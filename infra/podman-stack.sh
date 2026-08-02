@@ -21,8 +21,22 @@ require_env() {
   }
 }
 
+read_env_port() {
+  key="$1"
+  fallback="$2"
+  value=$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)
+  value=${value:-$fallback}
+  printf '%s' "$value" | grep -Eq '^[0-9]+$' || {
+    printf 'Invalid %s in %s.\n' "$key" "$env_file" >&2
+    exit 1
+  }
+  printf '%s' "$value"
+}
+
 start() {
   require_env
+  postgres_port=${POSTGRES_PORT:-$(read_env_port POSTGRES_PORT 5432)}
+  keycloak_port=${KEYCLOAK_PORT:-$(read_env_port KEYCLOAK_PORT 8081)}
   mkdir -p "$state/postgres"
   podman network inspect "$network" >/dev/null 2>&1 || podman network create --label "$label" "$network" >/dev/null
 
@@ -32,7 +46,7 @@ start() {
       --label "$label" \
       --network "$network" \
       --env-file "$env_file" \
-      --publish "127.0.0.1:${POSTGRES_PORT:-5432}:5432" \
+      --publish "127.0.0.1:${postgres_port}:5432" \
       --volume "$state/postgres:/var/lib/postgresql/data:U,Z" \
       --volume "$root/infra/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro,Z" \
       --health-cmd "pg_isready -U issue_agent -d issue_agent" \
@@ -56,7 +70,7 @@ start() {
       --label "$label" \
       --network "$network" \
       --env-file "$env_file" \
-      --publish "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080" \
+      --publish "127.0.0.1:${keycloak_port}:8080" \
       --security-opt no-new-privileges \
       --cap-drop ALL \
       quay.io/keycloak/keycloak:26.3.1 start-dev --health-enabled=true >/dev/null
@@ -64,7 +78,7 @@ start() {
     podman start "$keycloak_name" >/dev/null
   fi
 
-  printf 'PostgreSQL: 127.0.0.1:%s\nKeycloak: http://127.0.0.1:%s\n' "${POSTGRES_PORT:-5432}" "${KEYCLOAK_PORT:-8080}"
+  printf 'PostgreSQL: 127.0.0.1:%s\nKeycloak: http://127.0.0.1:%s\n' "$postgres_port" "$keycloak_port"
 }
 
 stop() {

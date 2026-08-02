@@ -22,6 +22,7 @@ case "$command_name" in
     [ -f "$password_file" ] || { printf 'Password file not found: %s\n' "$password_file" >&2; exit 1; }
 
     secret="${name}-password"
+    podman rm --force "$name" >/dev/null 2>&1 || true
     podman secret rm "$secret" >/dev/null 2>&1 || true
     podman secret create "$secret" "$password_file" >/dev/null
     podman run --detach --replace \
@@ -32,9 +33,9 @@ case "$command_name" in
       --cap-drop ALL \
       --read-only \
       --tmpfs /tmp:size=512m,mode=1777 \
-      --tmpfs /home/coder/.cache:size=512m \
-      --tmpfs /home/coder/.config:size=64m \
-      --tmpfs /home/coder/.local/share/code-server:size=512m \
+      --tmpfs /home/coder/.cache:size=512m,mode=1777 \
+      --tmpfs /home/coder/.config:size=64m,mode=1777 \
+      --tmpfs /home/coder/.local/share/code-server:size=512m,mode=1777 \
       --volume "$(realpath "$workspace"):/home/coder/project:Z" \
       --publish "127.0.0.1:${port}:8080" \
       --secret "$secret,type=env,target=PASSWORD" \

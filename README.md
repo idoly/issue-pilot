@@ -88,6 +88,12 @@ export DATABASE_URL='postgres://issue_agent:<password>@127.0.0.1:5432/issue_agen
 npm run db:migrate
 ```
 
+## 部署与灾难恢复
+
+完整部署、当前数据库/Keycloak 快照、新服务器迁移和恢复验收见 [部署与灾难恢复手册](docs/DEPLOYMENT_AND_RECOVERY.md)。
+
+私有仓库的 `recovery/current/` 包含可直接恢复的业务数据库、完整 Keycloak 数据、pi Sessions、附件、workspaces、runtime secrets、容器环境和 Pi provider 配置。仓库读取权限应按生产 Secret 权限管理。
+
 按工单启动 code-server：
 
 ```bash
