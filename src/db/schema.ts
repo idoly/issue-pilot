@@ -95,6 +95,17 @@ export const serviceRepositories = pgTable("service_repositories", {
   ...timestamps,
 }, (table) => [uniqueIndex("service_repository_unique").on(table.serviceId, table.url)]);
 
+export const serviceModules = pgTable("service_modules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  serviceId: uuid("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 200 }).notNull(),
+  path: varchar("path", { length: 1000 }).notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("service_module_name_unique").on(table.serviceId, table.name),
+  uniqueIndex("service_module_path_unique").on(table.serviceId, table.path),
+]);
+
 export const serviceRelations = pgTable("service_relations", {
   sourceServiceId: uuid("source_service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
   targetServiceId: uuid("target_service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
@@ -102,6 +113,13 @@ export const serviceRelations = pgTable("service_relations", {
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   ...timestamps,
 }, (table) => [uniqueIndex("service_relation_unique").on(table.sourceServiceId, table.targetServiceId, table.relationType)]);
+
+export const serviceRelationModules = pgTable("service_relation_modules", {
+  sourceServiceId: uuid("source_service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
+  targetServiceId: uuid("target_service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
+  moduleId: uuid("module_id").notNull().references(() => serviceModules.id),
+  ...timestamps,
+}, (table) => [uniqueIndex("service_relation_module_unique").on(table.sourceServiceId, table.targetServiceId, table.moduleId)]);
 
 export const issues = pgTable("issues", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -135,6 +153,12 @@ export const issueServices = pgTable("issue_services", {
   uniqueIndex("issue_service_unique").on(table.issueId, table.serviceId, table.environmentId),
   index("issue_services_service_idx").on(table.serviceId, table.environmentId),
 ]);
+
+export const issueServiceModules = pgTable("issue_service_modules", {
+  issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  moduleId: uuid("module_id").notNull().references(() => serviceModules.id),
+  ...timestamps,
+}, (table) => [uniqueIndex("issue_service_module_unique").on(table.issueId, table.moduleId)]);
 
 export const issueCcRecipients = pgTable("issue_cc_recipients", {
   issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { access, mkdir } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -11,7 +11,9 @@ export interface PrepareWorkspaceInput {
   repositoryId: string;
   url: string;
   baseBranch: string;
+  preferredBaseBranch?: string;
   workingBranch?: string;
+  existingWorkspacePath?: string;
 }
 
 export interface PreparedWorkspace {
@@ -51,6 +53,7 @@ export class GitWorkspaceManager {
     if (!/^ISSUE-[0-9]{4,}$/i.test(input.issueId)) throw new Error(`invalid issue ID: ${input.issueId}`);
     if (input.url.startsWith("-")) throw new Error("repository URL must not start with '-'");
     if (!input.baseBranch.trim() || input.baseBranch.startsWith("-")) throw new Error("invalid base branch");
+    if (input.preferredBaseBranch?.startsWith("-")) throw new Error("invalid preferred base branch");
 
     const repositoryKey = createHash("sha256").update(input.url).digest("hex").slice(0, 20);
     const previous = this.tails.get(repositoryKey) ?? Promise.resolve();
@@ -70,16 +73,29 @@ export class GitWorkspaceManager {
     if (!await exists(cachePath)) {
       await this.git(["clone", "--no-checkout", input.url, cachePath]);
     }
-    await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
+    let baseBranch = input.baseBranch;
+    if (input.preferredBaseBranch && input.preferredBaseBranch !== input.baseBranch) {
+      const preferredAvailable = await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.preferredBaseBranch]).then(
+        () => true,
+        () => false,
+      );
+      if (preferredAvailable) baseBranch = input.preferredBaseBranch;
+      else await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
+    } else {
+      await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
+    }
 
     const issueSegment = safeSegment(input.issueId);
+    const issueWorkspaceRoot = resolve(this.workspaceRoot, issueSegment);
     const repositorySegment = safeSegment(input.repositoryId || basename(input.url, ".git"));
-    const workspacePath = resolve(this.workspaceRoot, issueSegment, repositorySegment);
+    const workspacePath = input.existingWorkspacePath ? resolve(input.existingWorkspacePath) : resolve(issueWorkspaceRoot, repositorySegment);
+    if (dirname(workspacePath) !== issueWorkspaceRoot) throw new Error("existing workspace path is outside the managed issue directory");
     const workingBranch = input.workingBranch ?? `issue/${input.issueId.toUpperCase()}/${repositorySegment}`;
     if (workingBranch.startsWith("-")) throw new Error("invalid working branch");
-    const baseRef = `origin/${input.baseBranch}`;
+    const baseRef = `origin/${baseBranch}`;
     const baseCommit = (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
 
+    if (await exists(workspacePath) && !await exists(resolve(workspacePath, ".git"))) throw new Error("existing workspace is not a Git worktree");
     if (!await exists(workspacePath)) {
       await mkdir(resolve(workspacePath, ".."), { recursive: true });
       const branchExists = (await execFileAsync("git", ["-C", cachePath, "show-ref", "--verify", "--quiet", `refs/heads/${workingBranch}`]).then(
@@ -90,7 +106,7 @@ export class GitWorkspaceManager {
       else await this.git(["-C", cachePath, "worktree", "add", "-b", workingBranch, workspacePath, baseRef]);
     }
 
-    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
+    return { cachePath, workspacePath, baseBranch, workingBranch, baseCommit };
   }
 
   private async git(args: string[]): Promise<string> {

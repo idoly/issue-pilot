@@ -43,26 +43,9 @@
 | Issue Pilot remote | `git@github.com:idoly/issue-pilot.git` |
 | 主分支 | `main` |
 | 本文生成前基线提交 | `56f898d15256d6d9776039776b240f81e479c7cd` |
-| Ant Design Solid remote | `git@github-antd-design-solid:idoly/antd-design-solid.git` |
-| Ant Design Solid commit | `d9ed10e01dcc13dcb4522d46ea502f0f95cdf466` |
-| Ant Design Solid package version | `0.2.4` |
+| Ant Design Solid package | npm `@idoly/ant-design-solid@0.2.4` |
 
-实际恢复必须优先使用备份 manifest 中的 commit，而不是盲目使用上表中的历史基线。
-
-前端依赖是本地文件依赖：
-
-```text
-/home/idoly/issue-agent/apps/web
-  -> file:../../../antd-design-solid
-  -> /home/idoly/antd-design-solid
-```
-
-因此默认恢复路径为：
-
-```text
-/home/idoly/issue-agent
-/home/idoly/antd-design-solid
-```
+实际恢复必须优先使用备份 manifest 中的 commit，而不是盲目使用上表中的历史基线。前端依赖从 npm 锁定安装，不再要求相邻的 `antd-design-solid` 仓库，因此源码 clone 可以放在任意用户目录。精确运行时恢复仍需处理数据库和 Session 中记录的历史绝对路径。
 
 ### 2.3 端口
 
@@ -238,9 +221,6 @@ cd "$PROJECT_ROOT"
 
 git status --short
 git rev-parse HEAD
-git -C /home/idoly/antd-design-solid status --short
-git -C /home/idoly/antd-design-solid rev-parse HEAD
-
 ./infra/podman-stack.sh status
 curl -fsS http://127.0.0.1:3000/health
 ```
@@ -280,8 +260,7 @@ podman stop issue-agent-keycloak
 set -eu
 umask 077
 
-export PROJECT_ROOT=/home/idoly/issue-agent
-export ANTD_ROOT=/home/idoly/antd-design-solid
+export PROJECT_ROOT=/path/to/issue-pilot
 export BACKUP_DIR=/path/to/offline-backups
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 WORK=$(mktemp -d)
@@ -289,7 +268,6 @@ mkdir -p "$BACKUP_DIR"
 
 # 1. 源码，即使远端不可用也能恢复。
 git -C "$PROJECT_ROOT" bundle create "$WORK/issue-pilot.bundle" --all
-git -C "$ANTD_ROOT" bundle create "$WORK/antd-design-solid.bundle" --all
 
 # 2. 业务数据库和完整 Keycloak 数据库。
 podman exec issue-agent-postgres \
@@ -319,7 +297,6 @@ tar -C "$HOME" -czf "$WORK/pi-agent-config.tar.gz" \
   printf 'created_at=%s\n' "$STAMP"
   printf 'project_root=%s\n' "$PROJECT_ROOT"
   printf 'issue_pilot_commit=%s\n' "$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
-  printf 'antd_commit=%s\n' "$(git -C "$ANTD_ROOT" rev-parse HEAD)"
   printf 'node=%s\n' "$(node --version)"
   printf 'npm=%s\n' "$(npm --version)"
   printf 'podman=%s\n' "$(podman --version)"
@@ -380,22 +357,14 @@ gpg --decrypt issue-pilot-<STAMP>.tar.gz.gpg \
 新服务器必须先在仓库外配置 GitHub SSH key。当前网络环境可使用 GitHub SSH 443：
 
 ```bash
-mkdir -p /home/idoly
+git clone ssh://git@ssh.github.com:443/idoly/issue-pilot.git /path/to/issue-pilot
 
-git clone ssh://git@ssh.github.com:443/idoly/issue-pilot.git \
-  /home/idoly/issue-agent
-
-git clone ssh://git@ssh.github.com:443/idoly/antd-design-solid.git \
-  /home/idoly/antd-design-solid
-
-cd /home/idoly/issue-agent
-export RESTORE=/home/idoly/issue-agent/recovery/current
+cd /path/to/issue-pilot
+export RESTORE=$PWD/recovery/current
 chmod 700 "$RESTORE"
 chmod 600 "$RESTORE"/*
 (cd "$RESTORE" && sha256sum -c SHA256SUMS)
 
-git -C /home/idoly/antd-design-solid checkout \
-  "$(sed -n 's/^antd_design_solid_commit=//p' "$RESTORE/manifest.txt")"
 ```
 
 ### 6.2 可选：从外部 GPG 备份恢复
@@ -438,19 +407,15 @@ npm ci
 ```bash
 mkdir -p /home/idoly
 
-git clone "$RESTORE/issue-pilot.bundle" /home/idoly/issue-agent
-git -C /home/idoly/issue-agent checkout main
+git clone "$RESTORE/issue-pilot.bundle" /path/to/issue-pilot
+git -C /path/to/issue-pilot checkout main
 
-git clone "$RESTORE/antd-design-solid.bundle" /home/idoly/antd-design-solid
-git -C /home/idoly/antd-design-solid checkout \
-  "$(sed -n 's/^antd_commit=//p' "$RESTORE/manifest.txt")"
-
-cd /home/idoly/issue-agent
+cd /path/to/issue-pilot
 npm ci
 (cd apps/web && npm ci)
 ```
 
-确认本地依赖解析正确：
+确认发布依赖解析正确：
 
 ```bash
 node -e "console.log(require('./apps/web/node_modules/@idoly/ant-design-solid/package.json').version)"
@@ -746,12 +711,7 @@ curl -fsS http://127.0.0.1:4173/ >/dev/null
 
 ### 9.1 项目路径
 
-pi Session、数据库绑定和 Git workspace 中包含绝对路径。最安全的方案是保持：
-
-```text
-/home/idoly/issue-agent
-/home/idoly/antd-design-solid
-```
+pi Session、数据库绑定和 Git workspace 中包含绝对路径。精确恢复时最安全的方案是保持 manifest 中记录的原项目路径。源码构建不依赖固定路径，但 pi Session、数据库绑定和 Git worktree metadata 可能包含源主机的绝对路径。
 
 若必须更换路径，需要同时迁移：
 

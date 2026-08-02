@@ -35,6 +35,7 @@ export const CheckCircle2 = createIcon(icons.CheckCircle2);
 export const ChevronLeft = createIcon(icons.ChevronLeft);
 export const ChevronRight = createIcon(icons.ChevronRight);
 export const CircleDot = createIcon(icons.CircleDot);
+export const Copy = createIcon(icons.Copy);
 export const Database = createIcon(icons.Database);
 export const ExternalLink = createIcon(icons.ExternalLink);
 export const FileSearch = createIcon(icons.FileSearch);

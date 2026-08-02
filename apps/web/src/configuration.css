@@ -23,12 +23,21 @@
 .service-list { display: grid; gap: 10px; padding: 16px 18px; }
 .service-row { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.4fr); gap: 20px; padding: 16px 18px; border: 1px solid #dce2df; border-radius: 6px; background: #fff; }
 .service-main > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.service-main-actions { display: flex; align-items: center; gap: 2px; }
 .service-detail-link { padding: 0; border: 0; background: transparent; color: #176b5b; font-size: 15px; font-weight: 650; text-align: left; cursor: pointer; }
 .service-detail-link:hover { text-decoration: underline; }
 .service-main p { margin: 7px 0 0; color: #65706b; font-size: 12px; line-height: 1.55; }
 .service-repositories { display: grid; align-content: start; gap: 7px; }
 .service-repositories > div { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 7px; min-width: 0; }
 .service-repositories code { overflow: hidden; color: #4f5b56; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.service-module-editor { display: grid; gap: 8px; }
+.service-module-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.service-module-editor-header > span { font-size: 12px; font-weight: 600; }
+.service-module-row { display: grid; grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1.3fr) 32px; align-items: center; gap: 8px; }
+.module-list { display: grid; gap: 8px; }
+.module-list > div { display: grid; grid-template-columns: minmax(120px, 0.6fr) minmax(180px, 1.4fr); gap: 12px; padding: 10px 12px; border: 1px solid #e1e6e3; border-radius: 4px; background: #fff; }
+.module-list strong { font-size: 12px; }
+.module-list code { overflow-wrap: anywhere; color: #4f5b56; font-size: 12px; }
 .service-detail-heading { display: flex; align-items: center; gap: 8px; }
 .service-detail { display: grid; gap: 24px; width: min(920px, calc(100% - 36px)); margin: 20px auto 48px; }
 .service-detail-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid #dce2df; border-radius: 6px; background: #dce2df; }
@@ -59,4 +68,6 @@
   .service-panel { overflow: visible; }
   .service-row { grid-template-columns: 1fr; }
   .service-detail-facts { grid-template-columns: 1fr; }
+  .service-module-row, .module-list > div { grid-template-columns: 1fr; }
+  .service-module-row > :last-child { justify-self: end; }
 }

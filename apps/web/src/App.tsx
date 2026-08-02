@@ -16,11 +16,11 @@ import {
   theme,
 } from "@idoly/ant-design-solid";
 import {
-  Bot,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   CircleDot,
+  Copy,
   Database,
   ExternalLink,
   FileSearch,
@@ -32,19 +32,21 @@ import {
   Pencil,
   Plus,
   Search,
-  Send,
-  Square,
   TerminalSquare,
   Trash2,
 } from "./icons";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import type { Terminal as XtermTerminal } from "@xterm/xterm";
+import type { FitAddon as XtermFitAddon } from "@xterm/addon-fit";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
-import { abortPiPrompt, createEnvironment, createIssue, createService, deleteEnvironment, deleteService, getIssue, listIssues, loadConfiguration, loadPeople, sendPiPrompt, streamIssueAgentEvents, updateEnvironment, updateIssue, updateService, uploadIssueAttachments, type ConfigEnvironment, type ConfigService, type Configuration, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "./api";
+import { copyService, createEnvironment, createIssue, createService, deleteEnvironment, deleteService, getIssue, listIssues, loadConfiguration, loadPeople, piTerminalWebSocketUrl, requestPiTerminalTicket, updateEnvironment, updateIssue, updateService, uploadIssueAttachments, type ConfigEnvironment, type ConfigService, type Configuration, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "./api";
+import "@xterm/xterm/css/xterm.css";
 import "@idoly/ant-design-solid/base.css";
 import "@idoly/ant-design-solid/badge/style.css";
 import "@idoly/ant-design-solid/button/style.css";
+import "@idoly/ant-design-solid/config-provider/style.css";
 import "@idoly/ant-design-solid/input/style.css";
 import "@idoly/ant-design-solid/layout/style.css";
 import "@idoly/ant-design-solid/modal/style.css";
@@ -86,6 +88,13 @@ function formatFileSize(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function browserWorkspaceUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const url = new URL(value, window.location.href);
+  if (url.hostname === "127.0.0.1" || url.hostname === "localhost") url.hostname = window.location.hostname;
+  return url.toString();
+}
+
 function IssueQueue(props: {
   selectedId: string;
   userName: string;
@@ -95,9 +104,17 @@ function IssueQueue(props: {
 }) {
   const [issues, setIssues] = createSignal<Awaited<ReturnType<typeof listIssues>>>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
-  createEffect(() => props.refreshToken, () => {
+  const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
+  createEffect(() => ({ refreshToken: props.refreshToken, selectedId: props.selectedId }), ({ selectedId }) => {
     setLoading(true);
-    void listIssues().then(setIssues).finally(() => setLoading(false));
+    setLoadError("");
+    void listIssues().then((loaded) => {
+      setIssues(loaded);
+      if (!loaded.some((issue) => issue.id === selectedId)) props.onSelect(loaded[0]?.id ?? "");
+    }).catch((error) => {
+      setIssues([]);
+      setLoadError(error instanceof Error ? error.message : "工单加载失败");
+    }).finally(() => setLoading(false));
   });
   const [configuration, setConfiguration] = createSignal<Configuration>({ environments: [], services: [] }, { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
@@ -109,6 +126,7 @@ function IssueQueue(props: {
   const [title, setTitle] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
   const [service, setService] = createSignal<string[]>(["srm"], { ownedWrite: true });
+  const [moduleIds, setModuleIds] = createSignal<string[]>([], { ownedWrite: true });
   const [environment, setEnvironment] = createSignal("production", { ownedWrite: true });
   const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
   const [issueType, setIssueType] = createSignal<IssueType>("incident", { ownedWrite: true });
@@ -131,6 +149,7 @@ function IssueQueue(props: {
         assigneeSubject: assigneeSubject(),
         ccSubjects: ccSubjects(),
         serviceKeys: service(),
+        moduleIds: moduleIds(),
         environmentKey: environment(),
         reporter: props.userName,
       });
@@ -139,6 +158,7 @@ function IssueQueue(props: {
       setCreateOpen(false);
       setTitle("");
       setDescription("");
+      setModuleIds([]);
       setAttachments([]);
       props.onSelect(issue.id);
     } catch (error) {
@@ -147,6 +167,9 @@ function IssueQueue(props: {
       setSaving(false);
     }
   };
+  const selectableModules = createMemo(() => configuration().services
+    .filter((configuredService) => service().includes(configuredService.key))
+    .flatMap((configuredService) => configuredService.modules.map((module) => ({ value: module.id, label: `${configuredService.name} · ${module.name}` }))));
   const filtered = createMemo(() => {
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
@@ -186,6 +209,7 @@ function IssueQueue(props: {
       </div>
       <div class="queue-list" role="list">
         <Show when={!loading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 5 }} /></div>}>
+          <Show when={!loadError()} fallback={<div class="queue-error" role="alert">{loadError()}</div>}>
           <For each={filtered()} fallback={<div class="queue-empty">没有匹配的工单</div>}>
             {(issue) => (
               <button
@@ -208,12 +232,14 @@ function IssueQueue(props: {
               </button>
             )}
           </For>
+          </Show>
         </Show>
       </div>
       <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => setCreateOpen(false)} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service().length }}>
         <div class="create-issue-form">
-          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { setEnvironment(String(value)); setService([]); }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
-          <label><span>服务（可多选）</span><Select mode="multiple" aria-label="工单服务" value={service()} onChange={(value) => setService(Array.isArray(value) ? value.map(String) : [String(value)])} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { setEnvironment(String(value)); setService([]); setModuleIds([]); }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>服务（可多选）</span><Select mode="multiple" aria-label="工单服务" value={service()} onChange={(value) => { const keys = Array.isArray(value) ? value.map(String) : [String(value)]; setService(keys); const allowed = new Set(configuration().services.filter((item) => keys.includes(item.key)).flatMap((item) => item.modules.map((module) => module.id))); setModuleIds((current) => current.filter((id) => allowed.has(id))); }} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <Show when={selectableModules().length}><label><span>模块（可多选，不选表示整个服务）</span><Select mode="multiple" aria-label="工单模块" value={moduleIds()} onChange={(value) => setModuleIds(Array.isArray(value) ? value.map(String) : [String(value)])} options={selectableModules()} /></label></Show>
           <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => setPriority(value as IssuePriority)} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
           <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => setIssueType(value as IssueType)} options={Object.entries(issueTypeLabel).map(([value, label]) => ({ value, label }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onChange={(value) => setAssigneeSubject(value ? String(value) : null)} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
@@ -260,7 +286,7 @@ function EvidencePanel(props: { issue: IssueDetail }) {
   );
 }
 
-function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<void> }) {
+function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: () => void; onUpdated: () => Promise<void> }) {
   const confidence = () => Math.round((props.issue.diagnosis.confidence ?? 0) * 100);
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
@@ -270,6 +296,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<vo
   const [editAssignee, setEditAssignee] = createSignal<string | null>(null, { ownedWrite: true });
   const [editCc, setEditCc] = createSignal<string[]>([], { ownedWrite: true });
   const [editServices, setEditServices] = createSignal<string[]>([], { ownedWrite: true });
+  const [editModuleIds, setEditModuleIds] = createSignal<string[]>([], { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
   const [configuration, setConfiguration] = createSignal<Configuration>({ environments: [], services: [] }, { ownedWrite: true });
   const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
@@ -280,19 +307,23 @@ function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<vo
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority); setEditType(props.issue.type);
     setEditAssignee(props.issue.assigneeSubject); setEditCc((props.issue.ccRecipients ?? []).map((person) => person.subject));
     setEditServices([...(props.issue.affectedServices ?? [])].sort((left, right) => Number(right.primary) - Number(left.primary)).map((service) => service.key));
+    setEditModuleIds((props.issue.affectedModules ?? []).map((module) => module.id));
     setEditError(""); setEditOpen(true);
   };
   const saveIssue = async () => {
     if (!editTitle().trim() || !editServices().length) return;
     setEditSaving(true); setEditError("");
     try {
-      await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKeys: editServices(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
+      await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKeys: editServices(), moduleIds: editModuleIds(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
       await props.onUpdated();
       setEditOpen(false);
     } catch (error) {
       setEditError(error instanceof Error ? error.message : String(error));
     } finally { setEditSaving(false); }
   };
+  const editableModules = createMemo(() => configuration().services
+    .filter((service) => editServices().includes(service.key))
+    .flatMap((service) => service.modules.map((module) => ({ value: module.id, label: `${service.name} · ${module.name}` }))));
   const tabs = () => [
     {
       key: "diagnosis",
@@ -364,8 +395,8 @@ function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<vo
           <Button
             type="primary"
             icon={<TerminalSquare size={16} />}
-            disabled={!props.issue.workspace.url}
-            onClick={() => props.issue.workspace.url && window.open(props.issue.workspace.url, "_blank", "noopener")}
+            disabled={!browserWorkspaceUrl(props.issue.workspace.url)}
+            onClick={props.onOpenCodeServer}
           >
             打开 code-server
           </Button>
@@ -378,6 +409,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<vo
         <div><span>处理人</span><strong>{props.issue.assignee ?? "未分配"}</strong></div>
         <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
         <div><span>服务</span><strong>{props.issue.affectedServices?.map((service) => service.name).join("、") || "-"}</strong></div>
+        <div><span>模块</span><strong>{props.issue.affectedModules?.map((module) => `${module.serviceKey} · ${module.name}`).join("、") || "整个服务"}</strong></div>
         <div><span>仓库</span><strong>{props.issue.repositories.length}</strong></div>
         <div><span>Session</span><strong class={props.issue.agentSession ? "session-live" : ""}><Show when={props.issue.agentSession}><span /></Show>{props.issue.agentSession ? "已创建" : "等待创建"}</strong></div>
         <div><span>工作区</span><strong>{props.issue.workspace.status === "ready" ? "就绪" : props.issue.workspace.status === "preparing" ? "准备中" : props.issue.workspace.status === "running" ? "处理中" : props.issue.workspace.status === "failed" ? "失败" : props.issue.workspace.status}</strong></div>
@@ -404,7 +436,8 @@ function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<vo
       <Tabs defaultActiveKey="diagnosis" items={tabs()} />
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editServices().length }} onOk={() => { void saveIssue(); }} onCancel={() => setEditOpen(false)}>
         <div class="create-issue-form">
-          <label><span>服务（可多选）</span><Select mode="multiple" aria-label="编辑工单服务" value={editServices()} onChange={(value) => setEditServices(Array.isArray(value) ? value.map(String) : [String(value)])} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <label><span>服务（可多选）</span><Select mode="multiple" aria-label="编辑工单服务" value={editServices()} onChange={(value) => { const keys = Array.isArray(value) ? value.map(String) : [String(value)]; setEditServices(keys); const allowed = new Set(configuration().services.filter((service) => keys.includes(service.key)).flatMap((service) => service.modules.map((module) => module.id))); setEditModuleIds((current) => current.filter((id) => allowed.has(id))); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <Show when={editableModules().length}><label><span>模块（可多选，不选表示整个服务）</span><Select mode="multiple" aria-label="编辑工单模块" value={editModuleIds()} onChange={(value) => setEditModuleIds(Array.isArray(value) ? value.map(String) : [String(value)])} options={editableModules()} /></label></Show>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => setEditPriority(value as IssuePriority)} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
           <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => setEditType(value as IssueType)} options={Object.entries(issueTypeLabel).map(([value, label]) => ({ value, label }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onChange={(value) => setEditAssignee(value ? String(value) : null)} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
@@ -418,189 +451,202 @@ function IssueWorkspace(props: { issue: IssueDetail; onUpdated: () => Promise<vo
   );
 }
 
-function AgentThread(props: { issue: IssueDetail; expanded: boolean; onToggleExpanded: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
-  const [message, setMessage] = createSignal("", { ownedWrite: true });
-  const [sending, setSending] = createSignal(false, { ownedWrite: true });
-  const [aborting, setAborting] = createSignal(false, { ownedWrite: true });
-  const [sendError, setSendError] = createSignal("", { ownedWrite: true });
-  const [streamActive, setStreamActive] = createSignal(false, { ownedWrite: true });
-  const [streamedAnswer, setStreamedAnswer] = createSignal("", { ownedWrite: true });
-  const [pendingUserMessages, setPendingUserMessages] = createSignal<string[]>([], { ownedWrite: true });
-  let sendSequence = 0;
-  let streamController: AbortController | undefined;
-  let threadMessagesElement: HTMLDivElement | undefined;
-  let followLatest = true;
-  const runIsActive = () => props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
-  const processing = () => sending() || runIsActive() || streamActive();
-  createEffect(
-    () => props.issue.id,
-    (issueId) => {
-      streamController?.abort();
-      const controller = new AbortController();
-      streamController = controller;
-      setStreamActive(false);
-      setStreamedAnswer("");
-      setPendingUserMessages([]);
-      followLatest = true;
-      const connect = async () => {
-        while (!controller.signal.aborted) {
-          try {
-            await streamIssueAgentEvents(issueId, (event) => {
-              if (event.kind === "status" || event.kind === "response_start") setStreamActive(true);
-              if (event.kind === "response_start") setStreamedAnswer("");
-              if (event.kind === "assistant_delta") setStreamedAnswer((current) => current + event.message);
-              if (event.kind === "complete" || event.kind === "error") {
-                setStreamActive(false);
-                void props.onRefresh(issueId).finally(() => setStreamedAnswer(""));
-              }
-            }, controller.signal);
-          } catch (error) {
-            if (controller.signal.aborted) return;
-          }
-          if (!controller.signal.aborted) await new Promise((resolve) => setTimeout(resolve, 1_000));
-        }
-      };
-      void connect();
-    },
-  );
-  createEffect(
-    () => `${props.issue.id}:${props.issue.piConversation?.length ?? 0}:${streamedAnswer().length}:${pendingUserMessages().length}`,
-    () => {
-      if (!followLatest) return;
-      queueMicrotask(() => threadMessagesElement?.scrollTo?.({ top: threadMessagesElement.scrollHeight }));
-    },
-  );
-  const statusPoll = window.setInterval(() => {
-    if (sending() || !runIsActive()) return;
-    void props.onRefresh(props.issue.id).then((refreshed) => {
-      if (refreshed.workspace.status === "failed") setSendError(refreshed.workspace.lastError || "智能体处理失败");
-    }).catch(() => undefined);
-  }, 2_000);
-  onCleanup(() => { sendSequence += 1; streamController?.abort(); window.clearInterval(statusPoll); });
-  const threadMessages = () => {
-    const conversation = props.issue.piConversation ?? [];
-    const persisted = conversation.map((item) => ({ role: item.role === "assistant" ? "agent" as const : "user" as const, text: item.text }));
-    const persistedUserCounts = new Map<string, number>();
-    for (const item of conversation) if (item.role === "user") persistedUserCounts.set(item.text, (persistedUserCounts.get(item.text) ?? 0) + 1);
-    const pending = pendingUserMessages().filter((text) => {
-      const persistedCount = persistedUserCounts.get(text) ?? 0;
-      if (!persistedCount) return true;
-      persistedUserCounts.set(text, persistedCount - 1);
-      return false;
-    });
-    return [...persisted, ...pending.map((text) => ({ role: "user" as const, text }))];
-  };
-  const send = async () => {
-    const text = message().trim();
-    if (!text || sending()) return;
-    const issueId = props.issue.id;
-    const sequence = ++sendSequence;
-    setSending(true);
-    setSendError("");
-    try {
-      await sendPiPrompt(issueId, text);
-      setPendingUserMessages((current) => [...current, text]);
-      setMessage("");
-      void props.onRefresh(issueId);
-    } catch (error) {
-      setSendError(error instanceof Error ? error.message : "消息发送失败");
-    } finally {
-      if (sequence === sendSequence) setSending(false);
-    }
-  };
-
-  const stop = async () => {
-    if (aborting()) return;
-    setAborting(true);
-    setSendError("");
-    try {
-      await abortPiPrompt(props.issue.id);
-    } catch (error) {
-      setSendError(error instanceof Error ? error.message : "停止 pi 失败");
-    } finally {
-      setAborting(false);
-    }
-  };
-
+function AgentWorkbench(props: { issue: IssueDetail; terminalExpanded: boolean; codeExpanded: boolean; onToggleTerminal: () => void; onCloseCode: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
+  const agentRunning = () => props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
+  const codeServerUrl = () => browserWorkspaceUrl(props.issue.workspace.url);
   return (
-    <aside class="agent-thread" aria-label={`${props.issue.id} 对话`}>
-      <header class="agent-header">
-        <span class="agent-mark"><Bot size={17} /></span>
-        <div class="agent-identity"><strong>工单智能体</strong><span><i /> {processing() ? "智能体回复中" : "Session 已保存"}</span></div>
-        <div class="agent-header-actions">
-          <Show when={processing()}>
-            <Button type="text" shape="circle" danger icon={<Square size={14} />} title="停止当前 pi 处理" aria-label="停止当前 pi 处理" loading={aborting()} onClick={() => { void stop(); }} />
+    <section class={`agent-workbench${props.terminalExpanded ? " terminal-only" : ""}${props.codeExpanded ? " code-only" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
+      <Show when={props.codeExpanded} fallback={<PiTerminal issue={props.issue} expanded={props.terminalExpanded} onToggleExpanded={props.onToggleTerminal} onRefresh={props.onRefresh} />}>
+        <section class="code-server-pane" aria-label={`${props.issue.id} code-server`}>
+          <header class="code-server-header">
+            <div><TerminalSquare size={16} /><strong>code-server</strong><small>{props.issue.id}</small></div>
+            <span class="code-server-actions">
+              <Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在新窗口打开 code-server" aria-label="在新窗口打开 code-server" disabled={!codeServerUrl()} onClick={() => { const url = codeServerUrl(); if (url) window.open(url, "_blank", "noopener"); }} />
+              <Button type="text" shape="circle" icon={<Minimize2 size={16} />} title="还原 code-server" aria-label="还原 code-server" onClick={props.onCloseCode} />
+            </span>
+          </header>
+          <Show when={codeServerUrl()} fallback={<div class="code-server-empty"><strong>{agentRunning() ? "正在准备代码工作区" : "code-server 尚未就绪"}</strong></div>}>
+            {(url) => <div class="code-server-frame-wrap"><iframe class="code-server-frame" src={url()} title={`${props.issue.id} code-server 编辑器`} allow="clipboard-read; clipboard-write" /></div>}
           </Show>
-          <Button
-            type="text"
-            shape="circle"
-            icon={props.expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            title={props.expanded ? "还原对话" : "放大对话"}
-            aria-label={props.expanded ? "还原对话" : "放大对话"}
-            onClick={props.onToggleExpanded}
-          />
-        </div>
-      </header>
-      <div
-        class="thread-messages"
-        aria-live="polite"
-        ref={(element) => { threadMessagesElement = element; }}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-        }}
-      >
-        <For each={threadMessages()} fallback={<Show when={!processing()}><div class="empty-band">智能体尚未返回消息</div></Show>}>
-          {(item) => (
-            <div class={`thread-message ${item.role}`}>
-              <span>{item.role === "agent" ? "AI" : "我"}</span>
-              <MarkdownMessage source={item.text} />
-            </div>
-          )}
-        </For>
-        <Show when={streamedAnswer()}>
-          <div class="thread-message agent streaming-answer" aria-live="polite">
-            <span>AI</span>
-            <MarkdownMessage source={streamedAnswer()} />
-          </div>
-        </Show>
-        <Show when={processing() && !streamedAnswer()}>
-          <div class="thread-message agent agent-processing" role="status" aria-label="智能体正在分析">
-            <span>AI</span>
-            <div class="message-content"><strong>智能体正在分析</strong><span class="typing-dots" aria-hidden="true"><i /><i /><i /></span></div>
-          </div>
-        </Show>
-      </div>
-      <Show when={sendError()}><div class="agent-chat-error" role="alert">{sendError()}</div></Show>
-      <div class="agent-input">
-        <Input
-          aria-label="发送消息"
-          placeholder="继续分析或处理工单"
-          value={message()}
-          onInput={(event) => setMessage(event.currentTarget.value)}
-          onPressEnter={send}
-          disabled={sending()}
-          suffix={
-            <Button
-              type="text"
-              shape="circle"
-              icon={<Send size={16} />}
-              title="发送"
-              aria-label="发送"
-              loading={sending()}
-              disabled={sending() || !message().trim()}
-              onClick={() => { void send(); }}
-            />
-          }
-        />
-      </div>
-    </aside>
+        </section>
+      </Show>
+    </section>
   );
 }
 
-function MarkdownMessage(props: { source: string }) {
-  const html = createMemo(() => DOMPurify.sanitize(marked.parse(props.source, { async: false }) as string));
-  return <div class="message-content markdown-message" innerHTML={html()} />;
+function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpanded: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
+  type TerminalStatus = "waiting" | "connecting" | "open" | "closed" | "error";
+  const fixtureTerminal = import.meta.env.MODE === "test";
+  const [status, setStatus] = createSignal<TerminalStatus>(fixtureTerminal ? "open" : "waiting", { ownedWrite: true });
+  const [terminalError, setTerminalError] = createSignal("", { ownedWrite: true });
+  const [connectionMode, setConnectionMode] = createSignal<"live" | "pty">("pty", { ownedWrite: true });
+  let terminalElement: HTMLDivElement | undefined;
+  let terminal: XtermTerminal | undefined;
+  let fitAddon: XtermFitAddon | undefined;
+  let socket: WebSocket | undefined;
+  let terminalHeartbeat: number | undefined;
+  let resizeObserver: ResizeObserver | undefined;
+  let connectionSequence = 0;
+  let mounted = false;
+  let disposed = false;
+
+  const runIsActive = () => props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
+  const statusText = () => {
+    if (status() === "open") return connectionMode() === "live" ? "实时会话" : "已连接";
+    if (status() === "connecting") return "连接中";
+    if (status() === "error") return "连接失败";
+    if (status() === "closed") return "已退出";
+    return runIsActive() ? "等待当前处理完成" : "等待 Session";
+  };
+  const closeSocket = () => {
+    connectionSequence += 1;
+    if (terminalHeartbeat !== undefined) window.clearInterval(terminalHeartbeat);
+    terminalHeartbeat = undefined;
+    if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, "view changed");
+    socket = undefined;
+  };
+  const writeStatus = (message: string) => {
+    terminal?.write(`\r\n\x1b[38;5;244m${message}\x1b[0m\r\n`);
+  };
+  const terminalSnapshot = () => ({ issueId: props.issue.id, runActive: runIsActive(), sessionReady: Boolean(props.issue.agentSession) });
+  const connect = async (snapshot = terminalSnapshot()) => {
+    if (!mounted || fixtureTerminal || !terminal) return;
+    closeSocket();
+    terminal.reset();
+    setTerminalError("");
+    if (!snapshot.sessionReady) {
+      setStatus("waiting");
+      writeStatus("Waiting for the issue pi session...");
+      return;
+    }
+    const issueId = snapshot.issueId;
+    const sequence = ++connectionSequence;
+    setStatus("connecting");
+    writeStatus(`Opening pi session for ${issueId}...`);
+    try {
+      const ticket = await requestPiTerminalTicket(issueId);
+      if (sequence !== connectionSequence) return;
+      setConnectionMode(ticket.mode ?? "pty");
+      const nextSocket = new WebSocket(piTerminalWebSocketUrl(issueId, ticket.ticket));
+      socket = nextSocket;
+      nextSocket.addEventListener("open", () => {
+        if (sequence !== connectionSequence) return;
+        setStatus("open");
+        fitAddon?.fit();
+        nextSocket.send(JSON.stringify({ type: "resize", cols: terminal!.cols, rows: terminal!.rows }));
+        terminalHeartbeat = window.setInterval(() => {
+          if (nextSocket.readyState === WebSocket.OPEN) nextSocket.send(JSON.stringify({ type: "heartbeat" }));
+        }, 5_000);
+        terminal!.focus();
+      });
+      nextSocket.addEventListener("message", (event) => {
+        if (sequence !== connectionSequence) return;
+        try {
+          const message = JSON.parse(String(event.data)) as { type: "output"; data: string } | { type: "exit"; exitCode: number } | { type: "error"; error: string };
+          if (message.type === "output") terminal!.write(message.data);
+          else if (message.type === "exit") { setStatus("closed"); writeStatus(`pi exited with code ${message.exitCode}`); }
+          else { setStatus("error"); setTerminalError(message.error); writeStatus(message.error); }
+        } catch {
+          setStatus("error");
+          setTerminalError("terminal_protocol_error");
+        }
+      });
+      nextSocket.addEventListener("close", () => {
+        if (terminalHeartbeat !== undefined) window.clearInterval(terminalHeartbeat);
+        terminalHeartbeat = undefined;
+        if (sequence === connectionSequence && status() === "open") setStatus("closed");
+      });
+      nextSocket.addEventListener("error", () => {
+        if (sequence !== connectionSequence) return;
+        setStatus("error");
+        setTerminalError("terminal_connection_failed");
+      });
+    } catch (error) {
+      if (sequence !== connectionSequence) return;
+      const message = error instanceof Error ? error.message : "terminal_connection_failed";
+      setStatus(message === "pi_session_running" || message === "pi_session_not_ready" ? "waiting" : "error");
+      setTerminalError(message);
+      writeStatus(message);
+    }
+  };
+
+  createEffect(
+    terminalSnapshot,
+    (snapshot) => {
+      if (fixtureTerminal) setStatus(snapshot.runActive || !snapshot.sessionReady ? "waiting" : "open");
+      else if (mounted) void connect(snapshot);
+    },
+  );
+  queueMicrotask(() => { void (async () => {
+    if (disposed) return;
+    mounted = true;
+    if (fixtureTerminal) return;
+    const [{ Terminal }, { FitAddon }, { WebLinksAddon }] = await Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+      import("@xterm/addon-web-links"),
+    ]);
+    if (disposed) return;
+    terminal = new Terminal({
+      allowProposedApi: false,
+      convertEol: false,
+      cursorBlink: true,
+      cursorStyle: "block",
+      fontFamily: '"SFMono-Regular", "Cascadia Code", Consolas, monospace',
+      fontSize: 13,
+      letterSpacing: 0,
+      lineHeight: 1.18,
+      scrollback: 10_000,
+      theme: { background: "#111714", foreground: "#d8e1dc", cursor: "#69d3ad", selectionBackground: "#315346", black: "#17201d", brightBlack: "#65736d", green: "#69d3ad", brightGreen: "#8be6c4", yellow: "#e0c36a", brightYellow: "#f0d883", blue: "#6ba8d9", brightBlue: "#8bc4ef", cyan: "#65c7c0", brightCyan: "#86ddd6", red: "#dd746c", brightRed: "#f08b83", magenta: "#bd8bd1", brightMagenta: "#d5a4e5", white: "#d8e1dc", brightWhite: "#f4f7f5" },
+    });
+    fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new WebLinksAddon());
+    terminal.open(terminalElement!);
+    terminal.onData((data) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+    });
+    resizeObserver = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => {
+        if (!fitAddon || !terminal) return;
+        fitAddon.fit();
+        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+      });
+    });
+    resizeObserver.observe(terminalElement!);
+    void connect();
+  })(); });
+  const statusPoll = window.setInterval(() => {
+    if (!runIsActive() && props.issue.agentSession) return;
+    void props.onRefresh(props.issue.id).catch(() => undefined);
+  }, 2_000);
+  onCleanup(() => {
+    disposed = true;
+    mounted = false;
+    closeSocket();
+    window.clearInterval(statusPoll);
+    resizeObserver?.disconnect();
+    terminal?.dispose();
+  });
+
+  return (
+    <section class="pi-terminal-panel" aria-label={`${props.issue.id} pi 终端`}>
+      <header class="pi-terminal-header">
+        <div class="pi-terminal-title"><TerminalSquare size={17} /><span><strong>pi</strong><small>{props.issue.id}</small></span></div>
+        <div class="pi-terminal-actions">
+          <span class={`pi-terminal-status ${status()}`}><i />{statusText()}</span>
+          <Show when={status() === "closed" || status() === "error"}>
+            <Button type="text" size="small" onClick={() => { void connect(); }}>重连</Button>
+          </Show>
+          <Button type="text" shape="circle" icon={props.expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />} title={props.expanded ? "还原终端" : "放大终端"} aria-label={props.expanded ? "还原终端" : "放大终端"} onClick={props.onToggleExpanded} />
+        </div>
+      </header>
+      <Show when={!fixtureTerminal} fallback={<pre class="pi-terminal-fixture" role="log">{`pi --session ${props.issue.id}\n\n${props.issue.piConversation?.map((message) => `${message.role === "user" ? ">" : "pi"} ${message.text.replace(/[#*_`]/g, "")}`).join("\n\n") ?? ""}\n\n> `}</pre>}>
+        <div class="pi-terminal" ref={(element) => { terminalElement = element; }} onClick={() => terminal?.focus()} />
+      </Show>
+      <Show when={terminalError() && status() === "error"}><div class="pi-terminal-error" role="alert">{terminalError()}</div></Show>
+    </section>
+  );
 }
 
 function MarkdownDocument(props: { source: string }) {
@@ -614,11 +660,17 @@ function ConfigurationView() {
   const [environmentOpen, setEnvironmentOpen] = createSignal(false, { ownedWrite: true });
   const [environmentName, setEnvironmentName] = createSignal("", { ownedWrite: true });
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
+  const [copyOpen, setCopyOpen] = createSignal(false, { ownedWrite: true });
+  const [copySource, setCopySource] = createSignal<ConfigService | null>(null, { ownedWrite: true });
+  const [copyName, setCopyName] = createSignal("", { ownedWrite: true });
+  const [copyEnvironmentKey, setCopyEnvironmentKey] = createSignal("", { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
   const [repositoryUrl, setRepositoryUrl] = createSignal("", { ownedWrite: true });
   const [defaultBranch, setDefaultBranch] = createSignal("main", { ownedWrite: true });
+  const [serviceModules, setServiceModules] = createSignal<Array<{ id?: string; name: string; path: string }>>([], { ownedWrite: true });
   const [relatedServices, setRelatedServices] = createSignal<string[]>([], { ownedWrite: true });
+  const [relatedModuleIds, setRelatedModuleIds] = createSignal<string[]>([], { ownedWrite: true });
   const [serviceEnvironmentKey, setServiceEnvironmentKey] = createSignal("", { ownedWrite: true });
   const [editingEnvironmentKey, setEditingEnvironmentKey] = createSignal<string | null>(null, { ownedWrite: true });
   const [editingServiceKey, setEditingServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
@@ -668,7 +720,7 @@ function ConfigurationView() {
     } finally { setSaving(false); }
   };
   const resetServiceForm = () => {
-    setServiceName(""); setDescription(""); setRepositoryUrl(""); setDefaultBranch("main"); setRelatedServices([]); setServiceEnvironmentKey(""); setEditingServiceKey(null);
+    setServiceName(""); setDescription(""); setRepositoryUrl(""); setDefaultBranch("main"); setServiceModules([]); setRelatedServices([]); setRelatedModuleIds([]); setServiceEnvironmentKey(""); setEditingServiceKey(null);
   };
   const openNewService = () => {
     resetServiceForm(); setServiceEnvironmentKey(currentEnvironment()?.key ?? ""); setConfigurationError(""); setServiceOpen(true);
@@ -676,20 +728,50 @@ function ConfigurationView() {
   const openServiceEditor = (service: ConfigService) => {
     setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
-    setRepositoryUrl(service.repositories[0]?.url ?? ""); setDefaultBranch(service.repositories[0]?.defaultBranch ?? "main");
+    setRepositoryUrl(service.repositories[0]?.url ?? ""); setDefaultBranch(service.repositories[0]?.defaultBranch ?? "main"); setServiceModules(service.modules.map((module) => ({ ...module })));
     setServiceEnvironmentKey(configuration().environments.find((environment) => service.environmentIds.includes(environment.id))?.key ?? "");
     setRelatedServices(configuration().services.filter((related) => service.relatedServiceIds.includes(related.id)).map((related) => related.key));
+    setRelatedModuleIds([...service.relatedModuleIds]);
     setConfigurationError(""); setServiceOpen(true);
   };
+  const copyTargetEnvironments = createMemo(() => {
+    const source = copySource();
+    return configuration().environments.filter((environment) => !source?.environmentIds.includes(environment.id));
+  });
+  const openCopyService = (service: ConfigService) => {
+    const targets = configuration().environments.filter((environment) => !service.environmentIds.includes(environment.id));
+    setCopySource(service);
+    setCopyName(`${service.name} 副本`);
+    setCopyEnvironmentKey(targets[0]?.key ?? "");
+    setConfigurationError("");
+    setCopyOpen(true);
+  };
+  const saveServiceCopy = async () => {
+    const source = copySource();
+    if (!source || !copyName().trim() || !copyEnvironmentKey()) return;
+    setSaving(true); setConfigurationError("");
+    try {
+      const copied = await copyService(source.key, { name: copyName().trim(), targetEnvironmentKey: copyEnvironmentKey() });
+      await refresh();
+      setSelectedEnvironment(copyEnvironmentKey());
+      setSelectedServiceKey(copied.key);
+      setCopyOpen(false); setCopySource(null); setCopyName(""); setCopyEnvironmentKey("");
+    } catch (error) {
+      setConfigurationError(error instanceof Error ? error.message : String(error));
+    } finally { setSaving(false); }
+  };
+  const serviceModulesValid = createMemo(() => serviceModules().every((module) => module.name.trim() && module.path.trim()));
   const saveService = async () => {
-    if (!serviceName().trim() || !repositoryUrl().trim() || !serviceEnvironmentKey()) return;
+    if (!serviceName().trim() || !repositoryUrl().trim() || !serviceEnvironmentKey() || !serviceModulesValid()) return;
     setSaving(true); setConfigurationError("");
     try {
       const input = {
         name: serviceName().trim(), description: description().trim(),
         environmentKey: serviceEnvironmentKey(),
         repositories: [{ url: repositoryUrl().trim(), defaultBranch: defaultBranch().trim() || "main" }],
+        modules: serviceModules().map((module) => ({ ...(module.id ? { id: module.id } : {}), name: module.name.trim(), path: module.path.trim() })),
         relatedServiceKeys: relatedServices(),
+        relatedModuleIds: relatedModuleIds(),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, input);
@@ -700,6 +782,10 @@ function ConfigurationView() {
       setConfigurationError(error instanceof Error ? error.message : String(error));
     } finally { setSaving(false); }
   };
+  const relatedModuleOptions = createMemo(() => {
+    const relatedKeys = new Set(relatedServices());
+    return configuration().services.filter((service) => relatedKeys.has(service.key)).flatMap((service) => service.modules.map((module) => ({ value: module.id, label: `${service.name} · ${module.name}` })));
+  });
   const confirmDelete = async () => {
     const target = deleteTarget();
     if (!target) return;
@@ -740,7 +826,7 @@ function ConfigurationView() {
               <For each={visibleServices()} fallback={<div class="empty-band">当前环境暂无服务</div>}>
                 {(service) => (
                   <article class="service-row">
-                    <div class="service-main"><span><button type="button" class="service-detail-link" onClick={() => setSelectedServiceKey(service.key)}>{service.name}</button><Button type="text" shape="circle" icon={<Pencil size={14} />} title={`编辑${service.name}`} aria-label={`编辑${service.name}`} onClick={() => openServiceEditor(service)} /></span></div>
+                    <div class="service-main"><span><button type="button" class="service-detail-link" onClick={() => setSelectedServiceKey(service.key)}>{service.name}</button><span class="service-main-actions"><Button type="text" shape="circle" icon={<Copy size={14} />} title={`复制${service.name}`} aria-label={`复制${service.name}`} onClick={() => openCopyService(service)} /><Button type="text" shape="circle" icon={<Pencil size={14} />} title={`编辑${service.name}`} aria-label={`编辑${service.name}`} onClick={() => openServiceEditor(service)} /></span></span><p>{service.modules.length ? `${service.modules.length} 个模块` : "整个服务"}</p></div>
                     <div class="service-repositories"><For each={service.repositories} fallback={<span class="muted">尚未填写仓库</span>}>{(repository) => <div><GitBranch size={14} /><code>{repository.url}</code><Tag>{repository.defaultBranch}</Tag></div>}</For></div>
                   </article>
                 )}
@@ -750,13 +836,15 @@ function ConfigurationView() {
         )}>
           {(service) => (
             <>
-              <header class="service-header"><div class="service-detail-heading"><Button type="text" shape="circle" icon={<ChevronLeft size={16} />} title="返回服务列表" aria-label="返回服务列表" onClick={() => setSelectedServiceKey(null)} /><div><span>服务详情</span><h2>{service().name}</h2></div></div><Button icon={<Pencil size={14} />} onClick={() => openServiceEditor(service())}>编辑服务</Button></header>
+              <header class="service-header"><div class="service-detail-heading"><Button type="text" shape="circle" icon={<ChevronLeft size={16} />} title="返回服务列表" aria-label="返回服务列表" onClick={() => setSelectedServiceKey(null)} /><div><span>服务详情</span><h2>{service().name}</h2></div></div><Space><Button icon={<Copy size={14} />} onClick={() => openCopyService(service())}>复制服务</Button><Button icon={<Pencil size={14} />} onClick={() => openServiceEditor(service())}>编辑服务</Button></Space></header>
               <div class="service-detail">
                 <section class="service-detail-facts">
                   <div><span>所属环境</span><strong>{configuration().environments.find((environment) => service().environmentIds.includes(environment.id))?.name ?? "未配置"}</strong></div>
                   <div><span>关联服务</span><p>{configuration().services.filter((related) => service().relatedServiceIds.includes(related.id)).map((related) => related.name).join("、") || "无"}</p></div>
+                  <div><span>关联模块</span><p>{configuration().services.flatMap((related) => related.modules.filter((module) => service().relatedModuleIds.includes(module.id)).map((module) => `${related.name} · ${module.name}`)).join("、") || "整个关联服务"}</p></div>
                 </section>
                 <section class="service-detail-section"><h3>代码仓库</h3><div class="detail-repositories"><For each={service().repositories}>{(repository) => <div><GitBranch size={15} /><code>{repository.url}</code><Tag>{repository.defaultBranch}</Tag></div>}</For></div></section>
+                <section class="service-detail-section"><h3>模块</h3><div class="module-list"><For each={service().modules} fallback={<span class="muted">未拆分模块，工单将关联整个服务</span>}>{(module) => <div><strong>{module.name}</strong><code>{module.path}</code></div>}</For></div></section>
                 <section class="service-detail-section"><h3>项目描述</h3><MarkdownDocument source={service().description} /></section>
               </div>
             </>
@@ -770,12 +858,21 @@ function ConfigurationView() {
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
         </div>
       </Modal>
-      <Modal open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : `在${currentEnvironment()?.name ?? "环境"}中添加服务`} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)} okButtonProps={{ disabled: !serviceName().trim() || !repositoryUrl().trim() || !serviceEnvironmentKey() }}>
+      <Modal open={copyOpen()} title="复制服务" okText="复制" cancelText="取消" confirmLoading={saving()} onOk={() => { void saveServiceCopy(); }} onCancel={() => { setCopyOpen(false); setCopySource(null); setConfigurationError(""); }} okButtonProps={{ disabled: !copyName().trim() || !copyEnvironmentKey() }}>
+        <div class="create-issue-form">
+          <label><span>服务名称</span><Input aria-label="复制服务名称" value={copyName()} onInput={(event) => setCopyName(event.currentTarget.value)} /></label>
+          <label><span>目标环境</span><Select aria-label="复制目标环境" value={copyEnvironmentKey()} onChange={(value) => setCopyEnvironmentKey(String(value))} options={copyTargetEnvironments().map((environment) => ({ value: environment.key, label: environment.name }))} /></label>
+          <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
+        </div>
+      </Modal>
+      <Modal open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : `在${currentEnvironment()?.name ?? "环境"}中添加服务`} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)} okButtonProps={{ disabled: !serviceName().trim() || !repositoryUrl().trim() || !serviceEnvironmentKey() || !serviceModulesValid() }}>
         <div class="create-issue-form">
           <label><span>服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <label><span>仓库地址</span><Input aria-label="仓库地址" placeholder="git@example.com:team/project.git" value={repositoryUrl()} onInput={(event) => setRepositoryUrl(event.currentTarget.value)} /></label>
           <label><span>默认分支</span><Input aria-label="默认分支" value={defaultBranch()} onInput={(event) => setDefaultBranch(event.currentTarget.value)} /></label>
-          <label><span>关联服务（可多选）</span><Select mode="multiple" aria-label="关联服务" value={relatedServices()} onChange={(value) => setRelatedServices(Array.isArray(value) ? value.map(String) : [String(value)])} options={configuration().services.filter((service) => service.key !== editingServiceKey()).map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <div class="service-module-editor"><div class="service-module-editor-header"><span>模块（可选）</span><Button icon={<Plus size={14} />} onClick={() => setServiceModules((current) => [...current, { name: "", path: "" }])}>添加模块</Button></div><For each={serviceModules()}>{(module, index) => <div class="service-module-row"><Input aria-label={`模块名称 ${index() + 1}`} placeholder="订单模块" value={module.name} onInput={(event) => setServiceModules((current) => current.map((item, itemIndex) => itemIndex === index() ? { ...item, name: event.currentTarget.value } : item))} /><Input aria-label={`模块路径 ${index() + 1}`} placeholder="modules/order-service" value={module.path} onInput={(event) => setServiceModules((current) => current.map((item, itemIndex) => itemIndex === index() ? { ...item, path: event.currentTarget.value } : item))} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除模块${index() + 1}`} aria-label={`删除模块${index() + 1}`} onClick={() => setServiceModules((current) => current.filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For></div>
+          <label><span>关联服务（可多选）</span><Select mode="multiple" aria-label="关联服务" value={relatedServices()} onChange={(value) => { const keys = Array.isArray(value) ? value.map(String) : [String(value)]; setRelatedServices(keys); const allowed = new Set(configuration().services.filter((service) => keys.includes(service.key)).flatMap((service) => service.modules.map((module) => module.id))); setRelatedModuleIds((current) => current.filter((id) => allowed.has(id))); }} options={configuration().services.filter((service) => service.key !== editingServiceKey()).map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <Show when={relatedModuleOptions().length}><label><span>关联模块（可多选，不选表示整个关联服务）</span><Select mode="multiple" aria-label="关联模块" value={relatedModuleIds()} onChange={(value) => setRelatedModuleIds(Array.isArray(value) ? value.map(String) : [String(value)])} options={relatedModuleOptions()} /></label></Show>
           <label><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 6, maxRows: 14 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
@@ -845,19 +942,31 @@ export interface AppProps {
 
 export function App(props: AppProps = {}) {
   const [view, setView] = createSignal<"issues" | "statistics" | "configuration">("issues", { ownedWrite: true });
-  const [selectedId, setSelectedId] = createSignal("ISSUE-0042", { ownedWrite: true });
+  const [selectedId, setSelectedId] = createSignal("", { ownedWrite: true });
   const [issue, setIssue] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
+  const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
-  const [agentExpanded, setAgentExpanded] = createSignal(false, { ownedWrite: true });
+  const [terminalExpanded, setTerminalExpanded] = createSignal(false, { ownedWrite: true });
+  const [codeExpanded, setCodeExpanded] = createSignal(false, { ownedWrite: true });
   let request = 0;
   createEffect(
     () => selectedId(),
     (id) => {
       const currentRequest = ++request;
+      if (!id) {
+        setIssue(null);
+        setLoading(false);
+        return;
+      }
       setLoading(true);
+      setIssueError("");
       void getIssue(id).then((value) => {
         if (currentRequest === request) setIssue(value);
+      }).catch((error) => {
+        if (currentRequest !== request) return;
+        setIssue(null);
+        setIssueError(error instanceof Error ? error.message : "工单加载失败");
       }).finally(() => {
         if (currentRequest === request) setLoading(false);
       });
@@ -899,16 +1008,18 @@ export function App(props: AppProps = {}) {
             <div><strong>{props.user?.name ?? "严欣"}</strong><small>{props.user?.email ?? "694590014@qq.com"}</small></div>
           </button>
         </Layout.Header>
-        <Layout.Content class={`app-content${agentExpanded() && view() === "issues" ? " agent-expanded" : ""}`}>
+        <Layout.Content class={`app-content${terminalExpanded() && view() === "issues" ? " terminal-expanded" : ""}${codeExpanded() && view() === "issues" ? " code-expanded" : ""}`}>
           <Show when={view() === "issues"} fallback={view() === "statistics" ? <StatisticsView /> : <ConfigurationView />}>
-            <IssueQueue selectedId={selectedId()} userName={props.user?.name ?? "严欣"} userSubject={props.user?.subject ?? "fixture-user"} refreshToken={issueRefreshToken()} onSelect={setSelectedId} />
-            <Show when={!loading() && issue()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
-              {(current) => (
-                <>
-                  <Show when={!agentExpanded()}><IssueWorkspace issue={current()} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} /></Show>
-                  <AgentThread issue={current()} expanded={agentExpanded()} onToggleExpanded={() => setAgentExpanded((value) => !value)} onRefresh={refreshIssue} />
-                </>
-              )}
+            <Show when={!codeExpanded()}><IssueQueue selectedId={selectedId()} userName={props.user?.name ?? "严欣"} userSubject={props.user?.subject ?? "fixture-user"} refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
+            <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
+              <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
+                {(current) => (
+                  <>
+                    <AgentWorkbench issue={current()} terminalExpanded={terminalExpanded()} codeExpanded={codeExpanded()} onToggleTerminal={() => { setCodeExpanded(false); setTerminalExpanded((value) => !value); }} onCloseCode={() => setCodeExpanded(false)} onRefresh={refreshIssue} />
+                    <Show when={!terminalExpanded() && !codeExpanded()}><IssueWorkspace issue={current()} onOpenCodeServer={() => { setTerminalExpanded(false); setCodeExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} /></Show>
+                  </>
+                )}
+              </Show>
             </Show>
           </Show>
         </Layout.Content>

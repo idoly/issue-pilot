@@ -64,6 +64,20 @@
       "when": 1785629268143,
       "tag": "0008_issue_agent_events",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785654000000,
+      "tag": "0009_service_repository_module_path",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785662400000,
+      "tag": "0010_service_modules",
+      "breakpoints": true
     }
   ]
 }

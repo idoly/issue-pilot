@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +8,8 @@ import { createAgentSession, type AgentSession, ModelRuntime, SessionManager } f
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import type { PublicAgentEvent } from "./agent-event-broker.ts";
+import { prepareCodeTerminalFiles } from "./code-terminal-files.ts";
+import { CodeServerWorkspaceManager } from "./code-server-workspaces.ts";
 import type { createDatabase } from "./db/client.ts";
 import {
   issueAgentEvents,
@@ -15,9 +17,11 @@ import {
   issueComments,
   issueEvidence,
   issueRepositories,
+  issueServiceModules,
   issueServices,
   issueWorkspaces,
   issues,
+  serviceModules,
   serviceRepositories,
   services,
 } from "./db/schema.ts";
@@ -45,7 +49,9 @@ export interface PiConversationMessage {
 export class DatabaseIssueAgentRunner {
   private readonly coordinator = new IssueRunCoordinator();
   private readonly activeSessions = new Map<string, AgentSession>();
+  private readonly scheduledRuns = new Map<string, number>();
   private readonly workspaces: GitWorkspaceManager;
+  private readonly codeServerWorkspaces: CodeServerWorkspaceManager;
   private readonly stateRoot: string;
   private readonly db: Database;
   private modelRuntime?: ModelRuntime;
@@ -55,18 +61,16 @@ export class DatabaseIssueAgentRunner {
     this.db = db;
     this.stateRoot = path.resolve(stateRoot);
     this.workspaces = new GitWorkspaceManager(this.stateRoot);
+    this.codeServerWorkspaces = new CodeServerWorkspaceManager(this.stateRoot);
     this.publishEvent = publishEvent;
   }
 
   enqueue(issueId: string, triggerCommentId?: string): void {
-    void this.coordinator.run(issueId, () => this.run(issueId, triggerCommentId)).catch(async (error) => {
-      await this.db.update(issueWorkspaces).set({
-        status: "failed",
-        lastError: error instanceof Error ? error.message.slice(0, 4000) : String(error).slice(0, 4000),
-        updatedAt: new Date(),
-      }).where(eq(issueWorkspaces.issueId, issueId));
-      await this.appendAgentEvent(issueId, "error", "pi 处理失败");
-    });
+    this.schedule(issueId, () => this.run(issueId, triggerCommentId));
+  }
+
+  isRunning(issueId: string): boolean {
+    return (this.scheduledRuns.get(issueId) ?? 0) > 0;
   }
 
   async steerDirect(issueId: string, message: string, behavior: "steer" | "followUp" = "followUp"): Promise<boolean> {
@@ -85,14 +89,7 @@ export class DatabaseIssueAgentRunner {
   }
 
   enqueueDirect(issueId: string, message: string): void {
-    void this.coordinator.run(issueId, () => this.run(issueId, undefined, message)).catch(async (error) => {
-      await this.db.update(issueWorkspaces).set({
-        status: "failed",
-        lastError: error instanceof Error ? error.message.slice(0, 4000) : String(error).slice(0, 4000),
-        updatedAt: new Date(),
-      }).where(eq(issueWorkspaces.issueId, issueId));
-      await this.appendAgentEvent(issueId, "error", "pi 处理失败");
-    });
+    this.schedule(issueId, () => this.run(issueId, undefined, message));
   }
 
   async getConversation(issueId: string): Promise<PiConversationMessage[]> {
@@ -111,6 +108,22 @@ export class DatabaseIssueAgentRunner {
     });
   }
 
+  private schedule(issueId: string, operation: () => Promise<void>): void {
+    this.scheduledRuns.set(issueId, (this.scheduledRuns.get(issueId) ?? 0) + 1);
+    void this.coordinator.run(issueId, operation).catch(async (error) => {
+      await this.db.update(issueWorkspaces).set({
+        status: "failed",
+        lastError: error instanceof Error ? error.message.slice(0, 4000) : String(error).slice(0, 4000),
+        updatedAt: new Date(),
+      }).where(eq(issueWorkspaces.issueId, issueId));
+      await this.appendAgentEvent(issueId, "error", "pi 处理失败");
+    }).finally(() => {
+      const remaining = (this.scheduledRuns.get(issueId) ?? 1) - 1;
+      if (remaining > 0) this.scheduledRuns.set(issueId, remaining);
+      else this.scheduledRuns.delete(issueId);
+    });
+  }
+
   private async run(issueId: string, triggerCommentId?: string, directMessage?: string): Promise<void> {
     const [issue] = await this.db.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
@@ -123,26 +136,60 @@ export class DatabaseIssueAgentRunner {
       .innerJoin(services, eq(issueServices.serviceId, services.id))
       .where(eq(issueServices.issueId, issue.id));
     const serviceIds = linkedServices.map((service) => service.id);
-    const repositoryRows = serviceIds.length ? await this.db.select().from(serviceRepositories).where(inArray(serviceRepositories.serviceId, serviceIds)) : [];
-    const repositories = [...new Map(repositoryRows.map((repository) => [repository.url, repository])).values()];
+    const serviceById = new Map(linkedServices.map((service) => [service.id, service]));
+    const [repositoryRows, selectedModuleRows, existingRepositoryRows] = await Promise.all([
+      serviceIds.length ? this.db.select().from(serviceRepositories).where(inArray(serviceRepositories.serviceId, serviceIds)) : [],
+      this.db.select({ serviceId: serviceModules.serviceId, id: serviceModules.id, name: serviceModules.name, path: serviceModules.path })
+        .from(issueServiceModules)
+        .innerJoin(serviceModules, eq(issueServiceModules.moduleId, serviceModules.id))
+        .where(eq(issueServiceModules.issueId, issue.id)),
+      this.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
+    ]);
+    const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
+    const modulesByService = new Map<string, typeof selectedModuleRows>();
+    for (const module of selectedModuleRows) modulesByService.set(module.serviceId, [...(modulesByService.get(module.serviceId) ?? []), module]);
+    const repositoriesByUrl = new Map<string, {
+      repository: (typeof repositoryRows)[number];
+      modules: Array<{ serviceKey: string; serviceName: string; moduleName: string | null; modulePath: string | null }>;
+    }>();
+    for (const repository of repositoryRows) {
+      const service = serviceById.get(repository.serviceId);
+      if (!service) continue;
+      const selectedModules = modulesByService.get(service.id) ?? [];
+      const scopes = selectedModules.length
+        ? selectedModules.map((module) => ({ serviceKey: service.key, serviceName: service.name, moduleName: module.name, modulePath: module.path }))
+        : [{ serviceKey: service.key, serviceName: service.name, moduleName: null, modulePath: null }];
+      const existing = repositoriesByUrl.get(repository.url);
+      if (existing) {
+        if (existing.repository.defaultBranch !== repository.defaultBranch) throw new Error("selected_services_repository_branch_conflict");
+        existing.modules.push(...scopes);
+      } else {
+        repositoriesByUrl.set(repository.url, { repository, modules: scopes });
+      }
+    }
+    const repositories = [...repositoriesByUrl.values()];
     if (!repositories.length) {
       await this.db.delete(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
       throw new Error("selected_services_have_no_repository");
     }
     await this.db.delete(issueRepositories).where(and(
       eq(issueRepositories.issueId, issue.id),
-      notInArray(issueRepositories.url, repositories.map((repository) => repository.url)),
+      notInArray(issueRepositories.url, repositories.map(({ repository }) => repository.url)),
     ));
 
     const prepared = [];
-    for (const repository of repositories) {
+    for (const { repository, modules } of repositories) {
+      const existingRepository = existingRepositoryByUrl.get(repository.url);
       const workspace = await this.workspaces.prepare({
         issueId: issue.key,
         repositoryId: repository.id,
         url: repository.url,
         baseBranch: repository.defaultBranch,
+        preferredBaseBranch: "prod",
+        ...(existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
+        ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
       });
-      prepared.push({ repository, workspace });
+      prepared.push({ repository, workspace, modules });
       await this.appendAgentEvent(issue.id, "repository", `仓库 ${this.repositoryLabel(repository.url)} 已就绪`);
       await this.db.insert(issueRepositories).values({
         issueId: issue.id,
@@ -167,6 +214,22 @@ export class DatabaseIssueAgentRunner {
     const sessionDirectory = path.resolve(this.stateRoot, "sessions", issue.key);
     await mkdir(workspaceRoot, { recursive: true });
     await mkdir(sessionDirectory, { recursive: true });
+    await writeFile(path.join(workspaceRoot, ".issue-pilot.code-workspace"), JSON.stringify({
+      folders: prepared.map(({ repository, workspace }) => ({ name: this.repositoryLabel(repository.url), path: path.relative(workspaceRoot, workspace.workspacePath) })),
+      settings: {
+        "git.autoRepositoryDetection": true,
+        "files.watcherExclude": { "**/node_modules/**": true, "**/.git/objects/**": true },
+        "search.exclude": { "**/node_modules": true },
+      },
+    }, null, 2), "utf8");
+    await prepareCodeTerminalFiles(issue.key, workspaceRoot);
+    let codeServerUrl: string | null = null;
+    try {
+      codeServerUrl = await this.codeServerWorkspaces.ensure(issue.key, workspaceRoot);
+      await this.appendAgentEvent(issue.id, "workspace", "code-server 工作区已就绪");
+    } catch {
+      await this.appendAgentEvent(issue.id, "error", "code-server 工作区启动失败");
+    }
     const [binding] = await this.db.select().from(issueAgentSessions).where(eq(issueAgentSessions.issueId, issue.id)).limit(1);
     const manager = binding && await exists(binding.sessionFile)
       ? SessionManager.open(binding.sessionFile, sessionDirectory, binding.workspacePath)
@@ -205,7 +268,7 @@ export class DatabaseIssueAgentRunner {
       target: issueAgentSessions.issueId,
       set: { piSessionId: manager.getSessionId(), sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
-    await this.db.update(issueWorkspaces).set({ status: "running", branchCreated: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, branchCreated: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     if (!directConversation) await this.db.update(issues).set({ status: "in_progress", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(eq(issues.id, issue.id));
 
     const [triggerComment] = triggerCommentId
@@ -246,7 +309,7 @@ export class DatabaseIssueAgentRunner {
 
     this.activeSessions.set(issue.id, session);
     try {
-      await session.prompt(directMessage ?? this.prompt(issue.key, issue.title, issue.description, issue.type, prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch, path: workspace.workspacePath })), triggerComment?.body));
+      await session.prompt(directMessage ?? this.prompt(issue.key, issue.title, issue.description, issue.type, prepared.map(({ repository, workspace, modules }) => ({ url: repository.url, branch: workspace.workingBranch, path: workspace.workspacePath, modules })), triggerComment?.body));
       if (!directConversation && issue.type === "smart_analysis") {
         const classifiedType = this.classifiedType(session.messages);
         if (classifiedType) await this.db.update(issues).set({ type: classifiedType, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
@@ -327,7 +390,12 @@ export class DatabaseIssueAgentRunner {
     return matches.at(-1)?.[1]?.toLowerCase() as "incident" | "request" | "task" | "problem" | "question" | undefined;
   }
 
-  private prompt(issueKey: string, title: string, description: string, issueType: string, repositories: Array<{ url: string; branch: string; path: string }>, userMessage?: string): string {
+  private prompt(issueKey: string, title: string, description: string, issueType: string, repositories: Array<{
+    url: string;
+    branch: string;
+    path: string;
+    modules: Array<{ serviceKey: string; serviceName: string; moduleName: string | null; modulePath: string | null }>;
+  }>, userMessage?: string): string {
     return [
       userMessage ? `Continue handling engineering issue ${issueKey} and answer the latest user message.` : `Handle engineering issue ${issueKey}: ${title}`,
       `Configured issue type: ${issueType}`,
@@ -340,10 +408,18 @@ export class DatabaseIssueAgentRunner {
       ...(userMessage ? ["", "Latest user message:", userMessage, "", "Answer the latest user message directly after using the issue session and repository context as needed."] : []),
       "",
       "Prepared repositories:",
-      ...repositories.map((repository) => `- ${repository.url}\n  workspace: ${repository.path}\n  branch: ${repository.branch}`),
+      ...repositories.map((repository) => [
+        `- ${repository.url}`,
+        `  workspace: ${repository.path}`,
+        `  branch: ${repository.branch}`,
+        "  service module scopes:",
+        ...repository.modules.map((module) => `    - ${module.serviceKey} (${module.serviceName})${module.moduleName ? ` / ${module.moduleName}` : ""}: ${module.modulePath ?? ". (repository root)"}`),
+      ].join("\n")),
       "",
-      "Only the repositories listed above belong to the current issue context. Ignore any retired workspace directories from earlier service selections.",
-      "Inspect the relevant code, reproduce or establish the cause, implement the smallest correct change, and run appropriate tests. Do not expose credentials, raw production logs, or database rows. Keep all changes in the prepared issue branches.",
+      "Only the repositories and service module scopes listed above belong to the current issue context. Focus code search, edits, builds, and tests on the configured module paths unless evidence requires inspecting a dependency. Ignore any retired workspace directories from earlier service selections.",
+      "Inspect the relevant code and establish the cause before editing. If the cause is a code-logic defect, implement the smallest correct fix in the prepared local issue branch and run appropriate tests. The branch is based on the latest origin/prod when that branch exists.",
+      "Never push commits or branches to any remote, never create a merge request, and never run git push. Keep every code change local in the prepared issue branch for human review.",
+      "Do not expose credentials, raw production logs, or database rows. Focus changes on the configured issue scope and preserve unrelated user changes.",
     ].join("\n");
   }
 }

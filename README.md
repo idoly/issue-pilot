@@ -29,7 +29,7 @@ Issue Pilot 是基于 pi 的研发工单智能体。一个工单绑定一个持�
 - rootless Podman PostgreSQL、Keycloak 和按工单 code-server 脚本
 - 生产证据：Aliyun CLI SLS + DMS；测试证据：Aliyun CLI SLS + Drizzle MySQL
 - agent 结束、工单完成且前后端测试通过后，通过 `dws` 发送幂等钉钉通知
-- Solid `2.0.0-beta.29` 工作台 Demo，使用本地 `/home/idoly/antd-design-solid`
+- Solid `2.0.0-beta.29` 工作台，使用已发布的 `@idoly/ant-design-solid@0.2.4`，clone 后不依赖宿主机相邻目录
 - 工单统计：处理周期平均值/中位数/P95，个人、项目、类型、状态和优先级分组
 
 尚未接生产：
@@ -39,11 +39,21 @@ Issue Pilot 是基于 pi 的研发工单智能体。一个工单绑定一个持�
 - 附件当前使用本机私有目录且扫描状态为待处理；生产仍需接对象存储、病毒扫描与截图解析
 - SLS、DMS、MySQL 和钉钉均未配置组织凭据或真实目标
 
+## Clone 与验证
+
+```bash
+git clone https://github.com/idoly/issue-pilot.git
+cd issue-pilot
+./infra/verify-clone.sh
+```
+
+该脚本在干净 clone 中安装锁定依赖并执行 root/frontend 的 typecheck、测试和生产构建。源码环境与包含凭据的运行时恢复必须分开处理，详见 [Clone and restore](docs/CLONE_AND_RESTORE.md)。
+
 ## Demo
 
 ```bash
 cd apps/web
-npm install --legacy-peer-deps
+npm ci --legacy-peer-deps
 npm run dev -- --host 0.0.0.0
 ```
 
@@ -90,9 +100,9 @@ npm run db:migrate
 
 ## 部署与灾难恢复
 
-完整部署、当前数据库/Keycloak 快照、新服务器迁移和恢复验收见 [部署与灾难恢复手册](docs/DEPLOYMENT_AND_RECOVERY.md)。
+完整部署、数据库/Keycloak 快照、新服务器迁移和恢复验收见 [部署与灾难恢复手册](docs/DEPLOYMENT_AND_RECOVERY.md)。
 
-私有仓库的 `recovery/current/` 包含可直接恢复的业务数据库、完整 Keycloak 数据、pi Sessions、附件、workspaces、runtime secrets、容器环境和 Pi provider 配置。仓库读取权限应按生产 Secret 权限管理。
+历史 `recovery/current/` 已存在于仓库历史，包含业务数据库、Keycloak 数据、pi Sessions、runtime secrets 和 Pi provider 配置，仓库读取权限必须按生产 Secret 权限管理。源码提交不会刷新这份历史快照；当前实时状态只能通过手册中的 GPG 加密备份流程经受控渠道迁移，禁止把新快照直接提交到 GitHub。
 
 按工单启动 code-server：
 
@@ -111,7 +121,7 @@ chmod 600 /tmp/issue-code-password
 - Organization：`咸亨国际`
 - OIDC client：`issue-agent-web`（Authorization Code + PKCE）
 - 登录用户：严欣 / `694590014@qq.com`
-- 临时密码与本地管理凭据：[runtime.json](/home/idoly/issue-agent/.issue-agent/secrets/runtime.json)
+- 临时密码与本地管理凭据只保存在被 `.gitignore` 排除的 `.issue-agent/secrets/runtime.json`，不得写入文档、日志或提交
 
 启动 API：
 

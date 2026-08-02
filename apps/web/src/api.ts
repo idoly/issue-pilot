@@ -57,6 +57,7 @@ export interface IssueDetail extends IssueListItem {
   reporter?: Person;
   environmentKey?: string | null;
   affectedServices?: Array<{ key: string; name: string; primary: boolean }>;
+  affectedModules?: Array<{ id: string; serviceKey: string; name: string; path: string }>;
   comments?: IssueComment[];
   piConversation?: PiConversationMessage[];
 }
@@ -96,6 +97,7 @@ const fixture: IssueDetail[] = [
       { id: "test-2", scope: "frontend", status: "passed", summary: "桌面与移动端支付完成流程通过", command: "npm run test:e2e -- checkout-paid.spec.ts" },
     ],
     workspace: { status: "ready", url: "https://code.example.com/issue/ISSUE-0042" },
+    agentSession: { sessionId: "fixture-session-0042" },
     attachments: [],
     ccRecipients: [],
     comments: [{
@@ -157,6 +159,7 @@ export interface CreateDemoIssueInput {
   priority: IssuePriority;
   type: IssueType;
   service: string;
+  moduleIds: string[];
   environment: string;
   reporter: string;
   assigneeSubject: string | null;
@@ -186,6 +189,7 @@ export function createDemoIssue(input: CreateDemoIssueInput): IssueDetail {
     ccRecipients: fixturePeople.filter((person) => input.ccSubjects.includes(person.subject)),
     environmentKey: input.environment,
     affectedServices: input.service.split("+").map((serviceKey, index) => ({ key: serviceKey, name: serviceKey.toUpperCase(), primary: index === 0 })),
+    affectedModules: fixtureConfiguration.services.flatMap((service) => service.modules.filter((module) => input.moduleIds.includes(module.id)).map((module) => ({ ...module, serviceKey: service.key }))),
   };
   fixture.unshift(issue);
   return issue;
@@ -218,7 +222,9 @@ export interface ConfigService {
   metadata: Record<string, unknown>;
   environmentIds: string[];
   repositories: Array<{ id: string; url: string; defaultBranch: string; role: string }>;
+  modules: Array<{ id: string; name: string; path: string }>;
   relatedServiceIds: string[];
+  relatedModuleIds: string[];
 }
 
 export interface Configuration {
@@ -233,7 +239,7 @@ const fixtureConfiguration: Configuration = {
   ],
   services: [{
     id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务", scope: "global",
-    metadata: {}, environmentIds: ["env-production"], repositories: [], relatedServiceIds: [],
+    metadata: {}, environmentIds: ["env-production"], repositories: [], modules: [{ id: "srm-module-supplier", name: "供应商模块", path: "modules/supplier" }], relatedServiceIds: [], relatedModuleIds: [],
   }],
 };
 
@@ -251,8 +257,17 @@ export async function loadConfiguration(): Promise<Configuration> {
   return await response.json() as Configuration;
 }
 
+export function createConfigurationKey(prefix: string, name: string, unique = false): string {
+  const suffix = unique ? `-${Date.now()}` : "";
+  const normalized = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const fallback = unique ? "copy" : String(Date.now());
+  const maximumSlugLength = 99 - prefix.length - 1 - suffix.length;
+  const slug = (normalized || fallback).slice(0, maximumSlugLength).replace(/-+$/g, "") || "item";
+  return `${prefix}-${slug}${suffix}`;
+}
+
 export async function createEnvironment(name: string): Promise<{ key: string; name: string }> {
-  const key = `env-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || Date.now()}`;
+  const key = createConfigurationKey("env", name);
   if (fixturesEnabled) {
     const created: ConfigEnvironment = { id: `env-${key}`, key, name, kind: "test", scope: "global" };
     fixtureConfiguration.environments.push(created);
@@ -271,14 +286,16 @@ export interface ServiceMutationInput {
   description: string;
   environmentKey: string;
   repositories: Array<{ url: string; defaultBranch: string; role?: string }>;
+  modules: Array<{ id?: string; name: string; path: string }>;
   relatedServiceKeys: string[];
+  relatedModuleIds: string[];
 }
 
 export async function createService(input: ServiceMutationInput): Promise<{ key: string; name: string }> {
-  const key = `service-${input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || Date.now()}`;
+  const key = createConfigurationKey("service", input.name);
   if (fixturesEnabled) {
     const environmentIds = fixtureConfiguration.environments.filter((environment) => environment.key === input.environmentKey).map((environment) => environment.id);
-    const created: ConfigService = { id: `service-${key}`, key, name: input.name, description: input.description, scope: "global", metadata: {}, environmentIds, repositories: input.repositories.map((repository, index) => ({ id: `${key}-${index}`, role: repository.role ?? "application", ...repository })), relatedServiceIds: [] };
+    const created: ConfigService = { id: `service-${key}`, key, name: input.name, description: input.description, scope: "global", metadata: {}, environmentIds, repositories: input.repositories.map((repository, index) => ({ id: `${key}-${index}`, role: repository.role ?? "application", ...repository })), modules: input.modules.map((module, index) => ({ id: module.id ?? `${key}-module-${index}`, name: module.name, path: module.path })), relatedServiceIds: fixtureConfiguration.services.filter((related) => input.relatedServiceKeys.includes(related.key)).map((related) => related.id), relatedModuleIds: [...input.relatedModuleIds] };
     fixtureConfiguration.services.push(created);
     return created;
   }
@@ -287,6 +304,36 @@ export async function createService(input: ServiceMutationInput): Promise<{ key:
     const message = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
     throw new Error(message ?? `Failed to create service: ${response.status}`);
   }
+  return await response.json() as { key: string; name: string };
+}
+
+export async function copyService(key: string, input: { name: string; targetEnvironmentKey: string }): Promise<{ key: string; name: string }> {
+  const copyKey = createConfigurationKey("service", input.name, true);
+  if (fixturesEnabled) {
+    const source = fixtureConfiguration.services.find((service) => service.key === key);
+    if (!source) throw new Error("service_not_found");
+    const targetEnvironment = fixtureConfiguration.environments.find((environment) => environment.key === input.targetEnvironmentKey);
+    if (!targetEnvironment) throw new Error("invalid_environment");
+    if (source.environmentIds.includes(targetEnvironment.id)) throw new Error("copy_target_must_differ");
+    const allowedTargets = new Set(fixtureConfiguration.services.filter((service) => service.environmentIds.includes(targetEnvironment.id)).map((service) => service.id));
+    const relatedServiceIds = source.relatedServiceIds.filter((id) => allowedTargets.has(id));
+    const relatedModuleIds = fixtureConfiguration.services.filter((service) => relatedServiceIds.includes(service.id)).flatMap((service) => service.modules.filter((module) => source.relatedModuleIds.includes(module.id)).map((module) => module.id));
+    const copied: ConfigService = {
+      ...source,
+      id: `service-${copyKey}`,
+      key: copyKey,
+      name: input.name,
+      environmentIds: [targetEnvironment.id],
+      repositories: source.repositories.map((repository, index) => ({ ...repository, id: `${copyKey}-repository-${index}` })),
+      modules: source.modules.map((module, index) => ({ ...module, id: `${copyKey}-module-${index}` })),
+      relatedServiceIds,
+      relatedModuleIds,
+    };
+    fixtureConfiguration.services.push(copied);
+    return { key: copied.key, name: copied.name };
+  }
+  const response = await apiFetch(`/api/services/${encodeURIComponent(key)}/copy`, { method: "POST", body: JSON.stringify({ key: copyKey, ...input }) });
+  if (!response.ok) throw new Error(await response.json().then((body: { error?: string }) => body.error).catch(() => undefined) ?? `Failed to copy service: ${response.status}`);
   return await response.json() as { key: string; name: string };
 }
 
@@ -322,7 +369,9 @@ export async function updateService(key: string, input: ServiceMutationInput): P
     service.metadata = {};
     service.environmentIds = fixtureConfiguration.environments.filter((environment) => environment.key === input.environmentKey).map((environment) => environment.id);
     service.repositories = input.repositories.map((repository, index) => ({ id: `${key}-${index}`, role: repository.role ?? "application", ...repository }));
+    service.modules = input.modules.map((module, index) => ({ id: module.id ?? `${key}-module-${index}`, name: module.name, path: module.path }));
     service.relatedServiceIds = fixtureConfiguration.services.filter((related) => input.relatedServiceKeys.includes(related.key)).map((related) => related.id);
+    service.relatedModuleIds = [...input.relatedModuleIds];
     return;
   }
   const response = await apiFetch(`/api/services/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
@@ -361,6 +410,7 @@ export interface IssueMutationInput {
   priority: IssuePriority;
   type: IssueType;
   serviceKeys: string[];
+  moduleIds: string[];
   assigneeSubject: string | null;
   ccSubjects: string[];
 }
@@ -387,6 +437,7 @@ export async function updateIssue(key: string, input: IssueMutationInput): Promi
       assignee: input.assigneeSubject ? fixturePeople.find((person) => person.subject === input.assigneeSubject)?.name ?? null : null,
       ccRecipients: fixturePeople.filter((person) => input.ccSubjects.includes(person.subject)),
       affectedServices: input.serviceKeys.map((serviceKey, index) => ({ key: serviceKey, name: serviceKey.toUpperCase(), primary: index === 0 })),
+      affectedModules: fixtureConfiguration.services.flatMap((service) => service.modules.filter((module) => input.moduleIds.includes(module.id)).map((module) => ({ ...module, serviceKey: service.key }))),
       version: issue.version + 1,
       updatedAt: new Date().toISOString(),
     };
@@ -400,13 +451,30 @@ export async function updateIssue(key: string, input: IssueMutationInput): Promi
 
 export async function listIssues(): Promise<IssueListItem[]> {
   if (fixturesEnabled) return fixture;
-  try {
-    const response = await apiFetch("/api/issues");
-    if (!response.ok) throw new Error(String(response.status));
-    return await response.json() as IssueListItem[];
-  } catch {
-    return fixture;
-  }
+  const response = await apiFetch("/api/issues");
+  if (!response.ok) throw new Error(`Failed to load issues: ${response.status}`);
+  return await response.json() as IssueListItem[];
+}
+
+export interface PiTerminalTicket {
+  ticket: string;
+  mode?: "live" | "pty";
+  expiresAt: string;
+  fixture?: boolean;
+}
+
+export async function requestPiTerminalTicket(key: string): Promise<PiTerminalTicket> {
+  if (fixturesEnabled) return { ticket: "fixture", expiresAt: new Date(Date.now() + 30_000).toISOString(), fixture: true };
+  const response = await apiFetch(`/api/issues/${encodeURIComponent(key)}/terminal-ticket`, { method: "POST" });
+  if (!response.ok) throw new Error(await response.json().then((value: { error?: string }) => value.error).catch(() => undefined) ?? `Failed to open pi terminal: ${response.status}`);
+  return await response.json() as PiTerminalTicket;
+}
+
+export function piTerminalWebSocketUrl(key: string, ticket: string): string {
+  const url = new URL(`/api/issues/${encodeURIComponent(key)}/terminal`, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("ticket", ticket);
+  return url.toString();
 }
 
 export async function streamIssueAgentEvents(key: string, onEvent: (event: IssueAgentEvent) => void, signal: AbortSignal): Promise<void> {
@@ -475,13 +543,7 @@ export async function getIssue(id: string): Promise<IssueDetail> {
     if (!issue) throw new Error(`Issue not found: ${id}`);
     return structuredClone(issue);
   }
-  try {
-    const response = await apiFetch(`/api/issues/${encodeURIComponent(id)}`);
-    if (!response.ok) throw new Error(String(response.status));
-    return await response.json() as IssueDetail;
-  } catch {
-    const issue = fixture.find((item) => item.id === id);
-    if (!issue) throw new Error(`Issue not found: ${id}`);
-    return issue;
-  }
+  const response = await apiFetch(`/api/issues/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(response.status === 404 ? "issue_not_found" : `Failed to load issue: ${response.status}`);
+  return await response.json() as IssueDetail;
 }
