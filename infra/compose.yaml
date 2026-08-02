@@ -1,0 +1,77 @@
+name: issue-agent
+
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: issue_agent
+      POSTGRES_USER: issue_agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U issue_agent -d issue_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [control-plane]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.1
+    command: ["start-dev", "--health-enabled=true"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      KC_PROXY_HEADERS: xforwarded
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [control-plane]
+
+  code-server-sample:
+    image: ${CODE_SERVER_IMAGE:-ghcr.io/coder/code-server:4.99.4}
+    profiles: ["workspace"]
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD:?set CODE_SERVER_PASSWORD}
+    command:
+      - --bind-addr
+      - 0.0.0.0:8080
+      - --auth
+      - password
+      - --disable-telemetry
+      - /home/coder/project
+    ports:
+      - "127.0.0.1:${CODE_SERVER_PORT:-8443}:8080"
+    volumes:
+      - ${ISSUE_WORKSPACE_PATH:-../.issue-agent/workspaces/ISSUE-0001}:/home/coder/project
+      - code-server-user-data:/home/coder/.local/share/code-server
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/coder/.cache:size=512m,uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    restart: unless-stopped
+    networks: [workspace]
+
+volumes:
+  postgres-data:
+  code-server-user-data:
+
+networks:
+  control-plane:
+  workspace:
+    internal: false

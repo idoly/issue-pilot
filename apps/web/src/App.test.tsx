@@ -1,0 +1,147 @@
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { afterEach, describe, expect, test } from "vitest";
+
+import { App } from "./App";
+
+describe("issue workspace", () => {
+  afterEach(() => document.body.replaceChildren());
+
+  test("renders the selected issue, diagnosis, repositories, and persisted session state", async () => {
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getAllByText("ISSUE-0042").length).toBeGreaterThan(0));
+    expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy();
+    expect(screen.getByText("创建人")).toBeTruthy();
+    expect(screen.getByText("创建时间")).toBeTruthy();
+    expect(screen.getByText("确认缺陷")).toBeTruthy();
+    expect(screen.getByText("Session 已保存")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "打开 code-server" })).toBeTruthy();
+    expect(screen.getByText("issue/ISSUE-0042-web")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "分析结论" })).toBeTruthy();
+    expect(screen.getByText("tenantId").tagName).toBe("CODE");
+    const chatInput = screen.getByRole("textbox", { name: "发送消息" }) as HTMLInputElement;
+    chatInput.value = "请继续检查 **测试**";
+    fireEvent.input(chatInput);
+    const sendButton = screen.getByRole("button", { name: "发送" }) as HTMLButtonElement;
+    await waitFor(() => expect(sendButton.disabled).toBe(false));
+    fireEvent.click(sendButton);
+    await waitFor(() => expect(screen.getByText("测试").tagName).toBe("STRONG"));
+    expect(chatInput.value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "放大对话" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeNull());
+    expect(screen.getByRole("complementary", { name: "ISSUE-0042 对话" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "还原对话" }));
+    expect(await waitFor(() => screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" }))).toBeTruthy();
+
+    fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
+    expect(await waitFor(() => screen.getByRole("status", { name: "智能体正在分析" }))).toBeTruthy();
+    expect(screen.getByText("智能体回复中")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "停止当前 pi 处理" })).toBeTruthy();
+    fireEvent.click(screen.getAllByText("ISSUE-0042").map((element) => element.closest("button")).find(Boolean)!);
+    expect(await waitFor(() => screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" }))).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
+    expect(await waitFor(() => screen.getByLabelText("工单优先级"))).toBeTruthy();
+    expect(screen.getByLabelText("工单类型")).toBeTruthy();
+    expect(screen.getByLabelText("工单处理人")).toBeTruthy();
+    expect(screen.getByLabelText("工单抄送人")).toBeTruthy();
+    const titleInput = await waitFor(() => screen.getByRole("textbox", { name: "工单标题" })) as HTMLInputElement;
+    titleInput.value = "本地环境连接失败";
+    fireEvent.input(titleInput);
+    const attachmentInput = screen.getByLabelText("选择附件") as HTMLInputElement;
+    const logFile = new File(["error log"], "error.log", { type: "text/plain" });
+    const screenshot = new File(["image"], "screen.png", { type: "image/png" });
+    fireEvent.change(attachmentInput, { target: { files: [logFile, screenshot] } });
+    await waitFor(() => expect(screen.getByText("error.log")).toBeTruthy());
+    expect(screen.getByText("screen.png")).toBeTruthy();
+    const createButton = screen.getByRole("button", { name: "创建" }) as HTMLButtonElement;
+    await waitFor(() => expect(createButton.disabled).toBe(false));
+    fireEvent.click(createButton);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "本地环境连接失败" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("tab", { name: "附件 2" }));
+    await waitFor(() => expect(screen.getByText("error.log")).toBeTruthy());
+    expect(screen.getByText("screen.png")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+    expect(await waitFor(() => screen.getByLabelText("编辑工单优先级"))).toBeTruthy();
+    expect(screen.getByLabelText("编辑工单服务")).toBeTruthy();
+    expect(screen.getByLabelText("编辑工单处理人")).toBeTruthy();
+    expect(screen.getByLabelText("编辑工单抄送人")).toBeTruthy();
+    const editIssueTitle = screen.getByRole("textbox", { name: "编辑工单标题" }) as HTMLInputElement;
+    editIssueTitle.value = "本地环境连接失败（已更新）";
+    fireEvent.input(editIssueTitle);
+    const saveIssueButton = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    await waitFor(() => expect(saveIssueButton.disabled).toBe(false));
+    fireEvent.click(saveIssueButton);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "本地环境连接失败（已更新）" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("radio", { name: "统计" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "工单处理统计" })).toBeTruthy());
+    expect(screen.getByText("项目工单量")).toBeTruthy();
+    expect(screen.getByText("个人处理情况")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("radio", { name: "配置" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "环境" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "编辑正式" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑测试" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "添加环境" }));
+    const environmentInput = await waitFor(() => screen.getByRole("textbox", { name: "新环境名称" })) as HTMLInputElement;
+    environmentInput.value = "严欣本地";
+    fireEvent.input(environmentInput);
+    const addEnvironmentButton = screen.getByRole("button", { name: "添加" }) as HTMLButtonElement;
+    await waitFor(() => expect(addEnvironmentButton.disabled).toBe(false));
+    fireEvent.click(addEnvironmentButton);
+    await waitFor(() => expect(screen.getByText("严欣本地")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /^严欣本地/ }));
+    fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
+    const serviceInput = await waitFor(() => screen.getByRole("textbox", { name: "服务名称" })) as HTMLInputElement;
+    serviceInput.value = "本地调试服务";
+    fireEvent.input(serviceInput);
+    const repositoryInput = screen.getByRole("textbox", { name: "仓库地址" }) as HTMLInputElement;
+    repositoryInput.value = "git@example.com:team/local-service.git";
+    fireEvent.input(repositoryInput);
+    const descriptionInput = screen.getByRole("textbox", { name: "项目描述" }) as HTMLTextAreaElement;
+    descriptionInput.value = "# 本地服务\n\n支持 **Markdown** 文档。";
+    fireEvent.input(descriptionInput);
+    const addServiceButton = screen.getByRole("button", { name: "添加" }) as HTMLButtonElement;
+    await waitFor(() => expect(addServiceButton.disabled).toBe(false));
+    fireEvent.click(addServiceButton);
+    await waitFor(() => expect(screen.getByText("本地调试服务")).toBeTruthy());
+    expect(screen.getByText("git@example.com:team/local-service.git")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "本地调试服务" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "本地调试服务" })).toBeTruthy());
+    expect(screen.getByRole("heading", { name: "本地服务" })).toBeTruthy();
+    expect(screen.getByText("Markdown").tagName).toBe("STRONG");
+    fireEvent.click(screen.getByRole("button", { name: "返回服务列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑严欣本地" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "新环境名称" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "删除环境" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "编辑本地调试服务" })));
+    const editServiceInput = await waitFor(() => screen.getByRole("textbox", { name: "服务名称" })) as HTMLInputElement;
+    editServiceInput.value = "本地调试服务二";
+    fireEvent.input(editServiceInput);
+    const saveServiceButton = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    await waitFor(() => expect(saveServiceButton.disabled).toBe(false));
+    fireEvent.click(saveServiceButton);
+    await waitFor(() => expect(screen.getByText("本地调试服务二")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "编辑本地调试服务二" }));
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "删除服务" })));
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "确认删除" })));
+    await waitFor(() => expect(screen.queryByText("本地调试服务二")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑严欣本地" }));
+    const editEnvironmentInput = await waitFor(() => screen.getByRole("textbox", { name: "新环境名称" })) as HTMLInputElement;
+    editEnvironmentInput.value = "共享开发环境";
+    fireEvent.input(editEnvironmentInput);
+    const saveEnvironmentButton = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    await waitFor(() => expect(saveEnvironmentButton.disabled).toBe(false));
+    fireEvent.click(saveEnvironmentButton);
+    await waitFor(() => expect(screen.getByRole("button", { name: "编辑共享开发环境" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "编辑共享开发环境" }));
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "删除环境" })));
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "确认删除" })));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "编辑共享开发环境" })).toBeNull());
+  });
+});

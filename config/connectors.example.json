@@ -1,0 +1,54 @@
+{
+  "aliyunCli": ".tools/bin/aliyun",
+  "sls": {
+    "order-production": {
+      "environment": "production",
+      "profile": "issue-agent-production-readonly",
+      "region": "cn-hangzhou",
+      "project": "replace-with-production-sls-project",
+      "logstore": "order-service",
+      "maxWindowSeconds": 3600,
+      "queries": {
+        "by-trace-id": "traceId: {{traceId}}",
+        "by-order-id": "orderId: {{orderId}} and level: (ERROR or WARN)"
+      }
+    },
+    "order-test": {
+      "environment": "test",
+      "profile": "issue-agent-test-readonly",
+      "region": "cn-hangzhou",
+      "project": "replace-with-test-sls-project",
+      "logstore": "order-service",
+      "maxWindowSeconds": 7200,
+      "queries": {
+        "by-trace-id": "traceId: {{traceId}}",
+        "by-order-id": "orderId: {{orderId}}"
+      }
+    }
+  },
+  "dms": {
+    "order-production": {
+      "profile": "issue-agent-production-readonly",
+      "region": "cn-hangzhou",
+      "dbId": 0,
+      "logic": false,
+      "queries": {
+        "order-status": {
+          "statement": "SELECT order_id, status, updated_at FROM orders WHERE order_id = {{orderId}} LIMIT 20",
+          "parameters": { "orderId": "string" }
+        }
+      }
+    }
+  },
+  "mysql": {
+    "order-test": {
+      "connectionEnv": "ISSUE_AGENT_TEST_MYSQL_URL",
+      "queries": {
+        "order-status": {
+          "statement": "SELECT order_id, status, updated_at FROM orders WHERE order_id = {{orderId}} LIMIT 20",
+          "parameters": { "orderId": "string" }
+        }
+      }
+    }
+  }
+}

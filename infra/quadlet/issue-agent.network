@@ -1,0 +1,5 @@
+[Unit]
+Description=Issue Agent network
+
+[Network]
+NetworkName=issue-agent

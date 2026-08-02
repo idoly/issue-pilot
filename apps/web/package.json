@@ -1,0 +1,32 @@
+{
+  "name": "issue-agent-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --environment jsdom",
+    "test:e2e": "playwright test --project=chromium"
+  },
+  "dependencies": {
+    "@idoly/ant-design-solid": "file:../../../antd-design-solid",
+    "@solidjs/web": "2.0.0-beta.29",
+    "dompurify": "^3.4.12",
+    "keycloak-js": "^26.2.4",
+    "lucide": "^1.28.0",
+    "marked": "^18.0.7",
+    "solid-js": "2.0.0-beta.29"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@solidjs/testing-library": "1.0.0-beta.2",
+    "@types/node": "^24.0.0",
+    "jsdom": "^27.4.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vite-plugin-solid": "3.0.0-next.21",
+    "vitest": "^4.1.0"
+  }
+}
