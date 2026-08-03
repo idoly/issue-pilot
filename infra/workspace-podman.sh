@@ -8,7 +8,7 @@ usage() {
 
 command_name="${1:-}"
 issue_id="${2:-}"
-printf '%s' "$issue_id" | grep -Eq '^ISSUE-[0-9]{4,}$' || usage
+printf '%s' "$issue_id" | grep -Eq '^ISSUE-([0-9]{4,}|[0-9]{8}-[0-9]{3,4})$' || usage
 name="issue-agent-workspace-$(printf '%s' "$issue_id" | tr '[:upper:]' '[:lower:]')"
 
 case "$command_name" in
