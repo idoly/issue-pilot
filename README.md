@@ -9,6 +9,7 @@ Issue Pilot 是基于 pi 的研发工单智能体。一个工单绑定一个持�
 - pi 扩展：工单创建、查询、更新、评论、统计、SLS/DMS/MySQL 证据工具
 - MCP stdio server：供 Codex、Claude 等 MCP 客户端调用同一组工单工具
 - Agent Skills：分诊、Java、React、Solid 2、数据库、浏览器测试、code-server
+- 工单编码按业务日期生成 `ISSUE-YYYYMMDD-NNNN`，每日独立递增；新建 Git 分支与工单编码完全一致
 - 每工单持久 pi session；同一工单恢复原 JSONL 会话
 - 同一项目多工单并发：共享 Git 缓存，每工单独立 worktree 和修复分支
 - PostgreSQL Drizzle schema 与 migrations，共 17 张业务表

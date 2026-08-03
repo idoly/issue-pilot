@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { open, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { nextDatedIssueKey } from "./issue-keys.ts";
+
 export const ISSUE_STATUSES = ["open", "in_progress", "pending", "resolved", "closed"] as const;
 export const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 export const ISSUE_TYPES = ["incident", "request", "problem", "question", "task"] as const;
@@ -229,15 +231,20 @@ function assertDatabase(value: unknown): asserts value is IssueDatabase {
 export class IssueStore {
   readonly filePath: string;
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly now: () => Date;
+  private readonly issueKeyTimeZone: string;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: { now?: () => Date; timeZone?: string } = {}) {
     this.filePath = filePath;
+    this.now = options.now ?? (() => new Date());
+    this.issueKeyTimeZone = options.timeZone ?? process.env.ISSUE_AGENT_TIME_ZONE ?? "Asia/Shanghai";
   }
 
   async create(input: CreateIssueInput): Promise<Issue> {
     return this.mutate((database) => {
-      const now = new Date().toISOString();
-      const id = `ISSUE-${String(database.nextId).padStart(4, "0")}`;
+      const createdAt = this.now();
+      const now = createdAt.toISOString();
+      const id = nextDatedIssueKey(database.issues.map((issue) => issue.id), createdAt, this.issueKeyTimeZone);
       const issue: Issue = {
         id,
         title: cleanText(input.title, "title"),

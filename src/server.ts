@@ -17,6 +17,7 @@ import { AgentEventBroker } from "./agent-event-broker.ts";
 import { PiPtySessionManager, type PiPtyAttachment } from "./pi-pty-sessions.ts";
 import { createDatabase } from "./db/client.ts";
 import { DatabaseIssueAgentRunner } from "./issue-agent-runner.ts";
+import { formatIssueDate, isIssueKey } from "./issue-keys.ts";
 import {
   environments,
   issueDiagnoses,
@@ -48,6 +49,8 @@ interface AuthenticatedRequest extends FastifyRequest {
 const databaseUrl = process.env.DATABASE_URL;
 const organizationId = process.env.KEYCLOAK_ORGANIZATION_ID;
 const issuer = process.env.KEYCLOAK_ISSUER ?? "http://127.0.0.1:8081/realms/issue-agent";
+const issueKeyTimeZone = process.env.ISSUE_AGENT_TIME_ZONE ?? "Asia/Shanghai";
+formatIssueDate(new Date(), issueKeyTimeZone);
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 if (!organizationId) throw new Error("KEYCLOAK_ORGANIZATION_ID is required");
 const { db, close } = createDatabase(databaseUrl);
@@ -918,10 +921,18 @@ app.post("/api/issues", async (request, reply) => {
   const ccSubjects = [...new Set(input.ccSubjects ?? [])].filter((subject) => subject !== assigneeSubject);
   const created = await db.transaction(async (transaction) => {
     await transaction.execute(sql`select pg_advisory_xact_lock(hashtext('issue-agent-key'))`);
-    const nextRows = await transaction.execute<{ next: number }>(sql`select coalesce(max(substring(key from 7)::int), 0) + 1 as next from issues`);
+    const issueDate = formatIssueDate(new Date(), issueKeyTimeZone);
+    const keyPrefix = `ISSUE-${issueDate}-`;
+    const keyPattern = `^ISSUE-${issueDate}-[0-9]{4}$`;
+    const nextRows = await transaction.execute<{ next: number }>(sql`
+      select coalesce(max(substring(key from 16)::int), 0) + 1 as next
+      from issues
+      where key ~ ${keyPattern}
+    `);
     const next = Number(nextRows[0]?.next ?? 1);
+    if (!Number.isInteger(next) || next < 1 || next > 9_999) throw new Error("daily_issue_key_sequence_exhausted");
     const [issue] = await transaction.insert(issues).values({
-      key: `ISSUE-${String(next).padStart(4, "0")}`,
+      key: `${keyPrefix}${String(next).padStart(4, "0")}`,
       title: input.title,
       description: input.description ?? "",
       priority: input.priority,
@@ -1040,7 +1051,7 @@ const piPtyServer = createNetServer((socket: Socket) => {
     if (!binding) {
       const auth = z.object({
         type: z.literal("auth"),
-        issueKey: z.string().regex(/^ISSUE-[0-9]{4,}$/i),
+        issueKey: z.string().refine(isIssueKey),
         token: z.string().min(20).max(200),
         cols: z.number().int().min(20).max(400),
         rows: z.number().int().min(5).max(200),

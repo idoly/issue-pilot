@@ -11,7 +11,7 @@ const directories: string[] = [];
 async function createStore(): Promise<IssueStore> {
   const directory = await mkdtemp(join(tmpdir(), "issue-agent-"));
   directories.push(directory);
-  return new IssueStore(join(directory, "issues.json"));
+  return new IssueStore(join(directory, "issues.json"), { now: () => new Date("2026-08-03T02:00:00.000Z"), timeZone: "UTC" });
 }
 
 afterEach(async () => {
@@ -26,7 +26,7 @@ test("creates normalized issues and persists audit history", async () => {
     reporter: "alice",
   });
 
-  assert.equal(issue.id, "ISSUE-0001");
+  assert.equal(issue.id, "ISSUE-20260803-0001");
   assert.equal(issue.title, "Login fails");
   assert.deepEqual(issue.labels, ["auth", "frontend"]);
   assert.equal(issue.history[0]?.action, "created");

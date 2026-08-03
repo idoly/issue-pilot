@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { access, chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { isIssueKey } from "./issue-keys.ts";
+
 async function exists(candidate: string): Promise<boolean> {
   try {
     await access(candidate);
@@ -12,7 +14,7 @@ async function exists(candidate: string): Promise<boolean> {
 }
 
 export async function prepareCodeTerminalFiles(issueKey: string, workspaceRoot: string): Promise<void> {
-  if (!/^ISSUE-[0-9]{4,}$/i.test(issueKey)) throw new Error("invalid issue ID for pi terminal files");
+  if (!isIssueKey(issueKey)) throw new Error("invalid issue ID for pi terminal files");
   const bridgeDirectory = path.join(workspaceRoot, ".issue-pilot");
   const binaryDirectory = path.join(bridgeDirectory, "bin");
   const tokenFile = path.join(bridgeDirectory, "pi-terminal-token");

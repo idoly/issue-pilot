@@ -167,9 +167,14 @@ export interface CreateDemoIssueInput {
 }
 
 export function createDemoIssue(input: CreateDemoIssueInput): IssueDetail {
-  const next = Math.max(...fixture.map((issue) => Number(issue.id.replace("ISSUE-", "")))) + 1;
+  const createdAt = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(createdAt);
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  const issueDate = `${values.get("year")}${values.get("month")}${values.get("day")}`;
+  const pattern = new RegExp(`^ISSUE-${issueDate}-([0-9]{4})$`);
+  const next = Math.max(0, ...fixture.flatMap((issue) => { const match = pattern.exec(issue.id); return match ? [Number(match[1])] : []; })) + 1;
   const issue: IssueDetail = {
-    id: `ISSUE-${String(next).padStart(4, "0")}`,
+    id: `ISSUE-${issueDate}-${String(next).padStart(4, "0")}`,
     title: input.title,
     description: input.description,
     priority: input.priority,

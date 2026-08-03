@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, chmod, mkdir, writeFile } from "node:fs/promises";
 import { resolve, relative, isAbsolute } from "node:path";
 import { promisify } from "node:util";
 
 import { prepareCodeTerminalFiles } from "./code-terminal-files.ts";
+import { isIssueKey } from "./issue-keys.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,7 +28,9 @@ export class CodeServerWorkspaceManager {
   }
 
   async ensure(issueKey: string, workspacePath: string): Promise<string> {
-    const issueNumber = Number(/^ISSUE-([0-9]{4,})$/i.exec(issueKey)?.[1]);
+    if (!isIssueKey(issueKey)) throw new Error("invalid issue ID for code-server");
+    const legacyNumber = /^ISSUE-([0-9]{4,})$/i.exec(issueKey)?.[1];
+    const issueNumber = legacyNumber ? Number(legacyNumber) : Number.parseInt(createHash("sha256").update(issueKey.toUpperCase()).digest("hex").slice(0, 8), 16);
     if (!Number.isSafeInteger(issueNumber)) throw new Error("invalid issue ID for code-server");
     const resolvedWorkspace = resolve(workspacePath);
     const relativeWorkspace = relative(this.workspaceRoot, resolvedWorkspace);

@@ -184,10 +184,11 @@ export class DatabaseIssueAgentRunner {
         issueId: issue.key,
         repositoryId: repository.id,
         url: repository.url,
-        baseBranch: repository.defaultBranch,
-        preferredBaseBranch: "prod",
+        baseBranch: existingRepository?.baseBranch ?? repository.defaultBranch,
+        ...(!existingRepository ? { preferredBaseBranch: "prod" } : {}),
         ...(existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
         ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
+        ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
       });
       prepared.push({ repository, workspace, modules });
       await this.appendAgentEvent(issue.id, "repository", `仓库 ${this.repositoryLabel(repository.url)} 已就绪`);
@@ -204,7 +205,7 @@ export class DatabaseIssueAgentRunner {
           baseBranch: workspace.baseBranch,
           workingBranch: workspace.workingBranch,
           localPath: workspace.workspacePath,
-          commitBefore: workspace.baseCommit,
+          commitBefore: existingRepository?.commitBefore ?? workspace.baseCommit,
           updatedAt: new Date(),
         },
       });
