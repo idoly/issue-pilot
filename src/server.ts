@@ -923,16 +923,16 @@ app.post("/api/issues", async (request, reply) => {
     await transaction.execute(sql`select pg_advisory_xact_lock(hashtext('issue-agent-key'))`);
     const issueDate = formatIssueDate(new Date(), issueKeyTimeZone);
     const keyPrefix = `ISSUE-${issueDate}-`;
-    const keyPattern = `^ISSUE-${issueDate}-[0-9]{4}$`;
+    const keyPattern = `^ISSUE-${issueDate}-[0-9]{3,4}$`;
     const nextRows = await transaction.execute<{ next: number }>(sql`
       select coalesce(max(substring(key from 16)::int), 0) + 1 as next
       from issues
       where key ~ ${keyPattern}
     `);
     const next = Number(nextRows[0]?.next ?? 1);
-    if (!Number.isInteger(next) || next < 1 || next > 9_999) throw new Error("daily_issue_key_sequence_exhausted");
+    if (!Number.isInteger(next) || next < 1 || next > 999) throw new Error("daily_issue_key_sequence_exhausted");
     const [issue] = await transaction.insert(issues).values({
-      key: `${keyPrefix}${String(next).padStart(4, "0")}`,
+      key: `${keyPrefix}${String(next).padStart(3, "0")}`,
       title: input.title,
       description: input.description ?? "",
       priority: input.priority,

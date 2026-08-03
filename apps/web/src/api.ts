@@ -171,10 +171,10 @@ export function createDemoIssue(input: CreateDemoIssueInput): IssueDetail {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(createdAt);
   const values = new Map(parts.map((part) => [part.type, part.value]));
   const issueDate = `${values.get("year")}${values.get("month")}${values.get("day")}`;
-  const pattern = new RegExp(`^ISSUE-${issueDate}-([0-9]{4})$`);
+  const pattern = new RegExp(`^ISSUE-${issueDate}-([0-9]{3,4})$`);
   const next = Math.max(0, ...fixture.flatMap((issue) => { const match = pattern.exec(issue.id); return match ? [Number(match[1])] : []; })) + 1;
   const issue: IssueDetail = {
-    id: `ISSUE-${issueDate}-${String(next).padStart(4, "0")}`,
+    id: `ISSUE-${issueDate}-${String(next).padStart(3, "0")}`,
     title: input.title,
     description: input.description,
     priority: input.priority,

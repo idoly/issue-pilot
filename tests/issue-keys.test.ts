@@ -5,7 +5,8 @@ import { formatIssueDate, isIssueKey, nextDatedIssueKey } from "../src/issue-key
 
 test("accepts legacy and dated issue keys", () => {
   assert.equal(isIssueKey("ISSUE-0001"), true);
-  assert.equal(isIssueKey("ISSUE-20260803-0001"), true);
+  assert.equal(isIssueKey("ISSUE-20260803-001"), true);
+  assert.equal(isIssueKey("ISSUE-20260803-0001"), true); // Compatibility with the briefly published four-digit format.
   assert.equal(isIssueKey("ISSUE-20260803"), true); // Valid under the legacy numeric format.
   assert.equal(isIssueKey("ISSUE-20260803-1"), false);
 });
@@ -17,6 +18,6 @@ test("formats issue dates in the configured business timezone", () => {
 });
 
 test("allocates a daily sequence without considering legacy or other-day keys", () => {
-  const keys = ["ISSUE-0009", "ISSUE-20260802-0099", "ISSUE-20260803-0001", "ISSUE-20260803-0003"];
-  assert.equal(nextDatedIssueKey(keys, new Date("2026-08-03T02:00:00.000Z"), "UTC"), "ISSUE-20260803-0004");
+  const keys = ["ISSUE-0009", "ISSUE-20260802-099", "ISSUE-20260803-001", "ISSUE-20260803-0003"];
+  assert.equal(nextDatedIssueKey(keys, new Date("2026-08-03T02:00:00.000Z"), "UTC"), "ISSUE-20260803-004");
 });

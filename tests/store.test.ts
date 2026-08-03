@@ -26,7 +26,7 @@ test("creates normalized issues and persists audit history", async () => {
     reporter: "alice",
   });
 
-  assert.equal(issue.id, "ISSUE-20260803-0001");
+  assert.equal(issue.id, "ISSUE-20260803-001");
   assert.equal(issue.title, "Login fails");
   assert.deepEqual(issue.labels, ["auth", "frontend"]);
   assert.equal(issue.history[0]?.action, "created");
