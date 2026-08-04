@@ -1,6 +1,6 @@
 # Issue Pilot
 
-Issue Pilot is a local-first engineering issue workspace built on pi. It stores issue configuration in SQLite, prepares isolated Git worktrees, runs persistent pi sessions, exposes bounded evidence tools, and provides a Solid web interface.
+Issue Pilot is a local-first intelligent issue-processing system built around pi. It stores issue configuration in SQLite, prepares isolated Git worktrees, runs persistent policy-bound pi sessions, exposes external capabilities through a typed pi extension, and provides a Solid web interface.
 
 ## Requirements
 
@@ -28,7 +28,9 @@ SEED_USER_SUBJECT=demo-owner npm run db:seed
 
 The default state directory is `.issue-pilot` and the default database is `.issue-pilot/issues.db`. Both can be changed with `ISSUE_PILOT_STATE_ROOT` and `ISSUE_PILOT_DATABASE`.
 
-Copy `config/connectors.example.json` or provide an equivalent file, then set `ISSUE_PILOT_CONNECTORS_FILE` when evidence tools need Nacos, MySQL, or DMS access. Credentials must remain in external CLI profiles or runtime environment, never in issue records.
+Copy `config/connectors.example.json` or provide an equivalent file, then set `ISSUE_PILOT_CONNECTORS_FILE` when capability tools need Nacos, MySQL, or DMS access. Credentials must remain in external CLI profiles or runtime environment, never in issue records.
+
+Each issue run creates an owner-only execution policy that allowlists pi tools, service environments, and every repository attached to the selected service. Managed sessions disable arbitrary shell access and all automatically discovered pi resources. External capabilities execute only when pi calls their typed tools; for example, `database_read` resolves the service's frozen repository configuration, approved Nacos imports, and unique datasource before running a bounded read-only query in a disposable container.
 
 ## Run
 
@@ -46,7 +48,7 @@ npm --prefix apps/web run dev -- --host 127.0.0.1
 
 The API listens on `http://127.0.0.1:3000` and Vite on `http://127.0.0.1:4173` by default. There is no browser authentication or authentication database. Both services are restricted to loopback; any remote exposure must use an authenticated local reverse proxy.
 
-Prepare the pinned evidence tool images and shared code-server container with:
+Prepare the pinned disposable capability images and shared code-server container with:
 
 ```bash
 infra/pi-tools.sh prepare
@@ -65,10 +67,11 @@ npm --prefix apps/web run build
 ## Structure
 
 - `src/http`: Fastify API, uploads, terminal tickets, and interactive PTY WebSocket forwarding
-- `src/agent`: issue runner and per-issue execution coordination
+- `src/agent`: issue orchestration, service repository preparation, prompts, and per-issue execution coordination
+- `src/pi`: versioned issue policy, pi extension, path enforcement, and fixed repository inspection
+- `src/evidence`: containerized configuration, database, Node, and Maven capability implementations
 - `src/db`: libSQL client, SQLite schema, migration, and seed
-- `src/evidence`: capability grants and bounded read-only tools
-- `src/workspace`: Git worktrees, shared code-server, PTY sessions, and terminal bridge
+- `src/workspace`: Git worktrees, shared code-server, policy-bound PTY sessions, and terminal bridge
 - `apps/web`: Solid web client
 - `drizzle`: generated SQLite migration
 - `infra`: shared code-server and pinned tool preparation scripts

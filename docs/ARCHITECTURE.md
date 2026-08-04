@@ -1,44 +1,107 @@
 # Architecture
 
-## Runtime
+## Core Model
 
-Issue Pilot has three cooperating surfaces:
+Issue Pilot is an issue-processing system built around pi. Fastify and Solid provide orchestration and interaction; they do not implement a second agent runtime.
 
-1. The Fastify API owns SQLite writes, issue configuration, uploads, terminal tickets, and WebSocket-to-PTY forwarding.
-2. The agent runner prepares Git worktrees, persists pi sessions, writes capability grants, and starts the interactive pi CLI in a managed PTY.
-3. The Solid web client consumes the API and embeds the shared code-server plus an xterm view of that exact pi PTY.
+The runtime has four surfaces:
 
-SQLite is accessed through Drizzle and `@libsql/client`. Runtime files live below `.issue-pilot` by default. The database and capability files are created with owner-only permissions.
+1. Fastify owns SQLite writes, issue configuration, uploads, terminal tickets, and WebSocket-to-PTY forwarding.
+2. The Runner resolves issue scope, prepares Git worktrees, creates the issue policy, and starts the interactive pi CLI.
+3. The Issue Pilot pi extension enforces that policy and exposes bounded tools for external systems and build runtimes.
+4. Solid embeds the shared code-server and an xterm view of the exact Runner-owned pi PTY.
 
-## Issue Execution
+SQLite is accessed through Drizzle and `@libsql/client`. Runtime files live below `.issue-pilot` by default. Databases, policies, signals, connector profiles, and secrets are owner-only.
 
-A created issue binds one or more services to one environment. Each service binding references a unique deployment, which supplies the base branch and allowed evidence capabilities.
+## Service Model
 
-The runner:
+A service has a name, description, one or more frontend/backend Git repositories, and zero or more environment deployment configurations. Repository roots are the only configured code boundaries. Services do not contain a type, project paths, modules, or configured relationships.
 
-1. Expands explicitly configured service relationships and module scopes.
-2. Fetches each repository into a shared cache and creates an issue-specific Git worktree.
-3. Writes a frozen capability grant containing repository paths, base commits, module paths, and allowed capabilities.
-4. Creates or resumes a persistent pi session file.
-5. Starts interactive `pi --session ... -a` in the managed PTY, loads the evidence extension, and supplies the issue context as the initial CLI prompt.
-6. Lets the browser attach to that same PTY while the agent is running. The extension emits an owner-only `agent_settled` signal so the runner can update issue state without terminating the interactive CLI.
+An issue selects exactly one service. Runner prepares all repositories attached to that service and does not add repositories through dependency expansion. Maven/npm manifests, imports, configuration, and MQ annotations may be inspected on demand, but discovered dependencies are evidence rather than persisted authorization.
 
-Runs for one issue are serialized. Different issues can run concurrently.
+## Issue Execution Policy
 
-## Trust Boundaries
+Every run produces a versioned policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
 
-Capability grants are keyed by the normalized issue key and accepted only from the matching managed workspace. A grant must not be readable by group or other users.
+- one normalized issue key and issue type;
+- the exact workspace root;
+- the active pi tool allowlist;
+- granted service/environment pairs;
+- repository roots and frozen base commits;
+- repository-root code boundaries for the selected service;
+- deployment evidence capabilities.
 
-Configuration reads use files from the recorded base commit. Nacos hosts must be allowlisted. Bootstrap credentials are written only to a temporary owner-only profile and are not included in tool output. Loaded repository/Nacos sources and missing Nacos targets are reported separately so a `404` cannot be mistaken for a complete effective configuration.
+Policy files are accepted only from the matching managed workspace and must not be readable by group or other users. Repository paths must remain below that workspace. Existing targets are canonicalized with `realpath`; symlink escapes and writes to Git metadata are rejected.
 
-Database reads accept one issue-relevant read-only SQL statement at a time. The capability grant fixes the service and environment datasource; validation rejects comments, multiple statements, writes, DDL, locks, file output, delay functions, and unbounded `SELECT` queries. Test MySQL access and production DMS access run through pinned disposable containers. Passwords are passed through temporary environment files rather than command arguments.
+Issue type determines code mutation access. `incident`, `request`, and `smart_analysis` may use `edit`/`write` at the repository roots attached to the selected service. `question` sessions are entirely code-read-only. Configuration and database tools become active only when at least one selected deployment grants the corresponding capability.
 
-Node and Maven tools expose fixed actions instead of arbitrary shell commands. Project paths must stay below the issue workspace.
+The Runner includes a policy hash in the PTY binding. A policy change invalidates the old binding, so a retained process cannot silently keep stale permissions.
 
-Terminal access uses short-lived, single-use tickets. The browser neither formats agent events nor inserts status text into the terminal buffer: output, input, and resize messages are forwarded to the Runner-owned interactive pi PTY. PTY output has a bounded backlog. A running CLI is retained without a browser; after `agent_settled`, an unattached CLI is terminated after the idle timeout.
+## Locked Pi Runtime
 
-The API and web client have no built-in authentication or authentication database. They are loopback-only services. Any remote exposure must terminate authentication in a local reverse proxy before forwarding to the loopback listeners.
+Managed pi starts with automatic resources disabled:
 
-## Shared Code Server
+```text
+--no-approve
+--no-extensions
+--no-skills
+--no-prompt-templates
+--no-context-files
+--no-builtin-tools
+--tools <issue allowlist>
+--extension <issue-pilot extension>
+```
 
-One `code-server` container mounts the managed workspace root. Per-issue URLs select a folder through the `folder` query parameter. This avoids one persistent container per issue while preserving isolated Git worktrees.
+The explicit extension loads before project trust and activates only when the Runner sets `ISSUE_PILOT_POLICY_REQUIRED=1`. Outside a managed issue run, the package extension is inert.
+
+The CLI allowlist is the first boundary. The extension is the second boundary: it reloads the policy for every tool call, blocks inactive tools, validates built-in file/search paths, disables `!` shell commands, and prevents session switching/forking. Arbitrary `bash` is never active.
+
+The browser may attach only to an already-running, policy-matching Runner PTY. It cannot create a default pi process. Output, input, and resize bytes are forwarded unchanged. The extension emits an owner-only `agent_settled` signal so the Runner can update issue state without terminating the interactive CLI.
+
+## External Capabilities
+
+External systems are exposed as typed pi extension tools rather than shell access. Tools are allowlisted when policy is created but execute only when pi decides the current investigation needs that evidence:
+
+- `configuration_read`: resolves every repository granted to one service, reads bounded configuration from frozen Git revisions, follows approved Nacos imports, and returns sanitized per-repository results. The service key may be omitted only when the issue selects exactly one service.
+- `database_read`: validates one bounded read-only SQL statement, searches the selected service repositories for datasource configuration, follows approved Nacos imports, requires exactly one resolved datasource, and executes through MySQL or DMS connectors.
+- `node_project_command`: runs a fixed Node action in a pinned disposable container.
+- `maven_project_command`: runs a fixed Maven action in a pinned disposable Java 8 container with an issue-isolated cache.
+- `repository_status`: exposes only scoped local `git status` and `git diff` operations.
+
+Nacos, MySQL, DMS, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
+
+Configuration reads report repository/Nacos sources and missing targets separately. Nacos servers must be allowlisted. Database resolution fails explicitly when a service has no datasource or resolves more than one distinct datasource; pi must refine the service scope rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
+
+Database results are returned verbatim but bounded by row, field, string, and total byte limits. This exception applies only to query rows; configuration credentials, connection URLs, connector profiles, command arguments, and raw logs remain protected.
+
+## Workspace Flow
+
+A created issue binds exactly one service to one fixed environment. The Runner:
+
+1. Resolves all repositories attached to the selected service.
+2. Fetches repositories into a shared cache and creates issue-specific Git worktrees.
+3. Freezes repository commits and writes the issue execution policy.
+4. Creates or resumes one persistent pi session.
+5. Starts the locked interactive pi CLI with the issue prompt.
+6. Records comments, evidence, classification, and workspace state after settlement.
+
+Runs for one issue are serialized. Different issues can run concurrently. Git pushes, merge requests, and remote branch writes are not exposed to pi.
+
+## Issue Status
+
+Issue status describes workflow, while workspace status describes technical runtime state:
+
+- `open`: waiting to start or reopened by a user;
+- `in_progress`: Runner/pi is processing the current turn;
+- `pending`: pi settled successfully and the result awaits human confirmation;
+- `failed`: workspace preparation or the overall pi run failed;
+- `resolved`: a human confirmed the issue is solved;
+- `closed`: archived.
+
+A successful settlement never marks an issue resolved automatically. Retry changes a failed issue back to `in_progress`; a new message also starts another processing turn. The underlying error remains in `issueWorkspaces.lastError` for failed runs.
+
+## Network Boundary
+
+The API and web client have no built-in authentication or authentication database. They bind to loopback only. Any remote exposure must terminate authentication in a local reverse proxy before forwarding to those listeners.
+
+One shared code-server container mounts the managed workspace root. Per-issue URLs select a folder through the `folder` query parameter, and browser traffic is proxied through `/code-server/` for same-origin cookies and WebSockets.

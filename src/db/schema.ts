@@ -46,28 +46,14 @@ export const deploymentCapabilities = sqliteTable("deployment_capabilities", {
 }, (table) => [uniqueIndex("deployment_capability_unique").on(table.deploymentId, table.capability)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {
-  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), url: text("url").notNull(), role: text("role").notNull().default("application"), ...timestamps,
-}, (table) => [uniqueIndex("service_repository_one_per_service").on(table.serviceId)]);
-
-export const serviceModules = sqliteTable("service_modules", {
-  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), name: text("name").notNull(), path: text("path").notNull(), description: text("description").notNull().default(""), ...timestamps,
-}, (table) => [uniqueIndex("service_module_name_unique").on(table.serviceId, table.name), uniqueIndex("service_module_path_unique").on(table.serviceId, table.path)]);
-
-export const serviceRelations = sqliteTable("service_relations", {
-  sourceServiceId: text("source_service_id").notNull().references(() => services.id, { onDelete: "cascade" }), targetServiceId: text("target_service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
-  relationType: text("relation_type").notNull().default("depends_on"), metadata: json<Record<string, unknown>>("metadata").notNull().default({}), ...timestamps,
-}, (table) => [uniqueIndex("service_relation_unique").on(table.sourceServiceId, table.targetServiceId, table.relationType)]);
-
-export const serviceRelationModules = sqliteTable("service_relation_modules", {
-  sourceServiceId: text("source_service_id").notNull().references(() => services.id, { onDelete: "cascade" }), targetServiceId: text("target_service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
-  moduleId: text("module_id").notNull().references(() => serviceModules.id), ...timestamps,
-}, (table) => [uniqueIndex("service_relation_module_unique").on(table.sourceServiceId, table.targetServiceId, table.moduleId)]);
+  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), kind: text("kind", { enum: ["frontend", "backend"] }).notNull().default("backend"), url: text("url").notNull(), ...timestamps,
+}, (table) => [uniqueIndex("service_repository_url_unique").on(table.serviceId, table.url)]);
 
 export const issues = sqliteTable("issues", {
   id: id(), key: text("key").notNull(), title: text("title").notNull(), description: text("description").notNull().default(""),
-  status: text("status", { enum: ["open", "in_progress", "pending", "resolved", "closed"] }).notNull().default("open"),
+  status: text("status", { enum: ["open", "in_progress", "pending", "failed", "resolved", "closed"] }).notNull().default("open"),
   priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] }).notNull().default("p2"),
-  type: text("type", { enum: ["incident", "request", "problem", "question", "task", "smart_analysis"] }).notNull().default("request"),
+  type: text("type", { enum: ["incident", "request", "question", "smart_analysis"] }).notNull().default("request"),
   serviceId: text("service_id").references(() => services.id), environmentId: text("environment_id").references(() => environments.id),
   reporterSubject: text("reporter_subject").notNull().references(() => subjects.subject), assigneeSubject: text("assignee_subject").references(() => subjects.subject),
   labels: json<string[]>("labels").notNull().default([]), resolvedAt: date("resolved_at"), version: integer("version").notNull().default(1), ...timestamps,
@@ -78,10 +64,6 @@ export const issueServices = sqliteTable("issue_services", {
   environmentId: text("environment_id").notNull().references(() => environments.id), deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id),
   primary: integer("primary", { mode: "boolean" }).notNull().default(false), ...timestamps,
 }, (table) => [uniqueIndex("issue_service_unique").on(table.issueId, table.serviceId, table.environmentId), index("issue_services_service_idx").on(table.serviceId, table.environmentId)]);
-
-export const issueServiceModules = sqliteTable("issue_service_modules", {
-  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), moduleId: text("module_id").notNull().references(() => serviceModules.id), ...timestamps,
-}, (table) => [uniqueIndex("issue_service_module_unique").on(table.issueId, table.moduleId)]);
 
 export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
   issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), subject: text("subject").notNull().references(() => subjects.subject), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),

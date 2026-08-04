@@ -1,6 +1,6 @@
 export type IssuePriority = "p0" | "p1" | "p2" | "p3";
-export type IssueType = "incident" | "request" | "task" | "problem" | "question" | "smart_analysis";
-export type IssueStatus = "open" | "in_progress" | "pending" | "resolved" | "closed";
+export type IssueType = "incident" | "request" | "question" | "smart_analysis";
+export type IssueStatus = "open" | "in_progress" | "pending" | "failed" | "resolved" | "closed";
 
 export interface IssueListItem {
   id: string;
@@ -31,13 +31,6 @@ export interface AgentEvent {
   createdAt: string;
 }
 
-export interface ConversationMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  createdAt: string;
-}
-
 export interface IssueDetail extends IssueListItem {
   description: string;
   repositories: Array<{ id: string; url: string; baseBranch: string; workingBranch: string | null; codeServerPath: string | null }>;
@@ -55,10 +48,8 @@ export interface IssueDetail extends IssueListItem {
   reporter?: Person;
   environmentKey?: string | null;
   affectedServices?: Array<{ key: string; name: string; primary: boolean }>;
-  affectedModules?: Array<{ id: string; serviceKey: string; name: string; path: string }>;
-  scopeCandidates?: Array<{ serviceKey: string; serviceName: string; serviceDescription: string; sourceServiceKeys: string[]; wholeServiceAllowed: boolean; modules: Array<{ name: string; path: string; description: string }> }>;
   comments?: IssueComment[];
-  piConversation?: ConversationMessage[];
+  terminalTranscript?: { data: string; columns: number; rows: number } | null;
 }
 
 export interface Person { subject: string; name: string; email: string }
@@ -99,24 +90,10 @@ const fixture: IssueDetail[] = [
     agentSession: { sessionId: "fixture-session-0042" },
     attachments: [],
     ccRecipients: [],
-    scopeCandidates: [{
-      serviceKey: "srm-server",
-      serviceName: "srm-server",
-      serviceDescription: "供应商关系管理后端服务。",
-      sourceServiceKeys: ["srm"],
-      wholeServiceAllowed: false,
-      modules: [{ name: "srm-api-manage", path: "srm-api-manage", description: "管理端 API。" }],
-    }],
     comments: [{
       id: "comment-agent-1",
       author: "issue-pilot",
       body: "## 分析结论\n\n缓存失效消息缺少 `tenantId`。\n\n- 支付状态正常\n- 已补充映射测试",
-      createdAt: "2026-08-01T14:45:00.000Z",
-    }],
-    piConversation: [{
-      id: "pi-message-agent-1",
-      role: "assistant",
-      text: "## 分析结论\n\n缓存失效消息缺少 `tenantId`。\n\n- 支付状态正常\n- 已补充映射测试",
       createdAt: "2026-08-01T14:45:00.000Z",
     }],
   },
@@ -144,7 +121,7 @@ const fixture: IssueDetail[] = [
     title: "批量审批偶发超时",
     description: "超过 500 条记录时审批接口超时。",
     priority: "p1",
-    type: "problem",
+    type: "question",
     status: "open",
     assignee: null,
     assigneeSubject: null,
@@ -166,7 +143,6 @@ export interface DemoIssueInput {
   priority: IssuePriority;
   type: IssueType;
   service: string;
-  moduleIds: string[];
   environment: string;
   reporter: string;
   assigneeSubject: string | null;
@@ -201,7 +177,6 @@ export function createFixture(input: DemoIssueInput): IssueDetail {
     ccRecipients: fixturePeople.filter((person) => input.ccSubjects.includes(person.subject)),
     environmentKey: input.environment,
     affectedServices: input.service.split("+").map((serviceKey, index) => ({ key: serviceKey, name: serviceKey.toUpperCase(), primary: index === 0 })),
-    affectedModules: fixtureConfiguration.services.flatMap((service) => service.modules.filter((module) => input.moduleIds.includes(module.id)).map((module) => ({ ...module, serviceKey: service.key }))),
   };
   fixture.unshift(issue);
   return issue;
@@ -240,15 +215,12 @@ export interface Service {
   scope: "global";
   environmentIds: string[];
   deployments: ServiceDeployment[];
-  repositories: Array<{ id: string; url: string; role: string }>;
-  modules: Array<{ id: string; name: string; path: string; description: string }>;
-  relatedServiceIds: string[];
-  relatedModuleIds: string[];
+  repositories: Array<{ id: string; kind: "frontend" | "backend"; url: string }>;
 }
 
 export interface Config {
   environments: Environment[];
-  capabilityCatalog: Array<{ key: DeploymentCapability; label: string }>;
+  capabilityCatalog: Array<{ key: DeploymentCapability; label: string; description: string }>;
   services: Service[];
 }
 
@@ -258,19 +230,18 @@ const fixtureConfiguration: Config = {
     { id: "env-test", key: "test", name: "测试", kind: "test", scope: "global" },
   ],
   capabilityCatalog: [
-    { key: "configuration_read", label: "配置读取" },
-    { key: "database_read", label: "数据库读取" },
+    { key: "configuration_read", label: "配置读取", description: "按需合并冻结仓库配置、环境 profile 和批准的 Nacos 配置，并对敏感值脱敏。" },
+    { key: "database_read", label: "数据库读取", description: "按需解析服务数据源，通过 MySQL 或 DMS 执行有行数限制的只读 SQL。" },
   ],
   services: [{
     id: "service-srm", key: "srm", name: "SRM", description: "# SRM\n\n供应商关系管理服务。\n\n## 模块说明\n\n### 供应商模块\n\n负责供应商档案与准入流程。入口位于 supplier controller。\n\n### 批处理模块\n\n负责供应商数据批量同步任务。", scope: "global",
     environmentIds: ["env-production", "env-test"], deployments: [
       { id: "srm-production", environmentId: "env-production", baseBranch: "main", capabilities: [] },
       { id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["configuration_read", "database_read"] },
-    ], repositories: [], modules: [{ id: "srm-module-supplier", name: "供应商模块", path: "modules/supplier", description: "负责供应商档案与准入流程。入口位于 supplier controller。" }, { id: "srm-module-batch", name: "批处理模块", path: "modules/batch", description: "负责供应商数据批量同步任务。" }], relatedServiceIds: ["service-oms"], relatedModuleIds: ["oms-module-order"],
+    ], repositories: [{ id: "srm-repository", kind: "backend", url: "git@example.com:team/srm.git" }],
   }, {
     id: "service-oms", key: "oms", name: "OMS", description: "订单管理服务。", scope: "global",
-    environmentIds: [], deployments: [], repositories: [{ id: "oms-repository", url: "git@example.com:team/oms.git", role: "application" }],
-    modules: [{ id: "oms-module-order", name: "订单模块", path: "modules/order", description: "负责订单生命周期。" }], relatedServiceIds: [], relatedModuleIds: [],
+    environmentIds: [], deployments: [], repositories: [{ id: "oms-repository", kind: "backend", url: "git@example.com:team/oms.git" }],
   }],
 };
 
@@ -300,16 +271,15 @@ export function configKey(prefix: string, name: string, unique = false): string 
 export interface ServiceInput {
   name: string;
   description: string;
-  repositories: Array<{ url: string; role?: string }>;
-  modules: Array<{ id?: string; name: string; path: string; description?: string }>;
-  relatedServiceKeys: string[];
-  relatedModuleIds: string[];
+  repositories: Array<{ id?: string; kind: "frontend" | "backend"; url: string }>;
+  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[] }>;
 }
 
 export async function createService(input: ServiceInput): Promise<{ key: string; name: string }> {
   const key = configKey("service", input.name);
   if (fixturesEnabled) {
-    const created: Service = { id: `service-${key}`, key, name: input.name, description: input.description, scope: "global", environmentIds: [], deployments: [], repositories: input.repositories.map((repository, index) => ({ id: `${key}-${index}`, role: repository.role ?? "application", ...repository })), modules: input.modules.map((module, index) => ({ id: module.id ?? `${key}-module-${index}`, name: module.name, path: module.path, description: module.description ?? "" })), relatedServiceIds: fixtureConfiguration.services.filter((related) => input.relatedServiceKeys.includes(related.key)).map((related) => related.id), relatedModuleIds: [...input.relatedModuleIds] };
+    const deployments = input.deployments.map((deployment) => ({ id: `${key}-${deployment.environmentKey}`, environmentId: fixtureConfiguration.environments.find((environment) => environment.key === deployment.environmentKey)!.id, baseBranch: deployment.baseBranch, capabilities: [...deployment.capabilities] }));
+    const created: Service = { id: `service-${key}`, key, name: input.name, description: input.description, scope: "global", environmentIds: deployments.map((deployment) => deployment.environmentId), deployments, repositories: input.repositories.map((repository, index) => ({ id: repository.id ?? `${key}-${index}`, kind: repository.kind, url: repository.url })) };
     fixtureConfiguration.services.push(created);
     return created;
   }
@@ -381,10 +351,9 @@ export async function updateService(key: string, input: ServiceInput): Promise<v
     if (!service) throw new Error("service_not_found");
     service.name = input.name;
     service.description = input.description;
-    service.repositories = input.repositories.map((repository, index) => ({ id: `${key}-${index}`, role: repository.role ?? "application", ...repository }));
-    service.modules = input.modules.map((module, index) => ({ id: module.id ?? `${key}-module-${index}`, name: module.name, path: module.path, description: module.description ?? "" }));
-    service.relatedServiceIds = fixtureConfiguration.services.filter((related) => input.relatedServiceKeys.includes(related.key)).map((related) => related.id);
-    service.relatedModuleIds = [...input.relatedModuleIds];
+    service.repositories = input.repositories.map((repository, index) => ({ id: repository.id ?? `${key}-${index}`, kind: repository.kind, url: repository.url }));
+    service.deployments = input.deployments.map((deployment) => ({ id: `${key}-${deployment.environmentKey}`, environmentId: fixtureConfiguration.environments.find((environment) => environment.key === deployment.environmentKey)!.id, baseBranch: deployment.baseBranch, capabilities: [...deployment.capabilities] }));
+    service.environmentIds = service.deployments.map((deployment) => deployment.environmentId);
     return;
   }
   const response = await apiFetch(`/api/services/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
@@ -395,8 +364,7 @@ export async function deleteService(key: string): Promise<void> {
   if (fixturesEnabled) {
     const index = fixtureConfiguration.services.findIndex((item) => item.key === key);
     if (index < 0) throw new Error("service_not_found");
-    const [service] = fixtureConfiguration.services.splice(index, 1);
-    for (const related of fixtureConfiguration.services) related.relatedServiceIds = related.relatedServiceIds.filter((id) => id !== service!.id);
+    fixtureConfiguration.services.splice(index, 1);
     return;
   }
   const response = await apiFetch(`/api/services/${encodeURIComponent(key)}`, { method: "DELETE" });
@@ -423,7 +391,6 @@ export interface IssueInput {
   priority: IssuePriority;
   type: IssueType;
   serviceKeys: string[];
-  moduleIds: string[];
   assigneeSubject: string | null;
   ccSubjects: string[];
 }
@@ -437,6 +404,19 @@ export async function createIssue(input: IssueInput & { environmentKey: string; 
   }
   const response = await apiFetch("/api/issues", { method: "POST", body: JSON.stringify(input) });
   if (!response.ok) throw new Error(await response.json().then((body: { error?: string }) => body.error).catch(() => undefined) ?? `Failed to create issue: ${response.status}`);
+  return await response.json() as IssueListItem;
+}
+
+export async function updateIssueStatus(key: string, status: "open" | "resolved"): Promise<IssueListItem> {
+  if (fixturesEnabled) {
+    const issue = fixture.find((item) => item.id === key);
+    if (!issue) throw new Error("issue_not_found");
+    issue.status = status;
+    issue.updatedAt = new Date().toISOString();
+    return issue;
+  }
+  const response = await apiFetch(`/api/issues/${encodeURIComponent(key)}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+  if (!response.ok) throw new Error(await response.json().then((body: { error?: string }) => body.error).catch(() => undefined) ?? `Failed to update issue status: ${response.status}`);
   return await response.json() as IssueListItem;
 }
 
@@ -455,7 +435,6 @@ export async function updateIssue(key: string, input: IssueInput): Promise<Issue
       assignee: input.assigneeSubject ? fixturePeople.find((person) => person.subject === input.assigneeSubject)?.name ?? null : null,
       ccRecipients: fixturePeople.filter((person) => input.ccSubjects.includes(person.subject)),
       affectedServices: input.serviceKeys.map((serviceKey, index) => ({ key: serviceKey, name: serviceKey.toUpperCase(), primary: index === 0 })),
-      affectedModules: fixtureConfiguration.services.flatMap((service) => service.modules.filter((module) => input.moduleIds.includes(module.id)).map((module) => ({ ...module, serviceKey: service.key }))),
       version: issue.version + 1,
       updatedAt: new Date().toISOString(),
     };
@@ -523,12 +502,6 @@ export async function sendPrompt(key: string, message: string, behavior: "steer"
   if (fixturesEnabled) {
     const issue = fixture.find((item) => item.id === key);
     if (!issue) throw new Error("issue_not_found");
-    const now = Date.now();
-    issue.piConversation = [
-      ...(issue.piConversation ?? []),
-      { id: `${key}-pi-user-${now}`, role: "user", text: message, createdAt: new Date(now).toISOString() },
-      { id: `${key}-pi-assistant-${now}`, role: "assistant", text: "## 已收到\n\n我会基于当前 pi session 继续处理。", createdAt: new Date(now + 1).toISOString() },
-    ];
     return;
   }
   const response = await apiFetch(`/api/issues/${encodeURIComponent(key)}/pi-prompt`, { method: "POST", body: JSON.stringify({ message, behavior }) });

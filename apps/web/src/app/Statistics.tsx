@@ -54,7 +54,7 @@ export function Statistics() {
     <main class="statistics-workspace">
       <header class="statistics-header">
         <div><span>最近 {period().replace("d", "")} 天</span><h1>工单处理统计</h1></div>
-        <Select aria-label="统计周期" value={period()} onChange={(value) => setPeriod(String(value))} options={[{ value: "7d", label: "最近 7 天" }, { value: "30d", label: "最近 30 天" }, { value: "90d", label: "最近 90 天" }]} />
+        <Select aria-label="统计周期" value={period()} onChange={(value) => { if (value === "7d" || value === "30d" || value === "90d") setPeriod(value); }} options={[{ value: "7d", label: "最近 7 天" }, { value: "30d", label: "最近 30 天" }, { value: "90d", label: "最近 90 天" }]} />
       </header>
       <Show when={!loading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
         <Show when={!error()} fallback={<div class="queue-error" role="alert">{error()}</div>}>

@@ -4,7 +4,8 @@ export const priorityColor: Record<IssuePriority, string> = { p0: "red", p1: "vo
 export const statusLabel: Record<IssueStatus, string> = {
   open: "待处理",
   in_progress: "处理中",
-  pending: "等待中",
+  pending: "待确认",
+  failed: "异常",
   resolved: "已解决",
   closed: "已关闭",
 };
@@ -12,15 +13,14 @@ export const statusBadge: Record<IssueStatus, "default" | "processing" | "warnin
   open: "default",
   in_progress: "processing",
   pending: "warning",
+  failed: "warning",
   resolved: "success",
   closed: "default",
 };
 
 export const typeLabel: Record<IssueType, string> = {
   incident: "故障",
-  request: "请求",
-  task: "任务",
-  problem: "问题",
+  request: "需求",
   question: "咨询",
   smart_analysis: "智能分析",
 };

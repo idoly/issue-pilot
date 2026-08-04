@@ -15,6 +15,41 @@
       "when": 1785844806488,
       "tag": "0001_service_sort_order",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785852000000,
+      "tag": "0002_simple_service_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785855000000,
+      "tag": "0003_service_multiple_repositories",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785858000000,
+      "tag": "0004_drop_service_kind",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785861000000,
+      "tag": "0005_repository_kind",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785864000000,
+      "tag": "0006_simplify_issue_types",
+      "breakpoints": true
     }
   ]
 }

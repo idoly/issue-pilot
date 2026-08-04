@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { datasourceUrl, resolveConfiguration, sanitizedConfiguration } from "./configuration.ts";
-import type { ServiceCapability } from "./grants.ts";
+import type { ServiceCapability } from "../pi/policy.ts";
 import { queryMysql, validateReadOnlyQuery } from "./mysql.ts";
 import { result } from "./output.ts";
 
@@ -41,22 +41,44 @@ async function connectors(): Promise<ConnectorConfiguration> {
   }
 }
 
-export async function readConfiguration(pi: ExtensionAPI, service: ServiceCapability, signal?: AbortSignal) {
+export async function readConfiguration(pi: ExtensionAPI, services: ServiceCapability[], signal?: AbortSignal) {
+  if (!services.length) throw new Error("service_not_granted_for_issue");
   const configured = await connectors();
-  const provider = configured.databaseProviders?.[service.environmentKey];
-  const resolved = await resolveConfiguration(pi, service, signal, {}, nacosServers(configured, service, provider));
-  return result(sanitizedConfiguration(resolved), { serviceKey: service.serviceKey, sources: resolved.sources, missingSources: resolved.missingSources });
+  const repositories = [];
+  for (const service of services) {
+    const provider = configured.databaseProviders?.[service.environmentKey];
+    const resolved = await resolveConfiguration(pi, service, signal, {}, nacosServers(configured, service, provider));
+    repositories.push({ repository: path.basename(service.repositoryPath), ...sanitizedConfiguration(resolved) });
+  }
+  return result({ repositories }, {
+    serviceKey: services[0]!.serviceKey,
+    sources: repositories.flatMap((repository) => repository.sources),
+    missingSources: repositories.flatMap((repository) => repository.missingSources),
+  });
 }
 
-export async function readDatabase(pi: ExtensionAPI, cwd: string, service: ServiceCapability, input: { statement: string }, signal?: AbortSignal) {
+export async function readDatabase(pi: ExtensionAPI, cwd: string, services: ServiceCapability[], input: { statement: string }, signal?: AbortSignal) {
+  if (!services.length) throw new Error("service_not_granted_for_issue");
   const statement = validateReadOnlyQuery(input.statement);
   const configured = await connectors();
+  const candidates: Array<{ service: ServiceCapability; connectionUrl: string }> = [];
+  for (const service of services) {
+    const provider = configured.databaseProviders?.[service.environmentKey];
+    const resolved = await resolveConfiguration(pi, service, signal, {}, nacosServers(configured, service, provider));
+    try {
+      candidates.push({ service, connectionUrl: datasourceUrl(resolved) });
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "datasource_url_not_resolved") throw error;
+    }
+  }
+  const unique = [...new Map(candidates.map((candidate) => [candidate.connectionUrl, candidate])).values()];
+  if (!unique.length) throw new Error("service_datasource_not_found");
+  if (unique.length > 1) throw new Error("multiple_service_datasources_found");
+  const { service, connectionUrl } = unique[0]!;
   const provider = configured.databaseProviders?.[service.environmentKey];
-  const resolved = await resolveConfiguration(pi, service, signal, {}, nacosServers(configured, service, provider));
-  const connectionUrl = datasourceUrl(resolved);
   if (!provider || provider.provider !== "dms") {
     const output = await queryMysql(pi, cwd, { connectionUrl, statement }, signal);
-    return result({ provider: "mysql", ...output }, { serviceKey: service.serviceKey }, { redact: false });
+    return result({ provider: "mysql", ...output }, { serviceKey: service.serviceKey, repository: path.basename(service.repositoryPath) }, { redact: false });
   }
 
   const profile = await stat(path.resolve(provider.profileRoot));
@@ -73,5 +95,5 @@ export async function readDatabase(pi: ExtensionAPI, cwd: string, service: Servi
   if (execution.code !== 0) throw new Error("dms_query_failed");
   let payload: unknown;
   try { payload = JSON.parse(execution.stdout); } catch { payload = { output: execution.stdout }; }
-  return result({ provider: "dms", database: database.database, result: payload }, { serviceKey: service.serviceKey }, { redact: false });
+  return result({ provider: "dms", database: database.database, result: payload }, { serviceKey: service.serviceKey, repository: path.basename(service.repositoryPath) }, { redact: false });
 }

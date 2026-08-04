@@ -9,7 +9,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { resolveConfiguration, sanitizedConfiguration } from "../../src/evidence/configuration.ts";
-import type { ServiceCapability } from "../../src/evidence/grants.ts";
+import type { ServiceCapability } from "../../src/pi/policy.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,9 +49,9 @@ test("resolves datasource configuration through Nacos without exposing bootstrap
       serviceKey: "orders",
       environmentKey: "test",
       environmentKind: "test",
+      codeAccess: "write",
       repositoryPath: repository,
       baseCommit: stdout.trim(),
-      modulePaths: ["modules/orders"],
       capabilities: ["configuration_read", "database_read"],
     };
     const calls: string[][] = [];

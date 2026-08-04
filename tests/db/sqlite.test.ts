@@ -24,7 +24,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.ok(environment?.createdAt instanceof Date);
     const [production] = await db.insert(environments).values({ organizationId: "demo", scope: "global", key: "production", name: "Production", kind: "production", config: {} }).returning();
     const [service] = await db.insert(services).values({ organizationId: "demo", scope: "global", key: "orders", name: "Orders", description: "" }).returning();
-    await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:orders.git", role: "application" });
+    await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:orders.git" });
     const deployments = await db.insert(serviceDeployments).values([
       { serviceId: service!.id, environmentId: environment!.id, baseBranch: "develop", config: {} },
       { serviceId: service!.id, environmentId: production!.id, baseBranch: "release", config: {} },
@@ -32,10 +32,11 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await db.insert(deploymentCapabilities).values({ deploymentId: deployments[0]!.id, capability: "database_read" });
     assert.deepEqual(deployments.map((deployment) => deployment.baseBranch).sort(), ["develop", "release"]);
     await assert.rejects(db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, baseBranch: "other", config: {} }));
-    await assert.rejects(db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:second.git", role: "application" }));
+    await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:second.git" });
+    assert.equal((await db.select().from(serviceRepositories)).length, 2);
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
-    const obsoleteModuleRelationTable = await client.execute("select name from sqlite_master where type = 'table' and name = 'service_module_relations'");
-    assert.equal(obsoleteModuleRelationTable.rows.length, 0);
+    const obsoleteTables = await client.execute("select name from sqlite_master where type = 'table' and name in ('service_modules', 'service_relations', 'service_relation_modules', 'issue_service_modules')");
+    assert.equal(obsoleteTables.rows.length, 0);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
   } finally {
     await close();

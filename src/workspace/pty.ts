@@ -1,5 +1,4 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { spawn as spawnPty, type IPty } from "node-pty";
@@ -9,6 +8,8 @@ export interface PtyBinding {
   issueKey: string;
   sessionFile: string;
   workspacePath: string;
+  policyHash: string;
+  tools: string[];
 }
 
 export interface PtyClient {
@@ -30,6 +31,12 @@ interface ManagedPty {
   idleTimer: NodeJS.Timeout | null;
   retained: boolean;
   signalFile: string | null;
+  transcriptFile: string;
+  transcriptMetaFile: string;
+  transcriptTimer: NodeJS.Timeout | null;
+  transcriptWrite: Promise<void>;
+  transcriptValid: boolean;
+  stopping: boolean;
   exit: Promise<number>;
 }
 
@@ -38,6 +45,12 @@ export interface PtyRunOptions {
   provider: string;
   model: string;
   thinking: string;
+}
+
+export interface PtyTranscript {
+  data: string;
+  columns: number;
+  rows: number;
 }
 
 export class PtySessions {
@@ -80,7 +93,7 @@ export class PtySessions {
 
   async execute(binding: PtyBinding, options: PtyRunOptions): Promise<void> {
     let managed = this.sessions.get(binding.issueId);
-    if (managed && (managed.binding.sessionFile !== binding.sessionFile || managed.binding.workspacePath !== binding.workspacePath)) {
+    if (managed && !this.sameBinding(managed.binding, binding)) {
       if (managed.client) throw new Error("pi_terminal_already_open");
       this.stop(managed);
       managed = undefined;
@@ -100,17 +113,25 @@ export class PtySessions {
       await writeFile(signalFile, "", { mode: 0o600 });
       const args = [
         "--session", binding.sessionFile,
-        "-a",
+        "--no-approve",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-context-files",
+        "--no-builtin-tools",
+        "--tools", binding.tools.join(","),
         "--provider", options.provider,
         "--model", options.model,
         "--thinking", options.thinking,
       ];
-      if (this.extensionPath) args.push("-e", this.extensionPath);
+      if (this.extensionPath) args.push("--extension", this.extensionPath);
       args.push(options.prompt);
+      const transcript = await this.readTranscript(binding.sessionFile);
       managed = this.create(binding, 100, 30, args, {
         ...this.environment,
+        ISSUE_PILOT_POLICY_REQUIRED: "1",
         ISSUE_PILOT_SETTLED_SIGNAL_FILE: signalFile,
-      }, true, signalFile);
+      }, true, signalFile, transcript?.data ?? "");
     }
 
     await this.waitForSettlement(managed, baseline);
@@ -134,14 +155,9 @@ export class PtySessions {
   }
 
   attach(binding: PtyBinding, client: PtyClient, cols: number, rows: number): PtyAttachment {
-    let managed = this.sessions.get(binding.issueId);
-    if (managed && (managed.binding.sessionFile !== binding.sessionFile || managed.binding.workspacePath !== binding.workspacePath)) {
-      if (managed.client) throw new Error("pi_terminal_already_open");
-      this.stop(managed);
-      managed = undefined;
-    }
-    if (managed?.client) throw new Error("pi_terminal_already_open");
-    managed ??= this.create(binding, cols, rows);
+    const managed = this.sessions.get(binding.issueId);
+    if (!managed || !this.sameBinding(managed.binding, binding)) throw new Error("pi_terminal_not_runner_owned");
+    if (managed.client) throw new Error("pi_terminal_already_open");
     if (managed.idleTimer) clearTimeout(managed.idleTimer);
     managed.idleTimer = null;
     managed.client = client;
@@ -165,19 +181,30 @@ export class PtySessions {
     };
   }
 
-  close(): void {
-    for (const managed of this.sessions.values()) this.stop(managed);
-    this.sessions.clear();
+  async readTranscript(sessionFile: string): Promise<PtyTranscript | null> {
+    try {
+      const [data, metadata] = await Promise.all([
+        readFile(this.transcriptFile(sessionFile), "utf8"),
+        readFile(this.transcriptMetaFile(sessionFile), "utf8").then((value) => JSON.parse(value) as { columns?: unknown; rows?: unknown }),
+      ]);
+      if (!Number.isInteger(metadata.columns) || !Number.isInteger(metadata.rows)) return null;
+      const columns = metadata.columns as number;
+      const rows = metadata.rows as number;
+      if (columns < 20 || columns > 400 || rows < 5 || rows > 200) return null;
+      return { data, columns, rows };
+    } catch {
+      return null;
+    }
   }
 
-  private create(binding: PtyBinding, cols: number, rows: number, startupArgs?: string[], environment = this.environment, retained = false, signalFile: string | null = null): ManagedPty {
-    const args = startupArgs ?? ["--session", binding.sessionFile, "-a", ...(this.extensionPath ? ["-e", this.extensionPath] : [])];
-    if (!signalFile) {
-      mkdirSync(this.signalDirectory, { recursive: true, mode: 0o700 });
-      signalFile = path.join(this.signalDirectory, `${binding.issueKey.toLowerCase()}.settled`);
-      writeFileSync(signalFile, "", { mode: 0o600 });
-      environment = { ...environment, ISSUE_PILOT_SETTLED_SIGNAL_FILE: signalFile };
-    }
+  async close(): Promise<void> {
+    const managedSessions = [...this.sessions.values()];
+    for (const managed of managedSessions) this.stop(managed);
+    this.sessions.clear();
+    await Promise.all(managedSessions.map((managed) => managed.transcriptWrite));
+  }
+
+  private create(binding: PtyBinding, cols: number, rows: number, args: string[], environment: NodeJS.ProcessEnv, retained: boolean, signalFile: string, backlog: string): ManagedPty {
     const terminal = spawnPty(this.piExecutable, args, {
       name: "xterm-256color",
       cols: Math.max(20, Math.min(400, cols)),
@@ -187,20 +214,76 @@ export class PtySessions {
     });
     let resolveExit!: (exitCode: number) => void;
     const exit = new Promise<number>((resolve) => { resolveExit = resolve; });
-    const managed: ManagedPty = { binding, terminal, client: null, backlog: "", idleTimer: null, retained, signalFile, exit };
+    const managed: ManagedPty = {
+      binding,
+      terminal,
+      client: null,
+      backlog,
+      idleTimer: null,
+      retained,
+      signalFile,
+      transcriptFile: this.transcriptFile(binding.sessionFile),
+      transcriptMetaFile: this.transcriptMetaFile(binding.sessionFile),
+      transcriptTimer: null,
+      transcriptWrite: Promise.resolve(),
+      transcriptValid: true,
+      stopping: false,
+      exit,
+    };
     this.sessions.set(binding.issueId, managed);
     terminal.onData((data) => {
       managed.backlog += data;
-      if (managed.backlog.length > 2 * 1024 * 1024) managed.backlog = managed.backlog.slice(-1024 * 1024);
+      if (managed.backlog.length > 8 * 1024 * 1024) {
+        managed.backlog = "";
+        managed.transcriptValid = false;
+      }
+      this.scheduleTranscriptWrite(managed);
       managed.client?.output(data);
     });
     terminal.onExit(({ exitCode }) => {
       if (managed.idleTimer) clearTimeout(managed.idleTimer);
+      if (!managed.stopping) this.flushTranscript(managed);
       managed.client?.exit(exitCode);
       resolveExit(exitCode);
       if (this.sessions.get(binding.issueId) === managed) this.sessions.delete(binding.issueId);
     });
     return managed;
+  }
+
+  private transcriptFile(sessionFile: string): string {
+    return `${sessionFile}.pty`;
+  }
+
+  private transcriptMetaFile(sessionFile: string): string {
+    return `${sessionFile}.pty.json`;
+  }
+
+  private scheduleTranscriptWrite(managed: ManagedPty): void {
+    if (managed.transcriptTimer) return;
+    managed.transcriptTimer = setTimeout(() => {
+      managed.transcriptTimer = null;
+      this.flushTranscript(managed);
+    }, 100);
+    managed.transcriptTimer.unref();
+  }
+
+  private flushTranscript(managed: ManagedPty): void {
+    if (managed.transcriptTimer) clearTimeout(managed.transcriptTimer);
+    managed.transcriptTimer = null;
+    const transcript = managed.transcriptValid ? managed.backlog : "";
+    managed.transcriptWrite = managed.transcriptWrite
+      .then(async () => {
+        await writeFile(managed.transcriptFile, transcript, { mode: 0o600 });
+        await writeFile(managed.transcriptMetaFile, JSON.stringify({ columns: managed.terminal.cols, rows: managed.terminal.rows }), { mode: 0o600 });
+      })
+      .catch(() => undefined);
+  }
+
+  private sameBinding(left: PtyBinding, right: PtyBinding): boolean {
+    return left.sessionFile === right.sessionFile
+      && left.workspacePath === right.workspacePath
+      && left.policyHash === right.policyHash
+      && left.tools.join(",") === right.tools.join(",");
   }
 
   private async waitForSettlement(managed: ManagedPty, baseline: number): Promise<void> {
@@ -226,6 +309,8 @@ export class PtySessions {
   private stop(managed: ManagedPty): void {
     if (managed.idleTimer) clearTimeout(managed.idleTimer);
     managed.idleTimer = null;
+    this.flushTranscript(managed);
+    managed.stopping = true;
     try { managed.terminal.kill(); } catch { /* Process already exited. */ }
     if (this.sessions.get(managed.binding.issueId) === managed) this.sessions.delete(managed.binding.issueId);
   }

@@ -1,6 +1,7 @@
 import {
   Badge,
   Button,
+  Checkbox,
   ConfigProvider,
   Input,
   TextArea,
@@ -41,7 +42,7 @@ import { DragDropManager } from "@dnd-kit/dom";
 import { isSortable, Sortable } from "@dnd-kit/dom/sortable";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import type { FitAddon as XtermFitAddon } from "@xterm/addon-fit";
-import { createDeployment, createIssue, createService, deleteDeployment, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, terminalUrl, requestTerminalTicket, updateDeployment, updateIssue, updateService, uploadAttachments, type Service, type ServiceDeployment, type Config, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
+import { createIssue, createService, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, terminalUrl, requestTerminalTicket, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { workspaceUrl, folderUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
 import { Statistics } from "./Statistics";
@@ -50,6 +51,7 @@ import "@idoly/ant-design-solid/base.css";
 import "@idoly/ant-design-solid/badge/style.css";
 import "@idoly/ant-design-solid/button/style.css";
 import "@idoly/ant-design-solid/config-provider/style.css";
+import "@idoly/ant-design-solid/checkbox/style.css";
 import "@idoly/ant-design-solid/input/style.css";
 import "@idoly/ant-design-solid/layout/style.css";
 import "@idoly/ant-design-solid/modal/style.css";
@@ -58,6 +60,34 @@ import "@idoly/ant-design-solid/segmented/style.css";
 import "@idoly/ant-design-solid/select/style.css";
 import "@idoly/ant-design-solid/skeleton/style.css";
 import "@idoly/ant-design-solid/space/style.css";
+
+function selectedStrings(value: unknown, current: string[]): string[] {
+  if (value === null || value === undefined) return current;
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values.filter((entry): entry is string => typeof entry === "string" && entry.length > 0))];
+}
+
+function selectedChoice<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === "string" && allowed.includes(value as T) ? value as T : undefined;
+}
+
+function bindMultipleSelectBlankToggle(element: HTMLDivElement, setOpen: (open: boolean) => void): void {
+  let blankWasOpen = false;
+  element.addEventListener("mousedown", (event) => {
+    blankWasOpen = event.target instanceof HTMLElement
+      && event.target.classList.contains("ads-select-selector")
+      && element.querySelector('[role="combobox"]')?.getAttribute("aria-expanded") === "true";
+  }, { capture: true });
+  element.addEventListener("click", (event) => {
+    if (blankWasOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    }
+    blankWasOpen = false;
+  }, { capture: true });
+}
+
 import "@idoly/ant-design-solid/tabs/style.css";
 import "@idoly/ant-design-solid/tag/style.css";
 
@@ -89,8 +119,7 @@ function IssueQueue(props: {
   const [createOpen, setCreateOpen] = createSignal(false, { ownedWrite: true });
   const [title, setTitle] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
-  const [service, setService] = createSignal<string[]>([], { ownedWrite: true });
-  const [moduleIds, setModuleIds] = createSignal<string[]>([], { ownedWrite: true });
+  const [service, setService] = createSignal("", { ownedWrite: true });
   const [environment, setEnvironment] = createSignal("", { ownedWrite: true });
   void loadConfig().then((value) => {
     setConfiguration(value);
@@ -98,23 +127,21 @@ function IssueQueue(props: {
     setEnvironment(selectedEnvironment);
     const environmentId = value.environments.find((item) => item.key === selectedEnvironment)?.id;
     const availableServices = value.services.filter((item) => environmentId && item.environmentIds.includes(environmentId));
-    setService((current) => {
-      const valid = current.filter((key) => availableServices.some((item) => item.key === key));
-      return valid.length ? valid : availableServices[0] ? [availableServices[0].key] : [];
-    });
+    setService((current) => availableServices.some((item) => item.key === current) ? current : availableServices[0]?.key ?? "");
   }).catch((error) => setLoadError(error instanceof Error ? error.message : "配置加载失败"));
   void loadPeople().then((value) => { setPeople(value); }).catch(() => undefined);
   const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
   const [issueType, setIssueType] = createSignal<IssueType>("incident", { ownedWrite: true });
   const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(props.userSubject || null, { ownedWrite: true });
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
+  const [ccOpen, setCcOpen] = createSignal(false);
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   let attachmentInput: HTMLInputElement | undefined;
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
   const [queueNotice, setQueueNotice] = createSignal("", { ownedWrite: true });
   const submitIssue = async () => {
-    if (!title().trim() || !service().length) return;
+    if (!title().trim() || !service()) return;
     setSaving(true);
     setCreateError("");
     try {
@@ -125,8 +152,7 @@ function IssueQueue(props: {
         type: issueType(),
         assigneeSubject: assigneeSubject(),
         ccSubjects: ccSubjects(),
-        serviceKeys: service(),
-        moduleIds: moduleIds(),
+        serviceKeys: [service()],
         environmentKey: environment(),
         reporter: props.userName,
       });
@@ -139,10 +165,10 @@ function IssueQueue(props: {
         const message = error instanceof Error ? error.message : "附件上传失败";
         setQueueNotice(`${issue.id} 已创建，但附件上传失败：${message}`);
       }
+      setCcOpen(false);
       setCreateOpen(false);
       setTitle("");
       setDescription("");
-      setModuleIds([]);
       setAttachments([]);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : String(error));
@@ -150,9 +176,6 @@ function IssueQueue(props: {
       setSaving(false);
     }
   };
-  const selectableModules = createMemo(() => configuration().services
-    .filter((configuredService) => service().includes(configuredService.key))
-    .flatMap((configuredService) => configuredService.modules.map((module) => ({ value: module.id, label: `${configuredService.name} · ${module.name}` }))));
   const filtered = createMemo(() => {
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
@@ -179,12 +202,14 @@ function IssueQueue(props: {
         <Select
           aria-label="按状态筛选"
           value={status()}
-          onChange={(value) => setStatus(String(value))}
+          onChange={(value) => { const selected = selectedChoice(value, ["active", "open", "in_progress", "pending", "failed", "resolved", "all"] as const); if (selected) setStatus(selected); }}
           options={[
             { value: "active", label: "活动工单" },
             { value: "open", label: "待处理" },
             { value: "in_progress", label: "处理中" },
-            { value: "pending", label: "等待中" },
+            { value: "pending", label: "待确认" },
+            { value: "failed", label: "异常" },
+            { value: "resolved", label: "已解决" },
             { value: "all", label: "全部工单" },
           ]}
         />
@@ -219,15 +244,14 @@ function IssueQueue(props: {
           </Show>
         </Show>
       </div>
-      <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => setCreateOpen(false)} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service().length }}>
+      <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => { setCcOpen(false); setCreateOpen(false); }} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form">
-          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { setEnvironment(String(value)); setService([]); setModuleIds([]); }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
-          <label><span>服务（可多选）</span><Select mode="multiple" aria-label="工单服务" value={service()} onChange={(value) => { const keys = Array.isArray(value) ? value.map(String) : [String(value)]; setService(keys); const allowed = new Set(configuration().services.filter((item) => keys.includes(item.key)).flatMap((item) => item.modules.map((module) => module.id))); setModuleIds((current) => current.filter((id) => allowed.has(id))); }} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
-          <Show when={selectableModules().length}><label><span>模块（可多选，不选表示整个服务）</span><Select mode="multiple" aria-label="工单模块" value={moduleIds()} onChange={(value) => setModuleIds(Array.isArray(value) ? value.map(String) : [String(value)])} options={selectableModules()} /></label></Show>
-          <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => setPriority(value as IssuePriority)} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
-          <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => setIssueType(value as IssueType)} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
-          <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onChange={(value) => setAssigneeSubject(value ? String(value) : null)} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
-          <label><span>抄送人（可多选）</span><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} onChange={(value) => setCcSubjects(Array.isArray(value) ? value.map(String) : [String(value)])} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
+          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { const selected = selectedChoice(value, configuration().environments.map((item) => item.key)); if (selected) { setEnvironment(selected); setService(""); } }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((item) => item.key)); if (selected) setService(selected); }} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
+          <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, Object.keys(typeLabel) as IssueType[]); if (selected) setIssueType(selected); }} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
+          <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
+          <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setCcOpen)}><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} open={ccOpen()} onOpenChange={setCcOpen} onChange={(value) => setCcSubjects(selectedStrings(value, ccSubjects()))} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
           <label><span>描述</span><Input aria-label="工单描述" value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <div class="attachment-picker">
@@ -279,29 +303,31 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [editType, setEditType] = createSignal<IssueType>("incident", { ownedWrite: true });
   const [editAssignee, setEditAssignee] = createSignal<string | null>(null, { ownedWrite: true });
   const [editCc, setEditCc] = createSignal<string[]>([], { ownedWrite: true });
-  const [editServices, setEditServices] = createSignal<string[]>([], { ownedWrite: true });
-  const [editModuleIds, setEditModuleIds] = createSignal<string[]>([], { ownedWrite: true });
+  const [editCcOpen, setEditCcOpen] = createSignal(false);
+  const [editService, setEditService] = createSignal("", { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
   const [configuration, setConfiguration] = createSignal<Config>({ environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
   const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
   const [editError, setEditError] = createSignal("", { ownedWrite: true });
   const [retrying, setRetrying] = createSignal(false, { ownedWrite: true });
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
+  const [statusSaving, setStatusSaving] = createSignal(false, { ownedWrite: true });
+  const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
   void loadPeople().then(setPeople);
   void loadConfig().then(setConfiguration);
   const openEditor = () => {
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority); setEditType(props.issue.type);
     setEditAssignee(props.issue.assigneeSubject); setEditCc((props.issue.ccRecipients ?? []).map((person) => person.subject));
-    setEditServices([...(props.issue.affectedServices ?? [])].sort((left, right) => Number(right.primary) - Number(left.primary)).map((service) => service.key));
-    setEditModuleIds((props.issue.affectedModules ?? []).map((module) => module.id));
+    setEditService([...(props.issue.affectedServices ?? [])].sort((left, right) => Number(right.primary) - Number(left.primary))[0]?.key ?? "");
     setEditError(""); setEditOpen(true);
   };
   const saveIssue = async () => {
-    if (!editTitle().trim() || !editServices().length) return;
+    if (!editTitle().trim() || !editService()) return;
     setEditSaving(true); setEditError("");
     try {
-      await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKeys: editServices(), moduleIds: editModuleIds(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
+      await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKeys: [editService()], assigneeSubject: editAssignee(), ccSubjects: editCc() });
       await props.onUpdated();
+      setEditCcOpen(false);
       setEditOpen(false);
     } catch (error) {
       setEditError(error instanceof Error ? error.message : String(error));
@@ -319,9 +345,12 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
       setRetrying(false);
     }
   };
-  const editableModules = createMemo(() => configuration().services
-    .filter((service) => editServices().includes(service.key))
-    .flatMap((service) => service.modules.map((module) => ({ value: module.id, label: `${service.name} · ${module.name}` }))));
+  const changeStatus = async (status: "open" | "resolved") => {
+    setStatusSaving(true); setStatusError("");
+    try { await updateIssueStatus(props.issue.id, status); await props.onUpdated(); }
+    catch (error) { setStatusError(error instanceof Error ? error.message : String(error)); }
+    finally { setStatusSaving(false); }
+  };
   const tabs = () => [
     {
       key: "diagnosis",
@@ -390,8 +419,10 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
         </div>
         <Space>
           <Show when={props.issue.workspace.retryable}>
-            <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>重试处理</Button>
+            <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
           </Show>
+          <Show when={props.issue.status === "pending"}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
+          <Show when={props.issue.status === "resolved" || props.issue.status === "closed"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
           <Button icon={<Pencil size={15} />} onClick={openEditor}>编辑工单</Button>
         </Space>
       </header>
@@ -402,11 +433,10 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
         <div><span>处理人</span><strong>{props.issue.assignee ?? "未分配"}</strong></div>
         <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
         <div><span>服务</span><strong>{props.issue.affectedServices?.map((service) => service.name).join("、") || "-"}</strong></div>
-        <Show when={props.issue.affectedModules?.length}><div><span>模块</span><strong>{props.issue.affectedModules!.map((module) => `${module.serviceKey} · ${module.name}`).join("、")}</strong></div></Show>
-        <div><span>Session</span><strong class={props.issue.agentSession ? "session-live" : ""}><Show when={props.issue.agentSession}><span /></Show>{props.issue.agentSession ? "已创建" : "等待创建"}</strong></div>
-        <div><span>工作区</span><strong>{props.issue.workspace.status === "ready" ? "就绪" : props.issue.workspace.status === "preparing" ? "准备中" : props.issue.workspace.status === "running" ? "处理中" : props.issue.workspace.status === "failed" ? "失败" : props.issue.workspace.status}</strong></div>
+        <div><span>工作区</span><strong>{props.issue.workspace.status === "ready" ? "本轮完成" : props.issue.workspace.status === "preparing" ? "准备中" : props.issue.workspace.status === "running" ? "处理中" : props.issue.workspace.status === "failed" ? "异常" : props.issue.workspace.status}</strong></div>
       </div>
       <Show when={retryError()}><div class="workspace-error" role="alert">{retryError()}</div></Show>
+      <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
       <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{props.issue.workspace.lastError}</div></Show>
 
       <section class="repository-band" aria-labelledby="repositories-title">
@@ -429,14 +459,13 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
       </section>
 
       <Tabs defaultActiveKey="diagnosis" items={tabs()} />
-      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editServices().length }} onOk={() => { void saveIssue(); }} onCancel={() => setEditOpen(false)}>
+      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditOpen(false); }}>
         <div class="create-issue-form">
-          <label><span>服务（可多选）</span><Select mode="multiple" aria-label="编辑工单服务" value={editServices()} onChange={(value) => { const keys = Array.isArray(value) ? value.map(String) : [String(value)]; setEditServices(keys); const allowed = new Set(configuration().services.filter((service) => keys.includes(service.key)).flatMap((service) => service.modules.map((module) => module.id))); setEditModuleIds((current) => current.filter((id) => allowed.has(id))); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
-          <Show when={editableModules().length}><label><span>模块（可多选，不选表示整个服务）</span><Select mode="multiple" aria-label="编辑工单模块" value={editModuleIds()} onChange={(value) => setEditModuleIds(Array.isArray(value) ? value.map(String) : [String(value)])} options={editableModules()} /></label></Show>
-          <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => setEditPriority(value as IssuePriority)} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
-          <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => setEditType(value as IssueType)} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
-          <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onChange={(value) => setEditAssignee(value ? String(value) : null)} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
-          <label><span>抄送人（可多选）</span><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} onChange={(value) => setEditCc(Array.isArray(value) ? value.map(String) : [String(value)])} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
+          <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setEditPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
+          <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, Object.keys(typeLabel) as IssueType[]); if (selected) setEditType(selected); }} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
+          <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
+          <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
           <label><span>描述</span><TextArea aria-label="编辑工单描述" autoSize={{ minRows: 4, maxRows: 10 }} value={editDescription()} onInput={(event) => setEditDescription(event.currentTarget.value)} /></label>
           <Show when={editError()}><div class="create-error" role="alert">{editError()}</div></Show>
@@ -491,7 +520,7 @@ function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpa
     if (status() === "connecting") return "连接中";
     if (status() === "error") return "连接失败";
     if (status() === "closed") return "已退出";
-    return runIsActive() ? "等待当前处理完成" : "等待 Session";
+    return runIsActive() ? "等待当前处理完成" : props.issue.terminalTranscript?.data ? "历史记录" : "Session 未运行";
   };
   const closeSocket = () => {
     connectionSequence += 1;
@@ -501,13 +530,18 @@ function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpa
     socket = undefined;
   };
   const terminalSnapshot = () => ({ issueId: props.issue.id, runActive: runIsActive(), sessionReady: Boolean(props.issue.agentSession) });
-  const terminalSnapshotKey = () => `${props.issue.id}\u0000${props.issue.agentSession ? "ready" : "waiting"}`;
+  const terminalSnapshotKey = () => `${props.issue.id}\u0000${props.issue.agentSession ? "ready" : "waiting"}\u0000${props.issue.workspace.status}\u0000${props.issue.terminalTranscript?.data.length ?? 0}`;
   const connect = async (snapshot = terminalSnapshot()) => {
     if (!mounted || fixtureTerminal || !terminal) return;
     closeSocket();
     terminal.reset();
     setTerminalError("");
     if (!snapshot.sessionReady) {
+      const transcript = props.issue.terminalTranscript;
+      if (transcript?.data) {
+        terminal.resize(transcript.columns, transcript.rows);
+        terminal.write(transcript.data);
+      }
       setStatus("waiting");
       return;
     }
@@ -555,8 +589,9 @@ function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpa
     } catch (error) {
       if (sequence !== connectionSequence) return;
       const message = error instanceof Error ? error.message : "terminal_connection_failed";
-      setStatus(message === "pi_session_running" || message === "pi_session_not_ready" ? "waiting" : "error");
-      setTerminalError(message);
+      const waiting = message === "pi_session_running" || message === "pi_session_not_ready" || message === "pi_terminal_not_running";
+      setStatus(waiting ? "waiting" : "error");
+      setTerminalError(waiting ? "" : message);
     }
   };
 
@@ -599,7 +634,7 @@ function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpa
     });
     resizeObserver = new ResizeObserver(() => {
       window.requestAnimationFrame(() => {
-        if (!fitAddon || !terminal) return;
+        if (!fitAddon || !terminal || !props.issue.agentSession) return;
         fitAddon.fit();
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
       });
@@ -608,8 +643,13 @@ function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpa
     void connect();
   })(); });
   const statusPoll = window.setInterval(() => {
-    if (!runIsActive() && props.issue.agentSession) return;
-    void props.onRefresh(props.issue.id).catch(() => undefined);
+    if (status() === "open" || status() === "connecting" || (!runIsActive() && props.issue.agentSession)) return;
+    void props.onRefresh(props.issue.id)
+      .then((issue) => {
+        const runActive = issue.workspace.status === "preparing" || issue.workspace.status === "running";
+        if (status() === "waiting" && issue.agentSession && runActive) void connect({ issueId: issue.id, runActive, sessionReady: true });
+      })
+      .catch(() => undefined);
   }, 2_000);
   onCleanup(() => {
     disposed = true;
@@ -632,8 +672,8 @@ function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onToggleExpa
           <Button type="text" shape="circle" icon={props.expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />} title={props.expanded ? "还原终端" : "放大终端"} aria-label={props.expanded ? "还原终端" : "放大终端"} onClick={props.onToggleExpanded} />
         </div>
       </header>
-      <Show when={!fixtureTerminal} fallback={<pre class="pi-terminal-fixture" role="log">{`pi --session ${props.issue.id}\n\n${props.issue.piConversation?.map((message) => `${message.role === "user" ? ">" : "pi"} ${message.text.replace(/[#*_`]/g, "")}`).join("\n\n") ?? ""}\n\n> `}</pre>}>
-        <div class="pi-terminal" ref={(element) => { terminalElement = element; }} onClick={() => terminal?.focus()} />
+      <Show when={!fixtureTerminal} fallback={<pre class="pi-terminal-fixture" role="log">{props.issue.terminalTranscript?.data ?? ""}</pre>}>
+        <div class="pi-terminal" ref={(element) => { terminalElement = element; }} onClick={() => { if (props.issue.agentSession) terminal?.focus(); }} />
       </Show>
       <Show when={terminalError() && status() === "error"}><div class="pi-terminal-error" role="alert">{terminalError()}</div></Show>
     </section>
@@ -665,28 +705,56 @@ function SortableServiceEntry(props: { service: Service; index: number; selected
   );
 }
 
+type RepositoryKind = Service["repositories"][number]["kind"];
+
+interface ServiceDeploymentDraft {
+  environmentKey: string;
+  baseBranch: string;
+  capabilities: DeploymentCapability[];
+}
+
+function ServiceRepositoryEditorRow(props: {
+  index: number;
+  repository: { id?: string; kind: RepositoryKind; url: string };
+  only: boolean;
+  onChange: (repository: { kind: RepositoryKind; url: string }) => void;
+  onDelete: () => void;
+}) {
+  const [kind, setKind] = createSignal<RepositoryKind>(props.repository.kind, { ownedWrite: true });
+  const [url, setUrl] = createSignal(props.repository.url, { ownedWrite: true });
+  return <div class="service-repository-row"><Select aria-label={`仓库角色 ${props.index + 1}`} value={kind()} onChange={(value) => { const selected = selectedChoice(value, ["frontend", "backend"] as const); if (selected) { setKind(selected); props.onChange({ kind: selected, url: url() }); } }} options={[{ value: "frontend", label: "前端" }, { value: "backend", label: "后端" }]} /><Input aria-label={`仓库地址 ${props.index + 1}`} placeholder="git@example.com:team/project.git" value={url()} onInput={(event) => { const next = event.currentTarget.value; setUrl(next); props.onChange({ kind: kind(), url: next }); }} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除仓库${props.index + 1}`} aria-label={`删除仓库${props.index + 1}`} disabled={props.only} onClick={props.onDelete} /></div>;
+}
+
+function CapabilityDescriptions(props: { catalog: Config["capabilityCatalog"]; keys?: DeploymentCapability[] }) {
+  const entries = () => props.keys ? props.catalog.filter((capability) => props.keys!.includes(capability.key)) : props.catalog;
+  return <div class="capability-descriptions"><div><For each={entries()}>{(capability) => <div><strong>{capability.label}</strong><p>{capability.description}</p></div>}</For></div></div>;
+}
+
+function ServiceDeploymentEditorRow(props: {
+  index: number;
+  deployment: ServiceDeploymentDraft;
+  capabilityCatalog: Config["capabilityCatalog"];
+  environmentOptions: () => Config["environments"];
+  onChange: (deployment: ServiceDeploymentDraft) => void;
+  onDelete: () => void;
+}) {
+  const [environmentKey, setEnvironmentKey] = createSignal(props.deployment.environmentKey, { ownedWrite: true });
+  const [baseBranch, setBaseBranch] = createSignal(props.deployment.baseBranch, { ownedWrite: true });
+  const [selectedCapabilities, setSelectedCapabilities] = createSignal<DeploymentCapability[]>([...props.deployment.capabilities], { ownedWrite: true });
+  const update = (change: Partial<ServiceDeploymentDraft>) => props.onChange({ environmentKey: environmentKey(), baseBranch: baseBranch(), capabilities: selectedCapabilities(), ...change });
+  return <div class="service-deployment-row"><label class="deployment-environment"><span>环境</span><Select aria-label={`部署环境 ${props.index + 1}`} value={environmentKey()} onChange={(value) => { const options = props.environmentOptions(); const selected = selectedChoice(value, options.map((environment) => environment.key)); if (selected) { setEnvironmentKey(selected); update({ environmentKey: selected }); } }} options={props.environmentOptions().map((environment) => ({ value: environment.key, label: environment.name }))} /></label><label class="deployment-branch"><span>分支</span><Input aria-label={`部署分支 ${props.index + 1}`} value={baseBranch()} onInput={(event) => { const next = event.currentTarget.value; setBaseBranch(next); update({ baseBranch: next }); }} /></label><div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-controls"><Checkbox.Group aria-label={`部署能力 ${props.index + 1}`} class="capability-checkboxes" value={selectedCapabilities()} onChange={(value) => { const selected = new Set(selectedStrings(value, selectedCapabilities())); const next = props.capabilityCatalog.filter((capability) => selected.has(capability.key)).map((capability) => capability.key); setSelectedCapabilities(next); update({ capabilities: next }); }} options={props.capabilityCatalog.map((capability) => ({ value: capability.key, label: capability.label }))} /><CapabilityDescriptions catalog={props.capabilityCatalog} /></div></div><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除部署${props.index + 1}`} aria-label={`删除部署${props.index + 1}`} onClick={props.onDelete} /></div>;
+}
+
 function ConfigurationView() {
   const [configuration, setConfiguration] = createSignal<Config>({ environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
-  const [deploymentOpen, setDeploymentOpen] = createSignal(false, { ownedWrite: true });
-  const [deploymentService, setDeploymentService] = createSignal<Service | null>(null, { ownedWrite: true });
-  const [editingDeploymentEnvironmentKey, setEditingDeploymentEnvironmentKey] = createSignal<string | null>(null, { ownedWrite: true });
-  const [deploymentEnvironmentKey, setDeploymentEnvironmentKey] = createSignal("", { ownedWrite: true });
-  const [deploymentBranch, setDeploymentBranch] = createSignal("main", { ownedWrite: true });
-  const [deploymentCapabilities, setDeploymentCapabilities] = createSignal<string[]>([], { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
-  const [repositoryUrl, setRepositoryUrl] = createSignal("", { ownedWrite: true });
-  const [serviceModules, setServiceModules] = createSignal<Array<{ id?: string; name: string; path: string; description: string }>>([], { ownedWrite: true });
-  const [relatedServices, setRelatedServices] = createSignal<string[]>([], { ownedWrite: true });
-  const [relatedModuleIds, setRelatedModuleIds] = createSignal<string[]>([], { ownedWrite: true });
+  const [serviceRepositories, setServiceRepositories] = createSignal<Array<{ id?: string; kind: RepositoryKind; url: string }>>([{ kind: "backend", url: "" }], { ownedWrite: true });
+  const [serviceDeployments, setServiceDeployments] = createSignal<ServiceDeploymentDraft[]>([], { ownedWrite: true });
   const [editingServiceKey, setEditingServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
   const [selectedServiceKey, setSelectedServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
-  const [deleteTarget, setDeleteTarget] = createSignal<
-    | { kind: "service"; key: string; name: string }
-    | { kind: "deployment"; key: string; environmentKey: string; name: string }
-    | null
-  >(null, { ownedWrite: true });
+  const [deleteTarget, setDeleteTarget] = createSignal<{ kind: "service"; key: string; name: string } | null>(null, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
   const refresh = async () => {
@@ -727,7 +795,7 @@ function ConfigurationView() {
     dragDropManager?.destroy();
   });
   const resetServiceForm = () => {
-    setServiceName(""); setDescription(""); setRepositoryUrl(""); setServiceModules([]); setRelatedServices([]); setRelatedModuleIds([]); setEditingServiceKey(null);
+    setServiceName(""); setDescription(""); setServiceRepositories([{ kind: "backend", url: "" }]); setServiceDeployments([]); setEditingServiceKey(null);
   };
   const openNewService = () => {
     resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
@@ -735,65 +803,29 @@ function ConfigurationView() {
   const openServiceEditor = (service: Service) => {
     setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
-    setRepositoryUrl(service.repositories[0]?.url ?? ""); setServiceModules(service.modules.map((module) => ({ ...module, description: module.description ?? "" })));
-    setRelatedServices(configuration().services.filter((related) => service.relatedServiceIds.includes(related.id)).map((related) => related.key));
-    setRelatedModuleIds([...service.relatedModuleIds]);
+    setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, kind: repository.kind, url: repository.url })));
+    setServiceDeployments(service.deployments.map((deployment) => ({
+      environmentKey: configuration().environments.find((environment) => environment.id === deployment.environmentId)?.key ?? "",
+      baseBranch: deployment.baseBranch,
+      capabilities: [...deployment.capabilities],
+    })).filter((deployment) => deployment.environmentKey));
     setConfigurationError(""); setServiceOpen(true);
   };
-  const deploymentTargetEnvironments = createMemo(() => {
-    const source = deploymentService();
-    const editingKey = editingDeploymentEnvironmentKey();
-    return configuration().environments.filter((environment) => environment.key === editingKey || !source?.environmentIds.includes(environment.id));
-  });
-  const openDeployment = (service: Service) => {
-    const targets = configuration().environments.filter((environment) => !service.environmentIds.includes(environment.id));
-    setDeploymentService(service);
-    setEditingDeploymentEnvironmentKey(null);
-    setDeploymentEnvironmentKey(targets[0]?.key ?? "");
-    setDeploymentBranch("main");
-    setDeploymentCapabilities([]);
-    setConfigurationError("");
-    setDeploymentOpen(true);
+  const serviceRepositoriesValid = createMemo(() => serviceRepositories().length > 0 && serviceRepositories().every((repository) => repository.url.trim()) && new Set(serviceRepositories().map((repository) => repository.url.trim())).size === serviceRepositories().length);
+  const serviceDeploymentsValid = createMemo(() => serviceDeployments().every((deployment) => deployment.environmentKey && deployment.baseBranch.trim()) && new Set(serviceDeployments().map((deployment) => deployment.environmentKey)).size === serviceDeployments().length);
+  const availableDeploymentEnvironments = createMemo(() => configuration().environments.filter((environment) => !serviceDeployments().some((deployment) => deployment.environmentKey === environment.key)));
+  const addServiceDeployment = () => {
+    const environment = availableDeploymentEnvironments()[0];
+    if (environment) setServiceDeployments((current) => [...current, { environmentKey: environment.key, baseBranch: "main", capabilities: [] }]);
   };
-  const openDeploymentEditor = (service: Service, deployment: ServiceDeployment) => {
-    const environment = configuration().environments.find((item) => item.id === deployment.environmentId);
-    if (!environment) return;
-    setDeploymentService(service);
-    setEditingDeploymentEnvironmentKey(environment.key);
-    setDeploymentEnvironmentKey(environment.key);
-    setDeploymentBranch(deployment.baseBranch);
-    setDeploymentCapabilities([...deployment.capabilities]);
-    setConfigurationError("");
-    setDeploymentOpen(true);
-  };
-  const saveDeployment = async () => {
-    const source = deploymentService();
-    if (!source || !deploymentEnvironmentKey() || !deploymentBranch().trim()) return;
-    setSaving(true); setConfigurationError("");
-    try {
-      const selected = new Set(deploymentCapabilities());
-      const capabilities = configuration().capabilityCatalog.filter((capability) => selected.has(capability.key)).map((capability) => capability.key);
-      const editingKey = editingDeploymentEnvironmentKey();
-      if (editingKey) await updateDeployment(source.key, editingKey, { baseBranch: deploymentBranch().trim(), capabilities });
-      else await createDeployment(source.key, { environmentKey: deploymentEnvironmentKey(), baseBranch: deploymentBranch().trim(), capabilities });
-      await refresh();
-      setSelectedServiceKey(source.key);
-      setDeploymentOpen(false); setDeploymentService(null); setEditingDeploymentEnvironmentKey(null); setDeploymentEnvironmentKey(""); setDeploymentCapabilities([]);
-    } catch (error) {
-      setConfigurationError(error instanceof Error ? error.message : String(error));
-    } finally { setSaving(false); }
-  };
-  const serviceModulesValid = createMemo(() => serviceModules().every((module) => module.name.trim() && module.path.trim()));
   const saveService = async () => {
-    if (!serviceName().trim() || !repositoryUrl().trim() || !serviceModulesValid()) return;
+    if (!serviceName().trim() || !serviceRepositoriesValid() || !serviceDeploymentsValid()) return;
     setSaving(true); setConfigurationError("");
     try {
       const definition = {
         name: serviceName().trim(), description: description().trim(),
-        repositories: [{ url: repositoryUrl().trim() }],
-        modules: serviceModules().map((module) => ({ ...(module.id ? { id: module.id } : {}), name: module.name.trim(), path: module.path.trim(), description: module.description.trim() })),
-        relatedServiceKeys: relatedServices(),
-        relatedModuleIds: relatedModuleIds(),
+        repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), kind: repository.kind, url: repository.url.trim() })),
+        deployments: serviceDeployments().map((deployment) => ({ ...deployment, baseBranch: deployment.baseBranch.trim() })),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
@@ -804,19 +836,12 @@ function ConfigurationView() {
       setConfigurationError(error instanceof Error ? error.message : String(error));
     } finally { setSaving(false); }
   };
-  const relatedModuleOptions = createMemo(() => {
-    const relatedKeys = new Set(relatedServices());
-    return configuration().services.filter((service) => relatedKeys.has(service.key)).flatMap((service) => service.modules.map((module) => ({ value: module.id, label: `${service.name} · ${module.name}` })));
-  });
   const confirmDelete = async () => {
     const target = deleteTarget();
     if (!target) return;
     setSaving(true); setConfigurationError("");
     try {
-      if (target.kind === "deployment") {
-        await deleteDeployment(target.key, target.environmentKey);
-        setSelectedServiceKey(null);
-      } else await deleteService(target.key);
+      await deleteService(target.key);
       setDeleteTarget(null);
       await refresh();
     } catch (error) {
@@ -839,31 +864,30 @@ function ConfigurationView() {
       </aside>
       <section class="service-panel">
         <Show when={selectedService()} fallback={<><header class="service-header"><div><span>服务配置</span><h2>暂无服务</h2></div><Button type="primary" icon={<Plus size={15} />} onClick={openNewService}>添加服务</Button></header><div class="empty-band">先创建服务，再配置环境部署</div></>}>
-          {(service) => <><header class="service-header"><div><span>服务配置</span><h2>{service().name}</h2></div><Space><Button icon={<Plus size={14} />} disabled={service().environmentIds.length >= configuration().environments.length} onClick={() => openDeployment(service())}>添加部署</Button><Button icon={<Pencil size={14} />} onClick={() => openServiceEditor(service())}>编辑服务</Button></Space></header><div class="service-detail"><section class="service-detail-section"><h3>代码仓库</h3><div class="detail-repositories"><For each={service().repositories}>{(repository) => <div><GitBranch size={15} /><code>{repository.url}</code></div>}</For></div></section><section class="service-detail-section"><h3>环境部署</h3><div class="module-list"><For each={service().deployments} fallback={<span class="muted">尚未部署到任何环境</span>}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-row"><strong>{environment?.name ?? deployment.environmentId}</strong><code>{deployment.baseBranch}</code><span>{deployment.capabilities.map((key) => configuration().capabilityCatalog.find((capability) => capability.key === key)?.label ?? key).join("、") || "无外部能力"}</span><Button type="text" shape="circle" icon={<Pencil size={14} />} title={`编辑${environment?.name ?? "部署"}配置`} aria-label={`编辑${environment?.name ?? "部署"}配置`} onClick={() => openDeploymentEditor(service(), deployment)} /></div>; }}</For></div></section><Show when={service().modules.length}><section class="service-detail-section"><h3>模块</h3><div class="module-list"><For each={service().modules}>{(module) => <div><strong>{module.name}</strong><code>{module.path}</code></div>}</For></div></section></Show><Show when={configuration().services.some((candidate) => service().relatedServiceIds.includes(candidate.id))}><section class="service-detail-section"><h3>关联服务</h3><div class="module-list related-service-list"><For each={configuration().services.filter((candidate) => service().relatedServiceIds.includes(candidate.id))}>{(relatedService) => { const relatedModules = relatedService.modules.filter((module) => service().relatedModuleIds.includes(module.id)); return <div><button type="button" class="service-detail-link" aria-label={`查看关联服务 ${relatedService.name}`} onClick={() => setSelectedServiceKey(relatedService.key)}>{relatedService.name}</button><span>{relatedModules.length ? relatedModules.map((module) => module.name).join("、") : "整个服务"}</span></div>; }}</For></div></section></Show><section class="service-detail-section"><h3>项目描述</h3><Markdown source={service().description} /></section></div></>}
+          {(service) => <>
+            <header class="service-header">
+              <div><span>服务配置 · {service().repositories.length} 个仓库 · {service().deployments.length} 个部署</span><h2>{service().name}</h2></div>
+              <Button icon={<Pencil size={14} />} onClick={() => openServiceEditor(service())}>编辑服务</Button>
+            </header>
+            <div class="service-detail">
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>角色</span><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><span class={`repository-kind ${repository.kind}`}>{repository.kind === "frontend" ? "前端" : "后端"}</span><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><For each={service().deployments} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div class="deployment-detail-meta"><div class="deployment-environment-summary"><strong>{environment?.name ?? deployment.environmentId}</strong></div></div><div class="deployment-branch-summary"><span>分支</span><code>{deployment.baseBranch}</code></div><div class="deployment-detail-capabilities"><span>能力</span><div class="deployment-detail-capability-content"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityDescriptions catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div></div>; }}</For></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>项目描述</h3></div><Show when={service().description.trim()} fallback={<div class="service-detail-empty">暂无项目描述</div>}><Markdown source={service().description} /></Show></section>
+            </div>
+          </>}
         </Show>
       </section>
-      <Modal open={deploymentOpen()} title={`${editingDeploymentEnvironmentKey() ? "编辑" : "添加"}部署配置${deploymentService() ? ` · ${deploymentService()!.name}` : ""}`} okText={editingDeploymentEnvironmentKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveDeployment(); }} onCancel={() => { setDeploymentOpen(false); setDeploymentService(null); setEditingDeploymentEnvironmentKey(null); setConfigurationError(""); }} okButtonProps={{ disabled: !deploymentService() || !deploymentEnvironmentKey() || !deploymentBranch().trim() }}>
-        <div class="create-issue-form">
-          <label><span>目标环境</span><Select aria-label="部署环境" disabled={Boolean(editingDeploymentEnvironmentKey())} value={deploymentEnvironmentKey()} onChange={(value) => setDeploymentEnvironmentKey(String(value))} options={deploymentTargetEnvironments().map((environment) => ({ value: environment.key, label: environment.name }))} /></label>
-          <label><span>基础分支</span><Input aria-label="部署基础分支" value={deploymentBranch()} onInput={(event) => setDeploymentBranch(event.currentTarget.value)} /></label>
-          <label><span>允许的 pi-tool 能力</span><Select mode="multiple" aria-label="部署能力" value={deploymentCapabilities()} onChange={(value) => setDeploymentCapabilities(Array.isArray(value) ? value.map(String) : [String(value)])} options={configuration().capabilityCatalog.map((capability) => ({ value: capability.key, label: capability.label }))} /></label>
-          <Show when={editingDeploymentEnvironmentKey()}>{(environmentKey) => <div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { const environment = configuration().environments.find((item) => item.key === environmentKey()); setDeploymentOpen(false); setDeleteTarget({ kind: "deployment", key: deploymentService()!.key, environmentKey: environmentKey(), name: `${deploymentService()!.name} · ${environment?.name ?? environmentKey()}` }); }}>删除部署配置</Button></div>}</Show>
-          <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
-        </div>
-      </Modal>
-      <Modal open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)} okButtonProps={{ disabled: !serviceName().trim() || !repositoryUrl().trim() || !serviceModulesValid() }}>
-        <div class="create-issue-form">
-          <label><span>服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
-          <label><span>仓库地址</span><Input aria-label="仓库地址" placeholder="git@example.com:team/project.git" value={repositoryUrl()} onInput={(event) => setRepositoryUrl(event.currentTarget.value)} /></label>
-          <div class="service-module-editor"><div class="service-module-editor-header"><span>模块（可选）</span><Button icon={<Plus size={14} />} onClick={() => setServiceModules((current) => [...current, { name: "", path: "", description: "" }])}>添加模块</Button></div><For each={serviceModules()}>{(module, index) => <div class="service-module-row"><Input aria-label={`模块名称 ${index() + 1}`} placeholder="订单模块" value={module.name} onInput={(event) => setServiceModules((current) => { module.name = event.currentTarget.value; return [...current]; })} /><Input aria-label={`模块路径 ${index() + 1}`} placeholder="modules/order-service" value={module.path} onInput={(event) => setServiceModules((current) => { module.path = event.currentTarget.value; return [...current]; })} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除模块${index() + 1}`} aria-label={`删除模块${index() + 1}`} onClick={() => setServiceModules((current) => current.filter((item) => item !== module))} /></div>}</For></div>
-          <label><span>关联服务（可多选）</span><Select mode="multiple" aria-label="关联服务" value={relatedServices()} onChange={(value) => { const keys = Array.isArray(value) ? value.map(String) : [String(value)]; setRelatedServices(keys); const allowed = new Set(configuration().services.filter((service) => keys.includes(service.key)).flatMap((service) => service.modules.map((module) => module.id))); setRelatedModuleIds((current) => current.filter((id) => allowed.has(id))); }} options={configuration().services.filter((service) => service.key !== editingServiceKey()).map((service) => ({ value: service.key, label: service.name }))} /></label>
-          <Show when={relatedModuleOptions().length}><label><span>关联模块（可多选，不选表示整个关联服务）</span><Select mode="multiple" aria-label="关联模块" value={relatedModuleIds()} onChange={(value) => setRelatedModuleIds(Array.isArray(value) ? value.map(String) : [String(value)])} options={relatedModuleOptions()} /></label></Show>
-          <label><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 6, maxRows: 14 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
+      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)} okButtonProps={{ disabled: !serviceName().trim() || !serviceRepositoriesValid() || !serviceDeploymentsValid() }}>
+        <div class="service-form">
+          <label class="service-form-field"><span>服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { kind: "backend", url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments()} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments().some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => { Object.assign(deployment, next); return [...current]; })} onDelete={() => setServiceDeployments((current) => current.filter((item) => item !== deployment))} />}</For></div></div>
+          <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
         </div>
       </Modal>
-      <Modal open={Boolean(deleteTarget())} title={`删除${deleteTarget()?.kind === "deployment" ? "部署配置" : "服务"}`} okText="确认删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onOk={() => { void confirmDelete(); }} onCancel={() => { setDeleteTarget(null); setConfigurationError(""); }}>
+      <Modal open={Boolean(deleteTarget())} title="删除服务" okText="确认删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onOk={() => { void confirmDelete(); }} onCancel={() => { setDeleteTarget(null); setConfigurationError(""); }}>
         <p>确定删除“{deleteTarget()?.name}”吗？已被工单使用的配置不能删除。</p>
         <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
       </Modal>

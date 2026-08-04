@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import YAML from "yaml";
 
-import type { ServiceCapability } from "./grants.ts";
+import type { ServiceCapability } from "../pi/policy.ts";
 import { redact, sensitive } from "./output.ts";
 
 const execFileAsync = promisify(execFile);
@@ -73,12 +73,7 @@ async function git(repository: string, args: string[]): Promise<string> {
 
 async function frozenFiles(service: ServiceCapability): Promise<Array<{ file: string; content: string }>> {
   const names = (await git(service.repositoryPath, ["ls-tree", "-r", "--name-only", service.baseCommit])).split("\n").filter(Boolean);
-  const roots = service.modulePaths.map((modulePath) => modulePath.replace(/\/$/, ""));
-  const candidates = names.filter((name) => {
-    const repositoryLevel = !name.includes("/") || /^(?:config|src\/main\/resources)\//.test(name);
-    const inModule = roots.some((root) => name.startsWith(`${root}/`));
-    return CONFIG_FILE.test(name) && (!roots.length || repositoryLevel || inModule);
-  });
+  const candidates = names.filter((name) => CONFIG_FILE.test(name) && (!name.includes("/") || /^(?:config|src\/main\/resources)\//.test(name)));
   const profiles = new Set([service.environmentKey, ...(service.environmentKind === "production" ? ["prod", "production"] : service.environmentKind === "test" ? ["test"] : ["local", "dev"])]);
   const selected = new Map<string, string>();
   for (let pass = 0; pass < 10; pass += 1) {

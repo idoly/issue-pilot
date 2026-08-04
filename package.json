@@ -18,7 +18,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/evidence/extension.ts"
+      "./src/pi/extension.ts"
     ]
   },
   "peerDependencies": {
