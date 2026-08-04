@@ -1,20 +1,23 @@
-# Issue Agent Project
+# Issue Pilot Project
 
-This repository builds a browser-based engineering issue agent on top of pi.
+This repository builds a local-first browser-based engineering issue agent on pi.
 
 ## Operating Rules
 
-- Treat Keycloak identity as the source of user identity in production. Never trust user or role headers supplied directly by a browser.
-- Search for duplicate issues before creating a new one.
-- Record material investigation findings and test evidence as issue comments.
-- Do not mark an issue resolved until its acceptance criteria have been verified.
-- Use the relevant skill before changing Java, React, database, browser-test, or code-server integration code.
-- Never put access tokens, passwords, cookies, or connection strings in issues, comments, logs, or test snapshots.
+- Treat capability grant files as the authority for service and environment access.
+- Keep production credentials in external CLI profiles; never write secrets to issues, comments, logs, snapshots, or capability files.
+- Database evidence must use named read-only templates from the frozen repository commit.
+- Node and Maven actions must use the fixed disposable-container actions in `src/evidence/toolchains.ts`.
+- Preserve per-issue Git worktrees and pi sessions unless cleanup is explicitly requested.
+- Do not mark an issue resolved without recorded verification evidence.
 
 ## Commands
 
-- `npm test`: run store unit tests
-- `npm run typecheck`: type-check the pi package
-- `pi -e ./src/extension.ts -a`: run pi with the issue extension during development
+- `npm test`: run backend tests
+- `npm run typecheck`: type-check backend source and tests
+- `npm run db:migrate`: apply SQLite migrations
+- `npm run server`: start the Fastify API
+- `npm --prefix apps/web run typecheck`: type-check the web client
+- `npm --prefix apps/web run build`: build the web client
 
-Issue data defaults to `.issue-agent/issues.json`. Set `ISSUE_AGENT_DATA_FILE` to override it.
+Runtime data defaults to `.issue-pilot`. Set `ISSUE_PILOT_STATE_ROOT` and `ISSUE_PILOT_DATABASE` to override it.

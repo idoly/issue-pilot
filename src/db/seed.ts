@@ -1,14 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
 
-import { createDatabase } from "./client.ts";
-import { environments, serviceEnvironments, services, subjects } from "./schema.ts";
+import { openDatabase } from "./client.ts";
+import { deploymentCapabilities, environments, serviceDeployments, services, subjects } from "./schema.ts";
 
-const configuredOrganizationId = process.env.KEYCLOAK_ORGANIZATION_ID;
-if (!configuredOrganizationId) throw new Error("KEYCLOAK_ORGANIZATION_ID is required");
-const organizationId: string = configuredOrganizationId;
+const organizationId = "demo";
 
 const userSubject = process.env.SEED_USER_SUBJECT;
-const { db, close } = createDatabase();
+const { db, close } = openDatabase();
 
 try {
   if (userSubject) {
@@ -37,9 +35,7 @@ try {
       key,
       name,
       kind,
-      config: kind === "production"
-        ? { logProvider: "aliyun-sls", databaseProvider: "aliyun-dms" }
-        : { logProvider: "aliyun-sls", databaseProvider: "local-mysql" },
+      config: {},
     }).returning();
     return inserted[0]!;
   }
@@ -60,30 +56,18 @@ try {
       key: "srm",
       name: "SRM",
       description: "供应商关系管理服务",
-      metadata: {
-        serviceCode: "SRM",
-        ownerSubject: userSubject ?? null,
-        supportGroup: "咸亨国际",
-        repositoryBindings: [],
-      },
     }).returning();
   }
 
-  await db.insert(serviceEnvironments).values([
-    {
-      serviceId: service!.id,
-      environmentId: production.id,
-      logProvider: "aliyun-sls",
-      databaseProvider: "aliyun-dms",
-      connectorSourceKeys: ["srm-production"],
-    },
-    {
-      serviceId: service!.id,
-      environmentId: test.id,
-      logProvider: "aliyun-sls",
-      databaseProvider: "local-mysql",
-      connectorSourceKeys: ["srm-test"],
-    },
+  const deployments = await db.insert(serviceDeployments).values([
+    { serviceId: service!.id, environmentId: production.id, baseBranch: "main", config: {} },
+    { serviceId: service!.id, environmentId: test.id, baseBranch: "develop", config: {} },
+  ]).onConflictDoNothing().returning();
+  const testDeployment = deployments.find((deployment) => deployment.environmentId === test.id)
+    ?? (await db.select().from(serviceDeployments).where(and(eq(serviceDeployments.serviceId, service!.id), eq(serviceDeployments.environmentId, test.id))).limit(1))[0];
+  if (testDeployment) await db.insert(deploymentCapabilities).values([
+    { deploymentId: testDeployment.id, capability: "configuration_read" },
+    { deploymentId: testDeployment.id, capability: "database_read" },
   ]).onConflictDoNothing();
 
   console.log(JSON.stringify({

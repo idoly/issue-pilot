@@ -1,5 +1,0 @@
-[Unit]
-Description=Issue Agent PostgreSQL data
-
-[Volume]
-VolumeName=issue-agent-postgres-data

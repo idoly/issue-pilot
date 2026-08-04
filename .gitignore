@@ -5,6 +5,7 @@ coverage/
 *.tsbuildinfo
 .tools/
 .issue-agent/
+.issue-pilot/
 infra/.env
 *.log
 .DS_Store

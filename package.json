@@ -1,5 +1,5 @@
 {
-  "name": "pi-issue-agent",
+  "name": "issue-pilot",
   "version": "0.1.0",
   "description": "A local-first issue management agent for pi",
   "type": "module",
@@ -10,45 +10,35 @@
   ],
   "license": "MIT",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "mcp": "node --experimental-strip-types src/mcp-server.ts",
-    "server": "node --experimental-strip-types src/server.ts",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:seed": "node --experimental-strip-types src/db/seed.ts",
-    "db:studio": "drizzle-kit studio"
+    "server": "node --experimental-strip-types src/http/api.ts",
+    "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
+    "db:seed": "node --experimental-strip-types src/db/seed.ts"
   },
   "pi": {
     "extensions": [
-      "./src/extension.ts"
-    ],
-    "skills": [
-      "./skills"
+      "./src/evidence/extension.ts"
     ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "drizzle-kit": "^0.31.10",
     "typescript": "^5.9.0"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",
     "@fastify/websocket": "^11.3.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@libsql/client": "^0.17.0",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.11.0",
-    "jose": "^6.2.6",
-    "mysql2": "^3.23.2",
     "node-pty": "^1.1.0",
-    "postgres": "^3.4.9",
-    "zod": "^4.4.3"
+    "valibot": "^1.4.2",
+    "yaml": "^2.9.0"
   },
   "allowScripts": {
     "node-pty@1.1.0": true

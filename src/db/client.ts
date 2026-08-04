@@ -1,20 +1,22 @@
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import { closeSync, mkdirSync, openSync } from "node:fs";
+import path from "node:path";
+
+import { createClient } from "@libsql/client";
+import { drizzle } from "drizzle-orm/libsql";
 
 import * as schema from "./schema.ts";
 
-export function createDatabase(url = process.env.DATABASE_URL) {
-  if (!url) throw new Error("DATABASE_URL is required");
-  const client = postgres(url, {
-    max: Number(process.env.DATABASE_POOL_SIZE ?? 10),
-    idle_timeout: 20,
-    connect_timeout: 10,
-    prepare: false,
-  });
+export function openDatabase(file = process.env.ISSUE_PILOT_DATABASE ?? ".issue-pilot/issues.db") {
+  const databasePath = path.resolve(file);
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  closeSync(openSync(databasePath, "a", 0o600));
+
+  const client = createClient({ url: `file:${databasePath}` });
   return {
+    client,
     db: drizzle(client, { schema }),
-    close: () => client.end({ timeout: 5 }),
+    close: () => client.close(),
   };
 }
 
-export type Database = ReturnType<typeof createDatabase>["db"];
+export type Database = ReturnType<typeof openDatabase>["db"];

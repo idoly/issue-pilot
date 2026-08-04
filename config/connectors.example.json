@@ -1,54 +1,40 @@
 {
-  "aliyunCli": ".tools/bin/aliyun",
-  "sls": {
-    "order-production": {
-      "environment": "production",
-      "profile": "issue-agent-production-readonly",
-      "region": "cn-hangzhou",
-      "project": "replace-with-production-sls-project",
-      "logstore": "order-service",
-      "maxWindowSeconds": 3600,
-      "queries": {
-        "by-trace-id": "traceId: {{traceId}}",
-        "by-order-id": "orderId: {{orderId}} and level: (ERROR or WARN)"
+  "allowedNacosServers": [
+    "http://nacos-test.example.internal:8848"
+  ],
+  "configurationProviders": {
+    "test": {
+      "nacos": {
+        "allowedServers": [
+          "http://nacos-test.example.internal:8848"
+        ]
       }
     },
-    "order-test": {
-      "environment": "test",
-      "profile": "issue-agent-test-readonly",
-      "region": "cn-hangzhou",
-      "project": "replace-with-test-sls-project",
-      "logstore": "order-service",
-      "maxWindowSeconds": 7200,
-      "queries": {
-        "by-trace-id": "traceId: {{traceId}}",
-        "by-order-id": "orderId: {{orderId}}"
+    "production": {
+      "nacos": {
+        "allowedServers": [
+          "http://nacos-production.example.internal:8848"
+        ]
       }
     }
   },
-  "dms": {
-    "order-production": {
-      "profile": "issue-agent-production-readonly",
+  "databaseProviders": {
+    "production": {
+      "provider": "dms",
+      "image": "registry.example.internal/aliyun-cli:1.0.0",
+      "profileRoot": "/home/idoly/.aliyun",
+      "profile": "issue-pilot-production-readonly",
       "region": "cn-hangzhou",
-      "dbId": 0,
-      "logic": false,
-      "queries": {
-        "order-status": {
-          "statement": "SELECT order_id, status, updated_at FROM orders WHERE order_id = {{orderId}} LIMIT 20",
-          "parameters": { "orderId": "string" }
+      "allowedNacosServers": [
+        "http://nacos-production.example.internal:8848"
+      ],
+      "databases": [
+        {
+          "host": "mysql-production.example.internal",
+          "database": "srm",
+          "dbId": 1
         }
-      }
-    }
-  },
-  "mysql": {
-    "order-test": {
-      "connectionEnv": "ISSUE_AGENT_TEST_MYSQL_URL",
-      "queries": {
-        "order-status": {
-          "statement": "SELECT order_id, status, updated_at FROM orders WHERE order_id = {{orderId}} LIMIT 20",
-          "parameters": { "orderId": "string" }
-        }
-      }
+      ]
     }
   }
 }
