@@ -3,9 +3,9 @@ import path from "node:path";
 
 import { normalizeIssueKey } from "../shared/issue-key.ts";
 
-export const POLICY_VERSION = 2 as const;
+export const POLICY_VERSION = 3 as const;
 
-export type ServiceCapabilityName = "configuration_read" | "database_read" | "cache_read" | "log_read";
+export type ServiceCapabilityName = "configuration_read" | "database_read";
 export type IssueType = "incident" | "request" | "question" | "smart_analysis";
 export type PolicyToolName =
   | "read"
@@ -20,14 +20,24 @@ export type PolicyToolName =
   | "maven_project_command"
   | "repository_status";
 
-export interface ServiceCapability {
-  serviceKey: string;
-  environmentKey: string;
-  environmentKind: "production" | "test";
+export interface RepositoryGrant {
   codeAccess: "read" | "write";
   repositoryPath: string;
   baseCommit: string;
+}
+
+export interface ServiceGrant {
+  serviceKey: string;
+  environmentKey: string;
+  environmentKind: "production" | "test";
   capabilities: ServiceCapabilityName[];
+  repositories: RepositoryGrant[];
+}
+
+export interface GrantedRepository extends RepositoryGrant {
+  serviceKey: string;
+  environmentKey: string;
+  environmentKind: "production" | "test";
 }
 
 export interface IssuePolicy {
@@ -36,22 +46,16 @@ export interface IssuePolicy {
   issueType: IssueType;
   workspaceRoot: string;
   tools: PolicyToolName[];
-  services: ServiceCapability[];
+  service: ServiceGrant;
 }
 
 const READ_TOOLS: PolicyToolName[] = ["read", "grep", "find", "ls"];
 const WRITE_ISSUE_TYPES = new Set<IssueType>(["incident", "request", "smart_analysis"]);
 const ISSUE_TYPES = new Set<IssueType>(["incident", "request", "question", "smart_analysis"]);
-const CAPABILITIES = new Set<ServiceCapabilityName>(["configuration_read", "database_read", "cache_read", "log_read"]);
+const CAPABILITIES = new Set<ServiceCapabilityName>(["configuration_read", "database_read"]);
 const POLICY_TOOLS = new Set<PolicyToolName>([
   ...READ_TOOLS,
-  "edit",
-  "write",
-  "configuration_read",
-  "database_read",
-  "node_project_command",
-  "maven_project_command",
-  "repository_status",
+  "edit", "write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status",
 ]);
 
 function isString(value: unknown): value is string {
@@ -67,10 +71,10 @@ export function createIssuePolicy(input: {
   issueKey: string;
   issueType: IssueType;
   workspaceRoot: string;
-  services: ServiceCapability[];
+  service: ServiceGrant;
 }): IssuePolicy {
-  const capabilities = new Set(input.services.flatMap((service) => service.capabilities));
-  const codeMutationAllowed = WRITE_ISSUE_TYPES.has(input.issueType) && input.services.some((service) => service.codeAccess === "write");
+  const capabilities = new Set(input.service.capabilities);
+  const codeMutationAllowed = WRITE_ISSUE_TYPES.has(input.issueType) && input.service.repositories.some((repository) => repository.codeAccess === "write");
   const tools: PolicyToolName[] = [
     ...READ_TOOLS,
     ...(codeMutationAllowed ? ["edit", "write"] as PolicyToolName[] : []),
@@ -86,11 +90,11 @@ export function createIssuePolicy(input: {
     issueType: input.issueType,
     workspaceRoot: path.resolve(input.workspaceRoot),
     tools: [...new Set(tools)],
-    services: input.services.map((service) => ({
-      ...service,
-      repositoryPath: path.resolve(service.repositoryPath),
-      capabilities: [...new Set(service.capabilities)].sort(),
-    })),
+    service: {
+      ...input.service,
+      capabilities: [...new Set(input.service.capabilities)].sort(),
+      repositories: input.service.repositories.map((repository) => ({ ...repository, repositoryPath: path.resolve(repository.repositoryPath) })),
+    },
   };
 }
 
@@ -100,8 +104,7 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
   const workspacesRoot = path.dirname(workspace);
   if (path.basename(workspacesRoot) !== "workspaces") throw new Error("issue_workspace_not_granted");
   const root = stateRoot ? path.resolve(stateRoot) : path.dirname(workspacesRoot);
-  const expectedWorkspace = path.join(root, "workspaces", issueKey.toLowerCase());
-  if (workspace !== expectedWorkspace) throw new Error("issue_workspace_not_granted");
+  if (workspace !== path.join(root, "workspaces", issueKey.toLowerCase())) throw new Error("issue_workspace_not_granted");
 
   const file = path.join(root, "capabilities", `${issueKey.toLowerCase()}.json`);
   const metadata = await stat(file);
@@ -109,26 +112,32 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
   const parsed = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
   if (parsed.version !== POLICY_VERSION || parsed.issueKey !== issueKey || parsed.workspaceRoot !== workspace || !ISSUE_TYPES.has(parsed.issueType as IssueType)) throw new Error("invalid_issue_policy_file");
   if (!Array.isArray(parsed.tools) || !parsed.tools.every((tool) => POLICY_TOOLS.has(tool as PolicyToolName))) throw new Error("invalid_issue_policy_file");
-  if (!Array.isArray(parsed.services)) throw new Error("invalid_issue_policy_file");
+  if (!parsed.service || typeof parsed.service !== "object") throw new Error("invalid_issue_policy_file");
 
-  const services = parsed.services.map((candidate): ServiceCapability => {
+  const value = parsed.service as Record<string, unknown>;
+  if (!isString(value.serviceKey) || !isString(value.environmentKey) || (value.environmentKind !== "production" && value.environmentKind !== "test")) throw new Error("invalid_issue_policy_file");
+  if (!Array.isArray(value.capabilities) || !value.capabilities.every((entry) => CAPABILITIES.has(entry as ServiceCapabilityName))) throw new Error("invalid_issue_policy_file");
+  if (!Array.isArray(value.repositories) || !value.repositories.length) throw new Error("invalid_issue_policy_file");
+  const repositories = value.repositories.map((candidate): RepositoryGrant => {
     if (!candidate || typeof candidate !== "object") throw new Error("invalid_issue_policy_file");
-    const value = candidate as Record<string, unknown>;
-    if (!isString(value.serviceKey) || !isString(value.environmentKey) || (value.environmentKind !== "production" && value.environmentKind !== "test") || (value.codeAccess !== "read" && value.codeAccess !== "write") || !isString(value.repositoryPath) || !isString(value.baseCommit) || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(value.baseCommit)) throw new Error("invalid_issue_policy_file");
-    if (!Array.isArray(value.capabilities) || !value.capabilities.every((entry) => CAPABILITIES.has(entry as ServiceCapabilityName))) throw new Error("invalid_issue_policy_file");
-    const repositoryPath = path.resolve(value.repositoryPath);
+    const repository = candidate as Record<string, unknown>;
+    if ((repository.codeAccess !== "read" && repository.codeAccess !== "write") || !isString(repository.repositoryPath) || !isString(repository.baseCommit) || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(repository.baseCommit)) throw new Error("invalid_issue_policy_file");
+    const repositoryPath = path.resolve(repository.repositoryPath);
     if (!isWithin(workspace, repositoryPath) || repositoryPath === workspace) throw new Error("invalid_issue_policy_repository");
-    return {
+    return { codeAccess: repository.codeAccess, repositoryPath, baseCommit: repository.baseCommit };
+  });
+  const normalized = createIssuePolicy({
+    issueKey,
+    issueType: parsed.issueType as IssueType,
+    workspaceRoot: workspace,
+    service: {
       serviceKey: value.serviceKey,
       environmentKey: value.environmentKey,
       environmentKind: value.environmentKind,
-      codeAccess: value.codeAccess,
-      repositoryPath,
-      baseCommit: value.baseCommit,
       capabilities: value.capabilities as ServiceCapabilityName[],
-    };
+      repositories,
+    },
   });
-  const normalized = createIssuePolicy({ issueKey, issueType: parsed.issueType as IssueType, workspaceRoot: workspace, services });
   if (JSON.stringify(parsed.tools) !== JSON.stringify(normalized.tools)) throw new Error("issue_policy_tool_set_mismatch");
   return normalized;
 }
@@ -137,19 +146,22 @@ export function assertToolGranted(policy: IssuePolicy, toolName: string): void {
   if (!policy.tools.includes(toolName as PolicyToolName)) throw new Error("tool_not_granted_for_issue");
 }
 
-export function grantedServices(policy: IssuePolicy, serviceKey: string, capability?: ServiceCapabilityName): ServiceCapability[] {
-  const services = policy.services.filter((candidate) => candidate.serviceKey === serviceKey);
-  if (!services.length) throw new Error("service_not_granted_for_issue");
-  if (capability && services.some((service) => !service.capabilities.includes(capability))) throw new Error("capability_not_granted_for_service");
-  return services;
+export function grantedRepositories(policy: IssuePolicy, capability?: ServiceCapabilityName): GrantedRepository[] {
+  if (capability && !policy.service.capabilities.includes(capability)) throw new Error("capability_not_granted_for_service");
+  return policy.service.repositories.map((repository) => ({
+    ...repository,
+    serviceKey: policy.service.serviceKey,
+    environmentKey: policy.service.environmentKey,
+    environmentKind: policy.service.environmentKind,
+  }));
 }
 
 function repositoryRoots(policy: IssuePolicy): string[] {
-  return [...new Set(policy.services.map((service) => service.repositoryPath))];
+  return policy.service.repositories.map((repository) => repository.repositoryPath);
 }
 
 function writeRoots(policy: IssuePolicy): string[] {
-  return [...new Set(policy.services.filter((service) => service.codeAccess === "write").map((service) => service.repositoryPath))];
+  return policy.service.repositories.filter((repository) => repository.codeAccess === "write").map((repository) => repository.repositoryPath);
 }
 
 async function canonicalTarget(target: string, write: boolean): Promise<string> {

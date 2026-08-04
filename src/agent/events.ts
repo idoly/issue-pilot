@@ -6,5 +6,3 @@ export interface RunEvent {
   createdAt: string;
   transient?: boolean;
 }
-
-export type RunEventListener = (event: RunEvent) => void;

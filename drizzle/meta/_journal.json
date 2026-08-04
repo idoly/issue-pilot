@@ -50,6 +50,27 @@
       "when": 1785864000000,
       "tag": "0006_simplify_issue_types",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785867600000,
+      "tag": "0007_strict_issue_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785871200000,
+      "tag": "0008_remove_unimplemented_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785874800000,
+      "tag": "0009_enforce_issue_scope",
+      "breakpoints": true
     }
   ]
 }

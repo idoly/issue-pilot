@@ -1,20 +1,16 @@
 import { Select, Skeleton } from "@idoly/ant-design-solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-import { listIssues, loadConfig, type IssueListItem } from "../data/client";
+import { listIssues, type IssueListItem } from "../data/client";
 import { typeLabel } from "./model";
 
 export function Statistics() {
   const [issues, setIssues] = createSignal<IssueListItem[]>([], { ownedWrite: true });
-  const [serviceNames, setServiceNames] = createSignal(new Map<string, string>(), { ownedWrite: true });
   const [period, setPeriod] = createSignal("30d", { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
 
-  void Promise.all([listIssues(), loadConfig()]).then(([loadedIssues, configuration]) => {
-    setIssues(loadedIssues);
-    setServiceNames(new Map(configuration.services.map((service) => [service.key, service.name])));
-  }).catch((reason) => {
+  void listIssues().then(setIssues).catch((reason) => {
     setError(reason instanceof Error ? reason.message : "统计数据加载失败");
   }).finally(() => setLoading(false));
 
@@ -28,11 +24,15 @@ export function Statistics() {
   const unassigned = createMemo(() => filteredIssues().filter((issue) => !issue.assigneeSubject && issue.status !== "resolved" && issue.status !== "closed").length);
   const urgent = createMemo(() => filteredIssues().filter((issue) => (issue.priority === "p0" || issue.priority === "p1") && issue.status !== "resolved" && issue.status !== "closed").length);
   const completionRate = createMemo(() => filteredIssues().length ? Math.round(completed() / filteredIssues().length * 1000) / 10 : 0);
-  const services = createMemo(() => [...serviceNames()].map(([key, name]) => ({
-    key,
-    name,
-    count: filteredIssues().filter((issue) => issue.labels.includes(key)).length,
-  })).filter((service) => service.count > 0).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)));
+  const services = createMemo(() => {
+    const counts = new Map<string, { key: string; name: string; count: number }>();
+    for (const issue of filteredIssues()) {
+      const current = counts.get(issue.service.key) ?? { ...issue.service, count: 0 };
+      current.count += 1;
+      counts.set(issue.service.key, current);
+    }
+    return [...counts.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
+  });
   const types = createMemo(() => Object.entries(typeLabel).map(([key, name]) => ({
     key,
     name,
@@ -67,7 +67,7 @@ export function Statistics() {
           </section>
           <div class="statistics-grid">
             <section class="statistics-section">
-              <div class="statistics-title"><h2>服务工单量</h2><span>按工单服务标签计数</span></div>
+              <div class="statistics-title"><h2>服务工单量</h2><span>按工单服务计数</span></div>
               <For each={services()} fallback={<div class="empty-band">周期内暂无服务工单</div>}>{(service) => <div class="ranking-row"><span>{service.name}</span><div><i style={{ width: `${service.count / (services()[0]?.count ?? 1) * 100}%` }} /></div><strong>{service.count}</strong></div>}</For>
             </section>
             <section class="statistics-section">

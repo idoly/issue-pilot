@@ -15,8 +15,8 @@ The Pi packages are peer dependencies. In this workspace they are provided by th
 ## Install
 
 ```bash
-npm ci --legacy-peer-deps
-npm --prefix apps/web ci --legacy-peer-deps
+npm ci
+npm --prefix apps/web ci
 ```
 
 ## Initialize

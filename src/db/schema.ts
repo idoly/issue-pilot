@@ -18,7 +18,7 @@ export const subjects = sqliteTable("subjects", {
 export const environments = sqliteTable("environments", {
   id: id(), organizationId: text("organization_id").notNull(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }),
   scope: text("scope", { enum: ["global", "personal"] }).notNull(), key: text("key").notNull(), name: text("name").notNull(),
-  kind: text("kind", { enum: ["production", "test", "local"] }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
+  kind: text("kind", { enum: ["production", "test"] }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
 }, (table) => [
   index("environments_org_scope_idx").on(table.organizationId, table.scope),
   uniqueIndex("environments_owner_key_unique").on(table.organizationId, table.scope, table.ownerSubject, table.key),
@@ -42,7 +42,7 @@ export const serviceDeployments = sqliteTable("service_deployments", {
 
 export const deploymentCapabilities = sqliteTable("deployment_capabilities", {
   deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id, { onDelete: "cascade" }),
-  capability: text("capability", { enum: ["configuration_read", "database_read", "cache_read", "log_read"] }).notNull(), ...timestamps,
+  capability: text("capability", { enum: ["configuration_read", "database_read"] }).notNull(), ...timestamps,
 }, (table) => [uniqueIndex("deployment_capability_unique").on(table.deploymentId, table.capability)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {
@@ -54,16 +54,10 @@ export const issues = sqliteTable("issues", {
   status: text("status", { enum: ["open", "in_progress", "pending", "failed", "resolved", "closed"] }).notNull().default("open"),
   priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] }).notNull().default("p2"),
   type: text("type", { enum: ["incident", "request", "question", "smart_analysis"] }).notNull().default("request"),
-  serviceId: text("service_id").references(() => services.id), environmentId: text("environment_id").references(() => environments.id),
+  serviceId: text("service_id").notNull().references(() => services.id), environmentId: text("environment_id").notNull().references(() => environments.id),
   reporterSubject: text("reporter_subject").notNull().references(() => subjects.subject), assigneeSubject: text("assignee_subject").references(() => subjects.subject),
-  labels: json<string[]>("labels").notNull().default([]), resolvedAt: date("resolved_at"), version: integer("version").notNull().default(1), ...timestamps,
+  resolvedAt: date("resolved_at"), version: integer("version").notNull().default(1), ...timestamps,
 }, (table) => [uniqueIndex("issues_key_unique").on(table.key), index("issues_queue_idx").on(table.status, table.priority, table.updatedAt), index("issues_assignee_idx").on(table.assigneeSubject, table.status)]);
-
-export const issueServices = sqliteTable("issue_services", {
-  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), serviceId: text("service_id").notNull().references(() => services.id),
-  environmentId: text("environment_id").notNull().references(() => environments.id), deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id),
-  primary: integer("primary", { mode: "boolean" }).notNull().default(false), ...timestamps,
-}, (table) => [uniqueIndex("issue_service_unique").on(table.issueId, table.serviceId, table.environmentId), index("issue_services_service_idx").on(table.serviceId, table.environmentId)]);
 
 export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
   issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), subject: text("subject").notNull().references(() => subjects.subject), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
@@ -92,17 +86,6 @@ export const issueEvidence = sqliteTable("issue_evidence", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), source: text("source", { enum: ["sls", "dms", "mysql", "code", "attachment", "user", "test"] }).notNull(),
   summary: text("summary").notNull(), locator: text("locator"), payload: json<Record<string, unknown>>("payload"), createdBy: text("created_by").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
 }, (table) => [index("issue_evidence_issue_idx").on(table.issueId, table.source)]);
-
-export const issueDiagnoses = sqliteTable("issue_diagnoses", {
-  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), classification: text("classification", { enum: ["pending", "bug", "not_bug", "change_request", "cannot_determine"] }).notNull().default("pending"),
-  rootCause: text("root_cause"), confidencePermille: integer("confidence_permille"), evidenceIds: json<string[]>("evidence_ids").notNull().default([]), updatedBy: text("updated_by"), updatedAt: date("updated_at").notNull().$defaultFn(() => new Date()),
-});
-
-export const issueTestRuns = sqliteTable("issue_test_runs", {
-  id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), repositoryId: text("repository_id").references(() => issueRepositories.id, { onDelete: "set null" }),
-  scope: text("scope", { enum: ["backend", "frontend", "integration"] }).notNull(), command: text("command").notNull(), status: text("status", { enum: ["passed", "failed", "blocked"] }).notNull(),
-  summary: text("summary").notNull(), artifactKey: text("artifact_key"), createdBy: text("created_by").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
-}, (table) => [index("issue_test_runs_issue_idx").on(table.issueId, table.createdAt)]);
 
 export const agentSessions = sqliteTable("issue_pilot_sessions", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), piSessionId: text("pi_session_id").notNull(), sessionFile: text("session_file").notNull(), workspacePath: text("workspace_path").notNull(),

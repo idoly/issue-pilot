@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import YAML from "yaml";
 
-import type { ServiceCapability } from "../pi/policy.ts";
+import type { GrantedRepository } from "../pi/policy.ts";
 import { redact, sensitive } from "./output.ts";
 
 const execFileAsync = promisify(execFile);
@@ -71,7 +71,7 @@ async function git(repository: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-async function frozenFiles(service: ServiceCapability): Promise<Array<{ file: string; content: string }>> {
+async function frozenFiles(service: GrantedRepository): Promise<Array<{ file: string; content: string }>> {
   const names = (await git(service.repositoryPath, ["ls-tree", "-r", "--name-only", service.baseCommit])).split("\n").filter(Boolean);
   const candidates = names.filter((name) => CONFIG_FILE.test(name) && (!name.includes("/") || /^(?:config|src\/main\/resources)\//.test(name)));
   const profiles = new Set([service.environmentKey, ...(service.environmentKind === "production" ? ["prod", "production"] : service.environmentKind === "test" ? ["test"] : ["local", "dev"])]);
@@ -222,7 +222,7 @@ async function nacosContent(pi: ExtensionAPI, properties: Record<string, unknown
   }
 }
 
-export async function resolveConfiguration(pi: ExtensionAPI, service: ServiceCapability, signal?: AbortSignal, secrets: Record<string, string> = {}, allowedNacosServers: string[] = []): Promise<ResolvedConfiguration> {
+export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}, allowedNacosServers: string[] = []): Promise<ResolvedConfiguration> {
   const files = await frozenFiles(service);
   let properties: Record<string, unknown> = {};
   const sources: string[] = [];

@@ -33,23 +33,16 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
       issueKey: "ISSUE-20260804-002",
       issueType: "incident",
       workspaceRoot: workspace,
-      services: [{
+      service: {
         serviceKey: "orders",
         environmentKey: "test",
         environmentKind: "test",
-        codeAccess: "write",
-        repositoryPath: repository,
-        baseCommit: "a".repeat(40),
         capabilities: ["configuration_read"],
-      }, {
-        serviceKey: "shared",
-        environmentKey: "test",
-        environmentKind: "test",
-        codeAccess: "read",
-        repositoryPath: dependencyRepository,
-        baseCommit: "b".repeat(40),
-        capabilities: [],
-      }],
+        repositories: [
+          { codeAccess: "write", repositoryPath: repository, baseCommit: "a".repeat(40) },
+          { codeAccess: "read", repositoryPath: dependencyRepository, baseCommit: "b".repeat(40) },
+        ],
+      },
     });
     await writeFile(capabilityFile, JSON.stringify(policy), { mode: 0o600 });
     await chmod(capabilityFile, 0o600);
@@ -76,7 +69,13 @@ test("uses read-only code tools for non-mutating issue types", () => {
     issueKey: "ISSUE-20260804-003",
     issueType: "question",
     workspaceRoot: "/tmp/issue-policy-question",
-    services: [],
+    service: {
+      serviceKey: "orders",
+      environmentKey: "test",
+      environmentKind: "test",
+      capabilities: [],
+      repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-question/repository", baseCommit: "a".repeat(40) }],
+    },
   });
   assert.equal(policy.tools.includes("read"), true);
   assert.equal(policy.tools.includes("write"), false);

@@ -9,7 +9,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { resolveConfiguration, sanitizedConfiguration } from "../../src/evidence/configuration.ts";
-import type { ServiceCapability } from "../../src/pi/policy.ts";
+import type { GrantedRepository } from "../../src/pi/policy.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,14 +45,13 @@ test("resolves datasource configuration through Nacos without exposing bootstrap
     await execFileAsync("git", ["-C", repository, "add", "."]);
     await execFileAsync("git", ["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "fixture"]);
     const { stdout } = await execFileAsync("git", ["-C", repository, "rev-parse", "HEAD"], { encoding: "utf8" });
-    const service: ServiceCapability = {
+    const service: GrantedRepository = {
       serviceKey: "orders",
       environmentKey: "test",
       environmentKind: "test",
       codeAccess: "write",
       repositoryPath: repository,
       baseCommit: stdout.trim(),
-      capabilities: ["configuration_read", "database_read"],
     };
     const calls: string[][] = [];
     const pi = {

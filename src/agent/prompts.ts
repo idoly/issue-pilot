@@ -2,12 +2,6 @@ interface RepositoryContext {
   url: string;
   branch: string;
   path: string;
-  serviceScopes: Array<{
-    serviceKey: string;
-    serviceName: string;
-    serviceDescription: string;
-    codeAccess: "write";
-  }>;
 }
 
 interface ServiceContext {
@@ -21,11 +15,7 @@ function repositoryLines(repository: RepositoryContext): string {
     `- ${repository.url}`,
     `  workspace: ${repository.path}`,
     `  branch: ${repository.branch}`,
-    "  selected service scopes:",
-    ...repository.serviceScopes.map((scope) => [
-      `    - [explicit service] ${scope.serviceKey} (${scope.serviceName}): . (repository root)`,
-      ...(scope.serviceDescription.trim() ? [`      service context: ${scope.serviceDescription.trim()}`] : []),
-    ].join("\n")),
+    "  scope: selected service repository root",
   ].join("\n");
 }
 
@@ -49,7 +39,7 @@ export function initialPrompt(input: {
   description: string;
   issueType: string;
   repositories: RepositoryContext[];
-  services: ServiceContext[];
+  service: ServiceContext;
   userMessage?: string;
 }): string {
   return [
@@ -63,13 +53,13 @@ export function initialPrompt(input: {
     input.description || "No description was provided.",
     "",
     "Service context (required reading before investigating or changing a repository):",
-    ...input.services.map((service) => `- ${service.key} (${service.name})\n${service.description?.trim() || "  No service description was provided."}`),
+    `- ${input.service.key} (${input.service.name})\n${input.service.description?.trim() || "  No service description was provided."}`,
     ...(input.userMessage ? ["", "Latest user message:", input.userMessage, "", "Answer the latest user message directly after using the issue session and repository context as needed."] : []),
     "",
     "Prepared repositories:",
     ...input.repositories.map(repositoryLines),
     "",
-    "The prepared repositories are exactly those attached to the explicitly selected services. Focus code search, edits, builds, and tests on these repository roots and ignore retired workspace directories.",
+    "The prepared repositories are exactly those attached to the selected service. Focus code search, edits, builds, and tests on these repository roots and ignore retired workspace directories.",
     "Inspect the relevant code and establish the cause before editing. If the issue policy permits code mutation and the cause is a code-logic defect, implement the smallest correct fix in the prepared local issue branch and run appropriate tests.",
     "Use only tools activated by the Issue Pilot policy. Arbitrary shell execution and access outside the granted repositories are intentionally unavailable.",
     "Never push commits or branches to any remote, never create a merge request, and never run git push. Keep every code change local in the prepared issue branch for human review.",

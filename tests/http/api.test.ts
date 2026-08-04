@@ -40,9 +40,9 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(configurationResponse.statusCode, 200);
     const configuredEnvironments = (await json(configurationResponse)).environments as Array<{ key: string; name: string }>;
     assert.deepEqual(configuredEnvironments.map((environment) => environment.key).sort(), ["production", "test"]);
-    assert.equal((await app.inject({ method: "POST", url: "/api/environments", payload: { key: "staging", name: "Staging" } })).statusCode, 405);
-    assert.equal((await app.inject({ method: "PATCH", url: "/api/environments/test", payload: { name: "Changed" } })).statusCode, 405);
-    assert.equal((await app.inject({ method: "DELETE", url: "/api/environments/test" })).statusCode, 405);
+    assert.equal((await app.inject({ method: "POST", url: "/api/environments", payload: { key: "staging", name: "Staging" } })).statusCode, 404);
+    assert.equal((await app.inject({ method: "PATCH", url: "/api/environments/test", payload: { name: "Changed" } })).statusCode, 404);
+    assert.equal((await app.inject({ method: "DELETE", url: "/api/environments/test" })).statusCode, 404);
 
     for (const service of [
       { key: "alpha", name: "Alpha", repositoryUrls: ["https://example.test/alpha.git", "https://example.test/alpha-shared.git"] },
@@ -85,7 +85,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         priority: "p2",
         type: "question",
         environmentKey: "test",
-        serviceKeys: ["alpha"],
+        serviceKey: "alpha",
         assigneeSubject: "missing-user",
         ccSubjects: [],
       },
@@ -102,20 +102,13 @@ test("configuration and issue API preserves relational integrity", async () => {
         priority: "urgent",
         type: "question",
         environmentKey: "test",
-        serviceKeys: ["alpha"],
+        serviceKey: "alpha",
         assigneeSubject: null,
         ccSubjects: [],
       },
     });
     assert.equal(invalidPriority.statusCode, 400);
     assert.equal((await json(invalidPriority)).error, "invalid_priority");
-    const multipleServices = await app.inject({
-      method: "POST",
-      url: "/api/issues",
-      payload: { title: "Too many services", description: "", priority: "p2", type: "question", environmentKey: "test", serviceKeys: ["alpha", "beta"], assigneeSubject: null, ccSubjects: [] },
-    });
-    assert.equal(multipleServices.statusCode, 400);
-    assert.equal((await json(multipleServices)).error, "multiple_services_not_allowed");
     assert.deepEqual(await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)), []);
 
     const createdResponse = await app.inject({
@@ -127,7 +120,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         priority: "p1",
         type: "question",
         environmentKey: "test",
-        serviceKeys: ["alpha"],
+        serviceKey: "alpha",
         assigneeSubject: "demo-owner",
         ccSubjects: [],
       },
@@ -169,7 +162,7 @@ test("configuration and issue API preserves relational integrity", async () => {
       priority: "p2",
       type: "question",
       environmentKey: "test",
-      serviceKeys: ["alpha"],
+      serviceKey: "alpha",
       assigneeSubject: null,
       ccSubjects: [],
     });
@@ -189,7 +182,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(detailResponse.statusCode, 200, detailResponse.body);
     const detail = await json(detailResponse);
     assert.equal(detail.title, "Valid issue");
-    assert.deepEqual((detail.affectedServices as Array<{ key: string }>).map((service) => service.key), ["alpha"]);
+    assert.equal((detail.service as { key: string }).key, "alpha");
     assert.equal("affectedModules" in detail, false);
     assert.equal("scopeCandidates" in detail, false);
 
@@ -247,36 +240,19 @@ test("configuration and issue API preserves relational integrity", async () => {
       payload: { name: "Must roll back", description: "deployment still in use", repositories: updatedAlpha.repositories, deployments: [] },
     });
     assert.equal(usedDeploymentRemoval.statusCode, 409, usedDeploymentRemoval.body);
-    assert.equal((await json(usedDeploymentRemoval)).error, "resource_in_use");
+    assert.equal((await json(usedDeploymentRemoval)).error, "deployment_is_used_by_issues");
     const afterDeploymentRollback = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: unknown[] }> };
     assert.equal(afterDeploymentRollback.services.find((service) => service.key === "alpha")?.name, "Alpha renamed");
     assert.equal(afterDeploymentRollback.services.find((service) => service.key === "alpha")?.deployments.length, 1);
 
-    const emptyServices = await app.inject({
-      method: "PATCH",
-      url: `/api/issues/${created.id}`,
-      payload: { title: "No services", description: "", priority: "p2", type: "question", serviceKeys: [], assigneeSubject: null, ccSubjects: [] },
-    });
-    assert.equal(emptyServices.statusCode, 400);
-    assert.equal((await json(emptyServices)).error, "service_required");
-    const multipleServiceUpdate = await app.inject({
-      method: "PATCH",
-      url: `/api/issues/${created.id}`,
-      payload: { title: "Too many services", description: "", priority: "p2", type: "question", serviceKeys: ["alpha", "beta"], assigneeSubject: null, ccSubjects: [] },
-    });
-    assert.equal(multipleServiceUpdate.statusCode, 400);
-    assert.equal((await json(multipleServiceUpdate)).error, "multiple_services_not_allowed");
-
     const validUpdate = await app.inject({
       method: "PATCH",
       url: `/api/issues/${created.id}`,
-      payload: { title: "Moved to beta", description: "", priority: "p2", type: "question", serviceKeys: ["beta"], assigneeSubject: null, ccSubjects: [] },
+      payload: { title: "Moved to beta", description: "", priority: "p2", type: "question", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
     });
     assert.equal(validUpdate.statusCode, 200, validUpdate.body);
-    const updatedList = await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; labels: string[] }>;
-    assert.deepEqual(updatedList.find((item) => item.id === created.id)?.labels, ["beta", "test"]);
-    const updatedDetail = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { affectedServices: Array<{ key: string }> };
-    assert.deepEqual(updatedDetail.affectedServices.map((service) => service.key), ["beta"]);
+    const updatedList = await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; service: { key: string } }>;
+    assert.equal(updatedList.find((item) => item.id === created.id)?.service.key, "beta");
 
     const boundary = "issue-pilot-test-boundary";
     const attachmentContent = "diagnostic output\n";

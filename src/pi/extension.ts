@@ -10,21 +10,13 @@ import { runMavenProject, runNodeProject } from "../evidence/toolchains.ts";
 import {
   assertToolGranted,
   authorizeWorkspacePath,
-  grantedServices,
+  grantedRepositories,
   loadIssuePolicy,
-  type PolicyToolName,
 } from "./policy.ts";
 import { repositoryStatus } from "./repository.ts";
 
 const PATH_TOOLS = new Set(["read", "grep", "find", "ls", "edit", "write"]);
 const WRITE_TOOLS = new Set(["edit", "write"]);
-
-function requestedServiceKey(policy: Awaited<ReturnType<typeof loadIssuePolicy>>, requested: unknown): string {
-  if (typeof requested === "string" && requested.trim()) return requested.trim();
-  const serviceKeys = [...new Set(policy.services.map((service) => service.serviceKey))];
-  if (serviceKeys.length !== 1) throw new Error("service_key_required_for_multi_service_issue");
-  return serviceKeys[0]!;
-}
 
 export default function issuePilotExtension(pi: ExtensionAPI): void {
   if (process.env.ISSUE_PILOT_POLICY_REQUIRED !== "1") return;
@@ -47,7 +39,7 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event, context) => {
     const policy = await loadIssuePolicy(context.cwd);
     const writable = policy.tools.includes("write");
-    const writableRepositories = policy.services.filter((service) => service.codeAccess === "write").length;
+    const writableRepositories = policy.service.repositories.filter((repository) => repository.codeAccess === "write").length;
     return {
       systemPrompt: [
         event.systemPrompt,
@@ -55,13 +47,13 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
         "Issue Pilot execution policy:",
         `- Bound issue: ${policy.issueKey} (${policy.issueType}).`,
         `- Active tools: ${policy.tools.join(", ")}.`,
-        `- Repository access is restricted to ${policy.services.length} repository scope(s); ${writableRepositories} permit mutation when the issue type allows it.`,
+        `- Repository access is restricted to ${policy.service.repositories.length} repository scope(s); ${writableRepositories} permit mutation when the issue type allows it.`,
         `- Code mutation is ${writable ? "allowed only in explicitly granted repository roots" : "disabled for this issue type"}.`,
         "- Arbitrary shell execution, remote pushes, project-local extensions, and session switching are disabled.",
         "- External systems and build runtimes must be accessed only through the registered Issue Pilot tools.",
         "- Call external capability tools only when the current investigation needs that evidence; an active tool is available, not pre-executed.",
         "- When the user asks for current, effective, or environment-specific application configuration, call configuration_read. It resolves frozen repository files and approved Nacos imports; do not answer from a YAML file alone.",
-        "- For database evidence, call database_read with the relevant service key. It resolves that service's repositories, frozen configuration, Nacos imports, and datasource before running the bounded read-only query.",
+        "- For database evidence, call database_read. It resolves the selected service's repositories, frozen configuration, Nacos imports, and datasource before running the bounded read-only query.",
       ].join("\n"),
     };
   });
@@ -94,13 +86,11 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
     name: "configuration_read",
     label: "Read Service Configuration",
     description: "On demand, inspect every repository granted to a service and return sanitized configuration resolved from frozen files and approved Nacos providers.",
-    parameters: Type.Object({ service_key: Type.Optional(Type.String({ description: "Service key. May be omitted only when the issue selects exactly one service." })) }),
-    async execute(_id, raw, signal, _update, context) {
-      const input = raw as { service_key?: string };
+    parameters: Type.Object({}),
+    async execute(_id, _raw, signal, _update, context) {
       const policy = await loadIssuePolicy(context.cwd);
       assertToolGranted(policy, "configuration_read");
-      const serviceKey = requestedServiceKey(policy, input.service_key);
-      return readConfiguration(pi, grantedServices(policy, serviceKey, "configuration_read"), signal);
+      return readConfiguration(pi, grantedRepositories(policy, "configuration_read"), signal);
     },
   });
 
@@ -109,14 +99,13 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
     label: "Run Read-Only Database Query",
     description: "On demand, find the granted service repositories, resolve frozen configuration and approved Nacos imports, locate one datasource, and run one bounded read-only SQL statement. SELECT statements must include LIMIT 1-1000.",
     parameters: Type.Object({
-      service_key: Type.String(),
       statement: Type.String({ maxLength: 20_000 }),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const input = raw as { service_key: string; statement: string };
+      const input = raw as { statement: string };
       const policy = await loadIssuePolicy(context.cwd);
       assertToolGranted(policy, "database_read");
-      return readDatabase(pi, context.cwd, grantedServices(policy, input.service_key, "database_read"), input, signal);
+      return readDatabase(pi, context.cwd, grantedRepositories(policy, "database_read"), input, signal);
     },
   });
 
@@ -155,19 +144,13 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
     label: "Inspect Repository Changes",
     description: "On demand, show status or diff for every repository granted to one service without allowing arbitrary git commands.",
     parameters: Type.Object({
-      service_key: Type.String(),
       action: StringEnum(["status", "diff"] as const),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const input = raw as { service_key: string; action: "status" | "diff" };
+      const input = raw as { action: "status" | "diff" };
       const policy = await loadIssuePolicy(context.cwd);
       assertToolGranted(policy, "repository_status");
-      return repositoryStatus(pi, grantedServices(policy, input.service_key), input.action, signal);
+      return repositoryStatus(pi, grantedRepositories(policy), input.action, signal);
     },
   });
 }
-
-export const managedToolNames: readonly PolicyToolName[] = [
-  "read", "grep", "find", "ls", "edit", "write", "configuration_read", "database_read",
-  "node_project_command", "maven_project_command", "repository_status",
-];

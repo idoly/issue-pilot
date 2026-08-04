@@ -65,31 +65,16 @@ test("registers capability tools and resolves frozen service configuration", asy
       issueKey: "ISSUE-20260803-001",
       issueType: "incident",
       workspaceRoot: issueRoot,
-      services: [{
+      service: {
         serviceKey: "orders",
         environmentKey: "test",
         environmentKind: "test",
-        codeAccess: "write",
-        repositoryPath: source.path,
-        baseCommit: source.commit,
         capabilities: ["configuration_read", "database_read"],
-      }, {
-        serviceKey: "orders",
-        environmentKey: "test",
-        environmentKind: "test",
-        codeAccess: "write",
-        repositoryPath: supporting.path,
-        baseCommit: supporting.commit,
-        capabilities: ["configuration_read", "database_read"],
-      }, {
-        serviceKey: "orders-production",
-        environmentKey: "production",
-        environmentKind: "production",
-        codeAccess: "read",
-        repositoryPath: source.path,
-        baseCommit: source.commit,
-        capabilities: ["database_read"],
-      }],
+        repositories: [
+          { codeAccess: "write", repositoryPath: source.path, baseCommit: source.commit },
+          { codeAccess: "write", repositoryPath: supporting.path, baseCommit: supporting.commit },
+        ],
+      },
     })), { mode: 0o600 });
     await chmod(capabilityFile, 0o600);
     process.env.ISSUE_PILOT_CONNECTORS_FILE = connectors;
@@ -121,36 +106,46 @@ test("registers capability tools and resolves frozen service configuration", asy
     await assert.rejects(handlers.get("tool_call")!({ toolName: "read", input: { path: connectors } }, context), /workspace_path_not_granted/);
     await assert.rejects(handlers.get("tool_call")!({ toolName: "bash", input: { command: "pwd" } }, context), /tool_not_granted_for_issue/);
 
-    await assert.rejects(tools.get("configuration_read")!.execute("config-ambiguous", {}, undefined, undefined, { cwd: issueRoot }), /service_key_required_for_multi_service_issue/);
-    const configuration = await tools.get("configuration_read")!.execute("config", { service_key: "orders" }, undefined, undefined, { cwd: issueRoot });
+    const configuration = await tools.get("configuration_read")!.execute("config", {}, undefined, undefined, { cwd: issueRoot });
     assert.match(configuration.content[0]!.text, /spring\.datasource\.url/);
     assert.match(configuration.content[0]!.text, /"repository": "supporting"/);
     assert.match(configuration.content[0]!.text, /\[REDACTED\]/);
     assert.doesNotMatch(configuration.content[0]!.text, /repository-secret/);
 
     delete process.env.ISSUE_PILOT_STATE_ROOT;
-    const inferredStateRoot = await tools.get("configuration_read")!.execute("config-inferred", { service_key: "orders" }, undefined, undefined, { cwd: issueRoot });
+    const inferredStateRoot = await tools.get("configuration_read")!.execute("config-inferred", {}, undefined, undefined, { cwd: issueRoot });
     assert.match(inferredStateRoot.content[0]!.text, /spring\.datasource\.url/);
     process.env.ISSUE_PILOT_STATE_ROOT = root;
 
-    const database = await tools.get("database_read")!.execute("query", { service_key: "orders", statement: "SELECT order_id, status, password FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
+    const database = await tools.get("database_read")!.execute("query", { statement: "SELECT order_id, status, password FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
     assert.match(database.content[0]!.text, /ready/);
     assert.match(database.content[0]!.text, /secret-value/);
     assert.doesNotMatch(database.content[0]!.text, /repository-secret/);
     mysqlStdout = `payload\n${"x".repeat(200_000)}\n`;
-    const bounded = await tools.get("database_read")!.execute("query", { service_key: "orders", statement: "SELECT payload FROM audit_log ORDER BY created_at DESC LIMIT 100" }, undefined, undefined, { cwd: issueRoot });
+    const bounded = await tools.get("database_read")!.execute("query", { statement: "SELECT payload FROM audit_log ORDER BY created_at DESC LIMIT 100" }, undefined, undefined, { cwd: issueRoot });
     assert.ok(Buffer.byteLength(bounded.content[0]!.text, "utf8") < 50 * 1024);
-    const production = await tools.get("database_read")!.execute("query", { service_key: "orders-production", statement: "SELECT order_id, status FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
+    const status = await tools.get("repository_status")!.execute("status", { action: "status" }, undefined, undefined, { cwd: issueRoot });
+    assert.match(status.content[0]!.text, /"repository": "repository"/);
+    assert.match(status.content[0]!.text, /"repository": "supporting"/);
+    await writeFile(capabilityFile, JSON.stringify(createIssuePolicy({
+      issueKey: "ISSUE-20260803-001",
+      issueType: "question",
+      workspaceRoot: issueRoot,
+      service: {
+        serviceKey: "orders",
+        environmentKey: "production",
+        environmentKind: "production",
+        capabilities: ["database_read"],
+        repositories: [{ codeAccess: "read", repositoryPath: source.path, baseCommit: source.commit }],
+      },
+    })), { mode: 0o600 });
+    const production = await tools.get("database_read")!.execute("query", { statement: "SELECT order_id, status FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
     assert.match(production.content[0]!.text, /"provider": "dms"/);
     assert.match(production.content[0]!.text, /production-secret/);
     assert.doesNotMatch(production.content[0]!.text, /\[REDACTED\]/);
-    await assert.rejects(tools.get("database_read")!.execute("query", { service_key: "billing", statement: "SELECT 1 LIMIT 1" }, undefined, undefined, { cwd: issueRoot }), /service_not_granted_for_issue/);
-    await assert.rejects(tools.get("database_read")!.execute("query", { service_key: "orders", statement: "UPDATE orders SET status = 'done'" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
-    await assert.rejects(tools.get("database_read")!.execute("query", { service_key: "orders", statement: "SELECT * FROM orders" }, undefined, undefined, { cwd: issueRoot }), /database_select_requires_limit_at_most_1000/);
-    await assert.rejects(tools.get("database_read")!.execute("query", { service_key: "orders", statement: "SELECT * FROM orders INTO OUTFILE '/tmp/orders' LIMIT 10" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
-    const status = await tools.get("repository_status")!.execute("status", { service_key: "orders", action: "status" }, undefined, undefined, { cwd: issueRoot });
-    assert.match(status.content[0]!.text, /"repository": "repository"/);
-    assert.match(status.content[0]!.text, /"repository": "supporting"/);
+    await assert.rejects(tools.get("database_read")!.execute("query", { statement: "UPDATE orders SET status = 'done'" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
+    await assert.rejects(tools.get("database_read")!.execute("query", { statement: "SELECT * FROM orders" }, undefined, undefined, { cwd: issueRoot }), /database_select_requires_limit_at_most_1000/);
+    await assert.rejects(tools.get("database_read")!.execute("query", { statement: "SELECT * FROM orders INTO OUTFILE '/tmp/orders' LIMIT 10" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
 
     const commandText = calls.map((call) => call.join(" ")).join("\n");
     assert.match(commandText, /podman run --rm/);
@@ -191,7 +186,16 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
       issueKey: "ISSUE-20260803-001",
       issueType: "incident",
       workspaceRoot: issueRoot,
-      services: [{ serviceKey: "web", environmentKey: "test", environmentKind: "test", codeAccess: "write", repositoryPath: nodeProject, baseCommit: "a".repeat(40), capabilities: [] }, { serviceKey: "api", environmentKey: "test", environmentKind: "test", codeAccess: "write", repositoryPath: mavenProject, baseCommit: "b".repeat(40), capabilities: [] }],
+      service: {
+        serviceKey: "application",
+        environmentKey: "test",
+        environmentKind: "test",
+        capabilities: [],
+        repositories: [
+          { codeAccess: "write", repositoryPath: nodeProject, baseCommit: "a".repeat(40) },
+          { codeAccess: "write", repositoryPath: mavenProject, baseCommit: "b".repeat(40) },
+        ],
+      },
     })), { mode: 0o600 });
     process.env.ISSUE_PILOT_CONNECTORS_FILE = join(root, "missing-connectors");
     process.env.ISSUE_PILOT_STATE_ROOT = root;

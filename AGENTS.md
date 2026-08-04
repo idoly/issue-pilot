@@ -5,7 +5,7 @@ This repository builds a local-first browser-based engineering issue system with
 ## Architecture Rules
 
 - Pi is the only issue-processing agent. Add external capabilities as typed tools in `src/pi/extension.ts` instead of adding parallel agent runtimes.
-- Treat the versioned issue policy in `.issue-pilot/capabilities/<issue>.json` as the authority for tools, repositories, services, and environments.
+- Treat the versioned issue policy in `.issue-pilot/capabilities/<issue>.json` as the authority for tools, the selected service/environment, and repository grants.
 - Managed pi sessions are deny-by-default: no arbitrary bash, project-local extensions, skills, prompt templates, context files, session switching, or paths outside the issue grant.
 - Route Nacos, MySQL, DMS, Node, and Maven operations through fixed disposable Podman commands. Never add long-lived evidence containers.
 - Keep local Git status/diff operations argument-based and read-only. Never expose arbitrary Git commands or remote push operations to pi.

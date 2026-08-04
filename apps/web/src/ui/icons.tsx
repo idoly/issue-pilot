@@ -1,8 +1,26 @@
 import type { IconNode } from "lucide";
-import { icons } from "lucide";
-import { Dynamic } from "@solidjs/web";
+import {
+  CheckCircle2 as CheckCircle2Node,
+  ChevronLeft as ChevronLeftNode,
+  ChevronRight as ChevronRightNode,
+  Database as DatabaseNode,
+  ExternalLink as ExternalLinkNode,
+  FileSearch as FileSearchNode,
+  GitBranch as GitBranchNode,
+  GripVertical as GripVerticalNode,
+  ListFilter as ListFilterNode,
+  Maximize2 as Maximize2Node,
+  Minimize2 as Minimize2Node,
+  Paperclip as PaperclipNode,
+  Pencil as PencilNode,
+  Plus as PlusNode,
+  RefreshCw as RefreshCwNode,
+  Search as SearchNode,
+  SquareTerminal as TerminalSquareNode,
+  Trash2 as Trash2Node,
+} from "lucide";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { omit } from "solid-js";
-import type { JSX } from "@solidjs/web";
 
 interface IconProps extends Omit<JSX.SvgSVGAttributes<SVGSVGElement>, "children"> {
   size?: number;
@@ -12,45 +30,39 @@ function createIcon(node: IconNode) {
   return (props: IconProps) => {
     const others = omit(props, "size");
     return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={props.size ?? 24}
-      height={props.size ?? 24}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      {...others}
-    >
-      {node.map(([tag, attributes]) => <Dynamic component={tag} {...attributes} />)}
-    </svg>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width={props.size ?? 24}
+        height={props.size ?? 24}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        {...others}
+      >
+        {node.map(([tag, attributes]) => <Dynamic component={tag} {...attributes} />)}
+      </svg>
     );
   };
 }
 
-export const Bot = createIcon(icons.Bot);
-export const CheckCircle2 = createIcon(icons.CheckCircle2);
-export const ChevronLeft = createIcon(icons.ChevronLeft);
-export const ChevronRight = createIcon(icons.ChevronRight);
-export const CircleDot = createIcon(icons.CircleDot);
-export const Copy = createIcon(icons.Copy);
-export const Database = createIcon(icons.Database);
-export const ExternalLink = createIcon(icons.ExternalLink);
-export const FileSearch = createIcon(icons.FileSearch);
-export const GitBranch = createIcon(icons.GitBranch);
-export const GripVertical = createIcon(icons.GripVertical);
-export const ListFilter = createIcon(icons.ListFilter);
-export const Maximize2 = createIcon(icons.Maximize2);
-export const MessageSquareText = createIcon(icons.MessageSquareText);
-export const Minimize2 = createIcon(icons.Minimize2);
-export const Paperclip = createIcon(icons.Paperclip);
-export const Pencil = createIcon(icons.Pencil);
-export const Plus = createIcon(icons.Plus);
-export const RefreshCw = createIcon(icons.RefreshCw);
-export const Search = createIcon(icons.Search);
-export const Send = createIcon(icons.Send);
-export const Square = createIcon(icons.Square);
-export const TerminalSquare = createIcon(icons.SquareTerminal);
-export const Trash2 = createIcon(icons.Trash2);
+export const CheckCircle2 = createIcon(CheckCircle2Node);
+export const ChevronLeft = createIcon(ChevronLeftNode);
+export const ChevronRight = createIcon(ChevronRightNode);
+export const Database = createIcon(DatabaseNode);
+export const ExternalLink = createIcon(ExternalLinkNode);
+export const FileSearch = createIcon(FileSearchNode);
+export const GitBranch = createIcon(GitBranchNode);
+export const GripVertical = createIcon(GripVerticalNode);
+export const ListFilter = createIcon(ListFilterNode);
+export const Maximize2 = createIcon(Maximize2Node);
+export const Minimize2 = createIcon(Minimize2Node);
+export const Paperclip = createIcon(PaperclipNode);
+export const Pencil = createIcon(PencilNode);
+export const Plus = createIcon(PlusNode);
+export const RefreshCw = createIcon(RefreshCwNode);
+export const Search = createIcon(SearchNode);
+export const TerminalSquare = createIcon(TerminalSquareNode);
+export const Trash2 = createIcon(Trash2Node);

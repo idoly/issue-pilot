@@ -21,12 +21,12 @@ An issue selects exactly one service. Runner prepares all repositories attached 
 
 ## Issue Execution Policy
 
-Every run produces a versioned policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
+Every run produces a version 3 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
 
 - one normalized issue key and issue type;
 - the exact workspace root;
 - the active pi tool allowlist;
-- granted service/environment pairs;
+- the selected service and environment;
 - repository roots and frozen base commits;
 - repository-root code boundaries for the selected service;
 - deployment evidence capabilities.
@@ -56,13 +56,13 @@ The explicit extension loads before project trust and activates only when the Ru
 
 The CLI allowlist is the first boundary. The extension is the second boundary: it reloads the policy for every tool call, blocks inactive tools, validates built-in file/search paths, disables `!` shell commands, and prevents session switching/forking. Arbitrary `bash` is never active.
 
-The browser may attach only to an already-running, policy-matching Runner PTY. It cannot create a default pi process. Output, input, and resize bytes are forwarded unchanged. The extension emits an owner-only `agent_settled` signal so the Runner can update issue state without terminating the interactive CLI.
+The browser may attach only to an already-running, policy-matching Runner PTY. It cannot create a default pi process. Output, input, and resize bytes are forwarded unchanged. The extension emits an owner-only `agent_settled` signal so the Runner can update issue state without terminating the interactive CLI. Runner also stores a bounded owner-only PTY transcript plus its terminal dimensions; completed Sessions are replayed only when both strict transcript files are valid, Message reconstruction is not supported.
 
 ## External Capabilities
 
 External systems are exposed as typed pi extension tools rather than shell access. Tools are allowlisted when policy is created but execute only when pi decides the current investigation needs that evidence:
 
-- `configuration_read`: resolves every repository granted to one service, reads bounded configuration from frozen Git revisions, follows approved Nacos imports, and returns sanitized per-repository results. The service key may be omitted only when the issue selects exactly one service.
+- `configuration_read`: resolves every repository granted to the selected service, reads bounded configuration from frozen Git revisions, follows approved Nacos imports, and returns sanitized per-repository results.
 - `database_read`: validates one bounded read-only SQL statement, searches the selected service repositories for datasource configuration, follows approved Nacos imports, requires exactly one resolved datasource, and executes through MySQL or DMS connectors.
 - `node_project_command`: runs a fixed Node action in a pinned disposable container.
 - `maven_project_command`: runs a fixed Maven action in a pinned disposable Java 8 container with an issue-isolated cache.
@@ -70,7 +70,7 @@ External systems are exposed as typed pi extension tools rather than shell acces
 
 Nacos, MySQL, DMS, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
 
-Configuration reads report repository/Nacos sources and missing targets separately. Nacos servers must be allowlisted. Database resolution fails explicitly when a service has no datasource or resolves more than one distinct datasource; pi must refine the service scope rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
+Configuration reads report repository/Nacos sources and missing targets separately. Nacos servers must be allowlisted. Database resolution fails explicitly when the selected service has no datasource or resolves more than one distinct datasource; pi must investigate the repository configuration rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
 
 Database results are returned verbatim but bounded by row, field, string, and total byte limits. This exception applies only to query rows; configuration credentials, connection URLs, connector profiles, command arguments, and raw logs remain protected.
 
@@ -83,7 +83,7 @@ A created issue binds exactly one service to one fixed environment. The Runner:
 3. Freezes repository commits and writes the issue execution policy.
 4. Creates or resumes one persistent pi session.
 5. Starts the locked interactive pi CLI with the issue prompt.
-6. Records comments, evidence, classification, and workspace state after settlement.
+6. Records comments, evidence, and workspace state after settlement.
 
 Runs for one issue are serialized. Different issues can run concurrently. Git pushes, merge requests, and remote branch writes are not exposed to pi.
 

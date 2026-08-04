@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { datasourceUrl, resolveConfiguration, sanitizedConfiguration } from "./configuration.ts";
-import type { ServiceCapability } from "../pi/policy.ts";
+import type { GrantedRepository } from "../pi/policy.ts";
 import { queryMysql, validateReadOnlyQuery } from "./mysql.ts";
 import { result } from "./output.ts";
 
@@ -24,7 +24,7 @@ interface ConnectorConfiguration {
   allowedNacosServers?: string[];
 }
 
-function nacosServers(configuration: ConnectorConfiguration, service: ServiceCapability, provider?: DmsProvider): string[] {
+function nacosServers(configuration: ConnectorConfiguration, service: GrantedRepository, provider?: DmsProvider): string[] {
   return provider?.allowedNacosServers
     ?? configuration.configurationProviders?.[service.environmentKey]?.nacos?.allowedServers
     ?? configuration.allowedNacosServers
@@ -41,28 +41,26 @@ async function connectors(): Promise<ConnectorConfiguration> {
   }
 }
 
-export async function readConfiguration(pi: ExtensionAPI, services: ServiceCapability[], signal?: AbortSignal) {
-  if (!services.length) throw new Error("service_not_granted_for_issue");
+export async function readConfiguration(pi: ExtensionAPI, repositories: GrantedRepository[], signal?: AbortSignal) {
   const configured = await connectors();
-  const repositories = [];
-  for (const service of services) {
-    const provider = configured.databaseProviders?.[service.environmentKey];
-    const resolved = await resolveConfiguration(pi, service, signal, {}, nacosServers(configured, service, provider));
-    repositories.push({ repository: path.basename(service.repositoryPath), ...sanitizedConfiguration(resolved) });
+  const resolvedRepositories = [];
+  for (const repository of repositories) {
+    const provider = configured.databaseProviders?.[repository.environmentKey];
+    const resolved = await resolveConfiguration(pi, repository, signal, {}, nacosServers(configured, repository, provider));
+    resolvedRepositories.push({ repository: path.basename(repository.repositoryPath), ...sanitizedConfiguration(resolved) });
   }
-  return result({ repositories }, {
-    serviceKey: services[0]!.serviceKey,
-    sources: repositories.flatMap((repository) => repository.sources),
-    missingSources: repositories.flatMap((repository) => repository.missingSources),
+  return result({ repositories: resolvedRepositories }, {
+    serviceKey: repositories[0]!.serviceKey,
+    sources: resolvedRepositories.flatMap((repository) => repository.sources),
+    missingSources: resolvedRepositories.flatMap((repository) => repository.missingSources),
   });
 }
 
-export async function readDatabase(pi: ExtensionAPI, cwd: string, services: ServiceCapability[], input: { statement: string }, signal?: AbortSignal) {
-  if (!services.length) throw new Error("service_not_granted_for_issue");
+export async function readDatabase(pi: ExtensionAPI, cwd: string, repositories: GrantedRepository[], input: { statement: string }, signal?: AbortSignal) {
   const statement = validateReadOnlyQuery(input.statement);
   const configured = await connectors();
-  const candidates: Array<{ service: ServiceCapability; connectionUrl: string }> = [];
-  for (const service of services) {
+  const candidates: Array<{ service: GrantedRepository; connectionUrl: string }> = [];
+  for (const service of repositories) {
     const provider = configured.databaseProviders?.[service.environmentKey];
     const resolved = await resolveConfiguration(pi, service, signal, {}, nacosServers(configured, service, provider));
     try {
