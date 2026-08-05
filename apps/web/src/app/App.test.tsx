@@ -8,7 +8,7 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "incident", status,
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
-    service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", url: null, retryable }, agentSession: null, terminalTranscript: null,
   });
@@ -73,6 +73,8 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(within(descriptionDialog).getByRole("heading", { name: "放大后的详细描述" })).toBeTruthy());
     fireEvent.click(within(descriptionDialog).getByRole("button", { name: "应用" }));
     await waitFor(() => expect((within(issueDialog).getByLabelText("编辑工单描述") as HTMLTextAreaElement).value).toBe("# 放大后的详细描述"));
+    expect(within(issueDialog).getByText("existing.csv")).toBeTruthy();
+    expect(within(issueDialog).getByText("1/10")).toBeTruthy();
     const attachmentInput = within(issueDialog).getByLabelText("编辑工单选择附件") as HTMLInputElement;
     Object.defineProperty(attachmentInput, "files", { configurable: true, value: [new File(["details"], "details.txt", { type: "text/plain" })] });
     fireEvent.change(attachmentInput);

@@ -106,16 +106,18 @@ function DescriptionField(props: { value: () => string; inputLabel: string; expa
 
 function AttachmentPicker(props: {
   files: () => File[];
-  existingCount?: () => number;
+  existingFiles?: () => IssueDetail["attachments"];
   inputLabel: string;
   onFilesChange: (files: File[]) => void;
   onError: (message: string) => void;
 }) {
   let input: HTMLInputElement | undefined;
+  const existingFiles = () => props.existingFiles?.() ?? [];
+  const totalCount = () => existingFiles().length + props.files().length;
   const selectFiles = (selected: File[]) => {
     const oversized = selected.find((file) => file.size > 20 * 1024 * 1024);
     if (oversized) return props.onError(`${oversized.name} 超过 20 MB`);
-    if ((props.existingCount?.() ?? 0) + props.files().length + selected.length > 10) return props.onError("每个工单最多上传 10 个文件");
+    if (totalCount() + selected.length > 10) return props.onError("每个工单最多上传 10 个文件");
     props.onFilesChange([...props.files(), ...selected]);
     props.onError("");
   };
@@ -125,10 +127,13 @@ function AttachmentPicker(props: {
         selectFiles(Array.from(event.currentTarget.files ?? []));
         event.currentTarget.value = "";
       }} />
-      <div class="attachment-picker-header"><span>附件</span><Button icon={<Paperclip size={14} />} onClick={() => input?.click()}>添加附件</Button></div>
-      <Show when={props.files().length}>
+      <div class="attachment-picker-header"><span>附件 <small>{totalCount()}/10</small></span><Button icon={<Paperclip size={14} />} disabled={totalCount() >= 10} onClick={() => input?.click()}>添加附件</Button></div>
+      <Show when={totalCount()}>
         <div class="attachment-file-list">
-          <For each={props.files()}>{(file, index) => <div class="attachment-file"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
+          <Show when={existingFiles().length}><div class="attachment-group-label">已有附件</div></Show>
+          <For each={existingFiles()}>{(file) => <div class="attachment-file existing"><span><strong>{file.fileName}</strong><small>{file.mediaType} · {fileSize(file.size)}</small></span><small class="attachment-state">已上传</small></div>}</For>
+          <Show when={props.files().length}><div class="attachment-group-label">待上传</div></Show>
+          <For each={props.files()}>{(file, index) => <div class="attachment-file pending"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
         </div>
       </Show>
     </div>
@@ -469,7 +474,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
-          <AttachmentPicker files={editAttachments} existingCount={() => props.issue.attachments.length} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onError={(message) => setEditError(message)} />
+          <AttachmentPicker files={editAttachments} existingFiles={() => props.issue.attachments} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onError={(message) => setEditError(message)} />
           <Show when={editError()}><div class="create-error" role="alert">{editError()}</div></Show>
         </div>
       </Modal>
