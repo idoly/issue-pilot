@@ -97,14 +97,23 @@ button, input { font: inherit; }
 .ads-modal-container:has(.create-issue-form) { display: flex; max-height: min(720px, calc(100dvh - 120px)); flex-direction: column; }
 .ads-modal-container:has(.create-issue-form) .ads-modal-header, .ads-modal-container:has(.create-issue-form) .ads-modal-footer { flex: 0 0 auto; }
 .ads-modal-container:has(.create-issue-form) .ads-modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.ads-modal-container:has(.edit-issue-form) .ads-modal-body { overflow-y: visible; }
 .create-issue-form { display: grid; gap: 14px; }
+.edit-issue-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.edit-issue-form > :nth-child(n+5) { grid-column: 1 / -1; }
 .create-issue-form label { display: grid; gap: 6px; color: #56615c; font-size: 12px; }
 .create-issue-form .multi-select-trigger { min-width: 0; }
 .create-issue-form .ads-select { width: 100%; }
+.description-field { display: grid; min-width: 0; gap: 6px; }
+.description-field-header { display: flex; min-height: 24px; align-items: center; justify-content: space-between; gap: 10px; color: #56615c; font-size: 12px; }
+.markdown-editor-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.description-expanded-input, .description-markdown-preview { min-height: min(60vh, 560px); }
+.description-expanded-input { resize: vertical; }
+.description-markdown-preview { overflow-y: auto; padding: 12px; border: 1px solid #dce2df; border-radius: 5px; background: #fbfcfb; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; clip-path: inset(50%); }
 .attachment-picker { display: grid; gap: 7px; }
 .attachment-picker-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #56615c; font-size: 12px; }
-.attachment-file-list { display: grid; max-height: 174px; gap: 6px; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
+.attachment-file-list { display: grid; max-height: 140px; gap: 6px; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
 .attachment-file { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; padding: 6px 8px 6px 11px; border: 1px solid #e0e5e2; border-radius: 5px; background: #f9fbfa; }
 .attachment-file > span { display: grid; min-width: 0; gap: 2px; }
 .attachment-file strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -118,7 +127,8 @@ button, input { font: inherit; }
 .issue-heading-meta { display: flex; align-items: center; gap: 9px; color: #5e6965; font-size: 12px; }
 .issue-heading-meta > span:first-child { color: #176b5b; font-weight: 700; }
 .issue-heading h1 { margin: 8px 0 5px; font-size: 19px; line-height: 1.4; letter-spacing: 0; overflow-wrap: anywhere; }
-.issue-heading p { margin: 0; color: #626c68; font-size: 14px; line-height: 1.6; }
+.issue-description { color: #626c68; }
+.issue-description .markdown { max-width: none; font-size: 14px; line-height: 1.6; }
 .issue-facts { display: grid; grid-template-columns: repeat(2, minmax(90px, 1fr)); margin: 18px 0; border-block: 1px solid #e3e7e5; }
 .issue-facts > div { display: grid; gap: 4px; padding: 11px 14px; border-right: 1px solid #e3e7e5; }
 .issue-facts > div:nth-child(2n) { border-right: 0; }
@@ -155,6 +165,8 @@ button, input { font: inherit; }
 .comment-row time { color: #89928e; font-size: 10px; }
 .comment-row .markdown { color: #47524d; font-size: 12px; }
 .comment-editor { display: grid; gap: 8px; margin-top: 10px; }
+.comment-editor .markdown-editor-toolbar { margin-bottom: 0; }
+.comment-markdown-preview { min-height: 82px; padding: 9px 11px; border: 1px solid #dce2df; border-radius: 5px; background: #fbfcfb; }
 .comment-actions { display: flex; min-height: 32px; align-items: center; justify-content: flex-end; gap: 10px; }
 .comment-error { flex: 1; color: #b42318; font-size: 12px; }
 

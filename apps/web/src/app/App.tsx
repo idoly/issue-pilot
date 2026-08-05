@@ -22,6 +22,7 @@ import {
   GitBranch,
   GripVertical,
   ListFilter,
+  Maximize2,
   MessageSquare,
   Minimize2,
   Paperclip,
@@ -83,6 +84,25 @@ function bindMultipleSelectBlankToggle(element: HTMLDivElement, setOpen: (open: 
 }
 
 import "@idoly/ant-design-solid/tag/style.css";
+
+function DescriptionField(props: { value: () => string; inputLabel: string; expandLabel: string; onChange: (value: string) => void }) {
+  const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
+  const [draft, setDraft] = createSignal("", { ownedWrite: true });
+  const [mode, setMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
+  const open = () => { setDraft(props.value()); setMode("edit"); setExpanded(true); };
+  return (
+    <div class="description-field">
+      <div class="description-field-header"><span>描述</span><Button type="text" shape="circle" icon={<Maximize2 size={14} />} title={props.expandLabel} aria-label={props.expandLabel} onClick={open} /></div>
+      <TextArea aria-label={props.inputLabel} autoSize={{ minRows: 3, maxRows: 5 }} value={props.value()} onInput={(event) => props.onChange(event.currentTarget.value)} />
+      <Modal open={expanded()} title="编辑描述" okText="应用" cancelText="取消" onOk={() => { props.onChange(draft()); setExpanded(false); }} onCancel={() => setExpanded(false)}>
+        <div class="markdown-editor-toolbar"><Segmented size="small" aria-label="描述编辑模式" value={mode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={(value) => setMode(value as "edit" | "preview")} /></div>
+        <Show when={mode() === "edit"} fallback={<div class="description-markdown-preview"><Show when={draft().trim()} fallback={<span class="muted">暂无内容</span>}><Markdown source={draft()} /></Show></div>}>
+          <TextArea class="description-expanded-input" aria-label="放大描述编辑器" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} />
+        </Show>
+      </Modal>
+    </div>
+  );
+}
 
 function AttachmentPicker(props: {
   files: () => File[];
@@ -276,7 +296,7 @@ function IssueQueue(props: {
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setCcOpen)}><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} open={ccOpen()} onOpenChange={setCcOpen} onChange={(value) => setCcSubjects(selectedStrings(value, ccSubjects()))} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
-          <label><span>描述</span><Input aria-label="工单描述" value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
+          <DescriptionField value={description} inputLabel="工单描述" expandLabel="放大工单描述" onChange={(value) => setDescription(value)} />
           <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />
           <Show when={createError()}><div class="create-error" role="alert">{createError()}</div></Show>
         </div>
@@ -306,6 +326,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
   const [commentBody, setCommentBody] = createSignal("", { ownedWrite: true });
   const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
+  const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
   const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
   void loadPeople().then(setPeople);
   void loadConfig().then(setConfiguration);
@@ -337,6 +358,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     try {
       await addIssueComment(props.issue.id, body);
       setCommentBody("");
+      setCommentMode("edit");
       await props.onUpdated();
     } catch (error) {
       setCommentError(error instanceof Error ? error.message : String(error));
@@ -371,7 +393,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
             <Badge status={statusBadge[props.issue.status]} text={statusLabel[props.issue.status]} />
           </div>
           <h1>{props.issue.title}</h1>
-          <p>{props.issue.description}</p>
+          <Show when={props.issue.description.trim()}><div class="issue-description"><Markdown source={props.issue.description} /></div></Show>
         </div>
         <Space>
           <Show when={props.issue.workspace.retryable}>
@@ -431,19 +453,22 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           </For>
         </div>
         <div class="comment-editor">
-          <TextArea aria-label="添加评论或备注" placeholder="添加评论或备注" autoSize={{ minRows: 3, maxRows: 8 }} value={commentBody()} onInput={(event) => setCommentBody(event.currentTarget.value)} />
+          <div class="markdown-editor-toolbar"><Segmented size="small" aria-label="评论编辑模式" value={commentMode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={(value) => setCommentMode(value as "edit" | "preview")} /></div>
+          <Show when={commentMode() === "edit"} fallback={<div class="comment-markdown-preview"><Show when={commentBody().trim()} fallback={<span class="muted">暂无内容</span>}><Markdown source={commentBody()} /></Show></div>}>
+            <TextArea aria-label="添加评论或备注" placeholder="添加评论或备注" autoSize={{ minRows: 3, maxRows: 8 }} value={commentBody()} onInput={(event) => setCommentBody(event.currentTarget.value)} />
+          </Show>
           <div class="comment-actions"><Show when={commentError()}><span class="comment-error" role="alert">{commentError()}</span></Show><Button type="primary" icon={<Send size={14} />} loading={commentSaving()} disabled={!commentBody().trim()} onClick={() => { void submitComment(); }}>发布评论</Button></div>
         </div>
       </section>
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setEditOpen(false); }}>
-        <div class="create-issue-form">
+        <div class="create-issue-form edit-issue-form">
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setEditPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
           <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, Object.keys(typeLabel) as IssueType[]); if (selected) setEditType(selected); }} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
-          <label><span>描述</span><TextArea aria-label="编辑工单描述" autoSize={{ minRows: 4, maxRows: 10 }} value={editDescription()} onInput={(event) => setEditDescription(event.currentTarget.value)} /></label>
+          <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
           <AttachmentPicker files={editAttachments} existingCount={() => props.issue.attachments.length} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onError={(message) => setEditError(message)} />
           <Show when={editError()}><div class="create-error" role="alert">{editError()}</div></Show>
         </div>

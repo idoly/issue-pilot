@@ -56,7 +56,9 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("region", { name: "ISSUE-0042 pi 终端" })).toBeTruthy();
     const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
-    fireEvent.input(commentInput, { target: { value: "供其他用户查看的备注" } });
+    fireEvent.input(commentInput, { target: { value: "**供其他用户查看的备注**" } });
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "评论编辑模式" })).getByRole("radio", { name: "预览" }));
+    await waitFor(() => expect(screen.getByText("供其他用户查看的备注").tagName).toBe("STRONG"));
     const publishComment = screen.getByRole("button", { name: "发布评论" }) as HTMLButtonElement;
     await waitFor(() => expect(publishComment.disabled).toBe(false));
     fireEvent.click(publishComment);
@@ -64,6 +66,13 @@ describe("issue pilot workspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const issueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
+    fireEvent.click(within(issueDialog).getByRole("button", { name: "放大编辑工单描述" }));
+    const descriptionDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑描述" }));
+    fireEvent.input(within(descriptionDialog).getByLabelText("放大描述编辑器"), { target: { value: "# 放大后的详细描述" } });
+    fireEvent.click(within(descriptionDialog).getByRole("radio", { name: "预览" }));
+    await waitFor(() => expect(within(descriptionDialog).getByRole("heading", { name: "放大后的详细描述" })).toBeTruthy());
+    fireEvent.click(within(descriptionDialog).getByRole("button", { name: "应用" }));
+    await waitFor(() => expect((within(issueDialog).getByLabelText("编辑工单描述") as HTMLTextAreaElement).value).toBe("# 放大后的详细描述"));
     const attachmentInput = within(issueDialog).getByLabelText("编辑工单选择附件") as HTMLInputElement;
     Object.defineProperty(attachmentInput, "files", { configurable: true, value: [new File(["details"], "details.txt", { type: "text/plain" })] });
     fireEvent.change(attachmentInput);
