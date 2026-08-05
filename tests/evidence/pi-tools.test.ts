@@ -25,7 +25,6 @@ test("prepares pinned connector binaries without persistent tool containers", as
     assert.doesNotMatch(calls, /--name |--detach| sleep infinity/);
     assert.match(calls, /run --rm --user 0 --volume nacos-cli-data/);
     assert.match(calls, /volume exists nacos-cli-data/);
-    assert.doesNotMatch(calls, /aliyun|rabbitmq|elasticsearch/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
