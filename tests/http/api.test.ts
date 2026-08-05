@@ -282,6 +282,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(uploaded[0]?.sha256, createHash("sha256").update(attachmentContent).digest("hex"));
     assert.equal("objectKey" in uploaded[0]!, false);
     assert.equal("issueId" in uploaded[0]!, false);
+    assert.equal("scanStatus" in uploaded[0]!, false);
     const attachmentDirectory = join(root, "attachments", String(created.id).toLowerCase());
     const attachmentFiles = await readdir(attachmentDirectory);
     assert.equal(attachmentFiles.length, 1);
@@ -289,6 +290,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const detailWithAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<Record<string, unknown>> };
     assert.equal(detailWithAttachment.attachments.length, 1);
     assert.equal("objectKey" in detailWithAttachment.attachments[0]!, false);
+    assert.equal("scanStatus" in detailWithAttachment.attachments[0]!, false);
     const syncResponse = await app.inject({ method: "POST", url: `/api/issues/${created.id}/sync` });
     assert.equal(syncResponse.statusCode, 202, syncResponse.body);
     assert.match(runner.messages.at(-1) ?? "", /Issue metadata was updated/);

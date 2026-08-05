@@ -70,7 +70,7 @@ export const issueRepositories = sqliteTable("issue_repositories", {
 
 export const issueAttachments = sqliteTable("issue_attachments", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), fileName: text("file_name").notNull(), mediaType: text("media_type").notNull(), size: integer("size").notNull(),
-  objectKey: text("object_key").notNull(), sha256: text("sha256").notNull(), scanStatus: text("scan_status").notNull().default("pending"), uploadedBy: text("uploaded_by").notNull().references(() => subjects.subject),
+  objectKey: text("object_key").notNull(), sha256: text("sha256").notNull(), uploadedBy: text("uploaded_by").notNull().references(() => subjects.subject),
   createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
 }, (table) => [index("issue_attachments_issue_idx").on(table.issueId)]);
 

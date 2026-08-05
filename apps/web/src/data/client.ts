@@ -30,7 +30,7 @@ export interface IssueDetail extends IssueListItem {
   repositories: Array<{ id: string; url: string; baseBranch: string; workingBranch: string | null; codeServerPath: string | null }>;
   workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean };
   agentSession?: { sessionId: string } | null;
-  attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; scanStatus: string; createdAt?: string }>;
+  attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
   environmentKey: string;

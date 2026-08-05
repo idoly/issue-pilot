@@ -48,6 +48,8 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.equal(obsoleteTables.rows.length, 0);
     const issueColumns = await client.execute("pragma table_info('issues')");
     assert.equal(issueColumns.rows.some((column) => column.name === "labels"), false);
+    const attachmentColumns = await client.execute("pragma table_info('issue_attachments')");
+    assert.equal(attachmentColumns.rows.some((column) => column.name === "scan_status"), false);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
   } finally {
     await close();

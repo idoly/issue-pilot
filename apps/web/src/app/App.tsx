@@ -440,7 +440,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
         <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
         <div class="issue-attachment-list">
           <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
-            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span><Tag>{attachment.scanStatus === "pending" ? "待扫描" : attachment.scanStatus}</Tag></div>}
+            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span></div>}
           </For>
         </div>
       </section>

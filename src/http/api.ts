@@ -213,7 +213,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     mediaType: attachment.mediaType,
     size: attachment.size,
     sha256: attachment.sha256,
-    scanStatus: attachment.scanStatus,
     createdAt: date(attachment.createdAt),
   });
 
