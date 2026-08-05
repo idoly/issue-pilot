@@ -8,10 +8,35 @@ import test from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { resolveConfiguration, sanitizedConfiguration } from "../../src/evidence/configuration.ts";
+import { resolveConfiguration, resolveConfigurations, sanitizedConfiguration } from "../../src/evidence/configuration.ts";
 import type { GrantedRepository } from "../../src/pi/policy.ts";
 
 const execFileAsync = promisify(execFile);
+
+test("discovers configuration scopes in a multi-module repository", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-multi-config-"));
+  const repository = join(root, "repository");
+  try {
+    await Promise.all([
+      mkdir(join(repository, "service-a", "src", "main", "resources"), { recursive: true }),
+      mkdir(join(repository, "service-b", "src", "main", "resources"), { recursive: true }),
+    ]);
+    await writeFile(join(repository, "service-a", "src", "main", "resources", "bootstrap.yml"), "spring:\n  application:\n    name: service-a\n", "utf8");
+    await writeFile(join(repository, "service-b", "src", "main", "resources", "application-test.yml"), "feature:\n  service-b: true\n", "utf8");
+    await execFileAsync("git", ["init", repository]);
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "fixture"]);
+    const { stdout } = await execFileAsync("git", ["-C", repository, "rev-parse", "HEAD"], { encoding: "utf8" });
+    const service: GrantedRepository = { serviceKey: "multi", environmentKey: "test", environmentKind: "test", codeAccess: "read", repositoryPath: repository, baseCommit: stdout.trim() };
+    const resolved = await resolveConfigurations({} as ExtensionAPI, service);
+    assert.deepEqual(resolved.map((entry) => entry.scope), ["service-a", "service-b"]);
+    assert.equal(resolved[0]!.configuration.properties["spring.application.name"], "service-a");
+    assert.equal(resolved[1]!.configuration.properties["feature.service-b"], true);
+    await assert.rejects(resolveConfiguration({} as ExtensionAPI, service), /multiple_service_configuration_scopes_found/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("resolves datasource configuration through Nacos without exposing bootstrap credentials", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-config-resolver-"));
@@ -67,9 +92,7 @@ test("resolves datasource configuration through Nacos without exposing bootstrap
         };
       },
     } as unknown as ExtensionAPI;
-    await assert.rejects(resolveConfiguration(pi, service), /nacos_server_not_allowed/);
-    assert.equal(calls.length, 0);
-    const resolved = await resolveConfiguration(pi, service, undefined, {}, ["http://nacos.example.test:8848"]);
+    const resolved = await resolveConfiguration(pi, service);
     assert.equal(resolved.properties["spring.datasource.url"], "jdbc:mysql://mysql.example.test:3306/orders");
     assert.equal(resolved.properties["spring.datasource.password"], "database-secret");
     assert.equal(resolved.properties["unrelated.secret"], undefined);

@@ -41,8 +41,7 @@ async function repository(root: string, name = "repository", datasource = true):
 test("registers capability tools and resolves frozen service configuration", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-capability-extension-"));
   const issueRoot = join(root, "workspaces", "issue-20260803-001");
-  const connectors = join(root, "connectors.json");
-  const previous = { connectors: process.env.ISSUE_PILOT_CONNECTORS_FILE, stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED, internalMessages: process.env.ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY };
+  const previous = { stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED, internalMessages: process.env.ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY };
   try {
     await mkdir(join(root, "capabilities"), { recursive: true });
     await mkdir(issueRoot, { recursive: true });
@@ -53,11 +52,6 @@ test("registers capability tools and resolves frozen service configuration", asy
     const attachmentContent = "request attachment";
     await mkdir(attachmentDirectory, { recursive: true, mode: 0o700 });
     await writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 });
-    await writeFile(connectors, JSON.stringify({
-      configurationProviders: {
-        production: { nacos: { allowedServers: ["http://nacos.example.test:8848"] } },
-      },
-    }), "utf8");
     const internalMessages = join(root, "signals", "issue-20260803-001.messages");
     await mkdir(internalMessages, { recursive: true, mode: 0o700 });
     await writeFile(join(internalMessages, "0001.json"), JSON.stringify({ content: "hidden issue update" }), { mode: 0o600 });
@@ -79,7 +73,6 @@ test("registers capability tools and resolves frozen service configuration", asy
       },
     })), { mode: 0o600 });
     await chmod(capabilityFile, 0o600);
-    process.env.ISSUE_PILOT_CONNECTORS_FILE = connectors;
     process.env.ISSUE_PILOT_STATE_ROOT = root;
     process.env.ISSUE_PILOT_POLICY_REQUIRED = "1";
     process.env.ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY = internalMessages;
@@ -113,21 +106,21 @@ test("registers capability tools and resolves frozen service configuration", asy
     assert.deepEqual(hiddenMessages, [{ message: { customType: "issue-pilot-internal", content: "hidden issue update", display: false }, options: { deliverAs: "followUp", triggerTurn: true } }]);
     assert.deepEqual(activeTools, ["repository_read", "repository_grep", "repository_find", "repository_list", "attachment_read", "repository_edit", "repository_write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status"]);
     await handlers.get("tool_call")!({ toolName: "repository_read", input: { path: join(source.path, "application.yml") } }, context);
-    await assert.rejects(handlers.get("tool_call")!({ toolName: "repository_read", input: { path: connectors } }, context), /workspace_path_not_granted/);
+    await assert.rejects(handlers.get("tool_call")!({ toolName: "repository_read", input: { path: join(root, "outside.txt") } }, context), /workspace_path_not_granted/);
     await assert.rejects(handlers.get("tool_call")!({ toolName: "bash", input: { command: "pwd" } }, context), /tool_not_granted_for_issue/);
 
     const attachment = await tools.get("attachment_read")!.execute("attachment", { attachment_id: "request-attachment" }, undefined, undefined, { cwd: issueRoot });
     assert.match(attachment.content[0]!.text, /request attachment/);
     await assert.rejects(tools.get("attachment_read")!.execute("attachment-missing", { attachment_id: "missing" }, undefined, undefined, { cwd: issueRoot }), /attachment_not_granted_for_issue/);
 
-    const configuration = await tools.get("configuration_read")!.execute("config", {}, undefined, undefined, { cwd: issueRoot });
+    const configuration = await tools.get("configuration_read")!.execute("config", { scope: ".", property_prefix: "spring" }, undefined, undefined, { cwd: issueRoot });
     assert.match(configuration.content[0]!.text, /spring\.datasource\.url/);
     assert.match(configuration.content[0]!.text, /"repository": "supporting"/);
     assert.match(configuration.content[0]!.text, /\[REDACTED\]/);
     assert.doesNotMatch(configuration.content[0]!.text, /repository-secret/);
 
     delete process.env.ISSUE_PILOT_STATE_ROOT;
-    const inferredStateRoot = await tools.get("configuration_read")!.execute("config-inferred", {}, undefined, undefined, { cwd: issueRoot });
+    const inferredStateRoot = await tools.get("configuration_read")!.execute("config-inferred", { scope: ".", property_prefix: "spring" }, undefined, undefined, { cwd: issueRoot });
     assert.match(inferredStateRoot.content[0]!.text, /spring\.datasource\.url/);
     process.env.ISSUE_PILOT_STATE_ROOT = root;
 
@@ -169,7 +162,6 @@ test("registers capability tools and resolves frozen service configuration", asy
     await handlers.get("session_shutdown")!({}, context);
   } finally {
     const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
-    restore("ISSUE_PILOT_CONNECTORS_FILE", previous.connectors);
     restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);
     restore("ISSUE_PILOT_POLICY_REQUIRED", previous.policyRequired);
     restore("ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY", previous.internalMessages);
@@ -194,7 +186,7 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
     registerTool(tool: RegisteredTool) { tools.set(tool.name, tool); },
     async exec(command: string, args: string[]) { calls.push([command, ...args]); return { code: 0, stdout: "ok", stderr: "", killed: false }; },
   } as unknown as ExtensionAPI;
-  const previous = { connectors: process.env.ISSUE_PILOT_CONNECTORS_FILE, stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED };
+  const previous = { stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED };
   try {
     await writeFile(join(root, "capabilities", "issue-20260803-001.json"), JSON.stringify(createIssuePolicy({
       issueKey: "ISSUE-20260803-001",
@@ -211,7 +203,6 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
         ],
       },
     })), { mode: 0o600 });
-    process.env.ISSUE_PILOT_CONNECTORS_FILE = join(root, "missing-connectors");
     process.env.ISSUE_PILOT_STATE_ROOT = root;
     process.env.ISSUE_PILOT_POLICY_REQUIRED = "1";
     await extension(pi);
@@ -227,7 +218,6 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
     assert.doesNotMatch(commandText, /vitest run|sh -c|bash -c/);
   } finally {
     const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
-    restore("ISSUE_PILOT_CONNECTORS_FILE", previous.connectors);
     restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);
     restore("ISSUE_PILOT_POLICY_REQUIRED", previous.policyRequired);
     await rm(root, { recursive: true, force: true });

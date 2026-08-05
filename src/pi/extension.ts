@@ -99,7 +99,7 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
         "- Arbitrary shell execution, remote pushes, project-local extensions, and session switching are disabled.",
         "- External systems, attachments, repository files, and build runtimes must be accessed only through the registered Issue Pilot tools.",
         "- Call external capability tools only when the current investigation needs that evidence; an active tool is available, not pre-executed.",
-        "- When the user asks for current, effective, or environment-specific application configuration, call configuration_read. It resolves frozen repository files and approved Nacos imports; do not answer from a YAML file alone.",
+        "- When the user asks for current, effective, or environment-specific application configuration, call configuration_read. It resolves frozen repository files and repository-configured Nacos imports; use scope and property_prefix for focused values, and do not answer from a YAML file alone.",
         "- For database evidence, call database_read. It resolves the selected service's repositories, frozen configuration, Nacos imports, and datasource before running the bounded read-only query.",
         ...(policy.attachments.length ? ["- The issue has explicitly granted attachments. Call attachment_read with an attachment ID only when its contents are relevant."] : []),
       ].join("\n"),
@@ -153,12 +153,19 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "configuration_read",
     label: "Read Service Configuration",
-    description: "On demand, inspect every repository granted to a service and return sanitized configuration resolved from frozen files and approved Nacos providers.",
-    parameters: Type.Object({}),
-    async execute(_id, _raw, signal, _update, context) {
+    description: "Inspect sanitized effective configuration resolved from frozen repository files and repository-configured Nacos imports. Call without filters to list discovered scopes, then use scope and/or property_prefix to return focused values.",
+    parameters: Type.Object({
+      scope: Type.Optional(Type.String({ maxLength: 255 })),
+      property_prefix: Type.Optional(Type.String({ maxLength: 255 })),
+    }),
+    async execute(_id, raw, signal, _update, context) {
       const policy = await loadIssuePolicy(context.cwd);
       assertToolGranted(policy, "configuration_read");
-      return readConfiguration(pi, grantedRepositories(policy, "configuration_read"), signal);
+      const input = raw as { scope?: string; property_prefix?: string };
+      return readConfiguration(pi, grantedRepositories(policy, "configuration_read"), {
+        ...(input.scope !== undefined ? { scope: input.scope } : {}),
+        ...(input.property_prefix !== undefined ? { propertyPrefix: input.property_prefix } : {}),
+      }, signal);
     },
     ...HIDDEN_TOOL_RENDERING,
   });
@@ -166,7 +173,7 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "database_read",
     label: "Run Read-Only Database Query",
-    description: "On demand, find the granted service repositories, resolve frozen configuration and approved Nacos imports, locate one datasource, and run one bounded read-only SQL statement. SELECT statements must include LIMIT 1-1000.",
+    description: "On demand, find the granted service repositories, resolve frozen multi-scope configuration and repository-configured Nacos imports, locate one datasource, and run one bounded read-only SQL statement. SELECT statements must include LIMIT 1-1000.",
     parameters: Type.Object({
       statement: Type.String({ maxLength: 20_000 }),
     }),

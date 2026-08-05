@@ -219,6 +219,7 @@ export class Runner {
     if (!provider || !model) throw new Error("issue_pilot_model_not_configured");
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_create_agent_session");
+    await chmod(sessionFile, 0o600);
     await this.db.insert(agentSessions).values({
       issueId: issue.id,
       piSessionId: manager.getSessionId(),

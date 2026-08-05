@@ -15,7 +15,8 @@ const execFileAsync = promisify(execFile);
 const CONFIG_FILE = /(?:^|\/)(?:application|bootstrap)(?:-[a-zA-Z0-9._-]+)?\.(?:ya?ml|properties)$/;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_CONFIG_BYTES = 4 * 1024 * 1024;
-const MAX_CONFIG_FILES = 50;
+const MAX_CONFIG_FILES = 100;
+const MAX_CONFIG_SCOPES = 20;
 const MAX_NACOS_TARGETS = 20;
 const PLACEHOLDER = /\$\{([^}:]+)(?::([^}]*))?\}/g;
 
@@ -71,9 +72,15 @@ async function git(repository: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-async function frozenFiles(service: GrantedRepository): Promise<Array<{ file: string; content: string }>> {
-  const names = (await git(service.repositoryPath, ["ls-tree", "-r", "--name-only", service.baseCommit])).split("\n").filter(Boolean);
-  const candidates = names.filter((name) => CONFIG_FILE.test(name) && (!name.includes("/") || /^(?:config|src\/main\/resources)\//.test(name)));
+function configurationScope(file: string): string | null {
+  if (!CONFIG_FILE.test(file)) return null;
+  if (!file.includes("/") || file.startsWith("config/") || file.startsWith("src/main/resources/")) return ".";
+  const marker = "/src/main/resources/";
+  const index = file.indexOf(marker);
+  return index > 0 ? file.slice(0, index) : null;
+}
+
+async function frozenFiles(service: GrantedRepository, candidates: string[]): Promise<Array<{ file: string; content: string }>> {
   const profiles = new Set([service.environmentKey, ...(service.environmentKind === "production" ? ["prod", "production"] : service.environmentKind === "test" ? ["test"] : ["local", "dev"])]);
   const selected = new Map<string, string>();
   for (let pass = 0; pass < 10; pass += 1) {
@@ -96,11 +103,25 @@ async function frozenFiles(service: GrantedRepository): Promise<Array<{ file: st
     for (const profile of discovered) profiles.add(profile);
     if (profiles.size === previousSize) break;
   }
-  const output = [...selected].map(([file, content]) => ({ file, content }))
+  return [...selected].map(([file, content]) => ({ file, content }))
     .sort((left, right) => score(left.file, service.environmentKey) - score(right.file, service.environmentKey) || left.file.localeCompare(right.file));
-  if (output.length > MAX_CONFIG_FILES) throw new Error("too_many_service_configuration_files");
-  if (output.reduce((total, file) => total + Buffer.byteLength(file.content, "utf8"), 0) > MAX_TOTAL_CONFIG_BYTES) throw new Error("service_configuration_too_large");
-  return output;
+}
+
+async function frozenConfigurationScopes(service: GrantedRepository): Promise<Array<{ scope: string; files: Array<{ file: string; content: string }> }>> {
+  const names = (await git(service.repositoryPath, ["ls-tree", "-r", "--name-only", service.baseCommit])).split("\n").filter(Boolean);
+  const candidatesByScope = new Map<string, string[]>();
+  for (const name of names) {
+    const scope = configurationScope(name);
+    if (scope === null) continue;
+    candidatesByScope.set(scope, [...(candidatesByScope.get(scope) ?? []), name]);
+  }
+  if (candidatesByScope.size > MAX_CONFIG_SCOPES) throw new Error("too_many_service_configuration_scopes");
+  const scopes = [];
+  for (const [scope, candidates] of [...candidatesByScope].sort(([left], [right]) => left.localeCompare(right))) scopes.push({ scope, files: await frozenFiles(service, candidates) });
+  const files = scopes.flatMap((scope) => scope.files);
+  if (files.length > MAX_CONFIG_FILES) throw new Error("too_many_service_configuration_files");
+  if (files.reduce((total, file) => total + Buffer.byteLength(file.content, "utf8"), 0) > MAX_TOTAL_CONFIG_BYTES) throw new Error("service_configuration_too_large");
+  return scopes;
 }
 
 function value(properties: Record<string, unknown>, ...keys: string[]): string | undefined {
@@ -170,13 +191,10 @@ function nacosOrigin(value: string): string {
   return `${server.protocol}//${server.hostname.toLowerCase()}:${port}`;
 }
 
-async function nacosContent(pi: ExtensionAPI, properties: Record<string, unknown>, target: { dataId: string; group: string }, allowedServers: string[], signal?: AbortSignal): Promise<string | null> {
+async function nacosContent(pi: ExtensionAPI, properties: Record<string, unknown>, target: { dataId: string; group: string }, signal?: AbortSignal): Promise<string | null> {
   const configuredServer = value(properties, "spring.cloud.nacos.config.server-addr", "spring.cloud.nacos.server-addr", "nacos.server-addr");
   if (!configuredServer || configuredServer.includes("${")) throw new Error("nacos_server_not_resolved");
-  const origin = nacosOrigin(configuredServer);
-  const allowedOrigins = allowedServers.map(nacosOrigin);
-  if (!allowedOrigins.includes(origin)) throw new Error("nacos_server_not_allowed");
-  const server = new URL(origin);
+  const server = new URL(nacosOrigin(configuredServer));
   const profileRoot = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-nacos-"));
   try {
     const profile = {
@@ -222,8 +240,7 @@ async function nacosContent(pi: ExtensionAPI, properties: Record<string, unknown
   }
 }
 
-export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}, allowedNacosServers: string[] = []): Promise<ResolvedConfiguration> {
-  const files = await frozenFiles(service);
+async function resolveFiles(pi: ExtensionAPI, service: GrantedRepository, files: Array<{ file: string; content: string }>, signal?: AbortSignal, secrets: Record<string, string> = {}): Promise<ResolvedConfiguration> {
   let properties: Record<string, unknown> = {};
   const sources: string[] = [];
   const missingSources: string[] = [];
@@ -236,7 +253,7 @@ export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRep
   if (server) {
     for (const target of nacosTargets(properties, service.environmentKey)) {
       const source = `nacos:${target.dataId}/${target.group}`;
-      const content = await nacosContent(pi, properties, target, allowedNacosServers, signal);
+      const content = await nacosContent(pi, properties, target, signal);
       if (content === null) {
         if (target.required) missingSources.push(source);
         continue;
@@ -246,6 +263,19 @@ export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRep
     }
   }
   return { properties, sources, missingSources };
+}
+
+export async function resolveConfigurations(pi: ExtensionAPI, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}): Promise<Array<{ scope: string; configuration: ResolvedConfiguration }>> {
+  const scopes = await frozenConfigurationScopes(service);
+  const resolved = [];
+  for (const { scope, files } of scopes) resolved.push({ scope, configuration: await resolveFiles(pi, service, files, signal, secrets) });
+  return resolved;
+}
+
+export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}): Promise<ResolvedConfiguration> {
+  const resolved = await resolveConfigurations(pi, service, signal, secrets);
+  if (resolved.length > 1) throw new Error("multiple_service_configuration_scopes_found");
+  return resolved[0]?.configuration ?? { properties: {}, sources: [], missingSources: [] };
 }
 
 export function sanitizedConfiguration(configuration: ResolvedConfiguration): ResolvedConfiguration {

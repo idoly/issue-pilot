@@ -28,16 +28,14 @@ SEED_USER_SUBJECT=demo-owner npm run db:seed
 
 The default state directory is `.issue-pilot` and the default database is `.issue-pilot/issues.db`. Both can be changed with `ISSUE_PILOT_STATE_ROOT` and `ISSUE_PILOT_DATABASE`.
 
-Copy `config/connectors.example.json` or provide an equivalent file, then set `ISSUE_PILOT_CONNECTORS_FILE` when capability tools need Nacos or MySQL access. Credentials must remain in external CLI profiles or runtime environment, never in issue records.
-
-Each issue run creates an owner-only execution policy that allowlists pi tools, the selected service environment, every attached repository, and exact issue attachment grants. Managed sessions disable arbitrary shell access and all automatically discovered pi resources. Attachments are readable only through bounded `attachment_read` calls by granted ID. External capabilities execute only when pi calls their typed tools; for example, `database_read` resolves the service's frozen repository configuration, approved Nacos imports, and unique datasource before running a bounded read-only query in a disposable container.
+Each issue run creates an owner-only execution policy that allowlists pi tools, the selected service environment, every attached repository, and exact issue attachment grants. Managed sessions disable arbitrary shell access and all automatically discovered pi resources. Attachments are readable only through bounded `attachment_read` calls by granted ID. External capabilities execute only when pi calls their typed tools; for example, `database_read` resolves the service's frozen repository configuration, repository-resolved Nacos imports, and unique datasource before running a bounded read-only query in a disposable container.
 
 ## Run
 
 Start the API:
 
 ```bash
-ISSUE_PILOT_CONNECTORS_FILE=.issue-pilot/connectors.json npm run server
+npm run server
 ```
 
 Start the web client in another terminal:

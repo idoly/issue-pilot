@@ -11,7 +11,7 @@ The runtime has four surfaces:
 3. The Issue Pilot pi extension enforces that policy and exposes bounded tools for external systems and build runtimes.
 4. Solid embeds the shared code-server and an xterm view of the exact Runner-owned pi PTY.
 
-SQLite is accessed through Drizzle and `@libsql/client`. Runtime files live below `.issue-pilot` by default. Databases, policies, signals, connector profiles, and secrets are owner-only.
+SQLite is accessed through Drizzle and `@libsql/client`. Runtime files live below `.issue-pilot` by default. Databases, policies, signals, Sessions, transcripts, attachments, and secrets are owner-only.
 
 ## Service Model
 
@@ -64,17 +64,17 @@ The browser may attach only to an already-running, policy-matching Runner PTY. I
 External systems are exposed as typed pi extension tools rather than shell access. Tools are allowlisted when policy is created but execute only when pi decides the current investigation needs that evidence:
 
 - `attachment_read`: reads one attachment explicitly frozen into the current issue policy by ID. UTF-8 text is bounded to 256 KiB; PNG, JPEG, WebP, and GIF images are bounded to 5 MiB. Paths, file modes, sizes, and SHA-256 hashes are revalidated on every read.
-- `configuration_read`: resolves every repository granted to the selected service, reads bounded configuration from frozen Git revisions, follows approved Nacos imports, and returns sanitized per-repository results.
-- `database_read`: validates one bounded read-only SQL statement, searches the selected service repositories for datasource configuration, follows approved Nacos imports, requires exactly one resolved datasource, and executes through the MySQL connector.
+- `configuration_read`: resolves every repository granted to the selected service, discovers application scopes in each frozen repository revision, follows repository-configured Nacos imports, and returns sanitized summaries or focused property-prefix results.
+- `database_read`: validates one bounded read-only SQL statement, searches every discovered configuration scope in the selected service repositories, follows repository-configured Nacos imports, requires exactly one resolved datasource, and executes through a disposable MySQL client.
 - `node_project_command`: runs a fixed Node action in a pinned disposable container.
 - `maven_project_command`: runs a fixed Maven action in a pinned disposable Java 8 container with an issue-isolated cache.
 - `repository_status`: exposes only scoped local `git status` and `git diff` operations.
 
 Nacos, MySQL, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
 
-Configuration reads report repository/Nacos sources and missing targets separately. Nacos servers must be allowlisted. Database resolution fails explicitly when the selected service has no datasource or resolves more than one distinct datasource; pi must investigate the repository configuration rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
+Configuration reads report repository/Nacos sources and missing targets separately. Nacos origins are taken from frozen service configuration without a host allowlist; URL structure is still validated and access remains bounded to read-only config retrieval. Database resolution fails explicitly when the selected service has no datasource or resolves more than one distinct datasource; pi must investigate the repository configuration rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
 
-Database results are returned verbatim but bounded by row, field, string, and total byte limits. This exception applies only to query rows; configuration credentials, connection URLs, connector profiles, command arguments, and raw logs remain protected.
+Database results are returned verbatim but bounded by row, field, string, and total byte limits. This exception applies only to query rows; configuration credentials, connection URLs, temporary credential profiles, command arguments, and raw logs remain protected.
 
 ## Workspace Flow
 

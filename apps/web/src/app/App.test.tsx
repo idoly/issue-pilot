@@ -54,6 +54,8 @@ describe("issue pilot workspace", () => {
     render(() => <App />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
+    expect(screen.queryByText("生产")).toBeNull();
     expect(screen.getByRole("region", { name: "ISSUE-0042 pi 终端" })).toBeTruthy();
     const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
     fireEvent.input(commentInput, { target: { value: "**供其他用户查看的备注**" } });
