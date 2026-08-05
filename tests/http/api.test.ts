@@ -319,6 +319,14 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal((await json(excessiveUpload)).error, "attachment_limit_exceeded");
     assert.equal((await readdir(attachmentDirectory)).length, 1);
 
+    const deleteAttachment = await app.inject({ method: "DELETE", url: `/api/issues/${created.id}/attachments`, payload: { attachmentIds: [uploaded[0]!.id] } });
+    assert.equal(deleteAttachment.statusCode, 204, deleteAttachment.body);
+    assert.equal((await readdir(attachmentDirectory)).length, 0);
+    const detailWithoutAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: unknown[] };
+    assert.equal(detailWithoutAttachment.attachments.length, 0);
+    const deleteMissingAttachment = await app.inject({ method: "DELETE", url: `/api/issues/${created.id}/attachments`, payload: { attachmentIds: [uploaded[0]!.id] } });
+    assert.equal(deleteMissingAttachment.statusCode, 404, deleteMissingAttachment.body);
+
     const invalidServiceUpdate = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",

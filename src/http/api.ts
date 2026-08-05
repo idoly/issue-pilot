@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -487,6 +487,39 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await database.db.update(issues).set({ status: "in_progress", resolvedAt: null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
     runner.enqueue(issue.id, message);
     return reply.code(202).send({ ok: true });
+  });
+
+  app.delete<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
+    const issue = await issueByKey(request.params.key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    const attachmentIds = [...new Set(strings(record(request.body).attachmentIds, "attachment_ids", 10))];
+    if (!attachmentIds.length) return reply.code(204).send();
+    if (runner.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    if (!await runner.invalidatePolicy(issue.id)) throw new ApiError(409, "issue_terminal_active");
+    const attachments = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
+    if (attachments.length !== attachmentIds.length) throw new ApiError(404, "attachment_not_found");
+
+    const directory = path.resolve(stateRoot, "attachments", issue.key.toLowerCase());
+    const quarantined: Array<{ source: string; temporary: string }> = [];
+    try {
+      for (const attachment of attachments) {
+        const source = path.resolve(attachment.objectKey);
+        const metadata = await stat(source);
+        if (path.dirname(source) !== directory || !metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_issue_attachment_file");
+        const temporary = path.join(directory, `.${attachment.id}-${randomUUID()}.deleting`);
+        await rename(source, temporary);
+        quarantined.push({ source, temporary });
+      }
+      await database.db.transaction(async (transaction) => {
+        await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
+        await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      });
+    } catch (error) {
+      await Promise.all(quarantined.map(({ source, temporary }) => rename(temporary, source).catch(() => undefined)));
+      throw error;
+    }
+    await Promise.all(quarantined.map(({ temporary }) => rm(temporary, { force: true })));
+    return reply.code(204).send();
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {

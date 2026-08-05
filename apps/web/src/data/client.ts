@@ -132,6 +132,11 @@ export async function uploadAttachments(key: string, files: File[]): Promise<voi
   await request(`/api/issues/${encodeURIComponent(key)}/attachments`, { method: "POST", body: form });
 }
 
+export async function deleteIssueAttachments(key: string, attachmentIds: string[]): Promise<void> {
+  if (!attachmentIds.length) return;
+  await request(`/api/issues/${encodeURIComponent(key)}/attachments`, { method: "DELETE", body: JSON.stringify({ attachmentIds }) });
+}
+
 export const createIssue = (input: IssueInput & { environmentKey: string; reporter: string }) => request<IssueListItem>("/api/issues", { method: "POST", body: JSON.stringify(input) });
 export const updateIssue = (key: string, input: IssueInput) => request<IssueListItem>(`/api/issues/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => request<IssueListItem>(`/api/issues/${encodeURIComponent(key)}/status`, { method: "PATCH", body: JSON.stringify({ status }) });

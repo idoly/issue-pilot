@@ -37,7 +37,7 @@ import {
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { DragDropManager } from "@dnd-kit/dom";
 import { isSortable, Sortable } from "@dnd-kit/dom/sortable";
-import { addIssueComment, createIssue, createService, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
+import { addIssueComment, createIssue, createService, deleteIssueAttachments, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { workspaceUrl, folderUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
 import { PiTerminal } from "./PiTerminal";
@@ -108,6 +108,7 @@ function AttachmentPicker(props: {
   files: () => File[];
   existingFiles?: () => IssueDetail["attachments"];
   inputLabel: string;
+  onRemoveExisting?: (id: string) => void;
   onFilesChange: (files: File[]) => void;
   onError: (message: string) => void;
 }) {
@@ -130,10 +131,8 @@ function AttachmentPicker(props: {
       <div class="attachment-picker-header"><span>附件 <small>{totalCount()}/10</small></span><Button icon={<Paperclip size={14} />} disabled={totalCount() >= 10} onClick={() => input?.click()}>添加附件</Button></div>
       <Show when={totalCount()}>
         <div class="attachment-file-list">
-          <Show when={existingFiles().length}><div class="attachment-group-label">已有附件</div></Show>
-          <For each={existingFiles()}>{(file) => <div class="attachment-file existing"><span><strong>{file.fileName}</strong><small>{file.mediaType} · {fileSize(file.size)}</small></span><small class="attachment-state">已上传</small></div>}</For>
-          <Show when={props.files().length}><div class="attachment-group-label">待上传</div></Show>
-          <For each={props.files()}>{(file, index) => <div class="attachment-file pending"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
+          <For each={existingFiles()}>{(file) => <div class="attachment-file"><span><strong>{file.fileName}</strong><small>{file.mediaType} · {fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.fileName}`} aria-label={`移除${file.fileName}`} onClick={() => props.onRemoveExisting?.(file.id)} /></div>}</For>
+          <For each={props.files()}>{(file, index) => <div class="attachment-file"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
         </div>
       </Show>
     </div>
@@ -321,6 +320,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [editCcOpen, setEditCcOpen] = createSignal(false);
   const [editService, setEditService] = createSignal("", { ownedWrite: true });
   const [editAttachments, setEditAttachments] = createSignal<File[]>([], { ownedWrite: true });
+  const [removedAttachmentIds, setRemovedAttachmentIds] = createSignal<string[]>([], { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
   const [configuration, setConfiguration] = createSignal<Config>({ environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
   const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
@@ -340,6 +340,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     setEditAssignee(props.issue.assigneeSubject); setEditCc((props.issue.ccRecipients ?? []).map((person) => person.subject));
     setEditService(props.issue.service.key);
     setEditAttachments([]);
+    setRemovedAttachmentIds([]);
     setEditError(""); setEditOpen(true);
   };
   const saveIssue = async () => {
@@ -347,6 +348,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     setEditSaving(true); setEditError("");
     try {
       await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKey: editService(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
+      await deleteIssueAttachments(props.issue.id, removedAttachmentIds());
       await uploadAttachments(props.issue.id, editAttachments());
       await syncIssueUpdate(props.issue.id);
       await props.onUpdated();
@@ -465,7 +467,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           <div class="comment-actions"><Show when={commentError()}><span class="comment-error" role="alert">{commentError()}</span></Show><Button type="primary" icon={<Send size={14} />} loading={commentSaving()} disabled={!commentBody().trim()} onClick={() => { void submitComment(); }}>发布评论</Button></div>
         </div>
       </section>
-      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setEditOpen(false); }}>
+      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
         <div class="create-issue-form edit-issue-form">
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setEditPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
@@ -474,7 +476,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
-          <AttachmentPicker files={editAttachments} existingFiles={() => props.issue.attachments} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onError={(message) => setEditError(message)} />
+          <AttachmentPicker files={editAttachments} existingFiles={() => props.issue.attachments.filter((attachment) => !removedAttachmentIds().includes(attachment.id))} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onRemoveExisting={(id) => { setRemovedAttachmentIds((current) => [...current, id]); setEditError(""); }} onError={(message) => setEditError(message)} />
           <Show when={editError()}><div class="create-error" role="alert">{editError()}</div></Show>
         </div>
       </Modal>

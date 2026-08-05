@@ -79,7 +79,18 @@ describe("issue pilot workspace", () => {
     Object.defineProperty(attachmentInput, "files", { configurable: true, value: [new File(["details"], "details.txt", { type: "text/plain" })] });
     fireEvent.change(attachmentInput);
     await waitFor(() => expect(within(issueDialog).getByText("details.txt")).toBeTruthy());
+    expect(within(issueDialog).queryByText("已有附件")).toBeNull();
+    expect(within(issueDialog).queryByText("待上传")).toBeNull();
+    expect(within(issueDialog).queryByText("已上传")).toBeNull();
+    fireEvent.click(within(issueDialog).getByRole("button", { name: "移除existing.csv" }));
+    await waitFor(() => expect(within(issueDialog).queryByText("existing.csv")).toBeNull());
+    expect(within(issueDialog).getByText("1/10")).toBeTruthy();
     fireEvent.click(within(issueDialog).getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+    const reopenedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
+    expect(within(reopenedIssueDialog).getByText("existing.csv")).toBeTruthy();
+    expect(within(reopenedIssueDialog).getByText("1/10")).toBeTruthy();
+    fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
