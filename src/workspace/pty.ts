@@ -1,4 +1,5 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { spawn as spawnPty, type IPty } from "node-pty";
@@ -77,13 +78,6 @@ export class PtySessions {
     return this.sessions.has(issueId);
   }
 
-  sendPrompt(issueId: string, message: string): boolean {
-    const managed = this.sessions.get(issueId);
-    if (!managed) return false;
-    managed.terminal.write(`\x1b[200~${message.replace(/\x1b/g, "")}\x1b[201~\r`);
-    return true;
-  }
-
   abort(issueId: string): boolean {
     const managed = this.sessions.get(issueId);
     if (!managed) return false;
@@ -106,11 +100,16 @@ export class PtySessions {
       managed.retained = true;
       if (managed.idleTimer) clearTimeout(managed.idleTimer);
       managed.idleTimer = null;
-      this.sendPrompt(binding.issueId, options.prompt);
+      await this.enqueueInternalMessage(binding, options.prompt);
     } else {
       await mkdir(this.signalDirectory, { recursive: true, mode: 0o700 });
       const signalFile = path.join(this.signalDirectory, `${binding.issueKey.toLowerCase()}.settled`);
       await writeFile(signalFile, "", { mode: 0o600 });
+      const messageDirectory = this.internalMessageDirectory(binding);
+      await rm(messageDirectory, { recursive: true, force: true });
+      await mkdir(messageDirectory, { recursive: true, mode: 0o700 });
+      await chmod(messageDirectory, 0o700);
+      await this.enqueueInternalMessage(binding, options.prompt);
       const args = [
         "--session", binding.sessionFile,
         "--no-approve",
@@ -125,12 +124,12 @@ export class PtySessions {
         "--thinking", options.thinking,
       ];
       if (this.extensionPath) args.push("--extension", this.extensionPath);
-      args.push(options.prompt);
       const transcript = await this.readTranscript(binding.sessionFile);
       managed = this.create(binding, 100, 30, args, {
         ...this.environment,
         ISSUE_PILOT_POLICY_REQUIRED: "1",
         ISSUE_PILOT_SETTLED_SIGNAL_FILE: signalFile,
+        ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY: messageDirectory,
       }, true, signalFile, transcript?.data ?? "");
     }
 
@@ -248,6 +247,25 @@ export class PtySessions {
       if (this.sessions.get(binding.issueId) === managed) this.sessions.delete(binding.issueId);
     });
     return managed;
+  }
+
+  private internalMessageDirectory(binding: PtyBinding): string {
+    return path.join(this.signalDirectory, `${binding.issueKey.toLowerCase()}.messages`);
+  }
+
+  private async enqueueInternalMessage(binding: PtyBinding, content: string): Promise<void> {
+    if (!content.trim() || Buffer.byteLength(content, "utf8") > 256 * 1024) throw new Error("invalid_issue_internal_message");
+    const directory = this.internalMessageDirectory(binding);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const files = await readdir(directory);
+    if (files.filter((name) => name.endsWith(".json")).length >= 4) throw new Error("issue_internal_message_queue_full");
+    const id = `${Date.now().toString().padStart(16, "0")}-${randomUUID()}`;
+    const temporaryFile = path.join(directory, `.${id}.tmp`);
+    const messageFile = path.join(directory, `${id}.json`);
+    await writeFile(temporaryFile, JSON.stringify({ content }), { mode: 0o600 });
+    await chmod(temporaryFile, 0o600);
+    await rename(temporaryFile, messageFile);
   }
 
   private transcriptFile(sessionFile: string): string {

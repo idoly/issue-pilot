@@ -3,17 +3,17 @@ import path from "node:path";
 
 import { normalizeIssueKey } from "../shared/issue-key.ts";
 
-export const POLICY_VERSION = 4 as const;
+export const POLICY_VERSION = 5 as const;
 
 export type ServiceCapabilityName = "configuration_read" | "database_read";
 export type IssueType = "incident" | "request" | "question" | "smart_analysis";
 export type PolicyToolName =
-  | "read"
-  | "grep"
-  | "find"
-  | "ls"
-  | "edit"
-  | "write"
+  | "repository_read"
+  | "repository_grep"
+  | "repository_find"
+  | "repository_list"
+  | "repository_edit"
+  | "repository_write"
   | "attachment_read"
   | "configuration_read"
   | "database_read"
@@ -60,13 +60,13 @@ export interface IssuePolicy {
   service: ServiceGrant;
 }
 
-const READ_TOOLS: PolicyToolName[] = ["read", "grep", "find", "ls"];
+const READ_TOOLS: PolicyToolName[] = ["repository_read", "repository_grep", "repository_find", "repository_list"];
 const WRITE_ISSUE_TYPES = new Set<IssueType>(["incident", "request", "smart_analysis"]);
 const ISSUE_TYPES = new Set<IssueType>(["incident", "request", "question", "smart_analysis"]);
 const CAPABILITIES = new Set<ServiceCapabilityName>(["configuration_read", "database_read"]);
 const POLICY_TOOLS = new Set<PolicyToolName>([
   ...READ_TOOLS,
-  "edit", "write", "attachment_read", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status",
+  "repository_edit", "repository_write", "attachment_read", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status",
 ]);
 
 function isString(value: unknown): value is string {
@@ -91,7 +91,7 @@ export function createIssuePolicy(input: {
   const tools: PolicyToolName[] = [
     ...READ_TOOLS,
     ...(attachments.length ? ["attachment_read"] as PolicyToolName[] : []),
-    ...(codeMutationAllowed ? ["edit", "write"] as PolicyToolName[] : []),
+    ...(codeMutationAllowed ? ["repository_edit", "repository_write"] as PolicyToolName[] : []),
     ...(capabilities.has("configuration_read") ? ["configuration_read"] as PolicyToolName[] : []),
     ...(capabilities.has("database_read") ? ["database_read"] as PolicyToolName[] : []),
     "node_project_command",
@@ -213,7 +213,7 @@ async function canonicalTarget(target: string, write: boolean): Promise<string> 
 }
 
 export async function authorizeWorkspacePath(policy: IssuePolicy, cwd: string, requestedPath: string, access: "read" | "write"): Promise<string> {
-  assertToolGranted(policy, access === "write" ? "write" : "read");
+  assertToolGranted(policy, access === "write" ? "repository_write" : "repository_read");
   const raw = requestedPath.startsWith("@") ? requestedPath.slice(1) : requestedPath;
   if (!raw || raw.includes("\0")) throw new Error("invalid_workspace_path");
   const target = path.resolve(cwd, raw);

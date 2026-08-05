@@ -16,6 +16,8 @@ const execFileAsync = promisify(execFile);
 interface RegisteredTool {
   name: string;
   execute: (...args: any[]) => Promise<{ content: Array<{ type: string; text: string }> }>;
+  renderCall?: (...args: any[]) => { render: (width: number) => string[] };
+  renderResult?: (...args: any[]) => { render: (width: number) => string[] };
 }
 
 async function repository(root: string, name = "repository", datasource = true): Promise<{ path: string; commit: string }> {
@@ -40,7 +42,7 @@ test("registers capability tools and resolves frozen service configuration", asy
   const root = await mkdtemp(join(tmpdir(), "pi-capability-extension-"));
   const issueRoot = join(root, "workspaces", "issue-20260803-001");
   const connectors = join(root, "connectors.json");
-  const previous = { connectors: process.env.ISSUE_PILOT_CONNECTORS_FILE, stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED };
+  const previous = { connectors: process.env.ISSUE_PILOT_CONNECTORS_FILE, stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED, internalMessages: process.env.ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY };
   try {
     await mkdir(join(root, "capabilities"), { recursive: true });
     await mkdir(issueRoot, { recursive: true });
@@ -56,6 +58,9 @@ test("registers capability tools and resolves frozen service configuration", asy
         production: { nacos: { allowedServers: ["http://nacos.example.test:8848"] } },
       },
     }), "utf8");
+    const internalMessages = join(root, "signals", "issue-20260803-001.messages");
+    await mkdir(internalMessages, { recursive: true, mode: 0o700 });
+    await writeFile(join(internalMessages, "0001.json"), JSON.stringify({ content: "hidden issue update" }), { mode: 0o600 });
     const capabilityFile = join(root, "capabilities", "issue-20260803-001.json");
     await writeFile(capabilityFile, JSON.stringify(createIssuePolicy({
       issueKey: "ISSUE-20260803-001",
@@ -77,16 +82,19 @@ test("registers capability tools and resolves frozen service configuration", asy
     process.env.ISSUE_PILOT_CONNECTORS_FILE = connectors;
     process.env.ISSUE_PILOT_STATE_ROOT = root;
     process.env.ISSUE_PILOT_POLICY_REQUIRED = "1";
+    process.env.ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY = internalMessages;
 
     const tools = new Map<string, RegisteredTool>();
     const handlers = new Map<string, (...args: any[]) => any>();
     const calls: string[][] = [];
+    const hiddenMessages: Array<{ message: { customType: string; content: string; display: boolean }; options: { deliverAs: string; triggerTurn: boolean } }> = [];
     let activeTools: string[] = [];
     let mysqlStdout = "order_id\tstatus\tpassword\n123\tready\tsecret-value\n";
     const pi = {
       on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
       setActiveTools(names: string[]) { activeTools = names; },
       registerTool(tool: RegisteredTool) { tools.set(tool.name, tool); },
+      sendMessage(message: { customType: string; content: string; display: boolean }, options: { deliverAs: string; triggerTurn: boolean }) { hiddenMessages.push({ message, options }); },
       async exec(command: string, args: string[]) {
         calls.push([command, ...args]);
         if (args.includes("mysql")) return { code: 0, stdout: mysqlStdout, stderr: "", killed: false };
@@ -94,12 +102,18 @@ test("registers capability tools and resolves frozen service configuration", asy
       },
     } as unknown as ExtensionAPI;
     await extension(pi);
-    assert.deepEqual([...tools.keys()].sort(), ["attachment_read", "configuration_read", "database_read", "maven_project_command", "node_project_command", "repository_status"]);
+    assert.deepEqual([...tools.keys()].sort(), ["attachment_read", "configuration_read", "database_read", "maven_project_command", "node_project_command", "repository_edit", "repository_find", "repository_grep", "repository_list", "repository_read", "repository_status", "repository_write"]);
+    for (const tool of tools.values()) {
+      assert.deepEqual(tool.renderCall?.({}, {}, {}).render(100), []);
+      assert.deepEqual(tool.renderResult?.({}, {}, {}, {}).render(100), []);
+    }
     const context = { cwd: issueRoot, ui: { setStatus() {} } };
     await handlers.get("session_start")!({}, context);
-    assert.deepEqual(activeTools, ["read", "grep", "find", "ls", "attachment_read", "edit", "write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status"]);
-    await handlers.get("tool_call")!({ toolName: "read", input: { path: join(source.path, "application.yml") } }, context);
-    await assert.rejects(handlers.get("tool_call")!({ toolName: "read", input: { path: connectors } }, context), /workspace_path_not_granted/);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(hiddenMessages, [{ message: { customType: "issue-pilot-internal", content: "hidden issue update", display: false }, options: { deliverAs: "followUp", triggerTurn: true } }]);
+    assert.deepEqual(activeTools, ["repository_read", "repository_grep", "repository_find", "repository_list", "attachment_read", "repository_edit", "repository_write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status"]);
+    await handlers.get("tool_call")!({ toolName: "repository_read", input: { path: join(source.path, "application.yml") } }, context);
+    await assert.rejects(handlers.get("tool_call")!({ toolName: "repository_read", input: { path: connectors } }, context), /workspace_path_not_granted/);
     await assert.rejects(handlers.get("tool_call")!({ toolName: "bash", input: { command: "pwd" } }, context), /tool_not_granted_for_issue/);
 
     const attachment = await tools.get("attachment_read")!.execute("attachment", { attachment_id: "request-attachment" }, undefined, undefined, { cwd: issueRoot });
@@ -152,11 +166,13 @@ test("registers capability tools and resolves frozen service configuration", asy
     assert.match(commandText, /mysql:26\.7\.0 mysql/);
     assert.match(commandText, /--default-character-set=utf8mb4/);
     assert.doesNotMatch(commandText, /repository-secret|secret-value|sh -c|bash -c/);
+    await handlers.get("session_shutdown")!({}, context);
   } finally {
     const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
     restore("ISSUE_PILOT_CONNECTORS_FILE", previous.connectors);
     restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);
     restore("ISSUE_PILOT_POLICY_REQUIRED", previous.policyRequired);
+    restore("ISSUE_PILOT_INTERNAL_MESSAGE_DIRECTORY", previous.internalMessages);
     await rm(root, { recursive: true, force: true });
   }
 });

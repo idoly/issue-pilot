@@ -55,7 +55,7 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
     await chmod(capabilityFile, 0o600);
 
     const loaded = await loadIssuePolicy(workspace, root);
-    assert.deepEqual(loaded.tools, ["read", "grep", "find", "ls", "attachment_read", "edit", "write", "configuration_read", "node_project_command", "maven_project_command", "repository_status"]);
+    assert.deepEqual(loaded.tools, ["repository_read", "repository_grep", "repository_find", "repository_list", "attachment_read", "repository_edit", "repository_write", "configuration_read", "node_project_command", "maven_project_command", "repository_status"]);
     const attachment = await readAttachment(loaded, "attachment-1");
     const attachmentContentResult = attachment.content[0];
     assert.match(attachmentContentResult?.type === "text" ? attachmentContentResult.text : "", /bounded attachment text/);
@@ -91,8 +91,8 @@ test("uses read-only code tools for non-mutating issue types", () => {
       repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-question/repository", baseCommit: "a".repeat(40) }],
     },
   });
-  assert.equal(policy.tools.includes("read"), true);
-  assert.equal(policy.tools.includes("write"), false);
-  assert.equal(policy.tools.includes("edit"), false);
+  assert.equal(policy.tools.includes("repository_read"), true);
+  assert.equal(policy.tools.includes("repository_write"), false);
+  assert.equal(policy.tools.includes("repository_edit"), false);
   assert.equal(policy.tools.includes("database_read"), false);
 });

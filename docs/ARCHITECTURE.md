@@ -21,7 +21,7 @@ An issue selects exactly one service. Runner prepares all repositories attached 
 
 ## Issue Execution Policy
 
-Every run produces a version 4 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
+Every run produces a version 5 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
 
 - one normalized issue key and issue type;
 - the exact workspace root;
@@ -34,7 +34,7 @@ Every run produces a version 4 policy at `.issue-pilot/capabilities/<issue-key>.
 
 Policy files are accepted only from the matching managed workspace and must not be readable by group or other users. Repository paths must remain below that workspace. Existing targets are canonicalized with `realpath`; symlink escapes and writes to Git metadata are rejected.
 
-Issue type determines code mutation access. `incident`, `request`, and `smart_analysis` may use `edit`/`write` at the repository roots attached to the selected service. `question` sessions are entirely code-read-only. Configuration and database tools become active only when at least one selected deployment grants the corresponding capability.
+Issue type determines code mutation access. `incident`, `request`, and `smart_analysis` may use `repository_edit`/`repository_write` at the repository roots attached to the selected service. `question` sessions are entirely code-read-only. Configuration and database tools become active only when at least one selected deployment grants the corresponding capability.
 
 The Runner includes a policy hash in the PTY binding. A policy change invalidates the old binding, so a retained process cannot silently keep stale permissions.
 
@@ -55,9 +55,9 @@ Managed pi starts with automatic resources disabled:
 
 The explicit extension loads before project trust and activates only when the Runner sets `ISSUE_PILOT_POLICY_REQUIRED=1`. Outside a managed issue run, the package extension is inert.
 
-The CLI allowlist is the first boundary. The extension is the second boundary: it reloads the policy for every tool call, blocks inactive tools, validates built-in file/search paths, disables `!` shell commands, and prevents session switching/forking. Arbitrary `bash` is never active.
+The CLI allowlist is the first boundary. The extension is the second boundary: it reloads the policy for every tool call, blocks inactive tools, validates Issue Pilot repository file/search paths, disables `!` shell commands, and prevents session switching/forking. Arbitrary `bash` is never active.
 
-The browser may attach only to an already-running, policy-matching Runner PTY. It cannot create a default pi process. Output, input, and resize bytes are forwarded unchanged. The extension emits an owner-only `agent_settled` signal so the Runner can update issue state without terminating the interactive CLI. Runner also stores a bounded owner-only PTY transcript plus its terminal dimensions; completed Sessions are replayed only when both strict transcript files are valid, Message reconstruction is not supported.
+The browser may attach only to an already-running, policy-matching Runner PTY. It cannot create a default pi process. Output, input, and resize bytes are forwarded unchanged. Runner prompts and structured issue updates enter pi through an owner-only internal queue as hidden custom messages; they remain in model context but never render in the TUI. Every Issue Pilot tool uses an empty TUI renderer, so calls and results remain in model context and session data without producing PTY output. The extension emits an owner-only `agent_settled` signal so the Runner can update issue state without terminating the interactive CLI. Runner also stores a bounded owner-only PTY transcript plus its terminal dimensions; completed Sessions are replayed only when both strict transcript files are valid, Message reconstruction is not supported.
 
 ## External Capabilities
 
@@ -84,7 +84,7 @@ A created issue binds exactly one service to one fixed environment. The Runner:
 2. Fetches repositories into a shared cache and creates issue-specific Git worktrees.
 3. Freezes repository commits and writes the issue execution policy.
 4. Creates or resumes one persistent pi session.
-5. Starts the locked interactive pi CLI with the issue prompt.
+5. Starts the locked interactive pi CLI and injects the issue prompt through the hidden internal queue.
 6. Preserves the raw PTY Session and records workspace state after settlement.
 
 Runs for one issue are serialized. Different issues can run concurrently. Editing an issue invalidates a detached policy; after metadata and attachment writes complete, the API sends an internal structured snapshot to Runner and rebuilds policy before the next turn. Human comments are persisted for collaboration only: they do not change workflow status, enter the pi Session, or trigger Runner. Pi output remains in the raw PTY Session and is never written as a comment.
