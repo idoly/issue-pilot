@@ -8,7 +8,7 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "incident", status,
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
-    service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [], comments: [], ccRecipients: [],
+    service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", url: null, retryable }, agentSession: null, terminalTranscript: null,
   });
@@ -35,6 +35,12 @@ vi.mock("../data/client", async (importOriginal) => {
     loadConfig: async () => structuredClone(configuration),
     listIssues: async () => structuredClone(issues),
     getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
+    addIssueComment: async (id: string, body: string) => {
+      const selected = issues.find((item) => item.id === id)!;
+      const comment = { id: `comment-${selected.comments.length + 1}`, author: "fixture-user", body, createdAt: now };
+      selected.comments.push(comment);
+      return structuredClone(comment);
+    },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
   };
 });
@@ -49,6 +55,12 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("region", { name: "ISSUE-0042 pi 终端" })).toBeTruthy();
+    const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
+    fireEvent.input(commentInput, { target: { value: "供其他用户查看的备注" } });
+    const publishComment = screen.getByRole("button", { name: "发布评论" }) as HTMLButtonElement;
+    await waitFor(() => expect(publishComment.disabled).toBe(false));
+    fireEvent.click(publishComment);
+    await waitFor(() => expect(screen.getByText("供其他用户查看的备注")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const issueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));

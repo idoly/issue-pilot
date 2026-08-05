@@ -34,7 +34,7 @@ export interface IssueDetail extends IssueListItem {
   ccRecipients?: Person[];
   reporter?: Person;
   environmentKey: string;
-  comments?: IssueComment[];
+  comments: IssueComment[];
   terminalTranscript?: { data: string; columns: number; rows: number } | null;
 }
 
@@ -135,6 +135,8 @@ export async function uploadAttachments(key: string, files: File[]): Promise<voi
 export const createIssue = (input: IssueInput & { environmentKey: string; reporter: string }) => request<IssueListItem>("/api/issues", { method: "POST", body: JSON.stringify(input) });
 export const updateIssue = (key: string, input: IssueInput) => request<IssueListItem>(`/api/issues/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => request<IssueListItem>(`/api/issues/${encodeURIComponent(key)}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+export const addIssueComment = (key: string, body: string) => request<IssueComment>(`/api/issues/${encodeURIComponent(key)}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+export const syncIssueUpdate = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/sync`, { method: "POST" });
 export const retryIssue = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/retry`, { method: "POST" });
 export const requestTerminalTicket = (key: string) => request<TerminalTicket>(`/api/issues/${encodeURIComponent(key)}/terminal-ticket`, { method: "POST" });
 

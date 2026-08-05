@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { readAttachment } from "../../src/pi/attachment.ts";
 import {
   assertToolGranted,
   authorizeWorkspacePath,
@@ -19,20 +21,25 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
   const dependencyRepository = join(workspace, "dependency");
   const dependencyModule = join(dependencyRepository, "modules", "shared");
   const outside = join(root, "outside.txt");
+  const attachmentDirectory = join(root, "attachments", "issue-20260804-002");
+  const attachmentPath = join(attachmentDirectory, "fixture-note.txt");
+  const attachmentContent = "bounded attachment text";
   const capabilityFile = join(root, "capabilities", "issue-20260804-002.json");
   try {
-    await Promise.all([mkdir(module, { recursive: true }), mkdir(dependencyModule, { recursive: true }), mkdir(join(root, "capabilities"), { recursive: true })]);
+    await Promise.all([mkdir(module, { recursive: true }), mkdir(dependencyModule, { recursive: true }), mkdir(join(root, "capabilities"), { recursive: true }), mkdir(attachmentDirectory, { recursive: true, mode: 0o700 })]);
     await Promise.all([
       writeFile(join(repository, "README.md"), "repository", "utf8"),
       writeFile(join(module, "index.ts"), "export {};", "utf8"),
       writeFile(join(dependencyModule, "index.ts"), "export {};", "utf8"),
       writeFile(outside, "outside", "utf8"),
+      writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 }),
       symlink(outside, join(module, "escaped.txt")),
     ]);
     const policy = createIssuePolicy({
       issueKey: "ISSUE-20260804-002",
       issueType: "incident",
       workspaceRoot: workspace,
+      attachments: [{ id: "attachment-1", fileName: "note.txt", mediaType: "text/plain", size: Buffer.byteLength(attachmentContent), sha256: createHash("sha256").update(attachmentContent).digest("hex"), attachmentPath }],
       service: {
         serviceKey: "orders",
         environmentKey: "test",
@@ -48,7 +55,14 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
     await chmod(capabilityFile, 0o600);
 
     const loaded = await loadIssuePolicy(workspace, root);
-    assert.deepEqual(loaded.tools, ["read", "grep", "find", "ls", "edit", "write", "configuration_read", "node_project_command", "maven_project_command", "repository_status"]);
+    assert.deepEqual(loaded.tools, ["read", "grep", "find", "ls", "attachment_read", "edit", "write", "configuration_read", "node_project_command", "maven_project_command", "repository_status"]);
+    const attachment = await readAttachment(loaded, "attachment-1");
+    const attachmentContentResult = attachment.content[0];
+    assert.match(attachmentContentResult?.type === "text" ? attachmentContentResult.text : "", /bounded attachment text/);
+    await assert.rejects(readAttachment(loaded, "missing"), /attachment_not_granted_for_issue/);
+    await writeFile(attachmentPath, "xounded attachment text", { encoding: "utf8", mode: 0o600 });
+    await assert.rejects(readAttachment(loaded, "attachment-1"), /attachment_integrity_check_failed/);
+    await writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 });
     assert.equal(await authorizeWorkspacePath(loaded, workspace, join(repository, "README.md"), "read"), join(repository, "README.md"));
     assert.equal(await authorizeWorkspacePath(loaded, workspace, join(module, "new.ts"), "write"), join(module, "new.ts"));
     assert.equal(await authorizeWorkspacePath(loaded, workspace, join(dependencyModule, "index.ts"), "read"), join(dependencyModule, "index.ts"));

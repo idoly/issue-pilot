@@ -12,8 +12,9 @@ import { buildApi } from "../../src/http/api.ts";
 
 const runner = {
   enqueued: [] as string[],
+  messages: [] as Array<string | undefined>,
   running: new Set<string>(),
-  enqueue(issueId: string) { this.enqueued.push(issueId); },
+  enqueue(issueId: string, message?: string) { this.enqueued.push(issueId); this.messages.push(message); },
   isRunning(issueId: string) { return this.running.has(issueId); },
   enqueueDirect() {},
   async steerDirect() { return false; },
@@ -30,6 +31,7 @@ async function json(response: { body: string }): Promise<Record<string, unknown>
 test("configuration and issue API preserves relational integrity", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-api-"));
   runner.enqueued = [];
+  runner.messages = [];
   runner.running.clear();
   const app = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, runner: runner as never, logger: false });
   let appClosed = false;
@@ -151,10 +153,13 @@ test("configuration and issue API preserves relational integrity", async () => {
     const reopened = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "open" } });
     assert.equal(reopened.statusCode, 200, reopened.body);
     assert.equal((await json(reopened)).status, "open");
-    const followUp = await app.inject({ method: "POST", url: `/api/issues/${created.id}/comments`, payload: { body: "Please verify the follow-up" } });
+    const enqueueCountBeforeComment = runner.enqueued.length;
+    const followUp = await app.inject({ method: "POST", url: `/api/issues/${created.id}/comments`, payload: { body: "A note for other users" } });
     assert.equal(followUp.statusCode, 201, followUp.body);
-    const afterFollowUp = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string };
-    assert.equal(afterFollowUp.status, "in_progress");
+    const afterFollowUp = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string; comments: Array<{ body: string }> };
+    assert.equal(afterFollowUp.status, "open");
+    assert.deepEqual(afterFollowUp.comments.map((comment) => comment.body), ["A note for other users"]);
+    assert.equal(runner.enqueued.length, enqueueCountBeforeComment);
 
     const concurrentPayload = (title: string) => ({
       title,
@@ -284,6 +289,11 @@ test("configuration and issue API preserves relational integrity", async () => {
     const detailWithAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<Record<string, unknown>> };
     assert.equal(detailWithAttachment.attachments.length, 1);
     assert.equal("objectKey" in detailWithAttachment.attachments[0]!, false);
+    const syncResponse = await app.inject({ method: "POST", url: `/api/issues/${created.id}/sync` });
+    assert.equal(syncResponse.statusCode, 202, syncResponse.body);
+    assert.match(runner.messages.at(-1) ?? "", /Issue metadata was updated/);
+    assert.match(runner.messages.at(-1) ?? "", /diagnostic\.txt/);
+    assert.match(runner.messages.at(-1) ?? "", /attachment_read/);
 
     const excessiveBoundary = "issue-pilot-excessive-attachments";
     const excessiveBody = Buffer.from([

@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { readConfiguration, readDatabase } from "../evidence/capabilities.ts";
+import { readAttachment } from "./attachment.ts";
 import { runMavenProject, runNodeProject } from "../evidence/toolchains.ts";
 import {
   assertToolGranted,
@@ -50,10 +51,11 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
         `- Repository access is restricted to ${policy.service.repositories.length} repository scope(s); ${writableRepositories} permit mutation when the issue type allows it.`,
         `- Code mutation is ${writable ? "allowed only in explicitly granted repository roots" : "disabled for this issue type"}.`,
         "- Arbitrary shell execution, remote pushes, project-local extensions, and session switching are disabled.",
-        "- External systems and build runtimes must be accessed only through the registered Issue Pilot tools.",
+        "- External systems, attachments, and build runtimes must be accessed only through the registered Issue Pilot tools.",
         "- Call external capability tools only when the current investigation needs that evidence; an active tool is available, not pre-executed.",
         "- When the user asks for current, effective, or environment-specific application configuration, call configuration_read. It resolves frozen repository files and approved Nacos imports; do not answer from a YAML file alone.",
         "- For database evidence, call database_read. It resolves the selected service's repositories, frozen configuration, Nacos imports, and datasource before running the bounded read-only query.",
+        ...(policy.attachments.length ? ["- The issue has explicitly granted attachments. Call attachment_read with an attachment ID only when its contents are relevant."] : []),
       ].join("\n"),
     };
   });
@@ -80,6 +82,18 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
     const signalFile = process.env.ISSUE_PILOT_SETTLED_SIGNAL_FILE;
     if (!signalFile || !path.isAbsolute(signalFile)) return;
     await appendFile(signalFile, `${Date.now()}\n`, { encoding: "utf8", mode: 0o600 });
+  });
+
+  pi.registerTool({
+    name: "attachment_read",
+    label: "Read Issue Attachment",
+    description: "Read one explicitly granted issue attachment by ID. Supports bounded UTF-8 text and bounded PNG, JPEG, WebP, or GIF images.",
+    parameters: Type.Object({ attachment_id: Type.String() }),
+    async execute(_id, raw, _signal, _update, context) {
+      const policy = await loadIssuePolicy(context.cwd);
+      assertToolGranted(policy, "attachment_read");
+      return readAttachment(policy, (raw as { attachment_id: string }).attachment_id);
+    },
   });
 
   pi.registerTool({

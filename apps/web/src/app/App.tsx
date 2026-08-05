@@ -22,19 +22,21 @@ import {
   GitBranch,
   GripVertical,
   ListFilter,
+  MessageSquare,
   Minimize2,
   Paperclip,
   Pencil,
   Plus,
   RefreshCw,
   Search,
+  Send,
   TerminalSquare,
   Trash2,
 } from "../ui/icons";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { DragDropManager } from "@dnd-kit/dom";
 import { isSortable, Sortable } from "@dnd-kit/dom/sortable";
-import { createIssue, createService, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
+import { addIssueComment, createIssue, createService, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { workspaceUrl, folderUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
 import { PiTerminal } from "./PiTerminal";
@@ -298,6 +300,9 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
   const [statusSaving, setStatusSaving] = createSignal(false, { ownedWrite: true });
   const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
+  const [commentBody, setCommentBody] = createSignal("", { ownedWrite: true });
+  const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
+  const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
   void loadPeople().then(setPeople);
   void loadConfig().then(setConfiguration);
   const openEditor = () => {
@@ -313,12 +318,25 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     try {
       await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKey: editService(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
       await uploadAttachments(props.issue.id, editAttachments());
+      await syncIssueUpdate(props.issue.id);
       await props.onUpdated();
       setEditCcOpen(false);
       setEditOpen(false);
     } catch (error) {
       setEditError(error instanceof Error ? error.message : String(error));
     } finally { setEditSaving(false); }
+  };
+  const submitComment = async () => {
+    const body = commentBody().trim();
+    if (!body) return;
+    setCommentSaving(true); setCommentError("");
+    try {
+      await addIssueComment(props.issue.id, body);
+      setCommentBody("");
+      await props.onUpdated();
+    } catch (error) {
+      setCommentError(error instanceof Error ? error.message : String(error));
+    } finally { setCommentSaving(false); }
   };
   const retry = async () => {
     setRetrying(true);
@@ -398,6 +416,19 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
             {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span><Tag>{attachment.scanStatus === "pending" ? "待扫描" : attachment.scanStatus}</Tag></div>}
           </For>
+        </div>
+      </section>
+
+      <section class="comments-band" aria-labelledby="comments-title">
+        <div class="band-title"><MessageSquare size={16} /><h2 id="comments-title">评论与备注</h2><span>{props.issue.comments.length}</span></div>
+        <div class="comment-list">
+          <For each={props.issue.comments} fallback={<div class="empty-band">暂无评论</div>}>
+            {(comment) => <article class="comment-row"><header><strong>{comment.author}</strong><time>{new Date(comment.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time></header><Markdown source={comment.body} /></article>}
+          </For>
+        </div>
+        <div class="comment-editor">
+          <TextArea aria-label="添加评论或备注" placeholder="添加评论或备注" autoSize={{ minRows: 3, maxRows: 8 }} value={commentBody()} onInput={(event) => setCommentBody(event.currentTarget.value)} />
+          <div class="comment-actions"><Show when={commentError()}><span class="comment-error" role="alert">{commentError()}</span></Show><Button type="primary" icon={<Send size={14} />} loading={commentSaving()} disabled={!commentBody().trim()} onClick={() => { void submitComment(); }}>发布评论</Button></div>
         </div>
       </section>
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setEditOpen(false); }}>

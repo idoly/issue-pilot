@@ -17,24 +17,5 @@
         ]
       }
     }
-  },
-  "databaseProviders": {
-    "production": {
-      "provider": "dms",
-      "image": "registry.example.internal/aliyun-cli:1.0.0",
-      "profileRoot": "/home/idoly/.aliyun",
-      "profile": "issue-pilot-production-readonly",
-      "region": "cn-hangzhou",
-      "allowedNacosServers": [
-        "http://nacos-production.example.internal:8848"
-      ],
-      "databases": [
-        {
-          "host": "mysql-production.example.internal",
-          "database": "srm",
-          "dbId": 1
-        }
-      ]
-    }
   }
 }

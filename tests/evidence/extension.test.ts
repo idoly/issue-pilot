@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -45,19 +46,14 @@ test("registers capability tools and resolves frozen service configuration", asy
     await mkdir(issueRoot, { recursive: true });
     const source = await repository(issueRoot);
     const supporting = await repository(issueRoot, "supporting", false);
-    const aliyunProfiles = join(root, "aliyun-profiles");
-    await mkdir(aliyunProfiles, { recursive: true, mode: 0o700 });
-    await chmod(aliyunProfiles, 0o700);
+    const attachmentDirectory = join(root, "attachments", "issue-20260803-001");
+    const attachmentPath = join(attachmentDirectory, "request.txt");
+    const attachmentContent = "request attachment";
+    await mkdir(attachmentDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 });
     await writeFile(connectors, JSON.stringify({
-      databaseProviders: {
-        production: {
-          provider: "dms",
-          image: "registry.example.test/aliyun-cli:1.0.0",
-          profileRoot: aliyunProfiles,
-          profile: "production-readonly",
-          region: "cn-hangzhou",
-          databases: [{ host: "mysql.example.test", database: "orders", dbId: 42 }],
-        },
+      configurationProviders: {
+        production: { nacos: { allowedServers: ["http://nacos.example.test:8848"] } },
       },
     }), "utf8");
     const capabilityFile = join(root, "capabilities", "issue-20260803-001.json");
@@ -65,6 +61,7 @@ test("registers capability tools and resolves frozen service configuration", asy
       issueKey: "ISSUE-20260803-001",
       issueType: "incident",
       workspaceRoot: issueRoot,
+      attachments: [{ id: "request-attachment", fileName: "request.txt", mediaType: "text/plain", size: Buffer.byteLength(attachmentContent), sha256: createHash("sha256").update(attachmentContent).digest("hex"), attachmentPath }],
       service: {
         serviceKey: "orders",
         environmentKey: "test",
@@ -93,18 +90,21 @@ test("registers capability tools and resolves frozen service configuration", asy
       async exec(command: string, args: string[]) {
         calls.push([command, ...args]);
         if (args.includes("mysql")) return { code: 0, stdout: mysqlStdout, stderr: "", killed: false };
-        if (args.includes("ExecuteScript")) return { code: 0, stdout: JSON.stringify({ Result: [{ order_id: "123", status: "ready", password: "production-secret" }] }), stderr: "", killed: false };
         return { code: 0, stdout: "", stderr: "", killed: false };
       },
     } as unknown as ExtensionAPI;
     await extension(pi);
-    assert.deepEqual([...tools.keys()].sort(), ["configuration_read", "database_read", "maven_project_command", "node_project_command", "repository_status"]);
+    assert.deepEqual([...tools.keys()].sort(), ["attachment_read", "configuration_read", "database_read", "maven_project_command", "node_project_command", "repository_status"]);
     const context = { cwd: issueRoot, ui: { setStatus() {} } };
     await handlers.get("session_start")!({}, context);
-    assert.deepEqual(activeTools, ["read", "grep", "find", "ls", "edit", "write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status"]);
+    assert.deepEqual(activeTools, ["read", "grep", "find", "ls", "attachment_read", "edit", "write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status"]);
     await handlers.get("tool_call")!({ toolName: "read", input: { path: join(source.path, "application.yml") } }, context);
     await assert.rejects(handlers.get("tool_call")!({ toolName: "read", input: { path: connectors } }, context), /workspace_path_not_granted/);
     await assert.rejects(handlers.get("tool_call")!({ toolName: "bash", input: { command: "pwd" } }, context), /tool_not_granted_for_issue/);
+
+    const attachment = await tools.get("attachment_read")!.execute("attachment", { attachment_id: "request-attachment" }, undefined, undefined, { cwd: issueRoot });
+    assert.match(attachment.content[0]!.text, /request attachment/);
+    await assert.rejects(tools.get("attachment_read")!.execute("attachment-missing", { attachment_id: "missing" }, undefined, undefined, { cwd: issueRoot }), /attachment_not_granted_for_issue/);
 
     const configuration = await tools.get("configuration_read")!.execute("config", {}, undefined, undefined, { cwd: issueRoot });
     assert.match(configuration.content[0]!.text, /spring\.datasource\.url/);
@@ -139,10 +139,10 @@ test("registers capability tools and resolves frozen service configuration", asy
         repositories: [{ codeAccess: "read", repositoryPath: source.path, baseCommit: source.commit }],
       },
     })), { mode: 0o600 });
+    mysqlStdout = "order_id\tstatus\n123\tproduction-ready\n";
     const production = await tools.get("database_read")!.execute("query", { statement: "SELECT order_id, status FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
-    assert.match(production.content[0]!.text, /"provider": "dms"/);
-    assert.match(production.content[0]!.text, /production-secret/);
-    assert.doesNotMatch(production.content[0]!.text, /\[REDACTED\]/);
+    assert.match(production.content[0]!.text, /"provider": "mysql"/);
+    assert.match(production.content[0]!.text, /production-ready/);
     await assert.rejects(tools.get("database_read")!.execute("query", { statement: "UPDATE orders SET status = 'done'" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
     await assert.rejects(tools.get("database_read")!.execute("query", { statement: "SELECT * FROM orders" }, undefined, undefined, { cwd: issueRoot }), /database_select_requires_limit_at_most_1000/);
     await assert.rejects(tools.get("database_read")!.execute("query", { statement: "SELECT * FROM orders INTO OUTFILE '/tmp/orders' LIMIT 10" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
@@ -151,8 +151,6 @@ test("registers capability tools and resolves frozen service configuration", asy
     assert.match(commandText, /podman run --rm/);
     assert.match(commandText, /mysql:26\.7\.0 mysql/);
     assert.match(commandText, /--default-character-set=utf8mb4/);
-    assert.match(commandText, /registry\.example\.test\/aliyun-cli:1\.0\.0 aliyun --profile production-readonly dms-enterprise ExecuteScript/);
-    assert.match(commandText, /--DbId 42/);
     assert.doesNotMatch(commandText, /repository-secret|secret-value|sh -c|bash -c/);
   } finally {
     const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };

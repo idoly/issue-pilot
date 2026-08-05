@@ -3,12 +3,11 @@ import {
   CheckCircle2 as CheckCircle2Node,
   ChevronLeft as ChevronLeftNode,
   ChevronRight as ChevronRightNode,
-  Database as DatabaseNode,
   ExternalLink as ExternalLinkNode,
-  FileSearch as FileSearchNode,
   GitBranch as GitBranchNode,
   GripVertical as GripVerticalNode,
   ListFilter as ListFilterNode,
+  MessageSquare as MessageSquareNode,
   Maximize2 as Maximize2Node,
   Minimize2 as Minimize2Node,
   Paperclip as PaperclipNode,
@@ -16,6 +15,7 @@ import {
   Plus as PlusNode,
   RefreshCw as RefreshCwNode,
   Search as SearchNode,
+  Send as SendNode,
   SquareTerminal as TerminalSquareNode,
   Trash2 as Trash2Node,
 } from "lucide";
@@ -51,12 +51,11 @@ function createIcon(node: IconNode) {
 export const CheckCircle2 = createIcon(CheckCircle2Node);
 export const ChevronLeft = createIcon(ChevronLeftNode);
 export const ChevronRight = createIcon(ChevronRightNode);
-export const Database = createIcon(DatabaseNode);
 export const ExternalLink = createIcon(ExternalLinkNode);
-export const FileSearch = createIcon(FileSearchNode);
 export const GitBranch = createIcon(GitBranchNode);
 export const GripVertical = createIcon(GripVerticalNode);
 export const ListFilter = createIcon(ListFilterNode);
+export const MessageSquare = createIcon(MessageSquareNode);
 export const Maximize2 = createIcon(Maximize2Node);
 export const Minimize2 = createIcon(Minimize2Node);
 export const Paperclip = createIcon(PaperclipNode);
@@ -64,5 +63,6 @@ export const Pencil = createIcon(PencilNode);
 export const Plus = createIcon(PlusNode);
 export const RefreshCw = createIcon(RefreshCwNode);
 export const Search = createIcon(SearchNode);
+export const Send = createIcon(SendNode);
 export const TerminalSquare = createIcon(TerminalSquareNode);
 export const Trash2 = createIcon(Trash2Node);

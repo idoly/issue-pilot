@@ -19,10 +19,10 @@ function repositoryLines(repository: RepositoryContext): string {
   ].join("\n");
 }
 
-export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], userMessage?: string): string {
+export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], latestUpdate?: string): string {
   return [
     `Continue handling engineering issue ${issueKey} in the existing persistent session.`,
-    ...(userMessage ? ["", "Latest user message:", userMessage] : []),
+    ...(latestUpdate ? ["", "Latest issue update:", latestUpdate] : []),
     "",
     "Current prepared repository scope:",
     ...repositories.map(repositoryLines),
@@ -40,10 +40,10 @@ export function initialPrompt(input: {
   issueType: string;
   repositories: RepositoryContext[];
   service: ServiceContext;
-  userMessage?: string;
+  latestUpdate?: string;
 }): string {
   return [
-    input.userMessage ? `Continue handling engineering issue ${input.issueKey} and answer the latest user message.` : `Handle engineering issue ${input.issueKey}: ${input.title}`,
+    input.latestUpdate ? `Continue handling engineering issue ${input.issueKey} using the latest issue update.` : `Handle engineering issue ${input.issueKey}: ${input.title}`,
     `Configured issue type: ${input.issueType}`,
     ...(input.issueType === "smart_analysis" ? [
       "First classify this issue as exactly one of: incident (defect fix), request (requirement), or question (analysis or technical consultation). Then follow the corresponding handling approach. In the final response, write the classification marker named ISSUE_TYPE followed by a colon and the selected lowercase value.",
@@ -54,7 +54,7 @@ export function initialPrompt(input: {
     "",
     "Service context (required reading before investigating or changing a repository):",
     `- ${input.service.key} (${input.service.name})\n${input.service.description?.trim() || "  No service description was provided."}`,
-    ...(input.userMessage ? ["", "Latest user message:", input.userMessage, "", "Answer the latest user message directly after using the issue session and repository context as needed."] : []),
+    ...(input.latestUpdate ? ["", "Latest issue update:", input.latestUpdate, "", "Re-evaluate the issue using the latest metadata and repository context as needed."] : []),
     "",
     "Prepared repositories:",
     ...input.repositories.map(repositoryLines),

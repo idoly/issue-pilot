@@ -21,13 +21,14 @@ An issue selects exactly one service. Runner prepares all repositories attached 
 
 ## Issue Execution Policy
 
-Every run produces a version 3 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
+Every run produces a version 4 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
 
 - one normalized issue key and issue type;
 - the exact workspace root;
 - the active pi tool allowlist;
 - the selected service and environment;
 - repository roots and frozen base commits;
+- exact owner-only attachment files, IDs, sizes, and SHA-256 hashes;
 - repository-root code boundaries for the selected service;
 - deployment evidence capabilities.
 
@@ -62,13 +63,14 @@ The browser may attach only to an already-running, policy-matching Runner PTY. I
 
 External systems are exposed as typed pi extension tools rather than shell access. Tools are allowlisted when policy is created but execute only when pi decides the current investigation needs that evidence:
 
+- `attachment_read`: reads one attachment explicitly frozen into the current issue policy by ID. UTF-8 text is bounded to 256 KiB; PNG, JPEG, WebP, and GIF images are bounded to 5 MiB. Paths, file modes, sizes, and SHA-256 hashes are revalidated on every read.
 - `configuration_read`: resolves every repository granted to the selected service, reads bounded configuration from frozen Git revisions, follows approved Nacos imports, and returns sanitized per-repository results.
-- `database_read`: validates one bounded read-only SQL statement, searches the selected service repositories for datasource configuration, follows approved Nacos imports, requires exactly one resolved datasource, and executes through MySQL or DMS connectors.
+- `database_read`: validates one bounded read-only SQL statement, searches the selected service repositories for datasource configuration, follows approved Nacos imports, requires exactly one resolved datasource, and executes through the MySQL connector.
 - `node_project_command`: runs a fixed Node action in a pinned disposable container.
 - `maven_project_command`: runs a fixed Maven action in a pinned disposable Java 8 container with an issue-isolated cache.
 - `repository_status`: exposes only scoped local `git status` and `git diff` operations.
 
-Nacos, MySQL, DMS, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
+Nacos, MySQL, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
 
 Configuration reads report repository/Nacos sources and missing targets separately. Nacos servers must be allowlisted. Database resolution fails explicitly when the selected service has no datasource or resolves more than one distinct datasource; pi must investigate the repository configuration rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
 
@@ -83,9 +85,11 @@ A created issue binds exactly one service to one fixed environment. The Runner:
 3. Freezes repository commits and writes the issue execution policy.
 4. Creates or resumes one persistent pi session.
 5. Starts the locked interactive pi CLI with the issue prompt.
-6. Records the assistant response and workspace state after settlement.
+6. Preserves the raw PTY Session and records workspace state after settlement.
 
-Runs for one issue are serialized. Different issues can run concurrently. Git pushes, merge requests, and remote branch writes are not exposed to pi.
+Runs for one issue are serialized. Different issues can run concurrently. Editing an issue invalidates a detached policy; after metadata and attachment writes complete, the API sends an internal structured snapshot to Runner and rebuilds policy before the next turn. Human comments are persisted for collaboration only: they do not change workflow status, enter the pi Session, or trigger Runner. Pi output remains in the raw PTY Session and is never written as a comment.
+
+Git pushes, merge requests, and remote branch writes are not exposed to pi.
 
 ## Issue Status
 

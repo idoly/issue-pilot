@@ -15,8 +15,7 @@ import {
   agentSessions,
   deploymentCapabilities,
   environments,
-  issueComments,
-  issueHistory,
+  issueAttachments,
   issueRepositories,
   issueWorkspaces,
   issues,
@@ -59,8 +58,8 @@ export class Runner {
     this.ptys = ptys;
   }
 
-  enqueue(issueId: string, triggerCommentId?: string): void {
-    this.schedule(issueId, () => this.run(issueId, triggerCommentId));
+  enqueue(issueId: string, latestMessage?: string): void {
+    this.schedule(issueId, () => this.run(issueId, latestMessage));
   }
 
   isRunning(issueId: string): boolean {
@@ -95,7 +94,7 @@ export class Runner {
     });
   }
 
-  private async run(issueId: string, triggerCommentId?: string): Promise<void> {
+  private async run(issueId: string, latestMessage?: string): Promise<void> {
     const [issue] = await this.db.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
     await this.db.delete(agentEvents).where(eq(agentEvents.issueId, issue.id));
@@ -119,10 +118,11 @@ export class Runner {
     if (!service) throw new Error("issue_service_deployment_not_found");
     if (service.environmentKind !== "production" && service.environmentKind !== "test") throw new Error("unsupported_issue_environment_kind");
 
-    const [repositoryRows, existingRepositoryRows, capabilityRows] = await Promise.all([
+    const [repositoryRows, existingRepositoryRows, capabilityRows, attachmentRows] = await Promise.all([
       this.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
       this.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
       this.db.select().from(deploymentCapabilities).where(eq(deploymentCapabilities.deploymentId, service.deploymentId)),
+      this.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
     ]);
     if (!repositoryRows.length) {
       await this.db.delete(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
@@ -177,6 +177,7 @@ export class Runner {
       issueKey: issue.key,
       issueType: issue.type,
       workspaceRoot,
+      attachments: attachmentRows.map((attachment) => ({ id: attachment.id, fileName: attachment.fileName, mediaType: attachment.mediaType, size: attachment.size, sha256: attachment.sha256, attachmentPath: attachment.objectKey })),
       service: {
         serviceKey: service.key,
         environmentKey: service.environmentKey,
@@ -230,16 +231,10 @@ export class Runner {
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, branchCreated: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), notInArray(issues.status, ["resolved", "closed"])));
 
-    const [triggerComment] = triggerCommentId
-      ? await this.db.select().from(issueComments).where(and(eq(issueComments.id, triggerCommentId), eq(issueComments.issueId, issue.id))).limit(1)
-      : [];
-    if (triggerCommentId && !triggerComment) throw new Error("issue_comment_not_found");
-
     const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch, path: workspace.workspacePath }));
-    const latestMessage = triggerComment?.body;
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, latestMessage)
-      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(latestMessage !== undefined ? { userMessage: latestMessage } : {}) });
+      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(latestMessage !== undefined ? { latestUpdate: latestMessage } : {}) });
 
     await this.appendAgentEvent(issue.id, "agent", "pi CLI 已在交互终端启动");
     await this.ptys.execute({ issueId: issue.id, issueKey: issue.key, sessionFile, workspacePath: workspaceRoot, policyHash, tools: policy.tools }, {
@@ -256,9 +251,7 @@ export class Runner {
       const classifiedType = this.classifiedType(messages);
       if (classifiedType) await this.db.update(issues).set({ type: classifiedType, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
     }
-    const answer = this.assistantText(messages);
-    if (answer) await this.db.insert(issueComments).values({ issueId: issue.id, authorSubject: "issue-pilot", body: answer });
-    await this.appendAgentEvent(issue.id, "complete", "回答已写入工单");
+    await this.appendAgentEvent(issue.id, "complete", "pi 已完成当前处理");
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
       await transaction.update(issues).set({ status: "pending", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), eq(issues.status, "in_progress")));
@@ -286,19 +279,6 @@ export class Runner {
 
   private thinkingLevel(value: string | undefined): string {
     return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" ? value : "medium";
-  }
-
-  private assistantText(messages: unknown[]): string {
-    for (const message of [...messages].reverse()) {
-      if (!message || typeof message !== "object" || !("role" in message) || message.role !== "assistant" || !("content" in message)) continue;
-      const content = message.content;
-      if (typeof content === "string") return content.trim();
-      if (Array.isArray(content)) {
-        const text = content.flatMap((part) => part && typeof part === "object" && "type" in part && part.type === "text" && "text" in part && typeof part.text === "string" ? [part.text] : []).join("\n").trim();
-        if (text) return text;
-      }
-    }
-    return "";
   }
 
   private classifiedType(messages: unknown[]): "incident" | "request" | "question" | undefined {

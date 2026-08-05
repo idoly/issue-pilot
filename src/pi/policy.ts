@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { normalizeIssueKey } from "../shared/issue-key.ts";
 
-export const POLICY_VERSION = 3 as const;
+export const POLICY_VERSION = 4 as const;
 
 export type ServiceCapabilityName = "configuration_read" | "database_read";
 export type IssueType = "incident" | "request" | "question" | "smart_analysis";
@@ -14,6 +14,7 @@ export type PolicyToolName =
   | "ls"
   | "edit"
   | "write"
+  | "attachment_read"
   | "configuration_read"
   | "database_read"
   | "node_project_command"
@@ -24,6 +25,15 @@ export interface RepositoryGrant {
   codeAccess: "read" | "write";
   repositoryPath: string;
   baseCommit: string;
+}
+
+export interface AttachmentGrant {
+  id: string;
+  fileName: string;
+  mediaType: string;
+  size: number;
+  sha256: string;
+  attachmentPath: string;
 }
 
 export interface ServiceGrant {
@@ -46,6 +56,7 @@ export interface IssuePolicy {
   issueType: IssueType;
   workspaceRoot: string;
   tools: PolicyToolName[];
+  attachments: AttachmentGrant[];
   service: ServiceGrant;
 }
 
@@ -55,7 +66,7 @@ const ISSUE_TYPES = new Set<IssueType>(["incident", "request", "question", "smar
 const CAPABILITIES = new Set<ServiceCapabilityName>(["configuration_read", "database_read"]);
 const POLICY_TOOLS = new Set<PolicyToolName>([
   ...READ_TOOLS,
-  "edit", "write", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status",
+  "edit", "write", "attachment_read", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status",
 ]);
 
 function isString(value: unknown): value is string {
@@ -71,12 +82,15 @@ export function createIssuePolicy(input: {
   issueKey: string;
   issueType: IssueType;
   workspaceRoot: string;
+  attachments?: AttachmentGrant[];
   service: ServiceGrant;
 }): IssuePolicy {
   const capabilities = new Set(input.service.capabilities);
+  const attachments = input.attachments ?? [];
   const codeMutationAllowed = WRITE_ISSUE_TYPES.has(input.issueType) && input.service.repositories.some((repository) => repository.codeAccess === "write");
   const tools: PolicyToolName[] = [
     ...READ_TOOLS,
+    ...(attachments.length ? ["attachment_read"] as PolicyToolName[] : []),
     ...(codeMutationAllowed ? ["edit", "write"] as PolicyToolName[] : []),
     ...(capabilities.has("configuration_read") ? ["configuration_read"] as PolicyToolName[] : []),
     ...(capabilities.has("database_read") ? ["database_read"] as PolicyToolName[] : []),
@@ -90,6 +104,7 @@ export function createIssuePolicy(input: {
     issueType: input.issueType,
     workspaceRoot: path.resolve(input.workspaceRoot),
     tools: [...new Set(tools)],
+    attachments: attachments.map((attachment) => ({ ...attachment, attachmentPath: path.resolve(attachment.attachmentPath) })),
     service: {
       ...input.service,
       capabilities: [...new Set(input.service.capabilities)].sort(),
@@ -112,6 +127,19 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
   const parsed = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
   if (parsed.version !== POLICY_VERSION || parsed.issueKey !== issueKey || parsed.workspaceRoot !== workspace || !ISSUE_TYPES.has(parsed.issueType as IssueType)) throw new Error("invalid_issue_policy_file");
   if (!Array.isArray(parsed.tools) || !parsed.tools.every((tool) => POLICY_TOOLS.has(tool as PolicyToolName))) throw new Error("invalid_issue_policy_file");
+  if (!Array.isArray(parsed.attachments)) throw new Error("invalid_issue_policy_file");
+  const attachmentRoot = path.join(root, "attachments", issueKey.toLowerCase());
+  const attachments = await Promise.all(parsed.attachments.map(async (candidate): Promise<AttachmentGrant> => {
+    if (!candidate || typeof candidate !== "object") throw new Error("invalid_issue_policy_file");
+    const attachment = candidate as Record<string, unknown>;
+    if (!isString(attachment.id) || !isString(attachment.fileName) || !isString(attachment.mediaType) || !Number.isInteger(attachment.size) || (attachment.size as number) < 0 || (attachment.size as number) > 20 * 1024 * 1024 || typeof attachment.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(attachment.sha256) || !isString(attachment.attachmentPath)) throw new Error("invalid_issue_policy_file");
+    const attachmentPath = path.resolve(attachment.attachmentPath);
+    if (!isWithin(attachmentRoot, attachmentPath) || attachmentPath === attachmentRoot) throw new Error("invalid_issue_policy_attachment");
+    const [canonicalRoot, canonicalPath, metadata] = await Promise.all([realpath(attachmentRoot), realpath(attachmentPath), stat(attachmentPath)]);
+    if (!isWithin(canonicalRoot, canonicalPath) || !metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("invalid_issue_policy_attachment");
+    return { id: attachment.id, fileName: attachment.fileName, mediaType: attachment.mediaType, size: attachment.size as number, sha256: attachment.sha256.toLowerCase(), attachmentPath };
+  }));
+  if (new Set(attachments.map((attachment) => attachment.id)).size !== attachments.length || new Set(attachments.map((attachment) => attachment.attachmentPath)).size !== attachments.length) throw new Error("invalid_issue_policy_file");
   if (!parsed.service || typeof parsed.service !== "object") throw new Error("invalid_issue_policy_file");
 
   const value = parsed.service as Record<string, unknown>;
@@ -130,6 +158,7 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
     issueKey,
     issueType: parsed.issueType as IssueType,
     workspaceRoot: workspace,
+    attachments,
     service: {
       serviceKey: value.serviceKey,
       environmentKey: value.environmentKey,

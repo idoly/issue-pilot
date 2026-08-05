@@ -78,6 +78,13 @@
       "when": 1785878400000,
       "tag": "0010_drop_issue_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785882000000,
+      "tag": "0011_remove_agent_comments",
+      "breakpoints": true
     }
   ]
 }
