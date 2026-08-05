@@ -28,7 +28,6 @@ export interface IssueComment {
 export interface IssueDetail extends IssueListItem {
   description: string;
   repositories: Array<{ id: string; url: string; baseBranch: string; workingBranch: string | null; codeServerPath: string | null }>;
-  evidence: Array<{ id: string; source: string; summary: string; createdAt: string }>;
   workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean };
   agentSession?: { sessionId: string } | null;
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; scanStatus: string; createdAt?: string }>;

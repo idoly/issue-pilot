@@ -14,7 +14,7 @@ import type { RunEvent } from "../agent/events.ts";
 import { openDatabase } from "../db/client.ts";
 import {
   agentEvents, agentSessions, deploymentCapabilities, environments, issueAttachments, issueCcRecipients,
-  issueComments, issueEvidence, issueHistory, issueRepositories,
+  issueComments, issueHistory, issueRepositories,
   issueWorkspaces, issues, serviceDeployments,
   serviceRepositories, services, subjects,
 } from "../db/schema.ts";
@@ -414,9 +414,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
-    const [base, repositoryRows, attachmentRows, evidenceRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows] = await Promise.all([
+    const [base, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows] = await Promise.all([
       listItem(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
-      database.db.select().from(issueEvidence).where(eq(issueEvidence.issueId, issue.id)), database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
+      database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
       database.db.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)), database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
       database.db.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)), database.db.select().from(issueComments).where(eq(issueComments.issueId, issue.id)).orderBy(asc(issueComments.createdAt)),
     ]);
@@ -426,7 +426,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     return {
       ...base, description: issue.description,
       repositories: repositoryRows.map((item) => ({ id: item.id, url: item.url, baseBranch: item.baseBranch, workingBranch: item.workingBranch, codeServerPath: codeServerFolder(item.localPath) })),
-      attachments: attachmentRows.map(attachmentItem), evidence: evidenceRows.map((item) => ({ id: item.id, source: item.source, summary: item.summary, createdAt: item.createdAt.toISOString() })),
+      attachments: attachmentRows.map(attachmentItem),
       workspace: {
         status: workspace?.status ?? "not_created",
         url: workspace?.codeServerUrl ?? null,

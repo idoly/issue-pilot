@@ -82,11 +82,6 @@ export const issueComments = sqliteTable("issue_comments", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), authorSubject: text("author_subject").notNull(), body: text("body").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
 }, (table) => [index("issue_comments_issue_idx").on(table.issueId, table.createdAt)]);
 
-export const issueEvidence = sqliteTable("issue_evidence", {
-  id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), source: text("source", { enum: ["sls", "dms", "mysql", "code", "attachment", "user", "test"] }).notNull(),
-  summary: text("summary").notNull(), locator: text("locator"), payload: json<Record<string, unknown>>("payload"), createdBy: text("created_by").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
-}, (table) => [index("issue_evidence_issue_idx").on(table.issueId, table.source)]);
-
 export const agentSessions = sqliteTable("issue_pilot_sessions", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), piSessionId: text("pi_session_id").notNull(), sessionFile: text("session_file").notNull(), workspacePath: text("workspace_path").notNull(),
   leaseOwner: text("lease_owner"), leaseExpiresAt: date("lease_expires_at"), ...timestamps,

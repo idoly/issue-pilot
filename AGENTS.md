@@ -12,7 +12,7 @@ This repository builds a local-first browser-based engineering issue system with
 - Keep production credentials in external CLI profiles; never write secrets to issues, comments, logs, snapshots, policy files, or command arguments.
 - Database reads accept bounded direct read-only SQL. Return database rows verbatim, but continue protecting configuration credentials, connection URLs, temporary files, and raw logs.
 - Preserve per-issue Git worktrees and pi sessions unless cleanup is explicitly requested.
-- Do not mark an issue resolved without recorded verification evidence.
+- Do not mark an issue resolved without verification.
 
 ## Commands
 

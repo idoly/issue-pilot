@@ -8,7 +8,7 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "incident", status,
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
-    service, version: 1, createdAt: now, updatedAt: now, repositories: [], evidence: [], attachments: [], comments: [], ccRecipients: [],
+    service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [], comments: [], ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", url: null, retryable }, agentSession: null, terminalTranscript: null,
   });

@@ -44,7 +44,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:second.git" });
     assert.equal((await db.select().from(serviceRepositories)).length, 2);
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
-    const obsoleteTables = await client.execute("select name from sqlite_master where type = 'table' and name in ('service_modules', 'service_relations', 'service_relation_modules', 'issue_service_modules', 'issue_services', 'issue_diagnoses', 'issue_test_runs')");
+    const obsoleteTables = await client.execute("select name from sqlite_master where type = 'table' and name in ('service_modules', 'service_relations', 'service_relation_modules', 'issue_service_modules', 'issue_services', 'issue_diagnoses', 'issue_test_runs', 'issue_evidence')");
     assert.equal(obsoleteTables.rows.length, 0);
     const issueColumns = await client.execute("pragma table_info('issues')");
     assert.equal(issueColumns.rows.some((column) => column.name === "labels"), false);

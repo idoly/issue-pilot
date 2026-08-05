@@ -16,7 +16,6 @@ import {
   deploymentCapabilities,
   environments,
   issueComments,
-  issueEvidence,
   issueHistory,
   issueRepositories,
   issueWorkspaces,
@@ -260,12 +259,6 @@ export class Runner {
     const answer = this.assistantText(messages);
     if (answer) await this.db.insert(issueComments).values({ issueId: issue.id, authorSubject: "issue-pilot", body: answer });
     await this.appendAgentEvent(issue.id, "complete", "回答已写入工单");
-    await this.db.insert(issueEvidence).values({
-      issueId: issue.id,
-      source: "code",
-      summary: triggerComment ? "智能体已回复工单对话。" : "智能体已完成首轮代码分析、处理与验证。",
-      createdBy: "issue-pilot",
-    });
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
       await transaction.update(issues).set({ status: "pending", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), eq(issues.status, "in_progress")));

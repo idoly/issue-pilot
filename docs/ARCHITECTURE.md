@@ -83,7 +83,7 @@ A created issue binds exactly one service to one fixed environment. The Runner:
 3. Freezes repository commits and writes the issue execution policy.
 4. Creates or resumes one persistent pi session.
 5. Starts the locked interactive pi CLI with the issue prompt.
-6. Records comments, evidence, and workspace state after settlement.
+6. Records the assistant response and workspace state after settlement.
 
 Runs for one issue are serialized. Different issues can run concurrently. Git pushes, merge requests, and remote branch writes are not exposed to pi.
 

@@ -11,7 +11,6 @@ import {
   Select,
   Skeleton,
   Space,
-  Tabs,
   Tag,
   theme,
 } from "@idoly/ant-design-solid";
@@ -19,9 +18,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Database,
   ExternalLink,
-  FileSearch,
   GitBranch,
   GripVertical,
   ListFilter,
@@ -268,27 +265,6 @@ function IssueQueue(props: {
   );
 }
 
-function EvidencePanel(props: { issue: IssueDetail }) {
-  const sourceIcon = (source: string) => {
-    if (source === "sls") return <FileSearch size={16} />;
-    if (source === "dms") return <Database size={16} />;
-    return <GitBranch size={16} />;
-  };
-  return (
-    <div class="evidence-list">
-      <For each={props.issue.evidence} fallback={<div class="empty-band">暂无证据</div>}>
-        {(evidence) => (
-          <div class="evidence-row">
-            <span class="evidence-source">{sourceIcon(evidence.source)} {evidence.source.toUpperCase()}</span>
-            <span class="evidence-summary">{evidence.summary}</span>
-            <time>{new Date(evidence.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
-          </div>
-        )}
-      </For>
-    </div>
-  );
-}
-
 function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
@@ -345,21 +321,6 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     catch (error) { setStatusError(error instanceof Error ? error.message : String(error)); }
     finally { setStatusSaving(false); }
   };
-  const tabs = () => [
-    { key: "evidence", label: `证据 ${props.issue.evidence.length}`, children: <EvidencePanel issue={props.issue} /> },
-    {
-      key: "attachments",
-      label: `附件 ${props.issue.attachments.length}`,
-      children: (
-        <div class="issue-attachment-list">
-          <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
-            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span><Tag>{attachment.scanStatus === "pending" ? "待扫描" : attachment.scanStatus}</Tag></div>}
-          </For>
-        </div>
-      ),
-    },
-  ];
-
   return (
     <section class="issue-workspace">
       <header class="issue-header">
@@ -414,7 +375,14 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
         </div>
       </section>
 
-      <Tabs defaultActiveKey="evidence" items={tabs()} />
+      <section class="attachment-band" aria-labelledby="attachments-title">
+        <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
+        <div class="issue-attachment-list">
+          <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
+            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span><Tag>{attachment.scanStatus === "pending" ? "待扫描" : attachment.scanStatus}</Tag></div>}
+          </For>
+        </div>
+      </section>
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditOpen(false); }}>
         <div class="create-issue-form">
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
