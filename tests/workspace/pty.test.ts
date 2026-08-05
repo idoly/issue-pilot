@@ -42,8 +42,9 @@ test("shares one runner-owned interactive PTY with the browser and waits for set
 
   const sessions = new PtySessions(executable, null, process.env, join(root, "signals"), 100);
   const output: string[] = [];
+  let clientExited = false;
   const binding = { issueId: "issue-id", issueKey: "ISSUE-20260804-001", sessionFile, workspacePath: root, policyHash: "policy-v1", tools: ["repository_read", "repository_edit"] };
-  const client = { output: (data: string) => output.push(data), exit: () => undefined };
+  const client = { output: (data: string) => output.push(data), exit: () => { clientExited = true; } };
   try {
     assert.throws(() => sessions.attach(binding, client, 100, 30), /pi_terminal_not_runner_owned/);
     const run = sessions.execute(binding, {
@@ -78,6 +79,9 @@ test("shares one runner-owned interactive PTY with the browser and waits for set
     assert.doesNotMatch(output.join(""), /private issue update/);
     attachment.input("hello\r");
     await waitFor(() => output.join("").includes("INPUT:hello"));
+    assert.equal(await sessions.release("issue-id"), true);
+    assert.equal(sessions.has("issue-id"), false);
+    assert.equal(clientExited, true);
     attachment.detach();
   } finally {
     await sessions.close();

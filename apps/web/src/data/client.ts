@@ -42,11 +42,11 @@ export interface Environment {
   id: string;
   key: string;
   name: string;
-  kind: "production" | "test";
+  kind: "production" | "test" | "development";
   scope: "global";
 }
 
-export type DeploymentCapability = "configuration_read" | "database_read" | "sls_read";
+export type DeploymentCapability = "configuration_read" | "database_read" | "sls_read" | "browser_use";
 
 export interface ServiceDeployment {
   id: string;
@@ -54,6 +54,7 @@ export interface ServiceDeployment {
   baseBranch: string;
   capabilities: DeploymentCapability[];
   sls?: { project: string; logstores: string[] } | null;
+  browser?: { baseUrl: string; username: string | null; passwordConfigured: boolean } | null;
 }
 
 export interface Service {
@@ -77,7 +78,7 @@ export interface ServiceInput {
   name: string;
   description: string;
   repositories: Array<{ id?: string; kind: "frontend" | "backend"; url: string }>;
-  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[]; sls?: { project: string; logstores: string[] } }>;
+  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[]; sls?: { project: string; logstores: string[] }; browser?: { baseUrl: string; username: string; password?: string } }>;
 }
 
 export interface IssueInput {
@@ -125,6 +126,19 @@ export async function createService(input: ServiceInput): Promise<{ key: string;
 export const reorderServices = (serviceKeys: string[]) => request<void>("/api/services/order", { method: "PUT", body: JSON.stringify({ serviceKeys }) });
 export const updateService = (key: string, input: ServiceInput) => request<void>(`/api/services/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
 export const deleteService = (key: string) => request<void>(`/api/services/${encodeURIComponent(key)}`, { method: "DELETE" });
+
+export function attachmentUrl(key: string, attachmentId: string): string {
+  return `/api/issues/${encodeURIComponent(key)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+export async function fetchAttachment(key: string, attachmentId: string): Promise<Blob> {
+  const response = await fetch(attachmentUrl(key, attachmentId));
+  if (!response.ok) {
+    const error = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
+    throw new Error(error ?? `request_failed:${response.status}`);
+  }
+  return response.blob();
+}
 
 export async function uploadAttachments(key: string, files: File[]): Promise<void> {
   if (!files.length) return;

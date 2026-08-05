@@ -2,6 +2,7 @@ interface RepositoryContext {
   url: string;
   branch: string;
   path: string;
+  readOnly: boolean;
 }
 
 interface ServiceContext {
@@ -15,6 +16,7 @@ function repositoryLines(repository: RepositoryContext): string {
     `- ${repository.url}`,
     `  workspace: ${repository.path}`,
     `  branch: ${repository.branch}`,
+    `  access: ${repository.readOnly ? "read-only baseline; do not modify files or create branches" : "writable local issue branch"}`,
     "  scope: selected service repository root",
   ].join("\n");
 }
@@ -60,6 +62,7 @@ export function initialPrompt(input: {
     ...input.repositories.map(repositoryLines),
     "",
     "The prepared repositories are exactly those attached to the selected service. Focus code search, edits, builds, and tests on these repository roots and ignore retired workspace directories.",
+    ...(input.repositories.every((repository) => repository.readOnly) ? ["This environment is investigation-only. Analyze causes and, when data changes are requested, produce SQL for human review; do not execute mutating SQL or modify repository files."] : []),
     "Inspect the relevant code and establish the cause before editing. If the issue policy permits code mutation and the cause is a code-logic defect, implement the smallest correct fix in the prepared local issue branch and run appropriate tests.",
     "Use only tools activated by the Issue Pilot policy. Arbitrary shell execution and access outside the granted repositories are intentionally unavailable.",
     "Never push commits or branches to any remote, never create a merge request, and never run git push. Keep every code change local in the prepared issue branch for human review.",

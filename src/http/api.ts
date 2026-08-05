@@ -22,7 +22,7 @@ import { loadIssuePolicy } from "../pi/policy.ts";
 import { isIssueKey, normalizeIssueKey } from "../shared/issue-key.ts";
 import { PtySessions } from "../workspace/pty.ts";
 
-const CAPABILITIES = ["configuration_read", "database_read", "sls_read"] as const;
+const CAPABILITIES = ["configuration_read", "database_read", "sls_read", "browser_use"] as const;
 const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 const ISSUE_TYPES = ["incident", "request", "question", "smart_analysis"] as const;
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
@@ -30,6 +30,7 @@ const REPOSITORY_KINDS = ["frontend", "backend"] as const;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 type Capability = typeof CAPABILITIES[number];
+type IssueType = typeof ISSUE_TYPES[number];
 
 class ApiError extends Error {
   readonly statusCode: number;
@@ -76,10 +77,39 @@ function slsScope(value: unknown, required: boolean): { project: string; logstor
   return { project, logstores };
 }
 
+function browserConfiguration(value: unknown, required: boolean): { baseUrl: string; username: string | null; password?: string | null } | undefined {
+  if (!required) return undefined;
+  const input = record(value);
+  const rawBaseUrl = text(input.baseUrl, "browser_base_url", 2048);
+  let url: URL;
+  try { url = new URL(rawBaseUrl); } catch { throw new ApiError(400, "invalid_browser_base_url"); }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) throw new ApiError(400, "invalid_browser_base_url");
+  const username = optionalText(input.username, 500);
+  let password: string | null | undefined;
+  if (input.password === null) password = null;
+  else if (input.password !== undefined && input.password !== "") {
+    if (typeof input.password !== "string" || input.password.length > 10_000 || input.password.includes("\0")) throw new ApiError(400, "invalid_browser_password");
+    password = input.password;
+  }
+  return { baseUrl: url.href, username, ...(password !== undefined ? { password } : {}) };
+}
+
+function publicBrowserConfiguration(config: Record<string, unknown>): { baseUrl: string; username: string | null; passwordConfigured: boolean } | null {
+  const value = config.browser;
+  if (!value || typeof value !== "object") return null;
+  const browser = value as Record<string, unknown>;
+  if (typeof browser.baseUrl !== "string") return null;
+  return { baseUrl: browser.baseUrl, username: typeof browser.username === "string" ? browser.username : null, passwordConfigured: typeof browser.password === "string" && browser.password.length > 0 };
+}
+
 function choice<const Values extends readonly string[]>(value: unknown, name: string, values: Values): Values[number] {
   const selected = text(value, name, 100);
   if (!values.includes(selected)) throw new ApiError(400, `invalid_${name}`);
   return selected as Values[number];
+}
+
+function assertIssueTypeForEnvironment(issueType: IssueType, environmentKind: string): void {
+  if (environmentKind === "development" && issueType !== "incident" && issueType !== "request") throw new ApiError(400, "invalid_issue_type_for_environment");
 }
 
 function date(value: Date | null | undefined): string | undefined {
@@ -117,6 +147,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     args: [],
   });
   for (const definition of [
+    { key: "development", name: "开发", kind: "development" as const },
     { key: "production", name: "正式", kind: "production" as const },
     { key: "test", name: "测试", kind: "test" as const },
   ]) {
@@ -172,7 +203,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     return value;
   };
 
-  const environmentByKey = async (key: string) => key === "production" || key === "test"
+  const environmentByKey = async (key: string) => key === "development" || key === "production" || key === "test"
     ? (await database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), eq(environments.key, key))).limit(1))[0]
     : undefined;
   const serviceByKey = async (key: string) => (await database.db.select().from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global"), eq(services.key, key))).limit(1))[0];
@@ -235,7 +266,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
   app.get("/api/config", async () => {
     const [environmentRows, serviceRows, deploymentRows, capabilityRows, repositoryRows] = await Promise.all([
-      database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), eq(environments.scope, "global"), inArray(environments.key, ["production", "test"]))).orderBy(asc(environments.name)),
+      database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), eq(environments.scope, "global"), inArray(environments.key, ["development", "production", "test"]))).orderBy(asc(environments.name)),
       database.db.select().from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global"))).orderBy(asc(services.sortOrder), asc(services.name)),
       database.db.select().from(serviceDeployments), database.db.select().from(deploymentCapabilities), database.db.select().from(serviceRepositories),
     ]);
@@ -245,13 +276,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         { key: "configuration_read", label: "配置读取", description: "按需合并冻结仓库配置、环境 profile 和批准的 Nacos 配置，并对敏感值脱敏。" },
         { key: "database_read", label: "数据库读取", description: "按需解析服务数据源，通过 MySQL 执行有行数限制的只读 SQL。" },
         { key: "sls_read", label: "日志读取", description: "使用本机 Aliyun CLI 与本地凭据执行有时间窗和条数限制的 SLS 只读查询。" },
+        { key: "browser_use", label: "浏览器操作", description: "在一次性 Playwright 容器中访问该环境的固定服务地址，可使用部署凭据完成受限页面操作。" },
       ],
       services: serviceRows.map((service) => {
         const deployments = deploymentRows.filter((item) => item.serviceId === service.id);
         return {
           id: service.id, key: service.key, name: service.name, description: service.description, scope: service.scope,
           environmentIds: deployments.map((item) => item.environmentId),
-          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: capabilityRows.filter((capability) => capability.deploymentId === item.id).map((capability) => capability.capability), sls: record(item.config).sls ?? null })),
+          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: capabilityRows.filter((capability) => capability.deploymentId === item.id).map((capability) => capability.capability), sls: record(item.config).sls ?? null, browser: publicBrowserConfiguration(record(item.config)) })),
           repositories: repositoryRows.filter((item) => item.serviceId === service.id).map((item) => ({ id: item.id, kind: item.kind, url: item.url })),
         };
       }),
@@ -273,13 +305,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         baseBranch: text(deployment.baseBranch, "base_branch", 255),
         capabilities: selectedCapabilities,
         sls: slsScope(deployment.sls, selectedCapabilities.includes("sls_read")),
+        browser: browserConfiguration(deployment.browser, selectedCapabilities.includes("browser_use")),
       };
     }) : [];
     if (new Set(deploymentsInput.map((deployment) => deployment.environmentKey)).size !== deploymentsInput.length) throw new ApiError(400, "duplicate_deployment_environment");
     const [existingRepositories, existingDeployments, environmentRows] = await Promise.all([
       database.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
       database.db.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId)),
-      database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), inArray(environments.key, ["production", "test"]))),
+      database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), inArray(environments.key, ["development", "production", "test"]))),
     ]);
     const environmentsByKey = new Map(environmentRows.map((environment) => [environment.key, environment]));
     if (deploymentsInput.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new ApiError(400, "invalid_environment");
@@ -309,9 +342,19 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       for (const deploymentInput of deploymentsInput) {
         const environment = environmentsByKey.get(deploymentInput.environmentKey)!;
         const existing = existingByEnvironmentId.get(environment.id);
+        const existingConfig = existing ? record(existing.config) : {};
+        const browser = deploymentInput.browser ? {
+          baseUrl: deploymentInput.browser.baseUrl,
+          username: deploymentInput.browser.username,
+          ...(deploymentInput.browser.username ? ("password" in deploymentInput.browser
+            ? (deploymentInput.browser.password ? { password: deploymentInput.browser.password } : {})
+            : (typeof (existingConfig.browser as Record<string, unknown> | undefined)?.password === "string" ? { password: (existingConfig.browser as Record<string, unknown>).password } : {})) : {}),
+        } : undefined;
+        if (browser?.username && !("password" in browser)) throw new ApiError(400, "browser_password_required");
+        const config = { ...(deploymentInput.sls ? { sls: deploymentInput.sls } : {}), ...(browser ? { browser } : {}) };
         const deployment = existing
-          ? (await transaction.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config: deploymentInput.sls ? { sls: deploymentInput.sls } : {}, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
-          : (await transaction.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config: deploymentInput.sls ? { sls: deploymentInput.sls } : {} }).returning())[0]!;
+          ? (await transaction.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
+          : (await transaction.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config }).returning())[0]!;
         retainedDeploymentIds.add(deployment.id);
         await transaction.delete(deploymentCapabilities).where(eq(deploymentCapabilities.deploymentId, deployment.id));
         if (deploymentInput.capabilities.length) await transaction.insert(deploymentCapabilities).values(deploymentInput.capabilities.map((capability) => ({ deploymentId: deployment.id, capability })));
@@ -373,6 +416,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await validateSubjects([assignee, ...cc]);
     const priority = choice(input.priority, "priority", ISSUE_PRIORITIES);
     const issueType = choice(input.type, "type", ISSUE_TYPES);
+    assertIssueTypeForEnvironment(issueType, environment.kind);
     const created = await serializeIssueCreation(async () => {
       const prefix = `ISSUE-${datedKey()}-`;
       const existing = await database.db.select({ key: issues.key }).from(issues);
@@ -401,6 +445,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await validateSubjects([assignee, ...cc]);
     const priority = choice(input.priority, "priority", ISSUE_PRIORITIES);
     const issueType = choice(input.type, "type", ISSUE_TYPES);
+    const [environment] = await database.db.select({ kind: environments.kind }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1);
+    if (!environment) throw new ApiError(409, "issue_scope_not_found");
+    assertIssueTypeForEnvironment(issueType, environment.kind);
     if (!await runner.invalidatePolicy(issue.id)) throw new ApiError(409, "issue_terminal_active");
     await database.db.transaction(async (transaction) => {
       await transaction.update(issues).set({ title: text(input.title, "title", 300), description: optionalText(input.description) ?? "", priority, type: issueType, serviceId: selected.service.id, assigneeSubject: assignee, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
@@ -503,6 +550,28 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await database.db.update(issues).set({ status: "in_progress", resolvedAt: null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
     runner.enqueue(issue.id, message);
     return reply.code(202).send({ ok: true });
+  });
+
+  app.get<{ Params: { key: string; attachmentId: string } }>("/api/issues/:key/attachments/:attachmentId", async (request, reply) => {
+    const issue = await issueByKey(request.params.key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    const [attachment] = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId))).limit(1);
+    if (!attachment) throw new ApiError(404, "attachment_not_found");
+    const directory = path.resolve(stateRoot, "attachments", issue.key.toLowerCase());
+    const source = path.resolve(attachment.objectKey);
+    const metadata = await stat(source).catch(() => undefined);
+    if (path.dirname(source) !== directory || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || metadata.size !== attachment.size || metadata.size > 20 * 1024 * 1024) throw new Error("insecure_issue_attachment_file");
+    const data = await readFile(source);
+    if (createHash("sha256").update(data).digest("hex") !== attachment.sha256) throw new Error("attachment_integrity_check_failed");
+    const safeInline = attachment.mediaType.startsWith("text/")
+      || ["application/json", "application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType);
+    const fallbackName = attachment.fileName.replace(/[^a-zA-Z0-9._-]/g, "_") || "attachment";
+    reply.header("Content-Disposition", `${safeInline ? "inline" : "attachment"}; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(attachment.fileName)}`);
+    reply.header("Cache-Control", "private, no-store");
+    reply.header("X-Content-Type-Options", "nosniff");
+    const inlineMediaType = attachment.mediaType.startsWith("image/") || attachment.mediaType === "application/pdf" ? attachment.mediaType : "text/plain; charset=utf-8";
+    reply.type(safeInline ? inlineMediaType : "application/octet-stream");
+    return reply.send(data);
   });
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {

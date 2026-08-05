@@ -138,19 +138,17 @@ export class PtySessions {
     if (!managed.client) this.scheduleIdleStop(managed);
   }
 
+  async release(issueId: string): Promise<boolean> {
+    const managed = this.sessions.get(issueId);
+    if (!managed) return true;
+    return this.stopAndWait(managed);
+  }
+
   async releaseDetached(issueId: string): Promise<boolean> {
     const managed = this.sessions.get(issueId);
     if (!managed) return true;
     if (managed.client) return false;
-    const exited = new Promise<void>((resolve) => { managed.terminal.onExit(() => resolve()); });
-    this.stop(managed);
-    let timer: NodeJS.Timeout | undefined;
-    const timedOut = await Promise.race([
-      exited.then(() => false),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), 5_000); }),
-    ]);
-    if (timer) clearTimeout(timer);
-    return !timedOut;
+    return this.stopAndWait(managed);
   }
 
   attach(binding: PtyBinding, client: PtyClient, cols: number, rows: number): PtyAttachment {
@@ -322,6 +320,18 @@ export class PtySessions {
     if (managed.idleTimer || managed.client || managed.retained) return;
     managed.idleTimer = setTimeout(() => this.stop(managed), this.idleTimeoutMs);
     managed.idleTimer.unref();
+  }
+
+  private async stopAndWait(managed: ManagedPty): Promise<boolean> {
+    const exited = new Promise<void>((resolve) => { managed.terminal.onExit(() => resolve()); });
+    this.stop(managed);
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = await Promise.race([
+      exited.then(() => false),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), 5_000); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return !timedOut;
   }
 
   private stop(managed: ManagedPty): void {

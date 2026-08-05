@@ -28,7 +28,7 @@ SEED_USER_SUBJECT=demo-owner npm run db:seed
 
 The default state directory is `.issue-pilot` and the default database is `.issue-pilot/issues.db`. Both can be changed with `ISSUE_PILOT_STATE_ROOT` and `ISSUE_PILOT_DATABASE`.
 
-Each issue run creates an owner-only execution policy that allowlists pi tools, the selected service environment, every attached repository, and exact issue attachment grants. Optional SLS reads use the local Aliyun CLI and owner-only `~/.aliyun/config.json`; only the typed, bounded `sls_read` operation is exposed, never general Aliyun commands. Managed sessions disable arbitrary shell access and all automatically discovered pi resources. Attachments are readable only through bounded `attachment_read` calls by granted ID. External capabilities execute only when pi calls their typed tools; for example, `database_read` resolves the service's frozen repository configuration, repository-resolved Nacos imports, and unique datasource before running a bounded read-only query in a disposable container.
+Each issue run creates an owner-only execution policy that allowlists pi tools, the selected service environment, every attached repository, and exact issue attachment grants. Production and test issues use freshly fetched detached read-only baselines; development incidents use `hotfix/<issue-key>` branches and development requests use `feature/<issue-key>` branches. Optional SLS reads use the local Aliyun CLI and owner-only `~/.aliyun/config.json`; only the typed, bounded `sls_read` operation is exposed, never general Aliyun commands. Optional browser actions run in a disposable pinned Playwright container against the deployment's fixed origin; deployment passwords never enter policy files, command arguments, Sessions, or tool output. Managed sessions disable arbitrary shell access and all automatically discovered pi resources. Attachments are readable only through bounded `attachment_read` calls by granted ID. External capabilities execute only when pi calls their typed tools; for example, `database_read` resolves the service's frozen repository configuration, repository-resolved Nacos imports, and unique datasource before running a bounded read-only query in a disposable container.
 
 ## Run
 
@@ -67,7 +67,7 @@ npm --prefix apps/web run build
 - `src/http`: Fastify API, uploads, terminal tickets, and interactive PTY WebSocket forwarding
 - `src/agent`: issue orchestration, service repository preparation, prompts, and per-issue execution coordination
 - `src/pi`: versioned issue policy, pi extension, path enforcement, and fixed repository inspection
-- `src/evidence`: containerized configuration, database, Node, and Maven capability implementations
+- `src/evidence`: containerized configuration, database, browser, Node, and Maven capability implementations
 - `src/db`: libSQL client, SQLite schema, migration, and seed
 - `src/workspace`: Git worktrees, shared code-server, policy-bound PTY sessions, and terminal bridge
 - `apps/web`: Solid web client

@@ -3,7 +3,10 @@ import {
   CheckCircle2 as CheckCircle2Node,
   ChevronLeft as ChevronLeftNode,
   ChevronRight as ChevronRightNode,
+  Copy as CopyNode,
+  Download as DownloadNode,
   ExternalLink as ExternalLinkNode,
+  Eye as EyeNode,
   GitBranch as GitBranchNode,
   GripVertical as GripVerticalNode,
   ListFilter as ListFilterNode,
@@ -18,6 +21,8 @@ import {
   Send as SendNode,
   SquareTerminal as TerminalSquareNode,
   Trash2 as Trash2Node,
+  ZoomIn as ZoomInNode,
+  ZoomOut as ZoomOutNode,
 } from "lucide";
 import { Dynamic, type JSX } from "@solidjs/web";
 import { omit } from "solid-js";
@@ -51,7 +56,10 @@ function createIcon(node: IconNode) {
 export const CheckCircle2 = createIcon(CheckCircle2Node);
 export const ChevronLeft = createIcon(ChevronLeftNode);
 export const ChevronRight = createIcon(ChevronRightNode);
+export const Copy = createIcon(CopyNode);
+export const Download = createIcon(DownloadNode);
 export const ExternalLink = createIcon(ExternalLinkNode);
+export const Eye = createIcon(EyeNode);
 export const GitBranch = createIcon(GitBranchNode);
 export const GripVertical = createIcon(GripVerticalNode);
 export const ListFilter = createIcon(ListFilterNode);
@@ -66,3 +74,5 @@ export const Search = createIcon(SearchNode);
 export const Send = createIcon(SendNode);
 export const TerminalSquare = createIcon(TerminalSquareNode);
 export const Trash2 = createIcon(Trash2Node);
+export const ZoomIn = createIcon(ZoomInNode);
+export const ZoomOut = createIcon(ZoomOutNode);

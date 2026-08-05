@@ -100,6 +100,26 @@ test("freezes SLS project and Logstore grants into the issue policy", () => {
   assert.throws(() => createIssuePolicy({ ...policy, service: serviceWithoutSls }), /invalid_sls_service_scope/);
 });
 
+test("freezes a credential-free browser origin into the issue policy", () => {
+  const policy = createIssuePolicy({
+    issueKey: "ISSUE-20260804-005",
+    issueType: "incident",
+    workspaceRoot: "/tmp/issue-policy-browser",
+    service: {
+      serviceKey: "orders",
+      environmentKey: "development",
+      environmentKind: "development",
+      capabilities: ["browser_use"],
+      browser: { deploymentId: "orders-development", baseUrl: "https://orders.example.test/admin/login" },
+      repositories: [{ codeAccess: "write", repositoryPath: "/tmp/issue-policy-browser/repository", baseCommit: "a".repeat(40) }],
+    },
+  });
+  assert.equal(policy.tools.includes("browser_use"), true);
+  assert.deepEqual(policy.service.browser, { deploymentId: "orders-development", baseUrl: "https://orders.example.test/admin/login" });
+  assert.doesNotMatch(JSON.stringify(policy), /password|username/);
+  assert.throws(() => createIssuePolicy({ ...policy, service: { ...policy.service, browser: { deploymentId: "orders-development", baseUrl: "https://other.example.test/path?token=secret" } } }), /invalid_browser_service_scope/);
+});
+
 test("uses read-only code tools for non-mutating issue types", () => {
   const policy = createIssuePolicy({
     issueKey: "ISSUE-20260804-003",

@@ -19,8 +19,8 @@ export const statusBadge: Record<IssueStatus, "default" | "processing" | "warnin
 };
 
 export const typeLabel: Record<IssueType, string> = {
-  incident: "故障",
-  request: "需求",
+  incident: "缺陷修复",
+  request: "需求开发",
   question: "咨询",
   smart_analysis: "智能分析",
 };

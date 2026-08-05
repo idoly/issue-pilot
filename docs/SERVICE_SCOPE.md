@@ -18,8 +18,9 @@ When an issue selects its service, Runner prepares every repository attached to 
 
 - Only the single service selected on the issue contributes repositories.
 - No repository is added through configured service relationships or module expansion.
-- `incident`, `request`, and `smart_analysis` may receive repository-root write access.
-- `question` remains code-read-only.
+- Production and test issues always use the latest fetched baseline in detached, repository-read-only worktrees. They do not create issue branches.
+- Development environments accept only `incident` and `request` issues. Incidents create `hotfix/<issue-key>` branches and requests create `feature/<issue-key>` branches with repository-root write access.
+- Development `question` and `smart_analysis` submissions are rejected by the API.
 - Build tools run against disposable repository copies and cannot mutate managed worktrees.
 - Adding another codebase requires attaching its repository to an explicitly selected service.
 

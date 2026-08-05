@@ -8,11 +8,19 @@ maven_image=${PI_MAVEN_CLI_IMAGE:-docker.io/library/maven:3.9.16-eclipse-temurin
 mysql_image=${PI_MYSQL_CLI_IMAGE:-docker.io/library/mysql:26.7.0}
 redis_image=${PI_REDIS_CLI_IMAGE:-docker.io/library/redis:8.10.0-alpine}
 nacos_image=${PI_NACOS_CLI_IMAGE:-docker.io/library/node:26.5.1-bookworm-slim}
-images="$mysql_image $redis_image $node_image $maven_image"
+playwright_image=${PI_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright@sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac}
+base_images="$mysql_image $redis_image $node_image $maven_image"
+images="$base_images $playwright_image"
 
 prepare() {
-  mkdir -p "$cache_root/node" "$cache_root/maven"
-  for image in $images; do podman image exists "$image" || podman pull "$image" >/dev/null; done
+  mkdir -p "$cache_root/node" "$cache_root/maven" "$cache_root/playwright"
+  for image in $base_images; do podman image exists "$image" || podman pull "$image" >/dev/null; done
+
+  test "$(node -p "require('$cache_root/playwright/node_modules/playwright-core/package.json').version" 2>/dev/null || true)" = 1.62.1 || \
+    podman run --rm --user 0 --volume "$cache_root/playwright:/tool:Z" --entrypoint npm "$node_image" \
+      install --prefix /tool --omit=dev --ignore-scripts playwright-core@1.62.1 >/dev/null
+
+  podman image exists "$playwright_image" || podman pull "$playwright_image" >/dev/null
 
   podman volume exists nacos-cli-data || podman volume create nacos-cli-data >/dev/null
   podman run --rm --user 0 --volume nacos-cli-data:/tool --entrypoint sh "$nacos_image" \
@@ -23,6 +31,11 @@ status() {
   for image in $images; do
     if podman image exists "$image"; then printf 'image ready %s\n' "$image"; else printf 'image missing %s\n' "$image"; fi
   done
+  if test "$(node -p "require('$cache_root/playwright/node_modules/playwright-core/package.json').version" 2>/dev/null || true)" = 1.62.1; then
+    printf 'tool ready playwright-core@1.62.1\n'
+  else
+    printf 'tool missing playwright-core@1.62.1\n'
+  fi
   for volume in nacos-cli-data; do
     if podman volume exists "$volume"; then printf 'volume ready %s\n' "$volume"; else printf 'volume missing %s\n' "$volume"; fi
   done

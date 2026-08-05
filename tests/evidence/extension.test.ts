@@ -95,7 +95,7 @@ test("registers capability tools and resolves frozen service configuration", asy
       },
     } as unknown as ExtensionAPI;
     await extension(pi);
-    assert.deepEqual([...tools.keys()].sort(), ["attachment_read", "configuration_read", "database_read", "maven_project_command", "node_project_command", "repository_edit", "repository_find", "repository_grep", "repository_list", "repository_read", "repository_status", "repository_write", "sls_read"]);
+    assert.deepEqual([...tools.keys()].sort(), ["attachment_read", "browser_use", "configuration_read", "database_read", "maven_project_command", "node_project_command", "repository_edit", "repository_find", "repository_grep", "repository_list", "repository_read", "repository_status", "repository_write", "sls_read"]);
     for (const tool of tools.values()) {
       assert.deepEqual(tool.renderCall?.({}, {}, {}).render(100), []);
       assert.deepEqual(tool.renderResult?.({}, {}, {}, {}).render(100), []);

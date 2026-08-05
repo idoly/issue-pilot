@@ -18,7 +18,10 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Download,
   ExternalLink,
+  Eye,
   GitBranch,
   GripVertical,
   ListFilter,
@@ -33,11 +36,13 @@ import {
   Send,
   TerminalSquare,
   Trash2,
+  ZoomIn,
+  ZoomOut,
 } from "../ui/icons";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createStore, For, onCleanup, Show } from "solid-js";
 import { DragDropManager } from "@dnd-kit/dom";
 import { isSortable, Sortable } from "@dnd-kit/dom/sortable";
-import { addIssueComment, createIssue, createService, deleteIssueAttachments, deleteService, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
+import { addIssueComment, attachmentUrl, createIssue, createService, deleteIssueAttachments, deleteService, fetchAttachment, getIssue, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueStatus, type IssueType, type Person } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { workspaceUrl, folderUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
 import { PiTerminal } from "./PiTerminal";
@@ -64,6 +69,49 @@ function selectedStrings(value: unknown, current: string[]): string[] {
 
 function selectedChoice<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   return typeof value === "string" && allowed.includes(value as T) ? value as T : undefined;
+}
+
+const DEVELOPMENT_ISSUE_TYPES: IssueType[] = ["incident", "request"];
+const ALL_ISSUE_TYPES = Object.keys(typeLabel) as IssueType[];
+
+function issueTypesForEnvironment(environmentKey: string): IssueType[] {
+  return environmentKey === "development" ? DEVELOPMENT_ISSUE_TYPES : ALL_ISSUE_TYPES;
+}
+
+function validBrowserAddress(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+type IssueAttachment = IssueDetail["attachments"][number];
+type AttachmentPreviewKind = "image" | "text" | "pdf" | "unsupported";
+
+function attachmentPreviewKind(attachment: IssueAttachment): AttachmentPreviewKind {
+  if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType)) return "image";
+  if (attachment.mediaType === "application/pdf") return "pdf";
+  if (attachment.mediaType.startsWith("text/") || ["application/json", "application/xml", "application/yaml", "application/x-yaml"].includes(attachment.mediaType) || /\.(txt|log|md|csv|json|xml|ya?ml|properties)$/i.test(attachment.fileName)) return "text";
+  return "unsupported";
+}
+
+function readBlobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === "function") return blob.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(typeof reader.result === "string" ? reader.result : ""));
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("attachment_preview_failed")));
+    reader.readAsText(blob);
+  });
+}
+
+function serviceSaveErrorMessage(error: unknown): string {
+  const code = error instanceof Error ? error.message : String(error);
+  if (code === "invalid_browser_base_url") return "服务地址必须是完整的 HTTP 或 HTTPS 地址，不能包含账号、查询参数或 # 片段";
+  if (code === "browser_password_required") return "配置服务账号时必须填写密码";
+  return code;
 }
 
 function bindMultipleSelectBlankToggle(element: HTMLDivElement, setOpen: (open: boolean) => void): void {
@@ -293,10 +341,10 @@ function IssueQueue(props: {
       </div>
       <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => { setCcOpen(false); setCreateOpen(false); }} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form compact-issue-form new-issue-form">
-          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { const selected = selectedChoice(value, configuration().environments.map((item) => item.key)); if (selected) { setEnvironment(selected); setService(""); } }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { const selected = selectedChoice(value, configuration().environments.map((item) => item.key)); if (selected) { setEnvironment(selected); setService(""); if (!issueTypesForEnvironment(selected).includes(issueType())) setIssueType("incident"); } }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((item) => item.key)); if (selected) setService(selected); }} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
-          <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, Object.keys(typeLabel) as IssueType[]); if (selected) setIssueType(selected); }} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
+          <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(environment())); if (selected) setIssueType(selected); }} options={issueTypesForEnvironment(environment()).map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setCcOpen)}><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} open={ccOpen()} onOpenChange={setCcOpen} onChange={(value) => setCcSubjects(selectedStrings(value, ccSubjects()))} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
@@ -333,6 +381,17 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
   const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
   const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
+  const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
+  const [previewLoading, setPreviewLoading] = createSignal(false, { ownedWrite: true });
+  const [previewText, setPreviewText] = createSignal("", { ownedWrite: true });
+  const [previewObjectUrl, setPreviewObjectUrl] = createSignal("", { ownedWrite: true });
+  const [previewError, setPreviewError] = createSignal("", { ownedWrite: true });
+  const [previewCopied, setPreviewCopied] = createSignal(false, { ownedWrite: true });
+  const [imageZoom, setImageZoom] = createSignal(1, { ownedWrite: true });
+  const [imageDragging, setImageDragging] = createSignal(false, { ownedWrite: true });
+  let previewSequence = 0;
+  let imageViewport: HTMLDivElement | undefined;
+  let imageDrag: { pointerId: number; x: number; y: number; scrollLeft: number; scrollTop: number } | undefined;
   void loadPeople().then(setPeople);
   void loadConfig().then(setConfiguration);
   const openEditor = () => {
@@ -371,6 +430,84 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
       setCommentError(error instanceof Error ? error.message : String(error));
     } finally { setCommentSaving(false); }
   };
+  const closeAttachmentPreview = () => {
+    previewSequence += 1;
+    const objectUrl = previewObjectUrl();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    setPreviewAttachment(null); setPreviewObjectUrl(""); setPreviewText(""); setPreviewError(""); setPreviewCopied(false); setImageZoom(1); setImageDragging(false); imageDrag = undefined; setPreviewLoading(false);
+  };
+  const openAttachmentPreview = async (attachment: IssueAttachment) => {
+    closeAttachmentPreview();
+    setPreviewAttachment(attachment);
+    const kind = attachmentPreviewKind(attachment);
+    if (kind === "unsupported") return;
+    const sequence = ++previewSequence;
+    setPreviewLoading(true);
+    try {
+      const blob = await fetchAttachment(props.issue.id, attachment.id);
+      if (sequence !== previewSequence) return;
+      if (kind === "text") setPreviewText(await readBlobText(blob));
+      else setPreviewObjectUrl(URL.createObjectURL(blob));
+    } catch (error) {
+      if (sequence === previewSequence) setPreviewError(error instanceof Error ? error.message : "attachment_preview_failed");
+    } finally {
+      if (sequence === previewSequence) setPreviewLoading(false);
+    }
+  };
+  const changeImageZoom = (requestedZoom: number, focusX?: number, focusY?: number) => {
+    const previousZoom = imageZoom();
+    const nextZoom = Math.min(4, Math.max(1, Math.round(requestedZoom * 100) / 100));
+    if (nextZoom === previousZoom) return;
+    const viewport = imageViewport;
+    const x = focusX ?? (viewport?.clientWidth ?? 0) / 2;
+    const y = focusY ?? (viewport?.clientHeight ?? 0) / 2;
+    const contentX = (viewport?.scrollLeft ?? 0) + x;
+    const contentY = (viewport?.scrollTop ?? 0) + y;
+    setImageZoom(nextZoom);
+    if (viewport) requestAnimationFrame(() => {
+      const ratio = nextZoom / previousZoom;
+      viewport.scrollLeft = contentX * ratio - x;
+      viewport.scrollTop = contentY * ratio - y;
+    });
+  };
+  const handleImageWheel = (event: WheelEvent) => {
+    event.preventDefault();
+    const viewport = imageViewport;
+    if (!viewport) return;
+    const bounds = viewport.getBoundingClientRect();
+    changeImageZoom(imageZoom() * (event.deltaY < 0 ? 1.15 : 1 / 1.15), event.clientX - bounds.left, event.clientY - bounds.top);
+  };
+  const beginImageDrag = (event: PointerEvent) => {
+    const viewport = imageViewport;
+    if (!viewport || imageZoom() <= 1 || (event.pointerType === "mouse" && event.button !== 0)) return;
+    event.preventDefault();
+    viewport.setPointerCapture(event.pointerId);
+    imageDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
+    setImageDragging(true);
+  };
+  const moveImageDrag = (event: PointerEvent) => {
+    const viewport = imageViewport;
+    if (!viewport || imageDrag?.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    viewport.scrollLeft = imageDrag.scrollLeft - (event.clientX - imageDrag.x);
+    viewport.scrollTop = imageDrag.scrollTop - (event.clientY - imageDrag.y);
+  };
+  const endImageDrag = (event: PointerEvent) => {
+    const viewport = imageViewport;
+    if (!viewport || imageDrag?.pointerId !== event.pointerId) return;
+    if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    imageDrag = undefined;
+    setImageDragging(false);
+  };
+  const copyPreviewText = async () => {
+    try {
+      await navigator.clipboard.writeText(previewText());
+      setPreviewCopied(true);
+    } catch {
+      setPreviewError("clipboard_write_failed");
+    }
+  };
+  onCleanup(closeAttachmentPreview);
   const retry = async () => {
     setRetrying(true);
     setRetryError("");
@@ -433,8 +570,8 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
               return (
                 <div class="repository-row">
                   <span class="repo-name">{repository.url.split(/[/:]/).at(-1)?.replace(/\.git$/, "")}</span>
-                  <Show when={repository.workingBranch} fallback={<span class="repository-branch-pending">工单分支准备中</span>}>
-                    {(branch) => <Show when={codeServerUrl()} fallback={<code>{branch()}</code>}>{(url) => <button type="button" class="repository-branch-link" title={`在 code-server 中打开 ${branch()}`} onClick={() => props.onOpenCodeServer(url())}><code>{branch()}</code><ExternalLink size={14} /></button>}</Show>}
+                  <Show when={codeServerUrl()} fallback={<code>{repository.workingBranch ?? repository.baseBranch}{repository.workingBranch ? "" : " (只读)"}</code>}>
+                    {(url) => <button type="button" class="repository-branch-link" title={`在 code-server 中打开 ${repository.workingBranch ?? repository.baseBranch}`} onClick={() => props.onOpenCodeServer(url())}><code>{repository.workingBranch ?? repository.baseBranch}{repository.workingBranch ? "" : " (只读)"}</code><ExternalLink size={14} /></button>}
                   </Show>
                 </div>
               );
@@ -447,7 +584,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
         <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
         <div class="issue-attachment-list">
           <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
-            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span></div>}
+            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><button type="button" class="attachment-preview-trigger" aria-label={`预览 ${attachment.fileName}`} onClick={() => { void openAttachmentPreview(attachment); }}><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span><Eye size={15} /></button><a class="attachment-download-link" href={attachmentUrl(props.issue.id, attachment.id)} download={attachment.fileName} title={`下载 ${attachment.fileName}`} aria-label={`下载 ${attachment.fileName}`}><Download size={15} /></a></div>}
           </For>
         </div>
       </section>
@@ -467,11 +604,29 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           <div class="comment-actions"><Show when={commentError()}><span class="comment-error" role="alert">{commentError()}</span></Show><Button type="primary" icon={<Send size={14} />} loading={commentSaving()} disabled={!commentBody().trim()} onClick={() => { void submitComment(); }}>发布评论</Button></div>
         </div>
       </section>
+      <Modal width={860} open={Boolean(previewAttachment())} title={previewAttachment()?.fileName ?? "附件预览"} okText="关闭" cancelText="取消" onOk={closeAttachmentPreview} onCancel={closeAttachmentPreview}>
+        <div class="attachment-preview">
+          <Show when={!previewLoading()} fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
+            <Show when={!previewError()} fallback={<div class="workspace-error" role="alert">{previewError()}</div>}>
+              <Show when={previewAttachment()}>{(attachment) => {
+                const kind = () => attachmentPreviewKind(attachment());
+                return <Show when={kind() !== "unsupported"} fallback={<div class="attachment-preview-unsupported"><Paperclip size={24} /><strong>此格式不支持内嵌预览</strong><a href={attachmentUrl(props.issue.id, attachment().id)} download={attachment().fileName}><Download size={15} />下载附件</a></div>}>
+                  <Show when={kind() !== "text"} fallback={<div class="attachment-text-preview-shell"><div class="attachment-preview-toolbar"><Button icon={<Copy size={14} />} onClick={() => { void copyPreviewText(); }}>{previewCopied() ? "已复制" : "复制文字"}</Button></div><pre class="attachment-text-preview" tabindex="0">{previewText()}</pre></div>}>
+                    <Show when={kind() !== "image"} fallback={<div class="attachment-image-preview-shell"><div class="attachment-preview-toolbar"><Button type="text" shape="circle" icon={<ZoomOut size={15} />} disabled={imageZoom() <= 1} title="缩小" aria-label="缩小" onClick={() => changeImageZoom(imageZoom() / 1.25)} /><button type="button" class="attachment-zoom-value" title="恢复 100%" aria-label="恢复 100%" onClick={() => changeImageZoom(1)}>{Math.round(imageZoom() * 100)}%</button><Button type="text" shape="circle" icon={<ZoomIn size={15} />} disabled={imageZoom() >= 4} title="放大" aria-label="放大" onClick={() => changeImageZoom(imageZoom() * 1.25)} /></div><div ref={imageViewport} class={`attachment-image-viewport${imageZoom() > 1 ? " is-pannable" : ""}${imageDragging() ? " is-dragging" : ""}`} onWheel={handleImageWheel} onPointerDown={beginImageDrag} onPointerMove={moveImageDrag} onPointerUp={endImageDrag} onPointerCancel={endImageDrag}><div class="attachment-image-stage" style={{ width: `${imageZoom() * 100}%`, height: `${imageZoom() * 100}%` }}><img class="attachment-image-preview" src={previewObjectUrl()} alt={attachment().fileName} draggable={false} /></div></div></div>}>
+                      <iframe class="attachment-pdf-preview" src={previewObjectUrl()} title={`预览 ${attachment().fileName}`} />
+                    </Show>
+                  </Show>
+                </Show>;
+              }}</Show>
+            </Show>
+          </Show>
+        </div>
+      </Modal>
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
         <div class="create-issue-form compact-issue-form edit-issue-form">
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setEditPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
-          <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, Object.keys(typeLabel) as IssueType[]); if (selected) setEditType(selected); }} options={Object.entries(typeLabel).map(([value, label]) => ({ value, label }))} /></label>
+          <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(props.issue.environmentKey)); if (selected) setEditType(selected); }} options={issueTypesForEnvironment(props.issue.environmentKey).map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
@@ -539,6 +694,17 @@ interface ServiceDeploymentDraft {
   baseBranch: string;
   capabilities: DeploymentCapability[];
   sls?: { project: string; logstores: string[] };
+  browser?: { baseUrl: string; username: string; password: string; passwordConfigured?: boolean };
+}
+
+function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploymentDraft {
+  return {
+    environmentKey: deployment.environmentKey,
+    baseBranch: deployment.baseBranch,
+    capabilities: [...deployment.capabilities],
+    ...(deployment.sls ? { sls: { project: deployment.sls.project, logstores: [...deployment.sls.logstores] } } : {}),
+    ...(deployment.browser ? { browser: { ...deployment.browser } } : {}),
+  };
 }
 
 function ServiceRepositoryEditorRow(props: {
@@ -569,16 +735,26 @@ function ServiceDeploymentEditorRow(props: {
   const [environmentKey, setEnvironmentKey] = createSignal(props.deployment.environmentKey, { ownedWrite: true });
   const [baseBranch, setBaseBranch] = createSignal(props.deployment.baseBranch, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<DeploymentCapability[]>([...props.deployment.capabilities], { ownedWrite: true });
-  const [slsProject, setSlsProject] = createSignal(props.deployment.sls?.project ?? "", { ownedWrite: true });
-  const [slsLogstores, setSlsLogstores] = createSignal(props.deployment.sls?.logstores.join(", ") ?? "", { ownedWrite: true });
-  const sls = () => ({ project: slsProject().trim(), logstores: slsLogstores().split(",").map((value) => value.trim()).filter(Boolean) });
-  const update = (change: Partial<ServiceDeploymentDraft>) => props.onChange({ environmentKey: environmentKey(), baseBranch: baseBranch(), capabilities: selectedCapabilities(), ...(selectedCapabilities().includes("sls_read") ? { sls: sls() } : {}), ...change });
+  let currentSlsProject = props.deployment.sls?.project ?? "";
+  let currentSlsLogstores = props.deployment.sls?.logstores.join(", ") ?? "";
+  let currentBrowserBaseUrl = props.deployment.browser?.baseUrl ?? "";
+  let currentBrowserUsername = props.deployment.browser?.username ?? "";
+  let currentBrowserPassword = props.deployment.browser?.password ?? "";
+  const [slsProject, setSlsProject] = createSignal(currentSlsProject, { ownedWrite: true });
+  const [slsLogstores, setSlsLogstores] = createSignal(currentSlsLogstores, { ownedWrite: true });
+  const [browserBaseUrl, setBrowserBaseUrl] = createSignal(currentBrowserBaseUrl, { ownedWrite: true });
+  const [browserUsername, setBrowserUsername] = createSignal(currentBrowserUsername, { ownedWrite: true });
+  const [browserPassword, setBrowserPassword] = createSignal(currentBrowserPassword, { ownedWrite: true });
+  const sls = () => ({ project: currentSlsProject.trim(), logstores: currentSlsLogstores.split(",").map((value) => value.trim()).filter(Boolean) });
+  const browser = () => ({ baseUrl: currentBrowserBaseUrl.trim(), username: currentBrowserUsername.trim(), password: currentBrowserPassword, passwordConfigured: props.deployment.browser?.passwordConfigured });
+  const update = (change: Partial<ServiceDeploymentDraft>) => props.onChange({ ...props.deployment, ...change });
   return (
     <div class="service-deployment-row">
       <label class="deployment-environment"><span>环境</span><Select aria-label={`部署环境 ${props.index + 1}`} value={environmentKey()} onChange={(value) => { const options = props.environmentOptions(); const selected = selectedChoice(value, options.map((environment) => environment.key)); if (selected) { setEnvironmentKey(selected); update({ environmentKey: selected }); } }} options={props.environmentOptions().map((environment) => ({ value: environment.key, label: environment.name }))} /></label>
       <label class="deployment-branch"><span>分支</span><Input aria-label={`部署分支 ${props.index + 1}`} value={baseBranch()} onInput={(event) => { const next = event.currentTarget.value; setBaseBranch(next); update({ baseBranch: next }); }} /></label>
-      <div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-controls"><Checkbox.Group aria-label={`部署能力 ${props.index + 1}`} class="capability-checkboxes" value={selectedCapabilities()} onChange={(value) => { const selected = new Set(selectedStrings(value, selectedCapabilities())); const next = props.capabilityCatalog.filter((capability) => selected.has(capability.key)).map((capability) => capability.key); setSelectedCapabilities(next); update({ capabilities: next, ...(next.includes("sls_read") ? { sls: sls() } : {}) }); }} options={props.capabilityCatalog.map((capability) => ({ value: capability.key, label: capability.label }))} /><CapabilityDescriptions catalog={props.capabilityCatalog} /></div></div>
-      <Show when={selectedCapabilities().includes("sls_read")}><div class="deployment-sls"><label><span>SLS Project</span><Input aria-label={`SLS Project ${props.index + 1}`} value={slsProject()} onInput={(event) => { setSlsProject(event.currentTarget.value); update({ sls: sls() }); }} /></label><label><span>Logstore</span><Input aria-label={`SLS Logstore ${props.index + 1}`} placeholder="多个名称用逗号分隔" value={slsLogstores()} onInput={(event) => { setSlsLogstores(event.currentTarget.value); update({ sls: sls() }); }} /></label></div></Show>
+      <div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-controls"><Checkbox.Group aria-label={`部署能力 ${props.index + 1}`} class="capability-checkboxes" value={selectedCapabilities()} onChange={(value) => { const selected = new Set(selectedStrings(value, selectedCapabilities())); const next = props.capabilityCatalog.filter((capability) => selected.has(capability.key)).map((capability) => capability.key); setSelectedCapabilities(next); update({ capabilities: next, ...(next.includes("sls_read") ? { sls: sls() } : {}), ...(next.includes("browser_use") ? { browser: browser() } : {}) }); }} options={props.capabilityCatalog.map((capability) => ({ value: capability.key, label: capability.label }))} /><CapabilityDescriptions catalog={props.capabilityCatalog} /></div></div>
+      <Show when={selectedCapabilities().includes("sls_read")}><div class="deployment-sls"><label><span>SLS Project</span><Input aria-label={`SLS Project ${props.index + 1}`} value={slsProject()} onInput={(event) => { currentSlsProject = event.currentTarget.value; setSlsProject(currentSlsProject); update({ sls: sls() }); }} /></label><label><span>Logstore</span><Input aria-label={`SLS Logstore ${props.index + 1}`} placeholder="多个名称用逗号分隔" value={slsLogstores()} onInput={(event) => { currentSlsLogstores = event.currentTarget.value; setSlsLogstores(currentSlsLogstores); update({ sls: sls() }); }} /></label></div></Show>
+      <Show when={selectedCapabilities().includes("browser_use")}><div class="deployment-browser"><label><span>服务地址</span><Input aria-label={`服务地址 ${props.index + 1}`} placeholder="https://service.example.com/app" value={browserBaseUrl()} onInput={(event) => { currentBrowserBaseUrl = event.currentTarget.value; setBrowserBaseUrl(currentBrowserBaseUrl); update({ browser: browser() }); }} /></label><label><span>账号</span><Input aria-label={`服务账号 ${props.index + 1}`} value={browserUsername()} onInput={(event) => { currentBrowserUsername = event.currentTarget.value; setBrowserUsername(currentBrowserUsername); update({ browser: browser() }); }} /></label><label><span>密码</span><Input type="password" aria-label={`服务密码 ${props.index + 1}`} placeholder={props.deployment.browser?.passwordConfigured ? "留空以保留现有密码" : ""} value={browserPassword()} onInput={(event) => { currentBrowserPassword = event.currentTarget.value; setBrowserPassword(currentBrowserPassword); update({ browser: browser() }); }} /></label></div></Show>
       <Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除部署${props.index + 1}`} aria-label={`删除部署${props.index + 1}`} onClick={props.onDelete} />
     </div>
   );
@@ -590,7 +766,8 @@ function ConfigurationView() {
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
   const [serviceRepositories, setServiceRepositories] = createSignal<Array<{ id?: string; kind: RepositoryKind; url: string }>>([{ kind: "backend", url: "" }], { ownedWrite: true });
-  const [serviceDeployments, setServiceDeployments] = createSignal<ServiceDeploymentDraft[]>([], { ownedWrite: true });
+  const [serviceDeployments, setServiceDeployments] = createStore<ServiceDeploymentDraft[]>([]);
+  let deploymentDrafts: ServiceDeploymentDraft[] = [];
   const [editingServiceKey, setEditingServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
   const [selectedServiceKey, setSelectedServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
   const [deleteTarget, setDeleteTarget] = createSignal<{ kind: "service"; key: string; name: string } | null>(null, { ownedWrite: true });
@@ -634,7 +811,8 @@ function ConfigurationView() {
     dragDropManager?.destroy();
   });
   const resetServiceForm = () => {
-    setServiceName(""); setDescription(""); setServiceRepositories([{ kind: "backend", url: "" }]); setServiceDeployments([]); setEditingServiceKey(null);
+    deploymentDrafts = [];
+    setServiceName(""); setDescription(""); setServiceRepositories([{ kind: "backend", url: "" }]); setServiceDeployments(() => []); setEditingServiceKey(null);
   };
   const openNewService = () => {
     resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
@@ -643,29 +821,50 @@ function ConfigurationView() {
     setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
     setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, kind: repository.kind, url: repository.url })));
-    setServiceDeployments(service.deployments.map((deployment) => ({
+    deploymentDrafts = service.deployments.map((deployment) => ({
       environmentKey: configuration().environments.find((environment) => environment.id === deployment.environmentId)?.key ?? "",
       baseBranch: deployment.baseBranch,
       capabilities: [...deployment.capabilities],
       ...(deployment.sls ? { sls: { project: deployment.sls.project, logstores: [...deployment.sls.logstores] } } : {}),
-    })).filter((deployment) => deployment.environmentKey));
+      ...(deployment.browser ? { browser: { baseUrl: deployment.browser.baseUrl, username: deployment.browser.username ?? "", password: "", passwordConfigured: deployment.browser.passwordConfigured } } : {}),
+    })).filter((deployment) => deployment.environmentKey);
+    setServiceDeployments(() => deploymentDrafts.map(cloneDeploymentDraft));
     setConfigurationError(""); setServiceOpen(true);
   };
   const serviceRepositoriesValid = createMemo(() => serviceRepositories().length > 0 && serviceRepositories().every((repository) => repository.url.trim()) && new Set(serviceRepositories().map((repository) => repository.url.trim())).size === serviceRepositories().length);
-  const serviceDeploymentsValid = createMemo(() => serviceDeployments().every((deployment) => deployment.environmentKey && deployment.baseBranch.trim() && (!deployment.capabilities.includes("sls_read") || Boolean(deployment.sls?.project.trim() && deployment.sls.logstores.length))) && new Set(serviceDeployments().map((deployment) => deployment.environmentKey)).size === serviceDeployments().length);
-  const availableDeploymentEnvironments = createMemo(() => configuration().environments.filter((environment) => !serviceDeployments().some((deployment) => deployment.environmentKey === environment.key)));
+  const serviceDeploymentsValid = () => deploymentDrafts.every((deployment) => deployment.environmentKey && deployment.baseBranch.trim() && (!deployment.capabilities.includes("sls_read") || Boolean(deployment.sls?.project.trim() && deployment.sls.logstores.length)) && (!deployment.capabilities.includes("browser_use") || Boolean(deployment.browser && validBrowserAddress(deployment.browser.baseUrl.trim()) && (!deployment.browser.username.trim() || deployment.browser.password || deployment.browser.passwordConfigured)))) && new Set(deploymentDrafts.map((deployment) => deployment.environmentKey)).size === deploymentDrafts.length;
+  const serviceValidationError = () => {
+    if (!serviceName().trim()) return "请填写服务名称";
+    if (!serviceRepositories().length || serviceRepositories().some((repository) => !repository.url.trim())) return "请填写所有仓库地址";
+    if (new Set(serviceRepositories().map((repository) => repository.url.trim())).size !== serviceRepositories().length) return "仓库地址不能重复";
+    if (deploymentDrafts.some((deployment) => !deployment.environmentKey || !deployment.baseBranch.trim())) return "请填写所有部署环境和分支";
+    if (new Set(deploymentDrafts.map((deployment) => deployment.environmentKey)).size !== deploymentDrafts.length) return "同一环境只能配置一个部署";
+    const invalidSls = deploymentDrafts.findIndex((deployment) => deployment.capabilities.includes("sls_read") && !Boolean(deployment.sls?.project.trim() && deployment.sls.logstores.length));
+    if (invalidSls >= 0) return `部署 ${invalidSls + 1} 的 SLS Project 和 Logstore 不能为空`;
+    const invalidBrowserAddress = deploymentDrafts.findIndex((deployment) => deployment.capabilities.includes("browser_use") && !validBrowserAddress(deployment.browser?.baseUrl.trim() ?? ""));
+    if (invalidBrowserAddress >= 0) return `部署 ${invalidBrowserAddress + 1} 的服务地址必须是完整的 HTTP 或 HTTPS 地址，不能包含查询参数或 # 片段`;
+    const missingBrowserPassword = deploymentDrafts.findIndex((deployment) => deployment.capabilities.includes("browser_use") && Boolean(deployment.browser?.username.trim()) && !Boolean(deployment.browser?.password || deployment.browser?.passwordConfigured));
+    if (missingBrowserPassword >= 0) return `部署 ${missingBrowserPassword + 1} 配置账号时必须填写密码`;
+    return "";
+  };
+  const availableDeploymentEnvironments = createMemo(() => configuration().environments.filter((environment) => !serviceDeployments.some((deployment) => deployment.environmentKey === environment.key)));
   const addServiceDeployment = () => {
     const environment = availableDeploymentEnvironments()[0];
-    if (environment) setServiceDeployments((current) => [...current, { environmentKey: environment.key, baseBranch: "main", capabilities: [] }]);
+    if (environment) {
+      const deployment = { environmentKey: environment.key, baseBranch: "main", capabilities: [] } satisfies ServiceDeploymentDraft;
+      deploymentDrafts.push(deployment);
+      setServiceDeployments((current) => [...current, cloneDeploymentDraft(deployment)]);
+    }
   };
   const saveService = async () => {
-    if (!serviceName().trim() || !serviceRepositoriesValid() || !serviceDeploymentsValid()) return;
+    const validationError = serviceValidationError();
+    if (validationError || !serviceRepositoriesValid() || !serviceDeploymentsValid()) { setConfigurationError(validationError || "服务配置不完整"); return; }
     setSaving(true); setConfigurationError("");
     try {
       const definition = {
         name: serviceName().trim(), description: description().trim(),
         repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), kind: repository.kind, url: repository.url.trim() })),
-        deployments: serviceDeployments().map((deployment) => ({ environmentKey: deployment.environmentKey, baseBranch: deployment.baseBranch.trim(), capabilities: deployment.capabilities, ...(deployment.capabilities.includes("sls_read") && deployment.sls ? { sls: { project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}) })),
+        deployments: deploymentDrafts.map((deployment) => ({ environmentKey: deployment.environmentKey, baseBranch: deployment.baseBranch.trim(), capabilities: deployment.capabilities, ...(deployment.capabilities.includes("sls_read") && deployment.sls ? { sls: { project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}), ...(deployment.capabilities.includes("browser_use") && deployment.browser ? { browser: { baseUrl: deployment.browser.baseUrl.trim(), username: deployment.browser.username.trim(), ...(deployment.browser.password ? { password: deployment.browser.password } : {}) } } : {}) })),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
@@ -673,7 +872,7 @@ function ConfigurationView() {
       await refresh();
       setServiceOpen(false); resetServiceForm();
     } catch (error) {
-      setConfigurationError(error instanceof Error ? error.message : String(error));
+      setConfigurationError(serviceSaveErrorMessage(error));
     } finally { setSaving(false); }
   };
   const confirmDelete = async () => {
@@ -711,20 +910,20 @@ function ConfigurationView() {
             </header>
             <div class="service-detail">
               <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>角色</span><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><span class={`repository-kind ${repository.kind}`}>{repository.kind === "frontend" ? "前端" : "后端"}</span><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
-              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><For each={service().deployments} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div class="deployment-detail-meta"><div class="deployment-environment-summary"><strong>{environment?.name ?? deployment.environmentId}</strong></div></div><div class="deployment-branch-summary"><span>分支</span><code>{deployment.baseBranch}</code></div><div class="deployment-detail-capabilities"><span>能力</span><div class="deployment-detail-capability-content"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityDescriptions catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /><Show when={deployment.sls}>{(scope) => <div class="deployment-sls-summary"><code>{scope().project}</code><span>{scope().logstores.join("、")}</span></div>}</Show></Show></div></div></div>; }}</For></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><For each={service().deployments} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div class="deployment-detail-meta"><div class="deployment-environment-summary"><strong>{environment?.name ?? deployment.environmentId}</strong></div></div><div class="deployment-branch-summary"><span>分支</span><code>{deployment.baseBranch}</code></div><div class="deployment-detail-capabilities"><span>能力</span><div class="deployment-detail-capability-content"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityDescriptions catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /><Show when={deployment.sls}>{(scope) => <div class="deployment-sls-summary"><code>{scope().project}</code><span>{scope().logstores.join("、")}</span></div>}</Show><Show when={deployment.browser}>{(browser) => <div class="deployment-browser-summary"><code>{browser().baseUrl}</code><span>{browser().username || "未配置账号"}</span></div>}</Show></Show></div></div></div>; }}</For></div></section>
               <section class="service-detail-section"><div class="service-detail-heading"><h3>项目描述</h3></div><Show when={service().description.trim()} fallback={<div class="service-detail-empty">暂无项目描述</div>}><Markdown source={service().description} /></Show></section>
             </div>
           </>}
         </Show>
       </section>
-      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)} okButtonProps={{ disabled: !serviceName().trim() || !serviceRepositoriesValid() || !serviceDeploymentsValid() }}>
+      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)}>
         <div class="service-form">
+          <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span>服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong>代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { kind: "backend", url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments()} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments().some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => { Object.assign(deployment, next); return [...current]; })} onDelete={() => setServiceDeployments((current) => current.filter((item) => item !== deployment))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => { deploymentDrafts[index()] = cloneDeploymentDraft(next); setServiceDeployments((current) => { Object.assign(current[index()]!, next); }); }} onDelete={() => { deploymentDrafts.splice(index(), 1); setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index())); }} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
-          <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
         </div>
       </Modal>
       <Modal open={Boolean(deleteTarget())} title="删除服务" okText="确认删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onOk={() => { void confirmDelete(); }} onCancel={() => { setDeleteTarget(null); setConfigurationError(""); }}>

@@ -14,6 +14,7 @@ import {
 import { Type } from "typebox";
 
 import { readConfiguration, readDatabase } from "../evidence/capabilities.ts";
+import { useBrowser, type BrowserAction } from "../evidence/browser.ts";
 import { readAttachment } from "./attachment.ts";
 import { readSlsLogs } from "../evidence/sls.ts";
 import { runMavenProject, runNodeProject } from "../evidence/toolchains.ts";
@@ -111,6 +112,10 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
           "- One sls_read call covers at most 24 hours. For a longer requested range, query contiguous windows that cover the entire range through its intended end; do not report zero results after stopping before the current day.",
           "- For a trace ID without an explicit event time, call sls_read with trace_id and omit from/to; the tool will use the current trailing 24-hour window and preserve the complete UUID. Supply from/to only when the user provided an event time or when continuing older contiguous windows. Do not put a trace ID in query or shorten it to a prefix.",
           "- Before concluding that logs are absent, verify that the actual from/to Unix timestamps include the event time and summarize the exact covered interval.",
+        ] : []),
+        ...(policy.tools.includes("browser_use") ? [
+          `- For browser evidence, browser_use is restricted to ${policy.service.browser?.baseUrl}. It runs one disposable Playwright container per call and returns a bounded page snapshot or screenshot.`,
+          "- Use only relative paths and declarative actions. Use the login action for configured deployment credentials; credentials are injected inside the container and must never be requested, inferred, or repeated.",
         ] : []),
         ...(policy.attachments.length ? ["- The issue has explicitly granted attachments. Call attachment_read with an attachment ID only when its contents are relevant."] : []),
       ].join("\n"),
@@ -215,6 +220,36 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
       const input = raw as { project: string; logstore: string; from?: number; to?: number; query?: string; trace_id?: string; limit?: number };
       assertSlsGranted(policy, input.project, input.logstore);
       return readSlsLogs(pi, input, signal);
+    },
+    ...HIDDEN_TOOL_RENDERING,
+  });
+
+  pi.registerTool({
+    name: "browser_use",
+    label: "Use Service Browser",
+    description: "Run up to 20 declarative browser actions in one disposable Playwright container against only the selected deployment's fixed service origin. The login action injects configured credentials without exposing them. Returns a bounded page snapshot and optionally a screenshot.",
+    parameters: Type.Object({
+      actions: Type.Array(Type.Union([
+        Type.Object({ type: Type.Literal("goto"), path: Type.String({ maxLength: 2048 }) }),
+        Type.Object({ type: Type.Literal("login"), username_selector: Type.String({ maxLength: 500 }), password_selector: Type.String({ maxLength: 500 }), submit_selector: Type.String({ maxLength: 500 }) }),
+        Type.Object({ type: Type.Literal("click"), selector: Type.String({ maxLength: 500 }) }),
+        Type.Object({ type: Type.Literal("fill"), selector: Type.String({ maxLength: 500 }), value: Type.String({ maxLength: 10_000 }) }),
+        Type.Object({ type: Type.Literal("select"), selector: Type.String({ maxLength: 500 }), value: Type.String({ maxLength: 10_000 }) }),
+        Type.Object({ type: Type.Literal("wait_for"), selector: Type.String({ maxLength: 500 }) }),
+      ]), { minItems: 1, maxItems: 20 }),
+      screenshot: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id, raw, signal, _update, context) {
+      const policy = await loadIssuePolicy(context.cwd);
+      assertToolGranted(policy, "browser_use");
+      const input = raw as { actions: Array<Record<string, unknown>>; screenshot?: boolean };
+      const actions = input.actions.map((action): BrowserAction => action.type === "login" ? {
+        type: "login",
+        usernameSelector: String(action.username_selector),
+        passwordSelector: String(action.password_selector),
+        submitSelector: String(action.submit_selector),
+      } : action as BrowserAction);
+      return useBrowser(pi, policy, { actions, ...(input.screenshot !== undefined ? { screenshot: input.screenshot } : {}) }, signal);
     },
     ...HIDDEN_TOOL_RENDERING,
   });

@@ -21,7 +21,7 @@ An issue selects exactly one service. Runner prepares all repositories attached 
 
 ## Issue Execution Policy
 
-Every run produces a version 6 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
+Every run produces a version 7 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
 
 - one normalized issue key and issue type;
 - the exact workspace root;
@@ -34,7 +34,7 @@ Every run produces a version 6 policy at `.issue-pilot/capabilities/<issue-key>.
 
 Policy files are accepted only from the matching managed workspace and must not be readable by group or other users. Repository paths must remain below that workspace. Existing targets are canonicalized with `realpath`; symlink escapes and writes to Git metadata are rejected.
 
-Issue type determines code mutation access. `incident`, `request`, and `smart_analysis` may use `repository_edit`/`repository_write` at the repository roots attached to the selected service. `question` sessions are entirely code-read-only. Configuration and database tools become active only when at least one selected deployment grants the corresponding capability.
+Environment and issue type jointly determine code mutation access. Production and test deployments always use freshly fetched detached baselines: they create no issue branch and expose repository roots as read-only, so pi may investigate causes and generate SQL for human review but cannot modify code. Development environments accept only `incident` and `request` issues: `incident` receives a `hotfix/<issue-key>` branch and `request` receives a `feature/<issue-key>` branch. The API rejects development `question` and `smart_analysis` issues. Configuration, database, SLS, and browser tools become active only when the selected deployment grants the corresponding capability.
 
 The Runner includes a policy hash in the PTY binding. A policy change invalidates the old binding, so a retained process cannot silently keep stale permissions.
 
@@ -67,11 +67,12 @@ External systems are exposed as typed pi extension tools rather than shell acces
 - `configuration_read`: resolves every repository granted to the selected service, discovers application scopes in each frozen repository revision, follows repository-configured Nacos imports, and returns sanitized summaries or focused property-prefix results.
 - `database_read`: validates one bounded read-only SQL statement, searches every discovered configuration scope in the selected service repositories, follows repository-configured Nacos imports, requires exactly one resolved datasource, and executes through a disposable MySQL client.
 - `sls_read`: invokes only the local `aliyun sls get-logs` command with the owner-only local profile. It restricts project/logstore syntax, query length, time windows to 24 hours, results to 100 rows, execution to 30 seconds, and sanitized output to 50 KiB. No general Aliyun CLI command is exposed.
+- `browser_use`: runs bounded declarative Playwright actions in one disposable container against only the selected deployment origin. The policy contains the origin and deployment ID but no username or password. Credentials are reloaded from the owner-only database into a temporary `0600` file, mounted read-only, and removed after the call. Cross-origin requests, arbitrary JavaScript, downloads, popups, and persistent browser state are blocked.
 - `node_project_command`: runs a fixed Node action in a pinned disposable container.
 - `maven_project_command`: runs a fixed Maven action in a pinned disposable Java 8 container with an issue-isolated cache.
 - `repository_status`: exposes only scoped local `git status` and `git diff` operations.
 
-Nacos, MySQL, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
+Nacos, MySQL, Playwright, Node, and Maven containers use `--rm`, dropped capabilities, `no-new-privileges`, bounded timeouts, and narrow mounts. Build containers have no network and mount an ephemeral copy of one granted repository; build scripts never receive a writable mount of the managed worktree. No capability tool runs as a persistent service.
 
 Configuration reads report repository/Nacos sources and missing targets separately. Nacos origins are taken from frozen service configuration without a host allowlist; URL structure is still validated and access remains bounded to read-only config retrieval. Database resolution fails explicitly when the selected service has no datasource or resolves more than one distinct datasource; pi must investigate the repository configuration rather than guessing. Temporary profiles and database password files are owner-only and removed after execution.
 
@@ -82,7 +83,7 @@ Database results are returned verbatim but bounded by row, field, string, and to
 A created issue binds exactly one service to one fixed environment. The Runner:
 
 1. Resolves all repositories attached to the selected service.
-2. Fetches repositories into a shared cache and creates issue-specific Git worktrees.
+2. Fetches the latest configured remote branch into a shared cache and creates issue-specific Git worktrees. Production/test and non-mutating development issues use detached baselines; development incidents and requests create prefixed local branches.
 3. Freezes repository commits and writes the issue execution policy.
 4. Creates or resumes one persistent pi session.
 5. Starts the locked interactive pi CLI and injects the issue prompt through the hidden internal queue.

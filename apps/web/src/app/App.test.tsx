@@ -23,6 +23,7 @@ vi.mock("../data/client", async (importOriginal) => {
       { key: "configuration_read", label: "配置读取", description: "读取配置" },
       { key: "database_read", label: "数据库读取", description: "读取数据库" },
       { key: "sls_read", label: "日志读取", description: "读取 SLS 日志" },
+      { key: "browser_use", label: "浏览器操作", description: "使用 Playwright" },
     ],
     services: [{
       id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", scope: "global", environmentIds: ["env-test"],
@@ -43,6 +44,8 @@ vi.mock("../data/client", async (importOriginal) => {
       return structuredClone(comment);
     },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
+    fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
+    updateService: vi.fn(async () => undefined),
   };
 });
 
@@ -58,6 +61,12 @@ describe("issue pilot workspace", () => {
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
     expect(screen.queryByText("生产")).toBeNull();
     expect(screen.getByRole("region", { name: "ISSUE-0042 pi 终端" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
+    const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
+    await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());
+    expect(within(previewDialog).getByRole("button", { name: "复制文字" })).toBeTruthy();
+    fireEvent.click(within(previewDialog).getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "existing.csv" })).toBeNull());
     const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
     fireEvent.input(commentInput, { target: { value: "**供其他用户查看的备注**" } });
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "评论编辑模式" })).getByRole("radio", { name: "预览" }));
@@ -129,18 +138,29 @@ describe("issue pilot workspace", () => {
     const configurationCapability = [...serviceDialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"][value="configuration_read"]')].find((input) => input.checked)!;
     const databaseCapability = [...serviceDialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"][value="database_read"]')].find((input) => input.checked)!;
     const slsCapability = serviceDialog.querySelector<HTMLInputElement>('input[type="checkbox"][value="sls_read"]')!;
+    const browserCapability = serviceDialog.querySelector<HTMLInputElement>('input[type="checkbox"][value="browser_use"]')!;
     expect(configurationCapability.checked).toBe(true);
     expect(databaseCapability.checked).toBe(true);
     fireEvent.click(configurationCapability);
     expect(configurationCapability.checked).toBe(false);
     expect(databaseCapability.checked).toBe(true);
-    fireEvent.click(slsCapability);
-    const slsProject = await waitFor(() => screen.getByLabelText("SLS Project 1") as HTMLInputElement);
-    const slsLogstore = screen.getByLabelText("SLS Logstore 1") as HTMLInputElement;
-    fireEvent.input(slsProject, { target: { value: "xhgj-zysys-test" } });
-    fireEvent.input(slsLogstore, { target: { value: "srm" } });
-    expect(slsProject.value).toBe("xhgj-zysys-test");
-    expect(slsLogstore.value).toBe("srm");
+    expect(slsCapability.checked).toBe(false);
+    fireEvent.click(browserCapability);
+    const serviceAddress = await waitFor(() => screen.getByLabelText("服务地址 1") as HTMLInputElement);
+    const serviceAccount = screen.getByLabelText("服务账号 1") as HTMLInputElement;
+    const servicePassword = screen.getByLabelText("服务密码 1") as HTMLInputElement;
+    fireEvent.input(serviceAddress, { target: { value: "https://srm.example.test/admin/login" } });
+    fireEvent.input(serviceAccount, { target: { value: "operator" } });
+    fireEvent.input(servicePassword, { target: { value: "secret" } });
+    expect(servicePassword.type).toBe("password");
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
+    const client = await import("../data/client");
+    await waitFor(() => {
+      const alert = within(serviceDialog).queryByRole("alert");
+      if (alert) throw new Error(alert.textContent ?? "service save failed");
+      expect(client.updateService).toHaveBeenCalled();
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
 
   });
 });

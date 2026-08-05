@@ -18,7 +18,7 @@ export const subjects = sqliteTable("subjects", {
 export const environments = sqliteTable("environments", {
   id: id(), organizationId: text("organization_id").notNull(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }),
   scope: text("scope", { enum: ["global", "personal"] }).notNull(), key: text("key").notNull(), name: text("name").notNull(),
-  kind: text("kind", { enum: ["production", "test"] }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
+  kind: text("kind", { enum: ["production", "test", "development"] }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
 }, (table) => [
   index("environments_org_scope_idx").on(table.organizationId, table.scope),
   uniqueIndex("environments_owner_key_unique").on(table.organizationId, table.scope, table.ownerSubject, table.key),
@@ -42,7 +42,7 @@ export const serviceDeployments = sqliteTable("service_deployments", {
 
 export const deploymentCapabilities = sqliteTable("deployment_capabilities", {
   deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id, { onDelete: "cascade" }),
-  capability: text("capability", { enum: ["configuration_read", "database_read", "sls_read"] }).notNull(), ...timestamps,
+  capability: text("capability", { enum: ["configuration_read", "database_read", "sls_read", "browser_use"] }).notNull(), ...timestamps,
 }, (table) => [uniqueIndex("deployment_capability_unique").on(table.deploymentId, table.capability)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {

@@ -41,7 +41,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const configurationResponse = await app.inject({ method: "GET", url: "/api/config" });
     assert.equal(configurationResponse.statusCode, 200);
     const configuredEnvironments = (await json(configurationResponse)).environments as Array<{ key: string; name: string }>;
-    assert.deepEqual(configuredEnvironments.map((environment) => environment.key).sort(), ["production", "test"]);
+    assert.deepEqual(configuredEnvironments.map((environment) => environment.key).sort(), ["development", "production", "test"]);
     assert.equal((await app.inject({ method: "POST", url: "/api/environments", payload: { key: "staging", name: "Staging" } })).statusCode, 404);
     assert.equal((await app.inject({ method: "PATCH", url: "/api/environments/test", payload: { name: "Changed" } })).statusCode, 404);
     assert.equal((await app.inject({ method: "DELETE", url: "/api/environments/test" })).statusCode, 404);
@@ -58,7 +58,10 @@ test("configuration and issue API preserves relational integrity", async () => {
           name: service.name,
           description: `${service.name} service`,
           repositories: service.repositoryUrls.map((url, index) => ({ kind: index === 0 ? "frontend" : "backend", url })),
-          deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [] }],
+          deployments: [
+            { environmentKey: "test", baseBranch: "main", capabilities: [] },
+            ...(service.key === "beta" ? [{ environmentKey: "development", baseBranch: "develop", capabilities: [] }] : []),
+          ],
         },
       });
       assert.equal(response.statusCode, 201, response.body);
@@ -111,6 +114,23 @@ test("configuration and issue API preserves relational integrity", async () => {
     });
     assert.equal(invalidPriority.statusCode, 400);
     assert.equal((await json(invalidPriority)).error, "invalid_priority");
+
+    const invalidDevelopmentType = await app.inject({
+      method: "POST",
+      url: "/api/issues",
+      payload: {
+        title: "Development question",
+        description: "",
+        priority: "p2",
+        type: "question",
+        environmentKey: "development",
+        serviceKey: "beta",
+        assigneeSubject: null,
+        ccSubjects: [],
+      },
+    });
+    assert.equal(invalidDevelopmentType.statusCode, 400);
+    assert.equal((await json(invalidDevelopmentType)).error, "invalid_issue_type_for_environment");
     assert.deepEqual(await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)), []);
 
     const createdResponse = await app.inject({
@@ -216,16 +236,17 @@ test("configuration and issue API preserves relational integrity", async () => {
         name: "Alpha renamed",
         description: "multiple repositories",
         repositories: [{ id: retainedRepository.id, kind: "frontend", url: retainedRepository.url }, { kind: "backend", url: "https://example.test/alpha-extra.git" }],
-        deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["configuration_read"] }],
+        deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["configuration_read", "browser_use"], browser: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", password: "deployment-secret" } }],
       },
     });
     assert.equal(repositoryUpdate.statusCode, 200, repositoryUpdate.body);
-    const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[] }>; repositories: Array<{ id: string; kind: string; url: string }> }> };
+    const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[]; browser: { baseUrl: string; username: string; passwordConfigured: boolean } | null }>; repositories: Array<{ id: string; kind: string; url: string }> }> };
     const updatedAlpha = afterRepositoryUpdate.services.find((service) => service.key === "alpha")!;
     assert.equal(updatedAlpha.name, "Alpha renamed");
     assert.equal(updatedAlpha.repositories.find((repository) => repository.url === retainedRepository.url)?.id, retainedRepository.id);
     assert.deepEqual(updatedAlpha.repositories.map((repository) => repository.url).sort(), ["https://example.test/alpha-extra.git", "https://example.test/alpha.git"]);
-    assert.deepEqual(updatedAlpha.deployments.map((deployment) => ({ baseBranch: deployment.baseBranch, capabilities: deployment.capabilities })), [{ baseBranch: "main", capabilities: ["configuration_read"] }]);
+    assert.deepEqual(updatedAlpha.deployments.map((deployment) => ({ baseBranch: deployment.baseBranch, capabilities: deployment.capabilities, browser: deployment.browser })), [{ baseBranch: "main", capabilities: ["configuration_read", "browser_use"], browser: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", passwordConfigured: true } }]);
+    assert.doesNotMatch(JSON.stringify(afterRepositoryUpdate), /deployment-secret/);
 
     const duplicateRepository = await app.inject({
       method: "PATCH",
@@ -291,6 +312,17 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(detailWithAttachment.attachments.length, 1);
     assert.equal("objectKey" in detailWithAttachment.attachments[0]!, false);
     assert.equal("scanStatus" in detailWithAttachment.attachments[0]!, false);
+    const attachmentPreview = await app.inject({ method: "GET", url: `/api/issues/${created.id}/attachments/${uploaded[0]!.id}` });
+    assert.equal(attachmentPreview.statusCode, 200, attachmentPreview.body);
+    assert.equal(attachmentPreview.body, attachmentContent);
+    assert.match(String(attachmentPreview.headers["content-type"]), /^text\/plain/);
+    assert.match(String(attachmentPreview.headers["content-disposition"]), /^inline;/);
+    assert.equal(attachmentPreview.headers["cache-control"], "private, no-store");
+    assert.equal((await app.inject({ method: "GET", url: `/api/issues/${created.id}/attachments/missing` })).statusCode, 404);
+    const attachmentPath = join(attachmentDirectory, attachmentFiles[0]!);
+    await writeFile(attachmentPath, "diagnostic outpvt\n", "utf8");
+    assert.equal((await app.inject({ method: "GET", url: `/api/issues/${created.id}/attachments/${uploaded[0]!.id}` })).statusCode, 500);
+    await writeFile(attachmentPath, attachmentContent, "utf8");
     const syncResponse = await app.inject({ method: "POST", url: `/api/issues/${created.id}/sync` });
     assert.equal(syncResponse.statusCode, 202, syncResponse.body);
     assert.match(runner.messages.at(-1) ?? "", /Issue metadata was updated/);
@@ -341,6 +373,21 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal((await json(invalidServiceUpdate)).error, "invalid_repository");
     const configuration = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
     assert.equal(configuration.services.find((service) => service.key === "alpha")?.name, "Alpha renamed");
+
+    const developmentIssue = await app.inject({
+      method: "POST",
+      url: "/api/issues",
+      payload: { title: "Development defect", description: "", priority: "p2", type: "incident", environmentKey: "development", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
+    });
+    assert.equal(developmentIssue.statusCode, 201, developmentIssue.body);
+    const developmentIssueKey = String((await json(developmentIssue)).id);
+    const invalidDevelopmentUpdate = await app.inject({
+      method: "PATCH",
+      url: `/api/issues/${developmentIssueKey}`,
+      payload: { title: "Development question", description: "", priority: "p2", type: "smart_analysis", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
+    });
+    assert.equal(invalidDevelopmentUpdate.statusCode, 400);
+    assert.equal((await json(invalidDevelopmentUpdate)).error, "invalid_issue_type_for_environment");
 
     const interrupted = openDatabase(join(root, "issues.db"));
     await interrupted.db.transaction(async (transaction) => {

@@ -67,7 +67,7 @@ export class Runner {
   }
 
   async invalidatePolicy(issueId: string): Promise<boolean> {
-    return this.ptys.releaseDetached(issueId);
+    return this.ptys.release(issueId);
   }
 
   async getTerminalTranscript(issueId: string) {
@@ -117,7 +117,12 @@ export class Runner {
       .where(eq(services.id, issue.serviceId))
       .limit(1);
     if (!service) throw new Error("issue_service_deployment_not_found");
-    if (service.environmentKind !== "production" && service.environmentKind !== "test") throw new Error("unsupported_issue_environment_kind");
+    if (service.environmentKind !== "production" && service.environmentKind !== "test" && service.environmentKind !== "development") throw new Error("unsupported_issue_environment_kind");
+    const worktreeMode = service.environmentKind === "development" && issue.type === "incident"
+      ? "hotfix" as const
+      : service.environmentKind === "development" && issue.type === "request"
+        ? "feature" as const
+        : "detached" as const;
 
     const [repositoryRows, existingRepositoryRows, capabilityRows, attachmentRows] = await Promise.all([
       this.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
@@ -142,8 +147,9 @@ export class Runner {
         issueId: issue.key,
         repositoryId: repository.id,
         url: repository.url,
-        baseBranch: existingRepository?.baseBranch ?? service.baseBranch,
-        ...(existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
+        baseBranch: service.baseBranch,
+        mode: worktreeMode,
+        ...(worktreeMode !== "detached" && existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
         ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
         ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
       });
@@ -172,9 +178,11 @@ export class Runner {
     const sessionDirectory = path.resolve(this.stateRoot, "sessions", issue.key);
     const capabilityDirectory = path.resolve(this.stateRoot, "capabilities");
     await mkdir(workspaceRoot, { recursive: true });
-    await mkdir(sessionDirectory, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+    await chmod(sessionDirectory, 0o700);
     await mkdir(capabilityDirectory, { recursive: true, mode: 0o700 });
     const slsScope = this.slsScope(service.deploymentConfig);
+    const browserScope = this.browserScope(service.deploymentId, service.deploymentConfig);
     const policy = createIssuePolicy({
       issueKey: issue.key,
       issueType: issue.type,
@@ -186,7 +194,8 @@ export class Runner {
         environmentKind: service.environmentKind,
         capabilities: capabilityRows.map((row) => row.capability),
         ...(slsScope ? { sls: slsScope } : {}),
-        repositories: prepared.map(({ workspace }) => ({ codeAccess: "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
+        ...(browserScope ? { browser: browserScope } : {}),
+        repositories: prepared.map(({ workspace }) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
       },
     });
     const serializedPolicy = JSON.stringify(policy);
@@ -222,7 +231,6 @@ export class Runner {
     if (!provider || !model) throw new Error("issue_pilot_model_not_configured");
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_create_agent_session");
-    await chmod(sessionFile, 0o600);
     await this.db.insert(agentSessions).values({
       issueId: issue.id,
       piSessionId: manager.getSessionId(),
@@ -232,10 +240,10 @@ export class Runner {
       target: agentSessions.issueId,
       set: { piSessionId: manager.getSessionId(), sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
-    await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, branchCreated: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, branchCreated: worktreeMode !== "detached", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), notInArray(issues.status, ["resolved", "closed"])));
 
-    const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch, path: workspace.workspacePath }));
+    const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch ?? workspace.baseBranch, path: workspace.workspacePath, readOnly: worktreeMode === "detached" }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, latestMessage)
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(latestMessage !== undefined ? { latestUpdate: latestMessage } : {}) });
@@ -247,6 +255,7 @@ export class Runner {
       model,
       thinking: this.thinkingLevel(process.env.ISSUE_PILOT_REASONING ?? process.env.PI_REASONING_LEVEL),
     });
+    await chmod(sessionFile, 0o600);
     await this.appendAgentEvent(issue.id, "agent", "pi CLI 已完成当前处理并等待交互");
 
     const completedManager = SessionManager.open(sessionFile, sessionDirectory, workspaceRoot);
@@ -268,6 +277,17 @@ export class Runner {
     const scope = value as Record<string, unknown>;
     if (typeof scope.project !== "string" || !Array.isArray(scope.logstores) || !scope.logstores.every((entry) => typeof entry === "string")) return undefined;
     return { project: scope.project, logstores: scope.logstores as string[] };
+  }
+
+  private browserScope(deploymentId: string, config: Record<string, unknown>): { deploymentId: string; baseUrl: string } | undefined {
+    const value = config.browser;
+    if (!value || typeof value !== "object") return undefined;
+    const baseUrl = (value as Record<string, unknown>).baseUrl;
+    if (typeof baseUrl !== "string") return undefined;
+    let url: URL;
+    try { url = new URL(baseUrl); } catch { return undefined; }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) return undefined;
+    return { deploymentId, baseUrl: url.href };
   }
 
   private redactAssistantText(text: string): string {

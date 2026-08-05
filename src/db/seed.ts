@@ -21,7 +21,7 @@ try {
     });
   }
 
-  async function ensureEnvironment(key: string, name: string, kind: "production" | "test") {
+  async function ensureEnvironment(key: string, name: string, kind: "production" | "test" | "development") {
     const existing = await db.select().from(environments).where(and(
       eq(environments.organizationId, organizationId),
       eq(environments.scope, "global"),
@@ -40,6 +40,7 @@ try {
     return inserted[0]!;
   }
 
+  const development = await ensureEnvironment("development", "开发", "development");
   const production = await ensureEnvironment("production", "正式", "production");
   const test = await ensureEnvironment("test", "测试", "test");
 
@@ -60,6 +61,7 @@ try {
   }
 
   const deployments = await db.insert(serviceDeployments).values([
+    { serviceId: service!.id, environmentId: development.id, baseBranch: "develop", config: {} },
     { serviceId: service!.id, environmentId: production.id, baseBranch: "main", config: {} },
     { serviceId: service!.id, environmentId: test.id, baseBranch: "develop", config: {} },
   ]).onConflictDoNothing().returning();
@@ -72,7 +74,7 @@ try {
 
   console.log(JSON.stringify({
     organizationId,
-    environments: [production.name, test.name],
+    environments: [development.name, production.name, test.name],
     service: service!.name,
     subject: userSubject ?? null,
   }, null, 2));
