@@ -3,9 +3,9 @@ import path from "node:path";
 
 import { normalizeIssueKey } from "../shared/issue-key.ts";
 
-export const POLICY_VERSION = 5 as const;
+export const POLICY_VERSION = 6 as const;
 
-export type ServiceCapabilityName = "configuration_read" | "database_read";
+export type ServiceCapabilityName = "configuration_read" | "database_read" | "sls_read";
 export type IssueType = "incident" | "request" | "question" | "smart_analysis";
 export type PolicyToolName =
   | "repository_read"
@@ -17,6 +17,7 @@ export type PolicyToolName =
   | "attachment_read"
   | "configuration_read"
   | "database_read"
+  | "sls_read"
   | "node_project_command"
   | "maven_project_command"
   | "repository_status";
@@ -41,6 +42,7 @@ export interface ServiceGrant {
   environmentKey: string;
   environmentKind: "production" | "test";
   capabilities: ServiceCapabilityName[];
+  sls?: { project: string; logstores: string[] };
   repositories: RepositoryGrant[];
 }
 
@@ -63,10 +65,10 @@ export interface IssuePolicy {
 const READ_TOOLS: PolicyToolName[] = ["repository_read", "repository_grep", "repository_find", "repository_list"];
 const WRITE_ISSUE_TYPES = new Set<IssueType>(["incident", "request", "smart_analysis"]);
 const ISSUE_TYPES = new Set<IssueType>(["incident", "request", "question", "smart_analysis"]);
-const CAPABILITIES = new Set<ServiceCapabilityName>(["configuration_read", "database_read"]);
+const CAPABILITIES = new Set<ServiceCapabilityName>(["configuration_read", "database_read", "sls_read"]);
 const POLICY_TOOLS = new Set<PolicyToolName>([
   ...READ_TOOLS,
-  "repository_edit", "repository_write", "attachment_read", "configuration_read", "database_read", "node_project_command", "maven_project_command", "repository_status",
+  "repository_edit", "repository_write", "attachment_read", "configuration_read", "database_read", "sls_read", "node_project_command", "maven_project_command", "repository_status",
 ]);
 
 function isString(value: unknown): value is string {
@@ -86,6 +88,7 @@ export function createIssuePolicy(input: {
   service: ServiceGrant;
 }): IssuePolicy {
   const capabilities = new Set(input.service.capabilities);
+  if (capabilities.has("sls_read") !== Boolean(input.service.sls)) throw new Error("invalid_sls_service_scope");
   const attachments = input.attachments ?? [];
   const codeMutationAllowed = WRITE_ISSUE_TYPES.has(input.issueType) && input.service.repositories.some((repository) => repository.codeAccess === "write");
   const tools: PolicyToolName[] = [
@@ -94,6 +97,7 @@ export function createIssuePolicy(input: {
     ...(codeMutationAllowed ? ["repository_edit", "repository_write"] as PolicyToolName[] : []),
     ...(capabilities.has("configuration_read") ? ["configuration_read"] as PolicyToolName[] : []),
     ...(capabilities.has("database_read") ? ["database_read"] as PolicyToolName[] : []),
+    ...(capabilities.has("sls_read") ? ["sls_read"] as PolicyToolName[] : []),
     "node_project_command",
     "maven_project_command",
     "repository_status",
@@ -108,6 +112,7 @@ export function createIssuePolicy(input: {
     service: {
       ...input.service,
       capabilities: [...new Set(input.service.capabilities)].sort(),
+      ...(input.service.sls ? { sls: { project: input.service.sls.project, logstores: [...new Set(input.service.sls.logstores)].sort() } } : {}),
       repositories: input.service.repositories.map((repository) => ({ ...repository, repositoryPath: path.resolve(repository.repositoryPath) })),
     },
   };
@@ -145,6 +150,13 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
   const value = parsed.service as Record<string, unknown>;
   if (!isString(value.serviceKey) || !isString(value.environmentKey) || (value.environmentKind !== "production" && value.environmentKind !== "test")) throw new Error("invalid_issue_policy_file");
   if (!Array.isArray(value.capabilities) || !value.capabilities.every((entry) => CAPABILITIES.has(entry as ServiceCapabilityName))) throw new Error("invalid_issue_policy_file");
+  const sls = value.sls;
+  if (sls !== undefined) {
+    if (!sls || typeof sls !== "object") throw new Error("invalid_issue_policy_file");
+    const scope = sls as Record<string, unknown>;
+    if (!isString(scope.project) || !Array.isArray(scope.logstores) || !scope.logstores.length || !scope.logstores.every(isString)) throw new Error("invalid_issue_policy_file");
+  }
+  if (value.capabilities.includes("sls_read") !== Boolean(sls)) throw new Error("invalid_issue_policy_file");
   if (!Array.isArray(value.repositories) || !value.repositories.length) throw new Error("invalid_issue_policy_file");
   const repositories = value.repositories.map((candidate): RepositoryGrant => {
     if (!candidate || typeof candidate !== "object") throw new Error("invalid_issue_policy_file");
@@ -164,6 +176,7 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
       environmentKey: value.environmentKey,
       environmentKind: value.environmentKind,
       capabilities: value.capabilities as ServiceCapabilityName[],
+      ...(sls ? { sls: sls as { project: string; logstores: string[] } } : {}),
       repositories,
     },
   });
@@ -173,6 +186,11 @@ export async function loadIssuePolicy(cwd: string, stateRoot = process.env.ISSUE
 
 export function assertToolGranted(policy: IssuePolicy, toolName: string): void {
   if (!policy.tools.includes(toolName as PolicyToolName)) throw new Error("tool_not_granted_for_issue");
+}
+
+export function assertSlsGranted(policy: IssuePolicy, project: string, logstore: string): void {
+  assertToolGranted(policy, "sls_read");
+  if (policy.service.sls?.project !== project || !policy.service.sls.logstores.includes(logstore)) throw new Error("sls_scope_not_granted_for_service");
 }
 
 export function grantedRepositories(policy: IssuePolicy, capability?: ServiceCapabilityName): GrantedRepository[] {

@@ -15,8 +15,10 @@ import { Type } from "typebox";
 
 import { readConfiguration, readDatabase } from "../evidence/capabilities.ts";
 import { readAttachment } from "./attachment.ts";
+import { readSlsLogs } from "../evidence/sls.ts";
 import { runMavenProject, runNodeProject } from "../evidence/toolchains.ts";
 import {
+  assertSlsGranted,
   assertToolGranted,
   authorizeWorkspacePath,
   grantedRepositories,
@@ -86,6 +88,8 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event, context) => {
     const policy = await loadIssuePolicy(context.cwd);
     const writable = policy.tools.includes("repository_write");
+    const now = new Date();
+    const nowSeconds = Math.floor(now.getTime() / 1000);
     const writableRepositories = policy.service.repositories.filter((repository) => repository.codeAccess === "write").length;
     return {
       systemPrompt: [
@@ -101,6 +105,13 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
         "- Call external capability tools only when the current investigation needs that evidence; an active tool is available, not pre-executed.",
         "- When the user asks for current, effective, or environment-specific application configuration, call configuration_read. It resolves frozen repository files and repository-configured Nacos imports; use scope and property_prefix for focused values, and do not answer from a YAML file alone.",
         "- For database evidence, call database_read. It resolves the selected service's repositories, frozen configuration, Nacos imports, and datasource before running the bounded read-only query.",
+        ...(policy.tools.includes("sls_read") ? [
+          "- For application logs, call sls_read only when it is active. It executes a bounded read-only SLS query through the local Aliyun CLI; never invoke Aliyun CLI through another tool.",
+          `- Current SLS reference time is ${now.toISOString()} (${nowSeconds} Unix seconds). For real-time or recent evidence, anchor the newest query window at this time rather than at the issue creation date.`,
+          "- One sls_read call covers at most 24 hours. For a longer requested range, query contiguous windows that cover the entire range through its intended end; do not report zero results after stopping before the current day.",
+          "- For a trace ID without an explicit event time, call sls_read with trace_id and omit from/to; the tool will use the current trailing 24-hour window and preserve the complete UUID. Supply from/to only when the user provided an event time or when continuing older contiguous windows. Do not put a trace ID in query or shorten it to a prefix.",
+          "- Before concluding that logs are absent, verify that the actual from/to Unix timestamps include the event time and summarize the exact covered interval.",
+        ] : []),
         ...(policy.attachments.length ? ["- The issue has explicitly granted attachments. Call attachment_read with an attachment ID only when its contents are relevant."] : []),
       ].join("\n"),
     };
@@ -182,6 +193,28 @@ export default function issuePilotExtension(pi: ExtensionAPI): void {
       const policy = await loadIssuePolicy(context.cwd);
       assertToolGranted(policy, "database_read");
       return readDatabase(pi, context.cwd, grantedRepositories(policy, "database_read"), input, signal);
+    },
+    ...HIDDEN_TOOL_RENDERING,
+  });
+
+  pi.registerTool({
+    name: "sls_read",
+    label: "Read SLS Logs",
+    description: "Run one immediate, read-only Simple Log Service query through the local Aliyun CLI. For a trace lookup, pass the complete UUID in trace_id and omit query. If from/to are omitted, trace_id uses the current trailing 24 hours while a general query uses the current trailing 15 minutes. Explicit from/to are Unix seconds and define one window of at most 24 hours; split longer historical ranges into contiguous calls. At most 100 rows are returned.",
+    parameters: Type.Object({
+      project: Type.String({ maxLength: 63 }),
+      logstore: Type.String({ maxLength: 63 }),
+      from: Type.Optional(Type.Integer({ minimum: 0 })),
+      to: Type.Optional(Type.Integer({ minimum: 1 })),
+      query: Type.Optional(Type.String({ maxLength: 4096 })),
+      trace_id: Type.Optional(Type.String({ maxLength: 36 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
+    async execute(_id, raw, signal, _update, context) {
+      const policy = await loadIssuePolicy(context.cwd);
+      const input = raw as { project: string; logstore: string; from?: number; to?: number; query?: string; trace_id?: string; limit?: number };
+      assertSlsGranted(policy, input.project, input.logstore);
+      return readSlsLogs(pi, input, signal);
     },
     ...HIDDEN_TOOL_RENDERING,
   });

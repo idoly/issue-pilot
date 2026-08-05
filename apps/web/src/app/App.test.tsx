@@ -22,6 +22,7 @@ vi.mock("../data/client", async (importOriginal) => {
     capabilityCatalog: [
       { key: "configuration_read", label: "配置读取", description: "读取配置" },
       { key: "database_read", label: "数据库读取", description: "读取数据库" },
+      { key: "sls_read", label: "日志读取", description: "读取 SLS 日志" },
     ],
     services: [{
       id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", scope: "global", environmentIds: ["env-test"],
@@ -127,11 +128,19 @@ describe("issue pilot workspace", () => {
     expect(branchInput.value).toBe("release/test");
     const configurationCapability = [...serviceDialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"][value="configuration_read"]')].find((input) => input.checked)!;
     const databaseCapability = [...serviceDialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"][value="database_read"]')].find((input) => input.checked)!;
+    const slsCapability = serviceDialog.querySelector<HTMLInputElement>('input[type="checkbox"][value="sls_read"]')!;
     expect(configurationCapability.checked).toBe(true);
     expect(databaseCapability.checked).toBe(true);
     fireEvent.click(configurationCapability);
     expect(configurationCapability.checked).toBe(false);
     expect(databaseCapability.checked).toBe(true);
+    fireEvent.click(slsCapability);
+    const slsProject = await waitFor(() => screen.getByLabelText("SLS Project 1") as HTMLInputElement);
+    const slsLogstore = screen.getByLabelText("SLS Logstore 1") as HTMLInputElement;
+    fireEvent.input(slsProject, { target: { value: "xhgj-zysys-test" } });
+    fireEvent.input(slsLogstore, { target: { value: "srm" } });
+    expect(slsProject.value).toBe("xhgj-zysys-test");
+    expect(slsLogstore.value).toBe("srm");
 
   });
 });

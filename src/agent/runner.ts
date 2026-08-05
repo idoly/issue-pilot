@@ -108,6 +108,7 @@ export class Runner {
       description: services.description,
       deploymentId: serviceDeployments.id,
       baseBranch: serviceDeployments.baseBranch,
+      deploymentConfig: serviceDeployments.config,
       environmentKey: environments.key,
       environmentKind: environments.kind,
     }).from(services)
@@ -173,6 +174,7 @@ export class Runner {
     await mkdir(workspaceRoot, { recursive: true });
     await mkdir(sessionDirectory, { recursive: true });
     await mkdir(capabilityDirectory, { recursive: true, mode: 0o700 });
+    const slsScope = this.slsScope(service.deploymentConfig);
     const policy = createIssuePolicy({
       issueKey: issue.key,
       issueType: issue.type,
@@ -183,6 +185,7 @@ export class Runner {
         environmentKey: service.environmentKey,
         environmentKind: service.environmentKind,
         capabilities: capabilityRows.map((row) => row.capability),
+        ...(slsScope ? { sls: slsScope } : {}),
         repositories: prepared.map(({ workspace }) => ({ codeAccess: "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
       },
     });
@@ -257,6 +260,14 @@ export class Runner {
       await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
       await transaction.update(issues).set({ status: "pending", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), eq(issues.status, "in_progress")));
     });
+  }
+
+  private slsScope(config: Record<string, unknown>): { project: string; logstores: string[] } | undefined {
+    const value = config.sls;
+    if (!value || typeof value !== "object") return undefined;
+    const scope = value as Record<string, unknown>;
+    if (typeof scope.project !== "string" || !Array.isArray(scope.logstores) || !scope.logstores.every((entry) => typeof entry === "string")) return undefined;
+    return { project: scope.project, logstores: scope.logstores as string[] };
   }
 
   private redactAssistantText(text: string): string {

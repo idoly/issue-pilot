@@ -21,7 +21,7 @@ An issue selects exactly one service. Runner prepares all repositories attached 
 
 ## Issue Execution Policy
 
-Every run produces a version 5 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
+Every run produces a version 6 policy at `.issue-pilot/capabilities/<issue-key>.json`. The policy binds:
 
 - one normalized issue key and issue type;
 - the exact workspace root;
@@ -66,6 +66,7 @@ External systems are exposed as typed pi extension tools rather than shell acces
 - `attachment_read`: reads one attachment explicitly frozen into the current issue policy by ID. UTF-8 text is bounded to 256 KiB; PNG, JPEG, WebP, and GIF images are bounded to 5 MiB. Paths, file modes, sizes, and SHA-256 hashes are revalidated on every read.
 - `configuration_read`: resolves every repository granted to the selected service, discovers application scopes in each frozen repository revision, follows repository-configured Nacos imports, and returns sanitized summaries or focused property-prefix results.
 - `database_read`: validates one bounded read-only SQL statement, searches every discovered configuration scope in the selected service repositories, follows repository-configured Nacos imports, requires exactly one resolved datasource, and executes through a disposable MySQL client.
+- `sls_read`: invokes only the local `aliyun sls get-logs` command with the owner-only local profile. It restricts project/logstore syntax, query length, time windows to 24 hours, results to 100 rows, execution to 30 seconds, and sanitized output to 50 KiB. No general Aliyun CLI command is exposed.
 - `node_project_command`: runs a fixed Node action in a pinned disposable container.
 - `maven_project_command`: runs a fixed Maven action in a pinned disposable Java 8 container with an issue-isolated cache.
 - `repository_status`: exposes only scoped local `git status` and `git diff` operations.

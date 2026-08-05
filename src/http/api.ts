@@ -22,11 +22,13 @@ import { loadIssuePolicy } from "../pi/policy.ts";
 import { isIssueKey, normalizeIssueKey } from "../shared/issue-key.ts";
 import { PtySessions } from "../workspace/pty.ts";
 
-const CAPABILITIES = ["configuration_read", "database_read"] as const;
+const CAPABILITIES = ["configuration_read", "database_read", "sls_read"] as const;
 const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 const ISSUE_TYPES = ["incident", "request", "question", "smart_analysis"] as const;
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const REPOSITORY_KINDS = ["frontend", "backend"] as const;
+const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 type Capability = typeof CAPABILITIES[number];
 
 class ApiError extends Error {
@@ -63,6 +65,15 @@ function capabilities(value: unknown): Capability[] {
   const values = strings(value, "capabilities");
   if (values.some((entry) => !CAPABILITIES.includes(entry as Capability))) throw new ApiError(400, "invalid_capability");
   return [...new Set(values)] as Capability[];
+}
+
+function slsScope(value: unknown, required: boolean): { project: string; logstores: string[] } | undefined {
+  if (!required) return undefined;
+  const input = record(value);
+  const project = text(input.project, "sls_project", 63);
+  const logstores = [...new Set(strings(input.logstores, "sls_logstores", 20))];
+  if (!SLS_PROJECT.test(project) || !logstores.length || logstores.some((logstore) => !SLS_LOGSTORE.test(logstore))) throw new ApiError(400, "invalid_sls_scope");
+  return { project, logstores };
 }
 
 function choice<const Values extends readonly string[]>(value: unknown, name: string, values: Values): Values[number] {
@@ -233,13 +244,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       capabilityCatalog: [
         { key: "configuration_read", label: "配置读取", description: "按需合并冻结仓库配置、环境 profile 和批准的 Nacos 配置，并对敏感值脱敏。" },
         { key: "database_read", label: "数据库读取", description: "按需解析服务数据源，通过 MySQL 执行有行数限制的只读 SQL。" },
+        { key: "sls_read", label: "日志读取", description: "使用本机 Aliyun CLI 与本地凭据执行有时间窗和条数限制的 SLS 只读查询。" },
       ],
       services: serviceRows.map((service) => {
         const deployments = deploymentRows.filter((item) => item.serviceId === service.id);
         return {
           id: service.id, key: service.key, name: service.name, description: service.description, scope: service.scope,
           environmentIds: deployments.map((item) => item.environmentId),
-          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: capabilityRows.filter((capability) => capability.deploymentId === item.id).map((capability) => capability.capability) })),
+          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: capabilityRows.filter((capability) => capability.deploymentId === item.id).map((capability) => capability.capability), sls: record(item.config).sls ?? null })),
           repositories: repositoryRows.filter((item) => item.serviceId === service.id).map((item) => ({ id: item.id, kind: item.kind, url: item.url })),
         };
       }),
@@ -254,11 +266,15 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     })) : [];
     if (!repositoriesInput.length) throw new ApiError(400, "repository_required");
     if (new Set(repositoriesInput.map((repository) => repository.url)).size !== repositoriesInput.length) throw new ApiError(400, "duplicate_repository");
-    const deploymentsInput = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => ({
-      environmentKey: text(deployment.environmentKey, "environment_key", 100),
-      baseBranch: text(deployment.baseBranch, "base_branch", 255),
-      capabilities: capabilities(deployment.capabilities ?? []),
-    })) : [];
+    const deploymentsInput = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => {
+      const selectedCapabilities = capabilities(deployment.capabilities ?? []);
+      return {
+        environmentKey: text(deployment.environmentKey, "environment_key", 100),
+        baseBranch: text(deployment.baseBranch, "base_branch", 255),
+        capabilities: selectedCapabilities,
+        sls: slsScope(deployment.sls, selectedCapabilities.includes("sls_read")),
+      };
+    }) : [];
     if (new Set(deploymentsInput.map((deployment) => deployment.environmentKey)).size !== deploymentsInput.length) throw new ApiError(400, "duplicate_deployment_environment");
     const [existingRepositories, existingDeployments, environmentRows] = await Promise.all([
       database.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
@@ -294,8 +310,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         const environment = environmentsByKey.get(deploymentInput.environmentKey)!;
         const existing = existingByEnvironmentId.get(environment.id);
         const deployment = existing
-          ? (await transaction.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
-          : (await transaction.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config: {} }).returning())[0]!;
+          ? (await transaction.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config: deploymentInput.sls ? { sls: deploymentInput.sls } : {}, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
+          : (await transaction.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config: deploymentInput.sls ? { sls: deploymentInput.sls } : {} }).returning())[0]!;
         retainedDeploymentIds.add(deployment.id);
         await transaction.delete(deploymentCapabilities).where(eq(deploymentCapabilities.deploymentId, deployment.id));
         if (deploymentInput.capabilities.length) await transaction.insert(deploymentCapabilities).values(deploymentInput.capabilities.map((capability) => ({ deploymentId: deployment.id, capability })));

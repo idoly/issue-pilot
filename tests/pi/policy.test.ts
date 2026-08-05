@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { readAttachment } from "../../src/pi/attachment.ts";
 import {
+  assertSlsGranted,
   assertToolGranted,
   authorizeWorkspacePath,
   createIssuePolicy,
@@ -76,6 +77,27 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("freezes SLS project and Logstore grants into the issue policy", () => {
+  const policy = createIssuePolicy({
+    issueKey: "ISSUE-20260804-004",
+    issueType: "question",
+    workspaceRoot: "/tmp/issue-policy-sls",
+    service: {
+      serviceKey: "orders",
+      environmentKey: "test",
+      environmentKind: "test",
+      capabilities: ["sls_read"],
+      sls: { project: "orders-test", logstores: ["application"] },
+      repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-sls/repository", baseCommit: "a".repeat(40) }],
+    },
+  });
+  assert.equal(policy.tools.includes("sls_read"), true);
+  assert.doesNotThrow(() => assertSlsGranted(policy, "orders-test", "application"));
+  assert.throws(() => assertSlsGranted(policy, "other-project", "application"), /sls_scope_not_granted_for_service/);
+  const { sls: _sls, ...serviceWithoutSls } = policy.service;
+  assert.throws(() => createIssuePolicy({ ...policy, service: serviceWithoutSls }), /invalid_sls_service_scope/);
 });
 
 test("uses read-only code tools for non-mutating issue types", () => {

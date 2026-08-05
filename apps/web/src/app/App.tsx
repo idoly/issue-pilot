@@ -538,6 +538,7 @@ interface ServiceDeploymentDraft {
   environmentKey: string;
   baseBranch: string;
   capabilities: DeploymentCapability[];
+  sls?: { project: string; logstores: string[] };
 }
 
 function ServiceRepositoryEditorRow(props: {
@@ -568,8 +569,19 @@ function ServiceDeploymentEditorRow(props: {
   const [environmentKey, setEnvironmentKey] = createSignal(props.deployment.environmentKey, { ownedWrite: true });
   const [baseBranch, setBaseBranch] = createSignal(props.deployment.baseBranch, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<DeploymentCapability[]>([...props.deployment.capabilities], { ownedWrite: true });
-  const update = (change: Partial<ServiceDeploymentDraft>) => props.onChange({ environmentKey: environmentKey(), baseBranch: baseBranch(), capabilities: selectedCapabilities(), ...change });
-  return <div class="service-deployment-row"><label class="deployment-environment"><span>环境</span><Select aria-label={`部署环境 ${props.index + 1}`} value={environmentKey()} onChange={(value) => { const options = props.environmentOptions(); const selected = selectedChoice(value, options.map((environment) => environment.key)); if (selected) { setEnvironmentKey(selected); update({ environmentKey: selected }); } }} options={props.environmentOptions().map((environment) => ({ value: environment.key, label: environment.name }))} /></label><label class="deployment-branch"><span>分支</span><Input aria-label={`部署分支 ${props.index + 1}`} value={baseBranch()} onInput={(event) => { const next = event.currentTarget.value; setBaseBranch(next); update({ baseBranch: next }); }} /></label><div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-controls"><Checkbox.Group aria-label={`部署能力 ${props.index + 1}`} class="capability-checkboxes" value={selectedCapabilities()} onChange={(value) => { const selected = new Set(selectedStrings(value, selectedCapabilities())); const next = props.capabilityCatalog.filter((capability) => selected.has(capability.key)).map((capability) => capability.key); setSelectedCapabilities(next); update({ capabilities: next }); }} options={props.capabilityCatalog.map((capability) => ({ value: capability.key, label: capability.label }))} /><CapabilityDescriptions catalog={props.capabilityCatalog} /></div></div><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除部署${props.index + 1}`} aria-label={`删除部署${props.index + 1}`} onClick={props.onDelete} /></div>;
+  const [slsProject, setSlsProject] = createSignal(props.deployment.sls?.project ?? "", { ownedWrite: true });
+  const [slsLogstores, setSlsLogstores] = createSignal(props.deployment.sls?.logstores.join(", ") ?? "", { ownedWrite: true });
+  const sls = () => ({ project: slsProject().trim(), logstores: slsLogstores().split(",").map((value) => value.trim()).filter(Boolean) });
+  const update = (change: Partial<ServiceDeploymentDraft>) => props.onChange({ environmentKey: environmentKey(), baseBranch: baseBranch(), capabilities: selectedCapabilities(), ...(selectedCapabilities().includes("sls_read") ? { sls: sls() } : {}), ...change });
+  return (
+    <div class="service-deployment-row">
+      <label class="deployment-environment"><span>环境</span><Select aria-label={`部署环境 ${props.index + 1}`} value={environmentKey()} onChange={(value) => { const options = props.environmentOptions(); const selected = selectedChoice(value, options.map((environment) => environment.key)); if (selected) { setEnvironmentKey(selected); update({ environmentKey: selected }); } }} options={props.environmentOptions().map((environment) => ({ value: environment.key, label: environment.name }))} /></label>
+      <label class="deployment-branch"><span>分支</span><Input aria-label={`部署分支 ${props.index + 1}`} value={baseBranch()} onInput={(event) => { const next = event.currentTarget.value; setBaseBranch(next); update({ baseBranch: next }); }} /></label>
+      <div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-controls"><Checkbox.Group aria-label={`部署能力 ${props.index + 1}`} class="capability-checkboxes" value={selectedCapabilities()} onChange={(value) => { const selected = new Set(selectedStrings(value, selectedCapabilities())); const next = props.capabilityCatalog.filter((capability) => selected.has(capability.key)).map((capability) => capability.key); setSelectedCapabilities(next); update({ capabilities: next, ...(next.includes("sls_read") ? { sls: sls() } : {}) }); }} options={props.capabilityCatalog.map((capability) => ({ value: capability.key, label: capability.label }))} /><CapabilityDescriptions catalog={props.capabilityCatalog} /></div></div>
+      <Show when={selectedCapabilities().includes("sls_read")}><div class="deployment-sls"><label><span>SLS Project</span><Input aria-label={`SLS Project ${props.index + 1}`} value={slsProject()} onInput={(event) => { setSlsProject(event.currentTarget.value); update({ sls: sls() }); }} /></label><label><span>Logstore</span><Input aria-label={`SLS Logstore ${props.index + 1}`} placeholder="多个名称用逗号分隔" value={slsLogstores()} onInput={(event) => { setSlsLogstores(event.currentTarget.value); update({ sls: sls() }); }} /></label></div></Show>
+      <Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除部署${props.index + 1}`} aria-label={`删除部署${props.index + 1}`} onClick={props.onDelete} />
+    </div>
+  );
 }
 
 function ConfigurationView() {
@@ -635,11 +647,12 @@ function ConfigurationView() {
       environmentKey: configuration().environments.find((environment) => environment.id === deployment.environmentId)?.key ?? "",
       baseBranch: deployment.baseBranch,
       capabilities: [...deployment.capabilities],
+      ...(deployment.sls ? { sls: { project: deployment.sls.project, logstores: [...deployment.sls.logstores] } } : {}),
     })).filter((deployment) => deployment.environmentKey));
     setConfigurationError(""); setServiceOpen(true);
   };
   const serviceRepositoriesValid = createMemo(() => serviceRepositories().length > 0 && serviceRepositories().every((repository) => repository.url.trim()) && new Set(serviceRepositories().map((repository) => repository.url.trim())).size === serviceRepositories().length);
-  const serviceDeploymentsValid = createMemo(() => serviceDeployments().every((deployment) => deployment.environmentKey && deployment.baseBranch.trim()) && new Set(serviceDeployments().map((deployment) => deployment.environmentKey)).size === serviceDeployments().length);
+  const serviceDeploymentsValid = createMemo(() => serviceDeployments().every((deployment) => deployment.environmentKey && deployment.baseBranch.trim() && (!deployment.capabilities.includes("sls_read") || Boolean(deployment.sls?.project.trim() && deployment.sls.logstores.length))) && new Set(serviceDeployments().map((deployment) => deployment.environmentKey)).size === serviceDeployments().length);
   const availableDeploymentEnvironments = createMemo(() => configuration().environments.filter((environment) => !serviceDeployments().some((deployment) => deployment.environmentKey === environment.key)));
   const addServiceDeployment = () => {
     const environment = availableDeploymentEnvironments()[0];
@@ -652,7 +665,7 @@ function ConfigurationView() {
       const definition = {
         name: serviceName().trim(), description: description().trim(),
         repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), kind: repository.kind, url: repository.url.trim() })),
-        deployments: serviceDeployments().map((deployment) => ({ ...deployment, baseBranch: deployment.baseBranch.trim() })),
+        deployments: serviceDeployments().map((deployment) => ({ environmentKey: deployment.environmentKey, baseBranch: deployment.baseBranch.trim(), capabilities: deployment.capabilities, ...(deployment.capabilities.includes("sls_read") && deployment.sls ? { sls: { project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}) })),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
@@ -698,7 +711,7 @@ function ConfigurationView() {
             </header>
             <div class="service-detail">
               <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>角色</span><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><span class={`repository-kind ${repository.kind}`}>{repository.kind === "frontend" ? "前端" : "后端"}</span><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
-              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><For each={service().deployments} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div class="deployment-detail-meta"><div class="deployment-environment-summary"><strong>{environment?.name ?? deployment.environmentId}</strong></div></div><div class="deployment-branch-summary"><span>分支</span><code>{deployment.baseBranch}</code></div><div class="deployment-detail-capabilities"><span>能力</span><div class="deployment-detail-capability-content"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityDescriptions catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div></div>; }}</For></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><For each={service().deployments} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div class="deployment-detail-meta"><div class="deployment-environment-summary"><strong>{environment?.name ?? deployment.environmentId}</strong></div></div><div class="deployment-branch-summary"><span>分支</span><code>{deployment.baseBranch}</code></div><div class="deployment-detail-capabilities"><span>能力</span><div class="deployment-detail-capability-content"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityDescriptions catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /><Show when={deployment.sls}>{(scope) => <div class="deployment-sls-summary"><code>{scope().project}</code><span>{scope().logstores.join("、")}</span></div>}</Show></Show></div></div></div>; }}</For></div></section>
               <section class="service-detail-section"><div class="service-detail-heading"><h3>项目描述</h3></div><Show when={service().description.trim()} fallback={<div class="service-detail-empty">暂无项目描述</div>}><Markdown source={service().description} /></Show></section>
             </div>
           </>}

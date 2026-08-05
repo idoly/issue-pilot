@@ -42,7 +42,7 @@ export const serviceDeployments = sqliteTable("service_deployments", {
 
 export const deploymentCapabilities = sqliteTable("deployment_capabilities", {
   deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id, { onDelete: "cascade" }),
-  capability: text("capability", { enum: ["configuration_read", "database_read"] }).notNull(), ...timestamps,
+  capability: text("capability", { enum: ["configuration_read", "database_read", "sls_read"] }).notNull(), ...timestamps,
 }, (table) => [uniqueIndex("deployment_capability_unique").on(table.deploymentId, table.capability)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {

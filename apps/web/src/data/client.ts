@@ -46,13 +46,14 @@ export interface Environment {
   scope: "global";
 }
 
-export type DeploymentCapability = "configuration_read" | "database_read";
+export type DeploymentCapability = "configuration_read" | "database_read" | "sls_read";
 
 export interface ServiceDeployment {
   id: string;
   environmentId: string;
   baseBranch: string;
   capabilities: DeploymentCapability[];
+  sls?: { project: string; logstores: string[] } | null;
 }
 
 export interface Service {
@@ -76,7 +77,7 @@ export interface ServiceInput {
   name: string;
   description: string;
   repositories: Array<{ id?: string; kind: "frontend" | "backend"; url: string }>;
-  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[] }>;
+  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[]; sls?: { project: string; logstores: string[] } }>;
 }
 
 export interface IssueInput {
