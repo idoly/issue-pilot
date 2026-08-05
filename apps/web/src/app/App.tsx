@@ -106,7 +106,11 @@ function AttachmentPicker(props: {
         event.currentTarget.value = "";
       }} />
       <div class="attachment-picker-header"><span>附件</span><Button icon={<Paperclip size={14} />} onClick={() => input?.click()}>添加附件</Button></div>
-      <For each={props.files()}>{(file, index) => <div class="attachment-file"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
+      <Show when={props.files().length}>
+        <div class="attachment-file-list">
+          <For each={props.files()}>{(file, index) => <div class="attachment-file"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
+        </div>
+      </Show>
     </div>
   );
 }
@@ -375,7 +379,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           </Show>
           <Show when={props.issue.status === "pending"}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
           <Show when={props.issue.status === "resolved" || props.issue.status === "closed"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
-          <Button icon={<Pencil size={15} />} onClick={openEditor}>编辑工单</Button>
+          <Button icon={<Pencil size={15} />} disabled={props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running"} onClick={openEditor}>编辑工单</Button>
         </Space>
       </header>
 

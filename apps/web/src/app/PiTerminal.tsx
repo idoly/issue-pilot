@@ -143,7 +143,7 @@ export function PiTerminal(props: { issue: IssueDetail; expanded: boolean; onTog
     void connect();
   })(); });
   const statusPoll = window.setInterval(() => {
-    if (status() === "open" || status() === "connecting" || (!runIsActive() && props.issue.agentSession)) return;
+    if (!runIsActive() || status() === "open" || status() === "connecting") return;
     void props.onRefresh(props.issue.id).then((issue) => {
       const runActive = issue.workspace.status === "preparing" || issue.workspace.status === "running";
       if (status() === "waiting" && issue.agentSession && runActive) void connect({ issueId: issue.id, runActive, sessionReady: true });

@@ -94,6 +94,9 @@ button, input { font: inherit; }
 .queue-chevron { position: absolute; top: 50%; right: 10px; color: #a6afab; transform: translateY(-50%); }
 .queue-empty, .queue-loading, .queue-error { padding: 24px 14px; color: #77817d; text-align: center; }
 .queue-error { color: #a33b34; }
+.ads-modal-container:has(.create-issue-form) { display: flex; max-height: min(720px, calc(100dvh - 120px)); flex-direction: column; }
+.ads-modal-container:has(.create-issue-form) .ads-modal-header, .ads-modal-container:has(.create-issue-form) .ads-modal-footer { flex: 0 0 auto; }
+.ads-modal-container:has(.create-issue-form) .ads-modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .create-issue-form { display: grid; gap: 14px; }
 .create-issue-form label { display: grid; gap: 6px; color: #56615c; font-size: 12px; }
 .create-issue-form .multi-select-trigger { min-width: 0; }
@@ -101,6 +104,7 @@ button, input { font: inherit; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; clip-path: inset(50%); }
 .attachment-picker { display: grid; gap: 7px; }
 .attachment-picker-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #56615c; font-size: 12px; }
+.attachment-file-list { display: grid; max-height: 174px; gap: 6px; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
 .attachment-file { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; padding: 6px 8px 6px 11px; border: 1px solid #e0e5e2; border-radius: 5px; background: #f9fbfa; }
 .attachment-file > span { display: grid; min-width: 0; gap: 2px; }
 .attachment-file strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
