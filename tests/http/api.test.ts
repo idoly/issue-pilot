@@ -285,6 +285,28 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(detailWithAttachment.attachments.length, 1);
     assert.equal("objectKey" in detailWithAttachment.attachments[0]!, false);
 
+    const excessiveBoundary = "issue-pilot-excessive-attachments";
+    const excessiveBody = Buffer.from([
+      ...Array.from({ length: 10 }, (_, index) => [
+        `--${excessiveBoundary}`,
+        `Content-Disposition: form-data; name="files"; filename="extra-${index}.txt"`,
+        "Content-Type: text/plain",
+        "",
+        `extra-${index}`,
+      ]).flat(),
+      `--${excessiveBoundary}--`,
+      "",
+    ].join("\r\n"));
+    const excessiveUpload = await app.inject({
+      method: "POST",
+      url: `/api/issues/${created.id}/attachments`,
+      headers: { "content-type": `multipart/form-data; boundary=${excessiveBoundary}` },
+      payload: excessiveBody,
+    });
+    assert.equal(excessiveUpload.statusCode, 400, excessiveUpload.body);
+    assert.equal((await json(excessiveUpload)).error, "attachment_limit_exceeded");
+    assert.equal((await readdir(attachmentDirectory)).length, 1);
+
     const invalidServiceUpdate = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",

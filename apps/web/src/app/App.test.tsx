@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../data/client", async (importOriginal) => {
@@ -49,6 +49,14 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("region", { name: "ISSUE-0042 pi 终端" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+    const issueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
+    const attachmentInput = within(issueDialog).getByLabelText("编辑工单选择附件") as HTMLInputElement;
+    Object.defineProperty(attachmentInput, "files", { configurable: true, value: [new File(["details"], "details.txt", { type: "text/plain" })] });
+    fireEvent.change(attachmentInput);
+    await waitFor(() => expect(within(issueDialog).getByText("details.txt")).toBeTruthy());
+    fireEvent.click(within(issueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));

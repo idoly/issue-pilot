@@ -80,8 +80,34 @@ function bindMultipleSelectBlankToggle(element: HTMLDivElement, setOpen: (open: 
   }, { capture: true });
 }
 
-import "@idoly/ant-design-solid/tabs/style.css";
 import "@idoly/ant-design-solid/tag/style.css";
+
+function AttachmentPicker(props: {
+  files: () => File[];
+  existingCount?: () => number;
+  inputLabel: string;
+  onFilesChange: (files: File[]) => void;
+  onError: (message: string) => void;
+}) {
+  let input: HTMLInputElement | undefined;
+  const selectFiles = (selected: File[]) => {
+    const oversized = selected.find((file) => file.size > 20 * 1024 * 1024);
+    if (oversized) return props.onError(`${oversized.name} 超过 20 MB`);
+    if ((props.existingCount?.() ?? 0) + props.files().length + selected.length > 10) return props.onError("每个工单最多上传 10 个文件");
+    props.onFilesChange([...props.files(), ...selected]);
+    props.onError("");
+  };
+  return (
+    <div class="attachment-picker">
+      <input ref={input} class="visually-hidden" type="file" multiple aria-label={props.inputLabel} onChange={(event) => {
+        selectFiles(Array.from(event.currentTarget.files ?? []));
+        event.currentTarget.value = "";
+      }} />
+      <div class="attachment-picker-header"><span>附件</span><Button icon={<Paperclip size={14} />} onClick={() => input?.click()}>添加附件</Button></div>
+      <For each={props.files()}>{(file, index) => <div class="attachment-file"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => props.onFilesChange(props.files().filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
+    </div>
+  );
+}
 
 function IssueQueue(props: {
   selectedId: string;
@@ -128,7 +154,6 @@ function IssueQueue(props: {
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
   const [ccOpen, setCcOpen] = createSignal(false);
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
-  let attachmentInput: HTMLInputElement | undefined;
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
   const [queueNotice, setQueueNotice] = createSignal("", { ownedWrite: true });
@@ -246,18 +271,7 @@ function IssueQueue(props: {
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setCcOpen)}><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} open={ccOpen()} onOpenChange={setCcOpen} onChange={(value) => setCcSubjects(selectedStrings(value, ccSubjects()))} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
           <label><span>描述</span><Input aria-label="工单描述" value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
-          <div class="attachment-picker">
-            <input ref={attachmentInput} class="visually-hidden" type="file" multiple aria-label="选择附件" onChange={(event) => {
-              const selected = Array.from(event.currentTarget.files ?? []);
-              const oversized = selected.find((file) => file.size > 20 * 1024 * 1024);
-              if (oversized) setCreateError(`${oversized.name} 超过 20 MB`);
-              else if (attachments().length + selected.length > 10) setCreateError("每个工单最多上传 10 个文件");
-              else { setAttachments((current) => [...current, ...selected]); setCreateError(""); }
-              event.currentTarget.value = "";
-            }} />
-            <div class="attachment-picker-header"><span>附件</span><Button icon={<Paperclip size={14} />} onClick={() => attachmentInput?.click()}>添加附件</Button></div>
-            <For each={attachments()}>{(file, index) => <div class="attachment-file"><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`移除${file.name}`} aria-label={`移除${file.name}`} onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} /></div>}</For>
-          </div>
+          <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />
           <Show when={createError()}><div class="create-error" role="alert">{createError()}</div></Show>
         </div>
       </Modal>
@@ -275,6 +289,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [editCc, setEditCc] = createSignal<string[]>([], { ownedWrite: true });
   const [editCcOpen, setEditCcOpen] = createSignal(false);
   const [editService, setEditService] = createSignal("", { ownedWrite: true });
+  const [editAttachments, setEditAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
   const [configuration, setConfiguration] = createSignal<Config>({ environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
   const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
@@ -289,6 +304,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority); setEditType(props.issue.type);
     setEditAssignee(props.issue.assigneeSubject); setEditCc((props.issue.ccRecipients ?? []).map((person) => person.subject));
     setEditService(props.issue.service.key);
+    setEditAttachments([]);
     setEditError(""); setEditOpen(true);
   };
   const saveIssue = async () => {
@@ -296,6 +312,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
     setEditSaving(true); setEditError("");
     try {
       await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKey: editService(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
+      await uploadAttachments(props.issue.id, editAttachments());
       await props.onUpdated();
       setEditCcOpen(false);
       setEditOpen(false);
@@ -383,7 +400,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           </For>
         </div>
       </section>
-      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditOpen(false); }}>
+      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setEditOpen(false); }}>
         <div class="create-issue-form">
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setEditPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
@@ -392,6 +409,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
           <label><span>描述</span><TextArea aria-label="编辑工单描述" autoSize={{ minRows: 4, maxRows: 10 }} value={editDescription()} onInput={(event) => setEditDescription(event.currentTarget.value)} /></label>
+          <AttachmentPicker files={editAttachments} existingCount={() => props.issue.attachments.length} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onError={(message) => setEditError(message)} />
           <Show when={editError()}><div class="create-error" role="alert">{editError()}</div></Show>
         </div>
       </Modal>

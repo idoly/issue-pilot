@@ -116,7 +116,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     else await database.db.insert(environments).values({ organizationId: "demo", scope: "global", key: definition.key, name: definition.name, kind: definition.kind, config: {} });
   }
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test" });
-  await app.register(multipart, { limits: { files: 20, fileSize: 25 * 1024 * 1024 } });
+  await app.register(multipart, { limits: { files: 10, fileSize: 20 * 1024 * 1024 } });
   await app.register(websocket);
 
   const listeners = new Map<string, Set<(event: RunEvent) => void>>();
@@ -470,20 +470,41 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
-    const issue = await issueByKey(request.params.key); if (!issue) throw new ApiError(404, "issue_not_found");
-    const uploader = await subject(); const created: Array<ReturnType<typeof attachmentItem>> = [];
+    const issue = await issueByKey(request.params.key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    const uploader = await subject();
+    const pending: Array<{ fileName: string; mediaType: string; data: Buffer; sha256: string }> = [];
     for await (const part of request.files()) {
-      const data = await part.toBuffer(); const sha256 = createHash("sha256").update(data).digest("hex");
-      const directory = path.join(stateRoot, "attachments", issue.key.toLowerCase()); await mkdir(directory, { recursive: true, mode: 0o700 });
-      const objectKey = path.join(directory, `${randomUUID()}-${path.basename(part.filename)}`); await writeFile(objectKey, data, { mode: 0o600 });
-      try {
-        const [attachment] = await database.db.insert(issueAttachments).values({ issueId: issue.id, fileName: path.basename(part.filename), mediaType: part.mimetype, size: data.length, objectKey, sha256, uploadedBy: uploader }).returning(); created.push(attachmentItem(attachment!));
-      } catch (error) {
-        await rm(objectKey, { force: true });
-        throw error;
-      }
+      const data = await part.toBuffer();
+      const fileName = path.basename(part.filename).slice(0, 255);
+      if (!fileName) throw new ApiError(400, "invalid_attachment_name");
+      pending.push({ fileName, mediaType: part.mimetype.slice(0, 255), data, sha256: createHash("sha256").update(data).digest("hex") });
     }
-    return reply.code(201).send(created);
+    const existing = await database.db.select({ id: issueAttachments.id }).from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
+    if (existing.length + pending.length > 10) throw new ApiError(400, "attachment_limit_exceeded");
+    if (!pending.length) return reply.code(201).send([]);
+
+    const directory = path.join(stateRoot, "attachments", issue.key.toLowerCase());
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const written: string[] = [];
+    try {
+      const created = await database.db.transaction(async (transaction) => {
+        const rows: Array<ReturnType<typeof attachmentItem>> = [];
+        for (const file of pending) {
+          const objectKey = path.join(directory, `${randomUUID()}-${file.fileName}`);
+          await writeFile(objectKey, file.data, { mode: 0o600 });
+          written.push(objectKey);
+          const [attachment] = await transaction.insert(issueAttachments).values({ issueId: issue.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: uploader }).returning();
+          rows.push(attachmentItem(attachment!));
+        }
+        await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+        return rows;
+      });
+      return reply.code(201).send(created);
+    } catch (error) {
+      await Promise.all(written.map((objectKey) => rm(objectKey, { force: true })));
+      throw error;
+    }
   });
 
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
