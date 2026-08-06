@@ -21,9 +21,39 @@ function repositoryLines(repository: RepositoryContext): string {
   ].join("\n");
 }
 
-export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], latestUpdate?: string): string {
+function shanghaiTime(now: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "00";
+  return `${value("year")}-${value("month")}-${value("day")}T${value("hour")}:${value("minute")}:${value("second")}+08:00`;
+}
+
+export function runtimeTimeContext(now = new Date()): string {
+  return [
+    "Current runtime time (authoritative for all relative time ranges):",
+    `- UTC: ${now.toISOString()}`,
+    `- Asia/Shanghai: ${shanghaiTime(now)}`,
+    "Use this current runtime time for requests such as latest, now, today, or recent. Never reuse a timestamp from an earlier session message.",
+  ].join("\n");
+}
+
+export function promptWithRuntimeTime(message: string, now = new Date()): string {
+  return `${runtimeTimeContext(now)}\n\nUser request:\n${message}`;
+}
+
+export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], latestUpdate?: string, now = new Date()): string {
   return [
     `Continue handling engineering issue ${issueKey} in the existing persistent session.`,
+    "",
+    runtimeTimeContext(now),
     ...(latestUpdate ? ["", "Latest issue update:", latestUpdate] : []),
     "",
     "Current prepared repository scope:",
@@ -31,7 +61,8 @@ export function continuationPrompt(issueKey: string, repositories: RepositoryCon
     "",
     "Use the project descriptions and investigation findings already present in this session. Re-read repository files only where the latest message or refreshed scope requires it.",
     "The Issue Pilot extension enforces the active tools and repository paths. Do not attempt to bypass it or invoke arbitrary shell commands.",
-    "Never push commits or branches to any remote, and do not expose credentials or raw logs. Return bounded database_read query results verbatim when they are relevant to the issue.",
+    "Never push commits or branches to any remote. Preserve complete tool results, including credentials and raw logs, when they are relevant to the issue. Present database connection fields as labeled lines and query rows as a compact table instead of JSON.",
+    "When the work is complete or blocked, submit the structured outcome through complete_issue. A normal text response does not finish the run.",
   ].join("\n");
 }
 
@@ -43,10 +74,12 @@ export function initialPrompt(input: {
   repositories: RepositoryContext[];
   service: ServiceContext;
   latestUpdate?: string;
-}): string {
+}, now = new Date()): string {
   return [
     input.latestUpdate ? `Continue handling engineering issue ${input.issueKey} using the latest issue update.` : `Handle engineering issue ${input.issueKey}: ${input.title}`,
     `Configured issue type: ${input.issueType}`,
+    "",
+    runtimeTimeContext(now),
     ...(input.issueType === "smart_analysis" ? [
       "First classify this issue as exactly one of: incident (defect fix), request (requirement), or question (analysis or technical consultation). Then follow the corresponding handling approach. In the final response, write the classification marker named ISSUE_TYPE followed by a colon and the selected lowercase value.",
     ] : []),
@@ -66,6 +99,7 @@ export function initialPrompt(input: {
     "Inspect the relevant code and establish the cause before editing. If the issue policy permits code mutation and the cause is a code-logic defect, implement the smallest correct fix in the prepared local issue branch and run appropriate tests.",
     "Use only tools activated by the Issue Pilot policy. Arbitrary shell execution and access outside the granted repositories are intentionally unavailable.",
     "Never push commits or branches to any remote, never create a merge request, and never run git push. Keep every code change local in the prepared issue branch for human review.",
-    "Do not expose credentials or raw production logs. Return bounded database_read query results verbatim when they are relevant to the issue.",
+    "Preserve complete tool results, including credentials and raw production logs, when they are relevant to the issue. Present database connection fields as labeled lines and query rows as a compact table instead of JSON.",
+    "Finish by calling complete_issue with the outcome, evidence, changes, verification, and risks. A normal text response does not complete the Issue Pilot run.",
   ].join("\n");
 }

@@ -30,12 +30,22 @@ export interface IssueDetail extends IssueListItem {
   repositories: Array<{ id: string; url: string; baseBranch: string; workingBranch: string | null; codeServerPath: string | null }>;
   workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean };
   agentSession?: { sessionId: string } | null;
+  agentResult?: { outcome: "resolved" | "needs_human" | "blocked"; summary: string; rootCause: string | null; evidence: string[]; changes: string[]; verification: string[]; risks: string[]; policyVersion: number; updatedAt: string } | null;
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
   environmentKey: string;
   comments: IssueComment[];
-  terminalTranscript?: { data: string; columns: number; rows: number } | null;
+}
+
+export interface AgentEvent {
+  id: string;
+  issueId: string;
+  kind: string;
+  message: string;
+  createdAt: string;
+  transient?: boolean;
+  terminal?: { ansi: string; text: string; lines: number; replaceLines: number; toolCallId?: string };
 }
 
 export interface Environment {
@@ -46,15 +56,21 @@ export interface Environment {
   scope: "global";
 }
 
-export type DeploymentCapability = "configuration_read" | "database_read" | "sls_read" | "browser_use";
+export type DeploymentCapability = "playwright" | "nacos" | "db" | "redis" | "mq" | "es" | "sls";
 
 export interface ServiceDeployment {
   id: string;
   environmentId: string;
   baseBranch: string;
   capabilities: DeploymentCapability[];
-  sls?: { project: string; logstores: string[] } | null;
-  browser?: { baseUrl: string; username: string | null; passwordConfigured: boolean } | null;
+  agent?: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } | null;
+  nacos?: { serverUrl: string; namespace: string; group: string; username: string; password?: string } | null;
+  db?: { url: string; username: string; password: string } | null;
+  sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] } | null;
+  playwright?: { baseUrl: string; username: string | null; password: string } | null;
+  redis?: { host: string; port: number; username: string; password?: string; database: number } | null;
+  mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string } | null;
+  es?: { url: string; username: string; password?: string } | null;
 }
 
 export interface Service {
@@ -70,7 +86,7 @@ export interface Service {
 
 export interface Config {
   environments: Environment[];
-  capabilityCatalog: Array<{ key: DeploymentCapability; label: string; description: string }>;
+  capabilityCatalog: Array<{ key: DeploymentCapability }>;
   services: Service[];
 }
 
@@ -78,7 +94,7 @@ export interface ServiceInput {
   name: string;
   description: string;
   repositories: Array<{ id?: string; kind: "frontend" | "backend"; url: string }>;
-  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[]; sls?: { project: string; logstores: string[] }; browser?: { baseUrl: string; username: string; password?: string } }>;
+  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[]; agent?: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }; nacos?: { serverUrl: string; namespace: string; group: string; username: string; password?: string }; db?: { url: string; username: string; password: string }; sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] }; playwright?: { baseUrl: string; username: string; password?: string }; redis?: { host: string; port: number; username: string; password?: string; database: number }; mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string }; es?: { url: string; username: string; password?: string } }>;
 }
 
 export interface IssueInput {
@@ -91,12 +107,6 @@ export interface IssueInput {
   ccSubjects: string[];
 }
 
-export interface TerminalTicket {
-  ticket: string;
-  mode?: "live" | "pty";
-  expiresAt: string;
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
@@ -105,7 +115,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const error = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
     throw new Error(error ?? `request_failed:${response.status}`);
   }
-  return response.status === 204 ? undefined as T : await response.json() as T;
+  if (response.status === 204 || response.status === 205) return undefined as T;
+  const body = await response.text();
+  return body ? JSON.parse(body) as T : undefined as T;
 }
 
 export function configKey(prefix: string, name: string): string {
@@ -158,11 +170,11 @@ export const updateIssueStatus = (key: string, status: "open" | "resolved") => r
 export const addIssueComment = (key: string, body: string) => request<IssueComment>(`/api/issues/${encodeURIComponent(key)}/comments`, { method: "POST", body: JSON.stringify({ body }) });
 export const syncIssueUpdate = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/sync`, { method: "POST" });
 export const retryIssue = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/retry`, { method: "POST" });
-export const requestTerminalTicket = (key: string) => request<TerminalTicket>(`/api/issues/${encodeURIComponent(key)}/terminal-ticket`, { method: "POST" });
-
-export function terminalUrl(key: string, ticket: string): string {
-  const url = new URL(`/api/issues/${encodeURIComponent(key)}/terminal`, window.location.href);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("ticket", ticket);
-  return url.toString();
-}
+export const sendAgentMessage = (key: string, message: string, columns: number) => request<AgentEvent>(`/api/issues/${encodeURIComponent(key)}/agent-messages`, { method: "POST", body: JSON.stringify({ message, cols: columns }) });
+export const abortAgent = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/agent-abort`, { method: "POST" });
+export const agentStreamUrl = (key: string, columns?: number, footerColumns?: number) => {
+  const query = new URLSearchParams();
+  if (columns) query.set("cols", String(columns));
+  if (footerColumns) query.set("footerCols", String(footerColumns));
+  return `/api/issues/${encodeURIComponent(key)}/agent-stream${query.size ? `?${query}` : ""}`;
+};

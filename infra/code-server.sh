@@ -5,10 +5,10 @@ state_root=$(realpath -m "${ISSUE_PILOT_STATE_ROOT:-.issue-pilot}")
 workspace_root=$(realpath -m "${ISSUE_PILOT_WORKSPACE_ROOT:-$state_root/workspaces}")
 data_root=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_DATA:-$state_root/code-server-data}")
 password_file=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_PASSWORD_FILE:-$state_root/secrets/code-server-password}")
-image=${ISSUE_PILOT_CODE_SERVER_IMAGE:-ghcr.io/coder/code-server:4.107.0}
+image=${ISSUE_PILOT_CODE_SERVER_IMAGE:-ghcr.io/coder/code-server:4.131.0-39}
 port=${ISSUE_PILOT_CODE_SERVER_PORT:-18080}
 name=code-server
-runtime_version=keep-id-v1
+runtime_version=keep-id-v2-code-server-4.131.0
 
 status() {
   podman inspect "$name"

@@ -5,7 +5,6 @@ import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { grantedProject, type IssuePolicy } from "../pi/policy.ts";
-import { result } from "./output.ts";
 
 const NODE_ACTIONS: Record<string, string[]> = {
   install: ["npm", "ci"],
@@ -46,7 +45,8 @@ async function run(pi: ExtensionAPI, policy: IssuePolicy, cwd: string, input: { 
     if (kind === "maven") args.push("--volume", `${path.resolve(process.env.PI_TOOL_CACHE_ROOT ?? ".issue-pilot/tool-cache")}/maven/${policy.issueKey.toLowerCase()}:/tool-cache:Z`);
     args.push(kind === "node" ? (process.env.PI_NODE_CLI_IMAGE ?? "docker.io/library/node:26.5.1-bookworm-slim") : (process.env.PI_MAVEN_CLI_IMAGE ?? "docker.io/library/maven:3.9.16-eclipse-temurin-8"), ...command);
     const execution = await pi.exec("podman", args, { timeout: 10 * 60_000, ...(signal ? { signal } : {}) });
-    return result({ runtime: "container", isolation: "ephemeral-copy", action: input.action, exitCode: execution.code, stdout: execution.stdout, stderr: execution.stderr }, { kind, action: input.action });
+    const output = { runtime: "container", isolation: "ephemeral-copy", action: input.action, exitCode: execution.code, stdout: execution.stdout, stderr: execution.stderr };
+    return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }], details: { kind, action: input.action } };
   } finally {
     await rm(snapshotRoot, { recursive: true, force: true });
   }

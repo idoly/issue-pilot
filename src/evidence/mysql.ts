@@ -10,12 +10,7 @@ export function validateReadOnlyQuery(value: string): string {
   if (statement.includes(";") || /--|#|\/\*/.test(statement)) throw new Error("database_query_must_be_one_statement_without_comments");
   if (!/^(select|show|describe|desc|explain)\b/i.test(statement)) throw new Error("database_query_must_be_read_only");
   if (/\b(insert|update|delete|replace|create|alter|drop|truncate|rename|grant|revoke|call|do|handler|load|lock|unlock|set|use|begin|commit|rollback|savepoint|release)\b/i.test(statement)) throw new Error("database_query_must_be_read_only");
-  if (/\binto\s+(?:out|dump)file\b|\bfor\s+update\b|\block\s+in\s+share\s+mode\b|\b(?:sleep|benchmark)\s*\(/i.test(statement)) throw new Error("database_query_must_be_read_only");
-  if (/^select\b/i.test(statement)) {
-    const limits = [...statement.matchAll(/\blimit\s+(?:(\d+)\s*,\s*)?(\d+)\b/gi)];
-    const maximumRows = Number(limits.at(-1)?.[2]);
-    if (!Number.isSafeInteger(maximumRows) || maximumRows < 1 || maximumRows > 1000) throw new Error("database_select_requires_limit_at_most_1000");
-  }
+  if (/\binto\s+(?:out|dump)file\b|\binto\s+@|\bfor\s+update\b|\block\s+in\s+share\s+mode\b|\bprocedure\s+analyse\b|\b(?:sleep|benchmark|load_file|get_lock|release_lock|is_free_lock|is_used_lock|master_pos_wait|source_pos_wait|sys_exec|sys_eval)\s*\(/i.test(statement)) throw new Error("database_query_must_be_read_only");
   return statement;
 }
 
@@ -26,25 +21,9 @@ function image(cwd: string): string {
 
 function parseOutput(stdout: string) {
   const lines = stdout.replace(/\r/g, "").split("\n").filter(Boolean);
-  const columns = (lines.shift() ?? "").split("\t").slice(0, 50).map((column) => column.slice(0, 100));
-  const rows: Array<Record<string, string>> = [];
-  let budget = 40 * 1024;
-  let truncated = lines.length > 100 || Buffer.byteLength(stdout, "utf8") > 50 * 1024;
-  for (const line of lines.slice(0, 100)) {
-    const values = line.split("\t");
-    const row: Record<string, string> = {};
-    for (const [index, column] of columns.entries()) {
-      const raw = values[index] ?? "";
-      const allowance = Math.max(0, Math.min(2000, budget - Buffer.byteLength(column, "utf8") - 16));
-      const value = Buffer.from(raw).subarray(0, allowance).toString("utf8");
-      row[column] = value;
-      budget -= Buffer.byteLength(column) + Buffer.byteLength(value) + 16;
-      if (budget <= 0) { truncated = true; break; }
-    }
-    rows.push(row);
-    if (budget <= 0) break;
-  }
-  return { columns, rows, truncated };
+  const columns = (lines.shift() ?? "").split("\t");
+  const rows = lines.map((line) => Object.fromEntries(columns.map((column, index) => [column, line.split("\t")[index] ?? ""])));
+  return { columns, rows, truncated: false };
 }
 
 export async function queryMysql(pi: ExtensionAPI, cwd: string, input: { connectionUrl: string; statement: string }, signal?: AbortSignal) {

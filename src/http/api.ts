@@ -1,35 +1,35 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import multipart from "@fastify/multipart";
-import websocket from "@fastify/websocket";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import Fastify, { type FastifyInstance } from "fastify";
 
-import { Runner } from "../agent/runner.ts";
+import { AgentEngine } from "../agent/engine.ts";
 import type { RunEvent } from "../agent/events.ts";
+import { renderTerminalEvent, renderTerminalFooter, terminalColumns } from "../agent/terminal.ts";
 import { openDatabase } from "../db/client.ts";
 import {
-  agentEvents, agentSessions, deploymentCapabilities, environments, issueAttachments, issueCcRecipients,
-  issueComments, issueHistory, issueRepositories,
+  agentEvents, agentSessions, environments, issueAttachments, issueCcRecipients,
+  issueAgentResults, issueComments, issueHistory, issueRepositories,
   issueWorkspaces, issues, serviceDeployments,
   serviceRepositories, services, subjects,
 } from "../db/schema.ts";
-import { loadIssuePolicy } from "../pi/policy.ts";
+import { CAPABILITY_KEYS, configuredCapabilities, type CapabilityName } from "../shared/capabilities.ts";
 import { isIssueKey, normalizeIssueKey } from "../shared/issue-key.ts";
-import { PtySessions } from "../workspace/pty.ts";
-
-const CAPABILITIES = ["configuration_read", "database_read", "sls_read", "browser_use"] as const;
 const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 const ISSUE_TYPES = ["incident", "request", "question", "smart_analysis"] as const;
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const REPOSITORY_KINDS = ["frontend", "backend"] as const;
+const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+const NACOS_GROUP = /^[a-zA-Z0-9._:-]{1,255}$/;
 const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
-type Capability = typeof CAPABILITIES[number];
+type Capability = CapabilityName;
 type IssueType = typeof ISSUE_TYPES[number];
 
 class ApiError extends Error {
@@ -57,24 +57,113 @@ function optionalText(value: unknown, maximum = 10_000): string | null {
   return value.trim();
 }
 
-function strings(value: unknown, name: string, maximum = 100): string[] {
-  if (!Array.isArray(value) || value.length > maximum || !value.every((entry) => typeof entry === "string" && entry.length > 0)) throw new ApiError(400, `invalid_${name}`);
+function strings(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.length > 0)) throw new ApiError(400, `invalid_${name}`);
   return value as string[];
 }
 
 function capabilities(value: unknown): Capability[] {
   const values = strings(value, "capabilities");
-  if (values.some((entry) => !CAPABILITIES.includes(entry as Capability))) throw new ApiError(400, "invalid_capability");
+  if (values.some((entry) => !CAPABILITY_KEYS.includes(entry as Capability))) throw new ApiError(400, "invalid_capability");
   return [...new Set(values)] as Capability[];
 }
 
-function slsScope(value: unknown, required: boolean): { project: string; logstores: string[] } | undefined {
+function connectionUrl(value: unknown, name: string, protocols: string[]): string {
+  const raw = text(value, name, 2048);
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new ApiError(400, `invalid_${name}`); }
+  if (!protocols.includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) throw new ApiError(400, `invalid_${name}`);
+  return url.href;
+}
+
+function mysqlConnectionUrl(value: unknown): string {
+  const raw = text(value, "db_url", 4096);
+  const normalized = raw.replace(/^jdbc:(?=mysql:|mariadb:)/i, "");
+  const candidate = normalized.includes("://") ? normalized : `mysql://${normalized}`;
+  let url: URL;
+  try { url = new URL(candidate); } catch { throw new ApiError(400, "invalid_db_url"); }
+  if (!["mysql:", "mariadb:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.hash || !url.pathname.replace(/^\//, "")) throw new ApiError(400, "invalid_db_url");
+  return url.href;
+}
+
+function optionalSecret(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || !value || value.length > 10_000 || /[\0\r\n]/.test(value)) throw new ApiError(400, `invalid_${name}`);
+  return value;
+}
+
+function requiredSecret(value: unknown, name: string): string {
+  const secret = optionalSecret(value, name);
+  if (!secret) throw new ApiError(400, `invalid_${name}`);
+  return secret;
+}
+
+function nacosConfiguration(value: unknown, required: boolean) {
   if (!required) return undefined;
   const input = record(value);
+  const group = text(input.group, "nacos_group", 255);
+  if (!NACOS_GROUP.test(group)) throw new ApiError(400, "invalid_nacos_group");
+  const serverUrl = connectionUrl(input.serverUrl, "nacos_server_url", ["http:", "https:"]);
+  if (new URL(serverUrl).pathname !== "/") throw new ApiError(400, "invalid_nacos_server_url");
+  const username = optionalText(input.username, 500) ?? "";
+  const password = optionalSecret(input.password, "nacos_password");
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, "invalid_nacos_credentials");
+  return { serverUrl, namespace: optionalText(input.namespace, 255) ?? "", group, username, ...(password ? { password } : {}) };
+}
+
+function dbConfiguration(value: unknown, required: boolean) {
+  if (!required) return undefined;
+  const input = record(value);
+  const url = mysqlConnectionUrl(input.url);
+  return { url, username: text(input.username, "db_username", 500), password: requiredSecret(input.password, "db_password") };
+}
+
+function slsScope(value: unknown, required: boolean) {
+  if (!required) return undefined;
+  const input = record(value);
+  const accessKeyId = text(input.accessKeyId, "sls_access_key_id", 500);
+  const accessKeySecret = requiredSecret(input.accessKeySecret, "sls_access_key_secret");
+  const region = text(input.region, "sls_region", 63);
   const project = text(input.project, "sls_project", 63);
-  const logstores = [...new Set(strings(input.logstores, "sls_logstores", 20))];
+  const logstores = [...new Set(strings(input.logstores, "sls_logstores"))];
+  if (!SLS_REGION.test(region)) throw new ApiError(400, "invalid_sls_region");
   if (!SLS_PROJECT.test(project) || !logstores.length || logstores.some((logstore) => !SLS_LOGSTORE.test(logstore))) throw new ApiError(400, "invalid_sls_scope");
-  return { project, logstores };
+  return { accessKeyId, accessKeySecret, region, project, logstores };
+}
+
+function redisConfiguration(value: unknown, required: boolean) {
+  if (!required) return undefined;
+  const input = record(value);
+  const host = text(input.host, "redis_host", 255);
+  const port = Number(input.port ?? 6379);
+  const database = Number(input.database ?? 0);
+  if (!/^[a-zA-Z0-9._-]+$/.test(host)) throw new ApiError(400, "invalid_redis_host");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new ApiError(400, "invalid_redis_port");
+  if (!Number.isInteger(database) || database < 0 || database > 1024) throw new ApiError(400, "invalid_redis_database");
+  const username = optionalText(input.username, 500) ?? "";
+  const password = optionalSecret(input.password, "redis_password");
+  if (username && !password) throw new ApiError(400, "invalid_redis_credentials");
+  return { host, port, username, ...(password ? { password } : {}), database };
+}
+
+function esConfiguration(value: unknown, required: boolean) {
+  if (!required) return undefined;
+  const input = record(value);
+  const username = optionalText(input.username, 500) ?? "";
+  const password = optionalSecret(input.password, "es_password");
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, "invalid_es_credentials");
+  return { url: connectionUrl(input.url, "es_url", ["http:", "https:"]), username, ...(password ? { password } : {}) };
+}
+
+function mqConfiguration(value: unknown, required: boolean) {
+  if (!required) return undefined;
+  const input = record(value);
+  const host = text(input.host, "mq_host", 255);
+  const port = Number(input.port ?? 5672);
+  const managementPort = Number(input.managementPort ?? 15672);
+  if (!/^[a-zA-Z0-9._-]+$/.test(host)) throw new ApiError(400, "invalid_mq_host");
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(managementPort) || managementPort < 1 || managementPort > 65535) throw new ApiError(400, "invalid_mq_port");
+  return { host, port, managementPort, username: text(input.username, "mq_username", 500), password: requiredSecret(input.password, "mq_password"), virtualHost: text(input.virtualHost, "mq_virtual_host", 255) };
 }
 
 function browserConfiguration(value: unknown, required: boolean): { baseUrl: string; username: string | null; password?: string | null } | undefined {
@@ -87,19 +176,41 @@ function browserConfiguration(value: unknown, required: boolean): { baseUrl: str
   const username = optionalText(input.username, 500);
   let password: string | null | undefined;
   if (input.password === null) password = null;
-  else if (input.password !== undefined && input.password !== "") {
-    if (typeof input.password !== "string" || input.password.length > 10_000 || input.password.includes("\0")) throw new ApiError(400, "invalid_browser_password");
-    password = input.password;
-  }
+  else if (input.password !== undefined && input.password !== "") password = optionalSecret(input.password, "browser_password");
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, "invalid_browser_credentials");
   return { baseUrl: url.href, username, ...(password !== undefined ? { password } : {}) };
 }
 
-function publicBrowserConfiguration(config: Record<string, unknown>): { baseUrl: string; username: string | null; passwordConfigured: boolean } | null {
-  const value = config.browser;
+function agentConfiguration(value: unknown): { provider: string; model: string; thinkingLevel: typeof THINKING_LEVELS[number] } | undefined {
+  if (value === undefined || value === null) return undefined;
+  const input = record(value);
+  return {
+    provider: text(input.provider, "agent_provider", 200),
+    model: text(input.model, "agent_model", 500),
+    thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", THINKING_LEVELS),
+  };
+}
+
+function publicCapabilityConfiguration(config: Record<string, unknown>, key: "nacos" | "db" | "sls") {
+  const value = config[key];
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (key === "nacos") return { serverUrl: item.serverUrl, namespace: item.namespace, group: item.group, username: item.username, password: item.password };
+  if (key === "db") return { url: item.url, username: item.username, password: item.password };
+  return { accessKeyId: item.accessKeyId, accessKeySecret: item.accessKeySecret, region: item.region, project: item.project, logstores: item.logstores };
+}
+
+function publicStoredConfiguration(config: Record<string, unknown>, key: "redis" | "es" | "mq"): Record<string, unknown> | null {
+  const value = config[key];
+  return value && typeof value === "object" ? { ...(value as Record<string, unknown>) } : null;
+}
+
+function publicBrowserConfiguration(config: Record<string, unknown>): { baseUrl: string; username: string | null; password: string } | null {
+  const value = config.playwright;
   if (!value || typeof value !== "object") return null;
   const browser = value as Record<string, unknown>;
   if (typeof browser.baseUrl !== "string") return null;
-  return { baseUrl: browser.baseUrl, username: typeof browser.username === "string" ? browser.username : null, passwordConfigured: typeof browser.password === "string" && browser.password.length > 0 };
+  return { baseUrl: browser.baseUrl, username: typeof browser.username === "string" ? browser.username : null, password: typeof browser.password === "string" ? browser.password : "" };
 }
 
 function choice<const Values extends readonly string[]>(value: unknown, name: string, values: Values): Values[number] {
@@ -121,17 +232,31 @@ function datedKey(now = new Date()): string {
   return `${values.get("year")}${values.get("month")}${values.get("day")}`;
 }
 
+export interface AgentController {
+  enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
+  send(issueId: string, message: string): Promise<RunEvent>;
+  abort(issueId: string): Promise<boolean>;
+  isRunning(issueId: string): boolean;
+  invalidatePolicy(issueId: string): Promise<boolean>;
+  close?(): Promise<void>;
+}
+
 export interface ApiOptions {
   databaseFile?: string;
   stateRoot?: string;
-  runner?: Runner;
-  piExecutable?: string;
+  engine?: AgentController;
   logger?: boolean;
 }
 
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? process.env.ISSUE_PILOT_STATE_ROOT ?? ".issue-pilot");
   const database = openDatabase(options.databaseFile ?? process.env.ISSUE_PILOT_DATABASE ?? path.join(stateRoot, "issues.db"));
+  for (const directory of ["sessions", "capabilities", "attachments"].map((name) => path.join(stateRoot, name))) {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+  }
+  await database.client.execute("PRAGMA busy_timeout = 5000");
+  await database.client.execute("PRAGMA journal_mode = WAL");
   await migrate(database.db, { migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url)) });
   await database.client.execute("PRAGMA foreign_keys = ON");
   await database.client.execute({
@@ -158,14 +283,11 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     else await database.db.insert(environments).values({ organizationId: "demo", scope: "global", key: definition.key, name: definition.name, kind: definition.kind, config: {} });
   }
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test" });
-  await app.register(multipart, { limits: { files: 10, fileSize: 20 * 1024 * 1024 } });
-  await app.register(websocket);
+  await app.register(multipart);
 
   const listeners = new Map<string, Set<(event: RunEvent) => void>>();
   const publish = (event: RunEvent) => { for (const listener of listeners.get(event.issueId) ?? []) listener(event); };
-  const ptys = new PtySessions(options.piExecutable ?? process.env.PI_EXECUTABLE ?? "pi", path.resolve("src/pi/extension.ts"), process.env, path.join(stateRoot, "run-signals"));
-  const runner = options.runner ?? new Runner(database.db, ptys, stateRoot, publish);
-  const tickets = new Map<string, { issueId: string; issueKey: string; sessionFile: string; workspacePath: string; policyHash: string; tools: string[]; expiresAt: number }>();
+  const engine: AgentController = options.engine ?? new AgentEngine(database.db, stateRoot, publish);
   let issueCreationTail = Promise.resolve();
   const serializeIssueCreation = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = issueCreationTail;
@@ -193,12 +315,12 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.addHook("onClose", async () => {
-    await ptys.close();
+    await engine.close?.();
     await database.close();
   });
 
   const subject = async () => {
-    const value = process.env.ISSUE_PILOT_SUBJECT ?? "demo-owner";
+    const value = process.env.ISSUE_PILOT_SUBJECT ?? "yx4821@xianhengguoji.com";
     await database.db.insert(subjects).values({ subject: value, username: value, displayName: value, email: "" }).onConflictDoNothing();
     return value;
   };
@@ -264,26 +386,23 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "",
   })));
 
-  app.get("/api/config", async () => {
-    const [environmentRows, serviceRows, deploymentRows, capabilityRows, repositoryRows] = await Promise.all([
+  app.get("/api/config", async (_request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    reply.header("Pragma", "no-cache");
+    const [environmentRows, serviceRows, deploymentRows, repositoryRows] = await Promise.all([
       database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), eq(environments.scope, "global"), inArray(environments.key, ["development", "production", "test"]))).orderBy(asc(environments.name)),
       database.db.select().from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global"))).orderBy(asc(services.sortOrder), asc(services.name)),
-      database.db.select().from(serviceDeployments), database.db.select().from(deploymentCapabilities), database.db.select().from(serviceRepositories),
+      database.db.select().from(serviceDeployments), database.db.select().from(serviceRepositories),
     ]);
     return {
       environments: environmentRows.map((item) => ({ id: item.id, key: item.key, name: item.name, kind: item.kind, scope: item.scope })),
-      capabilityCatalog: [
-        { key: "configuration_read", label: "配置读取", description: "按需合并冻结仓库配置、环境 profile 和批准的 Nacos 配置，并对敏感值脱敏。" },
-        { key: "database_read", label: "数据库读取", description: "按需解析服务数据源，通过 MySQL 执行有行数限制的只读 SQL。" },
-        { key: "sls_read", label: "日志读取", description: "使用本机 Aliyun CLI 与本地凭据执行有时间窗和条数限制的 SLS 只读查询。" },
-        { key: "browser_use", label: "浏览器操作", description: "在一次性 Playwright 容器中访问该环境的固定服务地址，可使用部署凭据完成受限页面操作。" },
-      ],
+      capabilityCatalog: CAPABILITY_KEYS.map((key) => ({ key })),
       services: serviceRows.map((service) => {
         const deployments = deploymentRows.filter((item) => item.serviceId === service.id);
         return {
           id: service.id, key: service.key, name: service.name, description: service.description, scope: service.scope,
           environmentIds: deployments.map((item) => item.environmentId),
-          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: capabilityRows.filter((capability) => capability.deploymentId === item.id).map((capability) => capability.capability), sls: record(item.config).sls ?? null, browser: publicBrowserConfiguration(record(item.config)) })),
+          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: configuredCapabilities(record(item.config)), agent: record(item.config).agent ?? null, playwright: publicBrowserConfiguration(record(item.config)), nacos: publicCapabilityConfiguration(record(item.config), "nacos"), db: publicCapabilityConfiguration(record(item.config), "db"), redis: publicStoredConfiguration(record(item.config), "redis"), mq: publicStoredConfiguration(record(item.config), "mq"), es: publicStoredConfiguration(record(item.config), "es"), sls: publicCapabilityConfiguration(record(item.config), "sls") })),
           repositories: repositoryRows.filter((item) => item.serviceId === service.id).map((item) => ({ id: item.id, kind: item.kind, url: item.url })),
         };
       }),
@@ -304,8 +423,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         environmentKey: text(deployment.environmentKey, "environment_key", 100),
         baseBranch: text(deployment.baseBranch, "base_branch", 255),
         capabilities: selectedCapabilities,
-        sls: slsScope(deployment.sls, selectedCapabilities.includes("sls_read")),
-        browser: browserConfiguration(deployment.browser, selectedCapabilities.includes("browser_use")),
+        agent: agentConfiguration(deployment.agent),
+        nacos: nacosConfiguration(deployment.nacos, selectedCapabilities.includes("nacos")),
+        db: dbConfiguration(deployment.db, selectedCapabilities.includes("db")),
+        sls: slsScope(deployment.sls, selectedCapabilities.includes("sls")),
+        playwright: browserConfiguration(deployment.playwright, selectedCapabilities.includes("playwright")),
+        redis: redisConfiguration(deployment.redis, selectedCapabilities.includes("redis")),
+        es: esConfiguration(deployment.es, selectedCapabilities.includes("es")),
+        mq: mqConfiguration(deployment.mq, selectedCapabilities.includes("mq")),
       };
     }) : [];
     if (new Set(deploymentsInput.map((deployment) => deployment.environmentKey)).size !== deploymentsInput.length) throw new ApiError(400, "duplicate_deployment_environment");
@@ -342,22 +467,22 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       for (const deploymentInput of deploymentsInput) {
         const environment = environmentsByKey.get(deploymentInput.environmentKey)!;
         const existing = existingByEnvironmentId.get(environment.id);
-        const existingConfig = existing ? record(existing.config) : {};
-        const browser = deploymentInput.browser ? {
-          baseUrl: deploymentInput.browser.baseUrl,
-          username: deploymentInput.browser.username,
-          ...(deploymentInput.browser.username ? ("password" in deploymentInput.browser
-            ? (deploymentInput.browser.password ? { password: deploymentInput.browser.password } : {})
-            : (typeof (existingConfig.browser as Record<string, unknown> | undefined)?.password === "string" ? { password: (existingConfig.browser as Record<string, unknown>).password } : {})) : {}),
+        const nacos = deploymentInput.nacos;
+        const db = deploymentInput.db;
+        const sls = deploymentInput.sls;
+        const playwright = deploymentInput.playwright ? {
+          baseUrl: deploymentInput.playwright.baseUrl,
+          username: deploymentInput.playwright.username,
+          ...(typeof deploymentInput.playwright.password === "string" ? { password: deploymentInput.playwright.password } : {}),
         } : undefined;
-        if (browser?.username && !("password" in browser)) throw new ApiError(400, "browser_password_required");
-        const config = { ...(deploymentInput.sls ? { sls: deploymentInput.sls } : {}), ...(browser ? { browser } : {}) };
+        const redis = deploymentInput.redis;
+        const es = deploymentInput.es;
+        const mq = deploymentInput.mq;
+        const config = { ...(deploymentInput.agent ? { agent: deploymentInput.agent } : {}), ...(playwright ? { playwright } : {}), ...(nacos ? { nacos } : {}), ...(db ? { db } : {}), ...(redis ? { redis } : {}), ...(mq ? { mq } : {}), ...(es ? { es } : {}), ...(sls ? { sls } : {}) };
         const deployment = existing
           ? (await transaction.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
           : (await transaction.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config }).returning())[0]!;
         retainedDeploymentIds.add(deployment.id);
-        await transaction.delete(deploymentCapabilities).where(eq(deploymentCapabilities.deploymentId, deployment.id));
-        if (deploymentInput.capabilities.length) await transaction.insert(deploymentCapabilities).values(deploymentInput.capabilities.map((capability) => ({ deploymentId: deployment.id, capability })));
       }
       for (const deployment of existingDeployments) if (!retainedDeploymentIds.has(deployment.id)) await transaction.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
     });
@@ -388,9 +513,15 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.patch<{ Params: { key: string } }>("/api/services/:key", async (request) => {
     const service = await serviceByKey(request.params.key);
     if (!service) throw new ApiError(404, "service_not_found");
+    const affectedIssues = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id));
+    if (affectedIssues.some((issue) => engine.isRunning(issue.id))) throw new ApiError(409, "service_has_running_issues");
     const input = record(request.body);
     const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
     await replaceServiceConfiguration(service.id, input, serviceUpdate);
+    if (affectedIssues.length) {
+      await database.db.delete(issueAgentResults).where(inArray(issueAgentResults.issueId, affectedIssues.map((issue) => issue.id)));
+      await Promise.all(affectedIssues.map((issue) => engine.invalidatePolicy(issue.id)));
+    }
     return { ok: true };
   });
 
@@ -430,13 +561,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         return row!;
       });
     });
-    runner.enqueue(created.id);
+    engine.enqueue(created.id);
     return reply.code(201).send(await listItem(created));
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
+    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     const input = record(request.body);
     const selected = await serviceForEnvironment(text(input.serviceKey, "service_key", 100), issue.environmentId);
     if (!selected) throw new ApiError(400, "invalid_service_for_environment");
@@ -448,9 +580,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const [environment] = await database.db.select({ kind: environments.kind }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1);
     if (!environment) throw new ApiError(409, "issue_scope_not_found");
     assertIssueTypeForEnvironment(issueType, environment.kind);
-    if (!await runner.invalidatePolicy(issue.id)) throw new ApiError(409, "issue_terminal_active");
+    await engine.invalidatePolicy(issue.id);
     await database.db.transaction(async (transaction) => {
       await transaction.update(issues).set({ title: text(input.title, "title", 300), description: optionalText(input.description) ?? "", priority, type: issueType, serviceId: selected.service.id, assigneeSubject: assignee, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transaction.delete(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id));
       await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
       if (cc.length) await transaction.insert(issueCcRecipients).values(cc.map((recipient) => ({ issueId: issue.id, subject: recipient })));
     });
@@ -463,6 +596,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const target = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     const allowed = (target === "resolved" && issue.status === "pending") || (target === "open" && (issue.status === "resolved" || issue.status === "closed"));
     if (!allowed) throw new ApiError(409, "invalid_issue_status_transition");
+    if (target === "resolved") {
+      const [completion] = await database.db.select({ outcome: issueAgentResults.outcome, verification: issueAgentResults.verification }).from(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id)).limit(1);
+      if (completion?.outcome !== "resolved" || completion.verification.length === 0) throw new ApiError(409, "issue_verification_required");
+    }
     const actor = await subject();
     const updated = await database.db.transaction(async (transaction) => {
       const [row] = await transaction.update(issues).set({ status: target, resolvedAt: target === "resolved" ? new Date() : null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, issue.status))).returning();
@@ -476,15 +613,15 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
-    const [base, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows] = await Promise.all([
+    const [base, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, resultRows] = await Promise.all([
       listItem(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
       database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
       database.db.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)), database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
       database.db.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)), database.db.select({ comment: issueComments, person: subjects }).from(issueComments).innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject)).where(eq(issueComments.issueId, issue.id)).orderBy(asc(issueComments.createdAt)),
+      database.db.select().from(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id)).limit(1),
     ]);
     const workspace = workspaceRows[0]; const session = sessionRows[0]; const reporter = reporterRows[0];
     const sessionReady = session ? await readFile(session.sessionFile).then(() => true, () => false) : false;
-    const sessionLive = sessionReady && ptys.has(issue.id);
     return {
       ...base, description: issue.description,
       repositories: repositoryRows.map((item) => ({ id: item.id, url: item.url, baseBranch: item.baseBranch, workingBranch: item.workingBranch, codeServerPath: codeServerFolder(item.localPath) })),
@@ -493,29 +630,34 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         status: workspace?.status ?? "not_created",
         url: workspace?.codeServerUrl ?? null,
         lastError: workspace?.lastError ?? null,
-        retryable: !runner.isRunning(issue.id) && (
+        retryable: !engine.isRunning(issue.id) && (
           ["not_created", "preparing", "running", "stopped", "failed"].includes(workspace?.status ?? "not_created")
-          || (workspace?.status === "ready" && !sessionLive && ["open", "in_progress", "failed"].includes(issue.status))
+          || (workspace?.status === "ready" && !sessionReady && ["open", "in_progress", "failed"].includes(issue.status))
         ),
       },
-      agentSession: sessionLive ? { sessionId: session!.piSessionId } : null,
+      agentSession: sessionReady ? { sessionId: session!.piSessionId } : null,
+      agentResult: resultRows[0] ? {
+        outcome: resultRows[0].outcome, summary: resultRows[0].summary, rootCause: resultRows[0].rootCause,
+        evidence: resultRows[0].evidence, changes: resultRows[0].changes, verification: resultRows[0].verification, risks: resultRows[0].risks,
+        policyVersion: resultRows[0].policyVersion, updatedAt: resultRows[0].updatedAt.toISOString(),
+      } : null,
       reporter: reporter ? { subject: reporter.subject, name: reporter.displayName ?? reporter.username ?? reporter.subject, email: reporter.email ?? "" } : undefined,
       ccRecipients: ccRows.map(({ person }) => ({ subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "" })),
       environmentKey: (await database.db.select().from(environments).where(eq(environments.id, issue.environmentId)).limit(1))[0]?.key,
       comments: commentRows.map(({ comment, person }) => ({ id: comment.id, author: person.displayName ?? person.username ?? person.subject, body: comment.body, createdAt: comment.createdAt.toISOString() })),
-      terminalTranscript: await runner.getTerminalTranscript(issue.id),
     };
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
-    if (runner.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     await database.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
       await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transaction.delete(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id));
     });
-    runner.enqueue(issue.id);
+    engine.enqueue(issue.id);
     return reply.code(202).send({ ok: true });
   });
 
@@ -534,7 +676,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.post<{ Params: { key: string } }>("/api/issues/:key/sync", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
-    if (runner.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     const [service, environment, attachments] = await Promise.all([
       database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, issue.serviceId)).limit(1).then((rows) => rows[0]),
       database.db.select({ key: environments.key }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1).then((rows) => rows[0]),
@@ -547,8 +689,11 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       attachments.length ? "Use attachment_read with an attachment ID only when the attachment is relevant." : "The issue has no attachments.",
       "Re-evaluate the issue using the updated metadata and respond to the user.",
     ].join("\n\n");
-    await database.db.update(issues).set({ status: "in_progress", resolvedAt: null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
-    runner.enqueue(issue.id, message);
+    await database.db.transaction(async (transaction) => {
+      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transaction.delete(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id));
+    });
+    engine.enqueue(issue.id, message, false);
     return reply.code(202).send({ ok: true });
   });
 
@@ -577,10 +722,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.delete<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
-    const attachmentIds = [...new Set(strings(record(request.body).attachmentIds, "attachment_ids", 10))];
+    const attachmentIds = [...new Set(strings(record(request.body).attachmentIds, "attachment_ids"))];
     if (!attachmentIds.length) return reply.code(204).send();
-    if (runner.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
-    if (!await runner.invalidatePolicy(issue.id)) throw new ApiError(409, "issue_terminal_active");
+    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    await engine.invalidatePolicy(issue.id);
     const attachments = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
     if (attachments.length !== attachmentIds.length) throw new ApiError(404, "attachment_not_found");
 
@@ -597,30 +742,31 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       }
       await database.db.transaction(async (transaction) => {
         await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
+        await transaction.delete(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id));
         await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
       });
     } catch (error) {
       await Promise.all(quarantined.map(({ source, temporary }) => rename(temporary, source).catch(() => undefined)));
       throw error;
     }
-    await Promise.all(quarantined.map(({ temporary }) => rm(temporary, { force: true })));
+    await Promise.all(quarantined.map(({ temporary }) => rm(temporary, { force: true }).catch(() => undefined)));
     return reply.code(204).send();
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
+    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     const uploader = await subject();
     const pending: Array<{ fileName: string; mediaType: string; data: Buffer; sha256: string }> = [];
     for await (const part of request.files()) {
       const data = await part.toBuffer();
-      const fileName = path.basename(part.filename).slice(0, 255);
+      const fileName = path.basename(part.filename);
       if (!fileName) throw new ApiError(400, "invalid_attachment_name");
-      pending.push({ fileName, mediaType: part.mimetype.slice(0, 255), data, sha256: createHash("sha256").update(data).digest("hex") });
+      pending.push({ fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") });
     }
-    const existing = await database.db.select({ id: issueAttachments.id }).from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
-    if (existing.length + pending.length > 10) throw new ApiError(400, "attachment_limit_exceeded");
     if (!pending.length) return reply.code(201).send([]);
+    await engine.invalidatePolicy(issue.id);
 
     const directory = path.join(stateRoot, "attachments", issue.key.toLowerCase());
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -635,46 +781,74 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
           const [attachment] = await transaction.insert(issueAttachments).values({ issueId: issue.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: uploader }).returning();
           rows.push(attachmentItem(attachment!));
         }
+        await transaction.delete(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id));
         await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
         return rows;
       });
       return reply.code(201).send(created);
     } catch (error) {
-      await Promise.all(written.map((objectKey) => rm(objectKey, { force: true })));
+      await Promise.all(written.map((objectKey) => rm(objectKey, { force: true }).catch(() => undefined)));
       throw error;
     }
   });
 
-  app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
-    const issue = await issueByKey(request.params.key); if (!issue) throw new ApiError(404, "issue_not_found");
-    reply.hijack(); reply.raw.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-cache", connection: "keep-alive" });
-    for (const event of await database.db.select().from(agentEvents).where(eq(agentEvents.issueId, issue.id)).orderBy(asc(agentEvents.createdAt))) reply.raw.write(`${JSON.stringify({ ...event, createdAt: event.createdAt.toISOString() })}\n`);
-    const listener = (event: RunEvent) => reply.raw.write(`${JSON.stringify(event)}\n`); const set = listeners.get(issue.id) ?? new Set(); set.add(listener); listeners.set(issue.id, set);
-    const heartbeat = setInterval(() => reply.raw.write(`${JSON.stringify({ type: "heartbeat" })}\n`), 15_000); heartbeat.unref();
-    request.raw.once("close", () => { clearInterval(heartbeat); set.delete(listener); if (!set.size) listeners.delete(issue.id); });
+  app.get<{ Params: { key: string }; Querystring: { cols?: string; footerCols?: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
+    const issue = await issueByKey(request.params.key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    const columns = terminalColumns(request.query.cols);
+    const footerColumns = terminalColumns(request.query.footerCols ?? request.query.cols);
+    const cwd = path.join(stateRoot, "workspaces", issue.key.toLowerCase());
+    const [deployment] = await database.db.select({ config: serviceDeployments.config }).from(serviceDeployments)
+      .where(and(eq(serviceDeployments.serviceId, issue.serviceId), eq(serviceDeployments.environmentId, issue.environmentId))).limit(1);
+    const deploymentConfig = deployment?.config as Record<string, unknown> | undefined;
+    const configuredAgent = deploymentConfig?.agent && typeof deploymentConfig.agent === "object" ? deploymentConfig.agent as Record<string, unknown> : {};
+    const provider = typeof configuredAgent.provider === "string" && configuredAgent.provider ? configuredAgent.provider : process.env.ISSUE_PILOT_PROVIDER ?? process.env.PI_PROVIDER ?? "not-configured";
+    const model = typeof configuredAgent.model === "string" && configuredAgent.model ? configuredAgent.model : process.env.ISSUE_PILOT_MODEL ?? process.env.PI_MODEL ?? "not-configured";
+    const thinkingLevel = typeof configuredAgent.thinkingLevel === "string" && THINKING_LEVELS.includes(configuredAgent.thinkingLevel as typeof THINKING_LEVELS[number])
+      ? configuredAgent.thinkingLevel : process.env.ISSUE_PILOT_REASONING ?? process.env.PI_REASONING_LEVEL ?? "medium";
+    const footer = renderTerminalFooter({ workspace: `workspace/${issue.key.toLowerCase()}`, provider, model, thinkingLevel }, footerColumns);
+    const pendingToolLines = new Map<string, number>();
+    reply.hijack();
+    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+    const send = (event: RunEvent) => {
+      const frame = renderTerminalEvent(event, columns, cwd);
+      if ((event.kind === "tool_call" || event.kind === "tool_result") && !frame.ansi) return;
+      let replaceLines = 0;
+      if (frame.toolCallId && frame.replaceTool) {
+        replaceLines = pendingToolLines.get(frame.toolCallId) ?? 0;
+        pendingToolLines.delete(frame.toolCallId);
+      } else if (frame.toolCallId) {
+        pendingToolLines.set(frame.toolCallId, frame.lines);
+      }
+      const clientEvent = event.kind === "tool_call" || event.kind === "tool_result" ? { ...event, message: "" } : event;
+      reply.raw.write(`id: ${event.id}\ndata: ${JSON.stringify({ ...clientEvent, terminal: { ansi: frame.ansi, text: frame.text, lines: frame.lines, replaceLines, ...(frame.toolCallId ? { toolCallId: frame.toolCallId } : {}) } })}\n\n`);
+    };
+    const replay = await database.db.select().from(agentEvents)
+      .where(and(eq(agentEvents.issueId, issue.id), inArray(agentEvents.kind, ["user", "assistant", "tool_call", "tool_result"])))
+      .orderBy(asc(sql<number>`rowid`));
+    for (const event of replay) send({ ...event, createdAt: event.createdAt.toISOString() });
+    reply.raw.write(`event: ready\ndata: ${JSON.stringify({ footer })}\n\n`);
+    const set = listeners.get(issue.id) ?? new Set(); set.add(send); listeners.set(issue.id, set);
+    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000); heartbeat.unref();
+    request.raw.once("close", () => { clearInterval(heartbeat); set.delete(send); if (!set.size) listeners.delete(issue.id); });
   });
 
-  app.post<{ Params: { key: string } }>("/api/issues/:key/terminal-ticket", async (request) => {
-    const issue = await issueByKey(request.params.key); if (!issue) throw new ApiError(404, "issue_not_found");
-    const session = (await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1))[0]; if (!session) throw new ApiError(409, "pi_session_not_ready");
-    try { await Promise.all([readFile(session.sessionFile), readFile(path.join(session.workspacePath, ".issue-pilot", "pi-terminal-token"))]); }
-    catch { throw new ApiError(409, "pi_session_not_ready"); }
-    if (!ptys.has(issue.id)) throw new ApiError(409, "pi_terminal_not_running");
-    const policy = await loadIssuePolicy(session.workspacePath, stateRoot);
-    const policyHash = createHash("sha256").update(JSON.stringify(policy)).digest("hex");
-    const ticket = randomUUID(); const expiresAt = Date.now() + 30_000; tickets.set(ticket, { issueId: issue.id, issueKey: issue.key, sessionFile: session.sessionFile, workspacePath: session.workspacePath, policyHash, tools: policy.tools, expiresAt });
-    return { ticket, mode: "pty", expiresAt: new Date(expiresAt).toISOString() };
+  app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
+    const issue = await issueByKey(request.params.key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    const input = record(request.body);
+    const message = text(input.message, "agent_message", 50_000);
+    const columns = terminalColumns(input.cols);
+    const event = await engine.send(issue.id, message);
+    const frame = renderTerminalEvent(event, columns, path.join(stateRoot, "workspaces", issue.key.toLowerCase()));
+    return reply.code(202).send({ ...event, terminal: { ansi: frame.ansi, text: frame.text, lines: frame.lines, replaceLines: 0 } });
   });
 
-  app.get<{ Params: { key: string }; Querystring: { ticket?: string } }>("/api/issues/:key/terminal", { websocket: true }, (socket, request) => {
-    const ticket = request.query.ticket ? tickets.get(request.query.ticket) : undefined; if (request.query.ticket) tickets.delete(request.query.ticket);
-    if (!ticket || ticket.expiresAt < Date.now() || ticket.issueKey !== request.params.key.toUpperCase()) return socket.close(1008, "invalid_ticket");
-    let attachment: ReturnType<PtySessions["attach"]> | undefined;
-    try {
-      attachment = ptys.attach(ticket, { output: (data) => socket.send(JSON.stringify({ type: "output", data })), exit: (exitCode) => { socket.send(JSON.stringify({ type: "exit", exitCode })); socket.close(); } }, 100, 30);
-    } catch { return socket.close(1011, "terminal_unavailable"); }
-    socket.on("message", (buffer) => { try { const message = JSON.parse(buffer.toString()) as { type?: string; data?: string; cols?: number; rows?: number }; if (message.type === "input" && typeof message.data === "string") attachment?.input(message.data); else if (message.type === "resize") attachment?.resize(message.cols ?? 100, message.rows ?? 30); } catch { socket.close(1003, "invalid_message"); } });
-    socket.once("close", () => attachment?.detach());
+  app.post<{ Params: { key: string } }>("/api/issues/:key/agent-abort", async (request, reply) => {
+    const issue = await issueByKey(request.params.key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    if (!await engine.abort(issue.id)) throw new ApiError(409, "agent_not_running");
+    return reply.code(202).send();
   });
 
   return app;
@@ -682,8 +856,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
 async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? 3000);
-  const host = process.env.HOST ?? "127.0.0.1";
-  if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("issue_pilot_api_must_bind_to_loopback");
+  const host = process.env.HOST ?? "0.0.0.0";
   const app = await buildApi();
   await app.listen({ port, host });
 }

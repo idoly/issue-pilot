@@ -1,8 +1,11 @@
 import type { IconNode } from "lucide";
 import {
+  ArrowDown as ArrowDownNode,
+  Bot as BotNode,
   CheckCircle2 as CheckCircle2Node,
   ChevronLeft as ChevronLeftNode,
   ChevronRight as ChevronRightNode,
+  CircleStop as CircleStopNode,
   Copy as CopyNode,
   Download as DownloadNode,
   ExternalLink as ExternalLinkNode,
@@ -53,9 +56,12 @@ function createIcon(node: IconNode) {
   };
 }
 
+export const ArrowDown = createIcon(ArrowDownNode);
+export const Bot = createIcon(BotNode);
 export const CheckCircle2 = createIcon(CheckCircle2Node);
 export const ChevronLeft = createIcon(ChevronLeftNode);
 export const ChevronRight = createIcon(ChevronRightNode);
+export const CircleStop = createIcon(CircleStopNode);
 export const Copy = createIcon(CopyNode);
 export const Download = createIcon(DownloadNode);
 export const ExternalLink = createIcon(ExternalLinkNode);

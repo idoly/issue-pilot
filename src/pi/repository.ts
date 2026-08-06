@@ -2,7 +2,6 @@ import path from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { result } from "../evidence/output.ts";
 import type { GrantedRepository } from "./policy.ts";
 
 export async function repositoryStatus(pi: ExtensionAPI, repositories: GrantedRepository[], action: "status" | "diff", signal?: AbortSignal) {
@@ -15,5 +14,8 @@ export async function repositoryStatus(pi: ExtensionAPI, repositories: GrantedRe
     if (execution.code !== 0) throw new Error(`repository_${action}_failed`);
     outputs.push({ repository: path.basename(service.repositoryPath), output: execution.stdout });
   }
-  return result({ action, repositories: outputs }, { serviceKey: repositories[0]!.serviceKey, action });
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ action, repositories: outputs }, null, 2) }],
+    details: { serviceKey: repositories[0]!.serviceKey, action },
+  };
 }

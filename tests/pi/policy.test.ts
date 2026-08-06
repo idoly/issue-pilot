@@ -43,9 +43,10 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
       attachments: [{ id: "attachment-1", fileName: "note.txt", mediaType: "text/plain", size: Buffer.byteLength(attachmentContent), sha256: createHash("sha256").update(attachmentContent).digest("hex"), attachmentPath }],
       service: {
         serviceKey: "orders",
-        environmentKey: "test",
-        environmentKind: "test",
-        capabilities: ["configuration_read"],
+        environmentKey: "development",
+        environmentKind: "development",
+        capabilities: ["nacos"],
+        nacos: { deploymentId: "orders-development", serverUrl: "https://nacos.example.test", namespace: "development", group: "DEFAULT_GROUP" },
         repositories: [
           { codeAccess: "write", repositoryPath: repository, baseCommit: "a".repeat(40) },
           { codeAccess: "read", repositoryPath: dependencyRepository, baseCommit: "b".repeat(40) },
@@ -56,7 +57,7 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
     await chmod(capabilityFile, 0o600);
 
     const loaded = await loadIssuePolicy(workspace, root);
-    assert.deepEqual(loaded.tools, ["repository_read", "repository_grep", "repository_find", "repository_list", "attachment_read", "repository_edit", "repository_write", "configuration_read", "node_project_command", "maven_project_command", "repository_status"]);
+    assert.deepEqual(loaded.tools, ["repository_read", "repository_grep", "repository_find", "repository_list", "attachment_read", "repository_edit", "repository_write", "nacos", "node_project_command", "maven_project_command", "repository_status", "complete_issue"]);
     const attachment = await readAttachment(loaded, "attachment-1");
     const attachmentContentResult = attachment.content[0];
     assert.match(attachmentContentResult?.type === "text" ? attachmentContentResult.text : "", /bounded attachment text/);
@@ -72,7 +73,7 @@ test("enforces issue tool, repository-root, read-only, and symlink boundaries", 
     await assert.rejects(authorizeWorkspacePath(loaded, workspace, join(module, "escaped.txt"), "read"), /workspace_symlink_escape_not_granted/);
     await assert.rejects(authorizeWorkspacePath(loaded, workspace, outside, "read"), /workspace_path_not_granted/);
     assert.throws(() => assertToolGranted(loaded, "bash"), /tool_not_granted_for_issue/);
-    await writeFile(capabilityFile, JSON.stringify({ ...policy, tools: [...policy.tools, "database_read"] }), { mode: 0o600 });
+    await writeFile(capabilityFile, JSON.stringify({ ...policy, tools: [...policy.tools, "db"] }), { mode: 0o600 });
     await assert.rejects(loadIssuePolicy(workspace, root), /issue_policy_tool_set_mismatch/);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -88,12 +89,12 @@ test("freezes SLS project and Logstore grants into the issue policy", () => {
       serviceKey: "orders",
       environmentKey: "test",
       environmentKind: "test",
-      capabilities: ["sls_read"],
-      sls: { project: "orders-test", logstores: ["application"] },
+      capabilities: ["sls"],
+      sls: { deploymentId: "orders-test", region: "cn-test", project: "orders-test", logstores: ["application"] },
       repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-sls/repository", baseCommit: "a".repeat(40) }],
     },
   });
-  assert.equal(policy.tools.includes("sls_read"), true);
+  assert.equal(policy.tools.includes("sls"), true);
   assert.doesNotThrow(() => assertSlsGranted(policy, "orders-test", "application"));
   assert.throws(() => assertSlsGranted(policy, "other-project", "application"), /sls_scope_not_granted_for_service/);
   const { sls: _sls, ...serviceWithoutSls } = policy.service;
@@ -109,12 +110,12 @@ test("freezes a credential-free browser origin into the issue policy", () => {
       serviceKey: "orders",
       environmentKey: "development",
       environmentKind: "development",
-      capabilities: ["browser_use"],
+      capabilities: ["playwright"],
       browser: { deploymentId: "orders-development", baseUrl: "https://orders.example.test/admin/login" },
       repositories: [{ codeAccess: "write", repositoryPath: "/tmp/issue-policy-browser/repository", baseCommit: "a".repeat(40) }],
     },
   });
-  assert.equal(policy.tools.includes("browser_use"), true);
+  assert.equal(policy.tools.includes("playwright"), true);
   assert.deepEqual(policy.service.browser, { deploymentId: "orders-development", baseUrl: "https://orders.example.test/admin/login" });
   assert.doesNotMatch(JSON.stringify(policy), /password|username/);
   assert.throws(() => createIssuePolicy({ ...policy, service: { ...policy.service, browser: { deploymentId: "orders-development", baseUrl: "https://other.example.test/path?token=secret" } } }), /invalid_browser_service_scope/);
@@ -136,5 +137,21 @@ test("uses read-only code tools for non-mutating issue types", () => {
   assert.equal(policy.tools.includes("repository_read"), true);
   assert.equal(policy.tools.includes("repository_write"), false);
   assert.equal(policy.tools.includes("repository_edit"), false);
-  assert.equal(policy.tools.includes("database_read"), false);
+  assert.equal(policy.tools.includes("db"), false);
+
+  const analysisPolicy = createIssuePolicy({
+    issueKey: "ISSUE-20260804-006",
+    issueType: "smart_analysis",
+    workspaceRoot: "/tmp/issue-policy-analysis",
+    service: {
+      serviceKey: "orders",
+      environmentKey: "development",
+      environmentKind: "development",
+      capabilities: [],
+      repositories: [{ codeAccess: "write", repositoryPath: "/tmp/issue-policy-analysis/repository", baseCommit: "b".repeat(40) }],
+    },
+  });
+  assert.equal(analysisPolicy.tools.includes("repository_write"), false);
+  assert.equal(analysisPolicy.tools.includes("repository_edit"), false);
+  assert.equal(analysisPolicy.service.repositories[0]?.codeAccess, "read");
 });

@@ -87,23 +87,16 @@ async function main() {
     }
 
     const snapshot = await page.evaluate(() => {
-      const visible = (element) => {
-        const style = getComputedStyle(element);
-        const box = element.getBoundingClientRect();
-        return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
-      };
       const controls = [...document.querySelectorAll("a,button,input,select,textarea,[role=button]")]
-        .filter(visible)
-        .slice(0, 100)
         .map((element) => ({
           tag: element.tagName.toLowerCase(),
           type: element.getAttribute("type") || undefined,
           name: element.getAttribute("name") || undefined,
           id: element.id || undefined,
           role: element.getAttribute("role") || undefined,
-          text: (element.getAttribute("aria-label") || element.textContent || element.getAttribute("placeholder") || "").trim().slice(0, 300),
+          text: (element.getAttribute("aria-label") || element.textContent || element.getAttribute("placeholder") || "").trim(),
         }));
-      return { title: document.title.slice(0, 500), text: (document.body?.innerText || "").slice(0, 30_000), controls };
+      return { title: document.title, text: document.body?.innerText || "", controls };
     });
     const output = { url: page.url(), ...snapshot };
     if (request.screenshot === true) output.screenshot = (await page.screenshot({ type: "png", fullPage: false })).toString("base64");

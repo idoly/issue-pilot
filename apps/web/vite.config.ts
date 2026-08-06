@@ -6,8 +6,11 @@ import solidPlugin from "vite-plugin-solid";
 export default defineConfig({
   plugins: [solidPlugin()],
   server: {
-    host: "127.0.0.1",
+    host: "0.0.0.0",
     port: 4173,
+    watch: {
+      awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 },
+    },
     proxy: {
       "/api": { target: "http://127.0.0.1:3000", ws: true },
       "/code-server": {

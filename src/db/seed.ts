@@ -1,23 +1,21 @@
 import { and, eq, isNull } from "drizzle-orm";
 
 import { openDatabase } from "./client.ts";
-import { deploymentCapabilities, environments, serviceDeployments, services, subjects } from "./schema.ts";
+import { environments, serviceDeployments, services, subjects } from "./schema.ts";
 
 const organizationId = "demo";
 
-const userSubject = process.env.SEED_USER_SUBJECT;
+const people = [
+  { subject: "yx4821@xianhengguoji.com", username: "yx4821@xianhengguoji.com", displayName: "严欣", email: "yx4821@xianhengguoji.com" },
+  { subject: "zjj3753@xianhengguoji.com", username: "zjj3753@xianhengguoji.com", displayName: "周俊杰", email: "zjj3753@xianhengguoji.com" },
+];
 const { db, close } = openDatabase();
 
 try {
-  if (userSubject) {
-    await db.insert(subjects).values({
-      subject: userSubject,
-      username: "694590014@qq.com",
-      displayName: "严欣",
-      email: "694590014@qq.com",
-    }).onConflictDoUpdate({
+  for (const person of people) {
+    await db.insert(subjects).values(person).onConflictDoUpdate({
       target: subjects.subject,
-      set: { username: "694590014@qq.com", displayName: "严欣", email: "694590014@qq.com", updatedAt: new Date() },
+      set: { username: person.username, displayName: person.displayName, email: person.email, updatedAt: new Date() },
     });
   }
 
@@ -60,23 +58,17 @@ try {
     }).returning();
   }
 
-  const deployments = await db.insert(serviceDeployments).values([
+  await db.insert(serviceDeployments).values([
     { serviceId: service!.id, environmentId: development.id, baseBranch: "develop", config: {} },
     { serviceId: service!.id, environmentId: production.id, baseBranch: "main", config: {} },
     { serviceId: service!.id, environmentId: test.id, baseBranch: "develop", config: {} },
   ]).onConflictDoNothing().returning();
-  const testDeployment = deployments.find((deployment) => deployment.environmentId === test.id)
-    ?? (await db.select().from(serviceDeployments).where(and(eq(serviceDeployments.serviceId, service!.id), eq(serviceDeployments.environmentId, test.id))).limit(1))[0];
-  if (testDeployment) await db.insert(deploymentCapabilities).values([
-    { deploymentId: testDeployment.id, capability: "configuration_read" },
-    { deploymentId: testDeployment.id, capability: "database_read" },
-  ]).onConflictDoNothing();
 
   console.log(JSON.stringify({
     organizationId,
     environments: [development.name, production.name, test.name],
     service: service!.name,
-    subject: userSubject ?? null,
+    subjects: people.map((person) => person.subject),
   }, null, 2));
 } finally {
   await close();

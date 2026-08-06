@@ -6,10 +6,9 @@ cache_root=$(realpath -m "${PI_TOOL_CACHE_ROOT:-$root/.issue-pilot/tool-cache}")
 node_image=${PI_NODE_CLI_IMAGE:-docker.io/library/node:26.5.1-bookworm-slim}
 maven_image=${PI_MAVEN_CLI_IMAGE:-docker.io/library/maven:3.9.16-eclipse-temurin-8}
 mysql_image=${PI_MYSQL_CLI_IMAGE:-docker.io/library/mysql:26.7.0}
-redis_image=${PI_REDIS_CLI_IMAGE:-docker.io/library/redis:8.10.0-alpine}
 nacos_image=${PI_NACOS_CLI_IMAGE:-docker.io/library/node:26.5.1-bookworm-slim}
-playwright_image=${PI_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright@sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac}
-base_images="$mysql_image $redis_image $node_image $maven_image"
+playwright_image=${PI_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.62.1-noble}
+base_images="$mysql_image $node_image $maven_image"
 images="$base_images $playwright_image"
 
 prepare() {
@@ -35,6 +34,11 @@ status() {
     printf 'tool ready playwright-core@1.62.1\n'
   else
     printf 'tool missing playwright-core@1.62.1\n'
+  fi
+  if podman image exists "$node_image"; then
+    printf 'runtime ready redis,mq,es shared-disposable %s\n' "$node_image"
+  else
+    printf 'runtime missing redis,mq,es shared-disposable %s\n' "$node_image"
   fi
   for volume in nacos-cli-data; do
     if podman volume exists "$volume"; then printf 'volume ready %s\n' "$volume"; else printf 'volume missing %s\n' "$volume"; fi

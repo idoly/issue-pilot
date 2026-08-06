@@ -9,16 +9,18 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import YAML from "yaml";
 
 import type { GrantedRepository } from "../pi/policy.ts";
-import { redact, sensitive } from "./output.ts";
 
 const execFileAsync = promisify(execFile);
 const CONFIG_FILE = /(?:^|\/)(?:application|bootstrap)(?:-[a-zA-Z0-9._-]+)?\.(?:ya?ml|properties)$/;
-const MAX_FILE_BYTES = 1024 * 1024;
-const MAX_TOTAL_CONFIG_BYTES = 4 * 1024 * 1024;
-const MAX_CONFIG_FILES = 100;
-const MAX_CONFIG_SCOPES = 20;
-const MAX_NACOS_TARGETS = 20;
 const PLACEHOLDER = /\$\{([^}:]+)(?::([^}]*))?\}/g;
+
+export interface NacosConnection {
+  serverUrl: string;
+  namespace: string;
+  group: string;
+  username: string;
+  password: string;
+}
 
 export interface ResolvedConfiguration {
   properties: Record<string, unknown>;
@@ -91,7 +93,6 @@ async function frozenFiles(service: GrantedRepository, candidates: string[]): Pr
     for (const file of files) {
       if (selected.has(file)) continue;
       const content = await git(service.repositoryPath, ["show", `${service.baseCommit}:${file}`]);
-      if (Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES) throw new Error("service_configuration_too_large");
       selected.set(file, content);
     }
     const properties = Object.assign({}, ...[...selected].map(([file, content]) => parse(file, content)));
@@ -115,12 +116,8 @@ async function frozenConfigurationScopes(service: GrantedRepository): Promise<Ar
     if (scope === null) continue;
     candidatesByScope.set(scope, [...(candidatesByScope.get(scope) ?? []), name]);
   }
-  if (candidatesByScope.size > MAX_CONFIG_SCOPES) throw new Error("too_many_service_configuration_scopes");
   const scopes = [];
   for (const [scope, candidates] of [...candidatesByScope].sort(([left], [right]) => left.localeCompare(right))) scopes.push({ scope, files: await frozenFiles(service, candidates) });
-  const files = scopes.flatMap((scope) => scope.files);
-  if (files.length > MAX_CONFIG_FILES) throw new Error("too_many_service_configuration_files");
-  if (files.reduce((total, file) => total + Buffer.byteLength(file.content, "utf8"), 0) > MAX_TOTAL_CONFIG_BYTES) throw new Error("service_configuration_too_large");
   return scopes;
 }
 
@@ -179,7 +176,6 @@ function nacosTargets(properties: Record<string, unknown>, environmentKey: strin
     if (profile) targets.push({ dataId: `${application}-${profile}.${extension}`, group, required: false });
   }
   const unique = [...new Map(targets.map((target) => [`${target.dataId}\0${target.group}`, target])).values()];
-  if (unique.length > MAX_NACOS_TARGETS) throw new Error("too_many_nacos_configuration_targets");
   if (unique.some((target) => !/^[a-zA-Z0-9._-]{1,255}$/.test(target.dataId) || !/^[a-zA-Z0-9._-]{1,255}$/.test(target.group))) throw new Error("invalid_nacos_configuration_target");
   return unique;
 }
@@ -222,25 +218,36 @@ async function nacosContent(pi: ExtensionAPI, properties: Record<string, unknown
     const execution = await pi.exec("podman", [...container, "--volume", "nacos-cli-data:/opt/nacos-cli:ro", "--volume", `${profileRoot}:/home/node/.nacos-cli:ro,z`, "--env", "HOME=/home/node", image, "node", "/opt/nacos-cli/node_modules/@nacos-group/cli/bin/cli.js", "--profile", "issue", ...explicitConnection, "config-get", target.dataId, target.group], { timeout: 20_000, ...(signal ? { signal } : {}) });
     if (execution.code === 0) {
       const content = execution.stdout.replace(/^Fetching config:.*?\r?\n\r?\n═+\r?\nData ID:.*?\r?\nGroup:.*?\r?\n═+\r?\n/s, "");
-      if (Buffer.byteLength(content, "utf8") > 2 * 1024 * 1024) throw new Error("nacos_configuration_read_failed");
       return content;
     }
-    if (!/404 Not Found|resource not found/i.test(`${execution.stdout}\n${execution.stderr}`)) throw new Error("nacos_configuration_read_failed");
-
     const adapter = fileURLToPath(new URL("../../infra/nacos-config-get.mjs", import.meta.url));
     const fallback = await pi.exec("podman", [...container, "--volume", `${profileRoot}:/profile:ro,z`, "--volume", `${adapter}:/opt/issue-pilot/nacos-config-get.mjs:ro,z`, image, "node", "/opt/issue-pilot/nacos-config-get.mjs", "/profile/issue.json", target.dataId, target.group], { timeout: 20_000, ...(signal ? { signal } : {}) });
     if (fallback.code !== 0) {
       if (/nacos_configuration_read_failed:404|404 Not Found|resource not found/i.test(`${fallback.stdout}\n${fallback.stderr}`)) return null;
       throw new Error("nacos_configuration_read_failed");
     }
-    if (Buffer.byteLength(fallback.stdout, "utf8") > 2 * 1024 * 1024) throw new Error("nacos_configuration_read_failed");
     return fallback.stdout;
   } finally {
     await rm(profileRoot, { recursive: true, force: true });
   }
 }
 
-async function resolveFiles(pi: ExtensionAPI, service: GrantedRepository, files: Array<{ file: string; content: string }>, signal?: AbortSignal, secrets: Record<string, string> = {}): Promise<ResolvedConfiguration> {
+function withNacosConnection(properties: Record<string, unknown>, nacos: NacosConnection): Record<string, unknown> {
+  return {
+    ...properties,
+    "spring.cloud.nacos.server-addr": nacos.serverUrl,
+    "spring.cloud.nacos.namespace": nacos.namespace,
+    "spring.cloud.nacos.username": nacos.username,
+    "spring.cloud.nacos.password": nacos.password,
+    "spring.cloud.nacos.config.server-addr": nacos.serverUrl,
+    "spring.cloud.nacos.config.namespace": nacos.namespace,
+    "spring.cloud.nacos.config.group": nacos.group,
+    "spring.cloud.nacos.config.username": nacos.username,
+    "spring.cloud.nacos.config.password": nacos.password,
+  };
+}
+
+async function resolveFiles(pi: ExtensionAPI, service: GrantedRepository, files: Array<{ file: string; content: string }>, signal?: AbortSignal, secrets: Record<string, string> = {}, nacos?: NacosConnection): Promise<ResolvedConfiguration> {
   let properties: Record<string, unknown> = {};
   const sources: string[] = [];
   const missingSources: string[] = [];
@@ -249,9 +256,11 @@ async function resolveFiles(pi: ExtensionAPI, service: GrantedRepository, files:
     sources.push(`repository:${file.file}`);
   }
   properties = resolvePlaceholders(properties, secrets);
+  if (nacos) properties = withNacosConnection(properties, nacos);
   const server = value(properties, "spring.cloud.nacos.config.server-addr", "spring.cloud.nacos.server-addr", "nacos.server-addr");
   if (server) {
-    for (const target of nacosTargets(properties, service.environmentKey)) {
+    for (const discovered of nacosTargets(properties, service.environmentKey)) {
+      const target = nacos ? { ...discovered, group: nacos.group } : discovered;
       const source = `nacos:${target.dataId}/${target.group}`;
       const content = await nacosContent(pi, properties, target, signal);
       if (content === null) {
@@ -259,16 +268,17 @@ async function resolveFiles(pi: ExtensionAPI, service: GrantedRepository, files:
         continue;
       }
       properties = resolvePlaceholders({ ...properties, ...parse(target.dataId, content) }, secrets);
+      if (nacos) properties = withNacosConnection(properties, nacos);
       sources.push(source);
     }
   }
   return { properties, sources, missingSources };
 }
 
-export async function resolveConfigurations(pi: ExtensionAPI, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}): Promise<Array<{ scope: string; configuration: ResolvedConfiguration }>> {
+export async function resolveConfigurations(pi: ExtensionAPI, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}, nacos?: NacosConnection): Promise<Array<{ scope: string; configuration: ResolvedConfiguration }>> {
   const scopes = await frozenConfigurationScopes(service);
   const resolved = [];
-  for (const { scope, files } of scopes) resolved.push({ scope, configuration: await resolveFiles(pi, service, files, signal, secrets) });
+  for (const { scope, files } of scopes) resolved.push({ scope, configuration: await resolveFiles(pi, service, files, signal, secrets, nacos) });
   return resolved;
 }
 
@@ -278,14 +288,6 @@ export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRep
   return resolved[0]?.configuration ?? { properties: {}, sources: [], missingSources: [] };
 }
 
-export function sanitizedConfiguration(configuration: ResolvedConfiguration): ResolvedConfiguration {
-  const properties = Object.fromEntries(Object.entries(configuration.properties).map(([key, entry]) => {
-    if (sensitive(key)) return [key, "[REDACTED]"];
-    if (typeof entry === "string") return [key, redact(entry)];
-    return [key, entry];
-  }));
-  return { properties, sources: configuration.sources, missingSources: configuration.missingSources };
-}
 
 export function datasourceUrl(configuration: ResolvedConfiguration): string {
   const url = value(configuration.properties, "spring.datasource.url", "spring.datasource.jdbc-url", "spring.datasource.hikari.jdbc-url");

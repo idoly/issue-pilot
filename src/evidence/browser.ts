@@ -9,10 +9,8 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../db/client.ts";
 import { serviceDeployments } from "../db/schema.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
-import { result } from "./output.ts";
 
-const DEFAULT_IMAGE = "mcr.microsoft.com/playwright@sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac";
-const MAX_ACTIONS = 20;
+const DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
 
 export type BrowserAction =
   | { type: "goto"; path: string }
@@ -23,7 +21,7 @@ export type BrowserAction =
   | { type: "wait_for"; selector: string };
 
 function deploymentBrowser(value: Record<string, unknown>): { baseUrl: string; username: string | null; password: string | null } {
-  const raw = value.browser;
+  const raw = value.playwright;
   if (!raw || typeof raw !== "object") throw new Error("browser_configuration_not_found");
   const browser = raw as Record<string, unknown>;
   if (typeof browser.baseUrl !== "string") throw new Error("browser_configuration_not_found");
@@ -36,7 +34,7 @@ function deploymentBrowser(value: Record<string, unknown>): { baseUrl: string; u
 
 async function credentials(policy: IssuePolicy): Promise<{ username: string | null; password: string | null }> {
   const scope = policy.service.browser;
-  if (!scope || !policy.tools.includes("browser_use")) throw new Error("browser_scope_not_granted_for_service");
+  if (!scope || !policy.tools.includes("playwright")) throw new Error("browser_scope_not_granted_for_service");
   const stateRoot = process.env.ISSUE_PILOT_STATE_ROOT ?? path.dirname(path.dirname(policy.workspaceRoot));
   const databaseFile = path.resolve(process.env.ISSUE_PILOT_DATABASE ?? path.join(stateRoot, "issues.db"));
   const metadata = await stat(databaseFile);
@@ -54,7 +52,7 @@ async function credentials(policy: IssuePolicy): Promise<{ username: string | nu
 }
 
 function validateActions(actions: BrowserAction[]): void {
-  if (!Array.isArray(actions) || actions.length < 1 || actions.length > MAX_ACTIONS) throw new Error("invalid_browser_actions");
+  if (!Array.isArray(actions) || actions.length < 1) throw new Error("invalid_browser_actions");
   for (const action of actions) {
     if (!action || typeof action !== "object") throw new Error("invalid_browser_action");
     if (action.type === "goto") {
@@ -104,7 +102,7 @@ export async function useBrowser(pi: ExtensionAPI, policy: IssuePolicy, input: {
     ]);
     const args = [
       "run", "--rm", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--network", "host",
-      "--pids-limit", "256", "--memory", "1g", "--user", `${uid}:${gid}`,
+      "--pids-limit", "256", "--memory", "1g", "--userns", "keep-id", "--user", `${uid}:${gid}`,
       "--volume", `${runner}:/runner/playwright-runner.cjs:ro,Z`,
       "--volume", `${inputDirectory}:/run/input:ro,Z`,
       "--volume", `${secretDirectory}:/run/secrets:ro,Z`,
@@ -115,15 +113,16 @@ export async function useBrowser(pi: ExtensionAPI, policy: IssuePolicy, input: {
     ];
     const execution = await pi.exec("podman", args, { timeout: 90_000, ...(signal ? { signal } : {}) });
     if (execution.code !== 0) throw new Error("browser_operation_failed");
-    if (Buffer.byteLength(execution.stdout, "utf8") > 4 * 1024 * 1024) throw new Error("browser_output_too_large");
     let output: Record<string, unknown>;
     try { output = JSON.parse(execution.stdout) as Record<string, unknown>; } catch { throw new Error("browser_invalid_response"); }
     const screenshot = typeof output.screenshot === "string" ? output.screenshot : undefined;
     delete output.screenshot;
-    const response = result(output, { runtime: "container", baseUrl: scope.baseUrl, actionCount: input.actions.length });
+    const content: [{ type: "text"; text: string }, ...Array<{ type: "image"; data: string; mimeType: string }>] = [
+      { type: "text", text: JSON.stringify(output, null, 2) },
+    ];
+    const response = { content, details: { runtime: "container", baseUrl: scope.baseUrl, actionCount: input.actions.length } };
     if (screenshot) {
       const image = Buffer.from(screenshot, "base64");
-      if (image.length > 2 * 1024 * 1024) throw new Error("browser_screenshot_too_large");
       (response.content as Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>).push({ type: "image", data: image.toString("base64"), mimeType: "image/png" });
     }
     return response;

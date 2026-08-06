@@ -40,11 +40,6 @@ export const serviceDeployments = sqliteTable("service_deployments", {
   baseBranch: text("base_branch").notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
 }, (table) => [uniqueIndex("service_deployment_unique").on(table.serviceId, table.environmentId)]);
 
-export const deploymentCapabilities = sqliteTable("deployment_capabilities", {
-  deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id, { onDelete: "cascade" }),
-  capability: text("capability", { enum: ["configuration_read", "database_read", "sls_read", "browser_use"] }).notNull(), ...timestamps,
-}, (table) => [uniqueIndex("deployment_capability_unique").on(table.deploymentId, table.capability)]);
-
 export const serviceRepositories = sqliteTable("service_repositories", {
   id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), kind: text("kind", { enum: ["frontend", "backend"] }).notNull().default("backend"), url: text("url").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("service_repository_url_unique").on(table.serviceId, table.url)]);
@@ -77,6 +72,15 @@ export const issueAttachments = sqliteTable("issue_attachments", {
 export const agentEvents = sqliteTable("issue_pilot_events", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), kind: text("kind").notNull(), message: text("message").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
 }, (table) => [index("issue_pilot_events_issue_idx").on(table.issueId, table.createdAt)]);
+
+export const issueAgentResults = sqliteTable("issue_agent_results", {
+  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }),
+  outcome: text("outcome", { enum: ["resolved", "needs_human", "blocked"] }).notNull(),
+  summary: text("summary").notNull(), rootCause: text("root_cause"),
+  evidence: json<string[]>("evidence").notNull().default([]), changes: json<string[]>("changes").notNull().default([]),
+  verification: json<string[]>("verification").notNull().default([]), risks: json<string[]>("risks").notNull().default([]),
+  policyVersion: integer("policy_version").notNull(), ...timestamps,
+});
 
 export const issueComments = sqliteTable("issue_comments", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), authorSubject: text("author_subject").notNull(), body: text("body").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),

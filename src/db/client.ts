@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 
 import { createClient } from "@libsql/client";
@@ -10,6 +10,7 @@ export function openDatabase(file = process.env.ISSUE_PILOT_DATABASE ?? ".issue-
   const databasePath = path.resolve(file);
   mkdirSync(path.dirname(databasePath), { recursive: true });
   closeSync(openSync(databasePath, "a", 0o600));
+  chmodSync(databasePath, 0o600);
 
   const client = createClient({ url: `file:${databasePath}` });
   return {

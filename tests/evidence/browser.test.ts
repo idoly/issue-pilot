@@ -29,7 +29,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
       serviceId: service!.id,
       environmentId: environment!.id,
       baseBranch: "develop",
-      config: { browser: { baseUrl: "https://orders.example.test/", username: "operator", password: "deployment-secret" } },
+      config: { playwright: { baseUrl: "https://orders.example.test/", username: "operator", password: "deployment-secret" } },
     }).returning();
     await database.close();
     delete process.env.ISSUE_PILOT_STATE_ROOT;
@@ -44,7 +44,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
         serviceKey: "orders",
         environmentKey: "development",
         environmentKind: "development",
-        capabilities: ["browser_use"],
+        capabilities: ["playwright"],
         browser: { deploymentId: deployment!.id, baseUrl: "https://orders.example.test/" },
         repositories: [{ codeAccess: "write", repositoryPath: join(workspace, "repository"), baseCommit: "a".repeat(40) }],
       },
@@ -69,6 +69,8 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
     ] });
     assert.match(mountedRequest, /"path":"\/login"/);
     assert.match(mountedCredentials, /deployment-secret/);
+    assert.match(command.join(" "), /--userns keep-id/);
+    assert.match(command.join(" "), /mcr\.microsoft\.com\/playwright:v1\.62\.1-noble/);
     assert.doesNotMatch(command.join(" "), /deployment-secret|operator/);
     assert.doesNotMatch(JSON.stringify(output), /deployment-secret|operator/);
     assert.match(output.content[0]!.text, /Ready/);

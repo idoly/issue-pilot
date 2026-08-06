@@ -8,7 +8,7 @@ import test from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { resolveConfiguration, resolveConfigurations, sanitizedConfiguration } from "../../src/evidence/configuration.ts";
+import { resolveConfiguration, resolveConfigurations } from "../../src/evidence/configuration.ts";
 import type { GrantedRepository } from "../../src/pi/policy.ts";
 
 const execFileAsync = promisify(execFile);
@@ -38,7 +38,7 @@ test("discovers configuration scopes in a multi-module repository", async () => 
   }
 });
 
-test("resolves datasource configuration through Nacos without exposing bootstrap credentials", async () => {
+test("resolves complete datasource configuration through Nacos", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-config-resolver-"));
   const repository = join(root, "repository");
   try {
@@ -79,14 +79,18 @@ test("resolves datasource configuration through Nacos without exposing bootstrap
       baseCommit: stdout.trim(),
     };
     const calls: string[][] = [];
+    let remoteAttemptsConnectionOverride = false;
     const pi = {
       async exec(command: string, args: string[]) {
         calls.push([command, ...args]);
         const dataId = args.at(-2);
+        if (dataId === "orders-shared.yaml" && args.includes("--profile")) return { code: 1, stdout: "", stderr: "Error: login failed: status=403", killed: false };
         if (dataId === "orders.yaml" || dataId === "optional-missing.yaml") return { code: 1, stdout: "", stderr: "Error: get config failed (404 Not Found): resource not found", killed: false };
         return {
           code: 0,
-          stdout: dataId === "orders-shared.yaml" ? "shared:\n  enabled: true\n" : "spring:\n  datasource:\n    url: jdbc:mysql://mysql.example.test:3306/orders\n    username: readonly\n    password: database-secret\n",
+          stdout: dataId === "orders-shared.yaml"
+            ? remoteAttemptsConnectionOverride ? "spring:\n  cloud:\n    nacos:\n      config:\n        server-addr: http://untrusted.example.test\n      username: attacker\n      password: attacker-secret\n" : "shared:\n  enabled: true\n"
+            : "spring:\n  datasource:\n    url: jdbc:mysql://mysql.example.test:3306/orders\n    username: readonly\n    password: database-secret\n",
           stderr: "",
           killed: false,
         };
@@ -99,16 +103,36 @@ test("resolves datasource configuration through Nacos without exposing bootstrap
     assert.equal(resolved.properties["resolver.datasource-profile"], true);
     assert.equal(resolved.properties["resolver.boot-profile"], true);
     assert.equal(resolved.properties["shared.enabled"], true);
+    assert.equal(calls.some((call) => call.some((argument) => argument.includes("nacos-config-get.mjs")) && call.includes("orders-shared.yaml")), true);
     assert.deepEqual(resolved.sources, ["repository:bootstrap.yml", "repository:bootstrap-boot.yml", "repository:bootstrap-datasource.yml", "repository:bootstrap-env-test.yml", "nacos:orders-shared.yaml/DEFAULT_GROUP", "nacos:orders-env-test.yaml/DEFAULT_GROUP"]);
     assert.deepEqual(resolved.missingSources, ["nacos:orders.yaml/DEFAULT_GROUP"]);
-    const visible = JSON.stringify(sanitizedConfiguration(resolved));
-    assert.doesNotMatch(visible, /nacos-secret|database-secret/);
-    assert.match(visible, /\[REDACTED\]/);
+    const visible = JSON.stringify(resolved);
+    assert.match(visible, /nacos-secret|database-secret/);
     const command = calls.flat().join(" ");
     assert.match(command, /config-get orders-shared\.yaml DEFAULT_GROUP/);
     assert.match(command, /config-get orders\.yaml DEFAULT_GROUP/);
     assert.match(command, /config-get orders-env-test\.yaml DEFAULT_GROUP/);
     assert.doesNotMatch(command, /nacos-secret|nacos-user/);
+
+    calls.length = 0;
+    remoteAttemptsConnectionOverride = true;
+    const [managed] = await resolveConfigurations(pi, service, undefined, {}, {
+      serverUrl: "https://managed-nacos.example.test",
+      namespace: "managed-space",
+      group: "MANAGED_GROUP",
+      username: "managed-user",
+      password: "managed-secret",
+    });
+    assert.equal(managed?.configuration.properties["spring.cloud.nacos.config.server-addr"], "https://managed-nacos.example.test");
+    assert.equal(managed?.configuration.properties["spring.cloud.nacos.config.username"], "managed-user");
+    assert.equal(managed?.configuration.properties["spring.cloud.nacos.config.password"], "managed-secret");
+    assert.equal(managed?.configuration.properties["spring.cloud.nacos.password"], "managed-secret");
+    const managedCliCalls = calls.filter((call) => call.includes("config-get"));
+    assert.equal(managedCliCalls.length > 1, true);
+    for (const call of managedCliCalls) {
+      assert.equal(call[call.indexOf("--host") + 1], "managed-nacos.example.test");
+      assert.equal(call.at(-1), "MANAGED_GROUP");
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

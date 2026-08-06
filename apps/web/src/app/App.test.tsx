@@ -10,7 +10,7 @@ vi.mock("../data/client", async (importOriginal) => {
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
     service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: null, retryable }, agentSession: null, terminalTranscript: null,
+    workspace: { status: retryable ? "failed" : "ready", url: null, retryable }, agentSession: null,
   });
   const issues = [
     issue("ISSUE-0042", "结算页提交后订单状态未刷新", "in_progress"),
@@ -20,14 +20,17 @@ vi.mock("../data/client", async (importOriginal) => {
   const configuration = {
     environments: [{ id: "env-test", key: "test", name: "测试", kind: "test", scope: "global" }],
     capabilityCatalog: [
-      { key: "configuration_read", label: "配置读取", description: "读取配置" },
-      { key: "database_read", label: "数据库读取", description: "读取数据库" },
-      { key: "sls_read", label: "日志读取", description: "读取 SLS 日志" },
-      { key: "browser_use", label: "浏览器操作", description: "使用 Playwright" },
+      { key: "playwright" },
+      { key: "nacos" },
+      { key: "db" },
+      { key: "redis" },
+      { key: "mq" },
+      { key: "es" },
+      { key: "sls" },
     ],
     services: [{
       id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", scope: "global", environmentIds: ["env-test"],
-      deployments: [{ id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["configuration_read", "database_read"] }],
+      deployments: [{ id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["nacos", "db"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
       repositories: [{ id: "srm-repository", kind: "backend", url: "git@example.com:team/srm.git" }],
     }],
   };
@@ -45,6 +48,8 @@ vi.mock("../data/client", async (importOriginal) => {
     },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
     fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
+    sendAgentMessage: vi.fn(async () => undefined),
+    abortAgent: vi.fn(async () => undefined),
     updateService: vi.fn(async () => undefined),
   };
 });
@@ -60,7 +65,10 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
     expect(screen.queryByText("生产")).toBeNull();
-    expect(screen.getByRole("region", { name: "ISSUE-0042 pi 终端" })).toBeTruthy();
+    const agentRegion = screen.getByRole("region", { name: "ISSUE-0042 Agent 会话" });
+    expect(agentRegion.querySelector(".agent-terminal-output")).toBeTruthy();
+    expect(agentRegion.querySelector(".agent-terminal-input")).toBeTruthy();
+    expect(agentRegion.querySelector(".agent-terminal-footer")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
     await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());
@@ -86,7 +94,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(descriptionDialog).getByRole("button", { name: "应用" }));
     await waitFor(() => expect((within(issueDialog).getByLabelText("编辑工单描述") as HTMLTextAreaElement).value).toBe("# 放大后的详细描述"));
     expect(within(issueDialog).getByText("existing.csv")).toBeTruthy();
-    expect(within(issueDialog).getByText("1/10")).toBeTruthy();
+    expect(within(issueDialog).getByText("1")).toBeTruthy();
     const attachmentInput = within(issueDialog).getByLabelText("编辑工单选择附件") as HTMLInputElement;
     Object.defineProperty(attachmentInput, "files", { configurable: true, value: [new File(["details"], "details.txt", { type: "text/plain" })] });
     fireEvent.change(attachmentInput);
@@ -96,12 +104,12 @@ describe("issue pilot workspace", () => {
     expect(within(issueDialog).queryByText("已上传")).toBeNull();
     fireEvent.click(within(issueDialog).getByRole("button", { name: "移除existing.csv" }));
     await waitFor(() => expect(within(issueDialog).queryByText("existing.csv")).toBeNull());
-    expect(within(issueDialog).getByText("1/10")).toBeTruthy();
+    expect(within(issueDialog).getByText("1")).toBeTruthy();
     fireEvent.click(within(issueDialog).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const reopenedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
     expect(within(reopenedIssueDialog).getByText("existing.csv")).toBeTruthy();
-    expect(within(reopenedIssueDialog).getByText("1/10")).toBeTruthy();
+    expect(within(reopenedIssueDialog).getByText("1")).toBeTruthy();
     fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
@@ -135,24 +143,24 @@ describe("issue pilot workspace", () => {
     fireEvent.input(branchInput, { target: { value: "release/test" } });
     expect(document.activeElement).toBe(branchInput);
     expect(branchInput.value).toBe("release/test");
-    const configurationCapability = [...serviceDialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"][value="configuration_read"]')].find((input) => input.checked)!;
-    const databaseCapability = [...serviceDialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"][value="database_read"]')].find((input) => input.checked)!;
-    const slsCapability = serviceDialog.querySelector<HTMLInputElement>('input[type="checkbox"][value="sls_read"]')!;
-    const browserCapability = serviceDialog.querySelector<HTMLInputElement>('input[type="checkbox"][value="browser_use"]')!;
-    expect(configurationCapability.checked).toBe(true);
-    expect(databaseCapability.checked).toBe(true);
-    fireEvent.click(configurationCapability);
-    expect(configurationCapability.checked).toBe(false);
-    expect(databaseCapability.checked).toBe(true);
-    expect(slsCapability.checked).toBe(false);
-    fireEvent.click(browserCapability);
-    const serviceAddress = await waitFor(() => screen.getByLabelText("服务地址 1") as HTMLInputElement);
-    const serviceAccount = screen.getByLabelText("服务账号 1") as HTMLInputElement;
-    const servicePassword = screen.getByLabelText("服务密码 1") as HTMLInputElement;
-    fireEvent.input(serviceAddress, { target: { value: "https://srm.example.test/admin/login" } });
-    fireEvent.input(serviceAccount, { target: { value: "operator" } });
-    fireEvent.input(servicePassword, { target: { value: "secret" } });
-    expect(servicePassword.type).toBe("password");
+    expect(screen.queryByLabelText("Agent Provider 1")).toBeNull();
+    expect(screen.queryByLabelText("Agent Model 1")).toBeNull();
+    const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
+    const databaseUrl = screen.getByLabelText("db url 1");
+    expect(nacosServerUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("serverUrl");
+    expect(databaseUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
+    const esUrl = await waitFor(() => screen.getByLabelText("es url 1"));
+    expect(esUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
+    expect(screen.getByLabelText("es username 1")).toBeTruthy();
+    expect(screen.getByLabelText("es password 1")).toBeTruthy();
+    expect(screen.queryByLabelText(/es clusterNodes/i)).toBeNull();
+    expect(screen.queryByLabelText(/es indexes/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "nacos" }));
+    await waitFor(() => expect(screen.queryByLabelText("nacos serverUrl 1")).toBeNull());
+    expect(screen.getByLabelText("db url 1")).toBeTruthy();
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
+    await waitFor(() => expect(screen.queryByLabelText("es url 1")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
     const client = await import("../data/client");
     await waitFor(() => {
@@ -160,6 +168,8 @@ describe("issue pilot workspace", () => {
       if (alert) throw new Error(alert.textContent ?? "service save failed");
       expect(client.updateService).toHaveBeenCalled();
     });
+    const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
+    expect(savedService?.deployments[0]?.agent).toBeUndefined();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
 
   });

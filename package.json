@@ -32,14 +32,12 @@
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",
-    "@fastify/websocket": "^11.3.0",
     "@libsql/client": "^0.17.0",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.11.0",
-    "node-pty": "^1.1.0",
     "yaml": "^2.9.0"
   },
-  "allowScripts": {
-    "node-pty@1.1.0": true
+  "overrides": {
+    "undici": "8.9.0"
   }
 }

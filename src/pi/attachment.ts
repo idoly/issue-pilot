@@ -4,8 +4,6 @@ import path from "node:path";
 
 import type { AttachmentGrant, IssuePolicy } from "./policy.ts";
 
-const MAX_TEXT_BYTES = 256 * 1024;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 function isWithin(root: string, target: string): boolean {
@@ -34,7 +32,6 @@ export async function readAttachment(policy: IssuePolicy, attachmentId: string) 
 
   const metadataText = JSON.stringify({ id: attachment.id, fileName: attachment.fileName, mediaType: attachment.mediaType, size: attachment.size, sha256: attachment.sha256 }, null, 2);
   if (isTextAttachment(attachment)) {
-    if (data.length > MAX_TEXT_BYTES) throw new Error("attachment_text_too_large");
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(data); }
     catch { throw new Error("attachment_text_is_not_utf8"); }
@@ -42,7 +39,6 @@ export async function readAttachment(policy: IssuePolicy, attachmentId: string) 
     return { content: [{ type: "text" as const, text: `${metadataText}\n\n${text}` }], details: { attachmentId } };
   }
   if (IMAGE_TYPES.has(attachment.mediaType)) {
-    if (data.length > MAX_IMAGE_BYTES) throw new Error("attachment_image_too_large");
     return { content: [{ type: "text" as const, text: metadataText }, { type: "image" as const, data: data.toString("base64"), mimeType: attachment.mediaType }], details: { attachmentId } };
   }
   throw new Error("attachment_media_type_not_supported");
