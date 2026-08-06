@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { deploymentCapabilityConfig } from "./deployment.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
 
 const NODE_IMAGE = process.env.PI_NODE_CLI_IMAGE ?? "docker.io/library/node:26.5.1-bookworm-slim";
@@ -34,10 +33,9 @@ async function execute(pi: ExtensionAPI, cwd: string, capability: "redis" | "es"
   }
 }
 
-export async function readRedis(pi: ExtensionAPI, policy: IssuePolicy, cwd: string, input: { action: string; key?: string; keys?: string[]; field?: string; pattern?: string; cursor?: string; limit?: number }, signal?: AbortSignal) {
+export async function readRedis(pi: ExtensionAPI, policy: IssuePolicy, config: Record<string, unknown>, cwd: string, input: { action: string; key?: string; keys?: string[]; field?: string; pattern?: string; cursor?: string; limit?: number }, signal?: AbortSignal) {
   const grant = policy.service.redis;
   if (!grant) throw new Error("redis_scope_not_granted_for_service");
-  const config = await deploymentCapabilityConfig(policy, grant.deploymentId, "redis");
   if (typeof config.host !== "string" || !Number.isInteger(config.port) || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string") || !Number.isInteger(config.database)) throw new Error("redis_configuration_changed");
   const text = (value: unknown, name: string) => { if (typeof value !== "string" || !value || value.length > 1024 || value.includes("\0")) throw new Error(`invalid_redis_${name}`); return value; };
   let command: string[];
@@ -58,10 +56,9 @@ export async function readRedis(pi: ExtensionAPI, policy: IssuePolicy, cwd: stri
   };
 }
 
-export async function readElasticsearch(pi: ExtensionAPI, policy: IssuePolicy, cwd: string, input: { action: "search" | "count" | "mapping"; query?: Record<string, unknown>; limit?: number }, signal?: AbortSignal) {
+export async function readElasticsearch(pi: ExtensionAPI, policy: IssuePolicy, config: Record<string, unknown>, cwd: string, input: { action: "search" | "count" | "mapping"; query?: Record<string, unknown>; limit?: number }, signal?: AbortSignal) {
   const grant = policy.service.es;
   if (!grant) throw new Error("es_scope_not_granted_for_service");
-  const config = await deploymentCapabilityConfig(policy, grant.deploymentId, "es");
   if (typeof config.url !== "string" || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string")) throw new Error("es_configuration_changed");
   const query = input.query ?? { match_all: {} };
   if (!query || typeof query !== "object") throw new Error("invalid_es_query");
@@ -73,10 +70,9 @@ export async function readElasticsearch(pi: ExtensionAPI, policy: IssuePolicy, c
   };
 }
 
-export async function readRabbitMq(pi: ExtensionAPI, policy: IssuePolicy, cwd: string, input: { action: "overview" | "queues" | "queue" | "bindings"; queue?: string; limit?: number }, signal?: AbortSignal) {
+export async function readRabbitMq(pi: ExtensionAPI, policy: IssuePolicy, config: Record<string, unknown>, cwd: string, input: { action: "overview" | "queues" | "queue" | "bindings"; queue?: string; limit?: number }, signal?: AbortSignal) {
   const grant = policy.service.mq;
   if (!grant) throw new Error("mq_scope_not_granted_for_service");
-  const config = await deploymentCapabilityConfig(policy, grant.deploymentId, "mq");
   if (config.virtualHost !== grant.virtualHost || typeof config.host !== "string" || !Number.isInteger(config.port) || !Number.isInteger(config.managementPort) || typeof config.username !== "string" || typeof config.password !== "string") throw new Error("mq_configuration_changed");
   const queue = input.queue?.trim();
   if ((input.action === "queue" || input.action === "bindings") && (!queue || queue.length > 255 || queue.includes("\0"))) throw new Error("invalid_mq_queue");

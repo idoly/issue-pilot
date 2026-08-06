@@ -19,7 +19,7 @@ test("freezes credential-free Redis, Elasticsearch, and RabbitMQ grants", () => 
       repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-external/repository", baseCommit: "a".repeat(40) }],
     },
   });
-  assert.equal(policy.version, 14);
+  assert.equal(policy.version, 15);
   assert.equal(policy.tools.includes("redis"), true);
   assert.equal(policy.tools.includes("mq"), true);
   assert.equal(policy.tools.includes("es"), true);

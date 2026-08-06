@@ -35,7 +35,7 @@ test("returns complete SLS records through the secured local Aliyun CLI", async 
     } as unknown as ExtensionAPI;
     const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
     const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-    const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(pi, policy, input, undefined, configured);
+    const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(pi, policy, input, configured);
     const output = await read({ project: "srm-test", logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600, query: "level:ERROR", limit: 20 });
     assert.match(calls[0]!.command, /aliyun-profile\.sh$/);
     assert.deepEqual({ region_id: calls[0]!.profile.profiles[0].region_id, output_format: calls[0]!.profile.profiles[0].output_format }, { region_id: "cn-test", output_format: "json" });

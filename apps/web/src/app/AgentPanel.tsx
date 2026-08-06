@@ -28,7 +28,7 @@ export function updateAccessibleTranscript(entries: AccessibleAgentEntry[], even
 
 export function isVisibleConversationEvent(event: AgentEvent): boolean {
   return (event.kind === "user" || event.kind === "assistant" || event.kind === "tool_call" || event.kind === "tool_result")
-    && !(event.kind === "user" && event.message.startsWith("Issue metadata was updated by a user."));
+    && !(event.kind === "user" && event.message?.startsWith("Issue metadata was updated by a user."));
 }
 
 function panelError(error: string): string {
@@ -159,10 +159,11 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     source.addEventListener("ready", (messageEvent) => {
       if (current !== sequence) return;
       try {
-        const payload = JSON.parse(messageEvent.data) as { footer?: { ansi?: string; text?: string } };
+        const payload = JSON.parse(messageEvent.data) as { footer?: { ansi?: string; text?: string }; running?: boolean };
         if (payload.footer?.ansi) { footerTerminal?.reset(); footerTerminal?.write(`${payload.footer.ansi}${hideCursor}`); }
         setAccessibleFooter(payload.footer?.text ?? "");
         replayComplete = true;
+        setProcessing(payload.running === true);
         scrollLatest();
       } catch { setError("agent_event_protocol_error"); }
     });
@@ -171,7 +172,7 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
       try {
         const parsed = JSON.parse(messageEvent.data) as AgentEvent;
         writeFrame(parsed, replayComplete && parsed.kind === "user" ? () => setProcessing(true) : undefined);
-        if (replayComplete && parsed.kind === "complete") {
+        if (replayComplete && parsed.kind === "status" && (parsed.status === "complete" || parsed.status === "error")) {
           setProcessing(false);
           if (refreshAfterMessage || running()) {
             refreshAfterMessage = false;
@@ -194,8 +195,8 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     draftText = ""; draftCursor = 0; renderInput(); setSending(true); setError("");
     inputHistory.push(message); historyIndex = inputHistory.length;
     try {
-      const event = await sendAgentMessage(props.issue.id, message, outputTerminal?.cols ?? 100);
-      writeFrame(event, () => setProcessing(true));
+      await sendAgentMessage(props.issue.id, message);
+      setProcessing(true);
       refreshAfterMessage = true;
     } catch (cause) {
       draftText = message; draftCursor = Array.from(message).length; renderInput(); setProcessing(false);

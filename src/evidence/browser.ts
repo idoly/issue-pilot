@@ -1,13 +1,9 @@
-import { access, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { eq } from "drizzle-orm";
-
-import { openDatabase } from "../db/client.ts";
-import { serviceDeployments } from "../db/schema.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
 
 const DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
@@ -32,23 +28,12 @@ function deploymentBrowser(value: Record<string, unknown>): { baseUrl: string; u
   };
 }
 
-async function credentials(policy: IssuePolicy): Promise<{ username: string | null; password: string | null }> {
+function credentials(policy: IssuePolicy, config: Record<string, unknown>): { username: string | null; password: string | null } {
   const scope = policy.service.browser;
   if (!scope || !policy.tools.includes("playwright")) throw new Error("browser_scope_not_granted_for_service");
-  const stateRoot = process.env.ISSUE_PILOT_STATE_ROOT ?? path.dirname(path.dirname(policy.workspaceRoot));
-  const databaseFile = path.resolve(process.env.ISSUE_PILOT_DATABASE ?? path.join(stateRoot, "issues.db"));
-  const metadata = await stat(databaseFile);
-  if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_issue_database_file");
-  const database = openDatabase(databaseFile);
-  try {
-    const [deployment] = await database.db.select({ config: serviceDeployments.config }).from(serviceDeployments).where(eq(serviceDeployments.id, scope.deploymentId)).limit(1);
-    if (!deployment) throw new Error("browser_deployment_not_found");
-    const browser = deploymentBrowser(deployment.config);
-    if (browser.baseUrl !== scope.baseUrl) throw new Error("browser_scope_changed");
-    return { username: browser.username, password: browser.password };
-  } finally {
-    await database.close();
-  }
+  const browser = deploymentBrowser(config);
+  if (browser.baseUrl !== scope.baseUrl) throw new Error("browser_scope_changed");
+  return { username: browser.username, password: browser.password };
 }
 
 function validateActions(actions: BrowserAction[]): void {
@@ -75,11 +60,11 @@ function validateActions(actions: BrowserAction[]): void {
   }
 }
 
-export async function useBrowser(pi: ExtensionAPI, policy: IssuePolicy, input: { actions: BrowserAction[]; screenshot?: boolean }, signal?: AbortSignal) {
+export async function useBrowser(pi: ExtensionAPI, policy: IssuePolicy, config: Record<string, unknown>, input: { actions: BrowserAction[]; screenshot?: boolean }, signal?: AbortSignal) {
   const scope = policy.service.browser;
   if (!scope) throw new Error("browser_scope_not_granted_for_service");
   validateActions(input.actions);
-  const secret = await credentials(policy);
+  const secret = credentials(policy, config);
   if (input.actions.some((action) => action.type === "login") && (!secret.username || !secret.password)) throw new Error("browser_credentials_not_configured");
 
   const stateRoot = process.env.ISSUE_PILOT_STATE_ROOT ?? path.dirname(path.dirname(policy.workspaceRoot));

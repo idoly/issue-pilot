@@ -150,7 +150,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         type: "question",
         environmentKey: "test",
         serviceKey: "alpha",
-        assigneeSubject: "yx4821@xianhengguoji.com",
+        assigneeSubject: "zjj3753@xianhengguoji.com",
         ccSubjects: [],
       },
     });
@@ -193,11 +193,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(engine.enqueued.length, enqueueCountBeforeComment);
     const agentMessage = await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-messages`, payload: { message: "Check the latest evidence" } });
     assert.equal(agentMessage.statusCode, 202, agentMessage.body);
-    const acceptedMessage = await json(agentMessage) as { kind?: string; message?: string; terminal?: { ansi?: string; text?: string } };
-    assert.equal(acceptedMessage.kind, "user");
-    assert.equal(acceptedMessage.message, "Check the latest evidence");
-    assert.match(acceptedMessage.terminal?.ansi ?? "", /Check the latest evidence/);
-    assert.equal(acceptedMessage.terminal?.text, "User: Check the latest evidence");
+    assert.equal(agentMessage.body, "");
     assert.equal(engine.messages.at(-1), "Check the latest evidence");
     assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-messages`, payload: { message: "" } })).statusCode, 400);
     engine.running.add(createdInternalId);
@@ -482,7 +478,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const restarted = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, logger: false });
     try {
       const recovered = await restarted.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string; workspace: { status: string; lastError: string | null } };
-      assert.equal(recovered.status, "failed");
+      assert.equal(recovered.status, "open");
       assert.equal(recovered.workspace.status, "failed");
       assert.equal(recovered.workspace.lastError, "agent_interrupted_by_api_restart");
     } finally {

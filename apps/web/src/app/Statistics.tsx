@@ -19,10 +19,10 @@ export function Statistics() {
     const threshold = Date.now() - days * 24 * 60 * 60_000;
     return issues().filter((issue) => new Date(issue.createdAt ?? issue.updatedAt).getTime() >= threshold);
   });
-  const completed = createMemo(() => filteredIssues().filter((issue) => issue.status === "resolved" || issue.status === "closed").length);
-  const active = createMemo(() => filteredIssues().filter((issue) => issue.status !== "resolved" && issue.status !== "closed").length);
-  const unassigned = createMemo(() => filteredIssues().filter((issue) => !issue.assigneeSubject && issue.status !== "resolved" && issue.status !== "closed").length);
-  const urgent = createMemo(() => filteredIssues().filter((issue) => (issue.priority === "p0" || issue.priority === "p1") && issue.status !== "resolved" && issue.status !== "closed").length);
+  const completed = createMemo(() => filteredIssues().filter((issue) => issue.status === "resolved").length);
+  const active = createMemo(() => filteredIssues().filter((issue) => issue.status !== "resolved").length);
+  const unassigned = createMemo(() => filteredIssues().filter((issue) => !issue.assigneeSubject && issue.status !== "resolved").length);
+  const urgent = createMemo(() => filteredIssues().filter((issue) => (issue.priority === "p0" || issue.priority === "p1") && issue.status !== "resolved").length);
   const completionRate = createMemo(() => filteredIssues().length ? Math.round(completed() / filteredIssues().length * 1000) / 10 : 0);
   const services = createMemo(() => {
     const counts = new Map<string, { key: string; name: string; count: number }>();
@@ -43,7 +43,7 @@ export function Statistics() {
     for (const issue of filteredIssues()) {
       const key = issue.assigneeSubject ?? "unassigned";
       const row = rows.get(key) ?? { name: issue.assignee ?? "未分配", completed: 0, active: 0 };
-      if (issue.status === "resolved" || issue.status === "closed") row.completed += 1;
+      if (issue.status === "resolved") row.completed += 1;
       else row.active += 1;
       rows.set(key, row);
     }

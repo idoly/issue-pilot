@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { migrate } from "drizzle-orm/libsql/migrator";
-import { openDatabase } from "../../src/db/client.ts";
-import { serviceDeployments } from "../../src/db/schema.ts";
 import { registerIssuePilotExtension } from "../../src/pi/extension.ts";
 import { createIssuePolicy } from "../../src/pi/policy.ts";
 
@@ -44,9 +41,7 @@ async function repository(root: string, name = "repository", datasource = true):
 test("registers capability tools and resolves frozen service configuration", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-capability-extension-"));
   const issueRoot = join(root, "workspaces", "issue-20260803-001");
-  const previousStateRoot = process.env.ISSUE_PILOT_STATE_ROOT;
   try {
-    await mkdir(join(root, "capabilities"), { recursive: true });
     await mkdir(issueRoot, { recursive: true });
     const source = await repository(issueRoot);
     const supporting = await repository(issueRoot, "supporting", false);
@@ -55,13 +50,8 @@ test("registers capability tools and resolves frozen service configuration", asy
     const attachmentContent = "request attachment";
     await mkdir(attachmentDirectory, { recursive: true, mode: 0o700 });
     await writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 });
-    const stateDatabase = openDatabase(join(root, "issues.db"));
-    await migrate(stateDatabase.db, { migrationsFolder: join(process.cwd(), "drizzle") });
-    await stateDatabase.client.execute("PRAGMA foreign_keys = OFF");
-    await stateDatabase.db.insert(serviceDeployments).values({ id: "deployment-test", serviceId: "service-test", environmentId: "environment-test", baseBranch: "main", config: { nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "operator", password: "nacos-secret" }, db: { url: "mysql://mysql.example.test:3306/orders", username: "readonly", password: "db-secret" } } });
-    await stateDatabase.close();
-    const capabilityFile = join(root, "capabilities", "issue-20260803-001.json");
-    await writeFile(capabilityFile, JSON.stringify(createIssuePolicy({
+    const deploymentConfig = { nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "operator", password: "nacos-secret" }, db: { url: "mysql://mysql.example.test:3306/orders", username: "readonly", password: "db-secret" } };
+    const policy = createIssuePolicy({
       issueKey: "ISSUE-20260803-001",
       issueType: "incident",
       workspaceRoot: issueRoot,
@@ -78,9 +68,7 @@ test("registers capability tools and resolves frozen service configuration", asy
           { codeAccess: "write", repositoryPath: supporting.path, baseCommit: supporting.commit },
         ],
       },
-    })), { mode: 0o600 });
-    await chmod(capabilityFile, 0o600);
-    process.env.ISSUE_PILOT_STATE_ROOT = root;
+    });
 
     const tools = new Map<string, RegisteredTool>();
     const handlers = new Map<string, (...args: any[]) => any>();
@@ -97,7 +85,7 @@ test("registers capability tools and resolves frozen service configuration", asy
         return { code: 0, stdout: "", stderr: "", killed: false };
       },
     } as unknown as ExtensionAPI;
-    registerIssuePilotExtension(pi, { workspaceRoot: issueRoot, stateRoot: root });
+    registerIssuePilotExtension(pi, { policy, deploymentConfig });
     assert.deepEqual([...tools.keys()].sort(), ["attachment_read", "complete_issue", "db", "es", "maven_project_command", "mq", "nacos", "node_project_command", "playwright", "redis", "repository_edit", "repository_find", "repository_grep", "repository_list", "repository_read", "repository_status", "repository_write", "sls"]);
     const context = { cwd: issueRoot, ui: { setStatus() {} } };
     await handlers.get("session_start")!({}, context);
@@ -137,11 +125,6 @@ test("registers capability tools and resolves frozen service configuration", asy
     });
     assert.equal(configurationResult.controlledConfiguration.db.password, "db-secret");
 
-    delete process.env.ISSUE_PILOT_STATE_ROOT;
-    const inferredStateRoot = await tools.get("nacos")!.execute("config-inferred", {}, undefined, undefined, { cwd: issueRoot });
-    assert.match(inferredStateRoot.content[0]!.text, /spring\.datasource\.url/);
-    process.env.ISSUE_PILOT_STATE_ROOT = root;
-
     const database = await tools.get("db")!.execute("query", { statement: "SELECT order_id, status, password FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
     assert.match(database.content[0]!.text, /ready/);
     assert.match(database.content[0]!.text, /secret-value/);
@@ -154,26 +137,9 @@ test("registers capability tools and resolves frozen service configuration", asy
     const status = await tools.get("repository_status")!.execute("status", { action: "status" }, undefined, undefined, { cwd: issueRoot });
     assert.match(status.content[0]!.text, /"repository": "repository"/);
     assert.match(status.content[0]!.text, /"repository": "supporting"/);
-    await writeFile(capabilityFile, JSON.stringify(createIssuePolicy({
-      issueKey: "ISSUE-20260803-001",
-      issueType: "question",
-      workspaceRoot: issueRoot,
-      service: {
-        serviceKey: "orders",
-        environmentKey: "production",
-        environmentKind: "production",
-        capabilities: ["db"],
-        db: { deploymentId: "deployment-test" },
-        repositories: [{ codeAccess: "read", repositoryPath: source.path, baseCommit: source.commit }],
-      },
-    })), { mode: 0o600 });
-    mysqlStdout = "order_id\tstatus\n123\tproduction-ready\n";
-    const production = await tools.get("db")!.execute("query", { statement: "SELECT order_id, status FROM orders WHERE order_id = '123' LIMIT 20" }, undefined, undefined, { cwd: issueRoot });
-    assert.match(production.content[0]!.text, /"provider": "mysql"/);
-    assert.match(production.content[0]!.text, /production-ready/);
     await assert.rejects(tools.get("db")!.execute("query", { statement: "UPDATE orders SET status = 'done'" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
     const allRows = await tools.get("db")!.execute("query", { statement: "SELECT * FROM orders" }, undefined, undefined, { cwd: issueRoot });
-    assert.match(allRows.content[0]!.text, /production-ready/);
+    assert.match(allRows.content[0]!.text, /payload/);
     await assert.rejects(tools.get("db")!.execute("query", { statement: "SELECT * FROM orders INTO OUTFILE '/tmp/orders' LIMIT 10" }, undefined, undefined, { cwd: issueRoot }), /database_query_must_be_read_only/);
 
     const commandText = calls.map((call) => call.join(" ")).join("\n");
@@ -183,8 +149,6 @@ test("registers capability tools and resolves frozen service configuration", asy
     assert.doesNotMatch(commandText, /repository-secret|secret-value|sh -c|bash -c/);
     await handlers.get("session_shutdown")!({}, context);
   } finally {
-    if (previousStateRoot === undefined) delete process.env.ISSUE_PILOT_STATE_ROOT;
-    else process.env.ISSUE_PILOT_STATE_ROOT = previousStateRoot;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -194,7 +158,7 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
   const issueRoot = join(root, "workspaces", "issue-20260803-001");
   const nodeProject = join(issueRoot, "web");
   const mavenProject = join(issueRoot, "api");
-  await Promise.all([mkdir(nodeProject, { recursive: true }), mkdir(mavenProject, { recursive: true }), mkdir(join(root, "capabilities"), { recursive: true })]);
+  await Promise.all([mkdir(nodeProject, { recursive: true }), mkdir(mavenProject, { recursive: true })]);
   await Promise.all([
     writeFile(join(nodeProject, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }), "utf8"),
     writeFile(join(mavenProject, "pom.xml"), "<project/>", "utf8"),
@@ -206,9 +170,8 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
     registerTool(tool: RegisteredTool) { tools.set(tool.name, tool); },
     async exec(command: string, args: string[]) { calls.push([command, ...args]); return { code: 0, stdout: "ok", stderr: "", killed: false }; },
   } as unknown as ExtensionAPI;
-  const previous = { stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, policyRequired: process.env.ISSUE_PILOT_POLICY_REQUIRED };
   try {
-    await writeFile(join(root, "capabilities", "issue-20260803-001.json"), JSON.stringify(createIssuePolicy({
+    const policy = createIssuePolicy({
       issueKey: "ISSUE-20260803-001",
       issueType: "incident",
       workspaceRoot: issueRoot,
@@ -222,10 +185,8 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
           { codeAccess: "write", repositoryPath: mavenProject, baseCommit: "b".repeat(40) },
         ],
       },
-    })), { mode: 0o600 });
-    process.env.ISSUE_PILOT_STATE_ROOT = root;
-    process.env.ISSUE_PILOT_POLICY_REQUIRED = "1";
-    registerIssuePilotExtension(pi, { workspaceRoot: issueRoot, stateRoot: root });
+    });
+    registerIssuePilotExtension(pi, { policy, deploymentConfig: {} });
     await tools.get("node_project_command")!.execute("node", { project_path: "web", action: "test" }, undefined, undefined, { cwd: issueRoot });
     await tools.get("maven_project_command")!.execute("maven", { project_path: "api", action: "verify" }, undefined, undefined, { cwd: issueRoot });
     const commandText = calls.map((call) => call.join(" ")).join("\n");
@@ -237,9 +198,6 @@ test("runs fixed Node and Maven Java 8 actions in disposable containers", async 
     assert.match(commandText, /maven:3\.9\.16-eclipse-temurin-8 mvn --batch-mode --no-transfer-progress -Dmaven.repo.local=\/tool-cache verify/);
     assert.doesNotMatch(commandText, /vitest run|sh -c|bash -c/);
   } finally {
-    const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
-    restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);
-    restore("ISSUE_PILOT_POLICY_REQUIRED", previous.policyRequired);
     await rm(root, { recursive: true, force: true });
   }
 });

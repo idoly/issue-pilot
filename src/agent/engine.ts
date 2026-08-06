@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { access, chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { and, eq, notInArray, sql } from "drizzle-orm";
+import { and, eq, ne, notInArray, sql } from "drizzle-orm";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -16,7 +17,6 @@ import type { RunEvent } from "./events.ts";
 import { CodeServer } from "../workspace/code-server.ts";
 import type { openDatabase } from "../db/client.ts";
 import {
-  agentEvents,
   agentSessions,
   issueAgentResults,
   environments,
@@ -50,8 +50,8 @@ interface ManagedSession {
   session: AgentSession;
   policy: IssuePolicy;
   completion: IssueCompletion | null;
+  manager: SessionManager;
   unsubscribe: () => void;
-  flushTranscript: () => Promise<void>;
 }
 
 export class AgentEngine {
@@ -74,8 +74,8 @@ export class AgentEngine {
     this.modelRuntime = ModelRuntime.create();
   }
 
-  enqueue(issueId: string, latestMessage?: string, recordMessage = true): void {
-    this.schedule(issueId, () => this.run(issueId, latestMessage, recordMessage));
+  enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
+    this.schedule(issueId, () => this.run(issueId, latestMessage, displayMessage));
   }
 
   isRunning(issueId: string): boolean {
@@ -87,18 +87,17 @@ export class AgentEngine {
     return true;
   }
 
-  async send(issueId: string, message: string): Promise<RunEvent> {
+  async send(issueId: string, message: string): Promise<void> {
     if (!message.trim()) throw new Error("agent_message_required");
     const userMessage = message.trim();
-    const userEvent = await this.appendAgentEvent(issueId, "user", userMessage);
     const managed = this.sessions.get(issueId);
     if (!managed) {
-      this.enqueue(issueId, userMessage, false);
-      return userEvent;
+      this.enqueue(issueId, userMessage, true);
+      return;
     }
+    this.publishUserMessage(issueId, managed.manager, userMessage);
     if (managed.session.isStreaming) await managed.session.steer(promptWithRuntimeTime(userMessage));
     else this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage));
-    return userEvent;
   }
 
   async abort(issueId: string): Promise<boolean> {
@@ -122,9 +121,9 @@ export class AgentEngine {
             lastError: error instanceof Error ? error.message : String(error),
             updatedAt: new Date(),
           }).where(eq(issueWorkspaces.issueId, issueId));
-          await transaction.update(issues).set({ status: "failed", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), notInArray(issues.status, ["resolved", "closed"])));
+          await transaction.update(issues).set({ status: "open", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
         });
-        await this.appendAgentEvent(issueId, "error", "pi 处理失败");
+        this.publishStatus(issueId, "error");
       } catch {
         // A reporting write must not turn a handled background failure into an unhandled rejection.
       }
@@ -135,11 +134,10 @@ export class AgentEngine {
     });
   }
 
-  private async run(issueId: string, latestMessage?: string, recordMessage = true): Promise<void> {
+  private async run(issueId: string, latestMessage?: string, displayMessage = false): Promise<void> {
     const [issue] = await this.db.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
     const currentMessage = latestMessage?.trim() || undefined;
-    if (recordMessage && currentMessage) await this.appendAgentEvent(issue.id, "user", currentMessage);
     await this.db.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
 
     const [service] = await this.db.select({
@@ -215,11 +213,9 @@ export class AgentEngine {
 
     const workspaceRoot = path.resolve(this.stateRoot, "workspaces", issue.key.toLowerCase());
     const sessionDirectory = path.resolve(this.stateRoot, "sessions", issue.key);
-    const capabilityDirectory = path.resolve(this.stateRoot, "capabilities");
     await mkdir(workspaceRoot, { recursive: true });
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await chmod(sessionDirectory, 0o700);
-    await mkdir(capabilityDirectory, { recursive: true, mode: 0o700 });
     const nacosScope = this.nacosScope(service.deploymentId, service.deploymentConfig);
     const dbScope = this.dbScope(service.deploymentId, service.deploymentConfig);
     const slsScope = this.slsScope(service.deploymentId, service.deploymentConfig);
@@ -248,10 +244,6 @@ export class AgentEngine {
         repositories: prepared.map(({ workspace }) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
       },
     });
-    const serializedPolicy = JSON.stringify(policy);
-    const capabilityFile = path.join(capabilityDirectory, `${issue.key.toLowerCase()}.json`);
-    await writeFile(capabilityFile, serializedPolicy, { encoding: "utf8", mode: 0o600 });
-    await chmod(capabilityFile, 0o600);
     await writeFile(path.join(workspaceRoot, ".issue-pilot.code-workspace"), JSON.stringify({
       folders: prepared.map(({ repository, workspace }) => ({ name: this.repositoryLabel(repository.url), path: path.relative(workspaceRoot, workspace.workspacePath) })),
       settings: {
@@ -271,9 +263,10 @@ export class AgentEngine {
       ? SessionManager.open(binding.sessionFile, sessionDirectory, binding.workspacePath)
       : SessionManager.create(workspaceRoot, sessionDirectory);
     const hadMessages = manager.buildContextEntries().some((entry) => entry.type === "message");
+    if (displayMessage && currentMessage) this.publishUserMessage(issue.id, manager, currentMessage);
 
     await this.disposeSession(issue.id);
-    const managed = await this.createManagedSession(issue.id, workspaceRoot, policy, manager);
+    const managed = await this.createManagedSession(issue.id, workspaceRoot, policy, service.deploymentConfig, manager);
     managed.completion = null;
     this.sessions.set(issue.id, managed);
     const sessionFile = managed.session.sessionFile;
@@ -283,8 +276,8 @@ export class AgentEngine {
       target: agentSessions.issueId,
       set: { piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
-    await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, branchCreated: worktreeMode !== "detached", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-    await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), notInArray(issues.status, ["resolved", "closed"])));
+    await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
     const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch ?? workspace.baseBranch, path: workspace.workspacePath, readOnly: worktreeMode === "detached" }));
     const prompt = hadMessages
@@ -295,7 +288,7 @@ export class AgentEngine {
 
   }
 
-  private async createManagedSession(issueId: string, workspaceRoot: string, policy: IssuePolicy, manager: SessionManager): Promise<ManagedSession> {
+  private async createManagedSession(issueId: string, workspaceRoot: string, policy: IssuePolicy, deploymentConfig: Record<string, unknown>, manager: SessionManager): Promise<ManagedSession> {
     const modelRuntime = await this.modelRuntime;
     const model = modelRuntime.getModel(policy.model.provider, policy.model.modelId);
     if (!model) throw new Error(`issue_pilot_model_not_found:${policy.model.provider}/${policy.model.modelId}`);
@@ -303,8 +296,8 @@ export class AgentEngine {
     const extension: InlineExtension = {
       name: "issue-pilot-runtime",
       factory: (pi) => registerIssuePilotExtension(pi, {
-        workspaceRoot,
-        stateRoot: this.stateRoot,
+        policy,
+        deploymentConfig: structuredClone(deploymentConfig),
         onComplete: async (completion) => {
           const current = this.sessions.get(issueId);
           if (current) current.completion = completion;
@@ -351,48 +344,24 @@ export class AgentEngine {
       noTools: "builtin",
       tools: policy.tools,
     });
-    let managed!: ManagedSession;
-    let transcriptTail = Promise.resolve();
-    const pendingToolArguments = new Map<string, string>();
-    const appendTranscript = (kind: string, message: string) => {
-      transcriptTail = transcriptTail.then(async () => { await this.appendAgentEvent(issueId, kind, message); }).catch(() => undefined);
-    };
     const unsubscribe = session.subscribe((event) => {
+      const createdAt = new Date().toISOString();
       if (event.type === "message_end" && event.message.role === "assistant") {
         const text = event.message.content.flatMap((content) => content.type === "text" ? [content.text] : []).join("\n").trim();
-        if (text) appendTranscript("assistant", text);
-      } else if (event.type === "tool_execution_start") {
-        if (event.toolName === "complete_issue") return;
-        const argumentsText = this.toolArguments(event.toolName, event.args);
-        pendingToolArguments.set(event.toolCallId, argumentsText);
-        appendTranscript("tool_call", JSON.stringify({ toolCallId: event.toolCallId, toolName: event.toolName, argumentsText }));
-      } else if (event.type === "tool_execution_end") {
-        if (event.toolName === "complete_issue") return;
-        const argumentsText = pendingToolArguments.get(event.toolCallId) ?? "{}";
-        pendingToolArguments.delete(event.toolCallId);
-        appendTranscript("tool_result", JSON.stringify({
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          argumentsText,
-          output: this.toolResultText(event.toolName, event.result),
-          isError: event.isError,
-        }));
+        if (text) this.publish?.({ id: randomUUID(), issueId, kind: "assistant", message: text, createdAt });
+      } else if (event.type === "tool_execution_start" && event.toolName !== "complete_issue") {
+        this.publish?.({ id: randomUUID(), issueId, kind: "tool_call", toolCallId: event.toolCallId, toolName: event.toolName, arguments: event.args, createdAt });
+      } else if (event.type === "tool_execution_end" && event.toolName !== "complete_issue") {
+        this.publish?.({ id: randomUUID(), issueId, kind: "tool_result", toolCallId: event.toolCallId, toolName: event.toolName, result: { content: event.result.content, details: event.result.details }, isError: event.isError, createdAt });
       }
     });
-    managed = {
-      session,
-      policy,
-      completion: null,
-      unsubscribe,
-      flushTranscript: () => transcriptTail,
-    };
-    return managed;
+    return { session, policy, completion: null, manager, unsubscribe };
   }
 
   private async promptExisting(issueId: string, managed: ManagedSession, message: string): Promise<void> {
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "running", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
-      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), notInArray(issues.status, ["resolved", "closed"])));
+      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
     });
     managed.completion = null;
     await managed.session.prompt(promptWithRuntimeTime(message));
@@ -403,16 +372,15 @@ export class AgentEngine {
 
   private async finalizeRun(issueId: string, issueType: string, managed: ManagedSession): Promise<void> {
     if (!managed.completion) throw new Error("issue_result_not_submitted");
-    await managed.flushTranscript();
     if (issueType === "smart_analysis") {
       const classifiedType = this.classifiedType(managed.session.messages);
       if (classifiedType) await this.db.update(issues).set({ type: classifiedType, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issueId));
     }
-    await this.appendAgentEvent(issueId, "complete", "Pi 已提交结构化处理结果");
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
       await transaction.update(issues).set({ status: "pending", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")));
     });
+    this.publishStatus(issueId, "complete");
   }
 
   private async disposeSession(issueId: string): Promise<void> {
@@ -470,7 +438,7 @@ export class AgentEngine {
   }
 
   private browserScope(deploymentId: string, config: Record<string, unknown>): { deploymentId: string; baseUrl: string } | undefined {
-    const value = config.playwright ?? config.browser;
+    const value = config.playwright;
     if (!value || typeof value !== "object") return undefined;
     const baseUrl = (value as Record<string, unknown>).baseUrl;
     if (typeof baseUrl !== "string") return undefined;
@@ -480,25 +448,13 @@ export class AgentEngine {
     return { deploymentId, baseUrl: url.href };
   }
 
-  private toolArguments(_toolName: string, args: unknown): string {
-    try { return JSON.stringify(args, null, 2); } catch { return "[unserializable arguments]"; }
+  private publishUserMessage(issueId: string, manager: SessionManager, message: string): void {
+    const id = manager.appendCustomEntry("issue-pilot-user", { message });
+    this.publish?.({ id, issueId, kind: "user", message, createdAt: new Date().toISOString() });
   }
 
-  private toolResultText(_toolName: string, resultValue: { content?: Array<{ type?: string; text?: string; mimeType?: string }> }): string {
-    const output = (resultValue.content ?? []).map((content) => content.type === "text"
-      ? content.text ?? ""
-      : content.type === "image"
-        ? `[image: ${content.mimeType ?? "unknown"}]`
-        : `[${content.type ?? "unknown"} content]`).filter(Boolean).join("\n");
-    return output || "(no output)";
-  }
-
-  private async appendAgentEvent(issueId: string, kind: string, message: string): Promise<RunEvent> {
-    const [event] = await this.db.insert(agentEvents).values({ issueId, kind, message }).returning();
-    if (!event) throw new Error("agent_event_write_failed");
-    const published = { id: event.id, issueId: event.issueId, kind: event.kind, message: event.message, createdAt: event.createdAt.toISOString() };
-    this.publish?.(published);
-    return published;
+  private publishStatus(issueId: string, status: "complete" | "error"): void {
+    this.publish?.({ id: randomUUID(), issueId, kind: "status", status, createdAt: new Date().toISOString() });
   }
 
   private repositoryLabel(url: string): string {

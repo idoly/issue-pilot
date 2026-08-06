@@ -13,7 +13,6 @@ import { Type } from "typebox";
 
 import { readConfiguration, readDatabase } from "../evidence/capabilities.ts";
 import { useBrowser, type BrowserAction } from "../evidence/browser.ts";
-import { deploymentConfig } from "../evidence/deployment.ts";
 import { readAttachment } from "./attachment.ts";
 import { readSlsLogs } from "../evidence/sls.ts";
 import { readElasticsearch, readRabbitMq, readRedis } from "../evidence/external.ts";
@@ -23,7 +22,7 @@ import {
   assertToolGranted,
   authorizeWorkspacePath,
   grantedRepositories,
-  loadIssuePolicy,
+  type IssuePolicy,
 } from "./policy.ts";
 import { repositoryStatus } from "./repository.ts";
 
@@ -40,16 +39,22 @@ export interface IssueCompletion {
 }
 
 export interface IssuePilotExtensionOptions {
-  workspaceRoot: string;
-  stateRoot?: string;
+  policy: IssuePolicy;
+  deploymentConfig: Record<string, unknown>;
   onComplete?: (result: IssueCompletion) => Promise<void> | void;
 }
 
 export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilotExtensionOptions): void {
+  const policy = options.policy;
+  const capabilityConfig = (key: "nacos" | "db" | "sls" | "playwright" | "redis" | "es" | "mq") => {
+    const value = options.deploymentConfig[key];
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${key}_configuration_not_found`);
+    return value as Record<string, unknown>;
+  };
+
   pi.on("project_trust", () => ({ trusted: "no", remember: false }));
 
-  pi.on("session_start", async (_event, context) => {
-    const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
+  pi.on("session_start", (_event, context) => {
     pi.setActiveTools(policy.tools);
     context.ui.setStatus("issue-policy", `${policy.issueKey} · ${policy.issueType} · ${policy.tools.length} tools`);
   });
@@ -61,8 +66,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
   pi.on("session_before_switch", () => ({ cancel: true }));
   pi.on("session_before_fork", () => ({ cancel: true }));
 
-  pi.on("before_agent_start", async (event, context) => {
-    const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
+  pi.on("before_agent_start", (event) => {
     const writable = policy.tools.includes("repository_write");
     const now = new Date();
     const nowSeconds = Math.floor(now.getTime() / 1000);
@@ -107,7 +111,6 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
   });
 
   pi.on("tool_call", async (event, context) => {
-    const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
     assertToolGranted(policy, event.toolName);
     if (!PATH_TOOLS.has(event.toolName)) return;
     const input = event.input as { path?: unknown };
@@ -115,12 +118,12 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     await authorizeWorkspacePath(policy, context.cwd, requestedPath, WRITE_TOOLS.has(event.toolName) ? "write" : "read");
   });
 
-  pi.registerTool({ ...createReadToolDefinition(options.workspaceRoot), name: "repository_read", label: "Read Repository File", promptGuidelines: ["Use repository_read to examine granted repository files."] });
-  pi.registerTool({ ...createGrepToolDefinition(options.workspaceRoot), name: "repository_grep", label: "Search Repository Text" });
-  pi.registerTool({ ...createFindToolDefinition(options.workspaceRoot), name: "repository_find", label: "Find Repository Files" });
-  pi.registerTool({ ...createLsToolDefinition(options.workspaceRoot), name: "repository_list", label: "List Repository Directory" });
-  pi.registerTool({ ...createEditToolDefinition(options.workspaceRoot), name: "repository_edit", label: "Edit Repository File", promptGuidelines: ["Use repository_edit for precise changes in granted writable repository files; edits[].oldText must match exactly."] });
-  pi.registerTool({ ...createWriteToolDefinition(options.workspaceRoot), name: "repository_write", label: "Write Repository File", promptGuidelines: ["Use repository_write only for new files or complete rewrites in granted writable repositories."] });
+  pi.registerTool({ ...createReadToolDefinition(policy.workspaceRoot), name: "repository_read", label: "Read Repository File", promptGuidelines: ["Use repository_read to examine granted repository files."] });
+  pi.registerTool({ ...createGrepToolDefinition(policy.workspaceRoot), name: "repository_grep", label: "Search Repository Text" });
+  pi.registerTool({ ...createFindToolDefinition(policy.workspaceRoot), name: "repository_find", label: "Find Repository Files" });
+  pi.registerTool({ ...createLsToolDefinition(policy.workspaceRoot), name: "repository_list", label: "List Repository Directory" });
+  pi.registerTool({ ...createEditToolDefinition(policy.workspaceRoot), name: "repository_edit", label: "Edit Repository File", promptGuidelines: ["Use repository_edit for precise changes in granted writable repository files; edits[].oldText must match exactly."] });
+  pi.registerTool({ ...createWriteToolDefinition(policy.workspaceRoot), name: "repository_write", label: "Write Repository File", promptGuidelines: ["Use repository_write only for new files or complete rewrites in granted writable repositories."] });
 
   pi.on("user_bash", () => ({
     result: {
@@ -136,8 +139,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     label: "Read Issue Attachment",
     description: "Read one explicitly granted issue attachment by ID. Returns complete UTF-8 text or PNG, JPEG, WebP, and GIF image data.",
     parameters: Type.Object({ attachment_id: Type.String() }),
-    async execute(_id, raw, _signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
+    async execute(_id, raw) {
       assertToolGranted(policy, "attachment_read");
       return readAttachment(policy, (raw as { attachment_id: string }).attachment_id);
     },
@@ -148,15 +150,12 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     label: "Read Service Configuration",
     description: "Return all effective configuration resolved from frozen repository files and repository-configured Nacos imports without filtering fields.",
     parameters: Type.Object({}),
-    async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
+    async execute(_id, _raw, signal) {
       assertToolGranted(policy, "nacos");
       const grant = policy.service.nacos;
       if (!grant) throw new Error("nacos_scope_not_granted_for_service");
-      const controlledConfiguration = await deploymentConfig(policy, grant.deploymentId);
-      const config = controlledConfiguration.nacos;
-      if (!config || typeof config !== "object") throw new Error("nacos_configuration_changed");
-      const nacos = config as Record<string, unknown>;
+      const controlledConfiguration = options.deploymentConfig;
+      const nacos = capabilityConfig("nacos");
       if (nacos.serverUrl !== grant.serverUrl || nacos.namespace !== grant.namespace || nacos.group !== grant.group || typeof nacos.username !== "string" || (nacos.password !== undefined && typeof nacos.password !== "string")) throw new Error("nacos_configuration_changed");
       return readConfiguration(pi, grantedRepositories(policy, "nacos"), controlledConfiguration, signal, { serverUrl: grant.serverUrl, namespace: grant.namespace, group: grant.group, username: nacos.username, password: typeof nacos.password === "string" ? nacos.password : "" });
     },
@@ -171,9 +170,8 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     }),
     async execute(_id, raw, signal, _update, context) {
       const input = raw as { statement: string };
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "db");
-      return readDatabase(pi, policy, context.cwd, input, signal);
+      return readDatabase(pi, policy, capabilityConfig("db"), context.cwd, input, signal);
     },
   });
 
@@ -190,11 +188,10 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       trace_id: Type.Optional(Type.String({ maxLength: 36 })),
       limit: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
-    async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
+    async execute(_id, raw, signal) {
       const input = raw as { project: string; logstore: string; from?: number; to?: number; query?: string; trace_id?: string; limit?: number };
       assertSlsGranted(policy, input.project, input.logstore);
-      return readSlsLogs(pi, policy, input, signal);
+      return readSlsLogs(pi, policy, input, capabilityConfig("sls"), signal);
     },
   });
 
@@ -212,9 +209,8 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       limit: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "redis");
-      return readRedis(pi, policy, context.cwd, raw as Parameters<typeof readRedis>[3], signal);
+      return readRedis(pi, policy, capabilityConfig("redis"), context.cwd, raw as Parameters<typeof readRedis>[4], signal);
     },
   });
 
@@ -228,9 +224,8 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       limit: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "es");
-      return readElasticsearch(pi, policy, context.cwd, raw as Parameters<typeof readElasticsearch>[3], signal);
+      return readElasticsearch(pi, policy, capabilityConfig("es"), context.cwd, raw as Parameters<typeof readElasticsearch>[4], signal);
     },
   });
 
@@ -244,9 +239,8 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       limit: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "mq");
-      return readRabbitMq(pi, policy, context.cwd, raw as Parameters<typeof readRabbitMq>[3], signal);
+      return readRabbitMq(pi, policy, capabilityConfig("mq"), context.cwd, raw as Parameters<typeof readRabbitMq>[4], signal);
     },
   });
 
@@ -265,8 +259,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       ]), { minItems: 1 }),
       screenshot: Type.Optional(Type.Boolean()),
     }),
-    async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
+    async execute(_id, raw, signal) {
       assertToolGranted(policy, "playwright");
       const input = raw as { actions: Array<Record<string, unknown>>; screenshot?: boolean };
       const actions = input.actions.map((action): BrowserAction => action.type === "login" ? {
@@ -275,7 +268,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
         passwordSelector: String(action.password_selector),
         submitSelector: String(action.submit_selector),
       } : action as BrowserAction);
-      return useBrowser(pi, policy, { actions, ...(input.screenshot !== undefined ? { screenshot: input.screenshot } : {}) }, signal);
+      return useBrowser(pi, policy, options.deploymentConfig, { actions, ...(input.screenshot !== undefined ? { screenshot: input.screenshot } : {}) }, signal);
     },
   });
 
@@ -288,7 +281,6 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       action: StringEnum(["install", "test", "build", "typecheck"] as const),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "node_project_command");
       return runNodeProject(pi, policy, context.cwd, raw as { project_path: string; action: string }, signal);
     },
@@ -303,7 +295,6 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       action: StringEnum(["test", "verify", "package"] as const),
     }),
     async execute(_id, raw, signal, _update, context) {
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "maven_project_command");
       return runMavenProject(pi, policy, context.cwd, raw as { project_path: string; action: string }, signal);
     },
@@ -316,9 +307,8 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     parameters: Type.Object({
       action: StringEnum(["status", "diff"] as const),
     }),
-    async execute(_id, raw, signal, _update, context) {
+    async execute(_id, raw, signal) {
       const input = raw as { action: "status" | "diff" };
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "repository_status");
       return repositoryStatus(pi, grantedRepositories(policy), input.action, signal);
     },
@@ -337,9 +327,8 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       verification: Type.Array(Type.String()),
       risks: Type.Array(Type.String()),
     }),
-    async execute(_id, raw, _signal, _update, context) {
+    async execute(_id, raw) {
       const input = raw as { outcome: IssueCompletion["outcome"]; summary: string; root_cause?: string; evidence: string[]; changes: string[]; verification: string[]; risks: string[] };
-      const policy = await loadIssuePolicy(options.workspaceRoot, options.stateRoot);
       assertToolGranted(policy, "complete_issue");
       if (input.outcome === "resolved" && input.verification.length === 0) throw new Error("issue_completion_requires_verification");
       if (policy.service.environmentKind !== "development" && input.changes.length > 0) throw new Error("read_only_environment_cannot_report_code_changes");
@@ -374,9 +363,4 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
       return new Text(lines.join("\n"), 0, 0);
     },
   });
-}
-
-export default function issuePilotExtension(pi: ExtensionAPI): void {
-  if (process.env.ISSUE_PILOT_POLICY_REQUIRED !== "1") return;
-  registerIssuePilotExtension(pi, { workspaceRoot: process.cwd(), ...(process.env.ISSUE_PILOT_STATE_ROOT ? { stateRoot: process.env.ISSUE_PILOT_STATE_ROOT } : {}) });
 }

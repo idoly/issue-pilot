@@ -2,30 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { formatToolOutput, renderTerminalEvent, renderTerminalFooter, terminalColumns } from "../../src/agent/terminal.ts";
+import type { RunEvent } from "../../src/agent/events.ts";
 
-const toolCall = JSON.stringify({ toolCallId: "call-1", toolName: "sls", argumentsText: "{\n  \"limit\": 1\n}" });
-const toolResult = JSON.stringify({ toolCallId: "call-1", toolName: "sls", argumentsText: "{\n  \"limit\": 1\n}", output: "latest log", isError: false });
+const event = (value: Omit<RunEvent, "id" | "issueId" | "createdAt">): RunEvent => ({
+  id: "event-1", issueId: "issue-1", createdAt: "2026-08-06T00:00:00.000Z", ...value,
+});
 
 test("renders persisted Agent events with native Pi TUI components", () => {
   assert.equal(terminalColumns("20"), 100);
   assert.equal(terminalColumns("80"), 80);
 
-  const user = renderTerminalEvent({ kind: "user", message: "hello **world**\x1b]8;;https://invalid\x07" }, 80, "/workspace");
+  const user = renderTerminalEvent(event({ kind: "user", message: "hello **world**\x1b]8;;https://invalid\x07" }), 80, "/workspace");
   assert.match(user.ansi, /\x1b\[48;2;52;53;65m/);
   assert.doesNotMatch(user.ansi, /\x1b]8;;https:\/\/invalid\x07/);
   assert.equal(user.text, "User: hello **world**]8;;https://invalid");
   assert.ok(user.lines >= 3);
 
-  const assistant = renderTerminalEvent({ kind: "assistant", message: "result **ok**" }, 80, "/workspace");
+  const assistant = renderTerminalEvent(event({ kind: "assistant", message: "result **ok**" }), 80, "/workspace");
   assert.match(assistant.ansi, /result/);
   assert.doesNotMatch(assistant.ansi, /48;2;52;53;65/);
 
-  const pending = renderTerminalEvent({ kind: "tool_call", message: toolCall }, 80, "/workspace");
+  const pending = renderTerminalEvent(event({ kind: "tool_call", toolCallId: "call-1", toolName: "sls", arguments: { limit: 1 } }), 80, "/workspace");
   assert.equal(pending.toolCallId, "call-1");
   assert.equal(pending.replaceTool, undefined);
   assert.match(pending.ansi, /sls/);
 
-  const complete = renderTerminalEvent({ kind: "tool_result", message: toolResult }, 80, "/workspace");
+  const complete = renderTerminalEvent(event({ kind: "tool_result", toolCallId: "call-1", toolName: "sls", result: { content: [{ type: "text", text: "latest log" }] }, isError: false }), 80, "/workspace");
   assert.equal(complete.toolCallId, "call-1");
   assert.equal(complete.replaceTool, true);
   assert.match(complete.ansi, /latest log/);
@@ -73,11 +75,11 @@ test("renders a bounded Pi-style footer without terminal control injection", () 
   assert.doesNotMatch(footer.text, /context/);
   assert.match(footer.text, /model .*\/model-with-a-long-name \| thinking medium/);
 
-  const legacyTool = renderTerminalEvent({ kind: "tool_result", message: "legacy unstructured result" }, 80, "/workspace");
-  assert.equal(legacyTool.ansi, "");
-  assert.equal(legacyTool.text, "");
+  const status = renderTerminalEvent(event({ kind: "status", status: "complete" }), 80, "/workspace");
+  assert.equal(status.ansi, "");
+  assert.equal(status.text, "");
 
-  const completionTool = renderTerminalEvent({ kind: "tool_call", message: JSON.stringify({ toolCallId: "complete-1", toolName: "complete_issue", argumentsText: "{}" }) }, 80, "/workspace");
+  const completionTool = renderTerminalEvent(event({ kind: "tool_call", toolCallId: "complete-1", toolName: "complete_issue", arguments: {} }), 80, "/workspace");
   assert.equal(completionTool.ansi, "");
   assert.equal(completionTool.text, "");
 });

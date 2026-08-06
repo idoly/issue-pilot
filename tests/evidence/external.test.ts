@@ -8,11 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { migrate } from "drizzle-orm/libsql/migrator";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-import { openDatabase } from "../../src/db/client.ts";
-import { serviceDeployments } from "../../src/db/schema.ts";
 import { readElasticsearch, readRabbitMq, readRedis } from "../../src/evidence/external.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
@@ -22,21 +18,6 @@ test("returns complete Redis, Elasticsearch, and RabbitMQ responses without comm
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-external-"));
   const workspace = path.join(root, "workspaces", "issue-20260805-100");
   await mkdir(workspace, { recursive: true });
-  const databaseFile = path.join(root, "issues.db");
-  const database = openDatabase(databaseFile);
-  await migrate(database.db, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-  await database.client.execute("PRAGMA foreign_keys = OFF");
-  await database.db.insert(serviceDeployments).values({
-    id: "deployment-external", serviceId: "service-external", environmentId: "environment-external", baseBranch: "main",
-    config: {
-      redis: { host: "192.168.27.122", port: 6379, username: "", password: "redis-secret", database: 0 },
-      es: { url: "http://es-6.example.test/", username: "elastic", password: "es-secret" },
-      mq: { host: "192.168.27.122", port: 5672, managementPort: 15672, username: "admin", password: "mq-secret", virtualHost: "/" },
-    },
-  });
-  await database.close();
-  const previousDatabase = process.env.ISSUE_PILOT_DATABASE;
-  process.env.ISSUE_PILOT_DATABASE = databaseFile;
   const policy = {
     workspaceRoot: workspace,
     service: {
@@ -56,17 +37,18 @@ test("returns complete Redis, Elasticsearch, and RabbitMQ responses without comm
     },
   } as unknown as ExtensionAPI;
   try {
-    const redis = await readRedis(pi, policy, workspace, { action: "get", key: "order:1" });
-    const es = await readElasticsearch(pi, policy, workspace, { action: "search", query: { term: { status: "open" } }, limit: 10 });
-    const mq = await readRabbitMq(pi, policy, workspace, { action: "queues", limit: 20 });
+    const redisConfig = { host: "192.168.27.122", port: 6379, username: "", password: "redis-secret", database: 0 };
+    const esConfig = { url: "http://es-6.example.test/", username: "elastic", password: "es-secret" };
+    const mqConfig = { host: "192.168.27.122", port: 5672, managementPort: 15672, username: "admin", password: "mq-secret", virtualHost: "/" };
+    const redis = await readRedis(pi, policy, redisConfig, workspace, { action: "get", key: "order:1" });
+    const es = await readElasticsearch(pi, policy, esConfig, workspace, { action: "search", query: { term: { status: "open" } }, limit: 10 });
+    const mq = await readRabbitMq(pi, policy, mqConfig, workspace, { action: "queues", limit: 20 });
     assert.match(JSON.stringify(redis), /value/);
     assert.match(JSON.stringify(es), /ok/);
     assert.match(JSON.stringify(mq), /ok/);
     assert.equal(calls.length, 3);
-    await assert.rejects(() => readRedis(pi, policy, workspace, { action: "set", key: "order:1" }), /invalid_redis_action/);
+    await assert.rejects(() => readRedis(pi, policy, redisConfig, workspace, { action: "set", key: "order:1" }), /invalid_redis_action/);
   } finally {
-    if (previousDatabase === undefined) delete process.env.ISSUE_PILOT_DATABASE;
-    else process.env.ISSUE_PILOT_DATABASE = previousDatabase;
     await rm(root, { recursive: true, force: true });
   }
 });

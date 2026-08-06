@@ -1,6 +1,6 @@
 export type IssuePriority = "p0" | "p1" | "p2" | "p3";
 export type IssueType = "incident" | "request" | "question" | "smart_analysis";
-export type IssueStatus = "open" | "in_progress" | "pending" | "failed" | "resolved" | "closed";
+export type IssueStatus = "open" | "in_progress" | "pending" | "resolved";
 
 export interface Person { subject: string; name: string; email: string }
 
@@ -42,9 +42,14 @@ export interface AgentEvent {
   id: string;
   issueId: string;
   kind: string;
-  message: string;
+  message?: string;
   createdAt: string;
-  transient?: boolean;
+  toolCallId?: string;
+  toolName?: string;
+  arguments?: unknown;
+  result?: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown };
+  isError?: boolean;
+  status?: "running" | "complete" | "error";
   terminal?: { ansi: string; text: string; lines: number; replaceLines: number; toolCallId?: string };
 }
 
@@ -170,7 +175,7 @@ export const updateIssueStatus = (key: string, status: "open" | "resolved") => r
 export const addIssueComment = (key: string, body: string) => request<IssueComment>(`/api/issues/${encodeURIComponent(key)}/comments`, { method: "POST", body: JSON.stringify({ body }) });
 export const syncIssueUpdate = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/sync`, { method: "POST" });
 export const retryIssue = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/retry`, { method: "POST" });
-export const sendAgentMessage = (key: string, message: string, columns: number) => request<AgentEvent>(`/api/issues/${encodeURIComponent(key)}/agent-messages`, { method: "POST", body: JSON.stringify({ message, cols: columns }) });
+export const sendAgentMessage = (key: string, message: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/agent-messages`, { method: "POST", body: JSON.stringify({ message }) });
 export const abortAgent = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/agent-abort`, { method: "POST" });
 export const agentStreamUrl = (key: string, columns?: number, footerColumns?: number) => {
   const query = new URLSearchParams();

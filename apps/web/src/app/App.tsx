@@ -283,7 +283,7 @@ function IssueQueue(props: {
   const filtered = createMemo(() => {
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
-      const statusMatch = status() === "all" || (status() === "active" && !["resolved", "closed"].includes(issue.status)) || issue.status === status();
+      const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
       return statusMatch && (!term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name}`.toLowerCase().includes(term));
     });
   });
@@ -306,13 +306,12 @@ function IssueQueue(props: {
         <Select
           aria-label="按状态筛选"
           value={status()}
-          onChange={(value) => { const selected = selectedChoice(value, ["active", "open", "in_progress", "pending", "failed", "resolved", "all"] as const); if (selected) setStatus(selected); }}
+          onChange={(value) => { const selected = selectedChoice(value, ["active", "open", "in_progress", "pending", "resolved", "all"] as const); if (selected) setStatus(selected); }}
           options={[
             { value: "active", label: "活动工单" },
             { value: "open", label: "待处理" },
             { value: "in_progress", label: "处理中" },
             { value: "pending", label: "待确认" },
-            { value: "failed", label: "异常" },
             { value: "resolved", label: "已解决" },
             { value: "all", label: "全部工单" },
           ]}
@@ -561,7 +560,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
             <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
           </Show>
           <Show when={props.issue.status === "pending" && props.issue.agentResult?.outcome === "resolved" && props.issue.agentResult.verification.length > 0}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
-          <Show when={props.issue.status === "resolved" || props.issue.status === "closed"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
+          <Show when={props.issue.status === "resolved"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
           <Button icon={<Pencil size={15} />} disabled={props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running"} onClick={openEditor}>编辑工单</Button>
         </Space>
       </header>
@@ -1084,12 +1083,12 @@ export function App() {
           </div>
           <div class="identity">
             <span>本地</span>
-            <div><strong>严欣</strong><small>本地工作区</small></div>
+            <div><strong>周俊杰</strong><small>本地工作区</small></div>
           </div>
         </Layout.Header>
         <Layout.Content class={`app-content${agentExpanded() && view() === "issues" ? " agent-expanded" : ""}${codeExpanded() && view() === "issues" ? " code-expanded" : ""}`}>
           <Show when={view() === "issues"} fallback={view() === "statistics" ? <Statistics /> : <ConfigurationView />}>
-            <Show when={!codeExpanded()}><IssueQueue selectedId={selectedId()} userName="严欣" userSubject="yx4821@xianhengguoji.com" refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
+            <Show when={!codeExpanded()}><IssueQueue selectedId={selectedId()} userName="周俊杰" userSubject="zjj3753@xianhengguoji.com" refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
             <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
               <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                 {(current) => (

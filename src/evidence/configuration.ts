@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -286,19 +286,4 @@ export async function resolveConfiguration(pi: ExtensionAPI, service: GrantedRep
   const resolved = await resolveConfigurations(pi, service, signal, secrets);
   if (resolved.length > 1) throw new Error("multiple_service_configuration_scopes_found");
   return resolved[0]?.configuration ?? { properties: {}, sources: [], missingSources: [] };
-}
-
-
-export function datasourceUrl(configuration: ResolvedConfiguration): string {
-  const url = value(configuration.properties, "spring.datasource.url", "spring.datasource.jdbc-url", "spring.datasource.hikari.jdbc-url");
-  if (!url || url.includes("${")) throw new Error("datasource_url_not_resolved");
-  const normalized = url.replace(/^jdbc:/, "");
-  const parsed = new URL(normalized);
-  if (parsed.protocol !== "mysql:" && parsed.protocol !== "mariadb:") throw new Error("unsupported_datasource_protocol");
-  const username = value(configuration.properties, "spring.datasource.username", "spring.datasource.hikari.username");
-  const password = value(configuration.properties, "spring.datasource.password", "spring.datasource.hikari.password");
-  if (!parsed.username && username && !username.includes("${")) parsed.username = username;
-  if (!parsed.password && password && !password.includes("${")) parsed.password = password;
-  if (!parsed.username || !parsed.pathname.replace(/^\//, "")) throw new Error("datasource_credentials_not_resolved");
-  return parsed.toString();
 }

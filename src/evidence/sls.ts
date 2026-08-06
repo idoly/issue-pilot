@@ -5,7 +5,6 @@ import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { IssuePolicy } from "../pi/policy.ts";
-import { deploymentCapabilityConfig } from "./deployment.ts";
 import { fileURLToPath } from "node:url";
 
 const PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
@@ -27,7 +26,7 @@ export async function readSlsLogs(pi: ExtensionAPI, policy: IssuePolicy, input: 
   query?: string;
   trace_id?: string;
   limit?: number;
-}, signal?: AbortSignal, configuredOverride?: Record<string, unknown>) {
+}, configured: Record<string, unknown>, signal?: AbortSignal) {
   if (!PROJECT.test(input.project)) throw new Error("invalid_sls_project");
   if (!LOGSTORE.test(input.logstore)) throw new Error("invalid_sls_logstore");
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
@@ -46,7 +45,6 @@ export async function readSlsLogs(pi: ExtensionAPI, policy: IssuePolicy, input: 
 
   const scope = policy.service.sls;
   if (!scope) throw new Error("sls_scope_not_granted_for_service");
-  const configured = configuredOverride ?? await deploymentCapabilityConfig(policy, scope.deploymentId, "sls");
   if (configured.region !== scope.region || configured.project !== scope.project || !Array.isArray(configured.logstores) || !configured.logstores.includes(input.logstore) || typeof configured.accessKeyId !== "string" || typeof configured.accessKeySecret !== "string") throw new Error("sls_configuration_changed");
   const installedConfig = process.env.ISSUE_PILOT_ALIYUN_CONFIG_FILE ?? path.join(os.homedir(), ".aliyun", "config.json");
   const cli = process.env.ISSUE_PILOT_ALIYUN_CLI ?? "/usr/local/sbin/aliyun";

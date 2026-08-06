@@ -4,7 +4,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { resolveConfigurations, type NacosConnection } from "./configuration.ts";
 import type { GrantedRepository, IssuePolicy } from "../pi/policy.ts";
-import { deploymentCapabilityConfig } from "./deployment.ts";
 import { queryMysql, validateReadOnlyQuery } from "./mysql.ts";
 
 export async function readConfiguration(pi: ExtensionAPI, repositories: GrantedRepository[], controlledConfiguration: Record<string, unknown>, signal?: AbortSignal, nacos?: NacosConnection) {
@@ -22,11 +21,10 @@ export async function readConfiguration(pi: ExtensionAPI, repositories: GrantedR
   };
 }
 
-export async function readDatabase(pi: ExtensionAPI, policy: IssuePolicy, cwd: string, input: { statement: string }, signal?: AbortSignal) {
+export async function readDatabase(pi: ExtensionAPI, policy: IssuePolicy, config: Record<string, unknown>, cwd: string, input: { statement: string }, signal?: AbortSignal) {
   const statement = validateReadOnlyQuery(input.statement);
   const scope = policy.service.db;
   if (!scope) throw new Error("db_scope_not_granted_for_service");
-  const config = await deploymentCapabilityConfig(policy, scope.deploymentId, "db");
   if (typeof config.url !== "string" || typeof config.username !== "string" || typeof config.password !== "string") throw new Error("db_configuration_not_found");
   const connection = new URL(config.url);
   connection.username = config.username;

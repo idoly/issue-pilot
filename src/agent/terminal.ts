@@ -14,14 +14,6 @@ const terminalUi = { requestRender() {} };
 
 initTheme("dark");
 
-interface ToolPayload {
-  toolCallId: string;
-  toolName: string;
-  argumentsText: string;
-  output?: string;
-  isError?: boolean;
-}
-
 export interface TerminalFrame {
   ansi: string;
   text: string;
@@ -50,21 +42,6 @@ export function terminalColumns(value: unknown): number {
 
 function safeTerminalText(text: string): string {
   return text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-}
-
-function parseToolPayload(message: string): ToolPayload | null {
-  try {
-    const value = JSON.parse(message) as Partial<ToolPayload>;
-    return typeof value.toolCallId === "string" && typeof value.toolName === "string" && typeof value.argumentsText === "string"
-      ? { toolCallId: safeTerminalText(value.toolCallId), toolName: safeTerminalText(value.toolName), argumentsText: safeTerminalText(value.argumentsText), ...(typeof value.output === "string" ? { output: safeTerminalText(value.output) } : {}), ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}) }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function toolArguments(payload: ToolPayload): unknown {
-  try { return JSON.parse(payload.argumentsText); } catch { return payload.argumentsText; }
 }
 
 function displayValue(value: unknown): string {
@@ -136,33 +113,45 @@ function assistantMessage(text: string) {
   };
 }
 
-function accessibleText(event: Pick<RunEvent, "kind" | "message">, payload?: ToolPayload): string {
-  if (event.kind === "user") return `User: ${safeTerminalText(event.message)}`;
-  if (event.kind === "assistant") return `Agent: ${safeTerminalText(event.message)}`;
-  if (!payload) return "Invalid tool event";
-  if (event.kind === "tool_call") return `Tool ${payload.toolName}, pending\nArguments:\n${payload.argumentsText}`;
-  return `Tool ${payload.toolName}, ${payload.isError ? "failed" : "completed"}\nArguments:\n${payload.argumentsText}\nResult:\n${formatToolOutput(payload.toolName, payload.output ?? "(no output)")}`;
+function json(value: unknown): string {
+  try { return JSON.stringify(value, null, 2); } catch { return "[unserializable]"; }
 }
 
-function componentLines(event: Pick<RunEvent, "kind" | "message">, columns: number, cwd: string): { lines: string[]; text: string; toolCallId?: string; replaceTool?: boolean } {
-  if (event.kind === "user") return { lines: new UserMessageComponent(safeTerminalText(event.message)).render(columns), text: accessibleText(event) };
-  if (event.kind === "assistant") return { lines: new AssistantMessageComponent(assistantMessage(safeTerminalText(event.message))).render(columns), text: accessibleText(event) };
-  if (event.kind === "tool_call" || event.kind === "tool_result") {
-    const payload = parseToolPayload(event.message);
-    if (!payload || payload.toolName === "complete_issue") return { lines: [], text: "" };
-    const component = new ToolExecutionComponent(payload.toolName, payload.toolCallId, toolArguments(payload), { showImages: false }, undefined, terminalUi as never, cwd);
+function resultText(event: RunEvent): string {
+  const output = (event.result?.content ?? []).map((content) => content.type === "text"
+    ? content.text ?? ""
+    : content.type === "image"
+      ? `[image: ${content.mimeType ?? "unknown"}]`
+      : `[${content.type} content]`).filter(Boolean).join("\n");
+  return formatToolOutput(event.toolName ?? "", output || "(no output)");
+}
+
+function accessibleText(event: RunEvent): string {
+  if (event.kind === "user") return `User: ${safeTerminalText(event.message ?? "")}`;
+  if (event.kind === "assistant") return `Agent: ${safeTerminalText(event.message ?? "")}`;
+  if (event.kind === "tool_call") return `Tool ${event.toolName}, pending\nArguments:\n${json(event.arguments)}`;
+  if (event.kind === "tool_result") return `Tool ${event.toolName}, ${event.isError ? "failed" : "completed"}\nResult:\n${resultText(event)}`;
+  return "";
+}
+
+function componentLines(event: RunEvent, columns: number, cwd: string): { lines: string[]; text: string; toolCallId?: string; replaceTool?: boolean } {
+  if (event.kind === "user") return { lines: new UserMessageComponent(safeTerminalText(event.message ?? "")).render(columns), text: accessibleText(event) };
+  if (event.kind === "assistant") return { lines: new AssistantMessageComponent(assistantMessage(safeTerminalText(event.message ?? ""))).render(columns), text: accessibleText(event) };
+  if ((event.kind === "tool_call" || event.kind === "tool_result") && event.toolName && event.toolCallId) {
+    if (event.toolName === "complete_issue") return { lines: [], text: "" };
+    const component = new ToolExecutionComponent(event.toolName, event.toolCallId, event.arguments ?? {}, { showImages: false }, undefined, terminalUi as never, cwd);
     component.setExpanded(true);
     component.markExecutionStarted();
     if (event.kind === "tool_result") {
       component.setArgsComplete();
-      component.updateResult({ content: [{ type: "text", text: formatToolOutput(payload.toolName, payload.output ?? "(no output)") }], isError: payload.isError ?? false });
+      component.updateResult({ content: [{ type: "text", text: resultText(event) }], details: event.result?.details, isError: event.isError ?? false });
     }
-    return { lines: component.render(columns), text: accessibleText(event, payload), toolCallId: payload.toolCallId, replaceTool: event.kind === "tool_result" };
+    return { lines: component.render(columns), text: accessibleText(event), toolCallId: event.toolCallId, replaceTool: event.kind === "tool_result" };
   }
   return { lines: [], text: "" };
 }
 
-export function renderTerminalEvent(event: Pick<RunEvent, "kind" | "message">, columnsValue: unknown, cwd: string): TerminalFrame {
+export function renderTerminalEvent(event: RunEvent, columnsValue: unknown, cwd: string): TerminalFrame {
   const columns = terminalColumns(columnsValue);
   const rendered = componentLines(event, columns, cwd);
   return {

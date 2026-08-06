@@ -46,7 +46,7 @@ export const serviceRepositories = sqliteTable("service_repositories", {
 
 export const issues = sqliteTable("issues", {
   id: id(), key: text("key").notNull(), title: text("title").notNull(), description: text("description").notNull().default(""),
-  status: text("status", { enum: ["open", "in_progress", "pending", "failed", "resolved", "closed"] }).notNull().default("open"),
+  status: text("status", { enum: ["open", "in_progress", "pending", "resolved"] }).notNull().default("open"),
   priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] }).notNull().default("p2"),
   type: text("type", { enum: ["incident", "request", "question", "smart_analysis"] }).notNull().default("request"),
   serviceId: text("service_id").notNull().references(() => services.id), environmentId: text("environment_id").notNull().references(() => environments.id),
@@ -60,7 +60,7 @@ export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
 
 export const issueRepositories = sqliteTable("issue_repositories", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), url: text("url").notNull(), baseBranch: text("base_branch").notNull(),
-  workingBranch: text("working_branch"), localPath: text("local_path"), commitBefore: text("commit_before"), commitAfter: text("commit_after"), ...timestamps,
+  workingBranch: text("working_branch"), localPath: text("local_path"), commitBefore: text("commit_before"), ...timestamps,
 }, (table) => [index("issue_repositories_issue_idx").on(table.issueId), uniqueIndex("issue_repository_url_unique").on(table.issueId, table.url)]);
 
 export const issueAttachments = sqliteTable("issue_attachments", {
@@ -68,10 +68,6 @@ export const issueAttachments = sqliteTable("issue_attachments", {
   objectKey: text("object_key").notNull(), sha256: text("sha256").notNull(), uploadedBy: text("uploaded_by").notNull().references(() => subjects.subject),
   createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
 }, (table) => [index("issue_attachments_issue_idx").on(table.issueId)]);
-
-export const agentEvents = sqliteTable("issue_pilot_events", {
-  id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), kind: text("kind").notNull(), message: text("message").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
-}, (table) => [index("issue_pilot_events_issue_idx").on(table.issueId, table.createdAt)]);
 
 export const issueAgentResults = sqliteTable("issue_agent_results", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }),
@@ -87,13 +83,12 @@ export const issueComments = sqliteTable("issue_comments", {
 }, (table) => [index("issue_comments_issue_idx").on(table.issueId, table.createdAt)]);
 
 export const agentSessions = sqliteTable("issue_pilot_sessions", {
-  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), piSessionId: text("pi_session_id").notNull(), sessionFile: text("session_file").notNull(), workspacePath: text("workspace_path").notNull(),
-  leaseOwner: text("lease_owner"), leaseExpiresAt: date("lease_expires_at"), ...timestamps,
+  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), piSessionId: text("pi_session_id").notNull(), sessionFile: text("session_file").notNull(), workspacePath: text("workspace_path").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("issue_pilot_pi_session_unique").on(table.piSessionId)]);
 
 export const issueWorkspaces = sqliteTable("issue_workspaces", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: ["not_created", "preparing", "running", "ready", "stopped", "failed"] }).notNull().default("not_created"),
-  codeServerUrl: text("code_server_url"), ownerSubject: text("owner_subject").references(() => subjects.subject), branchCreated: integer("branch_created", { mode: "boolean" }).notNull().default(false), lastError: text("last_error"), ...timestamps,
+  codeServerUrl: text("code_server_url"), ownerSubject: text("owner_subject").references(() => subjects.subject), lastError: text("last_error"), ...timestamps,
 });
 
 export const issueHistory = sqliteTable("issue_history", {

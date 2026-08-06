@@ -5,17 +5,13 @@ export const statusLabel: Record<IssueStatus, string> = {
   open: "待处理",
   in_progress: "处理中",
   pending: "待确认",
-  failed: "异常",
   resolved: "已解决",
-  closed: "已关闭",
 };
 export const statusBadge: Record<IssueStatus, "default" | "processing" | "warning" | "success"> = {
   open: "default",
   in_progress: "processing",
   pending: "warning",
-  failed: "warning",
   resolved: "success",
-  closed: "default",
 };
 
 export const typeLabel: Record<IssueType, string> = {

@@ -7,13 +7,14 @@ import multipart from "@fastify/multipart";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import Fastify, { type FastifyInstance } from "fastify";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { AgentEngine } from "../agent/engine.ts";
-import type { RunEvent } from "../agent/events.ts";
+import { sessionTranscript, type RunEvent } from "../agent/events.ts";
 import { renderTerminalEvent, renderTerminalFooter, terminalColumns } from "../agent/terminal.ts";
 import { openDatabase } from "../db/client.ts";
 import {
-  agentEvents, agentSessions, environments, issueAttachments, issueCcRecipients,
+  agentSessions, environments, issueAttachments, issueCcRecipients,
   issueAgentResults, issueComments, issueHistory, issueRepositories,
   issueWorkspaces, issues, serviceDeployments,
   serviceRepositories, services, subjects,
@@ -234,7 +235,7 @@ function datedKey(now = new Date()): string {
 
 export interface AgentController {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
-  send(issueId: string, message: string): Promise<RunEvent>;
+  send(issueId: string, message: string): Promise<void>;
   abort(issueId: string): Promise<boolean>;
   isRunning(issueId: string): boolean;
   invalidatePolicy(issueId: string): Promise<boolean>;
@@ -251,7 +252,7 @@ export interface ApiOptions {
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? process.env.ISSUE_PILOT_STATE_ROOT ?? ".issue-pilot");
   const database = openDatabase(options.databaseFile ?? process.env.ISSUE_PILOT_DATABASE ?? path.join(stateRoot, "issues.db"));
-  for (const directory of ["sessions", "capabilities", "attachments"].map((name) => path.join(stateRoot, name))) {
+  for (const directory of ["sessions", "attachments"].map((name) => path.join(stateRoot, name))) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await chmod(directory, 0o700);
   }
@@ -260,7 +261,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   await migrate(database.db, { migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url)) });
   await database.client.execute("PRAGMA foreign_keys = ON");
   await database.client.execute({
-    sql: "UPDATE issues SET status = 'failed', updated_at = unixepoch() * 1000, version = version + 1 WHERE status NOT IN ('resolved', 'closed', 'failed') AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
+    sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() * 1000, version = version + 1 WHERE status != 'resolved' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
     args: [],
   });
   await database.client.execute({
@@ -320,7 +321,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   const subject = async () => {
-    const value = process.env.ISSUE_PILOT_SUBJECT ?? "yx4821@xianhengguoji.com";
+    const value = process.env.ISSUE_PILOT_SUBJECT ?? "zjj3753@xianhengguoji.com";
     await database.db.insert(subjects).values({ subject: value, username: value, displayName: value, email: "" }).onConflictDoNothing();
     return value;
   };
@@ -594,7 +595,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
     const target = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
-    const allowed = (target === "resolved" && issue.status === "pending") || (target === "open" && (issue.status === "resolved" || issue.status === "closed"));
+    const allowed = (target === "resolved" && issue.status === "pending") || (target === "open" && issue.status === "resolved");
     if (!allowed) throw new ApiError(409, "invalid_issue_status_transition");
     if (target === "resolved") {
       const [completion] = await database.db.select({ outcome: issueAgentResults.outcome, verification: issueAgentResults.verification }).from(issueAgentResults).where(eq(issueAgentResults.issueId, issue.id)).limit(1);
@@ -632,7 +633,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         lastError: workspace?.lastError ?? null,
         retryable: !engine.isRunning(issue.id) && (
           ["not_created", "preparing", "running", "stopped", "failed"].includes(workspace?.status ?? "not_created")
-          || (workspace?.status === "ready" && !sessionReady && ["open", "in_progress", "failed"].includes(issue.status))
+          || (workspace?.status === "ready" && !sessionReady && ["open", "in_progress"].includes(issue.status))
         ),
       },
       agentSession: sessionReady ? { sessionId: session!.piSessionId } : null,
@@ -820,14 +821,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       } else if (frame.toolCallId) {
         pendingToolLines.set(frame.toolCallId, frame.lines);
       }
-      const clientEvent = event.kind === "tool_call" || event.kind === "tool_result" ? { ...event, message: "" } : event;
-      reply.raw.write(`id: ${event.id}\ndata: ${JSON.stringify({ ...clientEvent, terminal: { ansi: frame.ansi, text: frame.text, lines: frame.lines, replaceLines, ...(frame.toolCallId ? { toolCallId: frame.toolCallId } : {}) } })}\n\n`);
+      reply.raw.write(`id: ${event.id}\ndata: ${JSON.stringify({ ...event, terminal: { ansi: frame.ansi, text: frame.text, lines: frame.lines, replaceLines, ...(frame.toolCallId ? { toolCallId: frame.toolCallId } : {}) } })}\n\n`);
     };
-    const replay = await database.db.select().from(agentEvents)
-      .where(and(eq(agentEvents.issueId, issue.id), inArray(agentEvents.kind, ["user", "assistant", "tool_call", "tool_result"])))
-      .orderBy(asc(sql<number>`rowid`));
-    for (const event of replay) send({ ...event, createdAt: event.createdAt.toISOString() });
-    reply.raw.write(`event: ready\ndata: ${JSON.stringify({ footer })}\n\n`);
+    const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
+    if (binding && await readFile(binding.sessionFile).then(() => true, () => false)) {
+      const manager = SessionManager.open(binding.sessionFile);
+      for (const event of sessionTranscript(manager, issue.id)) send(event);
+    }
+    reply.raw.write(`event: ready\ndata: ${JSON.stringify({ footer, running: engine.isRunning(issue.id) })}\n\n`);
     const set = listeners.get(issue.id) ?? new Set(); set.add(send); listeners.set(issue.id, set);
     const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000); heartbeat.unref();
     request.raw.once("close", () => { clearInterval(heartbeat); set.delete(send); if (!set.size) listeners.delete(issue.id); });
@@ -838,10 +839,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     if (!issue) throw new ApiError(404, "issue_not_found");
     const input = record(request.body);
     const message = text(input.message, "agent_message", 50_000);
-    const columns = terminalColumns(input.cols);
-    const event = await engine.send(issue.id, message);
-    const frame = renderTerminalEvent(event, columns, path.join(stateRoot, "workspaces", issue.key.toLowerCase()));
-    return reply.code(202).send({ ...event, terminal: { ansi: frame.ansi, text: frame.text, lines: frame.lines, replaceLines: 0 } });
+    await engine.send(issue.id, message);
+    return reply.code(202).send();
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-abort", async (request, reply) => {
