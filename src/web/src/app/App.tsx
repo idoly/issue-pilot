@@ -42,7 +42,7 @@ import { DragDropManager } from "@dnd-kit/dom";
 import { isSortable, Sortable } from "@dnd-kit/dom/sortable";
 import { addIssueComment, attachmentUrl, createIssue, createService, deleteIssueAttachments, deleteService, fetchAttachment, getIssue, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, listIssues, loadConfig, loadPeople, reorderServices, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type Config, type DeploymentCapability, type IssueDetail, type IssuePriority, type IssueType, type Person } from "../data/client";
 import { Markdown } from "../ui/Markdown";
-import { workspaceUrl, folderUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
+import { workspaceUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
 import { AgentPanel } from "./AgentPanel";
 import { Statistics } from "./Statistics";
 import "@idoly/ant-design-solid/base.css";
@@ -546,20 +546,21 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
       <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{props.issue.workspace.lastError}</div></Show>
       <section class="repository-band" aria-labelledby="repositories-title">
-        <div class="band-title"><GitBranch size={16} /><h2 id="repositories-title">代码分支</h2></div>
+        <div class="band-title">
+          <GitBranch size={16} />
+          <h2 id="repositories-title">代码分支</h2>
+          <Show when={workspaceUrl(props.issue.workspace.url)}>
+            {(url) => <span class="band-actions"><Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在 code-server 中打开工单工作区" aria-label="在 code-server 中打开工单工作区" onClick={() => props.onOpenCodeServer(url())} /></span>}
+          </Show>
+        </div>
         <div class="repository-list">
           <For each={props.issue.repositories} fallback={<span class="muted">尚未绑定仓库</span>}>
-            {(repository) => {
-              const codeServerUrl = () => folderUrl(props.issue.workspace.url, repository.codeServerPath);
-              return (
-                <div class="repository-row">
-                  <span class="repo-name">{repository.url.split(/[/:]/).at(-1)?.replace(/\.git$/, "")}</span>
-                  <Show when={codeServerUrl()} fallback={<code>{repository.workingBranch ?? repository.baseBranch}{repository.workingBranch ? "" : " (只读)"}</code>}>
-                    {(url) => <button type="button" class="repository-branch-link" title={`在 code-server 中打开 ${repository.workingBranch ?? repository.baseBranch}`} onClick={() => props.onOpenCodeServer(url())}><code>{repository.workingBranch ?? repository.baseBranch}{repository.workingBranch ? "" : " (只读)"}</code><ExternalLink size={14} /></button>}
-                  </Show>
-                </div>
-              );
-            }}
+            {(repository) => (
+              <div class="repository-row">
+                <span class="repo-name">{repository.url.split(/[/:]/).at(-1)?.replace(/\.git$/, "")}</span>
+                <code>{repository.workingBranch ?? repository.baseBranch}{repository.workingBranch ? "" : " (只读)"}</code>
+              </div>
+            )}
           </For>
         </div>
       </section>

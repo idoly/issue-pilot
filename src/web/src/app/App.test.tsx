@@ -8,9 +8,9 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
-    service, version: 1, createdAt: now, updatedAt: now, repositories: [], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    service, version: 1, createdAt: now, updatedAt: now, repositories: [{ id: "issue-repository", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue", codeServerPath: "/home/coder/state/workspaces/issue-0042/repository-id" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: null, retryable }, agentSession: null,
+    workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable }, agentSession: null,
   });
   const issues = [
     issue("ISSUE-0042", "结算页提交后订单状态未刷新", "in_progress"),
@@ -69,6 +69,13 @@ describe("issue pilot workspace", () => {
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-meta")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单工作区" }));
+    const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-0042 code-server 编辑器") as HTMLIFrameElement);
+    const codeServerUrl = new URL(codeServerFrame.src);
+    expect(codeServerUrl.pathname).toBe("/code-server/");
+    expect(codeServerUrl.searchParams.get("folder")).toBe("/home/coder/state/workspaces/issue-0042");
+    fireEvent.click(screen.getByRole("button", { name: "还原 code-server" }));
+    await waitFor(() => expect(screen.queryByTitle("ISSUE-0042 code-server 编辑器")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
     await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());

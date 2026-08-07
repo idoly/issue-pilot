@@ -54,10 +54,3 @@ function codeServerUrl(value: string): URL {
 export function workspaceUrl(value: string | null): string | null {
   return value ? codeServerUrl(value).toString() : null;
 }
-
-export function folderUrl(value: string | null, folder: string | null): string | null {
-  if (!value || !folder) return workspaceUrl(value);
-  const url = codeServerUrl(value);
-  url.searchParams.set("folder", folder);
-  return url.toString();
-}

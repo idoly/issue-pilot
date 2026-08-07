@@ -162,15 +162,12 @@ button, input { font: inherit; }
 .band-title { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #46504c; }
 .band-title h2 { margin: 0; font-size: 13px; letter-spacing: 0; }
 .band-title > span { color: #89928e; font-size: 11px; }
+.band-title .band-actions { margin-left: auto; }
 .repository-list { border: 1px solid #dfe4e1; border-radius: 6px; overflow: hidden; }
 .repository-row { display: grid; grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1.3fr); align-items: center; gap: 12px; min-height: 44px; padding: 7px 12px; border-bottom: 1px solid #e5e9e7; font-size: 12px; }
 .repository-row:last-child { border-bottom: 0; }
 .repo-name { overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .repository-row code { overflow: hidden; color: #5f6965; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.repository-branch-link { display: inline-flex; min-width: 0; align-items: center; justify-self: start; gap: 6px; padding: 0; border: 0; background: transparent; color: #166b52; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
-.repository-branch-link:hover { color: #0e503d; text-decoration: underline; }
-.repository-branch-link code { color: inherit; }
-.repository-branch-link svg { flex: 0 0 auto; }
 .repository-branch-pending { color: #89928e; font-size: 11px; }
 .muted, .empty-band { padding: 16px; color: #84908b; font-size: 13px; }
 .issue-attachment-list { border: 1px solid #e1e5e3; border-radius: 6px; }
@@ -478,5 +475,4 @@ button, input { font: inherit; }
   .issue-facts > div:nth-child(-n+2) { border-bottom: 1px solid #e3e7e5; }
   .repository-row { grid-template-columns: 1fr; }
   .repository-row { gap: 3px; }
-  .repository-branch-link { max-width: 100%; }
 }

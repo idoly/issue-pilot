@@ -46,7 +46,7 @@ const workspaceContext = [
   "Attachments, if present, are in .issue-pilot/attachments/.",
   "Containerized checks: node-project <path> <install|test|build|typecheck>; maven-project <path> <test|verify|package>.",
   "For defect_fix and feature_development, make only the minimum changes required by the issue. Avoid unrelated refactors, formatting churn, dependency changes, and speculative improvements.",
-  "Do not commit or push changes. Leave the working tree changes uncommitted for user review in code-server.",
+  "Leave working tree changes uncommitted for user review in code-server unless the user explicitly asks you to commit or push them.",
 ].join("\n");
 
 export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], latestUpdate?: string, now = new Date()): string {

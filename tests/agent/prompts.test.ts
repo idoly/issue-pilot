@@ -14,7 +14,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   const continuation = continuationPrompt("ISSUE-1", repositories, undefined, now);
   assert.match(continuation, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(continuation, /defect_fix and feature_development, make only the minimum changes required/);
-  assert.match(continuation, /Do not commit or push changes/);
+  assert.match(continuation, /unless the user explicitly asks you to commit or push them/);
   const initial = initialPrompt({
     issueKey: "ISSUE-1",
     title: "Latest log",
@@ -24,5 +24,5 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
     service: { key: "service", name: "Service" },
   }, now);
   assert.match(initial, new RegExp(expected.replaceAll("+", "\\+")));
-  assert.match(initial, /Do not commit or push changes/);
+  assert.match(initial, /unless the user explicitly asks you to commit or push them/);
 });
