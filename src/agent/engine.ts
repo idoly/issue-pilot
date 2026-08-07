@@ -313,7 +313,7 @@ export class AgentEngine {
 
   private handleRpcEvent(issueId: string, managed: ManagedSession, event: JsonAgentSessionEvent): void {
     if (event.type === "agent_start") managed.streaming = true;
-    if (event.type === "agent_settled" || event.type === "agent_end") managed.streaming = false;
+    if (event.type === "agent_settled") managed.streaming = false;
     this.publish?.({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event });
   }
 

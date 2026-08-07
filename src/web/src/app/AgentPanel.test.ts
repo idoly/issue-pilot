@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../data/client";
-import { applyAgentEvent, diffLineClass, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./AgentPanel";
+import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type ConversationEntry } from "./AgentPanel";
 
 function event(payload: AgentEvent["event"], id: string = crypto.randomUUID()): AgentEvent {
   return { id, issueId: "ISSUE-1", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -22,11 +22,27 @@ describe("Agent conversation state", () => {
     const entries = applyAgentEvent([], event({ type: "message_end", message: { role: "assistant", content: [
       { type: "thinking", thinking: "Inspect tests" },
       { type: "text", text: "Tests pass" },
-    ] } }, "message-1"));
+    ], stopReason: "stop" } }, "message-1"));
     expect(entries[0]).toEqual({ id: "message-1", kind: "assistant", blocks: [
       { type: "thinking", value: "Inspect tests" },
       { type: "text", value: "Tests pass" },
-    ] });
+    ], stopReason: "stop" });
+  });
+
+  it("keeps Pi retry lifecycle active until agent_settled", () => {
+    expect(processingAfterEvent(true, event({ type: "agent_end" }).event)).toBe(true);
+    expect(processingAfterEvent(false, event({ type: "agent_start" }).event)).toBe(true);
+    expect(processingAfterEvent(true, event({ type: "agent_settled" }).event)).toBe(false);
+    expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "Compacting context...", tone: "info" });
+    expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000 }).event)).toEqual({ text: "Retrying 2/3 in 2.0s...", tone: "warning" });
+    expect(activityForEvent(event({ type: "auto_retry_end", success: true }).event)).toBeNull();
+  });
+
+  it("keeps terminal tool status only when it carries information", () => {
+    const complete = { id: "tool-1", kind: "tool", toolCallId: "call-1", name: "bash", status: "complete", startedAt: "2026-08-06T00:00:00.000Z" } satisfies ConversationEntry;
+    expect(toolStatus(complete)).toBe("");
+    expect(toolStatus({ ...complete, name: "edit" })).toBe("changed");
+    expect(toolStatus({ ...complete, status: "error" })).toBe("error");
   });
 
   it("updates one tool row from Pi start through partial and final result", () => {

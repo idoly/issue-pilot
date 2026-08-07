@@ -56,7 +56,7 @@ export interface AgentEvent {
   createdAt: string;
   event: {
     type: string;
-    message?: string | { role?: string; content?: AgentContent[] };
+    message?: string | { role?: string; content?: AgentContent[]; stopReason?: string; errorMessage?: string };
     assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
     toolCallId?: string;
     toolName?: string;

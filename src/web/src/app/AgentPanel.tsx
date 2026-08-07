@@ -7,7 +7,7 @@ import { Markdown } from "../ui/Markdown";
 
 export type ConversationEntry =
   | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "assistant"; blocks: Array<{ type: "text" | "thinking" | "image"; value: string; mimeType?: string }>; progress?: boolean; streaming?: boolean }
+  | { id: string; kind: "assistant"; blocks: Array<{ type: "text" | "thinking" | "image"; value: string; mimeType?: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string }
   | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: AgentEvent["event"]["result"] };
 
 type AssistantBlock = { type: "text" | "thinking" | "image"; value: string; mimeType?: string };
@@ -42,11 +42,6 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEve
     const index = streamingAssistantIndex(entries);
     const next = [...entries];
     const current = index >= 0 ? next[index] as Extract<ConversationEntry, { kind: "assistant" }> : { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true };
-    if (update.type === "toolcall_start") {
-      const updated = { ...current, progress: true };
-      if (index >= 0) next[index] = updated; else next.push(updated);
-      return next;
-    }
     if (typeof update.delta !== "string") return entries;
     const blockType = update.type?.startsWith("thinking") ? "thinking" as const : "text" as const;
     const blockIndex = update.contentIndex ?? 0;
@@ -65,9 +60,11 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEve
       id: index >= 0 ? next[index]!.id : envelope.id,
       kind: "assistant",
       blocks: assistantBlocks(content),
-      ...(content.some((part) => part.type === "toolCall") ? { progress: true } : {}),
+      ...(typeof event.message.stopReason === "string" ? { stopReason: event.message.stopReason } : {}),
+      ...(typeof event.message.errorMessage === "string" ? { errorMessage: event.message.errorMessage } : {}),
     };
-    if (index >= 0) next[index] = assistant; else if ((assistant as Extract<ConversationEntry, { kind: "assistant" }>).blocks.length) next.push(assistant);
+    const completed = assistant as Extract<ConversationEntry, { kind: "assistant" }>;
+    if (index >= 0) next[index] = assistant; else if (completed.blocks.length || completed.errorMessage || completed.stopReason) next.push(assistant);
     for (const part of content) {
       if (part.type !== "toolCall" || !part.id || !part.name || next.some((entry) => entry.kind === "tool" && entry.toolCallId === part.id)) continue;
       next.push({ id: `${envelope.id}:${part.id}`, kind: "tool", toolCallId: part.id, name: part.name, status: "running", startedAt: envelope.createdAt, arguments: part.arguments });
@@ -103,6 +100,41 @@ function panelError(error: string): string {
     agent_abort_failed: "无法中止当前处理",
   };
   return messages[error] ?? error;
+}
+
+export interface AgentActivity {
+  text: string;
+  tone: "info" | "warning" | "error";
+}
+
+export function processingAfterEvent(current: boolean, event: AgentEvent["event"]): boolean {
+  if (event.type === "agent_start") return true;
+  if (event.type === "agent_settled" || event.type === "issue_status") return false;
+  return current;
+}
+
+export function activityForEvent(event: AgentEvent["event"]): AgentActivity | null | undefined {
+  const number = (key: string) => typeof event[key] === "number" ? event[key] as number : undefined;
+  if (event.type === "agent_start" || event.type === "compaction_end" || event.type === "summarization_retry_finished") return null;
+  if (event.type === "compaction_start") return { text: "Compacting context...", tone: "info" };
+  if (event.type === "auto_retry_start") {
+    const attempt = number("attempt");
+    const maximum = number("maxAttempts");
+    const delay = number("delayMs");
+    const progress = attempt !== undefined && maximum !== undefined ? ` ${attempt}/${maximum}` : "";
+    const wait = delay !== undefined ? ` in ${duration(delay)}` : "";
+    return { text: `Retrying${progress}${wait}...`, tone: "warning" };
+  }
+  if (event.type === "auto_retry_end") return event.success === false ? { text: "Retry failed", tone: "error" } : null;
+  if (event.type === "summarization_retry_scheduled") {
+    const attempt = number("attempt");
+    const maximum = number("maxAttempts");
+    const progress = attempt !== undefined && maximum !== undefined ? ` ${attempt}/${maximum}` : "";
+    return { text: `Retrying context summary${progress}...`, tone: "warning" };
+  }
+  if (event.type === "summarization_retry_attempt_start") return { text: "Rebuilding context summary...", tone: "info" };
+  if (event.type === "extension_error") return { text: "Extension error", tone: "error" };
+  return undefined;
 }
 
 function compactPath(value: string): string {
@@ -148,9 +180,9 @@ export function shellToolOutput(entry: Extract<ConversationEntry, { kind: "tool"
   return { lines: output.slice(-limit), omitted: Math.max(0, output.length - limit) };
 }
 
-function toolStatus(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
+export function toolStatus(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
   if (entry.status === "running" || entry.status === "error") return entry.status;
-  return entry.name === "edit" || entry.name === "write" ? "changed" : "done";
+  return entry.name === "edit" || entry.name === "write" ? "changed" : "";
 }
 
 export function toolLabelParts(label: string): { action: string; target: string; range: string } {
@@ -179,7 +211,7 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
   };
   const output = () => shellToolOutput(props.entry);
   return <div class={`agent-tool ${props.entry.status}`}>
-    <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code><span>{toolStatus(props.entry)}</span></div>
+    <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code><Show when={toolStatus(props.entry)}>{(status) => <span>{status()}</span>}</Show></div>
     <Show when={diff().length}><pre class="agent-tool-diff"><For each={diff()}>{(line) => <span class={diffLineClass(line)}>{line}{"\n"}</span>}</For></pre></Show>
     <Show when={output()}>{(result) => <>
       <Show when={result().lines.length}><pre class="agent-tool-output"><Show when={result().omitted}><span class="omitted">... ({result().omitted} earlier lines)</span></Show><For each={result().lines}>{(line) => <span>{line}{"\n"}</span>}</For></pre></Show>
@@ -199,7 +231,7 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
   const [draft, setDraft] = createSignal("", { ownedWrite: true });
   const [entries, setEntries] = createSignal<ConversationEntry[]>([], { ownedWrite: true });
   const [unread, setUnread] = createSignal(0, { ownedWrite: true });
-  const [activity, setActivity] = createSignal("", { ownedWrite: true });
+  const [activity, setActivity] = createSignal<AgentActivity | null>(null, { ownedWrite: true });
   const [queue, setQueue] = createSignal<{ steering: string[]; followUp: string[] }>({ steering: [], followUp: [] }, { ownedWrite: true });
   const [agent, setAgent] = createSignal({ provider: "", model: "", thinkingLevel: "" }, { ownedWrite: true });
   let transcript: HTMLDivElement | undefined;
@@ -222,9 +254,9 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     eventIds.add(event.id);
     setEntries((current) => applyAgentEvent(current, event));
     const type = event.event.type;
-    if (type === "agent_start") setProcessing(true);
-    if (type === "agent_settled" || type === "agent_end" || type === "issue_status") setProcessing(false);
-    if (type.startsWith("auto_retry") || type.startsWith("compaction_")) setActivity(type.endsWith("_end") ? "" : type);
+    setProcessing((current) => processingAfterEvent(current, event.event));
+    const nextActivity = activityForEvent(event.event);
+    if (nextActivity !== undefined) setActivity(nextActivity);
     if (type === "queue_update") setQueue({ steering: event.event.steering ?? [], followUp: event.event.followUp ?? [] });
     queueMicrotask(() => {
       if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
@@ -291,7 +323,7 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     </header>
     <div ref={transcript} class="agent-conversation" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
       <For each={entries()}>{(entry) => <Show when={entry.kind !== "user"} fallback={<div class="agent-message user">{(entry as Extract<ConversationEntry, { kind: "user" }>).text}</div>}>
-        <Show when={entry.kind !== "assistant"} fallback={<div class={`agent-message assistant${(entry as Extract<ConversationEntry, { kind: "assistant" }>).progress ? " progress" : ""}`}><For each={(entry as Extract<ConversationEntry, { kind: "assistant" }>).blocks}>{(block) => block.type === "text" ? <Markdown source={block.value} /> : block.type === "thinking" ? <div class="agent-thinking"><Markdown source={block.value} /></div> : <img class="agent-inline-image" src={`data:${block.mimeType ?? "image/png"};base64,${block.value}`} alt="Agent output" />}</For></div>}>
+        <Show when={entry.kind !== "assistant"} fallback={<div class="agent-message assistant"><For each={(entry as Extract<ConversationEntry, { kind: "assistant" }>).blocks}>{(block) => block.type === "text" ? <Markdown source={block.value} /> : block.type === "thinking" ? <div class="agent-thinking"><Markdown source={block.value} /></div> : <img class="agent-inline-image" src={`data:${block.mimeType ?? "image/png"};base64,${block.value}`} alt="Agent output" />}</For><Show when={(entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason && (entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason !== "stop" && (entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason !== "toolUse"}><div class="agent-message-notice">{(entry as Extract<ConversationEntry, { kind: "assistant" }>).errorMessage ?? (entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason}</div></Show></div>}>
           <ToolEntry entry={entry as Extract<ConversationEntry, { kind: "tool" }>} />
         </Show>
       </Show>}</For>
@@ -299,7 +331,7 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     </div>
     <Show when={unread() > 0}><Button class="agent-scroll-latest" shape="round" size="small" icon={<ArrowDown size={14} />} onClick={scrollLatest}>{unread()} 条新消息</Button></Show>
     <Show when={queue().steering.length || queue().followUp.length}><div class="agent-queue"><For each={queue().steering}>{(message) => <span><strong>Steering:</strong> {message}</span>}</For><For each={queue().followUp}>{(message) => <span><strong>Follow-up:</strong> {message}</span>}</For></div></Show>
-    <Show when={running() || activity()}><div class="agent-working" role="status"><i />{activity() || "Working..."}</div></Show>
+    <Show when={running() || activity()}><div class={`agent-working ${activity()?.tone ?? "info"}`} role="status"><i />{activity()?.text ?? "Working..."}</div></Show>
     <div class="agent-composer">
       <textarea aria-label="发送给 Agent" value={draft()} disabled={sending()} onInput={(event) => setDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} />
       <Button type="primary" shape="circle" icon={<Send size={16} />} title={running() ? "发送 steer" : "发送"} aria-label={running() ? "发送 steer" : "发送"} disabled={!draft().trim() || sending()} onClick={() => void submit()} />
