@@ -1,23 +1,26 @@
 import { Button } from "@idoly/ant-design-solid";
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 
-import { abortAgent, agentStreamUrl, sendAgentMessage, type AgentContent, type AgentEvent, type IssueDetail } from "../data/client";
+import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
+
+import { abortAgent, agentStreamUrl, sendAgentMessage, type AgentEvent, type IssueDetail } from "../data/client";
 import { ArrowDown, Bot, CircleStop, Maximize2, Minimize2, Send } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
 
+type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown };
+
 export type ConversationEntry =
   | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "assistant"; blocks: Array<{ type: "text" | "thinking" | "image"; value: string; mimeType?: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string }
-  | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: AgentEvent["event"]["result"] };
+  | { id: string; kind: "assistant"; blocks: Array<{ type: "text" | "thinking"; value: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string; hasToolCalls?: boolean }
+  | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: ToolResult };
 
-type AssistantBlock = { type: "text" | "thinking" | "image"; value: string; mimeType?: string };
+type AssistantBlock = { type: "text" | "thinking"; value: string };
 
-function assistantBlocks(content: AgentContent[] | undefined, fallback = ""): AssistantBlock[] {
+function assistantBlocks(content: AssistantMessage["content"] | undefined, fallback = ""): AssistantBlock[] {
   const blocks: AssistantBlock[] = [];
   for (const part of content ?? []) {
-    if (part.type === "text" && typeof part.text === "string") blocks.push({ type: "text", value: part.text });
-    else if (part.type === "thinking" && typeof part.thinking === "string") blocks.push({ type: "thinking", value: part.thinking });
-    else if (part.type === "image" && typeof part.data === "string") blocks.push({ type: "image", value: part.data, ...(part.mimeType ? { mimeType: part.mimeType } : {}) });
+    if (part.type === "text") blocks.push({ type: "text", value: part.text });
+    else if (part.type === "thinking") blocks.push({ type: "thinking", value: part.thinking });
   }
   return blocks.length ? blocks : fallback ? [{ type: "text", value: fallback }] : [];
 }
@@ -42,8 +45,8 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEve
     const index = streamingAssistantIndex(entries);
     const next = [...entries];
     const current = index >= 0 ? next[index] as Extract<ConversationEntry, { kind: "assistant" }> : { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true };
-    if (typeof update.delta !== "string") return entries;
-    const blockType = update.type?.startsWith("thinking") ? "thinking" as const : "text" as const;
+    if (!("delta" in update) || typeof update.delta !== "string" || (update.type !== "text_delta" && update.type !== "thinking_delta")) return entries;
+    const blockType = update.type === "thinking_delta" ? "thinking" as const : "text" as const;
     const blockIndex = update.contentIndex ?? 0;
     const blocks = [...current.blocks];
     const existing = blocks[blockIndex];
@@ -62,6 +65,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEve
       blocks: assistantBlocks(content),
       ...(typeof event.message.stopReason === "string" ? { stopReason: event.message.stopReason } : {}),
       ...(typeof event.message.errorMessage === "string" ? { errorMessage: event.message.errorMessage } : {}),
+      ...(content.some((part) => part.type === "toolCall") ? { hasToolCalls: true } : {}),
     };
     const completed = assistant as Extract<ConversationEntry, { kind: "assistant" }>;
     if (index >= 0) next[index] = assistant; else if (completed.blocks.length || completed.errorMessage || completed.stopReason) next.push(assistant);
@@ -74,7 +78,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEve
   if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
     const index = entries.findIndex((entry) => entry.kind === "tool" && entry.toolCallId === event.toolCallId);
     const previous = index >= 0 ? entries[index] as Extract<ConversationEntry, { kind: "tool" }> : undefined;
-    const result = event.type === "tool_execution_update" ? event.partialResult : event.result;
+    const result = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
     const entry: ConversationEntry = {
       id: previous?.id ?? envelope.id,
       kind: "tool",
@@ -83,7 +87,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEve
       status: event.type === "tool_execution_end" ? event.isError ? "error" : "complete" : "running",
       startedAt: previous?.startedAt ?? envelope.createdAt,
       ...(event.type === "tool_execution_end" && previous ? { durationMs: Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous.startedAt)) } : {}),
-      ...(event.args !== undefined ? { arguments: event.args } : previous?.arguments !== undefined ? { arguments: previous.arguments } : {}),
+      ...("args" in event ? { arguments: event.args } : previous?.arguments !== undefined ? { arguments: previous.arguments } : {}),
       ...(result ? { result } : previous?.result ? { result: previous.result } : {}),
     };
     if (index < 0) return [...entries, entry];
@@ -114,26 +118,14 @@ export function processingAfterEvent(current: boolean, event: AgentEvent["event"
 }
 
 export function activityForEvent(event: AgentEvent["event"]): AgentActivity | null | undefined {
-  const number = (key: string) => typeof event[key] === "number" ? event[key] as number : undefined;
   if (event.type === "agent_start" || event.type === "compaction_end" || event.type === "summarization_retry_finished") return null;
   if (event.type === "compaction_start") return { text: "Compacting context...", tone: "info" };
-  if (event.type === "auto_retry_start") {
-    const attempt = number("attempt");
-    const maximum = number("maxAttempts");
-    const delay = number("delayMs");
-    const progress = attempt !== undefined && maximum !== undefined ? ` ${attempt}/${maximum}` : "";
-    const wait = delay !== undefined ? ` in ${duration(delay)}` : "";
-    return { text: `Retrying${progress}${wait}...`, tone: "warning" };
-  }
-  if (event.type === "auto_retry_end") return event.success === false ? { text: "Retry failed", tone: "error" } : null;
+  if (event.type === "auto_retry_start") return { text: `Retrying ${event.attempt}/${event.maxAttempts} in ${duration(event.delayMs)}...`, tone: "warning" };
+  if (event.type === "auto_retry_end") return event.success ? null : { text: "Retry failed", tone: "error" };
   if (event.type === "summarization_retry_scheduled") {
-    const attempt = number("attempt");
-    const maximum = number("maxAttempts");
-    const progress = attempt !== undefined && maximum !== undefined ? ` ${attempt}/${maximum}` : "";
-    return { text: `Retrying context summary${progress}...`, tone: "warning" };
+    return { text: `Retrying context summary ${event.attempt}/${event.maxAttempts}...`, tone: "warning" };
   }
   if (event.type === "summarization_retry_attempt_start") return { text: "Rebuilding context summary...", tone: "info" };
-  if (event.type === "extension_error") return { text: "Extension error", tone: "error" };
   return undefined;
 }
 
@@ -147,7 +139,7 @@ export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): 
   const value = (key: string) => typeof input[key] === "string" ? input[key] as string : "";
   const path = () => compactPath(value("path"));
   const name = entry.name;
-  if (name === "bash") return `$ ${value("command").split("\n", 1)[0]}`.trim();
+  if (name === "bash") return `$ ${value("command")}`.trim();
   if (name === "read") {
     const offset = typeof input.offset === "number" ? input.offset : undefined;
     const limit = typeof input.limit === "number" ? input.limit : undefined;
@@ -160,8 +152,6 @@ export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): 
   if (name === "ls") return `ls ${path() || "."}`;
   if (name === "edit") return `edit ${path()}`.trim();
   if (name === "write") return `write ${path()}`.trim();
-  if (name === "git") return `$ git ${value("action") || "status"}`;
-  if (name === "attachment") return `attachment ${value("attachment_id")}`.trim();
   const labels: Record<string, string> = { playwright: "browser", nacos: "config", sls: "logs" };
   return labels[name] ?? name;
 }
@@ -171,13 +161,24 @@ function duration(value: number | undefined): string {
   return value < 1_000 ? `${value}ms` : `${(value / 1_000).toFixed(1)}s`;
 }
 
+function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
+  return entry.result?.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n") ?? "";
+}
+
 export function shellToolOutput(entry: Extract<ConversationEntry, { kind: "tool" }>): { lines: string[]; omitted: number } | undefined {
   if (entry.name !== "bash") return undefined;
-  const text = entry.result?.content.find((part) => part.type === "text")?.text ?? "";
-  const output = text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").split("\n");
+  const output = resultText(entry).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").split("\n");
   while (output.length && !output[output.length - 1]?.trim()) output.pop();
-  const limit = 10;
+  const limit = 5;
   return { lines: output.slice(-limit), omitted: Math.max(0, output.length - limit) };
+}
+
+export function assistantNotice(entry: Extract<ConversationEntry, { kind: "assistant" }>): string {
+  if (entry.stopReason === "length") return "Response was truncated before completion.";
+  if (entry.hasToolCalls) return "";
+  if (entry.stopReason === "aborted") return entry.errorMessage && entry.errorMessage !== "Request was aborted" ? entry.errorMessage : "Operation aborted";
+  if (entry.stopReason === "error") return `Error: ${entry.errorMessage || "Unknown error"}`;
+  return "";
 }
 
 export function toolStatus(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
@@ -207,9 +208,11 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
   const diff = () => {
     if (props.entry.name !== "edit" || !props.entry.result?.details || typeof props.entry.result.details !== "object") return [];
     const value = (props.entry.result.details as Record<string, unknown>).diff;
-    return typeof value === "string" ? value.split("\n").slice(0, 80) : [];
+    return typeof value === "string" ? value.split("\n") : [];
   };
   const output = () => shellToolOutput(props.entry);
+  const genericOutput = () => ["bash", "edit", "write", "read", "grep", "find", "ls"].includes(props.entry.name) ? "" : resultText(props.entry);
+  const images = () => props.entry.result?.content.filter((part): part is ImageContent => part.type === "image") ?? [];
   return <div class={`agent-tool ${props.entry.status}`}>
     <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code><Show when={toolStatus(props.entry)}>{(status) => <span>{status()}</span>}</Show></div>
     <Show when={diff().length}><pre class="agent-tool-diff"><For each={diff()}>{(line) => <span class={diffLineClass(line)}>{line}{"\n"}</span>}</For></pre></Show>
@@ -217,6 +220,8 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
       <Show when={result().lines.length}><pre class="agent-tool-output"><Show when={result().omitted}><span class="omitted">... ({result().omitted} earlier lines)</span></Show><For each={result().lines}>{(line) => <span>{line}{"\n"}</span>}</For></pre></Show>
       <Show when={props.entry.durationMs !== undefined}><div class="agent-tool-timing">Took {duration(props.entry.durationMs)}</div></Show>
     </>}</Show>
+    <Show when={genericOutput()}>{(text) => <pre class="agent-tool-output">{text()}</pre>}</Show>
+    <For each={images()}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="Tool output" />}</For>
   </div>;
 }
 
@@ -257,7 +262,7 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     setProcessing((current) => processingAfterEvent(current, event.event));
     const nextActivity = activityForEvent(event.event);
     if (nextActivity !== undefined) setActivity(nextActivity);
-    if (type === "queue_update") setQueue({ steering: event.event.steering ?? [], followUp: event.event.followUp ?? [] });
+    if (type === "queue_update") setQueue({ steering: [...event.event.steering], followUp: [...event.event.followUp] });
     queueMicrotask(() => {
       if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
       else if (replayComplete) setUnread((value) => value + 1);
@@ -322,8 +327,8 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
       </div>
     </header>
     <div ref={transcript} class="agent-conversation" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
-      <For each={entries()}>{(entry) => <Show when={entry.kind !== "user"} fallback={<div class="agent-message user">{(entry as Extract<ConversationEntry, { kind: "user" }>).text}</div>}>
-        <Show when={entry.kind !== "assistant"} fallback={<div class="agent-message assistant"><For each={(entry as Extract<ConversationEntry, { kind: "assistant" }>).blocks}>{(block) => block.type === "text" ? <Markdown source={block.value} /> : block.type === "thinking" ? <div class="agent-thinking"><Markdown source={block.value} /></div> : <img class="agent-inline-image" src={`data:${block.mimeType ?? "image/png"};base64,${block.value}`} alt="Agent output" />}</For><Show when={(entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason && (entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason !== "stop" && (entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason !== "toolUse"}><div class="agent-message-notice">{(entry as Extract<ConversationEntry, { kind: "assistant" }>).errorMessage ?? (entry as Extract<ConversationEntry, { kind: "assistant" }>).stopReason}</div></Show></div>}>
+      <For each={entries()}>{(entry) => <Show when={entry.kind !== "user"} fallback={<div class="agent-message user"><Markdown source={(entry as Extract<ConversationEntry, { kind: "user" }>).text} /></div>}>
+        <Show when={entry.kind !== "assistant"} fallback={<div class="agent-message assistant"><For each={(entry as Extract<ConversationEntry, { kind: "assistant" }>).blocks}>{(block) => block.type === "text" ? <Markdown source={block.value} /> : <div class="agent-thinking"><Markdown source={block.value} /></div>}</For><Show when={assistantNotice(entry as Extract<ConversationEntry, { kind: "assistant" }>)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div>}>
           <ToolEntry entry={entry as Extract<ConversationEntry, { kind: "tool" }>} />
         </Show>
       </Show>}</For>

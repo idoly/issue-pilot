@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { access, mkdir, rename } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { normalizeIssueKey } from "../domain/issue-key.ts";
@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile);
 
 export interface PrepareWorktreeInput {
   issueId: string;
-  repositoryId: string;
+  workspaceName: string;
   url: string;
   baseBranch: string;
   mode: "detached" | "hotfix" | "feature";
@@ -38,6 +38,23 @@ function segment(value: string): string {
   return safe;
 }
 
+function repositoryName(url: string): string {
+  const withoutQuery = url.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const name = withoutQuery.slice(Math.max(withoutQuery.lastIndexOf("/"), withoutQuery.lastIndexOf(":")) + 1).replace(/\.git$/i, "");
+  return segment(name);
+}
+
+export function repositoryWorkspaceNames(urls: string[]): Map<string, string> {
+  const bases = urls.map((url) => repositoryName(url));
+  const counts = new Map<string, number>();
+  for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
+  return new Map(urls.map((url, index) => {
+    const base = bases[index]!;
+    const suffix = createHash("sha256").update(url).digest("hex").slice(0, 8);
+    return [url, counts.get(base) === 1 ? base : `${base}-${suffix}`];
+  }));
+}
+
 export class Worktrees {
   private readonly stateRoot: string;
   private readonly repositoriesRoot: string;
@@ -48,6 +65,12 @@ export class Worktrees {
     this.stateRoot = resolve(stateRoot);
     this.repositoriesRoot = resolve(this.stateRoot, "repositories");
     this.workspacesRoot = workspacesRoot(this.stateRoot);
+  }
+
+  async migrate(issueId: string, url: string, workspaceName: string, existingWorkspacePath: string): Promise<string> {
+    const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(issueId));
+    const cachePath = resolve(this.repositoriesRoot, createHash("sha256").update(url).digest("hex").slice(0, 20));
+    return this.workspacePath(issueRoot, cachePath, workspaceName, existingWorkspacePath);
   }
 
   async prepare(input: PrepareWorktreeInput): Promise<PreparedWorktree> {
@@ -70,8 +93,7 @@ export class Worktrees {
     await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
 
     const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
-    const workspacePath = input.existingWorkspacePath ? resolve(input.existingWorkspacePath) : resolve(issueRoot, segment(input.repositoryId || basename(input.url, ".git")));
-    if (dirname(workspacePath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
+    const workspacePath = await this.workspacePath(issueRoot, cachePath, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.mode === "detached" ? null : input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     if (workingBranch) {
       await this.git(["check-ref-format", "--branch", workingBranch]);
@@ -108,6 +130,29 @@ export class Worktrees {
       if (upstream && upstream !== `origin/${workingBranch}`) await this.git(["-C", workspacePath, "branch", "--unset-upstream"]);
     }
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
+  }
+
+  private async workspacePath(issueRoot: string, cachePath: string, workspaceName: string, existingWorkspacePath?: string): Promise<string> {
+    const desiredPath = resolve(issueRoot, segment(workspaceName));
+    if (dirname(desiredPath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
+    if (!existingWorkspacePath) return desiredPath;
+
+    const previousPath = resolve(existingWorkspacePath);
+    if (dirname(previousPath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
+    if (previousPath === desiredPath) return desiredPath;
+    const [previousExists, desiredExists] = await Promise.all([exists(previousPath), exists(desiredPath)]);
+    if (!previousExists) return desiredPath;
+    if (desiredExists) throw new Error("workspace_path_migration_conflict");
+
+    await rename(previousPath, desiredPath);
+    try {
+      await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", desiredPath]);
+    } catch (error) {
+      await rename(desiredPath, previousPath);
+      await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", previousPath]).catch(() => undefined);
+      throw error;
+    }
+    return desiredPath;
   }
 
   private async git(args: string[]): Promise<string> {

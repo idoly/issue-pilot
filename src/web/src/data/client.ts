@@ -1,4 +1,5 @@
 import { ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type CapabilityName, type IssueStatus, type IssueType } from "../../../domain/contracts";
+import type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
 export type { IssueStatus, IssueType };
@@ -39,38 +40,7 @@ export interface IssueDetail extends IssueListItem {
   comments: IssueComment[];
 }
 
-export interface AgentContent {
-  type: string;
-  text?: string;
-  thinking?: string;
-  data?: string;
-  mimeType?: string;
-  id?: string;
-  name?: string;
-  arguments?: unknown;
-}
-
-export interface AgentEvent {
-  id: string;
-  issueId: string;
-  createdAt: string;
-  event: {
-    type: string;
-    message?: string | { role?: string; content?: AgentContent[]; stopReason?: string; errorMessage?: string };
-    assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
-    toolCallId?: string;
-    toolName?: string;
-    args?: unknown;
-    partialResult?: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown };
-    result?: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown };
-    isError?: boolean;
-    steering?: string[];
-    followUp?: string[];
-    status?: "complete" | "error";
-    messageText?: string;
-    [key: string]: unknown;
-  };
-}
+export type AgentEvent = RunEvent;
 
 export interface Environment {
   id: string;

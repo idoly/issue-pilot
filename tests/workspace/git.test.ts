@@ -1,18 +1,31 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { Worktrees } from "../../src/workspace/git.ts";
+import { repositoryWorkspaceNames, Worktrees } from "../../src/workspace/git.ts";
 
 const execFileAsync = promisify(execFile);
 
 async function git(args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
 }
+
+test("uses readable repository names and stable suffixes for basename collisions", () => {
+  const urls = [
+    "git@gitlab.example.test:team-a/srm-server.git",
+    "https://gitlab.example.test/team-b/srm-server.git",
+    "https://gitlab.example.test/team/srm-admin-front.git",
+  ];
+  const names = repositoryWorkspaceNames(urls);
+  assert.match(names.get(urls[0]!)!, /^srm-server-[a-f0-9]{8}$/);
+  assert.match(names.get(urls[1]!)!, /^srm-server-[a-f0-9]{8}$/);
+  assert.notEqual(names.get(urls[0]!), names.get(urls[1]!));
+  assert.equal(names.get(urls[2]!), "srm-admin-front");
+});
 
 test("uses detached latest baselines for read-only environments and prefixed dev branches", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-"));
@@ -27,7 +40,7 @@ test("uses detached latest baselines for read-only environments and prefixed dev
     await git(["-C", source, "remote", "add", "origin", remote]);
 
     const worktrees = new Worktrees(join(root, "state"));
-    const readonly = await worktrees.prepare({ issueId: "ISSUE-20260805-010", repositoryId: "repository", url: remote, baseBranch: "main", mode: "detached" });
+    const readonly = await worktrees.prepare({ issueId: "ISSUE-20260805-010", workspaceName: "remote", url: remote, baseBranch: "main", mode: "detached" });
     assert.equal(await git(["-C", readonly.cachePath, "rev-parse", "--is-bare-repository"]), "true");
     assert.equal(readonly.workingBranch, null);
     assert.equal(await git(["-C", readonly.workspacePath, "branch", "--show-current"]), "");
@@ -37,19 +50,27 @@ test("uses detached latest baselines for read-only environments and prefixed dev
     await git(["-C", source, "add", "."]);
     await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "second"]);
     await git(["-C", source, "push", "origin", "main"]);
-    const refreshed = await worktrees.prepare({ issueId: "ISSUE-20260805-010", repositoryId: "repository", url: remote, baseBranch: "main", mode: "detached", existingWorkspacePath: readonly.workspacePath });
+    const refreshed = await worktrees.prepare({ issueId: "ISSUE-20260805-010", workspaceName: "remote", url: remote, baseBranch: "main", mode: "detached", existingWorkspacePath: readonly.workspacePath });
     assert.notEqual(refreshed.baseCommit, firstCommit);
     assert.equal(await git(["-C", refreshed.workspacePath, "rev-parse", "HEAD"]), refreshed.baseCommit);
 
-    const hotfix = await worktrees.prepare({ issueId: "ISSUE-20260805-011", repositoryId: "repository", url: remote, baseBranch: "main", mode: "hotfix" });
+    const hotfix = await worktrees.prepare({ issueId: "ISSUE-20260805-011", workspaceName: "remote", url: remote, baseBranch: "main", mode: "hotfix" });
     assert.equal(hotfix.workingBranch, "hotfix-issue-20260805-011");
     assert.equal(await git(["-C", hotfix.workspacePath, "branch", "--show-current"]), hotfix.workingBranch);
     await assert.rejects(git(["-C", hotfix.workspacePath, "rev-parse", "@{upstream}"]));
     assert.doesNotMatch(await readFile(join(hotfix.workspacePath, ".git"), "utf8"), new RegExp(root));
     assert.doesNotMatch(await readFile(join(hotfix.cachePath, "worktrees", basename(hotfix.workspacePath), "gitdir"), "utf8"), new RegExp(root));
-    const feature = await worktrees.prepare({ issueId: "ISSUE-20260805-012", repositoryId: "repository", url: remote, baseBranch: "main", mode: "feature" });
+    const feature = await worktrees.prepare({ issueId: "ISSUE-20260805-012", workspaceName: "remote", url: remote, baseBranch: "main", mode: "feature" });
     assert.equal(feature.workingBranch, "feature-issue-20260805-012");
     assert.equal(await git(["-C", feature.workspacePath, "branch", "--show-current"]), feature.workingBranch);
+
+    const legacy = await worktrees.prepare({ issueId: "ISSUE-20260805-013", workspaceName: "e8291771-d16d-4161-a70f-2e6c04f4dc45", url: remote, baseBranch: "main", mode: "hotfix" });
+    await writeFile(join(legacy.workspacePath, "uncommitted.txt"), "preserved\n", "utf8");
+    const migrated = await worktrees.prepare({ issueId: "ISSUE-20260805-013", workspaceName: "srm-server", url: remote, baseBranch: "main", mode: "hotfix", existingWorkspacePath: legacy.workspacePath });
+    assert.equal(basename(migrated.workspacePath), "srm-server");
+    await assert.rejects(access(legacy.workspacePath));
+    assert.match(await git(["-C", migrated.workspacePath, "status", "--porcelain"]), /uncommitted\.txt/);
+    assert.equal(await git(["-C", migrated.workspacePath, "branch", "--show-current"]), "hotfix-issue-20260805-013");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

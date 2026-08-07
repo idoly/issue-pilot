@@ -25,6 +25,7 @@ import { CAPABILITY_KEYS, configuredCapabilities } from "../domain/contracts.ts"
 import { isIssueKey, normalizeIssueKey } from "../domain/issue-key.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
 import { issueAttachmentRoot } from "../workspace/paths.ts";
+import { repositoryWorkspaceNames, Worktrees } from "../workspace/git.ts";
 import { pruneState } from "../workspace/state.ts";
 const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
@@ -98,6 +99,29 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     )).limit(1);
     if (existing) await database.db.update(environments).set({ name: definition.name, kind: definition.kind, updatedAt: new Date() }).where(eq(environments.id, existing.id));
     else await database.db.insert(environments).values({ organizationId: "demo", scope: "global", key: definition.key, name: definition.name, kind: definition.kind, config: {} });
+  }
+  const persistedRepositories = await database.db.select({
+    id: issueRepositories.id,
+    issueKey: issues.key,
+    url: issueRepositories.url,
+    localPath: issueRepositories.localPath,
+  }).from(issueRepositories).innerJoin(issues, eq(issues.id, issueRepositories.issueId));
+  const repositoriesByIssue = new Map<string, typeof persistedRepositories>();
+  for (const repository of persistedRepositories) {
+    const group = repositoriesByIssue.get(repository.issueKey) ?? [];
+    group.push(repository);
+    repositoriesByIssue.set(repository.issueKey, group);
+  }
+  const worktrees = new Worktrees(stateRoot);
+  for (const [issueKey, repositories] of repositoriesByIssue) {
+    const workspaceNames = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
+    for (const repository of repositories) {
+      if (!repository.localPath) continue;
+      const migratedPath = await worktrees.migrate(issueKey, repository.url, workspaceNames.get(repository.url)!, repository.localPath);
+      if (migratedPath !== path.resolve(repository.localPath)) {
+        await database.db.update(issueRepositories).set({ localPath: migratedPath, updatedAt: new Date() }).where(eq(issueRepositories.id, repository.id));
+      }
+    }
   }
   await pruneState(stateRoot, (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key));
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test" });

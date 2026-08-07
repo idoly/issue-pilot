@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../data/client";
@@ -7,22 +8,31 @@ function event(payload: AgentEvent["event"], id: string = crypto.randomUUID()): 
   return { id, issueId: "ISSUE-1", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
 }
 
+const usage = {
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function assistant(content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): AssistantMessage {
+  return { role: "assistant", content, api: "openai-responses", provider: "test", model: "test-model", usage, stopReason, timestamp: Date.now() };
+}
+
 describe("Agent conversation state", () => {
   it("assembles Pi streaming events and replaces them with the final message", () => {
-    let entries = applyAgentEvent([], event({ type: "message_start", message: { role: "assistant", content: [] } }, "message-1"));
+    let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
     entries = applyAgentEvent(entries, event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
     entries = applyAgentEvent(entries, event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "完成" } }));
     expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查完成" }], streaming: true }]);
 
-    entries = applyAgentEvent(entries, event({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "检查已完成" }] } }));
-    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查已完成" }] }]);
+    entries = applyAgentEvent(entries, event({ type: "message_end", message: assistant([{ type: "text", text: "检查已完成" }], "stop") }));
+    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查已完成" }], stopReason: "stop" }]);
   });
 
   it("keeps thinking separate from visible answer text", () => {
-    const entries = applyAgentEvent([], event({ type: "message_end", message: { role: "assistant", content: [
+    const entries = applyAgentEvent([], event({ type: "message_end", message: assistant([
       { type: "thinking", thinking: "Inspect tests" },
       { type: "text", text: "Tests pass" },
-    ], stopReason: "stop" } }, "message-1"));
+    ], "stop") }, "message-1"));
     expect(entries[0]).toEqual({ id: "message-1", kind: "assistant", blocks: [
       { type: "thinking", value: "Inspect tests" },
       { type: "text", value: "Tests pass" },
@@ -30,12 +40,12 @@ describe("Agent conversation state", () => {
   });
 
   it("keeps Pi retry lifecycle active until agent_settled", () => {
-    expect(processingAfterEvent(true, event({ type: "agent_end" }).event)).toBe(true);
+    expect(processingAfterEvent(true, event({ type: "agent_end", messages: [], willRetry: true }).event)).toBe(true);
     expect(processingAfterEvent(false, event({ type: "agent_start" }).event)).toBe(true);
     expect(processingAfterEvent(true, event({ type: "agent_settled" }).event)).toBe(false);
     expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "Compacting context...", tone: "info" });
-    expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000 }).event)).toEqual({ text: "Retrying 2/3 in 2.0s...", tone: "warning" });
-    expect(activityForEvent(event({ type: "auto_retry_end", success: true }).event)).toBeNull();
+    expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000, errorMessage: "overloaded" }).event)).toEqual({ text: "Retrying 2/3 in 2.0s...", tone: "warning" });
+    expect(activityForEvent(event({ type: "auto_retry_end", success: true, attempt: 2 }).event)).toBeNull();
   });
 
   it("keeps terminal tool status only when it carries information", () => {
@@ -47,7 +57,7 @@ describe("Agent conversation state", () => {
 
   it("updates one tool row from Pi start through partial and final result", () => {
     let entries = applyAgentEvent([], event({ type: "tool_execution_start", toolCallId: "call-1", toolName: "db", args: { statement: "SELECT 1" } }));
-    entries = applyAgentEvent(entries, event({ type: "tool_execution_update", toolCallId: "call-1", toolName: "db", partialResult: { content: [{ type: "text", text: "running" }] } }));
+    entries = applyAgentEvent(entries, event({ type: "tool_execution_update", toolCallId: "call-1", toolName: "db", args: { statement: "SELECT 1" }, partialResult: { content: [{ type: "text", text: "running" }] } }));
     entries = applyAgentEvent(entries, event({ type: "tool_execution_end", toolCallId: "call-1", toolName: "db", result: { content: [{ type: "text", text: "done" }] }, isError: false }));
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ kind: "tool", toolCallId: "call-1", status: "complete", arguments: { statement: "SELECT 1" }, result: { content: [{ text: "done" }] } });
@@ -122,8 +132,8 @@ describe("Agent conversation state", () => {
     } satisfies ConversationEntry;
     expect(toolLabel(entry)).toBe("$ npm test");
     expect(shellToolOutput(entry)).toEqual({
-      lines: Array.from({ length: 10 }, (_, index) => `line ${index + 5}`),
-      omitted: 4,
+      lines: Array.from({ length: 5 }, (_, index) => `line ${index + 10}`),
+      omitted: 9,
     });
   });
 });

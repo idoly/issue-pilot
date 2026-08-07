@@ -23,7 +23,7 @@ import {
   services,
 } from "../db/schema.ts";
 import type { CapabilityName } from "../domain/contracts.ts";
-import { Worktrees } from "../workspace/git.ts";
+import { repositoryWorkspaceNames, Worktrees } from "../workspace/git.ts";
 import { createDeploymentPolicy, type IssuePolicy } from "../pi/policy.ts";
 import { executeCapability } from "../capabilities/broker.ts";
 import { Coordinator } from "./coordinator.ts";
@@ -167,6 +167,7 @@ export class AgentEngine {
       throw new Error("selected_service_has_no_repository");
     }
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
+    const workspaceNames = repositoryWorkspaceNames(repositoryRows.map((repository) => repository.url));
     await this.db.delete(issueRepositories).where(and(
       eq(issueRepositories.issueId, issue.id),
       notInArray(issueRepositories.url, repositoryRows.map((repository) => repository.url)),
@@ -177,7 +178,7 @@ export class AgentEngine {
       const existingRepository = existingRepositoryByUrl.get(repository.url);
       const workspace = await this.worktrees.prepare({
         issueId: issue.key,
-        repositoryId: repository.id,
+        workspaceName: workspaceNames.get(repository.url)!,
         url: repository.url,
         baseBranch: service.baseBranch,
         mode: worktreeMode,
@@ -245,7 +246,7 @@ export class AgentEngine {
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
-    const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch ?? workspace.baseBranch, path: workspace.workspacePath, readOnly: worktreeMode === "detached" }));
+    const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, workspace.workspacePath), readOnly: worktreeMode === "detached" }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, currentMessage)
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
