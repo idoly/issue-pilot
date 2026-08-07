@@ -7,7 +7,8 @@
   "keywords": ["issue-tracker", "ticket-agent"],
   "license": "MIT",
   "scripts": {
-    "dev:web": "vite --config src/web/vite.config.ts",
+    "dev:web": "infra/wsl-web.sh",
+    "dev:web:loopback": "vite --config src/web/vite.config.ts",
     "server": "node --experimental-strip-types src/http/api.ts",
     "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test tests/**/*.test.ts && vitest run --config src/web/vite.config.ts --environment jsdom",
