@@ -8,7 +8,7 @@ export default defineConfig({
   cacheDir: "../../node_modules/.vite/issue-pilot-web",
   plugins: [solidPlugin()],
   server: {
-    host: "0.0.0.0",
+    host: "127.0.0.1",
     port: 4173,
     watch: {
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 },

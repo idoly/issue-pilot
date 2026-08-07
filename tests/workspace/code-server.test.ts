@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -31,19 +31,25 @@ test("mounts the host Pi runtime and persistent Pi configuration into code-serve
   const stateRoot = await mkdtemp(join(tmpdir(), "code-server-state-test-"));
   directories.push(stateRoot);
   const log = join(stateRoot, "podman.log");
-  await exec(script, ["ensure"], { env: { ...process.env, PATH: await fakePodmanPath(), PODMAN_LOG: log, ISSUE_PILOT_STATE_ROOT: stateRoot } });
+  const piConfigRoot = join(stateRoot, "pi-config");
+  await mkdir(piConfigRoot);
+  await Promise.all(["auth.json", "models.json", "models-store.json", "settings.json"].map((file) => writeFile(join(piConfigRoot, file), "{}\n", "utf8")));
+  await exec(script, ["ensure"], { env: { ...process.env, PATH: await fakePodmanPath(), PODMAN_LOG: log, ISSUE_PILOT_STATE_ROOT: stateRoot, ISSUE_PILOT_CODE_SERVER_PI_CONFIG_ROOT: piConfigRoot } });
   const calls = await readFile(log, "utf8");
   assert.match(calls, /ghcr\.io\/coder\/code-server:4\.131\.0-39/);
   assert.match(calls, /--volume \/usr\/local\/node:\/opt\/node:ro/);
   assert.match(calls, /--env PATH=\/opt\/git\/bin:\/opt\/node\/bin:/);
   assert.match(calls, new RegExp(`--volume ${stateRoot}/code-server/pi:/home/coder/\\.pi/agent:Z`));
+  for (const file of ["auth.json", "models.json", "models-store.json", "settings.json"]) {
+    assert.match(calls, new RegExp(`--volume ${piConfigRoot}/${file}:/home/coder/\\.pi/agent/${file}:ro`));
+  }
   assert.match(calls, new RegExp(`--volume ${stateRoot}/code-server/data:/home/coder/\\.local/share/code-server:Z`));
   assert.match(calls, new RegExp(`--volume ${stateRoot}/workspaces:/home/coder/state/workspaces:Z`));
   assert.match(calls, new RegExp(`--volume ${stateRoot}/repositories:/home/coder/state/repositories:Z`));
   assert.match(calls, /--volume \/usr\/bin\/git:\/opt\/git\/bin\/git:ro/);
   assert.match(calls, /--volume \/usr\/libexec\/git-core:\/opt\/git\/libexec\/git-core:ro/);
   assert.match(calls, /--env GIT_EXEC_PATH=\/opt\/git\/libexec\/git-core/);
-  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v10-code-server-4\.131\.0-mounted-pi-0\.84\.0-trusted-workspaces/);
+  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v11-code-server-4\.131\.0-mounted-pi-0\.84\.0-configured/);
   assert.deepEqual(JSON.parse(await readFile(join(stateRoot, "code-server", "data", "User", "settings.json"), "utf8")), {
     "security.workspace.trust.enabled": false,
     "git.path": "/opt/git/bin/git",

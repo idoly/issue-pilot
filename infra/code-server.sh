@@ -6,6 +6,7 @@ workspace_root=$(realpath -m "${ISSUE_PILOT_WORKSPACE_ROOT:-$state_root/workspac
 repositories_root=$(realpath -m "${ISSUE_PILOT_REPOSITORIES_ROOT:-$state_root/repositories}")
 data_root=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_DATA:-$state_root/code-server/data}")
 pi_data_root=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_PI_DATA:-$state_root/code-server/pi}")
+pi_config_root=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_PI_CONFIG_ROOT:-$HOME/.pi/agent}")
 node_runtime=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_NODE_RUNTIME:-/usr/local/node}")
 git_binary=$(realpath -e "${ISSUE_PILOT_CODE_SERVER_GIT_BINARY:-/usr/bin/git}")
 git_exec_path=$(realpath -e "${ISSUE_PILOT_CODE_SERVER_GIT_EXEC_PATH:-/usr/libexec/git-core}")
@@ -16,7 +17,7 @@ password_file=$(realpath -m "${ISSUE_PILOT_CODE_SERVER_PASSWORD_FILE:-$state_roo
 image=${ISSUE_PILOT_CODE_SERVER_IMAGE:-ghcr.io/coder/code-server:4.131.0-39}
 port=${ISSUE_PILOT_CODE_SERVER_PORT:-18080}
 name=code-server
-runtime_version=keep-id-v10-code-server-4.131.0-mounted-pi-0.84.0-trusted-workspaces
+runtime_version=keep-id-v11-code-server-4.131.0-mounted-pi-0.84.0-configured
 
 status() {
   podman inspect "$name"
@@ -26,6 +27,9 @@ ensure() {
   mkdir -p "$workspace_root" "$repositories_root" "$data_root/User" "$pi_data_root"
   chmod 0700 "$data_root" "$data_root/User" "$pi_data_root" "$(dirname "$password_file")"
   [ -x "$node_runtime/bin/node" ] && [ -x "$node_runtime/bin/pi" ] || { printf 'Node/Pi runtime not found at %s\n' "$node_runtime" >&2; return 1; }
+  for file in auth.json models.json models-store.json settings.json; do
+    [ -f "$pi_config_root/$file" ] || { printf 'Pi configuration not found: %s\n' "$pi_config_root/$file" >&2; return 1; }
+  done
   settings_file="$data_root/User/settings.json"
   "$node_runtime/bin/node" -e '
     const fs = require("node:fs");
@@ -63,6 +67,10 @@ ensure() {
     --volume "$repositories_root:/home/coder/state/repositories:Z" \
     --volume "$data_root:/home/coder/.local/share/code-server:Z" \
     --volume "$pi_data_root:/home/coder/.pi/agent:Z" \
+    --volume "$pi_config_root/auth.json:/home/coder/.pi/agent/auth.json:ro" \
+    --volume "$pi_config_root/models.json:/home/coder/.pi/agent/models.json:ro" \
+    --volume "$pi_config_root/models-store.json:/home/coder/.pi/agent/models-store.json:ro" \
+    --volume "$pi_config_root/settings.json:/home/coder/.pi/agent/settings.json:ro" \
     --volume "$node_runtime:/opt/node:ro" \
     --volume "$git_binary:/opt/git/bin/git:ro" \
     --volume "$git_exec_path:/opt/git/libexec/git-core:ro" \
