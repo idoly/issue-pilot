@@ -7,14 +7,14 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
-import { agentSessions, issueAgentResults, issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
 
 const engine = {
   enqueued: [] as string[],
   messages: [] as Array<string | undefined>,
   recordedMessages: [] as boolean[],
-  invalidated: [] as string[],
+  closedSessions: [] as string[],
   running: new Set<string>(),
   enqueue(issueId: string, message?: string, recordMessage = true) { this.enqueued.push(issueId); this.messages.push(message); this.recordedMessages.push(recordMessage); },
   isRunning(issueId: string) { return this.running.has(issueId); },
@@ -23,7 +23,11 @@ const engine = {
     return { id: `user-${this.messages.length}`, issueId, kind: "user", message, createdAt: new Date().toISOString() };
   },
   async abort(issueId: string) { return this.running.has(issueId); },
-  async invalidatePolicy(issueId: string) { this.invalidated.push(issueId); return true; },
+  async closeSession(issueId: string) { this.closedSessions.push(issueId); },
+  async invokeCapability(issueId: string, token: string, capability: string, input: unknown) {
+    if (token !== "broker-token") throw new Error("capability_not_available");
+    return { content: [{ type: "text", text: JSON.stringify({ issueId, capability, input }) }], details: null };
+  },
 };
 
 async function json(response: { body: string }): Promise<Record<string, unknown>> {
@@ -35,19 +39,23 @@ test("configuration and issue API preserves relational integrity", async () => {
   engine.enqueued = [];
   engine.messages = [];
   engine.recordedMessages = [];
-  engine.invalidated = [];
+  engine.closedSessions = [];
   engine.running.clear();
   const app = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, logger: false });
   let appClosed = false;
   try {
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
+    assert.equal((await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", payload: { issueId: "issue", input: {} } })).statusCode, 401);
+    const broker = await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", headers: { authorization: "Bearer broker-token" }, payload: { issueId: "issue", input: { statement: "SELECT 1" } } });
+    assert.equal(broker.statusCode, 200, broker.body);
+    assert.match(broker.body, /SELECT 1/);
 
     const configurationResponse = await app.inject({ method: "GET", url: "/api/config" });
     assert.equal(configurationResponse.statusCode, 200);
     assert.equal(configurationResponse.headers["cache-control"], "private, no-store");
     assert.equal(configurationResponse.headers.pragma, "no-cache");
     const configuredEnvironments = (await json(configurationResponse)).environments as Array<{ key: string; name: string }>;
-    assert.deepEqual(configuredEnvironments.map((environment) => environment.key).sort(), ["development", "production", "test"]);
+    assert.deepEqual(configuredEnvironments.map((environment) => environment.key).sort(), ["dev", "prod", "test"]);
     assert.equal((await app.inject({ method: "POST", url: "/api/environments", payload: { key: "staging", name: "Staging" } })).statusCode, 404);
     assert.equal((await app.inject({ method: "PATCH", url: "/api/environments/test", payload: { name: "Changed" } })).statusCode, 404);
     assert.equal((await app.inject({ method: "DELETE", url: "/api/environments/test" })).statusCode, 404);
@@ -66,7 +74,7 @@ test("configuration and issue API preserves relational integrity", async () => {
           repositories: service.repositoryUrls.map((url, index) => ({ kind: index === 0 ? "frontend" : "backend", url })),
           deployments: [
             { environmentKey: "test", baseBranch: "main", capabilities: [], ...(service.key === "alpha" ? { agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } } : {}) },
-            ...(service.key === "beta" ? [{ environmentKey: "development", baseBranch: "develop", capabilities: [] }] : []),
+            ...(service.key === "beta" ? [{ environmentKey: "dev", baseBranch: "develop", capabilities: [] }] : []),
           ],
         },
       });
@@ -95,7 +103,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         title: "Unknown assignee",
         description: "",
         priority: "p2",
-        type: "question",
+        type: "smart_analysis",
         environmentKey: "test",
         serviceKey: "alpha",
         assigneeSubject: "missing-user",
@@ -112,7 +120,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         title: "Invalid priority",
         description: "",
         priority: "urgent",
-        type: "question",
+        type: "smart_analysis",
         environmentKey: "test",
         serviceKey: "alpha",
         assigneeSubject: null,
@@ -122,22 +130,22 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(invalidPriority.statusCode, 400);
     assert.equal((await json(invalidPriority)).error, "invalid_priority");
 
-    const invalidDevelopmentType = await app.inject({
+    const invalidDevType = await app.inject({
       method: "POST",
       url: "/api/issues",
       payload: {
-        title: "Development question",
+        title: "Dev question",
         description: "",
         priority: "p2",
-        type: "question",
-        environmentKey: "development",
+        type: "smart_analysis",
+        environmentKey: "dev",
         serviceKey: "beta",
         assigneeSubject: null,
         ccSubjects: [],
       },
     });
-    assert.equal(invalidDevelopmentType.statusCode, 400);
-    assert.equal((await json(invalidDevelopmentType)).error, "invalid_issue_type_for_environment");
+    assert.equal(invalidDevType.statusCode, 400);
+    assert.equal((await json(invalidDevType)).error, "invalid_issue_type_for_environment");
     assert.deepEqual(await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)), []);
 
     const createdResponse = await app.inject({
@@ -147,7 +155,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         title: "Valid issue",
         description: "Investigate alpha",
         priority: "p1",
-        type: "question",
+        type: "smart_analysis",
         environmentKey: "test",
         serviceKey: "alpha",
         assigneeSubject: "zjj3753@xianhengguoji.com",
@@ -173,10 +181,6 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(prematureResolve.statusCode, 409);
     const direct = openDatabase(join(root, "issues.db"));
     await direct.db.update(issues).set({ status: "pending" }).where(eq(issues.key, String(created.id)));
-    const unverifiedResolve = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "resolved" } });
-    assert.equal(unverifiedResolve.statusCode, 409, unverifiedResolve.body);
-    assert.equal((await json(unverifiedResolve)).error, "issue_verification_required");
-    await direct.db.insert(issueAgentResults).values({ issueId: createdInternalId, outcome: "resolved", summary: "Verified", verification: ["npm test passed"], policyVersion: 12 });
     await direct.close();
     const resolved = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "resolved" } });
     assert.equal(resolved.statusCode, 200, resolved.body);
@@ -205,7 +209,7 @@ test("configuration and issue API preserves relational integrity", async () => {
       title,
       description: "",
       priority: "p2",
-      type: "question",
+      type: "smart_analysis",
       environmentKey: "test",
       serviceKey: "alpha",
       assigneeSubject: null,
@@ -260,7 +264,7 @@ test("configuration and issue API preserves relational integrity", async () => {
       },
     });
     assert.equal(repositoryUpdate.statusCode, 200, repositoryUpdate.body);
-    assert.equal(engine.invalidated.includes(createdInternalId), true);
+    assert.equal(engine.closedSessions.includes(createdInternalId), true);
     const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[]; nacos: { password: string }; db: { url: string; password: string }; sls: { accessKeySecret: string }; playwright: { baseUrl: string; username: string; password: string } | null }>; repositories: Array<{ id: string; kind: string; url: string }> }> };
     const updatedAlpha = afterRepositoryUpdate.services.find((service) => service.key === "alpha")!;
     assert.equal(updatedAlpha.name, "Alpha renamed");
@@ -280,21 +284,6 @@ test("configuration and issue API preserves relational integrity", async () => {
     });
     assert.equal(missingDbPassword.statusCode, 400, missingDbPassword.body);
     assert.equal((await json(missingDbPassword)).error, "invalid_db_password");
-    const incompleteEsCredentials = await app.inject({
-      method: "PATCH",
-      url: "/api/services/alpha",
-      payload: { name: "Invalid ES", description: "", repositories: updatedAlpha.repositories, deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["es"], es: { url: "http://es.example.test", username: "reader" } }] },
-    });
-    assert.equal(incompleteEsCredentials.statusCode, 400, incompleteEsCredentials.body);
-    assert.equal((await json(incompleteEsCredentials)).error, "invalid_es_credentials");
-    const incompleteBrowserCredentials = await app.inject({
-      method: "PATCH",
-      url: "/api/services/alpha",
-      payload: { name: "Invalid browser", description: "", repositories: updatedAlpha.repositories, deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["playwright"], playwright: { baseUrl: "https://alpha.example.test", password: "password-only" } }] },
-    });
-    assert.equal(incompleteBrowserCredentials.statusCode, 400, incompleteBrowserCredentials.body);
-    assert.equal((await json(incompleteBrowserCredentials)).error, "invalid_browser_credentials");
-
     const clearedOptionalCredentials = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
@@ -349,11 +338,49 @@ test("configuration and issue API preserves relational integrity", async () => {
     const validUpdate = await app.inject({
       method: "PATCH",
       url: `/api/issues/${created.id}`,
-      payload: { title: "Moved to beta", description: "", priority: "p2", type: "question", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
+      payload: { title: "Moved to beta", description: "", priority: "p2", type: "smart_analysis", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
     });
     assert.equal(validUpdate.statusCode, 200, validUpdate.body);
     const updatedList = await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; service: { key: string } }>;
     assert.equal(updatedList.find((item) => item.id === created.id)?.service.key, "beta");
+
+    const createBoundary = "issue-pilot-create-with-attachment";
+    const initialIssue = {
+      title: "Issue with initial evidence",
+      description: "Inspect the attached evidence",
+      priority: "p2",
+      type: "smart_analysis",
+      environmentKey: "test",
+      serviceKey: "alpha",
+      assigneeSubject: null,
+      ccSubjects: [],
+    };
+    const createWithAttachmentBody = Buffer.from([
+      `--${createBoundary}`,
+      'Content-Disposition: form-data; name="issue"',
+      "",
+      JSON.stringify(initialIssue),
+      `--${createBoundary}`,
+      'Content-Disposition: form-data; name="files"; filename="initial.txt"',
+      "Content-Type: text/plain",
+      "",
+      "initial evidence",
+      `--${createBoundary}--`,
+      "",
+    ].join("\r\n"));
+    const enqueueCountBeforeMultipartCreate = engine.enqueued.length;
+    const createWithAttachment = await app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${createBoundary}` },
+      payload: createWithAttachmentBody,
+    });
+    assert.equal(createWithAttachment.statusCode, 201, createWithAttachment.body);
+    assert.equal(engine.enqueued.length, enqueueCountBeforeMultipartCreate + 1);
+    const issueWithAttachment = await json(createWithAttachment);
+    const createdWithAttachmentDetail = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ fileName: string; sha256: string }> };
+    assert.deepEqual(createdWithAttachmentDetail.attachments.map(({ fileName }) => fileName), ["initial.txt"]);
+    assert.equal(createdWithAttachmentDetail.attachments[0]?.sha256, createHash("sha256").update("initial evidence").digest("hex"));
 
     const boundary = "issue-pilot-test-boundary";
     const attachmentContent = "diagnostic output\n";
@@ -379,13 +406,12 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal("objectKey" in uploaded[0]!, false);
     assert.equal("issueId" in uploaded[0]!, false);
     assert.equal("scanStatus" in uploaded[0]!, false);
-    const attachmentDirectory = join(root, "attachments", String(created.id).toLowerCase());
+    const attachmentDirectory = join(root, "workspaces", String(created.id).toLowerCase(), ".issue-pilot", "attachments");
     const attachmentFiles = await readdir(attachmentDirectory);
     assert.equal(attachmentFiles.length, 1);
     assert.equal((await stat(join(attachmentDirectory, attachmentFiles[0]!))).mode & 0o777, 0o600);
-    const detailWithAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<Record<string, unknown>>; agentResult: unknown };
+    const detailWithAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<Record<string, unknown>> };
     assert.equal(detailWithAttachment.attachments.length, 1);
-    assert.equal(detailWithAttachment.agentResult, null);
     assert.equal("objectKey" in detailWithAttachment.attachments[0]!, false);
     assert.equal("scanStatus" in detailWithAttachment.attachments[0]!, false);
     const attachmentPreview = await app.inject({ method: "GET", url: `/api/issues/${created.id}/attachments/${uploaded[0]!.id}` });
@@ -403,7 +429,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(syncResponse.statusCode, 202, syncResponse.body);
     assert.match(engine.messages.at(-1) ?? "", /Issue metadata was updated/);
     assert.match(engine.messages.at(-1) ?? "", /diagnostic\.txt/);
-    assert.match(engine.messages.at(-1) ?? "", /attachment_read/);
+    assert.match(engine.messages.at(-1) ?? "", /attachments are available in \.issue-pilot\/attachments/);
     assert.equal(engine.recordedMessages.at(-1), false);
 
     const excessiveBoundary = "issue-pilot-excessive-attachments";
@@ -452,20 +478,20 @@ test("configuration and issue API preserves relational integrity", async () => {
     const configuration = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
     assert.equal(configuration.services.find((service) => service.key === "alpha")?.name, "Alpha renamed");
 
-    const developmentIssue = await app.inject({
+    const devIssue = await app.inject({
       method: "POST",
       url: "/api/issues",
-      payload: { title: "Development defect", description: "", priority: "p2", type: "incident", environmentKey: "development", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
+      payload: { title: "Dev defect", description: "", priority: "p2", type: "defect_fix", environmentKey: "dev", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
     });
-    assert.equal(developmentIssue.statusCode, 201, developmentIssue.body);
-    const developmentIssueKey = String((await json(developmentIssue)).id);
-    const invalidDevelopmentUpdate = await app.inject({
+    assert.equal(devIssue.statusCode, 201, devIssue.body);
+    const devIssueKey = String((await json(devIssue)).id);
+    const invalidDevUpdate = await app.inject({
       method: "PATCH",
-      url: `/api/issues/${developmentIssueKey}`,
-      payload: { title: "Development question", description: "", priority: "p2", type: "smart_analysis", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
+      url: `/api/issues/${devIssueKey}`,
+      payload: { title: "Dev question", description: "", priority: "p2", type: "smart_analysis", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
     });
-    assert.equal(invalidDevelopmentUpdate.statusCode, 400);
-    assert.equal((await json(invalidDevelopmentUpdate)).error, "invalid_issue_type_for_environment");
+    assert.equal(invalidDevUpdate.statusCode, 400);
+    assert.equal((await json(invalidDevUpdate)).error, "invalid_issue_type_for_environment");
 
     const interrupted = openDatabase(join(root, "issues.db"));
     await interrupted.db.transaction(async (transaction) => {

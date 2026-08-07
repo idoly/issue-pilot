@@ -8,7 +8,7 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 
 import { openDatabase } from "../../src/db/client.ts";
 import { environments, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
-import { configuredCapabilities } from "../../src/shared/capabilities.ts";
+import { configuredCapabilities } from "../../src/domain/contracts.ts";
 
 test("creates a private SQLite database with JSON, dates, transactions, and foreign keys", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-sqlite-"));
@@ -23,12 +23,12 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const [environment] = await db.select().from(environments);
     assert.deepEqual(environment?.config, { connector: "test" });
     assert.ok(environment?.createdAt instanceof Date);
-    const [production] = await db.insert(environments).values({ organizationId: "demo", scope: "global", key: "production", name: "Production", kind: "production", config: {} }).returning();
+    const [prod] = await db.insert(environments).values({ organizationId: "demo", scope: "global", key: "prod", name: "Prod", kind: "prod", config: {} }).returning();
     const [service] = await db.insert(services).values({ organizationId: "demo", scope: "global", key: "orders", name: "Orders", description: "" }).returning();
     await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:orders.git" });
     const deployments = await db.insert(serviceDeployments).values([
       { serviceId: service!.id, environmentId: environment!.id, baseBranch: "develop", config: { db: { url: "mysql://db.example.test/orders", username: "reader", password: "secret" } } },
-      { serviceId: service!.id, environmentId: production!.id, baseBranch: "release", config: { es: { url: "http://es.example.test", username: "" } } },
+      { serviceId: service!.id, environmentId: prod!.id, baseBranch: "release", config: { es: { url: "http://es.example.test", username: "" } } },
     ]).returning();
     assert.deepEqual(deployments.map(({ config }) => configuredCapabilities(config)), [["db"], ["es"]]);
     await assert.rejects(client.execute({

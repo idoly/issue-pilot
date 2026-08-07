@@ -3,9 +3,16 @@ import { access } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeIssueKey } from "../shared/issue-key.ts";
+import { normalizeIssueKey } from "../domain/issue-key.ts";
+import { workspacesRoot } from "./paths.ts";
 
 const execFileAsync = promisify(execFile);
+
+export function issueCodeServerUrl(issueKey: string, publicUrl = process.env.ISSUE_PILOT_CODE_SERVER_URL ?? "http://127.0.0.1:18080/"): string {
+  const url = new URL(publicUrl);
+  url.searchParams.set("folder", `/home/coder/state/workspaces/${normalizeIssueKey(issueKey).toLowerCase()}`);
+  return url.toString();
+}
 
 export class CodeServer {
   private readonly workspaceRoot: string;
@@ -13,7 +20,7 @@ export class CodeServer {
   private readonly publicUrl: URL;
 
   constructor(stateRoot: string) {
-    this.workspaceRoot = resolve(stateRoot, "workspaces");
+    this.workspaceRoot = workspacesRoot(stateRoot);
     this.script = resolve(process.env.ISSUE_PILOT_CODE_SERVER_SCRIPT ?? "infra/code-server.sh");
     this.publicUrl = new URL(process.env.ISSUE_PILOT_CODE_SERVER_URL ?? "http://127.0.0.1:18080/");
   }
@@ -25,8 +32,6 @@ export class CodeServer {
     if (!fromRoot || fromRoot.startsWith("..") || isAbsolute(fromRoot) || fromRoot !== normalized.toLowerCase()) throw new Error("invalid_code_server_workspace");
     await Promise.all([access(resolvedWorkspace), access(this.script)]);
     await execFileAsync(this.script, ["ensure"], { timeout: 180_000, maxBuffer: 2 * 1024 * 1024, env: process.env });
-    const url = new URL(this.publicUrl);
-    url.searchParams.set("folder", `/home/coder/project/${normalized.toLowerCase()}`);
-    return url.toString();
+    return issueCodeServerUrl(normalized, this.publicUrl.toString());
   }
 }

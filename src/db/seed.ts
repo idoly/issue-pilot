@@ -1,9 +1,10 @@
 import { and, eq, isNull } from "drizzle-orm";
 
+import type { EnvironmentKind } from "../domain/contracts.ts";
 import { openDatabase } from "./client.ts";
 import { environments, serviceDeployments, services, subjects } from "./schema.ts";
 
-const organizationId = "demo";
+const organizationId = "xhgj";
 
 const people = [
   { subject: "yx4821@xianhengguoji.com", username: "yx4821@xianhengguoji.com", displayName: "严欣", email: "yx4821@xianhengguoji.com" },
@@ -19,7 +20,7 @@ try {
     });
   }
 
-  async function ensureEnvironment(key: string, name: string, kind: "production" | "test" | "development") {
+  async function ensureEnvironment(key: string, name: string, kind: EnvironmentKind) {
     const existing = await db.select().from(environments).where(and(
       eq(environments.organizationId, organizationId),
       eq(environments.scope, "global"),
@@ -38,8 +39,8 @@ try {
     return inserted[0]!;
   }
 
-  const development = await ensureEnvironment("development", "开发", "development");
-  const production = await ensureEnvironment("production", "正式", "production");
+  const dev = await ensureEnvironment("dev", "开发", "dev");
+  const prod = await ensureEnvironment("prod", "正式", "prod");
   const test = await ensureEnvironment("test", "测试", "test");
 
   let service = (await db.select().from(services).where(and(
@@ -59,14 +60,14 @@ try {
   }
 
   await db.insert(serviceDeployments).values([
-    { serviceId: service!.id, environmentId: development.id, baseBranch: "develop", config: {} },
-    { serviceId: service!.id, environmentId: production.id, baseBranch: "main", config: {} },
+    { serviceId: service!.id, environmentId: dev.id, baseBranch: "develop", config: {} },
+    { serviceId: service!.id, environmentId: prod.id, baseBranch: "main", config: {} },
     { serviceId: service!.id, environmentId: test.id, baseBranch: "develop", config: {} },
   ]).onConflictDoNothing().returning();
 
   console.log(JSON.stringify({
     organizationId,
-    environments: [development.name, production.name, test.name],
+    environments: [dev.name, prod.name, test.name],
     service: service!.name,
     subjects: people.map((person) => person.subject),
   }, null, 2));

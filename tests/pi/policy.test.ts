@@ -1,149 +1,84 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
-import { readAttachment } from "../../src/pi/attachment.ts";
-import {
-  assertSlsGranted,
-  assertToolGranted,
-  authorizeWorkspacePath,
-  createIssuePolicy,
-} from "../../src/pi/policy.ts";
+import { assertSlsGranted, createDeploymentPolicy, createIssuePolicy, grantedRepositories } from "../../src/pi/policy.ts";
 
-test("enforces issue tool, repository-root, read-only, and symlink boundaries", async () => {
-  const root = await mkdtemp(join(tmpdir(), "issue-policy-"));
-  const workspace = join(root, "workspaces", "issue-20260804-002");
-  const repository = join(workspace, "repository");
-  const module = join(repository, "modules", "orders");
-  const dependencyRepository = join(workspace, "dependency");
-  const dependencyModule = join(dependencyRepository, "modules", "shared");
-  const outside = join(root, "outside.txt");
-  const attachmentDirectory = join(root, "attachments", "issue-20260804-002");
-  const attachmentPath = join(attachmentDirectory, "fixture-note.txt");
-  const attachmentContent = "bounded attachment text";
-  try {
-    await Promise.all([mkdir(module, { recursive: true }), mkdir(dependencyModule, { recursive: true }), mkdir(attachmentDirectory, { recursive: true, mode: 0o700 })]);
-    await Promise.all([
-      writeFile(join(repository, "README.md"), "repository", "utf8"),
-      writeFile(join(module, "index.ts"), "export {};", "utf8"),
-      writeFile(join(dependencyModule, "index.ts"), "export {};", "utf8"),
-      writeFile(outside, "outside", "utf8"),
-      writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 }),
-      symlink(outside, join(module, "escaped.txt")),
-    ]);
-    const policy = createIssuePolicy({
-      issueKey: "ISSUE-20260804-002",
-      issueType: "incident",
-      workspaceRoot: workspace,
-      attachments: [{ id: "attachment-1", fileName: "note.txt", mediaType: "text/plain", size: Buffer.byteLength(attachmentContent), sha256: createHash("sha256").update(attachmentContent).digest("hex"), attachmentPath }],
-      service: {
-        serviceKey: "orders",
-        environmentKey: "development",
-        environmentKind: "development",
-        capabilities: ["nacos"],
-        nacos: { deploymentId: "orders-development", serverUrl: "https://nacos.example.test", namespace: "development", group: "DEFAULT_GROUP" },
-        repositories: [
-          { codeAccess: "write", repositoryPath: repository, baseCommit: "a".repeat(40) },
-          { codeAccess: "read", repositoryPath: dependencyRepository, baseCommit: "b".repeat(40) },
-        ],
-      },
-    });
-    assert.deepEqual(policy.tools, ["repository_read", "repository_grep", "repository_find", "repository_list", "attachment_read", "repository_edit", "repository_write", "nacos", "node_project_command", "maven_project_command", "repository_status", "complete_issue"]);
-    const attachment = await readAttachment(policy, "attachment-1");
-    const attachmentContentResult = attachment.content[0];
-    assert.match(attachmentContentResult?.type === "text" ? attachmentContentResult.text : "", /bounded attachment text/);
-    await assert.rejects(readAttachment(policy, "missing"), /attachment_not_granted_for_issue/);
-    await writeFile(attachmentPath, "xounded attachment text", { encoding: "utf8", mode: 0o600 });
-    await assert.rejects(readAttachment(policy, "attachment-1"), /attachment_integrity_check_failed/);
-    await writeFile(attachmentPath, attachmentContent, { encoding: "utf8", mode: 0o600 });
-    assert.equal(await authorizeWorkspacePath(policy, workspace, join(repository, "README.md"), "read"), join(repository, "README.md"));
-    assert.equal(await authorizeWorkspacePath(policy, workspace, join(module, "new.ts"), "write"), join(module, "new.ts"));
-    assert.equal(await authorizeWorkspacePath(policy, workspace, join(dependencyModule, "index.ts"), "read"), join(dependencyModule, "index.ts"));
-    await assert.rejects(authorizeWorkspacePath(policy, workspace, join(dependencyModule, "index.ts"), "write"), /workspace_path_not_granted/);
-    assert.equal(await authorizeWorkspacePath(policy, workspace, join(repository, "outside-module.ts"), "write"), join(repository, "outside-module.ts"));
-    await assert.rejects(authorizeWorkspacePath(policy, workspace, join(module, "escaped.txt"), "read"), /workspace_symlink_escape_not_granted/);
-    await assert.rejects(authorizeWorkspacePath(policy, workspace, outside, "read"), /workspace_path_not_granted/);
-    assert.throws(() => assertToolGranted(policy, "bash"), /tool_not_granted_for_issue/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+function service(environmentKind: "prod" | "test" | "dev" = "dev") {
+  return {
+    serviceKey: "orders",
+    environmentKey: environmentKind,
+    environmentKind,
+    capabilities: [] as [],
+    repositories: [
+      { codeAccess: "write" as const, repositoryPath: "/tmp/issue-policy/repository", baseCommit: "a".repeat(40) },
+      { codeAccess: "read" as const, repositoryPath: "/tmp/issue-policy/dependency", baseCommit: "b".repeat(40) },
+    ],
+  };
+}
 
-test("freezes SLS project and Logstore grants into the issue policy", () => {
+test("keeps policy focused on model and service scopes", () => {
   const policy = createIssuePolicy({
-    issueKey: "ISSUE-20260804-004",
-    issueType: "question",
-    workspaceRoot: "/tmp/issue-policy-sls",
-    service: {
-      serviceKey: "orders",
-      environmentKey: "test",
-      environmentKind: "test",
-      capabilities: ["sls"],
-      sls: { deploymentId: "orders-test", region: "cn-test", project: "orders-test", logstores: ["application"] },
-      repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-sls/repository", baseCommit: "a".repeat(40) }],
-    },
+    issueKey: "issue-20260804-002",
+    issueType: "defect_fix",
+    workspaceRoot: "/tmp/issue-policy",
+    service: service(),
   });
-  assert.equal(policy.tools.includes("sls"), true);
-  assert.doesNotThrow(() => assertSlsGranted(policy, "orders-test", "application"));
-  assert.throws(() => assertSlsGranted(policy, "other-project", "application"), /sls_scope_not_granted_for_service/);
-  const { sls: _sls, ...serviceWithoutSls } = policy.service;
-  assert.throws(() => createIssuePolicy({ ...policy, service: serviceWithoutSls }), /invalid_sls_service_scope/);
+  assert.equal("tools" in policy, false);
+  assert.equal("attachments" in policy, false);
+  assert.equal(policy.issueKey, "ISSUE-20260804-002");
+  assert.equal(policy.service.repositories[0]?.codeAccess, "write");
+  assert.equal(grantedRepositories(policy)[1]?.codeAccess, "read");
 });
 
-test("freezes a credential-free browser origin into the issue policy", () => {
+test("derives credential-free capability scopes from deployment configuration", () => {
+  const policy = createDeploymentPolicy({
+    issueKey: "ISSUE-20260804-007",
+    issueType: "smart_analysis",
+    workspaceRoot: "/tmp/deployment-policy",
+    deploymentId: "deployment-1",
+    deploymentConfig: {
+      agent: { provider: "provider", model: "model", thinkingLevel: "high" },
+      nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "reader", password: "nacos-secret" },
+      db: { url: "mysql://db.example.test/app", username: "reader", password: "db-secret" },
+    },
+    serviceKey: "orders",
+    environmentKey: "test",
+    environmentKind: "test",
+    repositories: service("test").repositories,
+  });
+  assert.deepEqual(policy.service.capabilities, ["nacos", "db"]);
+  assert.equal(policy.model.thinkingLevel, "high");
+  assert.doesNotMatch(JSON.stringify(policy), /nacos-secret|db-secret|username/);
+});
+
+test("turns repositories read-only outside writable dev issue types", () => {
+  const question = createIssuePolicy({ issueKey: "ISSUE-20260804-003", issueType: "smart_analysis", workspaceRoot: "/tmp/question", service: service() });
+  const prod = createIssuePolicy({ issueKey: "ISSUE-20260804-004", issueType: "defect_fix", workspaceRoot: "/tmp/prod", service: service("prod") });
+  assert.equal(question.service.repositories.every((repository) => repository.codeAccess === "read"), true);
+  assert.equal(prod.service.repositories.every((repository) => repository.codeAccess === "read"), true);
+});
+
+test("freezes and validates external capability scopes", () => {
   const policy = createIssuePolicy({
     issueKey: "ISSUE-20260804-005",
-    issueType: "incident",
-    workspaceRoot: "/tmp/issue-policy-browser",
+    issueType: "smart_analysis",
+    workspaceRoot: "/tmp/sls",
     service: {
-      serviceKey: "orders",
-      environmentKey: "development",
-      environmentKind: "development",
-      capabilities: ["playwright"],
-      browser: { deploymentId: "orders-development", baseUrl: "https://orders.example.test/admin/login" },
-      repositories: [{ codeAccess: "write", repositoryPath: "/tmp/issue-policy-browser/repository", baseCommit: "a".repeat(40) }],
+      ...service("test"),
+      capabilities: ["sls"],
+      sls: { deploymentId: "orders-test", region: "cn-test", project: "orders-test", logstores: ["application"] },
     },
   });
-  assert.equal(policy.tools.includes("playwright"), true);
-  assert.deepEqual(policy.service.browser, { deploymentId: "orders-development", baseUrl: "https://orders.example.test/admin/login" });
-  assert.doesNotMatch(JSON.stringify(policy), /password|username/);
-  assert.throws(() => createIssuePolicy({ ...policy, service: { ...policy.service, browser: { deploymentId: "orders-development", baseUrl: "https://other.example.test/path?token=secret" } } }), /invalid_browser_service_scope/);
+  assert.doesNotThrow(() => assertSlsGranted(policy, "orders-test", "application"));
+  assert.throws(() => assertSlsGranted(policy, "other", "application"), /sls_scope_not_granted/);
+  assert.throws(() => grantedRepositories(policy, "db"), /capability_not_granted/);
 });
 
-test("uses read-only code tools for non-mutating issue types", () => {
-  const policy = createIssuePolicy({
-    issueKey: "ISSUE-20260804-003",
-    issueType: "question",
-    workspaceRoot: "/tmp/issue-policy-question",
-    service: {
-      serviceKey: "orders",
-      environmentKey: "test",
-      environmentKind: "test",
-      capabilities: [],
-      repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-question/repository", baseCommit: "a".repeat(40) }],
-    },
-  });
-  assert.equal(policy.tools.includes("repository_read"), true);
-  assert.equal(policy.tools.includes("repository_write"), false);
-  assert.equal(policy.tools.includes("repository_edit"), false);
-  assert.equal(policy.tools.includes("db"), false);
-
-  const analysisPolicy = createIssuePolicy({
+test("rejects capability declarations without matching scopes", () => {
+  assert.throws(() => createIssuePolicy({
     issueKey: "ISSUE-20260804-006",
     issueType: "smart_analysis",
-    workspaceRoot: "/tmp/issue-policy-analysis",
-    service: {
-      serviceKey: "orders",
-      environmentKey: "development",
-      environmentKind: "development",
-      capabilities: [],
-      repositories: [{ codeAccess: "write", repositoryPath: "/tmp/issue-policy-analysis/repository", baseCommit: "b".repeat(40) }],
-    },
-  });
-  assert.equal(analysisPolicy.tools.includes("repository_write"), false);
-  assert.equal(analysisPolicy.tools.includes("repository_edit"), false);
-  assert.equal(analysisPolicy.service.repositories[0]?.codeAccess, "read");
+    workspaceRoot: "/tmp/invalid",
+    service: { ...service("test"), capabilities: ["db"] },
+  }), /invalid_db_service_scope/);
 });

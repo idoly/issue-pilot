@@ -42,9 +42,16 @@ test("replays the visible transcript from the active Pi session branch", () => {
   });
 
   const transcript = sessionTranscript(manager, "issue-1");
-  assert.deepEqual(transcript.map((event) => event.kind), ["user", "assistant", "tool_call", "tool_result"]);
-  assert.equal(transcript[0]?.message, "Inspect the database");
-  assert.equal(transcript.some((event) => event.message === "Internal runtime prompt"), false);
-  assert.deepEqual(transcript[2]?.arguments, { statement: "SELECT 1" });
-  assert.deepEqual(transcript[3]?.result?.details, { runtime: "container" });
+  assert.deepEqual(transcript.map(({ event }) => event.type), ["issue_user", "message_end", "tool_execution_end"]);
+  const userEvent = transcript[0]!.event;
+  assert.ok("message" in userEvent);
+  assert.equal(userEvent.message, "Inspect the database");
+  assert.equal(transcript.some(({ event }) => JSON.stringify(event).includes("Internal runtime prompt")), false);
+  const assistantEvent = transcript[1]!.event;
+  assert.ok("message" in assistantEvent);
+  const assistant = assistantEvent.message as { content?: Array<{ type: string; arguments?: unknown }> };
+  assert.deepEqual(assistant.content?.find((part) => part.type === "toolCall")?.arguments, { statement: "SELECT 1" });
+  const toolEvent = transcript[2]!.event;
+  assert.ok("result" in toolEvent);
+  assert.deepEqual((toolEvent.result as { details?: unknown }).details, { runtime: "container" });
 });

@@ -2,33 +2,49 @@
   "name": "issue-pilot",
   "version": "0.1.0",
   "description": "A local-first issue management agent for pi",
+  "private": true,
   "type": "module",
-  "keywords": [
-    "issue-tracker",
-    "ticket-agent"
-  ],
+  "keywords": ["issue-tracker", "ticket-agent"],
   "license": "MIT",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/**/*.test.ts",
-    "typecheck": "tsc --noEmit",
+    "dev:web": "vite --config src/web/vite.config.ts",
     "server": "node --experimental-strip-types src/http/api.ts",
+    "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
+    "test": "node --experimental-strip-types --test tests/**/*.test.ts && vitest run --config src/web/vite.config.ts --environment jsdom",
+    "build": "vite build --config src/web/vite.config.ts",
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
     "db:seed": "node --experimental-strip-types src/db/seed.ts"
   },
-  "devDependencies": {
-    "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
-  },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.83.0",
-    "@earendil-works/pi-coding-agent": "^0.83.0",
-    "@earendil-works/pi-tui": "^0.83.0",
+    "@dnd-kit/dom": "^0.5.0",
+    "@earendil-works/pi-ai": "^0.84.0",
+    "@earendil-works/pi-coding-agent": "^0.84.0",
+    "@elastic/elasticsearch": "^6.8.8",
     "@fastify/multipart": "^10.1.0",
-    "@libsql/client": "^0.17.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@idoly/ant-design-solid": "0.2.4",
+    "@libsql/client": "^0.17.4",
+    "@solidjs/web": "2.0.0-beta.29",
+    "dompurify": "^3.4.13",
     "drizzle-orm": "^0.45.2",
-    "fastify": "^5.11.0",
-    "typebox": "^1.3.9",
+    "fastify": "^5.11.2",
+    "lucide": "^1.29.0",
+    "marked": "^18.0.9",
+    "mysql2": "^3.23.2",
+    "redis": "^6.2.0",
+    "solid-js": "2.0.0-beta.29",
+    "typebox": "^1.3.11",
     "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@solidjs/testing-library": "1.0.0-beta.2",
+    "@types/node": "^26.1.2",
+    "jsdom": "^30.0.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vite-plugin-solid": "3.0.0-next.21",
+    "vitest": "^4.1.0"
   },
   "overrides": {
     "undici": "8.9.0"

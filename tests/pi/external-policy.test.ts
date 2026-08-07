@@ -6,22 +6,19 @@ import { createIssuePolicy } from "../../src/pi/policy.ts";
 test("freezes credential-free Redis, Elasticsearch, and RabbitMQ grants", () => {
   const policy = createIssuePolicy({
     issueKey: "ISSUE-20260805-101",
-    issueType: "question",
+    issueType: "smart_analysis",
     workspaceRoot: "/tmp/issue-policy-external",
     service: {
       serviceKey: "orders",
-      environmentKey: "production",
-      environmentKind: "production",
+      environmentKey: "prod",
+      environmentKind: "prod",
       capabilities: ["redis", "mq", "es"],
-      redis: { deploymentId: "orders-production" },
-      mq: { deploymentId: "orders-production", virtualHost: "/" },
-      es: { deploymentId: "orders-production" },
+      redis: { deploymentId: "orders-prod" },
+      mq: { deploymentId: "orders-prod", virtualHost: "/" },
+      es: { deploymentId: "orders-prod" },
       repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-policy-external/repository", baseCommit: "a".repeat(40) }],
     },
   });
-  assert.equal(policy.version, 15);
-  assert.equal(policy.tools.includes("redis"), true);
-  assert.equal(policy.tools.includes("mq"), true);
-  assert.equal(policy.tools.includes("es"), true);
+  assert.deepEqual(policy.service.capabilities, ["redis", "mq", "es"]);
   assert.doesNotMatch(JSON.stringify(policy), /password|username|192\.168/);
 });

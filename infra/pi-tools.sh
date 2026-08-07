@@ -2,17 +2,16 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-cache_root=$(realpath -m "${PI_TOOL_CACHE_ROOT:-$root/.issue-pilot/tool-cache}")
+cache_root=$(realpath -m "${PI_TOOL_CACHE_ROOT:-$root/.issue-pilot/tools}")
 node_image=${PI_NODE_CLI_IMAGE:-docker.io/library/node:26.5.1-bookworm-slim}
 maven_image=${PI_MAVEN_CLI_IMAGE:-docker.io/library/maven:3.9.16-eclipse-temurin-8}
-mysql_image=${PI_MYSQL_CLI_IMAGE:-docker.io/library/mysql:26.7.0}
 nacos_image=${PI_NACOS_CLI_IMAGE:-docker.io/library/node:26.5.1-bookworm-slim}
 playwright_image=${PI_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.62.1-noble}
-base_images="$mysql_image $node_image $maven_image"
+base_images="$node_image $maven_image"
 images="$base_images $playwright_image"
 
 prepare() {
-  mkdir -p "$cache_root/node" "$cache_root/maven" "$cache_root/playwright"
+  mkdir -p "$cache_root/playwright"
   for image in $base_images; do podman image exists "$image" || podman pull "$image" >/dev/null; done
 
   test "$(node -p "require('$cache_root/playwright/node_modules/playwright-core/package.json').version" 2>/dev/null || true)" = 1.62.1 || \
@@ -34,11 +33,6 @@ status() {
     printf 'tool ready playwright-core@1.62.1\n'
   else
     printf 'tool missing playwright-core@1.62.1\n'
-  fi
-  if podman image exists "$node_image"; then
-    printf 'runtime ready redis,mq,es shared-disposable %s\n' "$node_image"
-  else
-    printf 'runtime missing redis,mq,es shared-disposable %s\n' "$node_image"
   fi
   for volume in nacos-cli-data; do
     if podman volume exists "$volume"; then printf 'volume ready %s\n' "$volume"; else printf 'volume missing %s\n' "$volume"; fi

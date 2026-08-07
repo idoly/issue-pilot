@@ -9,16 +9,20 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   const expected = "2026-08-06T09:52:43+08:00";
   assert.match(runtimeTimeContext(now), new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(promptWithRuntimeTime("sls latest record", now), /User request:\nsls latest record/);
-  assert.match(promptWithRuntimeTime("sls latest record", now), /Never reuse a timestamp from an earlier session message/);
 
   const repositories = [{ url: "git@example/repo.git", branch: "main", path: "/workspace/repo", readOnly: true }];
-  assert.match(continuationPrompt("ISSUE-1", repositories, undefined, now), new RegExp(expected.replaceAll("+", "\\+")));
-  assert.match(initialPrompt({
+  const continuation = continuationPrompt("ISSUE-1", repositories, undefined, now);
+  assert.match(continuation, new RegExp(expected.replaceAll("+", "\\+")));
+  assert.match(continuation, /defect_fix and feature_development, make only the minimum changes required/);
+  assert.match(continuation, /Do not commit or push changes/);
+  const initial = initialPrompt({
     issueKey: "ISSUE-1",
     title: "Latest log",
     description: "Read the latest SLS record",
-    issueType: "question",
+    issueType: "smart_analysis",
     repositories,
     service: { key: "service", name: "Service" },
-  }, now), new RegExp(expected.replaceAll("+", "\\+")));
+  }, now);
+  assert.match(initial, new RegExp(expected.replaceAll("+", "\\+")));
+  assert.match(initial, /Do not commit or push changes/);
 });

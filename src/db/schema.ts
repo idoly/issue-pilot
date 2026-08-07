@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+import { ENVIRONMENT_KINDS, ISSUE_STATUSES, ISSUE_TYPES } from "../domain/contracts.ts";
+
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
 const json = <T>(name: string) => text(name, { mode: "json" }).$type<T>();
@@ -18,7 +20,7 @@ export const subjects = sqliteTable("subjects", {
 export const environments = sqliteTable("environments", {
   id: id(), organizationId: text("organization_id").notNull(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }),
   scope: text("scope", { enum: ["global", "personal"] }).notNull(), key: text("key").notNull(), name: text("name").notNull(),
-  kind: text("kind", { enum: ["production", "test", "development"] }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
+  kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
 }, (table) => [
   index("environments_org_scope_idx").on(table.organizationId, table.scope),
   uniqueIndex("environments_owner_key_unique").on(table.organizationId, table.scope, table.ownerSubject, table.key),
@@ -46,9 +48,9 @@ export const serviceRepositories = sqliteTable("service_repositories", {
 
 export const issues = sqliteTable("issues", {
   id: id(), key: text("key").notNull(), title: text("title").notNull(), description: text("description").notNull().default(""),
-  status: text("status", { enum: ["open", "in_progress", "pending", "resolved"] }).notNull().default("open"),
+  status: text("status", { enum: ISSUE_STATUSES }).notNull().default("open"),
   priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] }).notNull().default("p2"),
-  type: text("type", { enum: ["incident", "request", "question", "smart_analysis"] }).notNull().default("request"),
+  type: text("type", { enum: ISSUE_TYPES }).notNull().default("smart_analysis"),
   serviceId: text("service_id").notNull().references(() => services.id), environmentId: text("environment_id").notNull().references(() => environments.id),
   reporterSubject: text("reporter_subject").notNull().references(() => subjects.subject), assigneeSubject: text("assignee_subject").references(() => subjects.subject),
   resolvedAt: date("resolved_at"), version: integer("version").notNull().default(1), ...timestamps,
@@ -68,15 +70,6 @@ export const issueAttachments = sqliteTable("issue_attachments", {
   objectKey: text("object_key").notNull(), sha256: text("sha256").notNull(), uploadedBy: text("uploaded_by").notNull().references(() => subjects.subject),
   createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
 }, (table) => [index("issue_attachments_issue_idx").on(table.issueId)]);
-
-export const issueAgentResults = sqliteTable("issue_agent_results", {
-  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }),
-  outcome: text("outcome", { enum: ["resolved", "needs_human", "blocked"] }).notNull(),
-  summary: text("summary").notNull(), rootCause: text("root_cause"),
-  evidence: json<string[]>("evidence").notNull().default([]), changes: json<string[]>("changes").notNull().default([]),
-  verification: json<string[]>("verification").notNull().default([]), risks: json<string[]>("risks").notNull().default([]),
-  policyVersion: integer("policy_version").notNull(), ...timestamps,
-});
 
 export const issueComments = sqliteTable("issue_comments", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), authorSubject: text("author_subject").notNull(), body: text("body").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
