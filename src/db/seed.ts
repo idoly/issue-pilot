@@ -1,10 +1,8 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import type { EnvironmentKind } from "../domain/contracts.ts";
 import { openDatabase } from "./client.ts";
 import { environments, serviceDeployments, services, subjects } from "./schema.ts";
-
-const organizationId = "xhgj";
 
 const people = [
   { subject: "yx4821@xianhengguoji.com", username: "yx4821@xianhengguoji.com", displayName: "严欣", email: "yx4821@xianhengguoji.com" },
@@ -21,21 +19,9 @@ try {
   }
 
   async function ensureEnvironment(key: string, name: string, kind: EnvironmentKind) {
-    const existing = await db.select().from(environments).where(and(
-      eq(environments.organizationId, organizationId),
-      eq(environments.scope, "global"),
-      isNull(environments.ownerSubject),
-      eq(environments.key, key),
-    )).limit(1);
+    const existing = await db.select().from(environments).where(eq(environments.key, key)).limit(1);
     if (existing[0]) return existing[0];
-    const inserted = await db.insert(environments).values({
-      organizationId,
-      scope: "global",
-      key,
-      name,
-      kind,
-      config: {},
-    }).returning();
+    const inserted = await db.insert(environments).values({ key, name, kind }).returning();
     return inserted[0]!;
   }
 
@@ -43,20 +29,9 @@ try {
   const prod = await ensureEnvironment("prod", "正式", "prod");
   const test = await ensureEnvironment("test", "测试", "test");
 
-  let service = (await db.select().from(services).where(and(
-    eq(services.organizationId, organizationId),
-    eq(services.scope, "global"),
-    isNull(services.ownerSubject),
-    eq(services.key, "srm"),
-  )).limit(1))[0];
+  let service = (await db.select().from(services).where(eq(services.key, "srm")).limit(1))[0];
   if (!service) {
-    [service] = await db.insert(services).values({
-      organizationId,
-      scope: "global",
-      key: "srm",
-      name: "SRM",
-      description: "供应商关系管理服务",
-    }).returning();
+    [service] = await db.insert(services).values({ key: "srm", name: "SRM", description: "供应商关系管理服务" }).returning();
   }
 
   await db.insert(serviceDeployments).values([
@@ -66,7 +41,6 @@ try {
   ]).onConflictDoNothing().returning();
 
   console.log(JSON.stringify({
-    organizationId,
     environments: [dev.name, prod.name, test.name],
     service: service!.name,
     subjects: people.map((person) => person.subject),

@@ -18,13 +18,12 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await migrate(db, { migrationsFolder: resolve("drizzle") });
     await db.transaction(async (transaction) => {
       await transaction.insert(subjects).values({ subject: "demo-owner", username: "owner", displayName: "Owner", email: "owner@example.com" });
-      await transaction.insert(environments).values({ organizationId: "demo", scope: "global", key: "test", name: "Test", kind: "test", config: { connector: "test" } });
+      await transaction.insert(environments).values({ key: "test", name: "Test", kind: "test" });
     });
     const [environment] = await db.select().from(environments);
-    assert.deepEqual(environment?.config, { connector: "test" });
     assert.ok(environment?.createdAt instanceof Date);
-    const [prod] = await db.insert(environments).values({ organizationId: "demo", scope: "global", key: "prod", name: "Prod", kind: "prod", config: {} }).returning();
-    const [service] = await db.insert(services).values({ organizationId: "demo", scope: "global", key: "orders", name: "Orders", description: "" }).returning();
+    const [prod] = await db.insert(environments).values({ key: "prod", name: "Prod", kind: "prod" }).returning();
+    const [service] = await db.insert(services).values({ key: "orders", name: "Orders", description: "" }).returning();
     await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:orders.git" });
     const deployments = await db.insert(serviceDeployments).values([
       { serviceId: service!.id, environmentId: environment!.id, baseBranch: "develop", config: { db: { url: "mysql://db.example.test/orders", username: "reader", password: "secret" } } },

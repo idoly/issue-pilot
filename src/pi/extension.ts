@@ -1,8 +1,6 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 
-import { MAX_BROWSER_ACTIONS, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS, MAX_SLS_RESULTS } from "../capabilities/limits.ts";
+import { capabilityInputSchemas } from "../capabilities/tool-schemas.ts";
 import type { CapabilityName } from "../domain/contracts.ts";
 
 export interface IssuePilotExtensionOptions {
@@ -40,81 +38,49 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     name: "nacos",
     label: "Read Service Configuration",
     description: "Return the raw configuration for the deployment's authorized Nacos data IDs.",
-    parameters: Type.Object({}),
+    parameters: capabilityInputSchemas.nacos,
     execute: (_id, input, signal) => broker(options, "nacos", input, signal),
   });
   register("db", {
     name: "db",
     label: "Query Database",
     description: "Run one read-only SQL statement against the selected deployment database.",
-    parameters: Type.Object({ statement: Type.String({ maxLength: 20_000 }) }),
+    parameters: capabilityInputSchemas.db,
     execute: (_id, input, signal) => broker(options, "db", input, signal),
   });
   register("sls", {
     name: "sls",
     label: "Read SLS Logs",
     description: "Query the selected deployment's Simple Log Service.",
-    parameters: Type.Object({
-      logstore: Type.String({ maxLength: 63 }),
-      from: Type.Optional(Type.Integer({ minimum: 0 })),
-      to: Type.Optional(Type.Integer({ minimum: 1 })),
-      query: Type.Optional(Type.String({ maxLength: 4096 })),
-      trace_id: Type.Optional(Type.String({ maxLength: 36 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SLS_RESULTS })),
-    }),
+    parameters: capabilityInputSchemas.sls,
     execute: (_id, input, signal) => broker(options, "sls", input, signal),
   });
   register("redis", {
     name: "redis",
     label: "Read Redis",
     description: "Run one read-only Redis operation.",
-    parameters: Type.Object({
-      action: StringEnum(["get", "mget", "hget", "hgetall", "type", "ttl", "scan"] as const),
-      key: Type.Optional(Type.String({ maxLength: 1024 })),
-      keys: Type.Optional(Type.Array(Type.String({ maxLength: 1024 }), { maxItems: MAX_REDIS_KEYS })),
-      field: Type.Optional(Type.String({ maxLength: 1024 })),
-      pattern: Type.Optional(Type.String({ maxLength: 1024 })),
-      cursor: Type.Optional(Type.String({ maxLength: 30 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_REDIS_RESULTS })),
-    }),
+    parameters: capabilityInputSchemas.redis,
     execute: (_id, input, signal) => broker(options, "redis", input, signal),
   });
   register("es", {
     name: "es",
     label: "Read Elasticsearch",
     description: "Run a search, count, or mapping request against the selected deployment.",
-    parameters: Type.Object({
-      action: StringEnum(["search", "count", "mapping"] as const),
-      query: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_ES_RESULTS })),
-    }),
+    parameters: capabilityInputSchemas.es,
     execute: (_id, input, signal) => broker(options, "es", input, signal),
   });
   register("mq", {
     name: "mq",
     label: "Read RabbitMQ",
     description: "Read RabbitMQ management metadata without consuming messages.",
-    parameters: Type.Object({
-      action: StringEnum(["overview", "queues", "queue", "bindings"] as const),
-      queue: Type.Optional(Type.String({ maxLength: 255 })),
-    }),
+    parameters: capabilityInputSchemas.mq,
     execute: (_id, input, signal) => broker(options, "mq", input, signal),
   });
   register("playwright", {
     name: "playwright",
     label: "Use Service Browser",
     description: "Run declarative browser actions against the selected deployment.",
-    parameters: Type.Object({
-      actions: Type.Array(Type.Union([
-        Type.Object({ type: Type.Literal("goto"), path: Type.String({ maxLength: 2048 }) }),
-        Type.Object({ type: Type.Literal("login"), username_selector: Type.String({ maxLength: 500 }), password_selector: Type.String({ maxLength: 500 }), submit_selector: Type.String({ maxLength: 500 }) }),
-        Type.Object({ type: Type.Literal("click"), selector: Type.String({ maxLength: 500 }) }),
-        Type.Object({ type: Type.Literal("fill"), selector: Type.String({ maxLength: 500 }), value: Type.String({ maxLength: 10_000 }) }),
-        Type.Object({ type: Type.Literal("select"), selector: Type.String({ maxLength: 500 }), value: Type.String({ maxLength: 10_000 }) }),
-        Type.Object({ type: Type.Literal("wait_for"), selector: Type.String({ maxLength: 500 }) }),
-      ]), { minItems: 1, maxItems: MAX_BROWSER_ACTIONS }),
-      screenshot: Type.Optional(Type.Boolean()),
-    }),
+    parameters: capabilityInputSchemas.playwright,
     execute: (_id, input, signal) => broker(options, "playwright", input, signal),
   });
 }

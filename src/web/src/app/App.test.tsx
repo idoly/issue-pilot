@@ -18,7 +18,8 @@ vi.mock("../data/client", async (importOriginal) => {
     issue("ISSUE-0038", "批量审批偶发超时", "open", true),
   ];
   const configuration = {
-    environments: [{ id: "env-test", key: "test", name: "测试", kind: "test", scope: "global" }],
+    agentModels: [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", thinkingLevels: ["low", "medium", "high"] }],
+    environments: [{ id: "env-test", key: "test", name: "测试", kind: "test" }],
     capabilityCatalog: [
       { key: "playwright" },
       { key: "nacos" },
@@ -29,8 +30,8 @@ vi.mock("../data/client", async (importOriginal) => {
       { key: "sls" },
     ],
     services: [{
-      id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", scope: "global", environmentIds: ["env-test"],
-      deployments: [{ id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["nacos", "db"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
+      id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", createdAt: "2026-08-07T00:00:00.000Z", environmentIds: ["env-test"],
+      deployments: [{ id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
       repositories: [{ id: "srm-repository", kind: "backend", url: "git@example.com:team/srm.git" }],
     }],
   };
@@ -140,11 +141,12 @@ describe("issue pilot workspace", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "配置" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /拖动排序/ })).toBeNull();
     expect(screen.getByRole("button", { name: "SRM" })).toBeTruthy();
     expect(screen.getByText("供应商关系管理服务。")).toBeTruthy();
     const deploymentHead = document.querySelector(".deployment-detail-head");
     expect([...deploymentHead!.children].map((item) => item.textContent)).toEqual(["环境", "分支", "模型", "能力"]);
-    expect(document.querySelector('.deployment-detail-row [data-label="模型"]')?.textContent).toBe("未配置");
+    expect(document.querySelector('.deployment-detail-row [data-label="模型"]')?.textContent).toContain("enterprise-ai/engineering-model");
 
     fireEvent.click(screen.getByRole("button", { name: "编辑服务" }));
     const serviceDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑服务" }));
@@ -160,14 +162,12 @@ describe("issue pilot workspace", () => {
     fireEvent.input(branchInput, { target: { value: "release/test" } });
     expect(document.activeElement).toBe(branchInput);
     expect(branchInput.value).toBe("release/test");
-    expect(screen.queryByLabelText("model provider 1")).toBeNull();
-    expect(screen.queryByLabelText("model id 1")).toBeNull();
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "model" }));
-    const modelProvider = await waitFor(() => screen.getByLabelText("model provider 1") as HTMLInputElement);
-    const modelId = screen.getByLabelText("model id 1") as HTMLInputElement;
-    fireEvent.input(modelProvider, { target: { value: "enterprise-ai" } });
-    fireEvent.input(modelId, { target: { value: "engineering-model" } });
+    expect(screen.getByLabelText("model provider 1")).toBeTruthy();
+    expect(screen.getByLabelText("model id 1")).toBeTruthy();
     expect(screen.getByLabelText("model thinkingLevel 1")).toBeTruthy();
+    const modelButton = within(serviceDialog).getByRole("button", { name: "model" }) as HTMLButtonElement;
+    expect(modelButton.disabled).toBe(true);
+    expect(modelButton.getAttribute("aria-pressed")).toBe("true");
     const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
     expect((screen.getByLabelText("nacos dataIds 1") as HTMLInputElement).value).toBe("srm-test.yaml, srm-shared.yaml");
     const databaseUrl = screen.getByLabelText("db url 1");
@@ -194,6 +194,7 @@ describe("issue pilot workspace", () => {
     });
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
+    expect(savedService?.deployments[0]?.db?.password).toBe("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
 
   });

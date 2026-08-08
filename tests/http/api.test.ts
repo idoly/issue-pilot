@@ -9,6 +9,13 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
+import { AGENT_THINKING_LEVELS } from "../../src/pi/models.ts";
+
+const modelCatalog = {
+  async list() {
+    return [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", thinkingLevels: AGENT_THINKING_LEVELS.filter((level) => level === "medium" || level === "high") }];
+  },
+};
 
 const engine = {
   enqueued: [] as string[],
@@ -41,7 +48,7 @@ test("configuration and issue API preserves relational integrity", async () => {
   engine.recordedMessages = [];
   engine.closedSessions = [];
   engine.running.clear();
-  const app = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, logger: false });
+  const app = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, modelCatalog, logger: false });
   let appClosed = false;
   try {
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
@@ -68,7 +75,6 @@ test("configuration and issue API preserves relational integrity", async () => {
         method: "POST",
         url: "/api/services",
         payload: {
-          key: service.key,
           name: service.name,
           description: `${service.name} service`,
           repositories: service.repositoryUrls.map((url, index) => ({ kind: index === 0 ? "frontend" : "backend", url })),
@@ -81,6 +87,15 @@ test("configuration and issue API preserves relational integrity", async () => {
       assert.equal(response.statusCode, 201, response.body);
     }
 
+    for (const [key, agent, expected] of [
+      ["invalid-model", { provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high" }, "agent_model_not_available"],
+      ["invalid-thinking", { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off" }, "agent_thinking_level_not_supported"],
+    ] as const) {
+      const response = await app.inject({ method: "POST", url: "/api/services", payload: { key, name: key, description: "", repositories: [{ kind: "backend", url: `https://example.test/${key}.git` }], deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [], agent }] } });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.equal((await json(response)).error, expected);
+    }
+
     const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ id: string; key: string; repositories: Array<{ id: string; kind: string; url: string }>; deployments: Array<{ agent: unknown }> }> };
     const alphaModel = modeled.services.find((service) => service.key === "alpha")!;
     assert.equal("kind" in alphaModel, false);
@@ -88,13 +103,9 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.deepEqual(alphaModel.repositories.map((repository) => repository.url).sort(), ["https://example.test/alpha-shared.git", "https://example.test/alpha.git"]);
     assert.deepEqual(alphaModel.deployments[0]?.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" });
 
-    const invalidOrder = await app.inject({ method: "PUT", url: "/api/services/order", payload: { serviceKeys: ["alpha"] } });
-    assert.equal(invalidOrder.statusCode, 400);
-    assert.equal((await json(invalidOrder)).error, "invalid_service_order");
-    const reordered = await app.inject({ method: "PUT", url: "/api/services/order", payload: { serviceKeys: ["beta", "alpha"] } });
-    assert.equal(reordered.statusCode, 200, reordered.body);
-    const reorderedConfiguration = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string }> };
-    assert.deepEqual(reorderedConfiguration.services.map((service) => service.key), ["beta", "alpha"]);
+    assert.deepEqual(modeled.services.map((service) => service.key), ["alpha", "beta"]);
+    const removedOrderEndpoint = await app.inject({ method: "PUT", url: "/api/services/order", payload: { serviceKeys: ["beta", "alpha"] } });
+    assert.equal(removedOrderEndpoint.statusCode, 404);
 
     const invalidSubject = await app.inject({
       method: "POST",
@@ -298,7 +309,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const missingDbPassword = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
-      payload: { name: "Invalid DB", description: "", repositories: updatedAlpha.repositories, deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" }, db: { url: "mysql://db.example.test:3306/alpha", username: "readonly" } }] },
+      payload: { name: "Invalid DB", description: "", repositories: updatedAlpha.repositories, deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" }, db: { url: "mysql://db.example.test:3306/alpha", username: "readonly", password: "" } }] },
     });
     assert.equal(missingDbPassword.statusCode, 400, missingDbPassword.body);
     assert.equal((await json(missingDbPassword)).error, "invalid_db_password");
@@ -323,7 +334,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const clearedDeployment = afterCredentialClear.services.find((service) => service.key === "alpha")!.deployments[0]!;
     assert.equal(clearedDeployment.nacos.password, undefined);
     assert.equal(clearedDeployment.es.password, undefined);
-    assert.equal(clearedDeployment.playwright.password, "");
+    assert.equal(clearedDeployment.playwright.password, undefined);
     assert.equal(clearedDeployment.es.url, "http://es-6.example.test/proxy");
     engine.running.add(createdInternalId);
     const runningServiceUpdate = await app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {} });
@@ -552,7 +563,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     await interrupted.close();
     await app.close();
     appClosed = true;
-    const restarted = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, logger: false });
+    const restarted = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, modelCatalog, logger: false });
     try {
       const recovered = await restarted.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string; workspace: { status: string; lastError: string | null } };
       assert.equal(recovered.status, "open");

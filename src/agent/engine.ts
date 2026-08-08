@@ -228,11 +228,12 @@ export class AgentEngine {
       repositories: prepared.map((workspace) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
     });
     await preparePiWorkspace(workspaceRoot);
-    let codeServerUrl: string | null = null;
+    let codeServerReady = false;
     try {
-      codeServerUrl = await this.codeServer.ensure(issue.key, workspaceRoot);
+      await this.codeServer.ensure(issue.key, workspaceRoot);
+      codeServerReady = true;
     } catch {
-      codeServerUrl = null;
+      codeServerReady = false;
     }
     const [binding] = await this.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const manager = binding && await exists(binding.sessionFile)
@@ -248,7 +249,7 @@ export class AgentEngine {
       target: agentSessions.issueId,
       set: { piSessionId: managed.sessionId, sessionFile: managed.sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
-    await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.db.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
     const repositoryContexts = prepared.map((workspace) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, workspace.workspacePath), readOnly: worktreeMode === "detached" }));

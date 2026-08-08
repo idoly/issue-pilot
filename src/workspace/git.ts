@@ -67,12 +67,6 @@ export class Worktrees {
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
-  async migrate(issueId: string, url: string, workspaceName: string, existingWorkspacePath: string): Promise<string> {
-    const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(issueId));
-    const cachePath = resolve(this.repositoriesRoot, createHash("sha256").update(url).digest("hex").slice(0, 20));
-    return this.workspacePath(issueRoot, cachePath, workspaceName, existingWorkspacePath);
-  }
-
   async remove(url: string, workspacePath: string): Promise<void> {
     const resolvedWorkspace = resolve(workspacePath);
     const relativePath = relative(this.workspacesRoot, resolvedWorkspace);

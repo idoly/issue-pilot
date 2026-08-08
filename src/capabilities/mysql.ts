@@ -1,4 +1,4 @@
-import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type RowDataPacket } from "mysql2/promise";
+import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type QueryError, type RowDataPacket } from "mysql2";
 
 import { MAX_CAPABILITY_RESULT_BYTES, MAX_DATABASE_ROWS } from "./limits.ts";
 
@@ -12,7 +12,34 @@ export function validateReadOnlyQuery(value: string): string {
   return statement;
 }
 
-export type MysqlConnectionFactory = (options: ConnectionOptions) => Promise<Connection>;
+export type MysqlConnectionFactory = (options: ConnectionOptions) => Connection | Promise<Connection>;
+
+function execute(connection: Connection, statement: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    connection.query(statement, (error) => error ? reject(error) : resolve());
+  });
+}
+
+function end(connection: Connection): Promise<void> {
+  return new Promise((resolve, reject) => connection.end((error?: QueryError | null) => error ? reject(error) : resolve()));
+}
+
+async function streamedRows(connection: Connection, statement: string): Promise<{ columns: string[]; rows: Array<Record<string, unknown>> }> {
+  let columns: string[] = [];
+  const rows: Array<Record<string, unknown>> = [];
+  let bytes = 2;
+  const query = connection.query(statement);
+  query.once("fields", (fields: FieldPacket[]) => { columns = fields.map((field) => field.name); });
+  for await (const value of query.stream({ highWaterMark: 1 })) {
+    if (rows.length >= MAX_DATABASE_ROWS) throw new Error("capability_result_too_large");
+    const row = value as RowDataPacket;
+    const normalized = Object.fromEntries(columns.map((column) => [column, row[column] ?? null]));
+    bytes += Buffer.byteLength(JSON.stringify(normalized)) + (rows.length ? 1 : 0);
+    if (bytes > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
+    rows.push(normalized);
+  }
+  return { columns, rows };
+}
 
 export async function queryMysql(input: { connectionUrl: string; statement: string }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
   const connectionUrl = new URL(input.connectionUrl);
@@ -47,16 +74,16 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
       typeCast: (field) => field.string(),
     });
     if (activeSignal.aborted) throw activeSignal.reason;
-    const [result, fields] = await connection.query<RowDataPacket[]>(input.statement);
+    await execute(connection, "START TRANSACTION READ ONLY");
+    const output = await streamedRows(connection, input.statement);
     if (activeSignal.aborted) throw activeSignal.reason;
-    if (!Array.isArray(result)) throw new Error("mysql_query_did_not_return_rows");
-    const columns = (fields as FieldPacket[]).map((field) => field.name);
-    if (result.length > MAX_DATABASE_ROWS) throw new Error("capability_result_too_large");
-    const rows = result.map((row) => Object.fromEntries(columns.map((column) => [column, row[column] ?? null])));
-    if (Buffer.byteLength(JSON.stringify(rows)) > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
-    return { columns, rows, runtime: "node" as const };
+    await execute(connection, "ROLLBACK");
+    return { ...output, runtime: "node" as const };
+  } catch (error) {
+    if (connection && !destroyed) await execute(connection, "ROLLBACK").catch(() => undefined);
+    throw error;
   } finally {
     activeSignal.removeEventListener("abort", abort);
-    if (connection && !destroyed) await connection.end();
+    if (connection && !destroyed) await end(connection);
   }
 }

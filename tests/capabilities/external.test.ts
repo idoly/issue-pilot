@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { readElasticsearch, readRabbitMq, readRedis } from "../../src/capabilities/external.ts";
+import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/limits.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 async function fixture() {
@@ -79,6 +80,38 @@ test("reads RabbitMQ management data with encoded scope and credentials", async 
     assert.equal(requests[0]?.authorization, `Basic ${Buffer.from("reader:secret").toString("base64")}`);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects oversized native Redis and HTTP responses before returning them", async () => {
+  const { root, policy } = await fixture();
+  const redisServer = createTcpServer((socket) => {
+    socket.once("data", () => {
+      const value = "x".repeat(MAX_CAPABILITY_RESULT_BYTES + 1);
+      socket.end(`$${value.length}\r\n${value}\r\n`);
+    });
+  });
+  const httpServer = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(Buffer.alloc(MAX_CAPABILITY_RESULT_BYTES + 1, 120));
+  });
+  await Promise.all([
+    new Promise<void>((resolve) => redisServer.listen(0, "127.0.0.1", resolve)),
+    new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve)),
+  ]);
+  const redisAddress = redisServer.address();
+  const httpAddress = httpServer.address();
+  assert(redisAddress && typeof redisAddress === "object");
+  assert(httpAddress && typeof httpAddress === "object");
+  try {
+    await assert.rejects(() => readRedis(policy, { host: "127.0.0.1", port: redisAddress.port, username: "", database: 0 }, { action: "get", key: "large" }), /capability_result_too_large/);
+    await assert.rejects(() => readRabbitMq(policy, { host: "127.0.0.1", port: 5672, managementPort: httpAddress.port, username: "reader", password: "secret", virtualHost: "/" }, { action: "overview" }), /capability_result_too_large/);
+  } finally {
+    await Promise.all([
+      new Promise<void>((resolve) => redisServer.close(() => resolve())),
+      new Promise<void>((resolve) => httpServer.close(() => resolve())),
+    ]);
     await rm(root, { recursive: true, force: true });
   }
 });

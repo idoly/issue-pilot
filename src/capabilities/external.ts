@@ -1,46 +1,70 @@
-import { Client as ElasticsearchClient } from "@elastic/elasticsearch";
-import { createClient } from "redis";
+import { Worker } from "node:worker_threads";
 
 import type { IssuePolicy } from "../pi/policy.ts";
-import { capabilityResultText, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS } from "./limits.ts";
+import { capabilityResultText, MAX_CAPABILITY_RESULT_BYTES, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS } from "./limits.ts";
 
 function operationSignal(signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(15_000);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-async function redisCommand(config: Record<string, unknown>, command: string[], signal?: AbortSignal): Promise<unknown> {
-  const username = config.username as string;
-  const password = config.password as string | undefined;
-  const client = createClient({
-    RESP: 2,
-    socket: {
-      host: config.host as string,
-      port: config.port as number,
-      connectTimeout: 10_000,
-      reconnectStrategy: false,
-    },
-    ...(username ? { username } : {}),
-    ...(password ? { password } : {}),
-    database: config.database as number,
-    disableClientInfo: true,
-  });
-  client.on("error", () => {});
+async function redisCommand(config: Record<string, unknown>, action: string, command: string[], signal?: AbortSignal): Promise<string> {
   const activeSignal = operationSignal(signal);
-  const abort = () => { if (client.isOpen) client.destroy(); };
-  activeSignal.addEventListener("abort", abort, { once: true });
-  try {
-    if (activeSignal.aborted) throw activeSignal.reason;
-    await client.connect();
-    return await client.sendCommand(command, { abortSignal: activeSignal });
-  } finally {
-    activeSignal.removeEventListener("abort", abort);
-    if (client.isOpen) client.destroy();
-  }
+  if (activeSignal.aborted) throw activeSignal.reason;
+  return new Promise<string>((resolve, reject) => {
+    const worker = new Worker(new URL("./redis-worker.ts", import.meta.url), {
+      execArgv: ["--experimental-strip-types"],
+      resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 },
+      workerData: {
+        action,
+        command,
+        config: { host: config.host, port: config.port, username: config.username, password: config.password, database: config.database },
+      },
+    });
+    let settled = false;
+    const finish = (operation: () => void) => {
+      if (settled) return;
+      settled = true;
+      activeSignal.removeEventListener("abort", abort);
+      operation();
+      void worker.terminate();
+    };
+    const abort = () => finish(() => reject(activeSignal.reason));
+    activeSignal.addEventListener("abort", abort, { once: true });
+    worker.once("message", (message: { ok?: boolean; text?: string; error?: string }) => finish(() => message.ok && typeof message.text === "string" ? resolve(message.text) : reject(new Error(message.error ?? "redis_read_failed"))));
+    worker.once("error", (error: Error) => finish(() => reject(new Error(/memory limit/i.test(error.message) ? "capability_result_too_large" : "redis_read_failed", { cause: error }))));
+    worker.once("exit", (code) => { if (!settled) finish(() => reject(new Error(code === 0 ? "redis_read_failed" : "capability_result_too_large"))); });
+  });
 }
 
 function authHeaders(config: Record<string, unknown>): Record<string, string> {
   return config.username ? { authorization: `Basic ${Buffer.from(`${config.username}:${config.password ?? ""}`).toString("base64")}` } : {};
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
+      chunks.push(chunk.value);
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+async function responseJson(response: Response): Promise<unknown> {
+  const text = await boundedResponseText(response);
+  if (!response.ok) throw new Error(`external_http_${response.status}`);
+  return text ? JSON.parse(text) as unknown : null;
 }
 
 async function httpJson(config: Record<string, unknown>, requestPath: string, signal?: AbortSignal): Promise<unknown> {
@@ -49,37 +73,26 @@ async function httpJson(config: Record<string, unknown>, requestPath: string, si
     headers: { accept: "application/json", ...authHeaders(config) },
     signal: operationSignal(signal),
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`external_http_${response.status}`);
-  return text ? JSON.parse(text) as unknown : null;
+  return responseJson(response);
+}
+
+function elasticsearchUrl(baseUrl: string, suffix: string): URL {
+  const endpoint = new URL(baseUrl);
+  endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/${suffix}`;
+  return endpoint;
 }
 
 async function elasticsearchRead(config: Record<string, unknown>, input: { action: "search" | "count" | "mapping"; query: Record<string, unknown>; limit?: number }, signal?: AbortSignal): Promise<unknown> {
-  const username = config.username as string;
-  const client = new ElasticsearchClient({
-    node: config.url as string,
-    maxRetries: 0,
-    requestTimeout: 15_000,
-    ...(username ? { auth: { username, password: config.password as string } } : {}),
+  const suffix = input.action === "mapping" ? "_mapping" : input.action === "count" ? "_count" : "_search";
+  const body = input.action === "mapping" ? undefined : JSON.stringify({ query: input.query, ...(input.action === "search" && input.limit !== undefined ? { size: input.limit } : {}) });
+  const response = await fetch(elasticsearchUrl(config.url as string, suffix), {
+    method: body ? "POST" : "GET",
+    redirect: "error",
+    headers: { accept: "application/json", ...(body ? { "content-type": "application/json" } : {}), ...authHeaders(config) },
+    ...(body ? { body } : {}),
+    signal: operationSignal(signal),
   });
-  const activeSignal = operationSignal(signal);
-  const abort = () => { void client.close(); };
-  activeSignal.addEventListener("abort", abort, { once: true });
-  try {
-    if (activeSignal.aborted) throw activeSignal.reason;
-    const response = input.action === "mapping"
-      ? await client.indices.getMapping()
-      : input.action === "count"
-        ? await client.count({ body: { query: input.query } })
-        : await client.search({ body: { query: input.query, ...(input.limit === undefined ? {} : { size: input.limit }) } });
-    if (activeSignal.aborted) throw activeSignal.reason;
-    const statusCode = response.statusCode;
-    if (typeof statusCode !== "number" || statusCode < 200 || statusCode >= 300) throw new Error(`external_http_${statusCode ?? "unknown"}`);
-    return response.body;
-  } finally {
-    activeSignal.removeEventListener("abort", abort);
-    await client.close();
-  }
+  return responseJson(response);
 }
 
 export async function readRedis(policy: IssuePolicy, config: Record<string, unknown>, input: { action: string; key?: string; keys?: string[]; field?: string; pattern?: string; cursor?: string; limit?: number }, signal?: AbortSignal) {
@@ -98,9 +111,9 @@ export async function readRedis(policy: IssuePolicy, config: Record<string, unkn
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_REDIS_RESULTS) throw new Error("invalid_redis_limit");
     command = ["SCAN", input.cursor && /^\d+$/.test(input.cursor) ? input.cursor : "0", "MATCH", input.pattern ? text(input.pattern, "pattern") : "*", "COUNT", String(limit)];
   } else throw new Error("invalid_redis_action");
-  const output = await redisCommand(config, command, signal);
+  const output = await redisCommand(config, input.action, command, signal);
   return {
-    content: [{ type: "text" as const, text: capabilityResultText({ action: input.action, output }) }],
+    content: [{ type: "text" as const, text: output }],
     details: { deploymentId: grant.deploymentId },
   };
 }

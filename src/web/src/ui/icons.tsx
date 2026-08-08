@@ -11,7 +11,6 @@ import {
   ExternalLink as ExternalLinkNode,
   Eye as EyeNode,
   GitBranch as GitBranchNode,
-  GripVertical as GripVerticalNode,
   ListFilter as ListFilterNode,
   MessageSquare as MessageSquareNode,
   Maximize2 as Maximize2Node,
@@ -67,7 +66,6 @@ export const Download = createIcon(DownloadNode);
 export const ExternalLink = createIcon(ExternalLinkNode);
 export const Eye = createIcon(EyeNode);
 export const GitBranch = createIcon(GitBranchNode);
-export const GripVertical = createIcon(GripVerticalNode);
 export const ListFilter = createIcon(ListFilterNode);
 export const MessageSquare = createIcon(MessageSquareNode);
 export const Maximize2 = createIcon(Maximize2Node);

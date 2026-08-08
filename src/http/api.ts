@@ -3,16 +3,20 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import multipart, { type MultipartFile } from "@fastify/multipart";
+import multipart from "@fastify/multipart";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import Fastify, { type FastifyInstance } from "fastify";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { AGENT_THINKING_LEVELS, PiAgentModelCatalog, type AgentModelCatalog, type AgentThinkingLevel } from "../pi/models.ts";
 import { ENVIRONMENT_KINDS, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { AgentEngine } from "../agent/engine.ts";
-import { browserConfiguration, dbConfiguration, esConfiguration, mqConfiguration, nacosConfiguration, parseCapabilities, publicBrowserConfiguration, publicCapabilityConfiguration, publicStoredConfiguration, redisConfiguration, slsConfiguration } from "../capabilities/http-config.ts";
+import { attachmentItem, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILES, type PendingAttachment, readAttachment } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
+import { installShutdownHandlers } from "./lifecycle.ts";
+import { replaceServiceConfiguration } from "./service-configuration.ts";
+import { createOrderedSseWriter } from "./sse.ts";
 import { sessionTranscript, type RunEvent } from "../agent/events.ts";
 import { openDatabase } from "../db/client.ts";
 import {
@@ -25,44 +29,9 @@ import { CAPABILITY_KEYS, configuredCapabilities } from "../domain/contracts.ts"
 import { isIssueKey, normalizeIssueKey } from "../domain/issue-key.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
 import { issueAttachmentRoot } from "../workspace/paths.ts";
-import { repositoryWorkspaceNames, Worktrees } from "../workspace/git.ts";
 import { pruneState } from "../workspace/state.ts";
 const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const REPOSITORY_KINDS = ["frontend", "backend"] as const;
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const MAX_ATTACHMENT_FILES = 20;
-const MAX_ATTACHMENT_REQUEST_BYTES = 40 * 1024 * 1024;
-
-type PendingAttachment = { fileName: string; mediaType: string; data: Buffer; sha256: string };
-
-async function readAttachment(part: MultipartFile, currentBytes: number): Promise<PendingAttachment> {
-  const chunks: Buffer[] = [];
-  let size = currentBytes;
-  for await (const chunk of part.file) {
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += data.length;
-    if (size > MAX_ATTACHMENT_REQUEST_BYTES) throw new ApiError(413, "attachment_limit_exceeded");
-    chunks.push(data);
-  }
-  if (part.file.truncated) throw new ApiError(413, "attachment_limit_exceeded");
-  const data = Buffer.concat(chunks);
-  const fileName = path.basename(part.filename);
-  if (!fileName) throw new ApiError(400, "invalid_attachment_name");
-  return { fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") };
-}
-
-function agentConfiguration(value: unknown): { provider: string; model: string; thinkingLevel: typeof THINKING_LEVELS[number] } {
-  if (value === undefined || value === null) throw new ApiError(400, "agent_configuration_required");
-  const input = record(value);
-  return {
-    provider: text(input.provider, "agent_provider", 200),
-    model: text(input.model, "agent_model", 500),
-    thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", THINKING_LEVELS),
-  };
-}
-
 function assertIssueTypeForEnvironment(issueType: IssueType, environmentKind: string): void {
   const allowed = ISSUE_TYPES_BY_ENVIRONMENT[environmentKind as EnvironmentKind];
   if (!allowed?.includes(issueType)) throw new ApiError(400, "invalid_issue_type_for_environment");
@@ -75,6 +44,15 @@ function date(value: Date | null | undefined): string | undefined {
 function datedKey(now = new Date()): string {
   const values = new Map(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now).map((part) => [part.type, part.value]));
   return `${values.get("year")}${values.get("month")}${values.get("day")}`;
+}
+
+function serviceKey(name: string, existing: Set<string>): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90).replace(/-+$/g, "");
+  const base = slug || `service-${randomUUID().slice(0, 8)}`;
+  if (!existing.has(base)) return base;
+  let suffix = 2;
+  while (existing.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
 }
 
 export interface AgentController {
@@ -92,6 +70,7 @@ export interface ApiOptions {
   stateRoot?: string;
   engine?: AgentController;
   logger?: boolean;
+  modelCatalog?: AgentModelCatalog;
 }
 
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
@@ -116,37 +95,13 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const environmentNames: Record<EnvironmentKind, string> = { prod: "正式", test: "测试", dev: "开发" };
   for (const kind of ENVIRONMENT_KINDS) {
     const definition = { key: kind, name: environmentNames[kind], kind };
-    const [existing] = await database.db.select().from(environments).where(and(
-      eq(environments.organizationId, "demo"), eq(environments.scope, "global"), eq(environments.key, definition.key),
-    )).limit(1);
+    const [existing] = await database.db.select().from(environments).where(eq(environments.key, definition.key)).limit(1);
     if (existing) await database.db.update(environments).set({ name: definition.name, kind: definition.kind, updatedAt: new Date() }).where(eq(environments.id, existing.id));
-    else await database.db.insert(environments).values({ organizationId: "demo", scope: "global", key: definition.key, name: definition.name, kind: definition.kind, config: {} });
-  }
-  const persistedRepositories = await database.db.select({
-    id: issueRepositories.id,
-    issueKey: issues.key,
-    url: issueRepositories.url,
-    localPath: issueRepositories.localPath,
-  }).from(issueRepositories).innerJoin(issues, eq(issues.id, issueRepositories.issueId));
-  const repositoriesByIssue = new Map<string, typeof persistedRepositories>();
-  for (const repository of persistedRepositories) {
-    const group = repositoriesByIssue.get(repository.issueKey) ?? [];
-    group.push(repository);
-    repositoriesByIssue.set(repository.issueKey, group);
-  }
-  const worktrees = new Worktrees(stateRoot);
-  for (const [issueKey, repositories] of repositoriesByIssue) {
-    const workspaceNames = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
-    for (const repository of repositories) {
-      if (!repository.localPath) continue;
-      const migratedPath = await worktrees.migrate(issueKey, repository.url, workspaceNames.get(repository.url)!, repository.localPath);
-      if (migratedPath !== path.resolve(repository.localPath)) {
-        await database.db.update(issueRepositories).set({ localPath: migratedPath, updatedAt: new Date() }).where(eq(issueRepositories.id, repository.id));
-      }
-    }
+    else await database.db.insert(environments).values(definition);
   }
   await pruneState(stateRoot, (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key));
-  const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test" });
+  const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test", forceCloseConnections: true });
+  const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog();
   await app.register(multipart, { limits: { fileSize: MAX_ATTACHMENT_BYTES, files: MAX_ATTACHMENT_FILES, parts: MAX_ATTACHMENT_FILES + 1, fieldSize: 100_000 } });
 
   const listeners = new Map<string, Set<(event: RunEvent) => void>>();
@@ -206,13 +161,13 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   };
 
   const environmentByKey = async (key: string) => ENVIRONMENT_KINDS.includes(key as EnvironmentKind)
-    ? (await database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), eq(environments.key, key))).limit(1))[0]
+    ? (await database.db.select().from(environments).where(eq(environments.key, key)).limit(1))[0]
     : undefined;
-  const serviceByKey = async (key: string) => (await database.db.select().from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global"), eq(services.key, key))).limit(1))[0];
+  const serviceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
   const serviceForEnvironment = async (key: string, environmentId: string) => (await database.db.select({ service: services, deployment: serviceDeployments })
     .from(services)
     .innerJoin(serviceDeployments, and(eq(serviceDeployments.serviceId, services.id), eq(serviceDeployments.environmentId, environmentId)))
-    .where(and(eq(services.organizationId, "demo"), eq(services.scope, "global"), eq(services.key, key)))
+    .where(eq(services.key, key))
     .limit(1))[0];
   const issueByKey = async (key: string) => isIssueKey(key) ? (await database.db.select().from(issues).where(eq(issues.key, normalizeIssueKey(key))).limit(1))[0] : undefined;
   const validateSubjects = async (values: Array<string | null>): Promise<void> => {
@@ -251,15 +206,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) return null;
     return path.posix.join("/home/coder/state/workspaces", ...relativePath.split(path.sep));
   };
-  const attachmentItem = (attachment: typeof issueAttachments.$inferSelect) => ({
-    id: attachment.id,
-    fileName: attachment.fileName,
-    mediaType: attachment.mediaType,
-    size: attachment.size,
-    sha256: attachment.sha256,
-    createdAt: date(attachment.createdAt),
-  });
-
   app.get("/health", async () => ({ ok: true }));
 
   app.get("/api/people", async () => (await database.db.select().from(subjects).orderBy(asc(subjects.displayName))).map((person) => ({
@@ -269,125 +215,42 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.get("/api/config", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     reply.header("Pragma", "no-cache");
-    const [environmentRows, serviceRows, deploymentRows, repositoryRows] = await Promise.all([
-      database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), eq(environments.scope, "global"), inArray(environments.key, ENVIRONMENT_KINDS))).orderBy(asc(environments.name)),
-      database.db.select().from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global"))).orderBy(asc(services.sortOrder), asc(services.name)),
-      database.db.select().from(serviceDeployments), database.db.select().from(serviceRepositories),
+    const [environmentRows, serviceRows, deploymentRows, repositoryRows, agentModels] = await Promise.all([
+      database.db.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
+      database.db.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
+      database.db.select().from(serviceDeployments), database.db.select().from(serviceRepositories), modelCatalog.list(),
     ]);
     return {
-      environments: environmentRows.map((item) => ({ id: item.id, key: item.key, name: item.name, kind: item.kind, scope: item.scope })),
+      agentModels,
+      environments: environmentRows.map((item) => ({ id: item.id, key: item.key, name: item.name, kind: item.kind })),
       capabilityCatalog: CAPABILITY_KEYS.map((key) => ({ key })),
       services: serviceRows.map((service) => {
         const deployments = deploymentRows.filter((item) => item.serviceId === service.id);
         return {
-          id: service.id, key: service.key, name: service.name, description: service.description, scope: service.scope,
+          id: service.id, key: service.key, name: service.name, description: service.description, createdAt: service.createdAt.toISOString(),
           environmentIds: deployments.map((item) => item.environmentId),
-          deployments: deployments.map((item) => ({ id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, capabilities: configuredCapabilities(record(item.config)), agent: record(item.config).agent ?? null, playwright: publicBrowserConfiguration(record(item.config)), nacos: publicCapabilityConfiguration(record(item.config), "nacos"), db: publicCapabilityConfiguration(record(item.config), "db"), redis: publicStoredConfiguration(record(item.config), "redis"), mq: publicStoredConfiguration(record(item.config), "mq"), es: publicStoredConfiguration(record(item.config), "es"), sls: publicCapabilityConfiguration(record(item.config), "sls") })),
+          deployments: deployments.map((item) => {
+            const config = record(item.config);
+            return { id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, ...structuredClone(config), capabilities: configuredCapabilities(config), agent: config.agent ?? null };
+          }),
           repositories: repositoryRows.filter((item) => item.serviceId === service.id).map((item) => ({ id: item.id, kind: item.kind, url: item.url })),
         };
       }),
     };
   });
 
-  async function replaceServiceConfiguration(serviceId: string, input: Record<string, unknown>, serviceUpdate?: { name: string; description: string }): Promise<void> {
-    const repositoriesInput = Array.isArray(input.repositories) ? input.repositories.map(record).map((repository) => ({
-      id: optionalText(repository.id, 255),
-      kind: choice(repository.kind, "repository_kind", REPOSITORY_KINDS),
-      url: text(repository.url, "repository_url"),
-    })) : [];
-    if (!repositoriesInput.length) throw new ApiError(400, "repository_required");
-    if (new Set(repositoriesInput.map((repository) => repository.url)).size !== repositoriesInput.length) throw new ApiError(400, "duplicate_repository");
-    const deploymentsInput = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => {
-      const selectedCapabilities = parseCapabilities(deployment.capabilities ?? []);
-      return {
-        environmentKey: text(deployment.environmentKey, "environment_key", 100),
-        baseBranch: text(deployment.baseBranch, "base_branch", 255),
-        capabilities: selectedCapabilities,
-        agent: agentConfiguration(deployment.agent),
-        nacos: nacosConfiguration(deployment.nacos, selectedCapabilities.includes("nacos")),
-        db: dbConfiguration(deployment.db, selectedCapabilities.includes("db")),
-        sls: slsConfiguration(deployment.sls, selectedCapabilities.includes("sls")),
-        playwright: browserConfiguration(deployment.playwright, selectedCapabilities.includes("playwright")),
-        redis: redisConfiguration(deployment.redis, selectedCapabilities.includes("redis")),
-        es: esConfiguration(deployment.es, selectedCapabilities.includes("es")),
-        mq: mqConfiguration(deployment.mq, selectedCapabilities.includes("mq")),
-      };
-    }) : [];
-    if (new Set(deploymentsInput.map((deployment) => deployment.environmentKey)).size !== deploymentsInput.length) throw new ApiError(400, "duplicate_deployment_environment");
-    const [existingRepositories, existingDeployments, environmentRows] = await Promise.all([
-      database.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
-      database.db.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId)),
-      database.db.select().from(environments).where(and(eq(environments.organizationId, "demo"), inArray(environments.key, ENVIRONMENT_KINDS))),
-    ]);
-    const environmentsByKey = new Map(environmentRows.map((environment) => [environment.key, environment]));
-    if (deploymentsInput.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new ApiError(400, "invalid_environment");
-    const existingById = new Map(existingRepositories.map((repository) => [repository.id, repository]));
-    const configuredIds = repositoriesInput.flatMap((repository) => repository.id ? [repository.id] : []);
-    if (new Set(configuredIds).size !== configuredIds.length || (serviceUpdate && configuredIds.some((id) => !existingById.has(id)))) throw new ApiError(400, "invalid_repository");
-    const retainedEnvironmentIds = new Set(deploymentsInput.map((deployment) => environmentsByKey.get(deployment.environmentKey)!.id));
-    for (const deployment of existingDeployments) {
-      if (!retainedEnvironmentIds.has(deployment.environmentId) && (await database.db.select({ id: issues.id }).from(issues).where(and(eq(issues.serviceId, serviceId), eq(issues.environmentId, deployment.environmentId))).limit(1))[0]) throw new ApiError(409, "deployment_is_used_by_issues");
-    }
-    await database.db.transaction(async (transaction) => {
-      if (serviceUpdate) await transaction.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
-      const retainedIds = new Set<string>();
-      for (const repository of repositoriesInput) {
-        if (repository.id && existingById.has(repository.id)) {
-          retainedIds.add(repository.id);
-          await transaction.update(serviceRepositories).set({ kind: repository.kind, url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId)));
-        } else {
-          const [created] = await transaction.insert(serviceRepositories).values({ serviceId, kind: repository.kind, url: repository.url }).returning();
-          retainedIds.add(created!.id);
-        }
-      }
-      for (const repository of existingRepositories) if (!retainedIds.has(repository.id)) await transaction.delete(serviceRepositories).where(eq(serviceRepositories.id, repository.id));
-
-      const existingByEnvironmentId = new Map(existingDeployments.map((deployment) => [deployment.environmentId, deployment]));
-      const retainedDeploymentIds = new Set<string>();
-      for (const deploymentInput of deploymentsInput) {
-        const environment = environmentsByKey.get(deploymentInput.environmentKey)!;
-        const existing = existingByEnvironmentId.get(environment.id);
-        const nacos = deploymentInput.nacos;
-        const db = deploymentInput.db;
-        const sls = deploymentInput.sls;
-        const playwright = deploymentInput.playwright ? {
-          baseUrl: deploymentInput.playwright.baseUrl,
-          username: deploymentInput.playwright.username,
-          ...(typeof deploymentInput.playwright.password === "string" ? { password: deploymentInput.playwright.password } : {}),
-        } : undefined;
-        const redis = deploymentInput.redis;
-        const es = deploymentInput.es;
-        const mq = deploymentInput.mq;
-        const config = { ...(deploymentInput.agent ? { agent: deploymentInput.agent } : {}), ...(playwright ? { playwright } : {}), ...(nacos ? { nacos } : {}), ...(db ? { db } : {}), ...(redis ? { redis } : {}), ...(mq ? { mq } : {}), ...(es ? { es } : {}), ...(sls ? { sls } : {}) };
-        const deployment = existing
-          ? (await transaction.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
-          : (await transaction.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config }).returning())[0]!;
-        retainedDeploymentIds.add(deployment.id);
-      }
-      for (const deployment of existingDeployments) if (!retainedDeploymentIds.has(deployment.id)) await transaction.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
-    });
-  }
-
   app.post("/api/services", async (request, reply) => {
     const input = record(request.body);
-    const maximum = await database.db.select({ maximumSortOrder: sql<number>`coalesce(max(${services.sortOrder}), -1)` }).from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global")));
-    const sortOrder = Number(maximum[0]?.maximumSortOrder ?? -1) + 1;
-    const [created] = await database.db.insert(services).values({ organizationId: "demo", scope: "global", key: text(input.key, "key", 100), name: text(input.name, "name", 200), description: optionalText(input.description) ?? "", sortOrder }).returning();
-    try { await replaceServiceConfiguration(created!.id, input); } catch (error) { await database.db.delete(services).where(eq(services.id, created!.id)); throw error; }
-    return reply.code(201).send(created);
-  });
-
-  app.put("/api/services/order", async (request) => {
-    const serviceKeys = strings(record(request.body).serviceKeys, "service_keys");
-    if (new Set(serviceKeys).size !== serviceKeys.length) throw new ApiError(400, "invalid_service_order");
-    const existing = await database.db.select({ id: services.id, key: services.key }).from(services).where(and(eq(services.organizationId, "demo"), eq(services.scope, "global")));
-    const existingKeys = new Set(existing.map((service) => service.key));
-    if (serviceKeys.length !== existing.length || serviceKeys.some((key) => !existingKeys.has(key))) throw new ApiError(400, "invalid_service_order");
-    const byKey = new Map(existing.map((service) => [service.key, service]));
-    await database.db.transaction(async (transaction) => {
-      for (const [sortOrder, key] of serviceKeys.entries()) await transaction.update(services).set({ sortOrder, updatedAt: new Date() }).where(eq(services.id, byKey.get(key)!.id));
+    const name = text(input.name, "name", 200);
+    const description = optionalText(input.description) ?? "";
+    const existingKeys = new Set((await database.db.select({ key: services.key }).from(services)).map(({ key }) => key));
+    const key = serviceKey(name, existingKeys);
+    const created = await database.db.transaction(async (transaction) => {
+      const [service] = await transaction.insert(services).values({ key, name, description }).returning();
+      await replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service!.id, input });
+      return service!;
     });
-    return { ok: true };
+    return reply.code(201).send(created);
   });
 
   app.patch<{ Params: { key: string } }>("/api/services/:key", async (request) => {
@@ -397,7 +260,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     if (affectedIssues.some((issue) => engine.isRunning(issue.id))) throw new ApiError(409, "service_has_running_issues");
     const input = record(request.body);
     const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
-    await replaceServiceConfiguration(service.id, input, serviceUpdate);
+    await database.db.transaction((transaction) => replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service.id, input, serviceUpdate }));
     if (affectedIssues.length) {
       await Promise.all(affectedIssues.map((issue) => engine.closeSession(issue.id)));
     }
@@ -539,7 +402,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       attachments: attachmentRows.map(attachmentItem),
       workspace: {
         status: workspace?.status ?? "not_created",
-        url: workspace?.codeServerUrl ? issueCodeServerUrl(issue.key) : null,
+        url: workspace?.codeServerReady ? issueCodeServerUrl(issue.key) : null,
         lastError: workspace?.lastError ?? null,
         retryable: !engine.isRunning(issue.id) && (
           ["not_created", "preparing", "running", "stopped", "failed"].includes(workspace?.status ?? "not_created")
@@ -699,19 +562,19 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const configuredAgent = deploymentConfig?.agent && typeof deploymentConfig.agent === "object" ? deploymentConfig.agent as Record<string, unknown> : {};
     const provider = typeof configuredAgent.provider === "string" && configuredAgent.provider ? configuredAgent.provider : "not-configured";
     const model = typeof configuredAgent.model === "string" && configuredAgent.model ? configuredAgent.model : "not-configured";
-    const thinkingLevel = typeof configuredAgent.thinkingLevel === "string" && THINKING_LEVELS.includes(configuredAgent.thinkingLevel as typeof THINKING_LEVELS[number])
+    const thinkingLevel = typeof configuredAgent.thinkingLevel === "string" && AGENT_THINKING_LEVELS.includes(configuredAgent.thinkingLevel as AgentThinkingLevel)
       ? configuredAgent.thinkingLevel : "not-configured";
+    const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
+    const transcript = binding && await readFile(binding.sessionFile).then(() => true, () => false)
+      ? sessionTranscript(SessionManager.open(binding.sessionFile), issue.id) : [];
     reply.hijack();
     reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
-    const send = (event: RunEvent) => reply.raw.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
-    const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    if (binding && await readFile(binding.sessionFile).then(() => true, () => false)) {
-      const manager = SessionManager.open(binding.sessionFile);
-      for (const event of sessionTranscript(manager, issue.id)) send(event);
-    }
-    reply.raw.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, running: engine.isRunning(issue.id) })}\n\n`);
+    const writer = createOrderedSseWriter(reply.raw);
+    const send = (event: RunEvent) => writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+    for (const event of transcript) send(event);
+    writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, running: engine.isRunning(issue.id) })}\n\n`);
     const set = listeners.get(issue.id) ?? new Set(); set.add(send); listeners.set(issue.id, set);
-    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000); heartbeat.unref();
+    const heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), 15_000); heartbeat.unref();
     request.raw.once("close", () => { clearInterval(heartbeat); set.delete(send); if (!set.size) listeners.delete(issue.id); });
   });
 
@@ -739,7 +602,14 @@ async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? "127.0.0.1";
   const app = await buildApi();
-  await app.listen({ port, host });
+  const removeShutdownHandlers = installShutdownHandlers(app);
+  try {
+    await app.listen({ port, host });
+  } catch (error) {
+    removeShutdownHandlers();
+    await app.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

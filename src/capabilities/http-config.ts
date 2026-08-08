@@ -24,14 +24,17 @@ function configuredUrl(value: unknown, name: string, protocols: string[], option
 }
 
 export function parseCapabilities(value: unknown): CapabilityName[] {
-  const values = new Set(strings(value, "capabilities"));
-  return CAPABILITY_KEYS.filter((key) => values.has(key));
+  const entries = strings(value, "capabilities");
+  if (new Set(entries).size !== entries.length || entries.some((entry) => !CAPABILITY_KEYS.includes(entry as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
+  return CAPABILITY_KEYS.filter((key) => entries.includes(key));
 }
 
 export function nacosConfiguration(value: unknown, required: boolean) {
   const input = selected(value, required);
   if (!input) return undefined;
   const password = optional(input.password);
+  const username = optional(input.username, 500);
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, "invalid_nacos_credentials");
   const dataIds = [...new Set(strings(input.dataIds, "nacos_data_ids").map((value) => text(value, "nacos_data_id", 255)))];
   if (!dataIds.length || dataIds.length > MAX_NACOS_DATA_IDS || dataIds.some((dataId) => !NACOS_TARGET.test(dataId))) throw new ApiError(400, "invalid_nacos_data_ids");
   const group = text(input.group, "nacos_group", 255);
@@ -41,7 +44,7 @@ export function nacosConfiguration(value: unknown, required: boolean) {
     namespace: optional(input.namespace, 255),
     group,
     dataIds,
-    username: optional(input.username, 500),
+    username,
     ...(password ? { password } : {}),
   };
 }
@@ -87,7 +90,9 @@ export function esConfiguration(value: unknown, required: boolean) {
   const input = selected(value, required);
   if (!input) return undefined;
   const password = optional(input.password);
-  return { url: configuredUrl(input.url, "es_url", ["http:", "https:"]), username: optional(input.username, 500), ...(password ? { password } : {}) };
+  const username = optional(input.username, 500);
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, "invalid_es_credentials");
+  return { url: configuredUrl(input.url, "es_url", ["http:", "https:"]), username, ...(password ? { password } : {}) };
 }
 
 export function mqConfiguration(value: unknown, required: boolean) {
@@ -106,26 +111,8 @@ export function mqConfiguration(value: unknown, required: boolean) {
 export function browserConfiguration(value: unknown, required: boolean) {
   const input = selected(value, required);
   if (!input) return undefined;
-  return { baseUrl: configuredUrl(input.baseUrl, "browser_base_url", ["http:", "https:"]), username: optional(input.username, 500), password: optional(input.password) };
-}
-
-export function publicCapabilityConfiguration(config: Record<string, unknown>, key: "nacos" | "db" | "sls") {
-  const value = config[key];
-  if (!value || typeof value !== "object") return null;
-  const item = value as Record<string, unknown>;
-  if (key === "nacos") return { serverUrl: item.serverUrl, namespace: item.namespace, group: item.group, dataIds: item.dataIds, username: item.username, password: item.password };
-  if (key === "db") return { url: item.url, username: item.username, password: item.password };
-  return { accessKeyId: item.accessKeyId, accessKeySecret: item.accessKeySecret, region: item.region, project: item.project, logstores: item.logstores };
-}
-
-export function publicStoredConfiguration(config: Record<string, unknown>, key: "redis" | "es" | "mq"): Record<string, unknown> | null {
-  const value = config[key];
-  return value && typeof value === "object" ? { ...(value as Record<string, unknown>) } : null;
-}
-
-export function publicBrowserConfiguration(config: Record<string, unknown>) {
-  const value = config.playwright;
-  if (!value || typeof value !== "object") return null;
-  const browser = value as Record<string, unknown>;
-  return { baseUrl: browser.baseUrl, username: browser.username, password: browser.password };
+  const username = optional(input.username, 500);
+  const password = optional(input.password);
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, "invalid_browser_credentials");
+  return { baseUrl: configuredUrl(input.baseUrl, "browser_base_url", ["http:", "https:"]), username, ...(password ? { password } : {}) };
 }

@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 
-import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { ENVIRONMENT_KINDS, ISSUE_STATUSES, ISSUE_TYPES } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, ISSUE_STATUSES, ISSUE_TYPES, type DeploymentConfig } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -18,28 +17,17 @@ export const subjects = sqliteTable("subjects", {
 });
 
 export const environments = sqliteTable("environments", {
-  id: id(), organizationId: text("organization_id").notNull(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }),
-  scope: text("scope", { enum: ["global", "personal"] }).notNull(), key: text("key").notNull(), name: text("name").notNull(),
-  kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
-}, (table) => [
-  index("environments_org_scope_idx").on(table.organizationId, table.scope),
-  uniqueIndex("environments_owner_key_unique").on(table.organizationId, table.scope, table.ownerSubject, table.key),
-  uniqueIndex("environments_global_key_unique").on(table.organizationId, table.scope, table.key).where(sql`${table.ownerSubject} is null`),
-]);
+  id: id(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }), key: text("key").notNull(), name: text("name").notNull(), kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), ...timestamps,
+}, (table) => [uniqueIndex("environments_key_unique").on(table.key)]);
 
 export const services = sqliteTable("services", {
-  id: id(), organizationId: text("organization_id").notNull(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }),
-  scope: text("scope", { enum: ["global", "personal"] }).notNull(), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), sortOrder: integer("sort_order").notNull().default(0), ...timestamps,
-}, (table) => [
-  index("services_org_scope_idx").on(table.organizationId, table.scope),
-  uniqueIndex("services_owner_key_unique").on(table.organizationId, table.scope, table.ownerSubject, table.key),
-  uniqueIndex("services_global_key_unique").on(table.organizationId, table.scope, table.key).where(sql`${table.ownerSubject} is null`),
-]);
+  id: id(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), ...timestamps,
+}, (table) => [uniqueIndex("services_key_unique").on(table.key)]);
 
 export const serviceDeployments = sqliteTable("service_deployments", {
   id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
   environmentId: text("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
-  baseBranch: text("base_branch").notNull(), config: json<Record<string, unknown>>("config").notNull().default({}), ...timestamps,
+  baseBranch: text("base_branch").notNull(), config: json<DeploymentConfig>("config").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("service_deployment_unique").on(table.serviceId, table.environmentId)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {
@@ -81,7 +69,7 @@ export const agentSessions = sqliteTable("issue_pilot_sessions", {
 
 export const issueWorkspaces = sqliteTable("issue_workspaces", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: ["not_created", "preparing", "running", "ready", "stopped", "failed"] }).notNull().default("not_created"),
-  codeServerUrl: text("code_server_url"), ownerSubject: text("owner_subject").references(() => subjects.subject), lastError: text("last_error"), ...timestamps,
+  codeServerReady: integer("code_server_ready", { mode: "boolean" }).notNull().default(false), ownerSubject: text("owner_subject").references(() => subjects.subject), lastError: text("last_error"), ...timestamps,
 });
 
 export const issueHistory = sqliteTable("issue_history", {

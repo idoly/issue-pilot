@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, ISSUE_TYPES_BY_ENVIRONMENT, type AgentThinkingLevel, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { CAPABILITY_KEYS, configuredCapabilities, type CapabilityName } from "../domain/contracts.ts";
 import { normalizeIssueKey } from "../domain/issue-key.ts";
 
@@ -28,7 +28,7 @@ export interface ServiceGrant {
 export interface ModelGrant {
   provider: string;
   modelId: string;
-  thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinkingLevel: AgentThinkingLevel;
 }
 
 export interface IssuePolicy {
@@ -109,7 +109,7 @@ export function createDeploymentPolicy(input: {
   const agent = object("agent");
   const provider = agent && isString(agent.provider) ? agent.provider : undefined;
   const modelId = agent && isString(agent.model) ? agent.model : undefined;
-  const levels = new Set<ModelGrant["thinkingLevel"]>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const levels = new Set<ModelGrant["thinkingLevel"]>(AGENT_THINKING_LEVELS);
   const thinkingLevel = agent && levels.has(agent.thinkingLevel as ModelGrant["thinkingLevel"]) ? agent.thinkingLevel as ModelGrant["thinkingLevel"] : undefined;
   if (!provider || !modelId || !thinkingLevel) throw new Error("issue_pilot_model_not_configured");
 

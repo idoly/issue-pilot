@@ -364,11 +364,6 @@ button, input { font: inherit; }
 .environment-entry { display: flex; min-width: 0; align-items: center; border-bottom: 1px solid #e4e8e6; }
 .environment-entry:last-child { border-bottom: 0; }
 .environment-entry.selected { background: #e3eeea; box-shadow: inset 3px 0 #176b5b; }
-.sortable-service-entry { display: grid; grid-template-columns: 34px minmax(0, 1fr); }
-.service-drag-handle, .service-drag-placeholder { display: grid; width: 30px; height: 32px; align-self: center; place-items: center; padding: 0; border: 0; border-radius: 3px; background: transparent; color: #87918d; }
-.service-drag-handle { cursor: grab; touch-action: none; }
-.service-drag-handle:hover, .service-drag-handle:focus-visible { background: #dce6e2; color: #3f514a; outline: none; }
-.service-drag-handle:active { cursor: grabbing; }
 .environment-item { display: flex; min-width: 0; flex: 1; align-items: center; padding: 10px 14px 10px 8px; border: 0; background: transparent; color: #26302c; text-align: left; cursor: pointer; }
 .environment-item > span { display: grid; min-width: 0; gap: 2px; }
 .environment-item strong, .environment-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -405,13 +400,14 @@ button, input { font: inherit; }
 .service-form { display: grid; gap: 18px; }
 .service-form-field { display: grid; gap: 6px; color: #56615c; font-size: 12px; }
 .service-form-section { display: grid; gap: 10px; padding-top: 2px; }
-.service-form-section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 8px; border-bottom: 1px solid #e5e9e7; }
+.service-form-section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 4px; }
 .service-form-section-header > div { display: grid; min-width: 0; gap: 2px; }
 .service-form-section-header strong { color: #303936; font-size: 13px; }
 .service-form-section-header span { color: #7a8580; font-size: 11px; }
 .service-repository-editor, .service-deployment-editor { display: grid; gap: 8px; }
 .service-repository-row { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
-.service-deployment-row { display: grid; grid-template-columns: 140px 120px 56px minmax(273px, 1fr) 30px; grid-template-areas: "environment branch model capabilities delete"; align-items: end; gap: 10px 6px; padding: 12px 2px; border-block: 1px solid #e2e7e4; background: #fff; }
+.service-deployment-row { display: grid; grid-template-columns: 125px 108px 72px minmax(280px, 1fr) 30px; grid-template-areas: "environment branch model capabilities delete"; align-items: end; gap: 10px 6px; padding: 12px 2px; background: #fff; }
+.service-deployment-row + .service-deployment-row { border-top: 1px solid #e2e7e4; }
 .service-deployment-row > label, .deployment-model, .deployment-capabilities { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .deployment-environment { grid-area: environment; }
 .deployment-branch { grid-area: branch; }
@@ -419,11 +415,11 @@ button, input { font: inherit; }
 .service-deployment-row .ads-select { width: 100%; }
 .deployment-model { grid-area: model; align-self: stretch; justify-items: start; }
 .deployment-model > span { color: #68736e; }
-.deployment-model .deployment-capability-option { width: 56px; }
+.deployment-model .deployment-capability-option { width: 56px; cursor: default; opacity: 1; }
 .deployment-capabilities { grid-area: capabilities; align-self: stretch; }
 .deployment-capabilities > span { color: #68736e; }
 .deployment-capability-options { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; gap: 5px; }
-.deployment-capability-option { min-width: 0; height: 30px; padding: 0 8px; overflow: hidden; border: 1px solid #d7dfdb; border-radius: 4px; background: #fff; color: #5c6862; font: 10px/28px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.deployment-capability-option { min-width: 0; height: 30px; flex: 0 0 auto; padding: 0 8px; overflow: hidden; border: 1px solid #d7dfdb; border-radius: 4px; background: #fff; color: #5c6862; font: 10px/28px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .deployment-capability-option:hover { border-color: #86aa9d; color: #176b5b; }
 .deployment-capability-option.selected { border-color: #176b5b; background: #eaf4f0; color: #176b5b; font-weight: 700; }
 .deployment-capabilities .deployment-capability-option { padding-inline: 6px; }
