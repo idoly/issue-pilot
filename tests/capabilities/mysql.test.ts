@@ -74,12 +74,14 @@ test("streams MySQL reads inside a server-enforced read-only transaction", async
   assert.doesNotMatch(JSON.stringify(result), /db-secret|mysql\.example\.test|readonly/);
   assert.equal(fixture.ended(), true);
   await assert.rejects(queryMysql({ connectionUrl: "mariadb://readonly:secret@mysql.example.test/orders", statement: "SELECT 1" }, undefined, factory), /unsupported_mysql_connection_protocol/);
+  await assert.rejects(queryMysql({ connectionUrl: "mysql://readonly:secret@mysql.example.test/orders", statement: "SELECT 1" }, undefined, factory), /invalid_mysql_connection_url/);
+  await assert.rejects(queryMysql({ connectionUrl: "mysql://readonly:secret@mysql.example.test:3306/orders/archive", statement: "SELECT 1" }, undefined, factory), /invalid_mysql_connection_url/);
 });
 
 test("stops streaming MySQL results at the configured row boundary", async () => {
   const fixture = connectionFixture(Array.from({ length: 600 }, (_, id) => ({ id }) as RowDataPacket), [{ name: "id" }]);
   await assert.rejects(queryMysql(
-    { connectionUrl: "mysql://readonly:secret@mysql.example.test/orders", statement: "SELECT id FROM orders" },
+    { connectionUrl: "mysql://readonly:secret@mysql.example.test:3306/orders", statement: "SELECT id FROM orders" },
     undefined,
     () => fixture.connection,
   ), /capability_result_too_large/);
@@ -91,7 +93,7 @@ test("destroys an active MySQL connection when the operation is aborted", async 
   const controller = new AbortController();
   const fixture = connectionFixture([], [], new Promise<void>(() => {}));
   const query = queryMysql(
-    { connectionUrl: "mysql://readonly:secret@mysql.example.test/orders", statement: "SELECT 1" },
+    { connectionUrl: "mysql://readonly:secret@mysql.example.test:3306/orders", statement: "SELECT 1" },
     controller.signal,
     () => fixture.connection,
   );

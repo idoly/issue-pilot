@@ -26,7 +26,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const [service] = await db.insert(services).values({ key: "orders", name: "Orders", description: "" }).returning();
     await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:orders.git" });
     const deployments = await db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: environment!.id, baseBranch: "develop", config: { db: { url: "mysql://db.example.test/orders", username: "reader", password: "secret" } } },
+      { serviceId: service!.id, environmentId: environment!.id, baseBranch: "develop", config: { db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" } } },
       { serviceId: service!.id, environmentId: prod!.id, baseBranch: "release", config: { es: { url: "http://es.example.test", username: "" } } },
     ]).returning();
     assert.deepEqual(deployments.map(({ config }) => configuredCapabilities(config)), [["db"], ["es"]]);
@@ -48,6 +48,10 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.equal(obsoleteTables.rows.length, 0);
     const issueColumns = await client.execute("pragma table_info('issues')");
     assert.equal(issueColumns.rows.some((column) => column.name === "labels"), false);
+    for (const table of ["environments", "services", "issue_workspaces"]) {
+      const columns = await client.execute(`pragma table_info('${table}')`);
+      assert.equal(columns.rows.some((column) => column.name === "owner_subject"), false);
+    }
     const attachmentColumns = await client.execute("pragma table_info('issue_attachments')");
     assert.equal(attachmentColumns.rows.some((column) => column.name === "scan_status"), false);
     assert.equal((await stat(file)).mode & 0o777, 0o600);

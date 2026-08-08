@@ -29,7 +29,7 @@ test("validates capability input at the broker execution boundary", async () => 
   const config = {
     playwright: { baseUrl: "https://app.example.test", username: "", password: "" },
     nacos: { serverUrl: "https://nacos.example.test", username: "" },
-    db: { url: "mysql://db.example.test/app", username: "reader", password: "secret" },
+    db: { url: "mysql://db.example.test:3306/app", username: "reader", password: "secret" },
     redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
     mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", password: "secret", virtualHost: "/" },
     es: { url: "http://es.example.test", username: "" },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createDeploymentPolicy, createIssuePolicy as createPolicy } from "../../src/pi/policy.ts";
+import { createDeploymentPolicy, createIssuePolicy as createPolicy, piToolAllowlist } from "../../src/pi/policy.ts";
 
 const model = { provider: "test", modelId: "test-model", thinkingLevel: "medium" as const };
 const createIssuePolicy = (input: Omit<Parameters<typeof createPolicy>[0], "model">) => createPolicy({ ...input, model });
@@ -42,7 +42,7 @@ test("derives credential-free capability scopes from deployment configuration", 
     deploymentConfig: {
       agent: { provider: "provider", model: "model", thinkingLevel: "high" },
       nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders-test.yaml"], username: "reader", password: "nacos-secret" },
-      db: { url: "mysql://db.example.test/app", username: "reader", password: "db-secret" },
+      db: { url: "mysql://db.example.test:3306/app", username: "reader", password: "db-secret" },
     },
     serviceKey: "orders",
     environmentKey: "test",
@@ -76,6 +76,14 @@ test("turns repositories read-only outside writable dev issue types", () => {
   const prod = createIssuePolicy({ issueKey: "ISSUE-20260804-004", issueType: "defect_fix", workspaceRoot: "/tmp/prod", service: service("prod") });
   assert.equal(question.service.repositories.every((repository) => repository.codeAccess === "read"), true);
   assert.equal(prod.service.repositories.every((repository) => repository.codeAccess === "read"), true);
+});
+
+test("keeps zero-repository policies read-only", () => {
+  const policy = createIssuePolicy({
+    issueKey: "ISSUE-20260808-099", issueType: "defect_fix", workspaceRoot: "/tmp/issue-pilot-empty-repositories",
+    service: { serviceKey: "empty", environmentKey: "dev", environmentKind: "dev", capabilities: [], repositories: [] },
+  });
+  assert.deepEqual(piToolAllowlist(policy), ["read", "grep", "find", "ls"]);
 });
 
 test("freezes and validates external capability scopes", () => {

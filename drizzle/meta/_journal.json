@@ -204,6 +204,13 @@
       "when": 1786094400000,
       "tag": "0028_remove_unused_scope_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1786211840308,
+      "tag": "0029_remove_unused_owner_fields",
+      "breakpoints": true
     }
   ]
 }

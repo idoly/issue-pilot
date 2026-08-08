@@ -259,13 +259,13 @@ export class AgentEngine implements AgentController {
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
     this.sessions.set(issue.id, managed);
-    if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
     await this.db.insert(agentSessions).values({ issueId: issue.id, piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
       target: agentSessions.issueId,
       set: { piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
+    if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 

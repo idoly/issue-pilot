@@ -48,6 +48,12 @@ test("configuration and issue API preserves relational integrity", async () => {
   try {
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
     assert.equal((await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", payload: {} })).statusCode, 404);
+    const currentUser = await app.inject({ method: "GET", url: "/api/me" });
+    assert.equal(currentUser.statusCode, 200);
+    const currentSubject = (await json(currentUser)).subject;
+    assert.equal(typeof currentSubject, "string");
+    const people = JSON.parse((await app.inject({ method: "GET", url: "/api/people" })).body) as Array<{ subject: string }>;
+    assert.ok(people.some((person) => person.subject === currentSubject));
 
     const configurationResponse = await app.inject({ method: "GET", url: "/api/config" });
     assert.equal(configurationResponse.statusCode, 200);

@@ -1,12 +1,13 @@
 import { type Accessor, type ParentProps, createContext, createSignal, useContext } from "solid-js";
 
-import { loadConfig, loadPeople, type Config, type Person } from "../data/client";
+import { loadConfig, loadCurrentUser, loadPeople, type Config, type Person } from "../data/client";
 
 const emptyConfiguration = (): Config => ({ agentModels: [], environments: [], capabilityCatalog: [], services: [] });
 
 interface ApplicationResources {
   configuration: Accessor<Config>;
   people: Accessor<Person[]>;
+  currentUser: Accessor<Person | null>;
   configurationError: Accessor<string>;
   peopleError: Accessor<string>;
   refreshConfiguration: () => Promise<Config>;
@@ -22,6 +23,7 @@ function message(error: unknown): string {
 export function ApplicationResourcesProvider(props: ParentProps) {
   const [configuration, setConfiguration] = createSignal<Config>(emptyConfiguration(), { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
+  const [currentUser, setCurrentUser] = createSignal<Person | null>(null, { ownedWrite: true });
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
   const [peopleError, setPeopleError] = createSignal("", { ownedWrite: true });
 
@@ -38,8 +40,9 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   };
   const refreshPeople = async () => {
     try {
-      const value = await loadPeople();
+      const [value, user] = await Promise.all([loadPeople(), loadCurrentUser()]);
       setPeople(value);
+      setCurrentUser(user);
       setPeopleError("");
       return value;
     } catch (error) {
@@ -52,7 +55,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   void refreshPeople().catch(() => undefined);
 
   return (
-    <ResourcesContext value={{ configuration, people, configurationError, peopleError, refreshConfiguration, refreshPeople }}>
+    <ResourcesContext value={{ configuration, people, currentUser, configurationError, peopleError, refreshConfiguration, refreshPeople }}>
       {props.children}
     </ResourcesContext>
   );

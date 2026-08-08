@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { AgentEventBus, sessionTranscript, type RunEvent } from "../../src/agent/events.ts";
+import { AgentEventBus, sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../../src/agent/events.ts";
 import { sessionFooterStats } from "../../src/agent/footer.ts";
 
 const usage = {
@@ -36,6 +36,22 @@ test("uses a listener snapshot for each event publication", () => {
   unsubscribeSecond = bus.subscribe("issue-1", () => received.push("second"));
   bus.publish({ id: "event", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
   assert.deepEqual(received, ["first", "second"]);
+});
+
+test("buffers live events until session replay is ready", () => {
+  const bus = new AgentEventBus();
+  const received: string[] = [];
+  const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
+  const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
+  bus.publish(event("during-replay-1"));
+  bus.publish(event("during-replay-2"));
+  assert.equal(received.length, 0);
+  subscription.activate(({ id }) => received.push(id));
+  bus.publish(event("live"));
+  subscription.unsubscribe();
+  bus.publish(event("after-close"));
+  assert.deepEqual(received, ["during-replay-1", "during-replay-2", "live"]);
+  assert.throws(() => subscription.activate(() => undefined), /agent_event_subscription_already_active/);
 });
 
 test("replays the visible transcript from the active Pi session branch", () => {

@@ -206,10 +206,6 @@ export function assistantNotice(entry: Extract<ConversationEntry, { kind: "assis
   return "";
 }
 
-export function toolStatus(_entry: Extract<ConversationEntry, { kind: "tool" }>): string {
-  return "";
-}
-
 export function toolLabelParts(label: string): { action: string; target: string; range: string } {
   if (label.startsWith("$ ")) return { action: "$", target: label.slice(2), range: "" };
   const separator = label.indexOf(" ");

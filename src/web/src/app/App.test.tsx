@@ -38,6 +38,7 @@ vi.mock("../data/client", async (importOriginal) => {
   return {
     ...actual,
     loadPeople: vi.fn(async () => [{ subject: "fixture-user", name: "严欣", email: "owner@example.test" }]),
+    loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: async () => structuredClone(issues),
     getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
@@ -128,7 +129,9 @@ describe("issue pilot workspace", () => {
     expect(within(reopenedIssueDialog).getByText("1")).toBeTruthy();
     fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
+    fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
     fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
+    await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
     fireEvent.click(retryButton);
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试处理" })).toBeNull());
@@ -199,5 +202,6 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
     expect(client.loadPeople).toHaveBeenCalledTimes(1);
+    expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
   });
 });

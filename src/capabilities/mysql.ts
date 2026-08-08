@@ -45,7 +45,7 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
   const connectionUrl = new URL(input.connectionUrl);
   if (connectionUrl.protocol !== "mysql:") throw new Error("unsupported_mysql_connection_protocol");
   const database = decodeURIComponent(connectionUrl.pathname.replace(/^\//, ""));
-  if (!connectionUrl.hostname || !connectionUrl.username || !database) throw new Error("invalid_mysql_connection_url");
+  if (!connectionUrl.hostname || !connectionUrl.port || !connectionUrl.username || !/^\/[^/]+$/.test(connectionUrl.pathname) || !database || database.includes("/")) throw new Error("invalid_mysql_connection_url");
   const password = decodeURIComponent(connectionUrl.password);
   if (/[\r\n]/.test(password)) throw new Error("invalid_mysql_password");
 

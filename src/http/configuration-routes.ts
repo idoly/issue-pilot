@@ -5,7 +5,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 import { configuredCapabilities, CAPABILITY_KEYS, ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { environments, issues, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
-import type { ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, type ApiRouteContext } from "./route-context.ts";
 import { replaceServiceConfiguration } from "./service-configuration.ts";
 
 function serviceKey(name: string, existing: Set<string>): string {
@@ -20,10 +20,21 @@ function serviceKey(name: string, existing: Set<string>): string {
 export function registerConfigurationRoutes(context: ApiRouteContext): void {
   const { app, database, engine, modelCatalog } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
-
-  app.get("/api/people", async () => (await database.db.select().from(subjects).orderBy(asc(subjects.displayName))).map((person) => ({
+  const serializePerson = (person: typeof subjects.$inferSelect) => ({
     subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "",
-  })));
+  });
+
+  app.get("/api/me", async () => {
+    const subject = await ensureCurrentSubject(database);
+    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+    if (!person) throw new Error("current_subject_not_found");
+    return serializePerson(person);
+  });
+
+  app.get("/api/people", async () => {
+    await ensureCurrentSubject(database);
+    return (await database.db.select().from(subjects).orderBy(asc(subjects.displayName))).map(serializePerson);
+  });
 
   app.get("/api/config", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");

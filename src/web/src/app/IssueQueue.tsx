@@ -13,7 +13,7 @@ export function IssueQueue(props: {
   refreshToken: number;
   onSelect: (id: string) => void;
 }) {
-  const { configuration, people, configurationError } = useApplicationResources();
+  const { configuration, people, configurationError, peopleError } = useApplicationResources();
   const [issues, setIssues] = createSignal<Awaited<ReturnType<typeof listIssues>>>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
@@ -54,14 +54,18 @@ export function IssueQueue(props: {
   const [environment, setEnvironment] = createSignal("", { ownedWrite: true });
   const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
   const [issueType, setIssueType] = createSignal<IssueType>("smart_analysis", { ownedWrite: true });
-  const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(props.userSubject || null, { ownedWrite: true });
+  const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(null, { ownedWrite: true });
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
+  createEffect(
+    () => ({ assignee: assigneeSubject(), createOpen: createOpen(), subject: props.userSubject }),
+    ({ assignee, createOpen, subject }) => { if (subject && !createOpen && assignee === null) setAssigneeSubject(subject); },
+  );
   const [ccOpen, setCcOpen] = createSignal(false);
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
-  createEffect(configuration, (value) => {
-    const selectedEnvironment = value.environments.some((item) => item.key === environment()) ? environment() : value.environments[0]?.key ?? "";
+  createEffect(() => ({ currentEnvironment: environment(), value: configuration() }), ({ currentEnvironment, value }) => {
+    const selectedEnvironment = value.environments.some((item) => item.key === currentEnvironment) ? currentEnvironment : value.environments[0]?.key ?? "";
     setEnvironment(selectedEnvironment);
     const allowedTypes = issueTypesForEnvironment(selectedEnvironment);
     setIssueType((current) => allowedTypes.includes(current) ? current : allowedTypes[0] ?? "smart_analysis");
@@ -163,7 +167,7 @@ export function IssueQueue(props: {
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={description} inputLabel="工单描述" expandLabel="放大工单描述" onChange={(value) => setDescription(value)} />
           <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />
-          <Show when={createError()}><div class="create-error" role="alert">{createError()}</div></Show>
+          <Show when={createError() || peopleError()}><div class="create-error" role="alert">{createError() || peopleError()}</div></Show>
         </div>
       </Modal>
     </aside>

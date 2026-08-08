@@ -38,7 +38,7 @@ export interface IssuePolicy {
 }
 
 export function piToolAllowlist(policy: IssuePolicy): string[] {
-  const localTools = policy.service.repositories.every((repository) => repository.codeAccess === "write")
+  const localTools = policy.service.repositories.length > 0 && policy.service.repositories.every((repository) => repository.codeAccess === "write")
     ? ["read", "bash", "edit", "write", "grep", "find", "ls"]
     : ["read", "grep", "find", "ls"];
   return [...localTools, ...policy.service.capabilities];

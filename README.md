@@ -92,6 +92,6 @@ tests/              后端测试
 
 ## 安全提示
 
-当前 API 没有内置身份认证。`GET /api/config` 会返回实际保存的 `password` 和 `accessKeySecret`，用于页面编辑后完整回写配置。默认 `HOST=127.0.0.1` 只能本机访问；外部暴露前必须部署身份认证、TLS 和访问控制代理。
+当前 API 没有内置身份认证。`GET /api/config` 会返回实际保存的 `password` 和 `accessKeySecret`，用于页面编辑后完整回写配置。API 固定监听 `127.0.0.1`；外部访问只能通过部署了身份认证、TLS 和访问控制的本机代理转发。
 
 页面表单不是安全边界。HTTP 保存校验、冻结 Agent policy、capability tool schema 和具体客户端都会再次验证授权范围和输入。

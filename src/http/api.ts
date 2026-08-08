@@ -73,11 +73,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
 async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? 3000);
-  const host = process.env.HOST ?? "127.0.0.1";
   const app = await buildApi();
   const removeShutdownHandlers = installShutdownHandlers(app);
   try {
-    await app.listen({ port, host });
+    await app.listen({ port, host: "127.0.0.1" });
   } catch (error) {
     removeShutdownHandlers();
     await app.close().catch(() => undefined);

@@ -17,11 +17,11 @@ export const subjects = sqliteTable("subjects", {
 });
 
 export const environments = sqliteTable("environments", {
-  id: id(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }), key: text("key").notNull(), name: text("name").notNull(), kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), ...timestamps,
+  id: id(), key: text("key").notNull(), name: text("name").notNull(), kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), ...timestamps,
 }, (table) => [uniqueIndex("environments_key_unique").on(table.key)]);
 
 export const services = sqliteTable("services", {
-  id: id(), ownerSubject: text("owner_subject").references(() => subjects.subject, { onDelete: "cascade" }), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), ...timestamps,
+  id: id(), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), ...timestamps,
 }, (table) => [uniqueIndex("services_key_unique").on(table.key)]);
 
 export const serviceDeployments = sqliteTable("service_deployments", {
@@ -69,7 +69,7 @@ export const agentSessions = sqliteTable("issue_pilot_sessions", {
 
 export const issueWorkspaces = sqliteTable("issue_workspaces", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: ["not_created", "preparing", "running", "ready", "stopped", "failed"] }).notNull().default("not_created"),
-  codeServerReady: integer("code_server_ready", { mode: "boolean" }).notNull().default(false), ownerSubject: text("owner_subject").references(() => subjects.subject), lastError: text("last_error"), ...timestamps,
+  codeServerReady: integer("code_server_ready", { mode: "boolean" }).notNull().default(false), lastError: text("last_error"), ...timestamps,
 });
 
 export const issueHistory = sqliteTable("issue_history", {

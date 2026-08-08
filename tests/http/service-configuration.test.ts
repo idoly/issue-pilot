@@ -15,6 +15,9 @@ test("validates capability connection settings when saving page configuration", 
     url: databaseUrl, username: "reader", password: "secret",
   });
   assert.throws(() => parseDatabaseConfiguration({ url: `${databaseUrl}?useSSL=false`, username: "reader", password: "secret" }, true), /invalid_db_url/);
+  assert.throws(() => parseDatabaseConfiguration({ url: "mysql://db.example.test/orders", username: "reader", password: "secret" }, true), /invalid_db_url/);
+  assert.throws(() => parseDatabaseConfiguration({ url: "mysql://db.example.test:3306/orders/archive", username: "reader", password: "secret" }, true), /invalid_db_url/);
+  assert.throws(() => parseDatabaseConfiguration({ url: "mysql://db.example.test:3306/orders%2Farchive", username: "reader", password: "secret" }, true), /invalid_db_url/);
   assert.throws(() => parseDatabaseConfiguration({ url: "jdbc:mysql://db.example.test/orders", username: "reader", password: "secret" }, true), /invalid_db_url/);
   assert.throws(() => parseDatabaseConfiguration({ url: "mariadb://db.example.test/orders", username: "reader", password: "secret" }, true), /invalid_db_url/);
   assert.throws(() => parseDatabaseConfiguration({ url: "mysql://hidden:secret@db.example.test/orders", username: "reader", password: "secret" }, true), /invalid_db_url/);

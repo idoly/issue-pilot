@@ -164,7 +164,6 @@ button, input, textarea { font: inherit; }
 .repository-row:last-child { border-bottom: 0; }
 .repo-name { overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .repository-row code { overflow: hidden; color: #5f6965; font-family: var(--mono-font); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.repository-branch-pending { color: #89928e; font-size: 11px; }
 .muted, .empty-band { padding: 16px; color: #84908b; font-size: 13px; }
 .issue-attachment-list { border: 1px solid #e1e5e3; border-radius: 6px; }
 .issue-attachment-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 30px; align-items: center; gap: 9px; padding: 4px 8px 4px 12px; border-bottom: 1px solid #e7eae8; }
@@ -271,7 +270,6 @@ button, input, textarea { font: inherit; }
 .agent-tool-head code span { min-width: 0; color: var(--pi-accent); overflow-wrap: anywhere; white-space: pre-wrap; }
 .agent-tool-head code em { flex: none; color: var(--pi-warning); font-style: normal; }
 .agent-bash-command { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
-.agent-tool-head > span { flex: none; color: var(--pi-muted); font: var(--pi-font-size)/1.5 var(--pi-code-font); }
 .agent-tool-diff { max-height: 420px; margin: 8px 0 0; overflow: auto; padding: 0; color: var(--pi-tool-diff-context); font: var(--pi-font-size)/1.5 var(--pi-code-font); white-space: pre; }
 .agent-tool-diff span { display: block; }
 .agent-tool-diff .added { color: var(--pi-tool-diff-added); }

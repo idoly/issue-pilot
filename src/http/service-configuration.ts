@@ -59,7 +59,10 @@ export function parseDatabaseConfiguration(value: unknown, required: boolean) {
   const input = configurationInput(value, required);
   if (!input) return undefined;
   const url = parseConnectionUrl(input.url, "db_url", ["mysql:"]);
-  if (new URL(url).pathname === "/") throw new ApiError(400, "invalid_db_url");
+  const parsed = new URL(url);
+  let database = "";
+  try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { throw new ApiError(400, "invalid_db_url"); }
+  if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) throw new ApiError(400, "invalid_db_url");
   return { url, username: text(input.username, "db_username", 500), password: text(input.password, "db_password") };
 }
 

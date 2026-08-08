@@ -106,6 +106,7 @@ const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponen
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
 
 export const loadPeople = () => request<Person[]>("/api/people");
+export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadConfig = () => request<Config>("/api/config");
 export const listIssues = () => request<IssueListItem[]>("/api/issues");
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));

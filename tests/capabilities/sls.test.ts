@@ -17,12 +17,13 @@ test("returns complete SLS records through the secured local Aliyun CLI", async 
     await writeFile(cli, "fixture", { mode: 0o755 });
     process.env.ISSUE_PILOT_ALIYUN_CLI = cli;
     const calls: Array<{ command: string; args: string[]; profile: Record<string, any> }> = [];
-    let responseRecords: unknown = [{ __time__: 1_700_000_000, message: "ready", password: "log-secret" }];
+    let responseRecords: unknown | ((args: string[]) => unknown) = [{ __time__: 1_700_000_000, message: "ready", password: "log-secret" }];
     const pi = {
       async exec(command: string, args: string[]) {
         const profile = JSON.parse(await readFile(join(args[0]!, ".aliyun", "config.json"), "utf8"));
         calls.push({ command, args, profile });
-        return { code: 0, stdout: JSON.stringify(responseRecords), stderr: "", killed: false };
+        const response = typeof responseRecords === "function" ? responseRecords(args) : responseRecords;
+        return { code: 0, stdout: JSON.stringify(response), stderr: "", killed: false };
       },
     } as unknown as ExtensionAPI;
     const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
@@ -59,6 +60,22 @@ test("returns complete SLS records through the secured local Aliyun CLI", async 
     assert.equal(unboundedBody.records[0].authorization, "Bearer secret-token");
     assert.equal("truncated" in unboundedBody.query, false);
     assert.match(unbounded.content[0]!.text, /secret-token/);
+
+    responseRecords = (args: string[]) => {
+      const offset = Number(args[args.indexOf("--offset") + 1]);
+      return offset === 0 ? Array.from({ length: 100 }, (_, index) => ({ message: `page-${index}` })) : offset === 100 ? [{ message: "last-page" }] : [];
+    };
+    const paged = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100, limit: 150 });
+    assert.equal((JSON.parse(paged.content[0]!.text) as { records: unknown[] }).records.length, 101);
+    const finalPageArgs = calls.at(-1)!.args;
+    assert.equal(finalPageArgs[finalPageArgs.indexOf("--line") + 1], "50");
+    assert.equal(finalPageArgs[finalPageArgs.indexOf("--offset") + 1], "100");
+
+    responseRecords = [{ message: "one" }, { message: "two" }];
+    await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100, limit: 2 }), /capability_result_too_large/);
+    const probeArgs = calls.at(-1)!.args;
+    assert.equal(probeArgs[probeArgs.indexOf("--line") + 1], "1");
+    assert.equal(probeArgs[probeArgs.indexOf("--offset") + 1], "2");
 
     await chmod(cli, 0o777);
     await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100 }), /insecure_aliyun_cli_file/);

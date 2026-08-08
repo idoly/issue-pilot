@@ -50,22 +50,34 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
   try {
     const wrapper = fileURLToPath(new URL("../../infra/aliyun-profile.sh", import.meta.url));
     await secureFile(wrapper);
-    const execution = await pi.exec(wrapper, [profileRoot, cli,
-      "sls", "GetLogs",
-      "--endpoint", `${scope.region}.log.aliyuncs.com`,
-      "--project", scope.project,
-      "--logstore", input.logstore,
-      "--from", String(from),
-      "--to", String(to),
-      "--query", searchQuery,
-      "--line", String(limit),
-      "--offset", "0",
-      "--reverse", "true",
-    ], { timeout: 30_000, ...(signal ? { signal } : {}) });
-    if (execution.code !== 0) throw new Error("sls_query_failed");
-    let parsed: unknown;
-    try { parsed = JSON.parse(execution.stdout); } catch { throw new Error("sls_query_invalid_response"); }
-    const returnedRows = Array.isArray(parsed) ? parsed.length : null;
+    const fetchRecords = async (line: number, offset: number): Promise<unknown[]> => {
+      const execution = await pi.exec(wrapper, [profileRoot, cli,
+        "sls", "GetLogs",
+        "--endpoint", `${scope.region}.log.aliyuncs.com`,
+        "--project", scope.project,
+        "--logstore", input.logstore,
+        "--from", String(from),
+        "--to", String(to),
+        "--query", searchQuery,
+        "--line", String(line),
+        "--offset", String(offset),
+        "--reverse", "true",
+      ], { timeout: 30_000, ...(signal ? { signal } : {}) });
+      if (execution.code !== 0) throw new Error("sls_query_failed");
+      let parsed: unknown;
+      try { parsed = JSON.parse(execution.stdout); } catch { throw new Error("sls_query_invalid_response"); }
+      if (!Array.isArray(parsed)) throw new Error("sls_query_invalid_response");
+      return parsed;
+    };
+    const records: unknown[] = [];
+    while (records.length < limit) {
+      const pageSize = Math.min(100, limit - records.length);
+      const page = await fetchRecords(pageSize, records.length);
+      if (page.length > pageSize) throw new Error("capability_result_too_large");
+      records.push(...page);
+      if (page.length < pageSize) break;
+    }
+    if (records.length === limit && (await fetchRecords(1, limit)).length) throw new Error("capability_result_too_large");
     const queryMetadata = {
       project: scope.project,
       logstore: input.logstore,
@@ -75,10 +87,10 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
       queryMode: traceId ? "trace_id_full_text" : "query",
       order: "newest_first",
       limit,
-      returnedRows,
-      possiblyIncomplete: returnedRows === null || returnedRows >= limit,
+      returnedRows: records.length,
+      possiblyIncomplete: false,
     };
-    const text = capabilityResultText({ query: queryMetadata, records: parsed });
+    const text = capabilityResultText({ query: queryMetadata, records });
     return capabilityTextResult(text, { provider: "aliyun-sls", ...queryMetadata, runtime: "local-cli" });
   } finally {
     await rm(profileRoot, { recursive: true, force: true });

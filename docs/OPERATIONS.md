@@ -14,7 +14,6 @@ API 收到 `SIGINT` 或 `SIGTERM` 时只关闭一次 Fastify。未完成的 Agen
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `HOST` | `127.0.0.1` | API 监听地址 |
 | `PORT` | `3000` | API 监听端口 |
 | `ISSUE_PILOT_STATE_ROOT` | `.issue-pilot` | 数据库、workspace 和 session 状态根目录 |
 | `ISSUE_PILOT_DATABASE` | `<state-root>/issues.db` | SQLite 文件 |
@@ -171,7 +170,7 @@ git diff --check
 
 ## 网络暴露
 
-API 没有内置认证。保持默认 loopback，或在前方部署认证代理和 TLS。必须限制 `/api/config`、附件下载和 code-server workspace 访问，不记录 deployment config、Authorization 或完整 secret 请求体。
+API 没有内置认证并固定监听 `127.0.0.1`。如需外部访问，只能通过带认证和 TLS 的本机代理转发。必须限制 `/api/config`、附件下载和 code-server workspace 访问，不记录 deployment config、Authorization 或完整 secret 请求体。
 
 ## 故障处理
 

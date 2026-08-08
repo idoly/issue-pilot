@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Modal, Segmented, Select, Space, Tag, TextArea } from "@idoly/ant-design-solid";
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
 import { addIssueComment, attachmentUrl, deleteIssueAttachments, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, uploadAttachments, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
@@ -12,7 +12,7 @@ import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typ
 type IssueAttachment = IssueDetail["attachments"][number];
 
 export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
-  const { configuration, people } = useApplicationResources();
+  const { configuration, people, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
   const [editDescription, setEditDescription] = createSignal("", { ownedWrite: true });
@@ -35,6 +35,14 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
   const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
   const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
+  let issueGeneration = 0;
+  createEffect(() => props.issue.id, (issueId, previousIssueId) => {
+    if (previousIssueId === undefined || issueId === previousIssueId) return;
+    issueGeneration += 1;
+    setEditOpen(false); setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
+    setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError("");
+    setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null);
+  });
   const openEditor = () => {
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority); setEditType(props.issue.type);
     setEditAssignee(props.issue.assigneeSubject); setEditCc((props.issue.ccRecipients ?? []).map((person) => person.subject));
@@ -45,58 +53,59 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
   };
   const saveIssue = async () => {
     if (!editTitle().trim() || !editService()) return;
+    const issueId = props.issue.id;
+    const generation = issueGeneration;
+    const input = { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKey: editService(), assigneeSubject: editAssignee(), ccSubjects: [...editCc()] };
+    const removals = [...removedAttachmentIds()];
+    const additions = [...editAttachments()];
     setEditSaving(true); setEditError("");
     try {
-      await updateIssue(props.issue.id, { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), type: editType(), serviceKey: editService(), assigneeSubject: editAssignee(), ccSubjects: editCc() });
-      const removals = removedAttachmentIds();
-      if (removals.length) {
-        await deleteIssueAttachments(props.issue.id, removals);
-        setRemovedAttachmentIds([]);
-      }
-      const additions = editAttachments();
-      if (additions.length) {
-        await uploadAttachments(props.issue.id, additions);
-        setEditAttachments([]);
-      }
-      await syncIssueUpdate(props.issue.id);
+      await updateIssue(issueId, input);
+      if (removals.length) await deleteIssueAttachments(issueId, removals);
+      if (additions.length) await uploadAttachments(issueId, additions);
+      await syncIssueUpdate(issueId);
+      if (issueGeneration !== generation) return;
+      setRemovedAttachmentIds([]); setEditAttachments([]);
       await props.onUpdated();
-      setEditCcOpen(false);
-      setEditOpen(false);
+      setEditCcOpen(false); setEditOpen(false);
     } catch (error) {
-      setEditError(error instanceof Error ? error.message : String(error));
-    } finally { setEditSaving(false); }
+      if (issueGeneration === generation) setEditError(error instanceof Error ? error.message : String(error));
+    } finally { if (issueGeneration === generation) setEditSaving(false); }
   };
   const submitComment = async () => {
     const body = commentBody().trim();
     if (!body) return;
+    const issueId = props.issue.id;
+    const generation = issueGeneration;
     setCommentSaving(true); setCommentError("");
     try {
-      await addIssueComment(props.issue.id, body);
-      setCommentBody("");
-      setCommentMode("edit");
+      await addIssueComment(issueId, body);
+      if (issueGeneration !== generation) return;
+      setCommentBody(""); setCommentMode("edit");
       await props.onUpdated();
     } catch (error) {
-      setCommentError(error instanceof Error ? error.message : String(error));
-    } finally { setCommentSaving(false); }
+      if (issueGeneration === generation) setCommentError(error instanceof Error ? error.message : String(error));
+    } finally { if (issueGeneration === generation) setCommentSaving(false); }
   };
 
   const retry = async () => {
-    setRetrying(true);
-    setRetryError("");
+    const issueId = props.issue.id;
+    const generation = issueGeneration;
+    setRetrying(true); setRetryError("");
     try {
-      await retryIssue(props.issue.id);
-      await props.onUpdated();
+      await retryIssue(issueId);
+      if (issueGeneration === generation) await props.onUpdated();
     } catch (error) {
-      setRetryError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setRetrying(false);
-    }
+      if (issueGeneration === generation) setRetryError(error instanceof Error ? error.message : String(error));
+    } finally { if (issueGeneration === generation) setRetrying(false); }
   };
   const changeStatus = async (status: "open" | "resolved") => {
+    const issueId = props.issue.id;
+    const generation = issueGeneration;
     setStatusSaving(true); setStatusError("");
-    try { await updateIssueStatus(props.issue.id, status); await props.onUpdated(); }
-    catch (error) { setStatusError(error instanceof Error ? error.message : String(error)); }
-    finally { setStatusSaving(false); }
+    try { await updateIssueStatus(issueId, status); if (issueGeneration === generation) await props.onUpdated(); }
+    catch (error) { if (issueGeneration === generation) setStatusError(error instanceof Error ? error.message : String(error)); }
+    finally { if (issueGeneration === generation) setStatusSaving(false); }
   };
   return (
     <section class="issue-workspace">
@@ -179,7 +188,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
         <div class="create-issue-form compact-issue-form edit-issue-form">
-          <Show when={editError()}><div class="create-error modal-form-error" role="alert">{editError()}</div></Show>
+          <Show when={editError() || peopleError()}><div class="create-error modal-form-error" role="alert">{editError() || peopleError()}</div></Show>
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setEditPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(props.issue.environmentKey)); if (selected) setEditType(selected); }} options={issueTypesForEnvironment(props.issue.environmentKey).map((value) => ({ value, label: typeLabel[value] }))} /></label>

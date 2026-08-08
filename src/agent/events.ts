@@ -34,6 +34,22 @@ export class AgentEventBus {
   }
 }
 
+export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string) {
+  let pending: RunEvent[] = [];
+  let sink: RunEventListener | undefined;
+  const unsubscribe = bus.subscribe(issueId, (event) => sink ? sink(event) : pending.push(event));
+  return {
+    activate(nextSink: RunEventListener): void {
+      if (sink) throw new Error("agent_event_subscription_already_active");
+      sink = nextSink;
+      const buffered = pending;
+      pending = [];
+      for (const event of buffered) nextSink(event);
+    },
+    unsubscribe,
+  };
+}
+
 function timestamp(value: string | undefined): string {
   return value && !Number.isNaN(Date.parse(value)) ? value : new Date().toISOString();
 }

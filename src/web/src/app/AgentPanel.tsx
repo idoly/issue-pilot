@@ -5,7 +5,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { agentStreamUrl, sendAgentMessage, type AgentFooterStats, type IssueDetail, type RunEvent } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
-import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type AgentActivity, type ConversationEntry } from "./conversation";
+import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
 import { piDarkThemeStyle } from "./pi-theme";
 
@@ -21,7 +21,7 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
   const genericOutput = () => ["bash", "edit", "write", "read", "grep", "find", "ls"].includes(props.entry.name) ? "" : resultText(props.entry);
   const images = () => props.entry.result?.content.filter((part): part is ImageContent => part.type === "image") ?? [];
   return <div class={`agent-tool ${props.entry.status}`}>
-    <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code><Show when={toolStatus(props.entry)}>{(status) => <span>{status()}</span>}</Show></div>
+    <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code></div>
     <Show when={diff().length}><pre class="agent-tool-diff"><For each={diff()}>{(line) => <span class={diffLineClass(line)}>{line}{"\n"}</span>}</For></pre></Show>
     <Show when={output()}>{(result) => <>
       <Show when={result().lines.length}><pre class="agent-tool-output"><Show when={result().omitted}><span class="omitted">... ({result().omitted} earlier lines)</span></Show><For each={result().lines}>{(line) => <span>{line}{"\n"}</span>}</For></pre></Show>
@@ -178,7 +178,8 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
   const connect = (issueId: string) => {
     stream?.close();
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    eventIds.clear(); pasteEditor.reset(); setEditorDraft(""); setEntries([]); setFooter(emptyFooter()); setUnread(0); setError(""); setConnected(false); replayComplete = false;
+    eventIds.clear(); pasteEditor.reset(); setEditorDraft(""); setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
+    setConnected(false); setSending(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" }); replayComplete = false;
     const currentConnection = ++connectionId;
     const source = new EventSource(agentStreamUrl(issueId));
     stream = source;
@@ -203,7 +204,7 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
           queueMicrotask(() => connect(issueId));
           return;
         }
-        if (replayComplete && envelope.event.type === "issue_status") void props.onRefresh(props.issue.id);
+        if (replayComplete && envelope.event.type === "issue_status") void props.onRefresh(issueId);
       } catch { setError("agent_event_protocol_error"); }
     });
     source.addEventListener("error", () => {
@@ -216,13 +217,17 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
     const editorText = draft();
     const message = pasteEditor.expand(editorText).trim();
     if (!message || sending() || !canSend()) return;
+    const issueId = props.issue.id;
+    const submitConnection = connectionId;
     setEditorDraft(""); setSending(true); setError(""); scrollLatest();
     try {
-      await sendAgentMessage(props.issue.id, message);
+      await sendAgentMessage(issueId, message);
+      if (submitConnection !== connectionId) return;
       pasteEditor.reset(); setProcessing(true);
     } catch (cause) {
+      if (submitConnection !== connectionId) return;
       setEditorDraft(editorText); setError(cause instanceof Error ? cause.message : "agent_message_failed");
-    } finally { setSending(false); }
+    } finally { if (submitConnection === connectionId) setSending(false); }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, result: PasteEditResult) => {
     setEditorDraft(result.value);

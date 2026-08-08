@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const { chromium } = require("/tool/node_modules/playwright-core");
 
 const [requestFile, credentialsFile] = process.argv.slice(2);
+const MAX_ACTIONS = 50;
 if (!requestFile || !credentialsFile) process.exit(2);
 
 function parse(file) {
@@ -23,7 +24,7 @@ async function main() {
   const credentials = parse(credentialsFile);
   const baseUrl = new URL(request.baseUrl);
   if ((baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) throw new Error("invalid_base_url");
-  if (!Array.isArray(request.actions) || request.actions.length < 1 || request.actions.length > 20) throw new Error("invalid_actions");
+  if (!Array.isArray(request.actions) || request.actions.length < 1 || request.actions.length > MAX_ACTIONS) throw new Error("invalid_actions");
 
   const browser = await chromium.launch({ headless: true });
   try {

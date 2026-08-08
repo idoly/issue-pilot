@@ -140,7 +140,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         return await database.db.transaction(async (transaction) => {
           const [row] = await transaction.insert(issues).values({ key, title: parsed.title, description: parsed.description, priority: parsed.priority, type: parsed.type, serviceId: parsed.serviceId, environmentId: environment.id, reporterSubject: reporter, assigneeSubject: parsed.assignee }).returning();
           if (parsed.cc.length) await transaction.insert(issueCcRecipients).values(parsed.cc.map((recipient) => ({ issueId: row!.id, subject: recipient })));
-          await transaction.insert(issueWorkspaces).values({ issueId: row!.id, ownerSubject: reporter });
+          await transaction.insert(issueWorkspaces).values({ issueId: row!.id });
           await transaction.insert(issueHistory).values({ issueId: row!.id, actorSubject: reporter, action: "created", changes: {} });
           if (initialAttachments.length) {
             const directory = issueAttachmentRoot(stateRoot, key);

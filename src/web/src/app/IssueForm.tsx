@@ -3,7 +3,7 @@ import { createSignal, For, Show } from "solid-js";
 
 import { Maximize2, Paperclip, Trash2 } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
-import { ISSUE_TYPES_BY_ENVIRONMENT, type Config, type IssueDetail, type IssueType } from "../data/client";
+import { ISSUE_TYPES_BY_ENVIRONMENT, type IssueDetail, type IssueType } from "../data/client";
 import { fileSize } from "./model";
 
 export function selectedStrings(value: unknown, current: string[]): string[] {
@@ -21,8 +21,6 @@ export const environmentLabel: Record<string, string> = { prod: "正式", test: 
 export function issueTypesForEnvironment(environmentKey: string): IssueType[] {
   return [...(ISSUE_TYPES_BY_ENVIRONMENT[environmentKey as keyof typeof ISSUE_TYPES_BY_ENVIRONMENT] ?? [])];
 }
-
-export const emptyConfig = (): Config => ({ agentModels: [], environments: [], capabilityCatalog: [], services: [] });
 
 export function bindMultipleSelectBlankToggle(element: HTMLDivElement, setOpen: (open: boolean) => void): void {
   let blankWasOpen = false;

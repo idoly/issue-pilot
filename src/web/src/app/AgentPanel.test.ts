@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel } from "./AgentPanel";
-import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type ConversationEntry } from "./conversation";
+import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
 import { piDarkThemeStyle } from "./pi-theme";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
@@ -57,13 +57,6 @@ describe("Agent conversation state", () => {
     expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "Compacting context...", tone: "info" });
     expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000, errorMessage: "overloaded" }).event)).toEqual({ text: "Retrying 2/3 in 2.0s...", tone: "warning" });
     expect(activityForEvent(event({ type: "auto_retry_end", success: true, attempt: 2 }).event)).toBeNull();
-  });
-
-  it("uses Pi tool backgrounds without redundant status labels", () => {
-    const complete = { id: "tool-1", kind: "tool", toolCallId: "call-1", name: "bash", status: "complete", startedAt: "2026-08-06T00:00:00.000Z" } satisfies ConversationEntry;
-    expect(toolStatus(complete)).toBe("");
-    expect(toolStatus({ ...complete, name: "edit" })).toBe("");
-    expect(toolStatus({ ...complete, status: "error" })).toBe("");
   });
 
   it("updates one tool row from Pi start through partial and final result", () => {

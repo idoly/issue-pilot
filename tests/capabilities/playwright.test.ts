@@ -59,6 +59,9 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
     assert.doesNotMatch(command.join(" "), /deployment-secret|operator/);
     assert.doesNotMatch(JSON.stringify(output), /deployment-secret|operator/);
     assert.match(output.content[0]!.text, /Ready/);
+    await runPlaywright(pi, policy, deploymentConfig, { actions: Array.from({ length: 21 }, (_, index) => ({ type: "goto" as const, path: `/page-${index}` })) });
+    assert.equal((JSON.parse(mountedRequest) as { actions: unknown[] }).actions.length, 21);
+    assert.match(await readFile(new URL("../../infra/playwright-runner.cjs", import.meta.url), "utf8"), /MAX_ACTIONS = 50/);
     const requestMount = command.find((value) => value.includes(":/run/input:"))!.split(":/run/input:")[0]!;
     await assert.rejects(stat(requestMount));
     await assert.rejects(runPlaywright(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "https://other.example.test/" }] }), /invalid_browser_path/);
