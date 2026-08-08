@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
-import { activityForEvent, AgentPanel, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type ConversationEntry } from "./AgentPanel";
+import { AgentPanel } from "./AgentPanel";
+import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type ConversationEntry } from "./conversation";
+import { piDarkThemeStyle } from "./pi-theme";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "ISSUE-1", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -20,6 +22,13 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("Agent conversation state", () => {
+  it("uses the official Pi dark theme tokens", () => {
+    expect(piDarkThemeStyle).toContain("--pi-accent:#8abeb7");
+    expect(piDarkThemeStyle).toContain("--pi-tool-success-bg:#283228");
+    expect(piDarkThemeStyle).toContain("--pi-thinking-medium:#81a2be");
+    expect(piDarkThemeStyle).toContain("--pi-export-page-bg:#18181e");
+  });
+
   it("assembles Pi streaming events and replaces them with the final message", () => {
     let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
     entries = applyAgentEvent(entries, event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
@@ -27,7 +36,7 @@ describe("Agent conversation state", () => {
     expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查完成" }], streaming: true }]);
 
     entries = applyAgentEvent(entries, event({ type: "message_end", message: assistant([{ type: "text", text: "检查已完成" }], "stop") }));
-    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查已完成" }], stopReason: "stop" }]);
+    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查已完成" }], stopReason: "stop", usage }]);
   });
 
   it("keeps thinking separate from visible answer text", () => {
@@ -38,7 +47,7 @@ describe("Agent conversation state", () => {
     expect(entries[0]).toEqual({ id: "message-1", kind: "assistant", blocks: [
       { type: "thinking", value: "Inspect tests" },
       { type: "text", value: "Tests pass" },
-    ], stopReason: "stop" });
+    ], stopReason: "stop", usage });
   });
 
   it("keeps Pi retry lifecycle active until agent_settled", () => {
@@ -50,11 +59,11 @@ describe("Agent conversation state", () => {
     expect(activityForEvent(event({ type: "auto_retry_end", success: true, attempt: 2 }).event)).toBeNull();
   });
 
-  it("keeps terminal tool status only when it carries information", () => {
+  it("uses Pi tool backgrounds without redundant status labels", () => {
     const complete = { id: "tool-1", kind: "tool", toolCallId: "call-1", name: "bash", status: "complete", startedAt: "2026-08-06T00:00:00.000Z" } satisfies ConversationEntry;
     expect(toolStatus(complete)).toBe("");
-    expect(toolStatus({ ...complete, name: "edit" })).toBe("changed");
-    expect(toolStatus({ ...complete, status: "error" })).toBe("error");
+    expect(toolStatus({ ...complete, name: "edit" })).toBe("");
+    expect(toolStatus({ ...complete, status: "error" })).toBe("");
   });
 
   it("updates one tool row from Pi start through partial and final result", () => {
@@ -67,6 +76,19 @@ describe("Agent conversation state", () => {
 
   it("appends visible user messages", () => {
     expect(applyAgentEvent([], event({ type: "issue_user", message: "继续检查" }))).toMatchObject([{ kind: "user", text: "继续检查" }]);
+  });
+
+  it("projects official compaction, branch, custom, and bash session messages", () => {
+    let entries = applyAgentEvent([], event({ type: "message_end", message: { role: "compactionSummary", summary: "Earlier context", tokensBefore: 42_000, timestamp: Date.now() } }));
+    entries = applyAgentEvent(entries, event({ type: "message_end", message: { role: "branchSummary", summary: "Alternate approach", fromId: "branch-1", timestamp: Date.now() } }));
+    entries = applyAgentEvent(entries, event({ type: "message_end", message: { role: "custom", customType: "notice", content: "Injected context", display: true, timestamp: Date.now() } }));
+    entries = applyAgentEvent(entries, event({ type: "message_end", message: { role: "bashExecution", command: "npm test", output: "passed", exitCode: 0, cancelled: false, truncated: false, timestamp: Date.now() } }));
+    expect(entries).toMatchObject([
+      { kind: "summary", summaryType: "compaction", summary: "Earlier context", tokensBefore: 42_000 },
+      { kind: "summary", summaryType: "branch", summary: "Alternate approach" },
+      { kind: "custom", label: "notice", blocks: [{ type: "text", value: "Injected context" }] },
+      { kind: "bash", command: "npm test", output: "passed", exitCode: 0 },
+    ]);
   });
 
   it("formats consecutive repository reads like Pi CLI", () => {
@@ -147,18 +169,25 @@ describe("Agent conversation state", () => {
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "running", url: null }, agentSession: { sessionId: "session-1" },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, expanded: false, onToggleExpanded: () => undefined, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;
     expect(source.url).toBe("/api/issues/ISSUE-1/agent-stream");
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
-    source.emit("ready", { agent: { provider: "test", model: "model", thinkingLevel: "medium" }, running: false });
+    source.emit("ready", {
+      agent: { provider: "test", model: "model", thinkingLevel: "medium" },
+      footer: { input: 11_000_000, output: 1_300_000, cacheRead: 498_000_000, cacheWrite: 0, cost: 385.206, latestCacheHitRate: 95, contextPercent: 32.9, contextWindow: 272_000, autoCompact: true },
+      running: false,
+    });
     await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
-    expect(screen.getByText("test/model")).toBeTruthy();
+    expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 32.9%/272k (auto)")).toBeTruthy();
+    expect(screen.getByText("model")).toBeTruthy();
+    expect(screen.queryByLabelText("中止处理")).toBeNull();
+    expect(screen.queryByLabelText("放大 Agent")).toBeNull();
     view.unmount();
     expect(source.closed).toBe(true);
 
-    const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, expanded: false, onToggleExpanded: () => undefined, onRefresh: async () => issue }));
+    const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, onRefresh: async () => issue }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
     resolvedView.unmount();
   });

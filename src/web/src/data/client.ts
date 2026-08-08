@@ -1,8 +1,8 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type EnvironmentKind, type IssuePriority, type IssueStatus, type IssueType, type RepositoryKind } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type EnvironmentKind, type IssuePriority, type IssueStatus, type IssueType, type RepositoryKind } from "../../../domain/contracts";
 export type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
-export type { AgentConfiguration, AgentModelDefinition, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType, RepositoryKind };
+export type { AgentConfiguration, AgentFooterStats, AgentModelDefinition, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType, RepositoryKind };
 
 export interface Person { subject: string; name: string; email: string }
 
@@ -154,5 +154,4 @@ export const addIssueComment = (key: string, body: string) => jsonRequest<IssueC
 export const syncIssueUpdate = (key: string) => request<void>(issuePath(key, "/sync"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
-export const abortAgent = (key: string) => request<void>(issuePath(key, "/agent-abort"), { method: "POST" });
 export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

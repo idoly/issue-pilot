@@ -9,21 +9,26 @@ import { execFile } from "node:child_process";
 const execFileAsync = promisify(execFile);
 const script = resolve("infra/pi-tools.sh");
 
-test("prepares pinned connector binaries without persistent tool containers", async () => {
+test("prepares global Playwright core and only the browser image", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-tools-"));
   const bin = join(root, "bin");
-  const home = join(root, "home");
-  const workspace = join(root, "workspaces");
-  const log = join(root, "podman.log");
+  const log = join(root, "tools.log");
   try {
-    await Promise.all([mkdir(bin), mkdir(home), mkdir(workspace)]);
-    const podman = join(bin, "podman");
-    await writeFile(podman, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PODMAN_LOG"\nif [ "$1 $2" = "volume exists" ]; then exit 0; fi\nexit 0\n`, "utf8");
-    await chmod(podman, 0o700);
-    await execFileAsync(script, ["prepare"], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, PODMAN_LOG: log, PI_WORKSPACE_ROOT: workspace, PI_TOOL_CACHE_ROOT: join(root, "cache") } });
+    await mkdir(bin);
+    for (const [name, content] of [
+      ["node", "#!/bin/sh\nexit 0\n"],
+      ["npm", "#!/bin/sh\nprintf 'npm %s\\n' \"$*\" >> \"$PI_TOOLS_LOG\"\n"],
+      ["podman", "#!/bin/sh\nprintf 'podman %s\\n' \"$*\" >> \"$PI_TOOLS_LOG\"\n[ \"$1 $2\" = \"image exists\" ] && exit 1\nexit 0\n"],
+    ] as const) {
+      await writeFile(join(bin, name), content, "utf8");
+      await chmod(join(bin, name), 0o700);
+    }
+    await execFileAsync(script, ["prepare"], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_TOOLS_LOG: log, PI_PLAYWRIGHT_CORE_ROOT: join(root, "playwright-core") } });
     const calls = await readFile(log, "utf8");
-    assert.doesNotMatch(calls, /--name |--detach| sleep infinity/);
-    assert.doesNotMatch(calls, /nacos-cli|nacos-cli-data|volume create/);
+    assert.match(calls, /npm install --global --omit=dev playwright-core@1\.62\.1/);
+    assert.match(calls, /podman image exists mcr\.microsoft\.com\/playwright:v1\.62\.1-noble/);
+    assert.match(calls, /podman pull mcr\.microsoft\.com\/playwright:v1\.62\.1-noble/);
+    assert.doesNotMatch(calls, /node:26|maven:|podman run|--name|--detach/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

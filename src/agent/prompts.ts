@@ -1,3 +1,5 @@
+import type { IssuePolicy } from "../pi/policy.ts";
+
 interface RepositoryContext {
   branch: string;
   path: string;
@@ -41,9 +43,22 @@ export function promptWithRuntimeTime(message: string, now = new Date()): string
   return `${runtimeTimeContext(now)}\n\nUser request:\n${message}`;
 }
 
+export function agentSystemPrompt(policy: IssuePolicy): string {
+  const writable = policy.service.repositories.filter((repository) => repository.codeAccess === "write").length;
+  return [
+    "Issue Pilot execution policy:",
+    `- Work only on issue ${policy.issueKey} in the current workspace.`,
+    `- The selected service is ${policy.service.serviceKey} in ${policy.service.environmentKey}.`,
+    `- ${writable ? `${writable} repository workspace(s) may be edited` : "All repository workspaces are read-only"}.`,
+    "- Treat tool availability and tool validation as hard authorization boundaries.",
+    "- Never disclose connection credentials or infer access beyond the configured deployment scope.",
+    "- Capability results are complete bounded evidence or explicit failures; do not claim omitted evidence.",
+  ].join("\n");
+}
+
 const workspaceContext = [
   "Attachments, if present, are in .issue-pilot/attachments/.",
-  "Containerized checks: node-project <path> <install|test|build|typecheck>; maven-project <path> <test|verify|package>.",
+  "Project checks: node-project <path> <install|test|build|typecheck>; maven-project <path> <test|verify|package>. Both wrappers use the configured host runtimes.",
   "For defect_fix and feature_development, make only the minimum changes required by the issue. Avoid unrelated refactors, formatting churn, dependency changes, and speculative improvements.",
   "Leave working tree changes uncommitted for user review in code-server unless the user explicitly asks you to commit or push them.",
 ].join("\n");

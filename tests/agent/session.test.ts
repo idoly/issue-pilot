@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { createPrivateSessionManager } from "../../src/agent/runtime.ts";
+import { createPrivateSessionManager } from "../../src/agent/session.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-session-"));

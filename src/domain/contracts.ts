@@ -29,7 +29,20 @@ export interface AgentModelDefinition {
   id: string;
   name: string;
   api: string;
+  contextWindow: number;
   thinkingLevels: AgentThinkingLevel[];
+}
+
+export interface AgentFooterStats {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  latestCacheHitRate: number | null;
+  contextPercent: number | null;
+  contextWindow: number;
+  autoCompact: boolean;
 }
 
 export interface CapabilityConfiguration {

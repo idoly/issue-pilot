@@ -13,7 +13,7 @@ import { AGENT_THINKING_LEVELS } from "../../src/domain/contracts.ts";
 
 const modelCatalog = {
   async list() {
-    return [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", thinkingLevels: AGENT_THINKING_LEVELS.filter((level) => level === "medium" || level === "high") }];
+    return [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", contextWindow: 32_000, thinkingLevels: AGENT_THINKING_LEVELS.filter((level) => level === "medium" || level === "high") }];
   },
 };
 
@@ -29,12 +29,7 @@ const engine = {
     this.messages.push(message); this.enqueued.push(issueId);
     return { id: `user-${this.messages.length}`, issueId, kind: "user", message, createdAt: new Date().toISOString() };
   },
-  async abort(issueId: string) { return this.running.has(issueId); },
   async closeSession(issueId: string) { this.closedSessions.push(issueId); },
-  async invokeCapability(issueId: string, token: string, capability: string, input: unknown) {
-    if (token !== "broker-token") throw new Error("capability_not_available");
-    return { content: [{ type: "text", text: JSON.stringify({ issueId, capability, input }) }], details: null };
-  },
 };
 
 async function json(response: { body: string }): Promise<Record<string, unknown>> {
@@ -52,10 +47,7 @@ test("configuration and issue API preserves relational integrity", async () => {
   let appClosed = false;
   try {
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
-    assert.equal((await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", payload: { issueId: "issue", input: {} } })).statusCode, 401);
-    const broker = await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", headers: { authorization: "Bearer broker-token" }, payload: { issueId: "issue", input: { statement: "SELECT 1" } } });
-    assert.equal(broker.statusCode, 200, broker.body);
-    assert.match(broker.body, /SELECT 1/);
+    assert.equal((await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", payload: {} })).statusCode, 404);
 
     const configurationResponse = await app.inject({ method: "GET", url: "/api/config" });
     assert.equal(configurationResponse.statusCode, 200);
@@ -227,10 +219,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(agentMessage.body, "");
     assert.equal(engine.messages.at(-1), "Check the latest evidence");
     assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-messages`, payload: { message: "" } })).statusCode, 400);
-    engine.running.add(createdInternalId);
-    assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-abort` })).statusCode, 202);
-    engine.running.delete(createdInternalId);
-    assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-abort` })).statusCode, 409);
+    assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-abort` })).statusCode, 404);
 
     const concurrentPayload = (title: string) => ({
       title,

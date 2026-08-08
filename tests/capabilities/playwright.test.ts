@@ -10,14 +10,13 @@ import { createIssuePolicy } from "../../src/pi/policy.ts";
 
 test("runs scoped Playwright actions without exposing deployment credentials", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-browser-"));
-  const cache = join(root, "tools", "playwright", "node_modules", "playwright-core");
+  const playwrightCoreRoot = join(root, "playwright-core");
   const workspace = join(root, "workspaces", "issue-20260805-001");
-  const previous = { stateRoot: process.env.ISSUE_PILOT_STATE_ROOT, cache: process.env.PI_TOOL_CACHE_ROOT };
+  const previousPlaywrightCoreRoot = process.env.PI_PLAYWRIGHT_CORE_ROOT;
   try {
-    await Promise.all([mkdir(cache, { recursive: true }), mkdir(join(workspace, "repository"), { recursive: true })]);
-    await writeFile(join(cache, "package.json"), JSON.stringify({ version: "1.62.1" }), "utf8");
-    delete process.env.ISSUE_PILOT_STATE_ROOT;
-    delete process.env.PI_TOOL_CACHE_ROOT;
+    await Promise.all([mkdir(playwrightCoreRoot, { recursive: true }), mkdir(join(workspace, "repository"), { recursive: true })]);
+    await writeFile(join(playwrightCoreRoot, "package.json"), JSON.stringify({ version: "1.62.1" }), "utf8");
+    process.env.PI_PLAYWRIGHT_CORE_ROOT = playwrightCoreRoot;
 
     const policy = createIssuePolicy({
       issueKey: "ISSUE-20260805-001",
@@ -66,9 +65,8 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
     response = { screenshot: Buffer.alloc(1024 * 1024).toString("base64") };
     await assert.rejects(runPlaywright(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "/dashboard" }], screenshot: true }), /capability_result_too_large/);
   } finally {
-    const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
-    restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);
-    restore("PI_TOOL_CACHE_ROOT", previous.cache);
+    if (previousPlaywrightCoreRoot === undefined) delete process.env.PI_PLAYWRIGHT_CORE_ROOT;
+    else process.env.PI_PLAYWRIGHT_CORE_ROOT = previousPlaywrightCoreRoot;
     await rm(root, { recursive: true, force: true });
   }
 });

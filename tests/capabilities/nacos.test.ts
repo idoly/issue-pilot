@@ -1,60 +1,96 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import test from "node:test";
 
-import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/nacos.ts";
-import type { CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { readNacosCapability } from "../../src/capabilities/broker.ts";
+import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/contracts.ts";
+import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/external-data.ts";
 
-const connection: NacosConnection = {
-  serverUrl: "https://managed-nacos.example.test",
-  namespace: "managed-space",
-  group: "MANAGED_GROUP",
-  dataIds: ["orders.yaml", "orders-shared.yaml"],
-  username: "managed-user",
-  password: "managed-secret",
-};
-
-test("reads only page-authorized Nacos data IDs through the managed connection", async () => {
-  const calls: string[][] = [];
-  const profiles: Array<Record<string, unknown>> = [];
-  const pi: CommandExecutor = {
-    async exec(command, args) {
-      calls.push([command, ...args]);
-      const profileMount = args.find((argument) => argument.endsWith(":/run/secret:ro,z"))!;
-      profiles.push(JSON.parse(await readFile(`${profileMount.slice(0, profileMount.indexOf(":"))}/connection.json`, "utf8")) as Record<string, unknown>);
-      const dataId = args.at(-2);
-      if (dataId === "orders-shared.yaml") return { code: 1, stdout: "", stderr: "nacos_configuration_read_failed:404", killed: false };
-      return { code: 0, stdout: "spring:\n  datasource:\n    password: business-secret\n", stderr: "", killed: false };
-    },
+async function nacosServer(): Promise<{
+  origin: string;
+  requests: URL[];
+  loginCount: () => number;
+  close: () => Promise<void>;
+}> {
+  const requests: URL[] = [];
+  let logins = 0;
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === "/nacos/v1/auth/login") {
+      logins += 1;
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      assert.deepEqual(Object.fromEntries(new URLSearchParams(body)), { username: "managed-user", password: "managed-secret" });
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ accessToken: "managed-token" }));
+      return;
+    }
+    assert.equal(url.pathname, "/nacos/v1/cs/configs");
+    requests.push(url);
+    if (url.searchParams.get("dataId") === "orders-shared.yaml") {
+      response.writeHead(404).end();
+      return;
+    }
+    if (url.searchParams.get("dataId") === "oversized.yaml") {
+      response.end("x".repeat(MAX_CAPABILITY_RESULT_BYTES + 1));
+      return;
+    }
+    response.end("spring:\n  datasource:\n    password: business-secret\n");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("nacos_test_server_not_started");
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    requests,
+    loginCount: () => logins,
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
+}
 
-  const configurations = await readNacosConfigurations(pi, connection);
-  assert.deepEqual(configurations, [
-    { dataId: "orders.yaml", group: "MANAGED_GROUP", content: "spring:\n  datasource:\n    password: business-secret\n" },
-    { dataId: "orders-shared.yaml", group: "MANAGED_GROUP", content: null },
-  ]);
-  assert.deepEqual(profiles.map((profile) => ({ host: profile.host, namespace: profile.namespace, username: profile.username, password: profile.password })), [
-    { host: "managed-nacos.example.test", namespace: "managed-space", username: "managed-user", password: "managed-secret" },
-    { host: "managed-nacos.example.test", namespace: "managed-space", username: "managed-user", password: "managed-secret" },
-  ]);
-  for (const call of calls) {
-    assert.equal(call[0], "podman");
-    assert.equal(call[call.indexOf("--pids-limit") + 1], "64");
-    assert.equal(call[call.indexOf("--memory") + 1], "128m");
-    assert.equal(call.at(-1), "MANAGED_GROUP");
-    assert.doesNotMatch(call.join(" "), /managed-user|managed-secret/);
+function connection(serverUrl: string, dataIds = ["orders.yaml", "orders-shared.yaml"]): NacosConnection {
+  return {
+    serverUrl,
+    namespace: "managed-space",
+    group: "MANAGED_GROUP",
+    dataIds,
+    username: "managed-user",
+    password: "managed-secret",
+  };
+}
+
+test("reads exact Nacos Data IDs over one authenticated bounded HTTP session", async () => {
+  const server = await nacosServer();
+  try {
+    const configured = connection(server.origin);
+    const configurations = await readNacosConfigurations(configured);
+    assert.deepEqual(configurations, [
+      { dataId: "orders.yaml", group: "MANAGED_GROUP", content: "spring:\n  datasource:\n    password: business-secret\n" },
+      { dataId: "orders-shared.yaml", group: "MANAGED_GROUP", content: null },
+    ]);
+    assert.equal(server.loginCount(), 1);
+    assert.deepEqual(server.requests.map((url) => Object.fromEntries(url.searchParams)), [
+      { dataId: "orders.yaml", group: "MANAGED_GROUP", tenant: "managed-space", accessToken: "managed-token" },
+      { dataId: "orders-shared.yaml", group: "MANAGED_GROUP", tenant: "managed-space", accessToken: "managed-token" },
+    ]);
+
+    const toolResult = await readNacosCapability("orders", { ...configured, dataIds: ["orders.yaml"] });
+    const output = JSON.stringify(toolResult);
+    assert.match(output, /business-secret/);
+    assert.doesNotMatch(output, /managed-user|managed-secret|managed-token/);
+  } finally {
+    await server.close();
   }
-
-  const toolResult = await readNacosCapability(pi, "orders", { ...connection, dataIds: ["orders.yaml"] });
-  const output = JSON.stringify(toolResult);
-  assert.match(output, /business-secret/);
-  assert.doesNotMatch(output, /managed-user|managed-secret/);
 });
 
-test("rejects missing, duplicate, and invalid Nacos targets", async () => {
-  const pi = { async exec() { throw new Error("unexpected_execution"); } } as CommandExecutor;
-  await assert.rejects(readNacosConfigurations(pi, { ...connection, dataIds: [] }), /invalid_nacos_configuration_target/);
-  await assert.rejects(readNacosConfigurations(pi, { ...connection, dataIds: ["orders.yaml", "orders.yaml"] }), /invalid_nacos_configuration_target/);
-  await assert.rejects(readNacosConfigurations(pi, { ...connection, dataIds: ["../orders.yaml"] }), /invalid_nacos_configuration_target/);
+test("rejects invalid targets and oversized Nacos responses", async () => {
+  const server = await nacosServer();
+  try {
+    await assert.rejects(readNacosConfigurations(connection(server.origin, [])), /invalid_nacos_configuration_target/);
+    await assert.rejects(readNacosConfigurations(connection(server.origin, ["orders.yaml", "orders.yaml"])), /invalid_nacos_configuration_target/);
+    await assert.rejects(readNacosConfigurations(connection(server.origin, ["../orders.yaml"])), /invalid_nacos_configuration_target/);
+    await assert.rejects(readNacosConfigurations(connection(server.origin, ["oversized.yaml"])), /capability_result_too_large/);
+  } finally {
+    await server.close();
+  }
 });

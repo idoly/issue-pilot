@@ -2,140 +2,165 @@
 
 ## 进程
 
-开发环境通常运行三个进程：
-
 | 组件 | 默认地址 | 启动方式 |
 | --- | --- | --- |
 | Fastify API | `http://127.0.0.1:3000` | `npm run server` |
 | SolidJS/Vite | `http://127.0.0.1:4173` | `npm run dev:web -- --host 127.0.0.1` |
 | code-server | `http://127.0.0.1:18080` | `infra/code-server.sh ensure` |
 
-API 收到 `SIGINT` 或 `SIGTERM` 时只执行一次 Fastify close。长连接会随服务关闭，未完成的 Agent workspace 在下次 API 启动时标记为失败并恢复工单状态。
+API 收到 `SIGINT` 或 `SIGTERM` 时只关闭一次 Fastify。未完成的 Agent workspace 在下次启动时标记为失败并恢复工单状态。
 
-## 环境变量
-
-### API 和状态
+## API 环境变量
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | API 监听地址 |
 | `PORT` | `3000` | API 监听端口 |
-| `ISSUE_PILOT_STATE_ROOT` | `.issue-pilot` | 数据库、workspace、session、工具和 code-server 状态根目录 |
+| `ISSUE_PILOT_STATE_ROOT` | `.issue-pilot` | 数据库、workspace 和 session 状态根目录 |
 | `ISSUE_PILOT_DATABASE` | `<state-root>/issues.db` | SQLite 文件 |
 | `ISSUE_PILOT_SUBJECT` | 本地默认用户 | 未认证部署中的当前操作人 |
-| `ISSUE_PILOT_INTERNAL_URL` | `http://127.0.0.1:3000` | Pi extension 回调 capability broker 的内部地址 |
 | `NODE_ENV` | 未设置 | `test` 时关闭默认 Fastify logger |
+| `ISSUE_PILOT_ALIYUN_CLI` | `/usr/local/sbin/aliyun` | SLS 使用的宿主 Aliyun CLI |
+| `PI_PLAYWRIGHT_CORE_ROOT` | `/usr/local/node/lib/node_modules/playwright-core` | 宿主全局 Playwright core |
+| `PI_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.62.1-noble` | 临时浏览器容器镜像 |
 
-### 能力
-
-| 变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| `PI_TOOL_CACHE_ROOT` | `<state-root>/tools` | Playwright 工具缓存 |
-| `PI_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.62.1-noble` | Playwright 临时容器镜像 |
-| `PI_NACOS_IMAGE` | `docker.io/library/node:26.5.1-bookworm-slim` | Nacos 临时容器镜像 |
-| `ISSUE_PILOT_ALIYUN_CLI` | `/usr/local/sbin/aliyun` | Aliyun CLI 路径 |
-| `ISSUE_PILOT_ALIYUN_PLUGIN_DIR` | `~/.aliyun/plugins` | Aliyun CLI plugin 目录 |
-
-`ISSUE_PILOT_RUNTIME_CONFIG` 由 AgentEngine 为 Pi RPC 子进程临时设置，包含 issue ID、能力列表、broker URL 和一次性 token。不要手工配置。
-
-### code-server
-
-常用变量：
-
-- `ISSUE_PILOT_CODE_SERVER_URL`
-- `ISSUE_PILOT_CODE_SERVER_SCRIPT`
-- `ISSUE_PILOT_CODE_SERVER_IMAGE`
-- `ISSUE_PILOT_CODE_SERVER_PORT`
-- `ISSUE_PILOT_CODE_SERVER_PASSWORD_FILE`
-- `ISSUE_PILOT_CODE_SERVER_DATA`
-- `ISSUE_PILOT_CODE_SERVER_PI_DATA`
-- `ISSUE_PILOT_CODE_SERVER_PI_CONFIG_ROOT`
-- `ISSUE_PILOT_CODE_SERVER_NODE_RUNTIME`
-
-脚本还允许覆盖 workspace、repository、Git binary、Git exec path 和所需动态库路径。完整名称以 `infra/code-server.sh` 为准。
+code-server 不读取环境变量覆盖；部署路径全部写在 `infra/code-server.sh` 中。
 
 ## 数据库和迁移
-
-手工迁移：
 
 ```bash
 npm run db:migrate
 ```
 
-API 启动时也会运行 migration。执行破坏性迁移前：
+API 启动时也会运行 migration。破坏性迁移前：
 
-1. 停止 API，防止同时写入。
-2. 复制 `.issue-pilot/issues.db` 及现有 `-wal`、`-shm` 文件，或在 SQLite checkpoint 后备份数据库。
+1. 停止 API。
+2. 复制 `.issue-pilot/issues.db` 及现有 `-wal`、`-shm`，或先执行 SQLite checkpoint。
 3. 执行迁移。
-4. 启动 API并检查 `/health`、`/api/config` 和已有工单。
+4. 启动 API，检查 `/health`、`/api/config` 和已有工单。
 
-数据库包含 deployment credentials，备份文件必须使用私有权限并按密钥材料管理。
+数据库和备份包含 deployment credentials，必须使用私有权限。
 
-## 容器准备
-
-准备 Pi 工具：
+## Agent 工具准备
 
 ```bash
 infra/pi-tools.sh prepare
 infra/pi-tools.sh status
 ```
 
-该脚本拉取固定 Node、Maven 和 Playwright 镜像，并把 `playwright-core@1.62.1` 安装到状态目录。`status` 还会检查是否存在不应持续运行的 pi-tool 容器。
+`prepare` 只做两件事：
 
-清理工具缓存：
+1. 在宿主 Node global prefix 安装 `playwright-core@1.62.1`。
+2. 准备 `mcr.microsoft.com/playwright:v1.62.1-noble` 浏览器镜像。
+
+Node 和 Maven project wrapper 均直接使用宿主命令，不拉取工具镜像。Playwright capability 调用时才启动带 `--rm` 的临时浏览器容器；不会保留长驻 pi-tool 容器。
+
+卸载全局 Playwright core：
 
 ```bash
 infra/pi-tools.sh clean
 ```
 
-Nacos 和 Playwright 容器按能力调用临时启动并使用 `--rm`。Redis、MySQL、Elasticsearch 和 RabbitMQ 不使用工具容器。
+## SLS CLI
 
-## code-server
-
-启动或修复共享容器：
+Issue Pilot 使用 Aliyun CLI 3.4.11 内置的 `Sls 2020-12-30 GetLogs`，不需要 `aliyun-cli-sls` plugin。可验证：
 
 ```bash
+aliyun plugin list
+aliyun sls GetLogs help
+```
+
+调用时 `infra/aliyun-profile.sh` 设置 `ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP=true`，确保使用内置产品 API。deployment AccessKey 写入临时 `0600` profile，调用结束立即删除。
+
+## code-server 部署
+
+### 固定约定
+
+`infra/code-server.sh` 不接受项目环境变量覆盖。固定值如下：
+
+| 项目 | 固定值 |
+| --- | --- |
+| 容器名 | `code-server` |
+| 镜像 | `ghcr.io/coder/code-server:4.131.0-39` |
+| 地址 | `127.0.0.1:18080` -> container `8080` |
+| workspace | `<repo>/.issue-pilot/workspaces` |
+| bare repository cache | `<repo>/.issue-pilot/repositories` |
+| code-server data/plugins | `<repo>/.issue-pilot/code-server/data` |
+| password | `<repo>/.issue-pilot/code-server/password` |
+
+脚本不构建自定义镜像。首次缺少官方镜像时只执行 `podman pull`；容器以 `/home/coder/state/workspaces` 为 workdir，直接使用镜像自带 entrypoint 和 bind address。
+
+### 宿主运行时挂载
+
+| 宿主路径 | 容器路径 | 模式 | 用途 |
+| --- | --- | --- | --- |
+| `/usr/local/node` | `/opt/host/node` | read-only | Node、npm、corepack、Pi |
+| `/usr/local/java` | `/opt/host/java` | read-only | 当前 Java 25 |
+| `/usr/local/maven` | `/opt/host/maven` | read-only | Maven 3.9.16 |
+| `/usr/bin/git` | `/opt/host/git/bin/git` | read-only | Git 2.55.0 |
+| `/usr/libexec/git-core` | `/opt/host/git/libexec/git-core` | read-only | Git 子命令 |
+| `/usr/share/git-core` | `/opt/host/git/share/git-core` | read-only | Git templates |
+| `/lib64/libpcre2-8.so.0` | `/opt/host/git/lib/libpcre2-8.so.0` | read-only | Git runtime library |
+| `/lib64/libz.so.1` | `/opt/host/git/lib/libz.so.1` | read-only | Git runtime library |
+
+Git 必须与宿主保持同一版本，因为 worktree 使用 Git 2.55.0 的 `relativeWorktrees` repository extension。只挂 binary 不够，必须同时挂 exec path、templates 和动态库。
+
+### 宿主配置和缓存挂载
+
+| 宿主路径 | 容器路径 | 模式 |
+| --- | --- | --- |
+| `~/.m2` | `/home/coder/.m2` | read-write |
+| `~/.npm` | `/home/coder/.npm` | read-write |
+| `~/.npmrc` | `/home/coder/.npmrc` | read-only |
+| `~/.pi/agent` | `/home/coder/.pi/agent` | read-write |
+
+因此 code-server Maven 直接复用本机 `settings.xml` 和已下载的 `~/.m2/repository`；npm 和 Pi 也使用本机状态。code-server 内运行的进程能访问这些凭据，只应在可信本机使用。
+
+### Java 版本
+
+当前脚本和 editor settings 指向 `/usr/local/java`，并登记为 `JavaSE-25`。后续把宿主 Linux Java 替换为 Java 8 时：
+
+1. 保持路径 `/usr/local/java` 不变。
+2. 把脚本中 `JavaSE-25` 改为 `JavaSE-1.8`。
+3. 删除并重建容器以刷新 bind mount：
+
+```bash
+podman rm --force code-server
 infra/code-server.sh ensure
 ```
 
-查看状态或停止：
+这不是镜像 rebuild；仍使用同一个官方 code-server 镜像。
+
+### 插件
+
+插件安装在宿主目录：
+
+```text
+.issue-pilot/code-server/data/extensions
+```
+
+在 code-server Extensions 页面安装或卸载即可，容器重建不会丢失，也不需要修改镜像。不要直接挂 Windows 的 `win32-x64` extension 目录到 Linux code-server；Java 等平台扩展应在 code-server 内安装 Linux 版本。
+
+### 操作
 
 ```bash
+infra/code-server.sh ensure
 infra/code-server.sh status
 infra/code-server.sh stop
 ```
 
-密码默认保存在 `.issue-pilot/code-server/password`，权限为 `0600`。端口默认只发布到 `127.0.0.1:18080`。Pi 的认证和模型配置以只读方式挂载，code-server 的独立 Pi 数据保存在状态目录。
+`ensure` 会校验所有固定宿主路径、更新 editor settings、创建私有密码，并按 runtime label 决定启动或重建容器。容器使用 `userns=keep-id`、`no-new-privileges` 和 `cap-drop ALL`。
 
 ## 健康检查
 
 ```bash
 curl -fsS http://127.0.0.1:3000/health
-```
-
-预期：
-
-```json
-{"ok":true}
-```
-
-配置检查会返回秘密，只在可信终端执行：
-
-```bash
 curl -fsS http://127.0.0.1:3000/api/config
 ```
 
-建议同时检查：
-
-- 服务和 deployment 数量符合预期。
-- 每个 deployment 有 model 和 thinking level。
-- 服务顺序保持创建顺序。
-- 长 Agent 会话能够回放并继续接收 SSE。
-- code-server URL 打开对应工单 folder。
+第二个响应包含真实 secrets，只在可信终端执行。还应检查服务/deployment 数量、model/thinking 配置、Agent SSE replay 和 code-server folder URL。
 
 ## 测试和构建
-
-提交前执行：
 
 ```bash
 npm run typecheck
@@ -144,25 +169,10 @@ npm run build
 git diff --check
 ```
 
-后端测试使用 Node test runner；Web 测试使用 Vitest/jsdom；构建产物写入 `src/web/dist`。
-
 ## 网络暴露
 
-API 当前没有内置认证。即使 `HOST` 支持外部绑定，也不代表可以直接暴露：
-
-1. 保持默认 loopback，或在前方部署认证代理。
-2. 为 API、Web 和 code-server 使用 TLS。
-3. 对 `/api/config` 和 attachment 下载实施严格授权。
-4. 不记录 Authorization、broker token、deployment config 或完整请求体。
-5. code-server 必须验证当前用户是否有权访问工单 workspace。
+API 没有内置认证。保持默认 loopback，或在前方部署认证代理和 TLS。必须限制 `/api/config`、附件下载和 code-server workspace 访问，不记录 deployment config、Authorization 或完整 secret 请求体。
 
 ## 故障处理
 
-Agent 失败后：
-
-- 工单回到 `open`。
-- workspace 状态标记为 `failed` 并保存 `lastError`。
-- runtime token 被撤销，临时 runtime 文件被删除。
-- Pi session JSONL 和已准备的 worktree 保留，便于 retry 继续上下文。
-
-若 API 异常退出，重启时会修复处于 `preparing` 或 `running` 的 workspace。不要直接删除 session JSONL；它是对话历史事实源。删除工单时，状态清理会移除不再存在工单的 workspace 和 session，并 prune Git worktree 元数据。
+Agent 失败后工单回到 `open`，workspace 标记为 `failed`，Pi SDK session 被 abort/dispose；JSONL 和 worktree 保留以便 retry。API 异常退出后，数据库 bootstrap 会修复 `preparing`/`running` 状态。

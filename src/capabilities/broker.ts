@@ -3,15 +3,14 @@ import { Value } from "typebox/value";
 import type { CapabilityName } from "../domain/contracts.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
 import { runPlaywright, type PlaywrightAction } from "./playwright.ts";
-import { readNacosConfigurations, type NacosConnection } from "./nacos.ts";
-import { readElasticsearch, readRabbitMq, readRedis } from "./external-data.ts";
-import { localExecutor, type CommandExecutor } from "./local-exec.ts";
+import { readElasticsearch, readNacosConfigurations, readRabbitMq, readRedis, type NacosConnection } from "./external-data.ts";
+import { localExecutor } from "./local-exec.ts";
 import { capabilityInputSchemas, capabilityResultText, capabilityTextResult, type CapabilityInputs } from "./contracts.ts";
 import { queryMysql, validateReadOnlyQuery } from "./mysql.ts";
 import { readSlsLogs } from "./sls.ts";
 
-export async function readNacosCapability(pi: CommandExecutor, serviceKey: string, nacos: NacosConnection, signal?: AbortSignal) {
-  const text = capabilityResultText({ configurations: await readNacosConfigurations(pi, nacos, signal) });
+export async function readNacosCapability(serviceKey: string, nacos: NacosConnection, signal?: AbortSignal) {
+  const text = capabilityResultText({ configurations: await readNacosConfigurations(nacos, signal) });
   return capabilityTextResult(text, { serviceKey });
 }
 
@@ -49,7 +48,7 @@ export async function executeCapability(policy: IssuePolicy, deploymentConfig: R
     capabilityInput("nacos", input);
     const grant = policy.service.nacos;
     if (!grant || typeof config.serverUrl !== "string" || typeof config.username !== "string") throw new Error("nacos_configuration_not_found");
-    return readNacosCapability(localExecutor, policy.service.serviceKey, {
+    return readNacosCapability(policy.service.serviceKey, {
       serverUrl: grant.serverUrl,
       namespace: grant.namespace,
       group: grant.group,

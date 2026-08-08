@@ -19,8 +19,8 @@
     "db:seed": "node --experimental-strip-types src/db/seed.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.84.0",
-    "@earendil-works/pi-coding-agent": "^0.84.0",
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
     "@fastify/multipart": "^10.1.0",
     "@idoly/ant-design-solid": "0.2.4",
     "@libsql/client": "^0.17.4",

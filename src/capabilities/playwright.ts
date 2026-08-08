@@ -8,6 +8,7 @@ import { capabilityResultText, MAX_BROWSER_ACTIONS, MAX_CAPABILITY_RESULT_BYTES 
 import type { CommandExecutor } from "./local-exec.ts";
 
 const DEFAULT_PLAYWRIGHT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
+const DEFAULT_PLAYWRIGHT_CORE_ROOT = "/usr/local/node/lib/node_modules/playwright-core";
 
 export type PlaywrightAction =
   | { type: "goto"; path: string }
@@ -68,10 +69,8 @@ export async function runPlaywright(pi: CommandExecutor, policy: IssuePolicy, co
   const credentials = playwrightCredentials(policy, config);
   if (input.actions.some((action) => action.type === "login") && (!credentials.username || !credentials.password)) throw new Error("browser_credentials_not_configured");
 
-  const stateRoot = process.env.ISSUE_PILOT_STATE_ROOT ?? path.dirname(path.dirname(policy.workspaceRoot));
-  const toolCacheRoot = process.env.PI_TOOL_CACHE_ROOT ?? path.join(stateRoot, "tools");
-  const toolCache = path.resolve(toolCacheRoot, "playwright");
-  await access(path.join(toolCache, "node_modules", "playwright-core", "package.json"));
+  const playwrightCoreRoot = path.resolve(process.env.PI_PLAYWRIGHT_CORE_ROOT ?? DEFAULT_PLAYWRIGHT_CORE_ROOT);
+  await access(path.join(playwrightCoreRoot, "package.json"));
   const runner = fileURLToPath(new URL("../../infra/playwright-runner.cjs", import.meta.url));
   const uid = process.getuid?.() ?? 1000;
   const gid = process.getgid?.() ?? 1000;
@@ -92,7 +91,7 @@ export async function runPlaywright(pi: CommandExecutor, policy: IssuePolicy, co
       "--volume", `${runner}:/runner/playwright-runner.cjs:ro,Z`,
       "--volume", `${inputDirectory}:/run/input:ro,Z`,
       "--volume", `${secretDirectory}:/run/secrets:ro,Z`,
-      "--volume", `${toolCache}:/tool:ro,Z`,
+      "--volume", `${playwrightCoreRoot}:/tool/node_modules/playwright-core:ro,Z`,
       "--entrypoint", "node",
       process.env.PI_PLAYWRIGHT_IMAGE ?? DEFAULT_PLAYWRIGHT_IMAGE,
       "/runner/playwright-runner.cjs", "/run/input/request.json", "/run/secrets/credentials.json",

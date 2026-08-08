@@ -13,12 +13,12 @@ vi.mock("../data/client", async (importOriginal) => {
     workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable }, agentSession: null,
   });
   const issues = [
+    issue("ISSUE-0041", "客户导出的 CSV 缺少时区信息", "resolved"),
     issue("ISSUE-0042", "结算页提交后订单状态未刷新", "in_progress"),
-    issue("ISSUE-0041", "客户导出的 CSV 缺少时区信息", "pending"),
     issue("ISSUE-0038", "批量审批偶发超时", "open", true),
   ];
   const configuration = {
-    agentModels: [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", thinkingLevels: ["low", "medium", "high"] }],
+    agentModels: [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", contextWindow: 32_000, thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ id: "env-test", key: "test", name: "测试", kind: "test" }],
     capabilityCatalog: [
       { key: "playwright" },
@@ -37,8 +37,8 @@ vi.mock("../data/client", async (importOriginal) => {
   };
   return {
     ...actual,
-    loadPeople: async () => [{ subject: "fixture-user", name: "严欣", email: "owner@example.test" }],
-    loadConfig: async () => structuredClone(configuration),
+    loadPeople: vi.fn(async () => [{ subject: "fixture-user", name: "严欣", email: "owner@example.test" }]),
+    loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: async () => structuredClone(issues),
     getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
     addIssueComment: async (id: string, body: string) => {
@@ -50,7 +50,6 @@ vi.mock("../data/client", async (importOriginal) => {
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
     fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
     sendAgentMessage: vi.fn(async () => undefined),
-    abortAgent: vi.fn(async () => undefined),
     updateService: vi.fn(async () => undefined),
   };
 });
@@ -71,12 +70,13 @@ describe("issue pilot workspace", () => {
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-meta")).toBeTruthy();
     const agentInput = within(agentRegion).getByLabelText("发送给 Agent") as HTMLTextAreaElement;
-    fireEvent.input(agentInput, { target: { value: "继续检查" } });
-    const sendAgentButton = within(agentRegion).getByRole("button", { name: "发送" }) as HTMLButtonElement;
-    await waitFor(() => expect(sendAgentButton.disabled).toBe(false));
-    fireEvent.click(sendAgentButton);
-    const { sendAgentMessage } = await import("../data/client");
-    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-0042", "继续检查"));
+    const pastedMessage = Array.from({ length: 41 }, (_, index) => `line ${index + 1}`).join("\n");
+    fireEvent.paste(agentInput, { clipboardData: { getData: () => pastedMessage } });
+    await waitFor(() => expect(agentInput.value).toBe("[paste #1 +41 lines]"));
+    expect(within(agentRegion).queryByRole("button", { name: "发送" })).toBeNull();
+    fireEvent.keyDown(agentInput, { key: "Enter", code: "Enter", shiftKey: false });
+    const { fetchAttachment, sendAgentMessage } = await import("../data/client");
+    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-0042", pastedMessage));
     fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单工作区" }));
     const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-0042 code-server 编辑器") as HTMLIFrameElement);
     const codeServerUrl = new URL(codeServerFrame.src);
@@ -87,6 +87,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
     await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());
+    expect(fetchAttachment).toHaveBeenCalledTimes(1);
     expect(within(previewDialog).getByRole("button", { name: "复制文字" })).toBeTruthy();
     fireEvent.click(within(previewDialog).getByRole("button", { name: "关闭" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "existing.csv" })).toBeNull());
@@ -136,7 +137,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "工单处理统计" })).toBeTruthy());
     const submitted = await waitFor(() => screen.getByText("提出工单"));
     expect(submitted.parentElement?.textContent).toContain("3");
-    expect(screen.getByText("已完成").parentElement?.textContent).toContain("0");
+    expect(screen.getByText("已完成").parentElement?.textContent).toContain("1");
     expect(screen.getByRole("heading", { name: "个人处理情况" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
@@ -196,6 +197,7 @@ describe("issue pilot workspace", () => {
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
     expect(savedService?.deployments[0]?.db?.password).toBe("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
-
+    expect(client.loadConfig).toHaveBeenCalledTimes(2);
+    expect(client.loadPeople).toHaveBeenCalledTimes(1);
   });
 });

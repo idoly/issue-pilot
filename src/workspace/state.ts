@@ -27,10 +27,6 @@ export function issueAttachmentRoot(stateRoot: string, issueKey: string): string
   return path.join(issueWorkspaceRoot(stateRoot, issueKey), ".issue-pilot", "attachments");
 }
 
-export function toolsRoot(stateRoot: string): string {
-  return path.resolve(stateRoot, "tools");
-}
-
 async function directories(root: string): Promise<string[]> {
   return readdir(root, { withFileTypes: true })
     .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name), () => []);

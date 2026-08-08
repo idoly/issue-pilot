@@ -37,6 +37,13 @@ export interface IssuePolicy {
   service: ServiceGrant;
 }
 
+export function piToolAllowlist(policy: IssuePolicy): string[] {
+  const localTools = policy.service.repositories.every((repository) => repository.codeAccess === "write")
+    ? ["read", "bash", "edit", "write", "grep", "find", "ls"]
+    : ["read", "grep", "find", "ls"];
+  return [...localTools, ...policy.service.capabilities];
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -71,22 +78,38 @@ export function createIssuePolicy(input: {
   }
 
   const codeMutationAllowed = input.service.environmentKind === "dev" && ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(input.issueType);
-  return {
+  const policy: IssuePolicy = {
     issueKey: normalizeIssueKey(input.issueKey),
     issueType: input.issueType,
     workspaceRoot: path.resolve(input.workspaceRoot),
-    model: input.model,
+    model: { ...input.model },
     service: {
       ...input.service,
       capabilities: CAPABILITY_KEYS.filter((capability) => capabilities.has(capability)),
+      ...(input.service.nacos ? { nacos: { ...input.service.nacos, dataIds: [...new Set(input.service.nacos.dataIds)] } } : {}),
       ...(input.service.sls ? { sls: { ...input.service.sls, logstores: [...new Set(input.service.sls.logstores)].sort() } } : {}),
-      repositories: input.service.repositories.map((repository) => ({
+      ...(input.service.playwright ? { playwright: { ...input.service.playwright } } : {}),
+      ...(input.service.db ? { db: { ...input.service.db } } : {}),
+      ...(input.service.redis ? { redis: { ...input.service.redis } } : {}),
+      ...(input.service.es ? { es: { ...input.service.es } } : {}),
+      ...(input.service.mq ? { mq: { ...input.service.mq } } : {}),
+      repositories: input.service.repositories.map((repository) => Object.freeze({
         ...repository,
         codeAccess: codeMutationAllowed && repository.codeAccess === "write" ? "write" : "read",
         repositoryPath: path.resolve(repository.repositoryPath),
       })),
     },
   };
+  Object.freeze(policy.model);
+  Object.freeze(policy.service.capabilities);
+  Object.freeze(policy.service.repositories);
+  if (policy.service.nacos) Object.freeze(policy.service.nacos.dataIds);
+  if (policy.service.sls) Object.freeze(policy.service.sls.logstores);
+  for (const scope of [policy.service.nacos, policy.service.db, policy.service.sls, policy.service.playwright, policy.service.redis, policy.service.es, policy.service.mq]) {
+    if (scope) Object.freeze(scope);
+  }
+  Object.freeze(policy.service);
+  return Object.freeze(policy);
 }
 
 function configObject(config: Record<string, unknown>, key: string): Record<string, unknown> | undefined {

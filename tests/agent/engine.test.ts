@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -21,12 +21,9 @@ test("rejects oversized Agent messages at the engine boundary", async () => {
   await assert.rejects(engine.send("issue", "x".repeat(MAX_AGENT_MESSAGE_CHARS + 1)), /invalid_agent_message/);
 });
 
-test("a failed Agent operation revokes the session and removes its runtime token", async () => {
+test("a failed Agent operation disposes and revokes its SDK session", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-"));
-  const runtimeConfigFile = join(root, "session.runtime.json");
-  await writeFile(runtimeConfigFile, "{}", { mode: 0o600 });
-  let aborted = false;
-  let unsubscribed = false;
+  let stopped = false;
   const published: RunEvent[] = [];
   const transaction = { update: () => ({ set: () => ({ where: async () => undefined }) }) };
   const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
@@ -36,22 +33,15 @@ test("a failed Agent operation revokes the session and removes its runtime token
     schedule(issueId: string, operation: () => Promise<void>): void;
   };
   internal.sessions.set("issue-1", {
-    client: {
-      async abort() { aborted = true; },
-      async stop() { throw new Error("rpc_stop_failed"); },
-    },
     streaming: true,
-    runtimeConfigFile,
-    unsubscribe: () => { unsubscribed = true; },
+    async stop() { stopped = true; },
   });
 
   try {
     internal.schedule("issue-1", async () => { throw new Error("agent_failed"); });
     await waitFor(() => published.some((event) => event.event.type === "issue_status" && event.event.status === "error"));
     assert.equal(internal.sessions.has("issue-1"), false);
-    assert.equal(aborted, true);
-    assert.equal(unsubscribed, true);
-    await assert.rejects(access(runtimeConfigFile));
+    assert.equal(stopped, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -27,6 +27,7 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
         id: model.id,
         name: model.name,
         api: model.api,
+        contextWindow: model.contextWindow,
         thinkingLevels: getSupportedThinkingLevels(model).filter((level): level is AgentThinkingLevel => AGENT_THINKING_LEVELS.includes(level as AgentThinkingLevel)),
       }))
       .sort((left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id));

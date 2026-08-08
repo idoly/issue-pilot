@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { access, chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { and, eq, ne, notInArray, sql } from "drizzle-orm";
-import { RpcClient, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import type { RunEvent } from "./events.ts";
-import { KeyedSerialQueue, createPrivateSessionManager } from "./runtime.ts";
+import { PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
+import { createPrivateSessionManager } from "./session.ts";
 import { CodeServer } from "../workspace/code-server.ts";
 import { preparePiWorkspace } from "../workspace/pi-tools.ts";
-import { issueSessionRoot, issueWorkspaceRoot, toolsRoot } from "../workspace/state.ts";
+import { issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
 import type { openDatabase } from "../db/client.ts";
 import {
   agentSessions,
@@ -22,13 +22,39 @@ import {
   serviceRepositories,
   services,
 } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type CapabilityName, type EnvironmentKind } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type EnvironmentKind } from "../domain/contracts.ts";
 import { repositoryWorkspaceNames, Worktrees } from "../workspace/git.ts";
-import { createDeploymentPolicy, type IssuePolicy } from "../pi/policy.ts";
-import { executeCapability } from "../capabilities/broker.ts";
-import { continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
+import { createDeploymentPolicy } from "../pi/policy.ts";
+import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
 type Database = ReturnType<typeof openDatabase>["db"];
+
+export interface AgentController {
+  enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
+  send(issueId: string, message: string): Promise<void>;
+  isRunning(issueId: string): boolean;
+  closeSession(issueId: string): Promise<void>;
+  close?(): Promise<void>;
+}
+
+class KeyedSerialQueue {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.catch(() => undefined).then(() => current);
+    this.tails.set(key, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.tails.get(key) === tail) this.tails.delete(key);
+    }
+  }
+}
 
 async function exists(filePath: string): Promise<boolean> {
   try {
@@ -39,19 +65,7 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
-interface ManagedSession {
-  client: RpcClient;
-  policy: IssuePolicy;
-  deploymentConfig: Record<string, unknown>;
-  brokerToken: string;
-  sessionFile: string;
-  sessionId: string;
-  runtimeConfigFile: string;
-  streaming: boolean;
-  unsubscribe: () => void;
-}
-
-export class AgentEngine {
+export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
   private readonly worktrees: Worktrees;
@@ -59,7 +73,8 @@ export class AgentEngine {
   private readonly stateRoot: string;
   private readonly db: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
-  private readonly sessions = new Map<string, ManagedSession>();
+  private readonly sessions = new Map<string, ManagedPiSession>();
+  private readonly pi = new PiSessionRuntime();
 
   constructor(db: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
     this.db = db;
@@ -91,15 +106,8 @@ export class AgentEngine {
       return;
     }
     await this.recordUserMessage(issueId, managed, userMessage);
-    if (managed.streaming) await managed.client.steer(promptWithRuntimeTime(userMessage));
+    if (managed.streaming) await managed.session.steer(promptWithRuntimeTime(userMessage));
     else this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage));
-  }
-
-  async abort(issueId: string): Promise<boolean> {
-    const managed = this.sessions.get(issueId);
-    if (!managed?.streaming) return false;
-    await managed.client.abort();
-    return true;
   }
 
   async close(): Promise<void> {
@@ -242,12 +250,21 @@ export class AgentEngine {
     const hadMessages = manager.buildContextEntries().some((entry) => entry.type === "message");
 
     await this.stopSession(issue.id);
-    const managed = await this.createManagedSession(issue.id, workspaceRoot, sessionDirectory, policy, service.deploymentConfig, manager);
+    const managed = await this.pi.start({
+      workspaceRoot,
+      policy,
+      deploymentConfig: service.deploymentConfig,
+      manager,
+      systemPrompt: agentSystemPrompt(policy),
+      onEvent: (event) => this.publishPiEvent(issue.id, event),
+    });
     this.sessions.set(issue.id, managed);
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
-    await this.db.insert(agentSessions).values({ issueId: issue.id, piSessionId: managed.sessionId, sessionFile: managed.sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
+    const sessionFile = manager.getSessionFile();
+    if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
+    await this.db.insert(agentSessions).values({ issueId: issue.id, piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
       target: agentSessions.issueId,
-      set: { piSessionId: managed.sessionId, sessionFile: managed.sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
+      set: { piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
@@ -256,90 +273,26 @@ export class AgentEngine {
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, currentMessage)
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
-    await this.promptAndWait(managed, prompt);
+    await managed.prompt(prompt);
     await this.finalizeRun(issue.id);
 
   }
 
-  private async createManagedSession(issueId: string, workspaceRoot: string, sessionDirectory: string, policy: IssuePolicy, deploymentConfig: Record<string, unknown>, manager: SessionManager): Promise<ManagedSession> {
-    const sessionFile = manager.getSessionFile();
-    const sessionId = manager.getSessionId();
-    if (!sessionFile) throw new Error("failed_to_create_agent_session");
-    const runtimeConfigFile = path.join(sessionDirectory, `${sessionId}.runtime.json`);
-    for (const entry of await readdir(sessionDirectory)) {
-      if (entry.endsWith(".runtime.json")) await rm(path.join(sessionDirectory, entry), { force: true });
-    }
-    const brokerToken = randomUUID();
-    await writeFile(runtimeConfigFile, JSON.stringify({
-      issueId,
-      capabilities: policy.service.capabilities,
-      brokerUrl: process.env.ISSUE_PILOT_INTERNAL_URL ?? "http://127.0.0.1:3000",
-      brokerToken,
-    }), { mode: 0o600 });
-    const cliPath = fileURLToPath(new URL("../../node_modules/@earendil-works/pi-coding-agent/dist/cli.js", import.meta.url));
-    const extensionPath = fileURLToPath(new URL("../pi/rpc-extension.ts", import.meta.url));
-    const client = new RpcClient({
-      cliPath,
-      cwd: workspaceRoot,
-      provider: policy.model.provider,
-      model: policy.model.modelId,
-      env: {
-        ISSUE_PILOT_RUNTIME_CONFIG: runtimeConfigFile,
-        ISSUE_WORKSPACE: workspaceRoot,
-        PI_TOOL_CACHE_ROOT: toolsRoot(this.stateRoot),
-        PATH: `${path.join(workspaceRoot, ".issue-pilot", "bin")}:${process.env.PATH ?? ""}`,
-      },
-      args: [
-        "--session", sessionFile,
-        "--session-dir", sessionDirectory,
-        "--thinking", policy.model.thinkingLevel,
-        "--no-approve",
-        "--extension", extensionPath,
-        "--append-system-prompt", `You are handling ${policy.issueKey} through Issue Pilot. Use the configured capability tools for deployment evidence.`,
-      ],
-    });
-    let managed!: ManagedSession;
-    const unsubscribe = client.onEvent((event) => this.handleRpcEvent(issueId, managed, event));
-    managed = {
-      client, policy, deploymentConfig: structuredClone(deploymentConfig), brokerToken, sessionFile, sessionId, runtimeConfigFile,
-      streaming: false, unsubscribe,
-    };
-    try {
-      await client.start();
-      const state = await client.getState();
-      if (state.sessionId !== sessionId || state.sessionFile !== sessionFile) throw new Error("issue_pilot_rpc_session_mismatch");
-      await Promise.all([client.setAutoCompaction(true), client.setAutoRetry(true)]);
-      return managed;
-    } catch (error) {
-      unsubscribe();
-      await client.stop().catch(() => undefined);
-      await rm(runtimeConfigFile, { force: true });
-      throw error;
-    }
-  }
-
-  private handleRpcEvent(issueId: string, managed: ManagedSession, event: JsonAgentSessionEvent): void {
-    if (event.type === "agent_start") managed.streaming = true;
-    if (event.type === "agent_settled") managed.streaming = false;
+  private publishPiEvent(issueId: string, event: JsonAgentSessionEvent): void {
     this.publish?.({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event });
   }
 
-  private async promptAndWait(managed: ManagedSession, prompt: string): Promise<void> {
-    const settled = managed.client.waitForIdle(30 * 60_000);
-    await Promise.all([managed.client.prompt(prompt), settled]);
-  }
-
-  private async recordUserMessage(issueId: string, managed: ManagedSession, message: string): Promise<void> {
-    await managed.client.prompt(`/issue-user ${Buffer.from(message).toString("base64url")}`);
+  private async recordUserMessage(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
+    managed.session.sessionManager.appendCustomEntry("issue-pilot-user", { message });
     this.publish?.({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message } });
   }
 
-  private async promptExisting(issueId: string, managed: ManagedSession, message: string): Promise<void> {
+  private async promptExisting(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "running", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
       await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
     });
-    await this.promptAndWait(managed, promptWithRuntimeTime(message));
+    await managed.prompt(promptWithRuntimeTime(message));
     await this.finalizeRun(issueId);
   }
 
@@ -355,19 +308,7 @@ export class AgentEngine {
     const managed = this.sessions.get(issueId);
     if (!managed) return;
     this.sessions.delete(issueId);
-    if (managed.streaming) await managed.client.abort().catch(() => undefined);
-    try { managed.unsubscribe(); } catch { /* Session access is already revoked by removing it from the map. */ }
-    try {
-      await managed.client.stop();
-    } finally {
-      await rm(managed.runtimeConfigFile, { force: true });
-    }
-  }
-
-  async invokeCapability(issueId: string, token: string, capability: string, input: unknown, signal?: AbortSignal) {
-    const managed = this.sessions.get(issueId);
-    if (!managed || managed.brokerToken !== token || !managed.policy.service.capabilities.includes(capability as CapabilityName)) throw new Error("capability_not_available");
-    return executeCapability(managed.policy, managed.deploymentConfig, capability as CapabilityName, input, signal);
+    await managed.stop();
   }
 
   private publishStatus(issueId: string, status: "complete" | "error"): void {

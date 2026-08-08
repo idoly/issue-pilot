@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,19 +42,16 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
   if (!scope) throw new Error("sls_scope_not_granted_for_service");
   if (configured.region !== scope.region || configured.project !== scope.project || !Array.isArray(configured.logstores) || !configured.logstores.includes(input.logstore) || !scope.logstores.includes(input.logstore) || typeof configured.accessKeyId !== "string" || typeof configured.accessKeySecret !== "string") throw new Error("sls_configuration_changed");
   const cli = process.env.ISSUE_PILOT_ALIYUN_CLI ?? "/usr/local/sbin/aliyun";
-  const pluginRoot = process.env.ISSUE_PILOT_ALIYUN_PLUGIN_DIR ?? path.join(os.homedir(), ".aliyun", "plugins");
-  const plugin = path.join(pluginRoot, "aliyun-cli-sls", "aliyun-cli-sls");
-  await Promise.all([secureFile(cli), secureFile(plugin)]);
+  await secureFile(cli);
   const profileRoot = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-aliyun-"));
   const aliyunRoot = path.join(profileRoot, ".aliyun");
   await mkdir(aliyunRoot, { mode: 0o700 });
   await writeFile(path.join(aliyunRoot, "config.json"), JSON.stringify({ current: "issue-pilot", profiles: [{ name: "issue-pilot", mode: "AK", region_id: scope.region, output_format: "json", language: "en", site: "China", access_key_id: configured.accessKeyId, access_key_secret: configured.accessKeySecret }] }), { mode: 0o600 });
-  await symlink(pluginRoot, path.join(aliyunRoot, "plugins"));
   try {
     const wrapper = fileURLToPath(new URL("../../infra/aliyun-profile.sh", import.meta.url));
     await secureFile(wrapper);
     const execution = await pi.exec(wrapper, [profileRoot, cli,
-      "sls", "get-logs",
+      "sls", "GetLogs",
       "--endpoint", `${scope.region}.log.aliyuncs.com`,
       "--project", scope.project,
       "--logstore", input.logstore,

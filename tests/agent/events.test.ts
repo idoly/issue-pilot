@@ -3,7 +3,8 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { sessionTranscript } from "../../src/agent/events.ts";
+import { AgentEventBus, sessionTranscript, type RunEvent } from "../../src/agent/events.ts";
+import { sessionFooterStats } from "../../src/agent/footer.ts";
 
 const usage = {
   input: 0,
@@ -13,6 +14,29 @@ const usage = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+test("publishes issue-scoped events until the subscription is revoked", () => {
+  const bus = new AgentEventBus();
+  const received: string[] = [];
+  const event = (id: string, issueId: string): RunEvent => ({ id, issueId, createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
+  const unsubscribe = bus.subscribe("issue-1", ({ id }) => received.push(id));
+  bus.publish(event("one", "issue-1"));
+  bus.publish(event("other", "issue-2"));
+  unsubscribe();
+  unsubscribe();
+  bus.publish(event("two", "issue-1"));
+  assert.deepEqual(received, ["one"]);
+});
+
+test("uses a listener snapshot for each event publication", () => {
+  const bus = new AgentEventBus();
+  const received: string[] = [];
+  let unsubscribeSecond: () => void = () => undefined;
+  bus.subscribe("issue-1", () => { received.push("first"); unsubscribeSecond(); });
+  unsubscribeSecond = bus.subscribe("issue-1", () => received.push("second"));
+  bus.publish({ id: "event", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
+  assert.deepEqual(received, ["first", "second"]);
+});
 
 test("replays the visible transcript from the active Pi session branch", () => {
   const manager = SessionManager.inMemory("/workspace");
@@ -54,4 +78,47 @@ test("replays the visible transcript from the active Pi session branch", () => {
   const toolEvent = transcript[2]!.event;
   assert.ok("result" in toolEvent);
   assert.deepEqual((toolEvent.result as { details?: unknown }).details, { runtime: "container" });
+});
+
+test("calculates Pi footer totals, cache hit rate, and context usage", () => {
+  const manager = SessionManager.inMemory("/workspace");
+  manager.appendMessage({ role: "user", content: "Inspect the issue", timestamp: Date.now() });
+  manager.appendMessage({
+    role: "assistant", api: "openai-responses", provider: "test", model: "test-model",
+    content: [{ type: "text", text: "Inspection complete" }], stopReason: "stop",
+    usage: {
+      input: 500, output: 500, cacheRead: 9_500, cacheWrite: 0, totalTokens: 10_500,
+      cost: { input: 0.1, output: 0.2, cacheRead: 0.05, cacheWrite: 0, total: 0.35 },
+    },
+    timestamp: Date.now(),
+  });
+
+  assert.deepEqual(sessionFooterStats(manager, 20_000), {
+    input: 500, output: 500, cacheRead: 9_500, cacheWrite: 0, cost: 0.35,
+    latestCacheHitRate: 95, contextPercent: 52.5, contextWindow: 20_000, autoCompact: true,
+  });
+});
+
+test("replays the official compaction-aware session context", () => {
+  const manager = SessionManager.inMemory("/workspace");
+  manager.appendMessage({ role: "user", content: "Old internal prompt", timestamp: Date.now() });
+  manager.appendMessage({
+    role: "assistant", api: "openai-responses", provider: "test", model: "test-model",
+    content: [{ type: "text", text: "Old answer" }], stopReason: "stop", usage, timestamp: Date.now(),
+  });
+  const firstKept = manager.appendCustomEntry("issue-pilot-user", { message: "Latest visible request" });
+  manager.appendMessage({ role: "user", content: "Runtime-wrapped latest prompt", timestamp: Date.now() });
+  manager.appendMessage({
+    role: "assistant", api: "openai-responses", provider: "test", model: "test-model",
+    content: [{ type: "text", text: "Latest answer" }], stopReason: "stop", usage, timestamp: Date.now(),
+  });
+  manager.appendCompaction("Earlier work summary", firstKept, 42_000);
+
+  const transcript = sessionTranscript(manager, "issue-1");
+  assert.deepEqual(transcript.map(({ event }) => event.type), ["message_end", "issue_user", "message_end"]);
+  assert.equal(JSON.stringify(transcript).includes("Old answer"), false);
+  assert.equal(JSON.stringify(transcript).includes("Runtime-wrapped latest prompt"), false);
+  const summary = transcript[0]!.event;
+  assert.ok("message" in summary && typeof summary.message === "object" && summary.message.role === "compactionSummary");
+  if ("message" in summary && typeof summary.message === "object" && summary.message.role === "compactionSummary") assert.equal(summary.message.tokensBefore, 42_000);
 });

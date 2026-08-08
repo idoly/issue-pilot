@@ -64,7 +64,7 @@ playwright, nacos, db, redis, mq, es, sls
 - `baseUrl`：必须是 `http://` 或 `https://` URL。
 - `username`、`password`：可同时为空，或同时填写。
 
-URL 不允许嵌入用户名、密码、query 或 fragment。Agent 只能从固定 base URL 发起相对路径导航。登录凭据通过临时 `0600` 文件挂载给运行容器，不进入命令行、policy、session 或工具结果。
+URL 不允许嵌入用户名、密码、query 或 fragment。Agent 只能从固定 base URL 发起相对路径导航。宿主全局 `playwright-core@1.62.1` 提供 runner，固定版本浏览器容器提供 Chromium。登录凭据通过临时 `0600` 文件挂载给浏览器容器，不进入命令行、policy、session 或工具结果。
 
 ### Nacos
 
@@ -138,7 +138,7 @@ Agent 只访问 Management HTTP API 元数据，不建立消费消息的 AMQP �
 - `project`
 - `logstores`：至少一个明确 logstore。
 
-region、project 和 logstore 必须满足保存校验。Agent 只能查询 policy 中列出的 logstore。Aliyun credentials 在执行时写入临时私有配置，不进入 capability 结果。
+region、project 和 logstore 必须满足保存校验。Agent 只能查询 policy 中列出的 logstore。执行使用宿主 Aliyun CLI 内置 `Sls GetLogs`，不依赖 `aliyun-cli-sls` plugin。Aliyun credentials 在执行时写入临时私有配置，不进入 capability 结果。
 
 ## 密钥回写
 

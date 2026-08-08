@@ -90,6 +90,13 @@ test("freezes and validates external capability scopes", () => {
     },
   });
   assert.deepEqual(policy.service.sls, { deploymentId: "orders-test", region: "cn-test", project: "orders-test", logstores: ["application"] });
+  assert.equal(Object.isFrozen(policy), true);
+  assert.equal(Object.isFrozen(policy.model), true);
+  assert.equal(Object.isFrozen(policy.service), true);
+  assert.equal(Object.isFrozen(policy.service.repositories[0]), true);
+  assert.equal(Object.isFrozen(policy.service.sls), true);
+  assert.equal(Object.isFrozen(policy.service.sls?.logstores), true);
+  assert.throws(() => policy.service.sls?.logstores.push("mutated"), TypeError);
 });
 
 test("rejects capability declarations without matching scopes", () => {

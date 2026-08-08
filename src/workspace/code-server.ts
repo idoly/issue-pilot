@@ -8,7 +8,7 @@ import { workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
-export function issueCodeServerUrl(issueKey: string, publicUrl = process.env.ISSUE_PILOT_CODE_SERVER_URL ?? "http://127.0.0.1:18080/"): string {
+export function issueCodeServerUrl(issueKey: string, publicUrl = "http://127.0.0.1:18080/"): string {
   const url = new URL(publicUrl);
   url.searchParams.set("folder", `/home/coder/state/workspaces/${normalizeIssueKey(issueKey).toLowerCase()}`);
   return url.toString();
@@ -21,8 +21,8 @@ export class CodeServer {
 
   constructor(stateRoot: string) {
     this.workspaceRoot = workspacesRoot(stateRoot);
-    this.script = resolve(process.env.ISSUE_PILOT_CODE_SERVER_SCRIPT ?? "infra/code-server.sh");
-    this.publicUrl = new URL(process.env.ISSUE_PILOT_CODE_SERVER_URL ?? "http://127.0.0.1:18080/");
+    this.script = resolve("infra/code-server.sh");
+    this.publicUrl = new URL("http://127.0.0.1:18080/");
   }
 
   async ensure(issueKey: string, workspacePath: string): Promise<string> {
