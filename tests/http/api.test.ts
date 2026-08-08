@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
-import { AGENT_THINKING_LEVELS } from "../../src/pi/models.ts";
+import { AGENT_THINKING_LEVELS } from "../../src/domain/contracts.ts";
 
 const modelCatalog = {
   async list() {

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
+import { MAX_AGENT_MESSAGE_CHARS } from "../../src/domain/contracts.ts";
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -14,6 +15,11 @@ async function waitFor(check: () => boolean): Promise<void> {
   }
   throw new Error("condition_not_met");
 }
+
+test("rejects oversized Agent messages at the engine boundary", async () => {
+  const engine = new AgentEngine({} as never);
+  await assert.rejects(engine.send("issue", "x".repeat(MAX_AGENT_MESSAGE_CHARS + 1)), /invalid_agent_message/);
+});
 
 test("a failed Agent operation revokes the session and removes its runtime token", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-"));

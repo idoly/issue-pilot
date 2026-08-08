@@ -17,7 +17,6 @@ describe("API client", () => {
       type: "smart_analysis",
       serviceKey: "service-a",
       environmentKey: "test",
-      reporter: "User",
       assigneeSubject: null,
       ccSubjects: [],
     }, [file]);

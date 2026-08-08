@@ -4,8 +4,8 @@ import { access, mkdir, rename } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeIssueKey } from "../domain/issue-key.ts";
-import { issueWorkspaceRoot, workspacesRoot } from "./paths.ts";
+import { normalizeIssueKey } from "../domain/contracts.ts";
+import { issueWorkspaceRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 

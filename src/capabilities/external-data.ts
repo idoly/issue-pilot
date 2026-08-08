@@ -1,15 +1,10 @@
 import { Worker } from "node:worker_threads";
 
 import type { IssuePolicy } from "../pi/policy.ts";
-import { capabilityResultText, MAX_CAPABILITY_RESULT_BYTES, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS } from "./limits.ts";
-
-function operationSignal(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(15_000);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
+import { capabilityResultText, capabilitySignal, capabilityTextResult, MAX_CAPABILITY_RESULT_BYTES, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS } from "./contracts.ts";
 
 async function redisCommand(config: Record<string, unknown>, action: string, command: string[], signal?: AbortSignal): Promise<string> {
-  const activeSignal = operationSignal(signal);
+  const activeSignal = capabilitySignal(signal);
   if (activeSignal.aborted) throw activeSignal.reason;
   return new Promise<string>((resolve, reject) => {
     const worker = new Worker(new URL("./redis-worker.ts", import.meta.url), {
@@ -71,7 +66,7 @@ async function httpJson(config: Record<string, unknown>, requestPath: string, si
   const response = await fetch(new URL(requestPath, `http://${config.host}:${config.managementPort}`), {
     redirect: "error",
     headers: { accept: "application/json", ...authHeaders(config) },
-    signal: operationSignal(signal),
+    signal: capabilitySignal(signal),
   });
   return responseJson(response);
 }
@@ -90,32 +85,56 @@ async function elasticsearchRead(config: Record<string, unknown>, input: { actio
     redirect: "error",
     headers: { accept: "application/json", ...(body ? { "content-type": "application/json" } : {}), ...authHeaders(config) },
     ...(body ? { body } : {}),
-    signal: operationSignal(signal),
+    signal: capabilitySignal(signal),
   });
   return responseJson(response);
 }
 
-export async function readRedis(policy: IssuePolicy, config: Record<string, unknown>, input: { action: string; key?: string; keys?: string[]; field?: string; pattern?: string; cursor?: string; limit?: number }, signal?: AbortSignal) {
+interface RedisReadInput {
+  action: string;
+  key?: string;
+  keys?: string[];
+  field?: string;
+  pattern?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+function redisArgument(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value || value.length > 1024 || value.includes("\0")) throw new Error(`invalid_redis_${name}`);
+  return value;
+}
+
+function redisReadCommand(input: RedisReadInput): string[] {
+  switch (input.action) {
+    case "get":
+    case "type":
+    case "ttl":
+    case "hgetall":
+      return [input.action.toUpperCase(), redisArgument(input.key, "key")];
+    case "hget":
+      return ["HGET", redisArgument(input.key, "key"), redisArgument(input.field, "field")];
+    case "mget":
+      if (!input.keys?.length || input.keys.length > MAX_REDIS_KEYS) throw new Error("invalid_redis_keys");
+      return ["MGET", ...input.keys.map((key) => redisArgument(key, "key"))];
+    case "scan": {
+      const limit = input.limit ?? 50;
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_REDIS_RESULTS) throw new Error("invalid_redis_limit");
+      const cursor = input.cursor && /^\d+$/.test(input.cursor) ? input.cursor : "0";
+      const pattern = input.pattern ? redisArgument(input.pattern, "pattern") : "*";
+      return ["SCAN", cursor, "MATCH", pattern, "COUNT", String(limit)];
+    }
+    default:
+      throw new Error("invalid_redis_action");
+  }
+}
+
+export async function readRedis(policy: IssuePolicy, config: Record<string, unknown>, input: RedisReadInput, signal?: AbortSignal) {
   const grant = policy.service.redis;
   if (!grant) throw new Error("redis_scope_not_granted_for_service");
   if (typeof config.host !== "string" || !Number.isInteger(config.port) || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string") || !Number.isInteger(config.database)) throw new Error("redis_configuration_changed");
-  const text = (value: unknown, name: string) => { if (typeof value !== "string" || !value || value.length > 1024 || value.includes("\0")) throw new Error(`invalid_redis_${name}`); return value; };
-  let command: string[];
-  if (input.action === "get" || input.action === "type" || input.action === "ttl" || input.action === "hgetall") command = [input.action.toUpperCase(), text(input.key, "key")];
-  else if (input.action === "hget") command = ["HGET", text(input.key, "key"), text(input.field, "field")];
-  else if (input.action === "mget") {
-    if (!Array.isArray(input.keys) || !input.keys.length || input.keys.length > MAX_REDIS_KEYS) throw new Error("invalid_redis_keys");
-    command = ["MGET", ...input.keys.map((key) => text(key, "key"))];
-  } else if (input.action === "scan") {
-    const limit = input.limit ?? 50;
-    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_REDIS_RESULTS) throw new Error("invalid_redis_limit");
-    command = ["SCAN", input.cursor && /^\d+$/.test(input.cursor) ? input.cursor : "0", "MATCH", input.pattern ? text(input.pattern, "pattern") : "*", "COUNT", String(limit)];
-  } else throw new Error("invalid_redis_action");
-  const output = await redisCommand(config, input.action, command, signal);
-  return {
-    content: [{ type: "text" as const, text: output }],
-    details: { deploymentId: grant.deploymentId },
-  };
+  const output = await redisCommand(config, input.action, redisReadCommand(input), signal);
+  return capabilityTextResult(output, { deploymentId: grant.deploymentId });
 }
 
 export async function readElasticsearch(policy: IssuePolicy, config: Record<string, unknown>, input: { action: "search" | "count" | "mapping"; query?: Record<string, unknown>; limit?: number }, signal?: AbortSignal) {
@@ -126,10 +145,17 @@ export async function readElasticsearch(policy: IssuePolicy, config: Record<stri
   if (!query || typeof query !== "object") throw new Error("invalid_es_query");
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > MAX_ES_RESULTS)) throw new Error("invalid_es_limit");
   const output = await elasticsearchRead(config, { action: input.action, query, ...(input.limit === undefined ? {} : { limit: input.limit }) }, signal);
-  return {
-    content: [{ type: "text" as const, text: capabilityResultText({ action: input.action, output }) }],
-    details: { deploymentId: grant.deploymentId },
-  };
+  return capabilityTextResult(capabilityResultText({ action: input.action, output }), { deploymentId: grant.deploymentId });
+}
+
+function rabbitMqPath(action: "overview" | "queues" | "queue" | "bindings", virtualHost: string, queue?: string): string {
+  const encodedVirtualHost = encodeURIComponent(virtualHost);
+  if (action === "overview") return "/api/overview";
+  if (action === "queues") return `/api/queues/${encodedVirtualHost}`;
+  const encodedQueue = encodeURIComponent(queue!);
+  return action === "queue"
+    ? `/api/queues/${encodedVirtualHost}/${encodedQueue}`
+    : `/api/queues/${encodedVirtualHost}/${encodedQueue}/bindings`;
 }
 
 export async function readRabbitMq(policy: IssuePolicy, config: Record<string, unknown>, input: { action: "overview" | "queues" | "queue" | "bindings"; queue?: string }, signal?: AbortSignal) {
@@ -138,14 +164,7 @@ export async function readRabbitMq(policy: IssuePolicy, config: Record<string, u
   if (config.virtualHost !== grant.virtualHost || typeof config.host !== "string" || !Number.isInteger(config.port) || !Number.isInteger(config.managementPort) || typeof config.username !== "string" || typeof config.password !== "string") throw new Error("mq_configuration_changed");
   const queue = input.queue?.trim();
   if ((input.action === "queue" || input.action === "bindings") && (!queue || queue.length > 255 || queue.includes("\0"))) throw new Error("invalid_mq_queue");
-  const vhost = encodeURIComponent(config.virtualHost as string);
-  const requestPath = input.action === "overview" ? "/api/overview"
-    : input.action === "queues" ? `/api/queues/${vhost}`
-      : input.action === "queue" ? `/api/queues/${vhost}/${encodeURIComponent(queue!)}`
-        : `/api/queues/${vhost}/${encodeURIComponent(queue!)}/bindings`;
+  const requestPath = rabbitMqPath(input.action, config.virtualHost as string, queue);
   const output = await httpJson(config, requestPath, signal);
-  return {
-    content: [{ type: "text" as const, text: capabilityResultText({ action: input.action, output }) }],
-    details: { deploymentId: grant.deploymentId, virtualHost: grant.virtualHost },
-  };
+  return capabilityTextResult(capabilityResultText({ action: input.action, output }), { deploymentId: grant.deploymentId, virtualHost: grant.virtualHost });
 }

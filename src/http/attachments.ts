@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { MultipartFile } from "@fastify/multipart";
@@ -17,7 +18,7 @@ export interface PendingAttachment {
   sha256: string;
 }
 
-export async function readAttachment(part: MultipartFile, currentBytes: number): Promise<PendingAttachment> {
+export async function readMultipartAttachment(part: MultipartFile, currentBytes: number): Promise<PendingAttachment> {
   const chunks: Buffer[] = [];
   let size = currentBytes;
   for await (const chunk of part.file) {
@@ -33,7 +34,14 @@ export async function readAttachment(part: MultipartFile, currentBytes: number):
   return { fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") };
 }
 
-export function attachmentItem(attachment: typeof issueAttachments.$inferSelect) {
+export async function resolveSecureAttachmentFile(directory: string, objectKey: string, expectedSize?: number): Promise<string> {
+  const source = path.resolve(objectKey);
+  const metadata = await stat(source).catch(() => undefined);
+  if (path.dirname(source) !== directory || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && (metadata.size !== expectedSize || metadata.size > MAX_ATTACHMENT_BYTES))) throw new Error("insecure_issue_attachment_file");
+  return source;
+}
+
+export function serializeAttachment(attachment: typeof issueAttachments.$inferSelect) {
   return {
     id: attachment.id,
     fileName: attachment.fileName,

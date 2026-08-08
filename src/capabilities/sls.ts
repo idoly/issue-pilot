@@ -4,10 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { IssuePolicy } from "../pi/policy.ts";
-import { capabilityResultText, MAX_SLS_RESULTS } from "./limits.ts";
+import { capabilityResultText, capabilityTextResult, isSlsLogstore, MAX_SLS_RESULTS } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
-const LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 const DEFAULT_TRACE_WINDOW_SECONDS = 24 * 60 * 60;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -24,7 +23,7 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
   trace_id?: string;
   limit?: number;
 }, configured: Record<string, unknown>, signal?: AbortSignal) {
-  if (!LOGSTORE.test(input.logstore)) throw new Error("invalid_sls_logstore");
+  if (!isSlsLogstore(input.logstore)) throw new Error("invalid_sls_logstore");
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
   const now = Math.floor(Date.now() / 1000);
   const to = input.to ?? now;
@@ -83,10 +82,7 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
       possiblyIncomplete: returnedRows === null || returnedRows >= limit,
     };
     const text = capabilityResultText({ query: queryMetadata, records: parsed });
-    return {
-      content: [{ type: "text" as const, text }],
-      details: { provider: "aliyun-sls", ...queryMetadata, runtime: "local-cli" },
-    };
+    return capabilityTextResult(text, { provider: "aliyun-sls", ...queryMetadata, runtime: "local-cli" });
   } finally {
     await rm(profileRoot, { recursive: true, force: true });
   }

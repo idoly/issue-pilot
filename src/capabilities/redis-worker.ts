@@ -2,7 +2,7 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { createClient } from "redis";
 
-import { capabilityResultText } from "./limits.ts";
+import { capabilityResultText } from "./contracts.ts";
 
 type Input = {
   action: string;

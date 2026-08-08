@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { ENVIRONMENT_KINDS, ISSUE_STATUSES, ISSUE_TYPES, type DeploymentConfig } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, REPOSITORY_KINDS, type DeploymentConfig } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -31,13 +31,13 @@ export const serviceDeployments = sqliteTable("service_deployments", {
 }, (table) => [uniqueIndex("service_deployment_unique").on(table.serviceId, table.environmentId)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {
-  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), kind: text("kind", { enum: ["frontend", "backend"] }).notNull().default("backend"), url: text("url").notNull(), ...timestamps,
+  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), kind: text("kind", { enum: REPOSITORY_KINDS }).notNull().default("backend"), url: text("url").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("service_repository_url_unique").on(table.serviceId, table.url)]);
 
 export const issues = sqliteTable("issues", {
   id: id(), key: text("key").notNull(), title: text("title").notNull(), description: text("description").notNull().default(""),
   status: text("status", { enum: ISSUE_STATUSES }).notNull().default("open"),
-  priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] }).notNull().default("p2"),
+  priority: text("priority", { enum: ISSUE_PRIORITIES }).notNull().default("p2"),
   type: text("type", { enum: ISSUE_TYPES }).notNull().default("smart_analysis"),
   serviceId: text("service_id").notNull().references(() => services.id), environmentId: text("environment_id").notNull().references(() => environments.id),
   reporterSubject: text("reporter_subject").notNull().references(() => subjects.subject), assigneeSubject: text("assignee_subject").references(() => subjects.subject),

@@ -7,10 +7,10 @@ import { and, eq, ne, notInArray, sql } from "drizzle-orm";
 import { RpcClient, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import type { RunEvent } from "./events.ts";
-import { createPrivateSessionManager } from "./session.ts";
+import { KeyedSerialQueue, createPrivateSessionManager } from "./runtime.ts";
 import { CodeServer } from "../workspace/code-server.ts";
 import { preparePiWorkspace } from "../workspace/pi-tools.ts";
-import { issueSessionRoot, issueWorkspaceRoot, toolsRoot } from "../workspace/paths.ts";
+import { issueSessionRoot, issueWorkspaceRoot, toolsRoot } from "../workspace/state.ts";
 import type { openDatabase } from "../db/client.ts";
 import {
   agentSessions,
@@ -22,11 +22,10 @@ import {
   serviceRepositories,
   services,
 } from "../db/schema.ts";
-import type { CapabilityName } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type CapabilityName, type EnvironmentKind } from "../domain/contracts.ts";
 import { repositoryWorkspaceNames, Worktrees } from "../workspace/git.ts";
 import { createDeploymentPolicy, type IssuePolicy } from "../pi/policy.ts";
 import { executeCapability } from "../capabilities/broker.ts";
-import { Coordinator } from "./coordinator.ts";
 import { continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
 type Database = ReturnType<typeof openDatabase>["db"];
@@ -53,7 +52,7 @@ interface ManagedSession {
 }
 
 export class AgentEngine {
-  private readonly queue = new Coordinator();
+  private readonly issueQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
   private readonly worktrees: Worktrees;
   private readonly codeServer: CodeServer;
@@ -84,6 +83,7 @@ export class AgentEngine {
 
   async send(issueId: string, message: string): Promise<void> {
     if (!message.trim()) throw new Error("agent_message_required");
+    if (message.length > MAX_AGENT_MESSAGE_CHARS) throw new Error("invalid_agent_message");
     const userMessage = message.trim();
     const managed = this.sessions.get(issueId);
     if (!managed) {
@@ -108,7 +108,7 @@ export class AgentEngine {
 
   private schedule(issueId: string, operation: () => Promise<void>): void {
     this.runCounts.set(issueId, (this.runCounts.get(issueId) ?? 0) + 1);
-    void this.queue.run(issueId, operation).catch(async (error) => {
+    void this.issueQueue.run(issueId, operation).catch(async (error) => {
       await this.stopSession(issueId).catch(() => undefined);
       try {
         await this.db.transaction(async (transaction) => {
@@ -153,7 +153,7 @@ export class AgentEngine {
       .where(eq(services.id, issue.serviceId))
       .limit(1);
     if (!service) throw new Error("issue_service_deployment_not_found");
-    if (service.environmentKind !== "prod" && service.environmentKind !== "test" && service.environmentKind !== "dev") throw new Error("unsupported_issue_environment_kind");
+    if (!ENVIRONMENT_KINDS.includes(service.environmentKind as EnvironmentKind)) throw new Error("unsupported_issue_environment_kind");
     const worktreeMode = service.environmentKind === "dev" && issue.type === "defect_fix"
       ? "hotfix" as const
       : service.environmentKind === "dev" && issue.type === "feature_development"

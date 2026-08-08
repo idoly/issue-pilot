@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/configuration.ts";
+import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/nacos.ts";
 import type { CommandExecutor } from "../../src/capabilities/local-exec.ts";
-import { readConfiguration } from "../../src/capabilities/queries.ts";
+import { readNacosCapability } from "../../src/capabilities/broker.ts";
 
 const connection: NacosConnection = {
   serverUrl: "https://managed-nacos.example.test",
@@ -46,7 +46,7 @@ test("reads only page-authorized Nacos data IDs through the managed connection",
     assert.doesNotMatch(call.join(" "), /managed-user|managed-secret/);
   }
 
-  const toolResult = await readConfiguration(pi, "orders", { ...connection, dataIds: ["orders.yaml"] });
+  const toolResult = await readNacosCapability(pi, "orders", { ...connection, dataIds: ["orders.yaml"] });
   const output = JSON.stringify(toolResult);
   assert.match(output, /business-secret/);
   assert.doesNotMatch(output, /managed-user|managed-secret/);

@@ -1,10 +1,10 @@
 import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type QueryError, type RowDataPacket } from "mysql2";
 
-import { MAX_CAPABILITY_RESULT_BYTES, MAX_DATABASE_ROWS } from "./limits.ts";
+import { capabilitySignal, MAX_CAPABILITY_RESULT_BYTES, MAX_DATABASE_QUERY_CHARS, MAX_DATABASE_ROWS } from "./contracts.ts";
 
 export function validateReadOnlyQuery(value: string): string {
   const statement = value.trim().replace(/;\s*$/, "");
-  if (!statement || statement.length > 20_000) throw new Error("invalid_database_query");
+  if (!statement || statement.length > MAX_DATABASE_QUERY_CHARS) throw new Error("invalid_database_query");
   if (statement.includes(";") || /--|#|\/\*/.test(statement)) throw new Error("database_query_must_be_one_statement_without_comments");
   if (!/^(select|show|describe|desc|explain)\b/i.test(statement)) throw new Error("database_query_must_be_read_only");
   if (/\b(insert|update|delete|replace|create|alter|drop|truncate|rename|grant|revoke|call|do|handler|load|lock|unlock|set|use|begin|commit|rollback|savepoint|release)\b/i.test(statement)) throw new Error("database_query_must_be_read_only");
@@ -51,7 +51,7 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
 
   let connection: Connection | undefined;
   let destroyed = false;
-  const activeSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
+  const activeSignal = capabilitySignal(signal);
   const abort = () => {
     destroyed = true;
     connection?.destroy();

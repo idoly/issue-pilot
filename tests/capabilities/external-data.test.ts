@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { readElasticsearch, readRabbitMq, readRedis } from "../../src/capabilities/external.ts";
-import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/limits.ts";
+import { readElasticsearch, readRabbitMq, readRedis } from "../../src/capabilities/external-data.ts";
+import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/contracts.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 async function fixture() {

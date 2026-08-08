@@ -1,6 +1,8 @@
-import type { IssuePriority, IssueStatus, IssueType } from "../data/client";
+import { ISSUE_PRIORITIES, type IssuePriority, type IssueStatus, type IssueType } from "../data/client";
 
 export const priorityColor: Record<IssuePriority, string> = { p0: "red", p1: "volcano", p2: "blue", p3: "default" };
+const priorityLabel: Record<IssuePriority, string> = { p0: "P0 · 紧急", p1: "P1 · 高", p2: "P2 · 中", p3: "P3 · 低" };
+export const priorityOptions = ISSUE_PRIORITIES.map((value) => ({ value, label: priorityLabel[value] }));
 export const statusLabel: Record<IssueStatus, string> = {
   open: "待处理",
   in_progress: "处理中",

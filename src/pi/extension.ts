@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { capabilityInputSchemas } from "../capabilities/tool-schemas.ts";
+import { capabilityInputSchemas } from "../capabilities/contracts.ts";
 import type { CapabilityName } from "../domain/contracts.ts";
 
 export interface IssuePilotExtensionOptions {

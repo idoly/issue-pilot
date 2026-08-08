@@ -1,22 +1,152 @@
 import { and, eq, inArray } from "drizzle-orm";
 
-import { browserConfiguration, dbConfiguration, esConfiguration, mqConfiguration, nacosConfiguration, parseCapabilities, redisConfiguration, slsConfiguration } from "../capabilities/http-config.ts";
+import { isNacosTarget, isSlsLogstore, MAX_NACOS_DATA_IDS } from "../capabilities/contracts.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
-import { AGENT_THINKING_LEVELS, type AgentModelCatalog, type AgentThinkingLevel } from "../pi/models.ts";
-import { ApiError, choice, optionalText, record, text } from "./input.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, REPOSITORY_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import type { AgentModelCatalog } from "../pi/models.ts";
+import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 
-const REPOSITORY_KINDS = ["frontend", "backend"] as const;
+const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
 
-function agentConfiguration(value: unknown): { provider: string; model: string; thinkingLevel: AgentThinkingLevel } {
+const configurationInput = (value: unknown, required: boolean) => required ? record(value) : undefined;
+const optionalString = (value: unknown, maximum = 10_000) => optionalText(value, maximum) ?? "";
+
+function optionalCredentials(input: Record<string, unknown>, name: string) {
+  const username = optionalString(input.username, 500);
+  const password = optionalString(input.password);
+  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, `invalid_${name}_credentials`);
+  return { username, ...(password ? { password } : {}) };
+}
+
+function boundedInteger(value: unknown, name: string, minimum: number, maximum: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) throw new ApiError(400, `invalid_${name}`);
+  return parsed;
+}
+
+function parseConnectionUrl(value: unknown, name: string, protocols: string[], options: { rootOnly?: boolean } = {}): string {
+  const configured = text(value, name, 4096);
+  let parsed: URL;
+  try { parsed = new URL(configured); } catch { throw new ApiError(400, `invalid_${name}`); }
+  if (!protocols.includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || (options.rootOnly && parsed.pathname !== "/")) throw new ApiError(400, `invalid_${name}`);
+  return configured;
+}
+
+export function parseCapabilities(value: unknown): CapabilityName[] {
+  const entries = strings(value, "capabilities");
+  if (new Set(entries).size !== entries.length || entries.some((entry) => !CAPABILITY_KEYS.includes(entry as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
+  return CAPABILITY_KEYS.filter((key) => entries.includes(key));
+}
+
+export function parseNacosConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  const credentials = optionalCredentials(input, "nacos");
+  const dataIds = [...new Set(strings(input.dataIds, "nacos_data_ids").map((value) => text(value, "nacos_data_id", 255)))];
+  if (!dataIds.length || dataIds.length > MAX_NACOS_DATA_IDS || dataIds.some((dataId) => !isNacosTarget(dataId))) throw new ApiError(400, "invalid_nacos_data_ids");
+  const group = text(input.group, "nacos_group", 255);
+  if (!isNacosTarget(group)) throw new ApiError(400, "invalid_nacos_group");
+  return {
+    serverUrl: parseConnectionUrl(input.serverUrl, "nacos_server_url", ["http:", "https:"], { rootOnly: true }),
+    namespace: optionalString(input.namespace, 255), group, dataIds, ...credentials,
+  };
+}
+
+export function parseDatabaseConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  const url = parseConnectionUrl(input.url, "db_url", ["mysql:"]);
+  if (new URL(url).pathname === "/") throw new ApiError(400, "invalid_db_url");
+  return { url, username: text(input.username, "db_username", 500), password: text(input.password, "db_password") };
+}
+
+export function parseSlsConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  const region = text(input.region, "sls_region", 63);
+  const project = text(input.project, "sls_project", 63);
+  const logstores = [...new Set(strings(input.logstores, "sls_logstores").map((value) => text(value, "sls_logstore", 63)))];
+  if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some((logstore) => !isSlsLogstore(logstore))) throw new ApiError(400, "invalid_sls_scope");
+  return { accessKeyId: text(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: text(input.accessKeySecret, "sls_access_key_secret"), region, project, logstores };
+}
+
+export function parseRedisConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  const password = optionalString(input.password);
+  return { host: text(input.host, "redis_host", 255), port: boundedInteger(input.port ?? 6379, "redis_port", 1, 65_535), username: optionalString(input.username, 500), ...(password ? { password } : {}), database: boundedInteger(input.database ?? 0, "redis_database", 0, 1_000_000) };
+}
+
+export function parseElasticsearchConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  return { url: parseConnectionUrl(input.url, "es_url", ["http:", "https:"]), ...optionalCredentials(input, "es") };
+}
+
+export function parseRabbitMqConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  return { host: text(input.host, "mq_host", 255), port: boundedInteger(input.port ?? 5672, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? 15672, "mq_management_port", 1, 65_535), username: text(input.username, "mq_username", 500), password: text(input.password, "mq_password"), virtualHost: text(input.virtualHost, "mq_virtual_host", 255) };
+}
+
+export function parsePlaywrightConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  return { baseUrl: parseConnectionUrl(input.baseUrl, "browser_base_url", ["http:", "https:"]), ...optionalCredentials(input, "browser") };
+}
+
+function parseAgentConfiguration(value: unknown): AgentConfiguration {
   if (value === undefined || value === null) throw new ApiError(400, "agent_configuration_required");
   const input = record(value);
   return {
     provider: text(input.provider, "agent_provider", 200),
     model: text(input.model, "agent_model", 500),
     thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS),
+  };
+}
+
+function parseServiceConfigurationInput(input: Record<string, unknown>) {
+  const repositories = Array.isArray(input.repositories) ? input.repositories.map(record).map((repository) => ({
+    id: optionalText(repository.id, 255),
+    kind: choice(repository.kind, "repository_kind", REPOSITORY_KINDS),
+    url: text(repository.url, "repository_url"),
+  })) : [];
+  if (!repositories.length) throw new ApiError(400, "repository_required");
+  if (new Set(repositories.map((repository) => repository.url)).size !== repositories.length) throw new ApiError(400, "duplicate_repository");
+
+  const deployments = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => {
+    const capabilities = parseCapabilities(deployment.capabilities ?? []);
+    return {
+      environmentKey: text(deployment.environmentKey, "environment_key", 100),
+      baseBranch: text(deployment.baseBranch, "base_branch", 255),
+      capabilities,
+      agent: parseAgentConfiguration(deployment.agent),
+      nacos: parseNacosConfiguration(deployment.nacos, capabilities.includes("nacos")),
+      db: parseDatabaseConfiguration(deployment.db, capabilities.includes("db")),
+      sls: parseSlsConfiguration(deployment.sls, capabilities.includes("sls")),
+      playwright: parsePlaywrightConfiguration(deployment.playwright, capabilities.includes("playwright")),
+      redis: parseRedisConfiguration(deployment.redis, capabilities.includes("redis")),
+      es: parseElasticsearchConfiguration(deployment.es, capabilities.includes("es")),
+      mq: parseRabbitMqConfiguration(deployment.mq, capabilities.includes("mq")),
+    };
+  }) : [];
+  if (new Set(deployments.map((deployment) => deployment.environmentKey)).size !== deployments.length) throw new ApiError(400, "duplicate_deployment_environment");
+  return { repositories, deployments };
+}
+
+function storedDeploymentConfiguration(deployment: ReturnType<typeof parseServiceConfigurationInput>["deployments"][number]) {
+  return {
+    agent: deployment.agent,
+    ...(deployment.playwright ? { playwright: deployment.playwright } : {}),
+    ...(deployment.nacos ? { nacos: deployment.nacos } : {}),
+    ...(deployment.db ? { db: deployment.db } : {}),
+    ...(deployment.redis ? { redis: deployment.redis } : {}),
+    ...(deployment.mq ? { mq: deployment.mq } : {}),
+    ...(deployment.es ? { es: deployment.es } : {}),
+    ...(deployment.sls ? { sls: deployment.sls } : {}),
   };
 }
 
@@ -28,31 +158,7 @@ export async function replaceServiceConfiguration(options: {
   serviceUpdate?: { name: string; description: string };
 }): Promise<void> {
   const { executor, modelCatalog, serviceId, input, serviceUpdate } = options;
-  const repositoriesInput = Array.isArray(input.repositories) ? input.repositories.map(record).map((repository) => ({
-    id: optionalText(repository.id, 255),
-    kind: choice(repository.kind, "repository_kind", REPOSITORY_KINDS),
-    url: text(repository.url, "repository_url"),
-  })) : [];
-  if (!repositoriesInput.length) throw new ApiError(400, "repository_required");
-  if (new Set(repositoriesInput.map((repository) => repository.url)).size !== repositoriesInput.length) throw new ApiError(400, "duplicate_repository");
-
-  const deploymentsInput = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => {
-    const capabilities = parseCapabilities(deployment.capabilities ?? []);
-    return {
-      environmentKey: text(deployment.environmentKey, "environment_key", 100),
-      baseBranch: text(deployment.baseBranch, "base_branch", 255),
-      capabilities,
-      agent: agentConfiguration(deployment.agent),
-      nacos: nacosConfiguration(deployment.nacos, capabilities.includes("nacos")),
-      db: dbConfiguration(deployment.db, capabilities.includes("db")),
-      sls: slsConfiguration(deployment.sls, capabilities.includes("sls")),
-      playwright: browserConfiguration(deployment.playwright, capabilities.includes("playwright")),
-      redis: redisConfiguration(deployment.redis, capabilities.includes("redis")),
-      es: esConfiguration(deployment.es, capabilities.includes("es")),
-      mq: mqConfiguration(deployment.mq, capabilities.includes("mq")),
-    };
-  }) : [];
-  if (new Set(deploymentsInput.map((deployment) => deployment.environmentKey)).size !== deploymentsInput.length) throw new ApiError(400, "duplicate_deployment_environment");
+  const { repositories: repositoriesInput, deployments: deploymentsInput } = parseServiceConfigurationInput(input);
 
   const [existingRepositories, existingDeployments, environmentRows, availableModels] = await Promise.all([
     executor.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
@@ -95,16 +201,7 @@ export async function replaceServiceConfiguration(options: {
   for (const deploymentInput of deploymentsInput) {
     const environment = environmentsByKey.get(deploymentInput.environmentKey)!;
     const existing = existingByEnvironmentId.get(environment.id);
-    const config = {
-      agent: deploymentInput.agent,
-      ...(deploymentInput.playwright ? { playwright: deploymentInput.playwright } : {}),
-      ...(deploymentInput.nacos ? { nacos: deploymentInput.nacos } : {}),
-      ...(deploymentInput.db ? { db: deploymentInput.db } : {}),
-      ...(deploymentInput.redis ? { redis: deploymentInput.redis } : {}),
-      ...(deploymentInput.mq ? { mq: deploymentInput.mq } : {}),
-      ...(deploymentInput.es ? { es: deploymentInput.es } : {}),
-      ...(deploymentInput.sls ? { sls: deploymentInput.sls } : {}),
-    };
+    const config = storedDeploymentConfiguration(deploymentInput);
     const deployment = existing
       ? (await executor.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
       : (await executor.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config }).returning())[0]!;

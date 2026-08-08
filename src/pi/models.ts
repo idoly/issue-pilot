@@ -1,18 +1,7 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
-import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "../domain/contracts.ts";
-
-export { AGENT_THINKING_LEVELS };
-export type { AgentThinkingLevel };
-
-export interface AgentModelDefinition {
-  provider: string;
-  id: string;
-  name: string;
-  api: string;
-  thinkingLevels: AgentThinkingLevel[];
-}
+import { AGENT_THINKING_LEVELS, type AgentModelDefinition, type AgentThinkingLevel } from "../domain/contracts.ts";
 
 export interface AgentModelCatalog {
   list(): Promise<AgentModelDefinition[]>;

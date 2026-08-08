@@ -1,8 +1,6 @@
 import path from "node:path";
 
-import { AGENT_THINKING_LEVELS, ISSUE_TYPES_BY_ENVIRONMENT, type AgentThinkingLevel, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
-import { CAPABILITY_KEYS, configuredCapabilities, type CapabilityName } from "../domain/contracts.ts";
-import { normalizeIssueKey } from "../domain/issue-key.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ISSUE_TYPES_BY_ENVIRONMENT, configuredCapabilities, normalizeIssueKey, type AgentThinkingLevel, type CapabilityName, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 
 export interface RepositoryGrant {
   codeAccess: "read" | "write";
@@ -18,7 +16,7 @@ export interface ServiceGrant {
   nacos?: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
   db?: { deploymentId: string };
   sls?: { deploymentId: string; region: string; project: string; logstores: string[] };
-  browser?: { deploymentId: string; baseUrl: string };
+  playwright?: { deploymentId: string; baseUrl: string };
   redis?: { deploymentId: string };
   es?: { deploymentId: string };
   mq?: { deploymentId: string; virtualHost: string };
@@ -39,7 +37,7 @@ export interface IssuePolicy {
   service: ServiceGrant;
 }
 
-function isString(value: unknown): value is string {
+function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
@@ -55,7 +53,7 @@ export function createIssuePolicy(input: {
     nacos: input.service.nacos,
     db: input.service.db,
     sls: input.service.sls,
-    playwright: input.service.browser,
+    playwright: input.service.playwright,
     redis: input.service.redis,
     es: input.service.es,
     mq: input.service.mq,
@@ -63,13 +61,13 @@ export function createIssuePolicy(input: {
   for (const capability of CAPABILITY_KEYS) {
     const label = capability === "playwright" ? "browser" : capability;
     const scope = scopes[capability];
-    if (capabilities.has(capability) !== Boolean(scope) || (scope && !isString(scope.deploymentId))) throw new Error(`invalid_${label}_service_scope`);
+    if (capabilities.has(capability) !== Boolean(scope) || (scope && !isNonEmptyString(scope.deploymentId))) throw new Error(`invalid_${label}_service_scope`);
   }
-  if (input.service.mq && !isString(input.service.mq.virtualHost)) throw new Error("invalid_mq_service_scope");
-  if (input.service.browser) {
+  if (input.service.mq && !isNonEmptyString(input.service.mq.virtualHost)) throw new Error("invalid_mq_service_scope");
+  if (input.service.playwright) {
     let parsedUrl: URL;
-    try { parsedUrl = new URL(input.service.browser.baseUrl); } catch { throw new Error("invalid_browser_service_scope"); }
-    if (!isString(input.service.browser.deploymentId) || !["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) throw new Error("invalid_browser_service_scope");
+    try { parsedUrl = new URL(input.service.playwright.baseUrl); } catch { throw new Error("invalid_browser_service_scope"); }
+    if (!isNonEmptyString(input.service.playwright.deploymentId) || !["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) throw new Error("invalid_browser_service_scope");
   }
 
   const codeMutationAllowed = input.service.environmentKind === "dev" && ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(input.issueType);
@@ -91,6 +89,50 @@ export function createIssuePolicy(input: {
   };
 }
 
+function configObject(config: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = config[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every(isNonEmptyString) ? value : undefined;
+}
+
+function parseModelGrant(config: Record<string, unknown>): ModelGrant {
+  const agent = configObject(config, "agent");
+  const provider = agent && isNonEmptyString(agent.provider) ? agent.provider : undefined;
+  const modelId = agent && isNonEmptyString(agent.model) ? agent.model : undefined;
+  const thinkingLevel = agent && AGENT_THINKING_LEVELS.includes(agent.thinkingLevel as AgentThinkingLevel)
+    ? agent.thinkingLevel as AgentThinkingLevel
+    : undefined;
+  if (!provider || !modelId || !thinkingLevel) throw new Error("issue_pilot_model_not_configured");
+  return { provider, modelId, thinkingLevel };
+}
+
+function parseCapabilityScopes(config: Record<string, unknown>, deploymentId: string): Partial<ServiceGrant> {
+  const scopes: Partial<ServiceGrant> = {};
+  const nacos = configObject(config, "nacos");
+  const dataIds = readStringArray(nacos?.dataIds);
+  if (nacos && isNonEmptyString(nacos.serverUrl) && typeof nacos.namespace === "string" && isNonEmptyString(nacos.group) && dataIds?.length) {
+    scopes.nacos = { deploymentId, serverUrl: nacos.serverUrl, namespace: nacos.namespace, group: nacos.group, dataIds: [...new Set(dataIds)] };
+  }
+
+  if (configObject(config, "db")) scopes.db = { deploymentId };
+  if (configObject(config, "redis")) scopes.redis = { deploymentId };
+  if (configObject(config, "es")) scopes.es = { deploymentId };
+
+  const sls = configObject(config, "sls");
+  const logstores = readStringArray(sls?.logstores);
+  if (sls && isNonEmptyString(sls.region) && isNonEmptyString(sls.project) && logstores) scopes.sls = { deploymentId, region: sls.region, project: sls.project, logstores };
+
+  const playwright = configObject(config, "playwright");
+  if (playwright && isNonEmptyString(playwright.baseUrl)) scopes.playwright = { deploymentId, baseUrl: playwright.baseUrl };
+
+  const mq = configObject(config, "mq");
+  if (mq && isNonEmptyString(mq.virtualHost)) scopes.mq = { deploymentId, virtualHost: mq.virtualHost };
+  return scopes;
+}
+
 export function createDeploymentPolicy(input: {
   issueKey: string;
   issueType: IssueType;
@@ -102,39 +144,17 @@ export function createDeploymentPolicy(input: {
   environmentKind: ServiceGrant["environmentKind"];
   repositories: RepositoryGrant[];
 }): IssuePolicy {
-  const object = (key: string): Record<string, unknown> | undefined => {
-    const value = input.deploymentConfig[key];
-    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  };
-  const agent = object("agent");
-  const provider = agent && isString(agent.provider) ? agent.provider : undefined;
-  const modelId = agent && isString(agent.model) ? agent.model : undefined;
-  const levels = new Set<ModelGrant["thinkingLevel"]>(AGENT_THINKING_LEVELS);
-  const thinkingLevel = agent && levels.has(agent.thinkingLevel as ModelGrant["thinkingLevel"]) ? agent.thinkingLevel as ModelGrant["thinkingLevel"] : undefined;
-  if (!provider || !modelId || !thinkingLevel) throw new Error("issue_pilot_model_not_configured");
-
-  const nacos = object("nacos");
-  const sls = object("sls");
-  const mq = object("mq");
-  const playwright = object("playwright");
-  const capabilities = configuredCapabilities(input.deploymentConfig);
   return createIssuePolicy({
     issueKey: input.issueKey,
     issueType: input.issueType,
     workspaceRoot: input.workspaceRoot,
-    model: { provider, modelId, thinkingLevel },
+    model: parseModelGrant(input.deploymentConfig),
     service: {
       serviceKey: input.serviceKey,
       environmentKey: input.environmentKey,
       environmentKind: input.environmentKind,
-      capabilities,
-      ...(nacos && isString(nacos.serverUrl) && typeof nacos.namespace === "string" && isString(nacos.group) && Array.isArray(nacos.dataIds) && nacos.dataIds.length && nacos.dataIds.every(isString) ? { nacos: { deploymentId: input.deploymentId, serverUrl: nacos.serverUrl, namespace: nacos.namespace, group: nacos.group, dataIds: [...new Set(nacos.dataIds)] } } : {}),
-      ...(object("db") ? { db: { deploymentId: input.deploymentId } } : {}),
-      ...(sls && isString(sls.region) && isString(sls.project) && Array.isArray(sls.logstores) && sls.logstores.every(isString) ? { sls: { deploymentId: input.deploymentId, region: sls.region, project: sls.project, logstores: sls.logstores } } : {}),
-      ...(playwright && isString(playwright.baseUrl) ? { browser: { deploymentId: input.deploymentId, baseUrl: playwright.baseUrl } } : {}),
-      ...(object("redis") ? { redis: { deploymentId: input.deploymentId } } : {}),
-      ...(object("es") ? { es: { deploymentId: input.deploymentId } } : {}),
-      ...(mq && isString(mq.virtualHost) ? { mq: { deploymentId: input.deploymentId, virtualHost: mq.virtualHost } } : {}),
+      capabilities: configuredCapabilities(input.deploymentConfig),
+      ...parseCapabilityScopes(input.deploymentConfig, input.deploymentId),
       repositories: input.repositories,
     },
   });

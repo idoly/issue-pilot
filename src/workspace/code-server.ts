@@ -3,8 +3,8 @@ import { access } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeIssueKey } from "../domain/issue-key.ts";
-import { workspacesRoot } from "./paths.ts";
+import { normalizeIssueKey } from "../domain/contracts.ts";
+import { workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { useBrowser } from "../../src/capabilities/browser.ts";
+import { runPlaywright } from "../../src/capabilities/playwright.ts";
 import type { CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { createIssuePolicy } from "../../src/pi/policy.ts";
 
@@ -29,7 +29,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
         environmentKey: "dev",
         environmentKind: "dev",
         capabilities: ["playwright"],
-        browser: { deploymentId: "deployment-browser", baseUrl: "https://orders.example.test/" },
+        playwright: { deploymentId: "deployment-browser", baseUrl: "https://orders.example.test/" },
         repositories: [{ codeAccess: "write", repositoryPath: join(workspace, "repository"), baseCommit: "a".repeat(40) }],
       },
     });
@@ -49,7 +49,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
       },
     } as CommandExecutor;
     const deploymentConfig = { playwright: { baseUrl: "https://orders.example.test/", username: "operator", password: "deployment-secret" } };
-    const output = await useBrowser(pi, policy, deploymentConfig, { actions: [
+    const output = await runPlaywright(pi, policy, deploymentConfig, { actions: [
       { type: "goto", path: "/login" },
       { type: "login", usernameSelector: "#username", passwordSelector: "#password", submitSelector: "button[type=submit]" },
     ] });
@@ -62,9 +62,9 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
     assert.match(output.content[0]!.text, /Ready/);
     const requestMount = command.find((value) => value.includes(":/run/input:"))!.split(":/run/input:")[0]!;
     await assert.rejects(stat(requestMount));
-    await assert.rejects(useBrowser(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "https://other.example.test/" }] }), /invalid_browser_path/);
+    await assert.rejects(runPlaywright(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "https://other.example.test/" }] }), /invalid_browser_path/);
     response = { screenshot: Buffer.alloc(1024 * 1024).toString("base64") };
-    await assert.rejects(useBrowser(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "/dashboard" }], screenshot: true }), /capability_result_too_large/);
+    await assert.rejects(runPlaywright(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "/dashboard" }], screenshot: true }), /capability_result_too_large/);
   } finally {
     const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
     restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);

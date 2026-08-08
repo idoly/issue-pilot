@@ -1,9 +1,8 @@
-import { ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentThinkingLevel, type CapabilityName, type IssueStatus, type IssueType } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type EnvironmentKind, type IssuePriority, type IssueStatus, type IssueType, type RepositoryKind } from "../../../domain/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
-export type { CapabilityName, IssueStatus, IssueType };
-export type IssuePriority = "p0" | "p1" | "p2" | "p3";
+export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
+export type { AgentConfiguration, AgentModelDefinition, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType, RepositoryKind };
 
 export interface Person { subject: string; name: string; email: string }
 
@@ -44,25 +43,15 @@ export interface Environment {
   id: string;
   key: string;
   name: string;
-  kind: "prod" | "test" | "dev";
+  kind: EnvironmentKind;
 }
 
-export type ThinkingLevel = AgentThinkingLevel;
-export interface AgentModelDefinition { provider: string; id: string; name: string; api: string; thinkingLevels: ThinkingLevel[] }
-
-export interface ServiceDeployment {
+export interface ServiceDeployment extends CapabilityConfiguration {
   id: string;
   environmentId: string;
   baseBranch: string;
   capabilities: CapabilityName[];
-  agent?: { provider: string; model: string; thinkingLevel: ThinkingLevel } | null;
-  nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string } | null;
-  db?: { url: string; username: string; password: string } | null;
-  sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] } | null;
-  playwright?: { baseUrl: string; username: string; password?: string } | null;
-  redis?: { host: string; port: number; username: string; password?: string; database: number } | null;
-  mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string } | null;
-  es?: { url: string; username: string; password?: string } | null;
+  agent: AgentConfiguration | null;
 }
 
 export interface Service {
@@ -73,7 +62,7 @@ export interface Service {
   createdAt: string;
   environmentIds: string[];
   deployments: ServiceDeployment[];
-  repositories: Array<{ id: string; kind: "frontend" | "backend"; url: string }>;
+  repositories: Array<{ id: string; kind: RepositoryKind; url: string }>;
 }
 
 export interface Config {
@@ -86,8 +75,8 @@ export interface Config {
 export interface ServiceInput {
   name: string;
   description: string;
-  repositories: Array<{ id?: string; kind: "frontend" | "backend"; url: string }>;
-  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: CapabilityName[]; agent: { provider: string; model: string; thinkingLevel: ThinkingLevel }; nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string }; db?: { url: string; username: string; password: string }; sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] }; playwright?: { baseUrl: string; username: string; password?: string }; redis?: { host: string; port: number; username: string; password?: string; database: number }; mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string }; es?: { url: string; username: string; password?: string } }>;
+  repositories: Array<{ id?: string; kind: RepositoryKind; url: string }>;
+  deployments: Array<CapabilityConfiguration & { environmentKey: string; baseBranch: string; capabilities: CapabilityName[]; agent: AgentConfiguration }>;
 }
 
 export interface IssueInput {
@@ -113,20 +102,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body ? JSON.parse(body) as T : undefined as T;
 }
 
+const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponent(key)}${suffix}`;
+const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
+
 export const loadPeople = () => request<Person[]>("/api/people");
 export const loadConfig = () => request<Config>("/api/config");
 export const listIssues = () => request<IssueListItem[]>("/api/issues");
-export const getIssue = (key: string) => request<IssueDetail>(`/api/issues/${encodeURIComponent(key)}`);
+export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 
-export async function createService(input: ServiceInput): Promise<{ key: string; name: string }> {
-  return request("/api/services", { method: "POST", body: JSON.stringify(input) });
-}
+const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
 
-export const updateService = (key: string, input: ServiceInput) => request<void>(`/api/services/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
-export const deleteService = (key: string) => request<void>(`/api/services/${encodeURIComponent(key)}`, { method: "DELETE" });
+export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
+export const updateService = (key: string, input: ServiceInput) => jsonRequest<void>(servicePath(key), "PATCH", input);
+export const deleteService = (key: string) => request<void>(servicePath(key), { method: "DELETE" });
 
 export function attachmentUrl(key: string, attachmentId: string): string {
-  return `/api/issues/${encodeURIComponent(key)}/attachments/${encodeURIComponent(attachmentId)}`;
+  return issuePath(key, `/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
 export async function fetchAttachment(key: string, attachmentId: string): Promise<Blob> {
@@ -142,26 +133,26 @@ export async function uploadAttachments(key: string, files: File[]): Promise<voi
   if (!files.length) return;
   const form = new FormData();
   for (const file of files) form.append("files", file, file.name);
-  await request(`/api/issues/${encodeURIComponent(key)}/attachments`, { method: "POST", body: form });
+  await request(issuePath(key, "/attachments"), { method: "POST", body: form });
 }
 
 export async function deleteIssueAttachments(key: string, attachmentIds: string[]): Promise<void> {
   if (!attachmentIds.length) return;
-  await request(`/api/issues/${encodeURIComponent(key)}/attachments`, { method: "DELETE", body: JSON.stringify({ attachmentIds }) });
+  await jsonRequest(issuePath(key, "/attachments"), "DELETE", { attachmentIds });
 }
 
-export function createIssue(input: IssueInput & { environmentKey: string; reporter: string }, files: File[] = []): Promise<IssueListItem> {
-  if (!files.length) return request("/api/issues", { method: "POST", body: JSON.stringify(input) });
+export function createIssue(input: IssueInput & { environmentKey: string }, files: File[] = []): Promise<IssueListItem> {
+  if (!files.length) return jsonRequest("/api/issues", "POST", input);
   const form = new FormData();
   form.append("issue", JSON.stringify(input));
   for (const file of files) form.append("files", file, file.name);
   return request("/api/issues", { method: "POST", body: form });
 }
-export const updateIssue = (key: string, input: IssueInput) => request<IssueListItem>(`/api/issues/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify(input) });
-export const updateIssueStatus = (key: string, status: "open" | "resolved") => request<IssueListItem>(`/api/issues/${encodeURIComponent(key)}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
-export const addIssueComment = (key: string, body: string) => request<IssueComment>(`/api/issues/${encodeURIComponent(key)}/comments`, { method: "POST", body: JSON.stringify({ body }) });
-export const syncIssueUpdate = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/sync`, { method: "POST" });
-export const retryIssue = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/retry`, { method: "POST" });
-export const sendAgentMessage = (key: string, message: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/agent-messages`, { method: "POST", body: JSON.stringify({ message }) });
-export const abortAgent = (key: string) => request<void>(`/api/issues/${encodeURIComponent(key)}/agent-abort`, { method: "POST" });
-export const agentStreamUrl = (key: string) => `/api/issues/${encodeURIComponent(key)}/agent-stream`;
+export const updateIssue = (key: string, input: IssueInput) => jsonRequest<IssueListItem>(issuePath(key), "PATCH", input);
+export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueListItem>(issuePath(key, "/status"), "PATCH", { status });
+export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
+export const syncIssueUpdate = (key: string) => request<void>(issuePath(key, "/sync"), { method: "POST" });
+export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
+export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
+export const abortAgent = (key: string) => request<void>(issuePath(key, "/agent-abort"), { method: "POST" });
+export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

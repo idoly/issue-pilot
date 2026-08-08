@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -9,10 +9,10 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import Fastify, { type FastifyInstance } from "fastify";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { AGENT_THINKING_LEVELS, PiAgentModelCatalog, type AgentModelCatalog, type AgentThinkingLevel } from "../pi/models.ts";
-import { ENVIRONMENT_KINDS, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, MAX_AGENT_MESSAGE_CHARS, configuredCapabilities, isIssueKey, normalizeIssueKey, type AgentThinkingLevel, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { AgentEngine } from "../agent/engine.ts";
-import { attachmentItem, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILES, type PendingAttachment, readAttachment } from "./attachments.ts";
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILES, type PendingAttachment, readMultipartAttachment, resolveSecureAttachmentFile, serializeAttachment } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import { installShutdownHandlers } from "./lifecycle.ts";
 import { replaceServiceConfiguration } from "./service-configuration.ts";
@@ -25,19 +25,15 @@ import {
   issueWorkspaces, issues, serviceDeployments,
   serviceRepositories, services, subjects,
 } from "../db/schema.ts";
-import { CAPABILITY_KEYS, configuredCapabilities } from "../domain/contracts.ts";
-import { isIssueKey, normalizeIssueKey } from "../domain/issue-key.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
-import { issueAttachmentRoot } from "../workspace/paths.ts";
-import { pruneState } from "../workspace/state.ts";
-const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
+import { issueAttachmentRoot, pruneState } from "../workspace/state.ts";
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 function assertIssueTypeForEnvironment(issueType: IssueType, environmentKind: string): void {
   const allowed = ISSUE_TYPES_BY_ENVIRONMENT[environmentKind as EnvironmentKind];
   if (!allowed?.includes(issueType)) throw new ApiError(400, "invalid_issue_type_for_environment");
 }
 
-function date(value: Date | null | undefined): string | undefined {
+function isoDate(value: Date | null | undefined): string | undefined {
   return value?.toISOString();
 }
 
@@ -154,30 +150,56 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await database.close();
   });
 
-  const subject = async () => {
+  const ensureCurrentSubject = async () => {
     const value = process.env.ISSUE_PILOT_SUBJECT ?? "zjj3753@xianhengguoji.com";
     await database.db.insert(subjects).values({ subject: value, username: value, displayName: value, email: "" }).onConflictDoNothing();
     return value;
   };
 
-  const environmentByKey = async (key: string) => ENVIRONMENT_KINDS.includes(key as EnvironmentKind)
+  const findEnvironmentByKey = async (key: string) => ENVIRONMENT_KINDS.includes(key as EnvironmentKind)
     ? (await database.db.select().from(environments).where(eq(environments.key, key)).limit(1))[0]
     : undefined;
-  const serviceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
-  const serviceForEnvironment = async (key: string, environmentId: string) => (await database.db.select({ service: services, deployment: serviceDeployments })
+  const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
+  const findServiceDeployment = async (key: string, environmentId: string) => (await database.db.select({ service: services, deployment: serviceDeployments })
     .from(services)
     .innerJoin(serviceDeployments, and(eq(serviceDeployments.serviceId, services.id), eq(serviceDeployments.environmentId, environmentId)))
     .where(eq(services.key, key))
     .limit(1))[0];
-  const issueByKey = async (key: string) => isIssueKey(key) ? (await database.db.select().from(issues).where(eq(issues.key, normalizeIssueKey(key))).limit(1))[0] : undefined;
+  const findIssueByKey = async (key: string) => isIssueKey(key) ? (await database.db.select().from(issues).where(eq(issues.key, normalizeIssueKey(key))).limit(1))[0] : undefined;
+  const requireIssue = async (key: string) => {
+    const issue = await findIssueByKey(key);
+    if (!issue) throw new ApiError(404, "issue_not_found");
+    return issue;
+  };
+  const assertIssueIdle = (issueId: string) => {
+    if (engine.isRunning(issueId)) throw new ApiError(409, "issue_already_running");
+  };
   const validateSubjects = async (values: Array<string | null>): Promise<void> => {
     const requested = [...new Set(values.filter((value): value is string => Boolean(value)))];
     if (!requested.length) return;
     const found = await database.db.select({ subject: subjects.subject }).from(subjects).where(inArray(subjects.subject, requested));
     if (found.length !== requested.length) throw new ApiError(400, "invalid_subject");
   };
+  const parseIssueInput = async (input: Record<string, unknown>, environment: { id: string; kind: string }) => {
+    const serviceDeployment = await findServiceDeployment(text(input.serviceKey, "service_key", 100), environment.id);
+    if (!serviceDeployment) throw new ApiError(400, "invalid_service_for_environment");
+    const assignee = optionalText(input.assigneeSubject, 255);
+    const cc = [...new Set(strings(input.ccSubjects ?? [], "cc_subjects"))];
+    await validateSubjects([assignee, ...cc]);
+    const type = choice(input.type, "type", ISSUE_TYPES);
+    assertIssueTypeForEnvironment(type, environment.kind);
+    return {
+      title: text(input.title, "title", 300),
+      description: optionalText(input.description) ?? "",
+      priority: choice(input.priority, "priority", ISSUE_PRIORITIES),
+      type,
+      serviceId: serviceDeployment.service.id,
+      assignee,
+      cc,
+    };
+  };
 
-  const listItems = async (selectedIssues: Array<typeof issues.$inferSelect>) => {
+  const serializeIssueSummaries = async (selectedIssues: Array<typeof issues.$inferSelect>) => {
     const assigneeSubjects = [...new Set(selectedIssues.flatMap((issue) => issue.assigneeSubject ? [issue.assigneeSubject] : []))];
     const serviceIds = [...new Set(selectedIssues.map((issue) => issue.serviceId))];
     const [assigneeRows, serviceRows] = await Promise.all([
@@ -194,11 +216,11 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         id: issue.key, title: issue.title, priority: issue.priority, type: issue.type, status: issue.status,
         assignee: assignee?.displayName ?? assignee?.username ?? null, assigneeSubject: issue.assigneeSubject,
         service: { key: service.key, name: service.name },
-        version: issue.version, createdAt: date(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
+        version: issue.version, createdAt: isoDate(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
       };
     });
   };
-  const listItem = async (issue: typeof issues.$inferSelect) => (await listItems([issue]))[0]!;
+  const serializeIssueSummary = async (issue: typeof issues.$inferSelect) => (await serializeIssueSummaries([issue]))[0]!;
   const codeServerFolder = (localPath: string | null): string | null => {
     if (!localPath) return null;
     const workspaceRoot = path.join(stateRoot, "workspaces");
@@ -254,7 +276,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.patch<{ Params: { key: string } }>("/api/services/:key", async (request) => {
-    const service = await serviceByKey(request.params.key);
+    const service = await findServiceByKey(request.params.key);
     if (!service) throw new ApiError(404, "service_not_found");
     const affectedIssues = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id));
     if (affectedIssues.some((issue) => engine.isRunning(issue.id))) throw new ApiError(409, "service_has_running_issues");
@@ -268,14 +290,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.delete<{ Params: { key: string } }>("/api/services/:key", async (request, reply) => {
-    const service = await serviceByKey(request.params.key);
+    const service = await findServiceByKey(request.params.key);
     if (!service) throw new ApiError(404, "service_not_found");
     if ((await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id)).limit(1))[0]) throw new ApiError(409, "service_is_used_by_issues");
     await database.db.delete(services).where(eq(services.id, service.id));
     return reply.code(204).send();
   });
 
-  app.get("/api/issues", async () => listItems(await database.db.select().from(issues).orderBy(desc(issues.updatedAt))));
+  app.get("/api/issues", async () => serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.updatedAt))));
 
   app.post("/api/issues", async (request, reply) => {
     const initialAttachments: PendingAttachment[] = [];
@@ -285,7 +307,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       let issuePart: unknown;
       for await (const part of request.parts()) {
         if (part.type === "file") {
-          const attachment = await readAttachment(part, attachmentBytes);
+          const attachment = await readMultipartAttachment(part, attachmentBytes);
           attachmentBytes += attachment.data.length;
           initialAttachments.push(attachment);
         } else if (part.fieldname === "issue") {
@@ -301,17 +323,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     } else {
       input = record(request.body);
     }
-    const environment = await environmentByKey(text(input.environmentKey, "environment_key", 100));
+    const environment = await findEnvironmentByKey(text(input.environmentKey, "environment_key", 100));
     if (!environment) throw new ApiError(400, "invalid_environment");
-    const selected = await serviceForEnvironment(text(input.serviceKey, "service_key", 100), environment.id);
-    if (!selected) throw new ApiError(400, "invalid_service_for_environment");
-    const reporter = await subject();
-    const assignee = optionalText(input.assigneeSubject, 255);
-    const cc = [...new Set(strings(input.ccSubjects ?? [], "cc_subjects"))];
-    await validateSubjects([assignee, ...cc]);
-    const priority = choice(input.priority, "priority", ISSUE_PRIORITIES);
-    const issueType = choice(input.type, "type", ISSUE_TYPES);
-    assertIssueTypeForEnvironment(issueType, environment.kind);
+    const reporter = await ensureCurrentSubject();
+    const parsed = await parseIssueInput(input, environment);
     const created = await serializeIssueCreation(async () => {
       const prefix = `ISSUE-${datedKey()}-`;
       const existing = await database.db.select({ key: issues.key }).from(issues);
@@ -320,8 +335,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       const written: string[] = [];
       try {
         return await database.db.transaction(async (transaction) => {
-          const [row] = await transaction.insert(issues).values({ key, title: text(input.title, "title", 300), description: optionalText(input.description) ?? "", priority, type: issueType, serviceId: selected.service.id, environmentId: environment.id, reporterSubject: reporter, assigneeSubject: assignee }).returning();
-          if (cc.length) await transaction.insert(issueCcRecipients).values(cc.map((recipient) => ({ issueId: row!.id, subject: recipient })));
+          const [row] = await transaction.insert(issues).values({ key, title: parsed.title, description: parsed.description, priority: parsed.priority, type: parsed.type, serviceId: parsed.serviceId, environmentId: environment.id, reporterSubject: reporter, assigneeSubject: parsed.assignee }).returning();
+          if (parsed.cc.length) await transaction.insert(issueCcRecipients).values(parsed.cc.map((recipient) => ({ issueId: row!.id, subject: recipient })));
           await transaction.insert(issueWorkspaces).values({ issueId: row!.id, ownerSubject: reporter });
           await transaction.insert(issueHistory).values({ issueId: row!.id, actorSubject: reporter, action: "created", changes: {} });
           if (initialAttachments.length) {
@@ -342,54 +357,44 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       }
     });
     engine.enqueue(created.id);
-    return reply.code(201).send(await listItem(created));
+    return reply.code(201).send(await serializeIssueSummary(created));
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
-    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    const issue = await requireIssue(request.params.key);
+    assertIssueIdle(issue.id);
     const input = record(request.body);
-    const selected = await serviceForEnvironment(text(input.serviceKey, "service_key", 100), issue.environmentId);
-    if (!selected) throw new ApiError(400, "invalid_service_for_environment");
-    const cc = [...new Set(strings(input.ccSubjects ?? [], "cc_subjects"))];
-    const assignee = optionalText(input.assigneeSubject, 255);
-    await validateSubjects([assignee, ...cc]);
-    const priority = choice(input.priority, "priority", ISSUE_PRIORITIES);
-    const issueType = choice(input.type, "type", ISSUE_TYPES);
-    const [environment] = await database.db.select({ kind: environments.kind }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1);
+    const [environment] = await database.db.select({ id: environments.id, kind: environments.kind }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1);
     if (!environment) throw new ApiError(409, "issue_scope_not_found");
-    assertIssueTypeForEnvironment(issueType, environment.kind);
+    const parsed = await parseIssueInput(input, environment);
     await engine.closeSession(issue.id);
     await database.db.transaction(async (transaction) => {
-      await transaction.update(issues).set({ title: text(input.title, "title", 300), description: optionalText(input.description) ?? "", priority, type: issueType, serviceId: selected.service.id, assigneeSubject: assignee, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transaction.update(issues).set({ title: parsed.title, description: parsed.description, priority: parsed.priority, type: parsed.type, serviceId: parsed.serviceId, assigneeSubject: parsed.assignee, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
       await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
-      if (cc.length) await transaction.insert(issueCcRecipients).values(cc.map((recipient) => ({ issueId: issue.id, subject: recipient })));
+      if (parsed.cc.length) await transaction.insert(issueCcRecipients).values(parsed.cc.map((recipient) => ({ issueId: issue.id, subject: recipient })));
     });
-    return listItem((await issueByKey(issue.key))!);
+    return serializeIssueSummary((await findIssueByKey(issue.key))!);
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key/status", async (request) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     const target = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     const allowed = (target === "resolved" && issue.status === "pending") || (target === "open" && issue.status === "resolved");
     if (!allowed) throw new ApiError(409, "invalid_issue_status_transition");
-    const actor = await subject();
+    const actor = await ensureCurrentSubject();
     const updated = await database.db.transaction(async (transaction) => {
       const [row] = await transaction.update(issues).set({ status: target, resolvedAt: target === "resolved" ? new Date() : null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, issue.status))).returning();
       if (!row) throw new ApiError(409, "invalid_issue_status_transition");
       await transaction.insert(issueHistory).values({ issueId: issue.id, actorSubject: actor, action: `status:${target}`, changes: { from: issue.status, to: target } });
       return row;
     });
-    return listItem(updated);
+    return serializeIssueSummary(updated);
   });
 
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     const [base, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows] = await Promise.all([
-      listItem(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
+      serializeIssueSummary(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
       database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
       database.db.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)), database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
       database.db.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)), database.db.select({ comment: issueComments, person: subjects }).from(issueComments).innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject)).where(eq(issueComments.issueId, issue.id)).orderBy(asc(issueComments.createdAt)),
@@ -399,7 +404,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     return {
       ...base, description: issue.description,
       repositories: repositoryRows.map((item) => ({ id: item.id, url: item.url, baseBranch: item.baseBranch, workingBranch: item.workingBranch, codeServerPath: codeServerFolder(item.localPath) })),
-      attachments: attachmentRows.map(attachmentItem),
+      attachments: attachmentRows.map(serializeAttachment),
       workspace: {
         status: workspace?.status ?? "not_created",
         url: workspace?.codeServerReady ? issueCodeServerUrl(issue.key) : null,
@@ -418,18 +423,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     if (issue.status !== "open") throw new ApiError(409, "issue_not_retryable");
-    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    assertIssueIdle(issue.id);
     engine.enqueue(issue.id);
     return reply.code(202).send({ ok: true });
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/comments", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
-    const input = record(request.body); const author = await subject();
+    const issue = await requireIssue(request.params.key);
+    const input = record(request.body); const author = await ensureCurrentSubject();
     const comment = await database.db.transaction(async (transaction) => {
       const [created] = await transaction.insert(issueComments).values({ issueId: issue.id, authorSubject: author, body: text(input.body, "comment", 50_000) }).returning();
       await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
@@ -439,10 +442,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/sync", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
-    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    assertIssueIdle(issue.id);
     const [service, environment, attachments] = await Promise.all([
       database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, issue.serviceId)).limit(1).then((rows) => rows[0]),
       database.db.select({ key: environments.key }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1).then((rows) => rows[0]),
@@ -461,14 +463,11 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.get<{ Params: { key: string; attachmentId: string } }>("/api/issues/:key/attachments/:attachmentId", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     const [attachment] = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId))).limit(1);
     if (!attachment) throw new ApiError(404, "attachment_not_found");
     const directory = issueAttachmentRoot(stateRoot, issue.key);
-    const source = path.resolve(attachment.objectKey);
-    const metadata = await stat(source).catch(() => undefined);
-    if (path.dirname(source) !== directory || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || metadata.size !== attachment.size || metadata.size > MAX_ATTACHMENT_BYTES) throw new Error("insecure_issue_attachment_file");
+    const source = await resolveSecureAttachmentFile(directory, attachment.objectKey, attachment.size);
     const data = await readFile(source);
     if (createHash("sha256").update(data).digest("hex") !== attachment.sha256) throw new Error("attachment_integrity_check_failed");
     const safeInline = attachment.mediaType.startsWith("text/")
@@ -483,11 +482,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     const attachmentIds = [...new Set(strings(record(request.body).attachmentIds, "attachment_ids"))];
     if (!attachmentIds.length) return reply.code(204).send();
-    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
+    assertIssueIdle(issue.id);
     await engine.closeSession(issue.id);
     const attachments = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
     if (attachments.length !== attachmentIds.length) throw new ApiError(404, "attachment_not_found");
@@ -496,9 +494,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const quarantined: Array<{ source: string; temporary: string }> = [];
     try {
       for (const attachment of attachments) {
-        const source = path.resolve(attachment.objectKey);
-        const metadata = await stat(source);
-        if (path.dirname(source) !== directory || !metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_issue_attachment_file");
+        const source = await resolveSecureAttachmentFile(directory, attachment.objectKey);
         const temporary = path.join(directory, `.${attachment.id}-${randomUUID()}.deleting`);
         await rename(source, temporary);
         quarantined.push({ source, temporary });
@@ -516,14 +512,13 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
-    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
-    const uploader = await subject();
+    const issue = await requireIssue(request.params.key);
+    assertIssueIdle(issue.id);
+    const uploader = await ensureCurrentSubject();
     const pending: PendingAttachment[] = [];
     let attachmentBytes = 0;
     for await (const part of request.files()) {
-      const attachment = await readAttachment(part, attachmentBytes);
+      const attachment = await readMultipartAttachment(part, attachmentBytes);
       attachmentBytes += attachment.data.length;
       pending.push(attachment);
     }
@@ -535,13 +530,13 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const written: string[] = [];
     try {
       const created = await database.db.transaction(async (transaction) => {
-        const rows: Array<ReturnType<typeof attachmentItem>> = [];
+        const rows: Array<ReturnType<typeof serializeAttachment>> = [];
         for (const file of pending) {
           const objectKey = path.join(directory, `${randomUUID()}-${file.fileName}`);
           await writeFile(objectKey, file.data, { mode: 0o600 });
           written.push(objectKey);
           const [attachment] = await transaction.insert(issueAttachments).values({ issueId: issue.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: uploader }).returning();
-          rows.push(attachmentItem(attachment!));
+          rows.push(serializeAttachment(attachment!));
         }
         await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
         return rows;
@@ -554,8 +549,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     const [deployment] = await database.db.select({ config: serviceDeployments.config }).from(serviceDeployments)
       .where(and(eq(serviceDeployments.serviceId, issue.serviceId), eq(serviceDeployments.environmentId, issue.environmentId))).limit(1);
     const deploymentConfig = deployment?.config as Record<string, unknown> | undefined;
@@ -579,18 +573,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     const input = record(request.body);
-    const message = text(input.message, "agent_message", 50_000);
+    const message = text(input.message, "agent_message", MAX_AGENT_MESSAGE_CHARS);
     await engine.send(issue.id, message);
     return reply.code(202).send();
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-abort", async (request, reply) => {
-    const issue = await issueByKey(request.params.key);
-    if (!issue) throw new ApiError(404, "issue_not_found");
+    const issue = await requireIssue(request.params.key);
     if (!await engine.abort(issue.id)) throw new ApiError(409, "agent_not_running");
     return reply.code(202).send();
   });

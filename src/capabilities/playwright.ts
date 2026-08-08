@@ -4,12 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { IssuePolicy } from "../pi/policy.ts";
-import { capabilityResultText, MAX_BROWSER_ACTIONS, MAX_CAPABILITY_RESULT_BYTES } from "./limits.ts";
+import { capabilityResultText, MAX_BROWSER_ACTIONS, MAX_CAPABILITY_RESULT_BYTES } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
-const DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
+const DEFAULT_PLAYWRIGHT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
 
-export type BrowserAction =
+export type PlaywrightAction =
   | { type: "goto"; path: string }
   | { type: "login"; usernameSelector: string; passwordSelector: string; submitSelector: string }
   | { type: "click"; selector: string }
@@ -17,27 +17,27 @@ export type BrowserAction =
   | { type: "select"; selector: string; value: string }
   | { type: "wait_for"; selector: string };
 
-function deploymentBrowser(value: Record<string, unknown>): { baseUrl: string; username: string | null; password: string | null } {
+function deploymentPlaywright(value: Record<string, unknown>): { baseUrl: string; username: string | null; password: string | null } {
   const raw = value.playwright;
   if (!raw || typeof raw !== "object") throw new Error("browser_configuration_not_found");
-  const browser = raw as Record<string, unknown>;
-  if (typeof browser.baseUrl !== "string") throw new Error("browser_configuration_not_found");
+  const playwright = raw as Record<string, unknown>;
+  if (typeof playwright.baseUrl !== "string") throw new Error("browser_configuration_not_found");
   return {
-    baseUrl: browser.baseUrl,
-    username: typeof browser.username === "string" ? browser.username : null,
-    password: typeof browser.password === "string" ? browser.password : null,
+    baseUrl: playwright.baseUrl,
+    username: typeof playwright.username === "string" ? playwright.username : null,
+    password: typeof playwright.password === "string" ? playwright.password : null,
   };
 }
 
-function credentials(policy: IssuePolicy, config: Record<string, unknown>): { username: string | null; password: string | null } {
-  const scope = policy.service.browser;
+function playwrightCredentials(policy: IssuePolicy, config: Record<string, unknown>): { username: string | null; password: string | null } {
+  const scope = policy.service.playwright;
   if (!scope || !policy.service.capabilities.includes("playwright")) throw new Error("browser_scope_not_granted_for_service");
-  const browser = deploymentBrowser(config);
-  if (browser.baseUrl !== scope.baseUrl) throw new Error("browser_scope_changed");
-  return { username: browser.username, password: browser.password };
+  const playwright = deploymentPlaywright(config);
+  if (playwright.baseUrl !== scope.baseUrl) throw new Error("browser_scope_changed");
+  return { username: playwright.username, password: playwright.password };
 }
 
-function validateActions(actions: BrowserAction[]): void {
+function validatePlaywrightActions(actions: PlaywrightAction[]): void {
   if (!Array.isArray(actions) || actions.length < 1 || actions.length > MAX_BROWSER_ACTIONS) throw new Error("invalid_browser_actions");
   for (const action of actions) {
     if (!action || typeof action !== "object") throw new Error("invalid_browser_action");
@@ -61,12 +61,12 @@ function validateActions(actions: BrowserAction[]): void {
   }
 }
 
-export async function useBrowser(pi: CommandExecutor, policy: IssuePolicy, config: Record<string, unknown>, input: { actions: BrowserAction[]; screenshot?: boolean }, signal?: AbortSignal) {
-  const scope = policy.service.browser;
+export async function runPlaywright(pi: CommandExecutor, policy: IssuePolicy, config: Record<string, unknown>, input: { actions: PlaywrightAction[]; screenshot?: boolean }, signal?: AbortSignal) {
+  const scope = policy.service.playwright;
   if (!scope) throw new Error("browser_scope_not_granted_for_service");
-  validateActions(input.actions);
-  const secret = credentials(policy, config);
-  if (input.actions.some((action) => action.type === "login") && (!secret.username || !secret.password)) throw new Error("browser_credentials_not_configured");
+  validatePlaywrightActions(input.actions);
+  const credentials = playwrightCredentials(policy, config);
+  if (input.actions.some((action) => action.type === "login") && (!credentials.username || !credentials.password)) throw new Error("browser_credentials_not_configured");
 
   const stateRoot = process.env.ISSUE_PILOT_STATE_ROOT ?? path.dirname(path.dirname(policy.workspaceRoot));
   const toolCacheRoot = process.env.PI_TOOL_CACHE_ROOT ?? path.join(stateRoot, "tools");
@@ -84,7 +84,7 @@ export async function useBrowser(pi: CommandExecutor, policy: IssuePolicy, confi
     const credentialsFile = path.join(secretDirectory, "credentials.json");
     await Promise.all([
       writeFile(requestFile, JSON.stringify({ baseUrl: scope.baseUrl, actions: input.actions, screenshot: input.screenshot === true }), { mode: 0o600 }),
-      writeFile(credentialsFile, JSON.stringify(secret), { mode: 0o600 }),
+      writeFile(credentialsFile, JSON.stringify(credentials), { mode: 0o600 }),
     ]);
     const args = [
       "run", "--rm", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--network", "host",
@@ -94,7 +94,7 @@ export async function useBrowser(pi: CommandExecutor, policy: IssuePolicy, confi
       "--volume", `${secretDirectory}:/run/secrets:ro,Z`,
       "--volume", `${toolCache}:/tool:ro,Z`,
       "--entrypoint", "node",
-      process.env.PI_PLAYWRIGHT_IMAGE ?? DEFAULT_IMAGE,
+      process.env.PI_PLAYWRIGHT_IMAGE ?? DEFAULT_PLAYWRIGHT_IMAGE,
       "/runner/playwright-runner.cjs", "/run/input/request.json", "/run/secrets/credentials.json",
     ];
     const execution = await pi.exec("podman", args, { timeout: 90_000, ...(signal ? { signal } : {}) });

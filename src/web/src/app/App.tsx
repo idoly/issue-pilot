@@ -37,9 +37,9 @@ import {
   ZoomOut,
 } from "../ui/icons";
 import { createEffect, createMemo, createSignal, createStore, For, onCleanup, Show } from "solid-js";
-import { addIssueComment, attachmentUrl, createIssue, createService, deleteIssueAttachments, deleteService, fetchAttachment, getIssue, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, listIssues, loadConfig, loadPeople, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type AgentModelDefinition, type CapabilityName, type Config, type IssueDetail, type IssuePriority, type IssueType, type Person, type ThinkingLevel } from "../data/client";
+import { addIssueComment, attachmentUrl, createIssue, createService, deleteIssueAttachments, deleteService, fetchAttachment, getIssue, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, listIssues, loadConfig, loadPeople, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, updateService, uploadAttachments, type Service, type AgentModelDefinition, type CapabilityName, type Config, type IssueDetail, type IssuePriority, type IssueType, type Person, type AgentConfiguration, type CapabilityConfiguration } from "../data/client";
 import { Markdown } from "../ui/Markdown";
-import { workspaceUrl, fileSize, typeLabel, priorityColor, relativeTime, statusBadge, statusLabel } from "./model";
+import { workspaceUrl, fileSize, typeLabel, priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel } from "./model";
 import { AgentPanel } from "./AgentPanel";
 import { Statistics } from "./Statistics";
 import "@idoly/ant-design-solid/base.css";
@@ -70,6 +70,8 @@ const environmentLabel: Record<string, string> = { prod: "正式", test: "测试
 function issueTypesForEnvironment(environmentKey: string): IssueType[] {
   return [...(ISSUE_TYPES_BY_ENVIRONMENT[environmentKey as keyof typeof ISSUE_TYPES_BY_ENVIRONMENT] ?? [])];
 }
+
+const emptyConfig = (): Config => ({ agentModels: [], environments: [], capabilityCatalog: [], services: [] });
 
 type IssueAttachment = IssueDetail["attachments"][number];
 type AttachmentPreviewKind = "image" | "text" | "pdf" | "unsupported";
@@ -174,7 +176,6 @@ function AttachmentPicker(props: {
 
 function IssueQueue(props: {
   selectedId: string;
-  userName: string;
   userSubject: string;
   refreshToken: number;
   onSelect: (id: string) => void;
@@ -193,7 +194,7 @@ function IssueQueue(props: {
       setLoadError(error instanceof Error ? error.message : "工单加载失败");
     }).finally(() => setLoading(false));
   });
-  const [configuration, setConfiguration] = createSignal<Config>({ agentModels: [], environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
+  const [configuration, setConfiguration] = createSignal<Config>(emptyConfig(), { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
   const [status, setStatus] = createSignal<string>("active", { ownedWrite: true });
@@ -202,6 +203,15 @@ function IssueQueue(props: {
   const [description, setDescription] = createSignal("", { ownedWrite: true });
   const [service, setService] = createSignal("", { ownedWrite: true });
   const [environment, setEnvironment] = createSignal("", { ownedWrite: true });
+  void loadPeople().then((value) => { setPeople(value); }).catch(() => undefined);
+  const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
+  const [issueType, setIssueType] = createSignal<IssueType>("smart_analysis", { ownedWrite: true });
+  const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(props.userSubject || null, { ownedWrite: true });
+  const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
+  const [ccOpen, setCcOpen] = createSignal(false);
+  const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
+  const [saving, setSaving] = createSignal(false, { ownedWrite: true });
+  const [createError, setCreateError] = createSignal("", { ownedWrite: true });
   void loadConfig().then((value) => {
     setConfiguration(value);
     const selectedEnvironment = value.environments.some((item) => item.key === environment()) ? environment() : value.environments[0]?.key ?? "";
@@ -212,15 +222,6 @@ function IssueQueue(props: {
     const availableServices = value.services.filter((item) => environmentId && item.environmentIds.includes(environmentId));
     setService((current) => availableServices.some((item) => item.key === current) ? current : availableServices[0]?.key ?? "");
   }).catch((error) => setLoadError(error instanceof Error ? error.message : "配置加载失败"));
-  void loadPeople().then((value) => { setPeople(value); }).catch(() => undefined);
-  const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
-  const [issueType, setIssueType] = createSignal<IssueType>("smart_analysis", { ownedWrite: true });
-  const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(props.userSubject || null, { ownedWrite: true });
-  const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
-  const [ccOpen, setCcOpen] = createSignal(false);
-  const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
-  const [saving, setSaving] = createSignal(false, { ownedWrite: true });
-  const [createError, setCreateError] = createSignal("", { ownedWrite: true });
   const submitIssue = async () => {
     if (!title().trim() || !service()) return;
     setSaving(true);
@@ -235,7 +236,6 @@ function IssueQueue(props: {
         ccSubjects: ccSubjects(),
         serviceKey: service(),
         environmentKey: environment(),
-        reporter: props.userName,
       }, attachments());
       setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
       props.onSelect(issue.id);
@@ -317,7 +317,7 @@ function IssueQueue(props: {
         <div class="create-issue-form compact-issue-form new-issue-form">
           <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { const selected = selectedChoice(value, configuration().environments.map((item) => item.key)); if (selected) { setEnvironment(selected); setService(""); if (!issueTypesForEnvironment(selected).includes(issueType())) setIssueType(issueTypesForEnvironment(selected)[0] ?? "smart_analysis"); } }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((item) => item.key)); if (selected) setService(selected); }} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
-          <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
+          <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(environment())); if (selected) setIssueType(selected); }} options={issueTypesForEnvironment(environment()).map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setCcOpen)}><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} open={ccOpen()} onOpenChange={setCcOpen} onChange={(value) => setCcSubjects(selectedStrings(value, ccSubjects()))} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
@@ -344,7 +344,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
   const [editAttachments, setEditAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [removedAttachmentIds, setRemovedAttachmentIds] = createSignal<string[]>([], { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
-  const [configuration, setConfiguration] = createSignal<Config>({ agentModels: [], environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
+  const [configuration, setConfiguration] = createSignal<Config>(emptyConfig(), { ownedWrite: true });
   const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
   const [editError, setEditError] = createSignal("", { ownedWrite: true });
   const [retrying, setRetrying] = createSignal(false, { ownedWrite: true });
@@ -608,7 +608,7 @@ function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: str
         <div class="create-issue-form compact-issue-form edit-issue-form">
           <Show when={editError()}><div class="create-error modal-form-error" role="alert">{editError()}</div></Show>
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.environmentIds.includes(configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.id ?? "")).map((service) => ({ value: service.key, label: service.name }))} /></label>
-          <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, ["p0", "p1", "p2", "p3"] as const); if (selected) setEditPriority(selected); }} options={[{ value: "p0", label: "P0 · 紧急" }, { value: "p1", label: "P1 · 高" }, { value: "p2", label: "P2 · 中" }, { value: "p3", label: "P3 · 低" }]} /></label>
+          <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setEditPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(props.issue.environmentKey)); if (selected) setEditType(selected); }} options={issueTypesForEnvironment(props.issue.environmentKey).map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
@@ -645,20 +645,16 @@ function AgentWorkbench(props: { issue: IssueDetail; agentExpanded: boolean; cod
 }
 
 type RepositoryKind = Service["repositories"][number]["kind"];
-type AgentDraft = { provider: string; model: string; thinkingLevel: ThinkingLevel };
 
-interface ServiceDeploymentDraft {
+interface ServiceDeploymentDraft extends CapabilityConfiguration {
   environmentKey: string;
   baseBranch: string;
   capabilities: CapabilityName[];
-  agent: AgentDraft;
-  nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password: string };
-  db?: { url: string; username: string; password: string };
-  sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
-  playwright?: { baseUrl: string; username: string; password: string };
-  redis?: { host: string; port: number; username: string; password: string; database: number };
-  mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string };
-  es?: { url: string; username: string; password: string };
+  agent: AgentConfiguration;
+  nacos?: NonNullable<CapabilityConfiguration["nacos"]> & { password: string };
+  playwright?: NonNullable<CapabilityConfiguration["playwright"]> & { password: string };
+  redis?: NonNullable<CapabilityConfiguration["redis"]> & { password: string };
+  es?: NonNullable<CapabilityConfiguration["es"]> & { password: string };
 }
 
 function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploymentDraft {
@@ -706,7 +702,7 @@ function ServiceDeploymentEditorRow(props: {
   const [environmentKey, setEnvironmentKey] = createSignal(props.deployment.environmentKey, { ownedWrite: true });
   const [baseBranch, setBaseBranch] = createSignal(props.deployment.baseBranch, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...props.deployment.capabilities], { ownedWrite: true });
-  const [agentDraft, setAgentDraft] = createSignal<AgentDraft>({ ...props.deployment.agent }, { ownedWrite: true });
+  const [agentDraft, setAgentDraft] = createSignal<AgentConfiguration>({ ...props.deployment.agent }, { ownedWrite: true });
   const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: props.deployment.nacos?.serverUrl ?? "", namespace: props.deployment.nacos?.namespace ?? "", group: props.deployment.nacos?.group ?? "DEFAULT_GROUP", dataIds: props.deployment.nacos?.dataIds?.join(", ") ?? "", username: props.deployment.nacos?.username ?? "", password: props.deployment.nacos?.password ?? "" }, { ownedWrite: true });
   const [dbDraft, setDbDraft] = createSignal({ url: props.deployment.db?.url ?? "", username: props.deployment.db?.username ?? "", password: props.deployment.db?.password ?? "" }, { ownedWrite: true });
   const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: props.deployment.sls?.accessKeyId ?? "", accessKeySecret: props.deployment.sls?.accessKeySecret ?? "", region: props.deployment.sls?.region ?? "", project: props.deployment.sls?.project ?? "", logstores: props.deployment.sls?.logstores.join(", ") ?? "" }, { ownedWrite: true });
@@ -767,7 +763,7 @@ function ServiceDeploymentEditorRow(props: {
 }
 
 function ConfigurationView() {
-  const [configuration, setConfiguration] = createSignal<Config>({ agentModels: [], environments: [], capabilityCatalog: [], services: [] }, { ownedWrite: true });
+  const [configuration, setConfiguration] = createSignal<Config>(emptyConfig(), { ownedWrite: true });
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
@@ -796,7 +792,7 @@ function ConfigurationView() {
   const openNewService = () => {
     resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
   };
-  const defaultAgent = (): AgentDraft => {
+  const defaultAgent = (): AgentConfiguration => {
     const model = configuration().agentModels[0];
     return model ? { provider: model.provider, model: model.id, thinkingLevel: model.thinkingLevels.includes("medium") ? "medium" : model.thinkingLevels[0]! } : { provider: "", model: "", thinkingLevel: "off" };
   };
@@ -986,7 +982,7 @@ export function App() {
         </Layout.Header>
         <Layout.Content class={`app-content${agentExpanded() && view() === "issues" ? " agent-expanded" : ""}${codeExpanded() && view() === "issues" ? " code-expanded" : ""}`}>
           <Show when={view() === "issues"} fallback={view() === "statistics" ? <Statistics /> : <ConfigurationView />}>
-            <Show when={!codeExpanded()}><IssueQueue selectedId={selectedId()} userName="周俊杰" userSubject="zjj3753@xianhengguoji.com" refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
+            <Show when={!codeExpanded()}><IssueQueue selectedId={selectedId()} userSubject="zjj3753@xianhengguoji.com" refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
             <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
               <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                 {(current) => (

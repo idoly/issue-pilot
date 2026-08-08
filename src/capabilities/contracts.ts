@@ -1,11 +1,38 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 
-import { MAX_BROWSER_ACTIONS, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS, MAX_SLS_RESULTS } from "./limits.ts";
+export const MAX_BROWSER_ACTIONS = 50;
+export const MAX_CAPABILITY_RESULT_BYTES = 1024 * 1024;
+export const MAX_CAPABILITY_TIMEOUT_MS = 15_000;
+export const MAX_DATABASE_QUERY_CHARS = 20_000;
+export const MAX_DATABASE_ROWS = 500;
+export const MAX_ES_RESULTS = 200;
+export const MAX_NACOS_DATA_IDS = 50;
+export const MAX_REDIS_KEYS = 100;
+export const MAX_REDIS_RESULTS = 500;
+export const MAX_SLS_RESULTS = 200;
+
+export function capabilityResultText(value: unknown): string {
+  const text = JSON.stringify(value, null, 2);
+  if (Buffer.byteLength(text) > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
+  return text;
+}
+
+export function capabilitySignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(MAX_CAPABILITY_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+export function capabilityTextResult<Details extends Record<string, unknown>>(text: string, details: Details) {
+  return { content: [{ type: "text" as const, text }], details };
+}
+
+export const isNacosTarget = (value: string): boolean => /^[a-zA-Z0-9._-]{1,255}$/.test(value);
+export const isSlsLogstore = (value: string): boolean => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/.test(value);
 
 export const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
-  db: Type.Object({ statement: Type.String({ maxLength: 20_000 }) }, { additionalProperties: false }),
+  db: Type.Object({ statement: Type.String({ maxLength: MAX_DATABASE_QUERY_CHARS }) }, { additionalProperties: false }),
   sls: Type.Object({
     logstore: Type.String({ maxLength: 63 }),
     from: Type.Optional(Type.Integer({ minimum: 0 })),

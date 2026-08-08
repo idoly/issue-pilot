@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MAX_NACOS_DATA_IDS } from "./limits.ts";
+import { isNacosTarget, MAX_NACOS_DATA_IDS } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
-
-const NACOS_TARGET = /^[a-zA-Z0-9._-]{1,255}$/;
 
 export interface NacosConnection {
   serverUrl: string;
@@ -53,7 +51,7 @@ async function nacosContent(pi: CommandExecutor, dataId: string, connection: Nac
 }
 
 export async function readNacosConfigurations(pi: CommandExecutor, connection: NacosConnection, signal?: AbortSignal): Promise<Array<{ dataId: string; group: string; content: string | null }>> {
-  if (!NACOS_TARGET.test(connection.group) || !Array.isArray(connection.dataIds) || !connection.dataIds.length || connection.dataIds.length > MAX_NACOS_DATA_IDS || connection.dataIds.some((dataId) => !NACOS_TARGET.test(dataId)) || new Set(connection.dataIds).size !== connection.dataIds.length) throw new Error("invalid_nacos_configuration_target");
+  if (!isNacosTarget(connection.group) || !Array.isArray(connection.dataIds) || !connection.dataIds.length || connection.dataIds.length > MAX_NACOS_DATA_IDS || connection.dataIds.some((dataId) => !isNacosTarget(dataId)) || new Set(connection.dataIds).size !== connection.dataIds.length) throw new Error("invalid_nacos_configuration_target");
   const configurations = [];
   for (const dataId of connection.dataIds) configurations.push({ dataId, group: connection.group, content: await nacosContent(pi, dataId, connection, signal) });
   return configurations;
