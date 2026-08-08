@@ -57,7 +57,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
             const deploymentConfig = record(deployment.config);
             return { id: deployment.id, environmentId: deployment.environmentId, baseBranch: deployment.baseBranch, ...structuredClone(deploymentConfig), capabilities: configuredCapabilities(deploymentConfig), agent: deploymentConfig.agent ?? null };
           }),
-          repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, kind: repository.kind, url: repository.url })),
+          repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, url: repository.url })),
         };
       }),
     };

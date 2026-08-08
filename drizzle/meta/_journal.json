@@ -211,6 +211,13 @@
       "when": 1786211840308,
       "tag": "0029_remove_unused_owner_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1786229580029,
+      "tag": "0030_remove_repository_kind",
+      "breakpoints": true
     }
   ]
 }

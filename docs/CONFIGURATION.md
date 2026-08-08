@@ -20,12 +20,7 @@ Web 配置页面保存的 service deployment 是 Agent 模型、连接、credent
 
 ## Repository
 
-Repository kind 只能是：
-
-- `frontend`
-- `backend`
-
-每个服务至少一个 repository，URL 在同一服务内不能重复。Deployment 的 `baseBranch` 是该 environment 下所有 repository 使用的远端基线。
+每个服务至少一个 repository，URL 在同一服务内不能重复。Repository 不区分前后端类型；所有 repository 使用相同的 workspace、policy 和 Git 生命周期。Deployment 的 `baseBranch` 是该 environment 下所有 repository 使用的远端基线。
 
 创建工单后，Issue Pilot 会把 service repository 固化到 issue workspace 记录。Service 删除 repository 时，下一次 Agent 准备会清理不再授权的 clean worktree；dirty workspace 明确失败并保留，防止丢失未提交修改。
 

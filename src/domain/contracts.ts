@@ -66,9 +66,6 @@ export function configuredCapabilities(config: Record<string, unknown>): Capabil
   });
 }
 
-export const REPOSITORY_KINDS = ["frontend", "backend"] as const;
-export type RepositoryKind = typeof REPOSITORY_KINDS[number];
-
 export const ENVIRONMENT_KINDS = ["prod", "test", "dev"] as const;
 export type EnvironmentKind = typeof ENVIRONMENT_KINDS[number];
 

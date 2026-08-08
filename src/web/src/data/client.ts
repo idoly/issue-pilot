@@ -1,8 +1,8 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type EnvironmentKind, type IssuePriority, type IssueStatus, type IssueType, type RepositoryKind } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type EnvironmentKind, type IssuePriority, type IssueStatus, type IssueType } from "../../../domain/contracts";
 export type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
-export type { AgentConfiguration, AgentFooterStats, AgentModelDefinition, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType, RepositoryKind };
+export type { AgentConfiguration, AgentFooterStats, AgentModelDefinition, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType };
 
 export interface Person { subject: string; name: string; email: string }
 
@@ -62,7 +62,7 @@ export interface Service {
   createdAt: string;
   environmentIds: string[];
   deployments: ServiceDeployment[];
-  repositories: Array<{ id: string; kind: RepositoryKind; url: string }>;
+  repositories: Array<{ id: string; url: string }>;
 }
 
 export interface Config {
@@ -75,7 +75,7 @@ export interface Config {
 export interface ServiceInput {
   name: string;
   description: string;
-  repositories: Array<{ id?: string; kind: RepositoryKind; url: string }>;
+  repositories: Array<{ id?: string; url: string }>;
   deployments: Array<CapabilityConfiguration & { environmentKey: string; baseBranch: string; capabilities: CapabilityName[]; agent: AgentConfiguration }>;
 }
 

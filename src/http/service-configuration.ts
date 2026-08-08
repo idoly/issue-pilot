@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { isNacosTarget, isSlsLogstore, MAX_NACOS_DATA_IDS } from "../capabilities/contracts.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, REPOSITORY_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 
@@ -114,7 +114,6 @@ function parseAgentConfiguration(value: unknown): AgentConfiguration {
 function parseServiceConfigurationInput(input: Record<string, unknown>) {
   const repositories = Array.isArray(input.repositories) ? input.repositories.map(record).map((repository) => ({
     id: optionalText(repository.id, 255),
-    kind: choice(repository.kind, "repository_kind", REPOSITORY_KINDS),
     url: text(repository.url, "repository_url"),
   })) : [];
   if (!repositories.length) throw new ApiError(400, "repository_required");
@@ -191,9 +190,9 @@ export async function replaceServiceConfiguration(options: {
   for (const repository of repositoriesInput) {
     if (repository.id && existingById.has(repository.id)) {
       retainedRepositoryIds.add(repository.id);
-      await executor.update(serviceRepositories).set({ kind: repository.kind, url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId)));
+      await executor.update(serviceRepositories).set({ url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId)));
     } else {
-      const [created] = await executor.insert(serviceRepositories).values({ serviceId, kind: repository.kind, url: repository.url }).returning();
+      const [created] = await executor.insert(serviceRepositories).values({ serviceId, url: repository.url }).returning();
       retainedRepositoryIds.add(created!.id);
     }
   }

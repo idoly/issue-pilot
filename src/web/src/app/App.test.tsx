@@ -32,7 +32,7 @@ vi.mock("../data/client", async (importOriginal) => {
     services: [{
       id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", createdAt: "2026-08-07T00:00:00.000Z", environmentIds: ["env-test"],
       deployments: [{ id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
-      repositories: [{ id: "srm-repository", kind: "backend", url: "git@example.com:team/srm.git" }],
+      repositories: [{ id: "srm-repository", url: "git@example.com:team/srm.git" }],
     }],
   };
   return {

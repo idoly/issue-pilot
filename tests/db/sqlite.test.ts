@@ -52,6 +52,8 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       const columns = await client.execute(`pragma table_info('${table}')`);
       assert.equal(columns.rows.some((column) => column.name === "owner_subject"), false);
     }
+    const repositoryColumns = await client.execute("pragma table_info('service_repositories')");
+    assert.equal(repositoryColumns.rows.some((column) => column.name === "kind"), false);
     const attachmentColumns = await client.execute("pragma table_info('issue_attachments')");
     assert.equal(attachmentColumns.rows.some((column) => column.name === "scan_status"), false);
     assert.equal((await stat(file)).mode & 0o777, 0o600);

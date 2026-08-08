@@ -75,7 +75,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         payload: {
           name: service.name,
           description: `${service.name} service`,
-          repositories: service.repositoryUrls.map((url, index) => ({ kind: index === 0 ? "frontend" : "backend", url })),
+          repositories: service.repositoryUrls.map((url) => ({ url })),
           deployments: [
             { environmentKey: "test", baseBranch: "main", capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } },
             ...(service.key === "beta" ? [{ environmentKey: "dev", baseBranch: "develop", capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } }] : []),
@@ -89,15 +89,15 @@ test("configuration and issue API preserves relational integrity", async () => {
       ["invalid-model", { provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high" }, "agent_model_not_available"],
       ["invalid-thinking", { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off" }, "agent_thinking_level_not_supported"],
     ] as const) {
-      const response = await app.inject({ method: "POST", url: "/api/services", payload: { key, name: key, description: "", repositories: [{ kind: "backend", url: `https://example.test/${key}.git` }], deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [], agent }] } });
+      const response = await app.inject({ method: "POST", url: "/api/services", payload: { key, name: key, description: "", repositories: [{ url: `https://example.test/${key}.git` }], deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [], agent }] } });
       assert.equal(response.statusCode, 400, response.body);
       assert.equal((await json(response)).error, expected);
     }
 
-    const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ id: string; key: string; repositories: Array<{ id: string; kind: string; url: string }>; deployments: Array<{ agent: unknown }> }> };
+    const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ id: string; key: string; repositories: Array<{ id: string; url: string }>; deployments: Array<{ agent: unknown }> }> };
     const alphaModel = modeled.services.find((service) => service.key === "alpha")!;
     assert.equal("kind" in alphaModel, false);
-    assert.deepEqual(alphaModel.repositories.map((repository) => repository.kind).sort(), ["backend", "frontend"]);
+    assert.equal(alphaModel.repositories.some((repository) => "kind" in repository), false);
     assert.deepEqual(alphaModel.repositories.map((repository) => repository.url).sort(), ["https://example.test/alpha-shared.git", "https://example.test/alpha.git"]);
     assert.deepEqual(alphaModel.deployments[0]?.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" });
 
@@ -282,13 +282,13 @@ test("configuration and issue API preserves relational integrity", async () => {
       payload: {
         name: "Alpha renamed",
         description: "multiple repositories",
-        repositories: [{ id: retainedRepository.id, kind: "frontend", url: retainedRepository.url }, { kind: "backend", url: "https://example.test/alpha-extra.git" }],
+        repositories: [{ id: retainedRepository.id, url: retainedRepository.url }, { url: "https://example.test/alpha-extra.git" }],
         deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "sls"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha-test.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/alpha", username: "readonly", password: "db-secret" }, redis: { host: "192.168.27.122", port: 6379, username: "", password: "redis-secret", database: 0 }, mq: { host: "192.168.27.122", port: 5672, managementPort: 15672, username: "admin", password: "mq-secret", virtualHost: "/" }, es: { url: "http://es-6.example.test", username: "", password: "" }, sls: { accessKeyId: "fixture-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"] }, playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", password: "deployment-secret" } }],
       },
     });
     assert.equal(repositoryUpdate.statusCode, 200, repositoryUpdate.body);
     assert.equal(engine.closedSessions.includes(createdInternalId), true);
-    const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[]; nacos: { dataIds: string[]; password: string }; db: { url: string; password: string }; sls: { accessKeySecret: string }; playwright: { baseUrl: string; username: string; password: string } | null }>; repositories: Array<{ id: string; kind: string; url: string }> }> };
+    const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[]; nacos: { dataIds: string[]; password: string }; db: { url: string; password: string }; sls: { accessKeySecret: string }; playwright: { baseUrl: string; username: string; password: string } | null }>; repositories: Array<{ id: string; url: string }> }> };
     const updatedAlpha = afterRepositoryUpdate.services.find((service) => service.key === "alpha")!;
     assert.equal(updatedAlpha.name, "Alpha renamed");
     assert.equal(updatedAlpha.repositories.find((repository) => repository.url === retainedRepository.url)?.id, retainedRepository.id);
@@ -340,7 +340,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const duplicateRepository = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
-      payload: { name: "Should roll back", description: "must not persist", repositories: [{ kind: "frontend", url: "https://example.test/duplicate.git" }, { kind: "backend", url: "https://example.test/duplicate.git" }], deployments: [] },
+      payload: { name: "Should roll back", description: "must not persist", repositories: [{ url: "https://example.test/duplicate.git" }, { url: "https://example.test/duplicate.git" }], deployments: [] },
     });
     assert.equal(duplicateRepository.statusCode, 400, duplicateRepository.body);
     assert.equal((await json(duplicateRepository)).error, "duplicate_repository");
@@ -525,7 +525,7 @@ test("configuration and issue API preserves relational integrity", async () => {
       payload: {
         name: "Partially changed",
         description: "changed",
-        repositories: [{ id: "missing-repository", kind: "frontend", url: "https://example.test/alpha.git" }],
+        repositories: [{ id: "missing-repository", url: "https://example.test/alpha.git" }],
         deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } }],
       },
     });

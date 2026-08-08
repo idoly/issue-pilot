@@ -18,8 +18,6 @@ function serviceSaveErrorMessage(error: unknown): string {
   return messages[code] ?? code;
 }
 
-type RepositoryKind = Service["repositories"][number]["kind"];
-
 interface ServiceDeploymentDraft extends CapabilityConfiguration {
   environmentKey: string;
   baseBranch: string;
@@ -49,13 +47,13 @@ function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploy
 
 function ServiceRepositoryEditorRow(props: {
   index: number;
-  repository: { id?: string; kind: RepositoryKind; url: string };
+  repository: { id?: string; url: string };
   only: boolean;
-  onChange: (repository: { kind: RepositoryKind; url: string }) => void;
+  onChange: (repository: { url: string }) => void;
   onDelete: () => void;
 }) {
   const [url, setUrl] = createSignal(props.repository.url, { ownedWrite: true });
-  return <div class="service-repository-row"><Input aria-label={`仓库地址 ${props.index + 1}`} placeholder="git@example.com:team/project.git" value={url()} onInput={(event) => { const next = event.currentTarget.value; setUrl(next); props.onChange({ kind: props.repository.kind, url: next }); }} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除仓库${props.index + 1}`} aria-label={`删除仓库${props.index + 1}`} disabled={props.only} onClick={props.onDelete} /></div>;
+  return <div class="service-repository-row"><Input aria-label={`仓库地址 ${props.index + 1}`} placeholder="git@example.com:team/project.git" value={url()} onInput={(event) => { const next = event.currentTarget.value; setUrl(next); props.onChange({ url: next }); }} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除仓库${props.index + 1}`} aria-label={`删除仓库${props.index + 1}`} disabled={props.only} onClick={props.onDelete} /></div>;
 }
 
 function CapabilityLabels(props: { catalog: Config["capabilityCatalog"]; keys: CapabilityName[] }) {
@@ -143,7 +141,7 @@ export function ConfigurationView() {
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
-  const [serviceRepositories, setServiceRepositories] = createSignal<Array<{ id?: string; kind: RepositoryKind; url: string }>>([{ kind: "backend", url: "" }], { ownedWrite: true });
+  const [serviceRepositories, setServiceRepositories] = createSignal<Array<{ id?: string; url: string }>>([{ url: "" }], { ownedWrite: true });
   const [serviceDeployments, setServiceDeployments] = createStore<ServiceDeploymentDraft[]>([]);
   const [editingServiceKey, setEditingServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
   const [selectedServiceKey, setSelectedServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
@@ -169,7 +167,7 @@ export function ConfigurationView() {
   );
   const selectedService = createMemo(() => configuration().services.find((service) => service.key === selectedServiceKey()));
   const resetServiceForm = () => {
-    setServiceName(""); setDescription(""); setServiceRepositories([{ kind: "backend", url: "" }]); setServiceDeployments(() => []); setEditingServiceKey(null);
+    setServiceName(""); setDescription(""); setServiceRepositories([{ url: "" }]); setServiceDeployments(() => []); setEditingServiceKey(null);
   };
   const openNewService = () => {
     resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
@@ -181,7 +179,7 @@ export function ConfigurationView() {
   const openServiceEditor = (service: Service) => {
     setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
-    setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, kind: repository.kind, url: repository.url })));
+    setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, url: repository.url })));
     const deployments = service.deployments.map((deployment) => ({
       environmentKey: configuration().environments.find((environment) => environment.id === deployment.environmentId)?.key ?? "",
       baseBranch: deployment.baseBranch,
@@ -223,7 +221,7 @@ export function ConfigurationView() {
     try {
       const definition = {
         name: serviceName().trim(), description: description().trim(),
-        repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), kind: repository.kind, url: repository.url.trim() })),
+        repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), url: repository.url.trim() })),
         deployments: serviceDeployments.map((deployment) => ({ environmentKey: deployment.environmentKey, baseBranch: deployment.baseBranch.trim(), capabilities: deployment.capabilities, agent: { provider: deployment.agent.provider.trim(), model: deployment.agent.model.trim(), thinkingLevel: deployment.agent.thinkingLevel }, ...(deployment.capabilities.includes("nacos") && deployment.nacos ? { nacos: { serverUrl: deployment.nacos.serverUrl.trim(), namespace: deployment.nacos.namespace.trim(), group: deployment.nacos.group.trim(), dataIds: deployment.nacos.dataIds, username: deployment.nacos.username.trim(), password: deployment.nacos.password } } : {}), ...(deployment.capabilities.includes("db") && deployment.db ? { db: { url: deployment.db.url.trim(), username: deployment.db.username.trim(), password: deployment.db.password } } : {}), ...(deployment.capabilities.includes("sls") && deployment.sls ? { sls: { accessKeyId: deployment.sls.accessKeyId.trim(), accessKeySecret: deployment.sls.accessKeySecret, region: deployment.sls.region.trim(), project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}), ...(deployment.capabilities.includes("playwright") && deployment.playwright ? { playwright: { baseUrl: deployment.playwright.baseUrl.trim(), username: deployment.playwright.username.trim(), password: deployment.playwright.password } } : {}), ...(deployment.capabilities.includes("redis") && deployment.redis ? { redis: { host: deployment.redis.host.trim(), port: deployment.redis.port, username: deployment.redis.username.trim(), password: deployment.redis.password, database: deployment.redis.database } } : {}), ...(deployment.capabilities.includes("mq") && deployment.mq ? { mq: { host: deployment.mq.host.trim(), port: deployment.mq.port, managementPort: deployment.mq.managementPort, username: deployment.mq.username.trim(), password: deployment.mq.password, virtualHost: deployment.mq.virtualHost.trim() } } : {}), ...(deployment.capabilities.includes("es") && deployment.es ? { es: { url: deployment.es.url.trim(), username: deployment.es.username.trim(), password: deployment.es.password } } : {}) })),
       };
       const editingKey = editingServiceKey();
@@ -279,7 +277,7 @@ export function ConfigurationView() {
         <div class="service-form">
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { kind: "backend", url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 Pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? cloneDeploymentDraft(next) : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
