@@ -1,7 +1,7 @@
 {
   "name": "issue-pilot",
   "version": "0.1.0",
-  "description": "A local-first issue management agent for pi",
+  "description": "A local-first issue management agent for Pi",
   "private": true,
   "type": "module",
   "keywords": [
@@ -15,8 +15,7 @@
     "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test tests/**/*.test.ts && vitest run --config src/web/vite.config.ts --environment jsdom",
     "build": "vite build --config src/web/vite.config.ts",
-    "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
-    "db:seed": "node --experimental-strip-types src/db/seed.ts"
+    "db:migrate": "node --experimental-strip-types src/db/migrate.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.1",

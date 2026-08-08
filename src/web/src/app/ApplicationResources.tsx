@@ -16,7 +16,7 @@ interface ApplicationResources {
 
 const ResourcesContext = createContext<ApplicationResources>();
 
-function message(error: unknown): string {
+function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -34,7 +34,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
       setConfigurationError("");
       return value;
     } catch (error) {
-      setConfigurationError(message(error));
+      setConfigurationError(errorMessage(error));
       throw error;
     }
   };
@@ -46,7 +46,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
       setPeopleError("");
       return value;
     } catch (error) {
-      setPeopleError(message(error));
+      setPeopleError(errorMessage(error));
       throw error;
     }
   };

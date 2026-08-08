@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,10 +7,15 @@ import type { IssuePolicy } from "../pi/policy.ts";
 import { capabilityResultText, MAX_BROWSER_ACTIONS, MAX_CAPABILITY_RESULT_BYTES } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
-const DEFAULT_PLAYWRIGHT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
-const DEFAULT_PLAYWRIGHT_CORE_ROOT = "/usr/local/node/lib/node_modules/playwright-core";
+const PLAYWRIGHT_VERSION = "1.62.1";
+const BROWSER_RUNTIME = {
+  image: "mcr.microsoft.com/playwright:v1.62.1-noble",
+  playwrightCoreRoot: "/usr/local/node/lib/node_modules/playwright-core",
+} as const;
 
-export type PlaywrightAction =
+type BrowserRuntime = Readonly<{ image: string; playwrightCoreRoot: string }>;
+
+export type BrowserAction =
   | { type: "goto"; path: string }
   | { type: "login"; usernameSelector: string; passwordSelector: string; submitSelector: string }
   | { type: "click"; selector: string }
@@ -18,8 +23,8 @@ export type PlaywrightAction =
   | { type: "select"; selector: string; value: string }
   | { type: "wait_for"; selector: string };
 
-function deploymentPlaywright(value: Record<string, unknown>): { baseUrl: string; username: string | null; password: string | null } {
-  const raw = value.playwright;
+function deploymentBrowserConfiguration(deploymentConfig: Record<string, unknown>): { baseUrl: string; username: string | null; password: string | null } {
+  const raw = deploymentConfig.playwright;
   if (!raw || typeof raw !== "object") throw new Error("browser_configuration_not_found");
   const playwright = raw as Record<string, unknown>;
   if (typeof playwright.baseUrl !== "string") throw new Error("browser_configuration_not_found");
@@ -30,15 +35,15 @@ function deploymentPlaywright(value: Record<string, unknown>): { baseUrl: string
   };
 }
 
-function playwrightCredentials(policy: IssuePolicy, config: Record<string, unknown>): { username: string | null; password: string | null } {
+function browserCredentials(policy: IssuePolicy, deploymentConfig: Record<string, unknown>): { username: string | null; password: string | null } {
   const scope = policy.service.playwright;
   if (!scope || !policy.service.capabilities.includes("playwright")) throw new Error("browser_scope_not_granted_for_service");
-  const playwright = deploymentPlaywright(config);
-  if (playwright.baseUrl !== scope.baseUrl) throw new Error("browser_scope_changed");
-  return { username: playwright.username, password: playwright.password };
+  const browserConfig = deploymentBrowserConfiguration(deploymentConfig);
+  if (browserConfig.baseUrl !== scope.baseUrl) throw new Error("browser_scope_changed");
+  return { username: browserConfig.username, password: browserConfig.password };
 }
 
-function validatePlaywrightActions(actions: PlaywrightAction[]): void {
+function validateBrowserActions(actions: BrowserAction[]): void {
   if (!Array.isArray(actions) || actions.length < 1 || actions.length > MAX_BROWSER_ACTIONS) throw new Error("invalid_browser_actions");
   for (const action of actions) {
     if (!action || typeof action !== "object") throw new Error("invalid_browser_action");
@@ -62,15 +67,21 @@ function validatePlaywrightActions(actions: PlaywrightAction[]): void {
   }
 }
 
-export async function runPlaywright(pi: CommandExecutor, policy: IssuePolicy, config: Record<string, unknown>, input: { actions: PlaywrightAction[]; screenshot?: boolean }, signal?: AbortSignal) {
+export async function runBrowserActions(executor: CommandExecutor, policy: IssuePolicy, deploymentConfig: Record<string, unknown>, input: { actions: BrowserAction[]; screenshot?: boolean }, signal?: AbortSignal, runtime: BrowserRuntime = BROWSER_RUNTIME) {
   const scope = policy.service.playwright;
   if (!scope) throw new Error("browser_scope_not_granted_for_service");
-  validatePlaywrightActions(input.actions);
-  const credentials = playwrightCredentials(policy, config);
+  validateBrowserActions(input.actions);
+  const credentials = browserCredentials(policy, deploymentConfig);
   if (input.actions.some((action) => action.type === "login") && (!credentials.username || !credentials.password)) throw new Error("browser_credentials_not_configured");
 
-  const playwrightCoreRoot = path.resolve(process.env.PI_PLAYWRIGHT_CORE_ROOT ?? DEFAULT_PLAYWRIGHT_CORE_ROOT);
-  await access(path.join(playwrightCoreRoot, "package.json"));
+  const playwrightCoreRoot = path.resolve(runtime.playwrightCoreRoot);
+  let installedVersion = "";
+  try {
+    installedVersion = JSON.parse(await readFile(path.join(playwrightCoreRoot, "package.json"), "utf8")).version;
+  } catch {
+    throw new Error("playwright_core_not_installed");
+  }
+  if (installedVersion !== PLAYWRIGHT_VERSION) throw new Error("playwright_core_version_mismatch");
   const runner = fileURLToPath(new URL("../../infra/playwright-runner.cjs", import.meta.url));
   const uid = process.getuid?.() ?? 1000;
   const gid = process.getgid?.() ?? 1000;
@@ -93,10 +104,10 @@ export async function runPlaywright(pi: CommandExecutor, policy: IssuePolicy, co
       "--volume", `${secretDirectory}:/run/secrets:ro,Z`,
       "--volume", `${playwrightCoreRoot}:/tool/node_modules/playwright-core:ro,Z`,
       "--entrypoint", "node",
-      process.env.PI_PLAYWRIGHT_IMAGE ?? DEFAULT_PLAYWRIGHT_IMAGE,
+      runtime.image,
       "/runner/playwright-runner.cjs", "/run/input/request.json", "/run/secrets/credentials.json",
     ];
-    const execution = await pi.exec("podman", args, { timeout: 90_000, ...(signal ? { signal } : {}) });
+    const execution = await executor.execute("podman", args, { timeout: 90_000, ...(signal ? { signal } : {}) });
     if (execution.code !== 0) throw new Error("browser_operation_failed");
     let output: Record<string, unknown>;
     try { output = JSON.parse(execution.stdout) as Record<string, unknown>; } catch { throw new Error("browser_invalid_response"); }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "node:test";
 
 import { parseCapabilities, parseDatabaseConfiguration, parseElasticsearchConfiguration, parseNacosConfiguration, parsePlaywrightConfiguration, parseRabbitMqConfiguration, parseRedisConfiguration, parseSlsConfiguration } from "../../src/http/service-configuration.ts";
 

@@ -58,9 +58,10 @@ vi.mock("../data/client", async (importOriginal) => {
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
-  afterEach(() => document.body.replaceChildren());
+  afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 
   test("renders issues and data-backed statistics, then opens configuration", async () => {
+    const consoleWarning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     render(() => <App />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
@@ -203,5 +204,6 @@ describe("issue pilot workspace", () => {
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
     expect(client.loadPeople).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
+    expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
   });
 });

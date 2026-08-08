@@ -4,11 +4,11 @@ import path from "node:path";
 
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
-import { type PendingAttachment, readMultipartAttachment, serializeAttachment } from "./attachments.ts";
-import { environments, issueAttachments, issueCcRecipients, issueComments, issueHistory, issueRepositories, issueWorkspaces, issues, agentSessions, serviceDeployments, services, subjects } from "../db/schema.ts";
+import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueHistory, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
 import { issueAttachmentRoot } from "../workspace/state.ts";
+import { type PendingAttachment, readMultipartAttachment, serializeAttachment } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import { ensureCurrentSubject, assertIssueIdle, requireIssue, type ApiRouteContext } from "./route-context.ts";
 
@@ -23,7 +23,7 @@ function isoDate(value: Date | null | undefined): string | undefined {
   return value?.toISOString();
 }
 
-function datedKey(now = new Date()): string {
+function shanghaiDateStamp(now = new Date()): string {
   const values = new Map(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now).map((part) => [part.type, part.value]));
   return `${values.get("year")}${values.get("month")}${values.get("day")}`;
 }
@@ -131,7 +131,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const reporter = await ensureCurrentSubject(database);
     const parsed = await parseIssueInput(input, environment);
     const created = await serializeIssueCreation(async () => {
-      const prefix = `ISSUE-${datedKey()}-`;
+      const prefix = `ISSUE-${shanghaiDateStamp()}-`;
       const existing = await database.db.select({ key: issues.key }).from(issues);
       const sequence = Math.max(0, ...existing.flatMap(({ key }) => key.startsWith(prefix) ? [Number(key.slice(prefix.length)) || 0] : [])) + 1;
       const key = `${prefix}${String(sequence).padStart(3, "0")}`;

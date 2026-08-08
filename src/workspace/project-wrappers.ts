@@ -33,7 +33,7 @@ cd "$project"
 exec mvn --batch-mode --no-transfer-progress "$action" "$@"
 `;
 
-export async function preparePiWorkspace(workspaceRoot: string): Promise<void> {
+export async function prepareProjectWrappers(workspaceRoot: string): Promise<void> {
   const binRoot = path.join(workspaceRoot, ".issue-pilot", "bin");
   await mkdir(binRoot, { recursive: true });
   await Promise.all([

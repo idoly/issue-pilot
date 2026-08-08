@@ -49,25 +49,28 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
     imageDrag = undefined;
     setLoading(false);
   };
-  createEffect(() => props.attachment, (attachment) => {
-    reset();
-    if (!attachment || attachmentPreviewKind(attachment) === "unsupported") return;
-    const sequence = ++requestSequence;
-    setLoading(true);
-    void fetchAttachment(props.issueKey, attachment.id).then(async (blob) => {
-      if (sequence !== requestSequence) return;
-      if (attachmentPreviewKind(attachment) === "text") {
-        const content = await readBlobText(blob);
-        if (sequence === requestSequence) setText(content);
-      } else {
-        setObjectUrl(URL.createObjectURL(blob));
-      }
-    }).catch((cause) => {
-      if (sequence === requestSequence) setError(cause instanceof Error ? cause.message : "attachment_preview_failed");
-    }).finally(() => {
-      if (sequence === requestSequence) setLoading(false);
-    });
-  });
+  createEffect(
+    () => ({ attachment: props.attachment, issueKey: props.issueKey }),
+    ({ attachment, issueKey }) => {
+      reset();
+      if (!attachment || attachmentPreviewKind(attachment) === "unsupported") return;
+      const sequence = ++requestSequence;
+      setLoading(true);
+      void fetchAttachment(issueKey, attachment.id).then(async (blob) => {
+        if (sequence !== requestSequence) return;
+        if (attachmentPreviewKind(attachment) === "text") {
+          const content = await readBlobText(blob);
+          if (sequence === requestSequence) setText(content);
+        } else {
+          setObjectUrl(URL.createObjectURL(blob));
+        }
+      }).catch((cause) => {
+        if (sequence === requestSequence) setError(cause instanceof Error ? cause.message : "attachment_preview_failed");
+      }).finally(() => {
+        if (sequence === requestSequence) setLoading(false);
+      });
+    },
+  );
   onCleanup(reset);
 
   const changeImageZoom = (requestedZoom: number, focusX?: number, focusY?: number) => {

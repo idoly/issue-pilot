@@ -7,11 +7,11 @@ const [requestFile, credentialsFile] = process.argv.slice(2);
 const MAX_ACTIONS = 50;
 if (!requestFile || !credentialsFile) process.exit(2);
 
-function parse(file) {
+function readJsonFile(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function allowedUrl(value, baseUrl) {
+function isAllowedUrl(value, baseUrl) {
   const url = new URL(value, baseUrl);
   if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) return false;
   if (url.protocol === "ws:") url.protocol = "http:";
@@ -19,9 +19,9 @@ function allowedUrl(value, baseUrl) {
   return url.origin === new URL(baseUrl).origin;
 }
 
-async function main() {
-  const request = parse(requestFile);
-  const credentials = parse(credentialsFile);
+async function run() {
+  const request = readJsonFile(requestFile);
+  const credentials = readJsonFile(credentialsFile);
   const baseUrl = new URL(request.baseUrl);
   if ((baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) throw new Error("invalid_base_url");
   if (!Array.isArray(request.actions) || request.actions.length < 1 || request.actions.length > MAX_ACTIONS) throw new Error("invalid_actions");
@@ -34,12 +34,12 @@ async function main() {
       serviceWorkers: "block",
     });
     await context.route("**/*", async (route) => {
-      if (allowedUrl(route.request().url(), baseUrl.href)) await route.continue();
+      if (isAllowedUrl(route.request().url(), baseUrl.href)) await route.continue();
       else await route.abort("blockedbyclient");
     });
     if (typeof context.routeWebSocket === "function") {
       await context.routeWebSocket("**/*", (socket) => {
-        if (!allowedUrl(socket.url(), baseUrl.href)) socket.close({ code: 1008, reason: "cross_origin_blocked" });
+        if (!isAllowedUrl(socket.url(), baseUrl.href)) socket.close({ code: 1008, reason: "cross_origin_blocked" });
         else socket.connectToServer();
       });
     }
@@ -108,7 +108,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+run().catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.message : "browser_failed"}\n`);
   process.exit(1);
 });

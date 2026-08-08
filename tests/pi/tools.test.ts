@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "node:test";
 
 import { createIssuePolicy } from "../../src/pi/policy.ts";
 import { createCapabilityTools } from "../../src/pi/tools.ts";

@@ -1,144 +1,275 @@
 # 运维说明
 
-## 进程
+## 部署模式
 
-| 组件 | 默认地址 | 启动方式 |
-| --- | --- | --- |
-| Fastify API | `http://127.0.0.1:3000` | `npm run server` |
-| SolidJS/Vite | `http://127.0.0.1:4173` | `npm run dev:web -- --host 127.0.0.1` |
-| code-server | `http://127.0.0.1:18080` | `infra/code-server.sh ensure` |
+Issue Pilot 默认是可信单机应用。推荐拓扑：
 
-API 收到 `SIGINT` 或 `SIGTERM` 时只关闭一次 Fastify。未完成的 Agent workspace 在下次启动时标记为失败并恢复工单状态。
+```text
+browser
+  -> same-host TLS/auth reverse proxy
+       +-- /             static src/web/dist
+       +-- /api/*        127.0.0.1:3000 (Fastify + SSE)
+       +-- /code/*       127.0.0.1:18080 (optional code-server)
 
-## API 环境变量
+Fastify -> SQLite / Pi SDK / Git / native capabilities
+Podman  -> shared code-server + ephemeral Playwright Chromium only
+```
 
-| 变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| `PORT` | `3000` | API 监听端口 |
-| `ISSUE_PILOT_STATE_ROOT` | `.issue-pilot` | 数据库、workspace 和 session 状态根目录 |
-| `ISSUE_PILOT_DATABASE` | `<state-root>/issues.db` | SQLite 文件 |
-| `ISSUE_PILOT_SUBJECT` | 本地默认用户 | 未认证部署中的当前操作人 |
-| `NODE_ENV` | 未设置 | `test` 时关闭默认 Fastify logger |
-| `ISSUE_PILOT_ALIYUN_CLI` | `/usr/local/sbin/aliyun` | SLS 使用的宿主 Aliyun CLI |
-| `PI_PLAYWRIGHT_CORE_ROOT` | `/usr/local/node/lib/node_modules/playwright-core` | 宿主全局 Playwright core |
-| `PI_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.62.1-noble` | 临时浏览器容器镜像 |
+API 没有内置 authentication，且 `/api/config` 返回真实 secret。即使有 reverse proxy，也必须保持 API 和 code-server 只监听 loopback，并在 proxy 层实施 identity、authorization、TLS、request size 和 audit policy。
 
-code-server 不读取环境变量覆盖；部署路径全部写在 `infra/code-server.sh` 中。
+## 固定 runtime
 
-## 数据库和迁移
+| component | fixed value |
+| --- | --- |
+| Node/Pi | `/usr/local/node`，Pi 0.84.1 |
+| Java | `/usr/local/java` |
+| Maven | `/usr/local/maven` |
+| Git | `/usr/bin/git` + `/usr/libexec/git-core` + `/usr/share/git-core` |
+| Aliyun CLI | `/usr/local/sbin/aliyun` |
+| Playwright core | `/usr/local/node/lib/node_modules/playwright-core@1.62.1` |
+| Browser image | `mcr.microsoft.com/playwright:v1.62.1-noble` |
+| code-server image | `ghcr.io/coder/code-server:4.131.0-39` |
+
+Capability runtime 路径、browser image 和版本不接受环境变量覆盖。这样部署检查、policy 行为和测试使用同一套已知 runtime。
+
+验证宿主：
 
 ```bash
+/usr/local/node/bin/node --version
+/usr/local/node/bin/pi --version
+/usr/local/java/bin/java -version
+/usr/local/maven/bin/mvn --version
+/usr/bin/git --version
+/usr/local/sbin/aliyun version
+podman version
+```
+
+还必须存在：
+
+```text
+~/.pi/agent/auth.json
+~/.pi/agent/models.json
+~/.pi/agent/models-store.json
+~/.pi/agent/settings.json
+~/.m2/settings.xml
+~/.m2/repository
+~/.npmrc
+~/.npm
+```
+
+## API process
+
+| variable | default | purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | API port；host 始终为 `127.0.0.1` |
+| `ISSUE_PILOT_STATE_ROOT` | `.issue-pilot` | database/workspace/session root |
+| `ISSUE_PILOT_DATABASE` | `<state-root>/issues.db` | SQLite file |
+| `ISSUE_PILOT_SUBJECT` | local default subject | 当前未认证操作人 |
+| `NODE_ENV` | unset | `test` 时关闭默认 Fastify logger |
+
+这些变量只配置 API process/state，不配置 model、credential、connection 或 capability authorization。Deployment 授权只能来自 SQLite 中的页面配置。
+
+API 收到 `SIGINT`/`SIGTERM` 时只关闭一次 Fastify、Agent session 和 database。下次启动会把中断的 workspace 标记为 failed，并恢复 issue 状态。
+
+## 首次部署
+
+在固定 release directory 中执行：
+
+```bash
+npm ci
+infra/playwright.sh prepare
+infra/playwright.sh status
+npm run typecheck
+npm test
+npm run build
 npm run db:migrate
+infra/code-server.sh ensure
 ```
 
-API 启动时也会运行 migration。破坏性迁移前：
+首次启动 API 后：
 
-1. 停止 API。
-2. 复制 `.issue-pilot/issues.db` 及现有 `-wal`、`-shm`，或先执行 SQLite checkpoint。
-3. 执行迁移。
-4. 启动 API，检查 `/health`、`/api/config` 和已有工单。
+1. 打开配置页面。
+2. 确认 `prod`、`test`、`dev` 三个 environment 存在。
+3. 创建 service 和 repository。
+4. 为需要的 environment 配置 base branch、model、thinking level 和 capability。
+5. 用 `/api/config` 或页面复核 deployment，但不要记录 response。
+6. 创建一个只读测试 issue，验证 model、SSE replay 和 worktree。
 
-数据库和备份包含 deployment credentials，必须使用私有权限。
+项目不提供业务 seed。环境由 database bootstrap 创建，用户由当前 subject 创建，service/deployment 必须由部署者明确配置。
 
-## Agent 工具准备
+## 本机开发
 
 ```bash
-infra/pi-tools.sh prepare
-infra/pi-tools.sh status
+npm run server
+npm run dev:web
+infra/code-server.sh ensure
 ```
 
-`prepare` 只做两件事：
+| component | address |
+| --- | --- |
+| Fastify API | `http://127.0.0.1:3000` |
+| Vite Web | `http://127.0.0.1:4173` |
+| code-server | `http://127.0.0.1:18080` |
 
-1. 在宿主 Node global prefix 安装 `playwright-core@1.62.1`。
-2. 准备 `mcr.microsoft.com/playwright:v1.62.1-noble` 浏览器镜像。
+`src/web/vite.config.ts` 已固定 Vite host 和 API proxy，不需要额外 `--host`。Vite 只用于开发。
 
-Node 和 Maven project wrapper 均直接使用宿主命令，不拉取工具镜像。Playwright capability 调用时才启动带 `--rm` 的临时浏览器容器；不会保留长驻 pi-tool 容器。
+## 生产部署
 
-卸载全局 Playwright core：
+### API systemd 示例
+
+下面示例使用专用低权限账号。把路径替换成实际 release directory；该账号必须拥有 `.issue-pilot`、Git cache、Pi config 和所需 package cache。
+
+```ini
+[Unit]
+Description=Issue Pilot API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=issue-pilot
+Group=issue-pilot
+WorkingDirectory=/opt/issue-pilot/current
+Environment=PATH=/usr/local/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=NODE_ENV=production
+ExecStart=/usr/local/node/bin/node --experimental-strip-types src/http/api.ts
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+安装和检查：
 
 ```bash
-infra/pi-tools.sh clean
+sudo systemctl daemon-reload
+sudo systemctl enable --now issue-pilot-api
+sudo systemctl status issue-pilot-api
+journalctl -u issue-pilot-api -f
 ```
+
+不要在 unit 中放 model API key、database password 或 capability credential。它们属于 Pi credential store 或 deployment config。
+
+### Static Web
+
+生产 Web 由 `npm run build` 生成到 `src/web/dist`。静态服务器应与 `/api` 使用同一 origin，避免额外 CORS surface。
+
+Nginx location 核心配置：
+
+```nginx
+root /opt/issue-pilot/current/src/web/dist;
+
+location / {
+    try_files $uri $uri/ /index.html;
+}
+
+location /api/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+}
+```
+
+必须在这些 location 外层增加组织实际使用的 authentication/TLS policy。Agent stream 是长连接 SSE；不能启用 response buffering、compression cache 或短 read timeout。Proxy request body limit 至少覆盖应用的 attachment limit，同时不应无限放大。
+
+### code-server proxy
+
+code-server 使用 WebSocket。外部开放时应使用独立、受保护的 path/origin，并转发 upgrade headers：
+
+```nginx
+location /code/ {
+    proxy_pass http://127.0.0.1:18080/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 1h;
+}
+```
+
+code-server 自身还有 private password，但不能替代统一身份认证。不要把 `18080` 直接发布到 LAN。
+
+## Playwright runtime
+
+```bash
+infra/playwright.sh prepare
+infra/playwright.sh status
+infra/playwright.sh clean
+```
+
+`prepare` 只安装固定 global `playwright-core@1.62.1` 并拉取固定 Noble browser image。它不准备 Node/Maven container，不创建 persistent browser container。
+
+每次 Playwright capability 调用：
+
+1. 创建 private input/secret directory。
+2. 写入 request 和 credential `0600` file。
+3. 以 `--rm`、`no-new-privileges`、`cap-drop ALL`、`pids-limit`、memory limit 启动 browser。
+4. 只允许 deployment base origin 的 HTTP/WebSocket。
+5. 返回结构化 snapshot 和可选 screenshot。
+6. 删除 temporary directory。
+
+`status` 还会拒绝带 `io.issue-pilot.component=pi-tool` label 的意外 persistent tool container。
 
 ## SLS CLI
 
-Issue Pilot 使用 Aliyun CLI 3.4.11 内置的 `Sls 2020-12-30 GetLogs`，不需要 `aliyun-cli-sls` plugin。可验证：
+Issue Pilot 使用 `/usr/local/sbin/aliyun` 的内置 `Sls 2020-12-30 GetLogs`，不需要 `aliyun-cli-sls` plugin：
 
 ```bash
-aliyun plugin list
-aliyun sls GetLogs help
+/usr/local/sbin/aliyun version
+/usr/local/sbin/aliyun sls GetLogs help
 ```
 
-调用时 `infra/aliyun-profile.sh` 设置 `ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP=true`，确保使用内置产品 API。deployment AccessKey 写入临时 `0600` profile，调用结束立即删除。
+调用时 command executor 为单次调用设置 private HOME 和 `ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP=true`。Deployment AccessKey 写入该 HOME 下的 `0600` profile，调用结束立即删除。CLI path 固定，且启动前拒绝 group/world writable binary。
 
 ## code-server 部署
 
 ### 固定约定
 
-`infra/code-server.sh` 不接受项目环境变量覆盖。固定值如下：
-
-| 项目 | 固定值 |
+| item | fixed value |
 | --- | --- |
-| 容器名 | `code-server` |
-| 镜像 | `ghcr.io/coder/code-server:4.131.0-39` |
-| 地址 | `127.0.0.1:18080` -> container `8080` |
+| container name | `code-server` |
+| image | `ghcr.io/coder/code-server:4.131.0-39` |
+| address | `127.0.0.1:18080` -> container `8080` |
 | workspace | `<repo>/.issue-pilot/workspaces` |
-| bare repository cache | `<repo>/.issue-pilot/repositories` |
-| code-server data/plugins | `<repo>/.issue-pilot/code-server/data` |
+| repository cache | `<repo>/.issue-pilot/repositories` |
+| data/extensions | `<repo>/.issue-pilot/code-server/data` |
 | password | `<repo>/.issue-pilot/code-server/password` |
+| container env file | `<repo>/.issue-pilot/code-server/container.env` |
 
-脚本不构建自定义镜像。首次缺少官方镜像时只执行 `podman pull`；容器以 `/home/coder/state/workspaces` 为 workdir，直接使用镜像自带 entrypoint 和 bind address。
+脚本不构建 custom image。`ensure` 校验固定 host runtime、更新 editor settings、创建 private password/env file，并按 runtime label 启动或重建容器。Password 不出现在 `podman run` command line；`status` 只输出 state、image 和 runtime label，不输出完整 inspect。
 
-### 宿主运行时挂载
+### Host runtime mounts
 
-| 宿主路径 | 容器路径 | 模式 | 用途 |
-| --- | --- | --- | --- |
-| `/usr/local/node` | `/opt/host/node` | read-only | Node、npm、corepack、Pi |
-| `/usr/local/java` | `/opt/host/java` | read-only | 当前 Java 25 |
-| `/usr/local/maven` | `/opt/host/maven` | read-only | Maven 3.9.16 |
-| `/usr/bin/git` | `/opt/host/git/bin/git` | read-only | Git 2.55.0 |
-| `/usr/libexec/git-core` | `/opt/host/git/libexec/git-core` | read-only | Git 子命令 |
-| `/usr/share/git-core` | `/opt/host/git/share/git-core` | read-only | Git templates |
-| `/lib64/libpcre2-8.so.0` | `/opt/host/git/lib/libpcre2-8.so.0` | read-only | Git runtime library |
-| `/lib64/libz.so.1` | `/opt/host/git/lib/libz.so.1` | read-only | Git runtime library |
+| host | container | mode |
+| --- | --- | --- |
+| `/usr/local/node` | `/opt/host/node` | read-only |
+| `/usr/local/java` | `/opt/host/java` | read-only |
+| `/usr/local/maven` | `/opt/host/maven` | read-only |
+| `/usr/bin/git` | `/opt/host/git/bin/git` | read-only |
+| `/usr/libexec/git-core` | `/opt/host/git/libexec/git-core` | read-only |
+| `/usr/share/git-core` | `/opt/host/git/share/git-core` | read-only |
+| `/lib64/libpcre2-8.so.0` | `/opt/host/git/lib/libpcre2-8.so.0` | read-only |
+| `/lib64/libz.so.1` | `/opt/host/git/lib/libz.so.1` | read-only |
 
-Git 必须与宿主保持同一版本，因为 worktree 使用 Git 2.55.0 的 `relativeWorktrees` repository extension。只挂 binary 不够，必须同时挂 exec path、templates 和动态库。
+Git 必须与 host 保持同一版本。只挂 binary 不足以支持 relative worktree extension，所以 exec path、templates 和 dynamic libraries 也固定挂载。
 
-### 宿主配置和缓存挂载
+### Host config/cache mounts
 
-| 宿主路径 | 容器路径 | 模式 |
+| host | container | mode |
 | --- | --- | --- |
 | `~/.m2` | `/home/coder/.m2` | read-write |
 | `~/.npm` | `/home/coder/.npm` | read-write |
 | `~/.npmrc` | `/home/coder/.npmrc` | read-only |
 | `~/.pi/agent` | `/home/coder/.pi/agent` | read-write |
 
-因此 code-server Maven 直接复用本机 `settings.xml` 和已下载的 `~/.m2/repository`；npm 和 Pi 也使用本机状态。code-server 内运行的进程能访问这些凭据，只应在可信本机使用。
-
-### Java 版本
-
-当前脚本和 editor settings 指向 `/usr/local/java`，并登记为 `JavaSE-25`。后续把宿主 Linux Java 替换为 Java 8 时：
-
-1. 保持路径 `/usr/local/java` 不变。
-2. 把脚本中 `JavaSE-25` 改为 `JavaSE-1.8`。
-3. 删除并重建容器以刷新 bind mount：
-
-```bash
-podman rm --force code-server
-infra/code-server.sh ensure
-```
-
-这不是镜像 rebuild；仍使用同一个官方 code-server 镜像。
-
-### 插件
-
-插件安装在宿主目录：
-
-```text
-.issue-pilot/code-server/data/extensions
-```
-
-在 code-server Extensions 页面安装或卸载即可，容器重建不会丢失，也不需要修改镜像。不要直接挂 Windows 的 `win32-x64` extension 目录到 Linux code-server；Java 等平台扩展应在 code-server 内安装 Linux 版本。
+这些目录可能包含 credential，只能由可信本机 operator 使用。Editor 不强制 npm/yarn；project wrapper 根据 repository `packageManager` 和 lockfile 选择。
 
 ### 操作
 
@@ -148,30 +279,111 @@ infra/code-server.sh status
 infra/code-server.sh stop
 ```
 
-`ensure` 会校验所有固定宿主路径、更新 editor settings、创建私有密码，并按 runtime label 决定启动或重建容器。容器使用 `userns=keep-id`、`no-new-privileges` 和 `cap-drop ALL`。
-
-## 健康检查
+`ensure` 使用 `userns=keep-id`、`no-new-privileges`、`cap-drop ALL`。Container rebuild 不删除 data/extensions。Java host runtime 变更后保持 `/usr/local/java` 路径不变，并同步脚本中的 editor runtime name 后执行：
 
 ```bash
-curl -fsS http://127.0.0.1:3000/health
-curl -fsS http://127.0.0.1:3000/api/config
+podman rm --force code-server
+infra/code-server.sh ensure
 ```
 
-第二个响应包含真实 secrets，只在可信终端执行。还应检查服务/deployment 数量、model/thinking 配置、Agent SSE replay 和 code-server folder URL。
+## Database backup
 
-## 测试和构建
+API 启动时自动 migration，也可以显式执行：
 
 ```bash
+npm run db:migrate
+```
+
+破坏性 migration 前必须获得一致 backup：
+
+1. 停止 API，等待 process 完全退出。
+2. 确认 `.issue-pilot/issues.db-wal` 已 checkpoint/消失；若仍存在，连同 `-wal`、`-shm` 一起保存。
+3. 复制 database，并保持 `0600`。
+4. 执行 migration。
+5. 启动 API，检查 migration journal、row counts 和 `PRAGMA foreign_key_check`。
+
+```bash
+systemctl stop issue-pilot-api
+cp --preserve=mode .issue-pilot/issues.db \
+  ".issue-pilot/issues.db.backup-$(date +%Y%m%d%H%M%S)"
+npm run db:migrate
+systemctl start issue-pilot-api
+```
+
+Database 和 backup 含真实 deployment credential。不要上传到 artifact store，除非目标支持组织要求的 encryption、retention 和 access audit。
+
+### Restore
+
+1. 停止 API。
+2. 另存当前损坏 database 供调查。
+3. 恢复一组一致的 database/WAL/SHM；只有确认 backup 已 checkpoint 时才删除残留 WAL/SHM。
+4. 保持 owner 和 `0600`。
+5. 启动与 backup schema 兼容的代码。
+6. 检查 foreign keys、service/deployment、issue、session binding。
+
+## Upgrade 和 rollback
+
+推荐升级顺序：
+
+```bash
+git fetch --all --prune
+git checkout <reviewed-commit>
+npm ci
+infra/playwright.sh prepare
 npm run typecheck
 npm test
 npm run build
-git diff --check
+systemctl stop issue-pilot-api
+# create database backup here
+npm run db:migrate
+systemctl start issue-pilot-api
+infra/code-server.sh ensure
 ```
 
-## 网络暴露
+验证通过前保留旧 release directory 和 database backup。Rollback code 前先判断新 migration 是否向后兼容；不能让旧 schema code 直接读取已发生 destructive migration 的 database。最可靠 rollback 是旧 release + 升级前一致 backup 成对恢复。
 
-API 没有内置认证并固定监听 `127.0.0.1`。如需外部访问，只能通过带认证和 TLS 的本机代理转发。必须限制 `/api/config`、附件下载和 code-server workspace 访问，不记录 deployment config、Authorization 或完整 secret 请求体。
+## Health and acceptance
 
-## 故障处理
+基础检查：
 
-Agent 失败后工单回到 `open`，workspace 标记为 `failed`，Pi SDK session 被 abort/dispose；JSONL 和 worktree 保留以便 retry。API 异常退出后，数据库 bootstrap 会修复 `preparing`/`running` 状态。
+```bash
+curl -fsS http://127.0.0.1:3000/health
+curl -fsS http://127.0.0.1:3000/api/me
+infra/playwright.sh status
+infra/code-server.sh status
+ss -ltnp | grep -E ':3000|:18080'
+```
+
+`/api/config` 包含 secret，只在可信终端临时检查。部署验收还应覆盖：
+
+- service/deployment/repository count
+- provider/model/thinking readiness
+- read-only issue 不出现 mutation tools
+- dev issue 的 worktree branch 和 tool allowlist
+- SSE replay 后 live event 不丢失
+- compaction 后 active context 正确
+- code-server folder URL 与 issue workspace 一致
+- capability oversize 明确失败
+- database `foreign_key_check` 为 0
+
+## Logs and incident handling
+
+禁止记录：
+
+- `/api/config` response/body
+- Authorization/Cookie
+- deployment password/AccessKey
+- Playwright credential file
+- code-server `container.env`
+- 完整包含敏感业务数据的 capability result
+
+Agent 失败后 issue 回到 `open`，workspace 标记为 `failed`，Pi session abort/dispose；JSONL 和 worktree 保留用于 retry。排障顺序：
+
+1. 查看 workspace `last_error` 和 API structured log。
+2. 检查 model catalog/credential readiness。
+3. 检查 deployment scope 是否改变。
+4. 检查 Git remote/base branch 和 dirty workspace。
+5. 检查 fixed runtime version/path。
+6. 在缩小 scope 后单独重试 capability。
+
+不要通过放宽 policy、提高无限结果上限或把 credential 放入 prompt 来绕过故障。

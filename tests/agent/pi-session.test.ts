@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "node:test";
 
 import type { Model } from "@earendil-works/pi-ai";
 import { ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";

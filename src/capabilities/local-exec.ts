@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 
-export interface CommandOptions {
+export interface CommandExecutionOptions {
   cwd?: string;
   timeout?: number;
   signal?: AbortSignal;
+  environment?: Readonly<Record<string, string>>;
 }
 
-export interface CommandResult {
+export interface CommandExecutionResult {
   stdout: string;
   stderr: string;
   code: number;
@@ -14,16 +15,16 @@ export interface CommandResult {
 }
 
 export interface CommandExecutor {
-  exec(command: string, args: string[], options?: CommandOptions): Promise<CommandResult>;
+  execute(command: string, args: string[], options?: CommandExecutionOptions): Promise<CommandExecutionResult>;
 }
 
 const MAX_COMMAND_OUTPUT_BYTES = 5 * 1024 * 1024;
 
-export async function execLocal(command: string, args: string[], options: CommandOptions = {}): Promise<CommandResult> {
+export async function executeLocalCommand(command: string, args: string[], options: CommandExecutionOptions = {}): Promise<CommandExecutionResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       ...(options.cwd ? { cwd: options.cwd } : {}),
-      env: process.env,
+      env: options.environment ? { ...process.env, ...options.environment } : process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -69,4 +70,4 @@ export async function execLocal(command: string, args: string[], options: Comman
   });
 }
 
-export const localExecutor: CommandExecutor = { exec: execLocal };
+export const localCommandExecutor: CommandExecutor = { execute: executeLocalCommand };

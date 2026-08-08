@@ -1,22 +1,32 @@
 #!/bin/sh
 set -eu
 
+node=/usr/local/node/bin/node
+npm=/usr/local/node/bin/npm
 playwright_version=1.62.1
-playwright_image=${PI_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.62.1-noble}
-playwright_core_root=${PI_PLAYWRIGHT_CORE_ROOT:-/usr/local/node/lib/node_modules/playwright-core}
+playwright_core_root=/usr/local/node/lib/node_modules/playwright-core
+playwright_image=mcr.microsoft.com/playwright:v1.62.1-noble
+
+require_tools() {
+  [ -x "$node" ] || { printf 'Executable not found: %s\n' "$node" >&2; exit 1; }
+  [ -x "$npm" ] || { printf 'Executable not found: %s\n' "$npm" >&2; exit 1; }
+  command -v podman >/dev/null 2>&1 || { printf 'Executable not found: podman\n' >&2; exit 1; }
+}
 
 installed_version() {
-  node -p "require('$playwright_core_root/package.json').version" 2>/dev/null || true
+  "$node" -p "require('$playwright_core_root/package.json').version" 2>/dev/null || true
 }
 
 prepare() {
+  require_tools
   if [ "$(installed_version)" != "$playwright_version" ]; then
-    npm install --global --omit=dev "playwright-core@$playwright_version" >/dev/null
+    "$npm" install --global --omit=dev "playwright-core@$playwright_version" >/dev/null
   fi
   podman image exists "$playwright_image" || podman pull "$playwright_image" >/dev/null
 }
 
 status() {
+  require_tools
   if [ "$(installed_version)" = "$playwright_version" ]; then
     printf 'tool ready playwright-core@%s\n' "$playwright_version"
   else
@@ -32,7 +42,8 @@ status() {
 }
 
 clean() {
-  npm uninstall --global playwright-core >/dev/null
+  require_tools
+  "$npm" uninstall --global playwright-core >/dev/null
 }
 
 case "${1:-}" in

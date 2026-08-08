@@ -31,7 +31,8 @@ async function fixture(): Promise<{ root: string; script: string; log: string; p
 test("uses one shared code-server container", async () => {
   const value = await fixture();
   const result = await exec(value.script, ["status"], { env: { ...process.env, PATH: value.path, PODMAN_LOG: value.log } });
-  assert.match(result.stdout, /inspect code-server/);
+  assert.match(result.stdout, /inspect --format .* code-server/);
+  assert.doesNotMatch(result.stdout, /PASSWORD=/);
   assert.doesNotMatch(result.stdout, /ISSUE-/);
 });
 
@@ -49,14 +50,19 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.match(calls, new RegExp(`--volume ${process.env.HOME}/\\.pi/agent:/home/coder/\\.pi/agent`));
   assert.match(calls, /--volume \/usr\/bin\/git:\/opt\/host\/git\/bin\/git:ro/);
   assert.match(calls, /--volume \/usr\/libexec\/git-core:\/opt\/host\/git\/libexec\/git-core:ro/);
-  assert.match(calls, /--env GIT_EXEC_PATH=\/opt\/host\/git\/libexec\/git-core/);
-  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v17-code-server-4\.131\.0-host-development-runtime/);
+  assert.match(calls, /--env-file .*\/\.issue-pilot\/code-server\/container\.env/);
+  assert.doesNotMatch(calls, /PASSWORD=|--env /);
+  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v18-code-server-4\.131\.0-host-development-runtime/);
   assert.match(calls, /--workdir \/home\/coder\/state\/workspaces/);
   assert.doesNotMatch(calls, /--bind-addr/);
   const settings = JSON.parse(await readFile(join(value.root, ".issue-pilot", "code-server", "data", "User", "settings.json"), "utf8"));
   assert.equal(settings["git.path"], "/opt/host/git/bin/git");
   assert.equal(settings["java.jdt.ls.java.home"], "/opt/host/java");
   assert.equal(settings["maven.executable.path"], "/opt/host/maven/bin/mvn");
+  assert.equal("npm.packageManager" in settings, false);
+  const containerEnvironment = await readFile(join(value.root, ".issue-pilot", "code-server", "container.env"), "utf8");
+  assert.match(containerEnvironment, /^PASSWORD=.+$/m);
+  assert.match(containerEnvironment, /^GIT_EXEC_PATH=\/opt\/host\/git\/libexec\/git-core$/m);
 });
 
 test("rejects obsolete per-issue commands", async () => {

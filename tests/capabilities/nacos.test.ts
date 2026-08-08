@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import test from "node:test";
+import { test } from "node:test";
 
 import { readNacosCapability } from "../../src/capabilities/broker.ts";
 import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/contracts.ts";

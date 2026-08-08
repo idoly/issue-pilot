@@ -1,28 +1,32 @@
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { IssuePolicy } from "../pi/policy.ts";
 import { capabilityResultText, capabilityTextResult, isSlsLogstore, MAX_SLS_RESULTS } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
+const ALIYUN_CLI_PATH = "/usr/local/sbin/aliyun";
 const DEFAULT_TRACE_WINDOW_SECONDS = 24 * 60 * 60;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+interface SlsRuntime {
+  cliPath: string;
+}
 
 async function secureFile(file: string): Promise<void> {
   const metadata = await stat(file);
   if (!metadata.isFile() || (metadata.mode & 0o022) !== 0) throw new Error("insecure_aliyun_cli_file");
 }
 
-export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, input: {
+export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy, input: {
   logstore: string;
   from?: number;
   to?: number;
   query?: string;
   trace_id?: string;
   limit?: number;
-}, configured: Record<string, unknown>, signal?: AbortSignal) {
+}, configured: Record<string, unknown>, signal?: AbortSignal, runtime: SlsRuntime = { cliPath: ALIYUN_CLI_PATH }) {
   if (!isSlsLogstore(input.logstore)) throw new Error("invalid_sls_logstore");
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
   const now = Math.floor(Date.now() / 1000);
@@ -41,17 +45,15 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
   const scope = policy.service.sls;
   if (!scope) throw new Error("sls_scope_not_granted_for_service");
   if (configured.region !== scope.region || configured.project !== scope.project || !Array.isArray(configured.logstores) || !configured.logstores.includes(input.logstore) || !scope.logstores.includes(input.logstore) || typeof configured.accessKeyId !== "string" || typeof configured.accessKeySecret !== "string") throw new Error("sls_configuration_changed");
-  const cli = process.env.ISSUE_PILOT_ALIYUN_CLI ?? "/usr/local/sbin/aliyun";
-  await secureFile(cli);
+  await secureFile(runtime.cliPath);
+  // Isolate each credential profile from the operator's persistent Aliyun CLI state.
   const profileRoot = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-aliyun-"));
   const aliyunRoot = path.join(profileRoot, ".aliyun");
   await mkdir(aliyunRoot, { mode: 0o700 });
   await writeFile(path.join(aliyunRoot, "config.json"), JSON.stringify({ current: "issue-pilot", profiles: [{ name: "issue-pilot", mode: "AK", region_id: scope.region, output_format: "json", language: "en", site: "China", access_key_id: configured.accessKeyId, access_key_secret: configured.accessKeySecret }] }), { mode: 0o600 });
   try {
-    const wrapper = fileURLToPath(new URL("../../infra/aliyun-profile.sh", import.meta.url));
-    await secureFile(wrapper);
     const fetchRecords = async (line: number, offset: number): Promise<unknown[]> => {
-      const execution = await pi.exec(wrapper, [profileRoot, cli,
+      const execution = await executor.execute(runtime.cliPath, [
         "sls", "GetLogs",
         "--endpoint", `${scope.region}.log.aliyuncs.com`,
         "--project", scope.project,
@@ -62,7 +64,11 @@ export async function readSlsLogs(pi: CommandExecutor, policy: IssuePolicy, inpu
         "--line", String(line),
         "--offset", String(offset),
         "--reverse", "true",
-      ], { timeout: 30_000, ...(signal ? { signal } : {}) });
+      ], {
+        timeout: 30_000,
+        environment: { HOME: profileRoot, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" },
+        ...(signal ? { signal } : {}),
+      });
       if (execution.code !== 0) throw new Error("sls_query_failed");
       let parsed: unknown;
       try { parsed = JSON.parse(execution.stdout); } catch { throw new Error("sls_query_invalid_response"); }

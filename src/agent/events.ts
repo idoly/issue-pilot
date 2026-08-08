@@ -34,6 +34,7 @@ export class AgentEventBus {
   }
 }
 
+// Buffer events between the replay snapshot and live activation so SSE preserves one ordered stream.
 export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string) {
   let pending: RunEvent[] = [];
   let sink: RunEventListener | undefined;

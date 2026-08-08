@@ -8,8 +8,8 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import type { RunEvent } from "./events.ts";
 import { PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { createPrivateSessionManager } from "./session.ts";
-import { CodeServer } from "../workspace/code-server.ts";
-import { preparePiWorkspace } from "../workspace/pi-tools.ts";
+import { CodeServerManager } from "../workspace/code-server.ts";
+import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
 import { issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
 import type { openDatabase } from "../db/client.ts";
 import {
@@ -23,7 +23,7 @@ import {
   services,
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type EnvironmentKind } from "../domain/contracts.ts";
-import { repositoryWorkspaceNames, Worktrees } from "../workspace/git.ts";
+import { repositoryWorkspaceNames, WorktreeManager } from "../workspace/git.ts";
 import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -68,19 +68,19 @@ async function exists(filePath: string): Promise<boolean> {
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
-  private readonly worktrees: Worktrees;
-  private readonly codeServer: CodeServer;
+  private readonly worktreeManager: WorktreeManager;
+  private readonly codeServerManager: CodeServerManager;
   private readonly stateRoot: string;
   private readonly db: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly sessions = new Map<string, ManagedPiSession>();
-  private readonly pi = new PiSessionRuntime();
+  private readonly piRuntime = new PiSessionRuntime();
 
   constructor(db: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
     this.db = db;
     this.stateRoot = path.resolve(stateRoot);
-    this.worktrees = new Worktrees(this.stateRoot);
-    this.codeServer = new CodeServer(this.stateRoot);
+    this.worktreeManager = new WorktreeManager(this.stateRoot);
+    this.codeServerManager = new CodeServerManager(this.stateRoot);
     this.publish = publish;
   }
 
@@ -175,7 +175,7 @@ export class AgentEngine implements AgentController {
     const repositoryUrls = new Set(repositoryRows.map((repository) => repository.url));
     const obsoleteRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
     for (const repository of obsoleteRepositories) {
-      if (repository.localPath) await this.worktrees.remove(repository.url, repository.localPath);
+      if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
     }
     if (obsoleteRepositories.length) {
       await this.db.delete(issueRepositories).where(repositoryUrls.size
@@ -186,11 +186,11 @@ export class AgentEngine implements AgentController {
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
     const workspaceNames = repositoryWorkspaceNames(repositoryRows.map((repository) => repository.url));
 
-    const prepared: Array<Awaited<ReturnType<Worktrees["prepare"]>>> = [];
+    const prepared: Array<Awaited<ReturnType<WorktreeManager["prepare"]>>> = [];
     for (const repository of repositoryRows) {
       const existingRepository = existingRepositoryByUrl.get(repository.url);
-      const workspace = await this.worktrees.prepare({
-        issueId: issue.key,
+      const workspace = await this.worktreeManager.prepare({
+        issueKey: issue.key,
         workspaceName: workspaceNames.get(repository.url)!,
         url: repository.url,
         baseBranch: service.baseBranch,
@@ -235,10 +235,10 @@ export class AgentEngine implements AgentController {
       environmentKind: service.environmentKind,
       repositories: prepared.map((workspace) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
     });
-    await preparePiWorkspace(workspaceRoot);
+    await prepareProjectWrappers(workspaceRoot);
     let codeServerReady = false;
     try {
-      await this.codeServer.ensure(issue.key, workspaceRoot);
+      await this.codeServerManager.ensure(issue.key, workspaceRoot);
       codeServerReady = true;
     } catch {
       codeServerReady = false;
@@ -250,7 +250,7 @@ export class AgentEngine implements AgentController {
     const hadMessages = manager.buildContextEntries().some((entry) => entry.type === "message");
 
     await this.stopSession(issue.id);
-    const managed = await this.pi.start({
+    const managed = await this.piRuntime.start({
       workspaceRoot,
       policy,
       deploymentConfig: service.deploymentConfig,

@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "node:test";
 
-import { preparePiWorkspace } from "../../src/workspace/pi-tools.ts";
+import { prepareProjectWrappers } from "../../src/workspace/project-wrappers.ts";
 
 test("prepares workspace-scoped project wrappers for native Pi bash", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pi-workspace-"));
   try {
-    await preparePiWorkspace(root);
+    await prepareProjectWrappers(root);
     const node = await readFile(path.join(root, ".issue-pilot", "bin", "node-project"), "utf8");
     const maven = await readFile(path.join(root, ".issue-pilot", "bin", "maven-project"), "utf8");
     assert.match(node, /corepack "\$package_manager" install --frozen-lockfile/);

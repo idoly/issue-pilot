@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import test from "node:test";
+import { test } from "node:test";
 
 import type { Connection, ConnectionOptions, FieldPacket, RowDataPacket } from "mysql2";
 import { queryMysql, validateReadOnlyQuery, type MysqlConnectionFactory } from "../../src/capabilities/mysql.ts";

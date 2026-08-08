@@ -8,12 +8,12 @@ import { ApiError, optionalText, record, text } from "./input.ts";
 import { ensureCurrentSubject, type ApiRouteContext } from "./route-context.ts";
 import { replaceServiceConfiguration } from "./service-configuration.ts";
 
-function serviceKey(name: string, existing: Set<string>): string {
+function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90).replace(/-+$/g, "");
   const base = slug || `service-${randomUUID().slice(0, 8)}`;
-  if (!existing.has(base)) return base;
+  if (!existingKeys.has(base)) return base;
   let suffix = 2;
-  while (existing.has(`${base}-${suffix}`)) suffix += 1;
+  while (existingKeys.has(`${base}-${suffix}`)) suffix += 1;
   return `${base}-${suffix}`;
 }
 
@@ -46,18 +46,18 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     ]);
     return {
       agentModels,
-      environments: environmentRows.map((item) => ({ id: item.id, key: item.key, name: item.name, kind: item.kind })),
+      environments: environmentRows.map((environment) => ({ id: environment.id, key: environment.key, name: environment.name, kind: environment.kind })),
       capabilityCatalog: CAPABILITY_KEYS.map((key) => ({ key })),
       services: serviceRows.map((service) => {
-        const deployments = deploymentRows.filter((item) => item.serviceId === service.id);
+        const deployments = deploymentRows.filter((deployment) => deployment.serviceId === service.id);
         return {
           id: service.id, key: service.key, name: service.name, description: service.description, createdAt: service.createdAt.toISOString(),
-          environmentIds: deployments.map((item) => item.environmentId),
-          deployments: deployments.map((item) => {
-            const config = record(item.config);
-            return { id: item.id, environmentId: item.environmentId, baseBranch: item.baseBranch, ...structuredClone(config), capabilities: configuredCapabilities(config), agent: config.agent ?? null };
+          environmentIds: deployments.map((deployment) => deployment.environmentId),
+          deployments: deployments.map((deployment) => {
+            const deploymentConfig = record(deployment.config);
+            return { id: deployment.id, environmentId: deployment.environmentId, baseBranch: deployment.baseBranch, ...structuredClone(deploymentConfig), capabilities: configuredCapabilities(deploymentConfig), agent: deploymentConfig.agent ?? null };
           }),
-          repositories: repositoryRows.filter((item) => item.serviceId === service.id).map((item) => ({ id: item.id, kind: item.kind, url: item.url })),
+          repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, kind: repository.kind, url: repository.url })),
         };
       }),
     };
@@ -68,7 +68,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const name = text(input.name, "name", 200);
     const description = optionalText(input.description) ?? "";
     const existingKeys = new Set((await database.db.select({ key: services.key }).from(services)).map(({ key }) => key));
-    const key = serviceKey(name, existingKeys);
+    const key = uniqueServiceKey(name, existingKeys);
     const created = await database.db.transaction(async (transaction) => {
       const [service] = await transaction.insert(services).values({ key, name, description }).returning();
       await replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service!.id, input });

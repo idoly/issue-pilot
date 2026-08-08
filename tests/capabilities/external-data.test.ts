@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "node:test";
 
 import { readElasticsearch, readRabbitMq, readRedis } from "../../src/capabilities/external-data.ts";
 import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/contracts.ts";

@@ -2,37 +2,37 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "node:test";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
+import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { readSlsLogs } from "../../src/capabilities/sls.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 test("returns complete SLS records through the secured local Aliyun CLI", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-sls-"));
   const cli = join(root, "aliyun");
-  const previousCli = process.env.ISSUE_PILOT_ALIYUN_CLI;
   try {
     await writeFile(cli, "fixture", { mode: 0o755 });
-    process.env.ISSUE_PILOT_ALIYUN_CLI = cli;
-    const calls: Array<{ command: string; args: string[]; profile: Record<string, any> }> = [];
+    const calls: Array<{ command: string; args: string[]; options: CommandExecutionOptions; profile: Record<string, any> }> = [];
     let responseRecords: unknown | ((args: string[]) => unknown) = [{ __time__: 1_700_000_000, message: "ready", password: "log-secret" }];
-    const pi = {
-      async exec(command: string, args: string[]) {
-        const profile = JSON.parse(await readFile(join(args[0]!, ".aliyun", "config.json"), "utf8"));
-        calls.push({ command, args, profile });
+    const executor: CommandExecutor = {
+      async execute(command: string, args: string[], options: CommandExecutionOptions = {}) {
+        const profileRoot = options.environment?.HOME;
+        assert.ok(profileRoot);
+        const profile = JSON.parse(await readFile(join(profileRoot, ".aliyun", "config.json"), "utf8"));
+        calls.push({ command, args, options, profile });
         const response = typeof responseRecords === "function" ? responseRecords(args) : responseRecords;
         return { code: 0, stdout: JSON.stringify(response), stderr: "", killed: false };
       },
-    } as unknown as ExtensionAPI;
+    };
     const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
     const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-    const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(pi, policy, input, configured);
+    const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(executor, policy, input, configured, undefined, { cliPath: cli });
     const output = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600, query: "level:ERROR", limit: 20 });
-    assert.match(calls[0]!.command, /aliyun-profile\.sh$/);
+    assert.equal(calls[0]!.command, cli);
+    assert.deepEqual(calls[0]!.options.environment, { HOME: calls[0]!.options.environment?.HOME, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" });
     assert.deepEqual({ region_id: calls[0]!.profile.profiles[0].region_id, output_format: calls[0]!.profile.profiles[0].output_format }, { region_id: "cn-test", output_format: "json" });
-    assert.deepEqual(calls[0]!.args.slice(2), ["sls", "GetLogs", "--endpoint", "cn-test.log.aliyuncs.com", "--project", "srm-test", "--logstore", "application_log", "--from", "1700000000", "--to", "1700003600", "--query", "level:ERROR", "--line", "20", "--offset", "0", "--reverse", "true"]);
+    assert.deepEqual(calls[0]!.args, ["sls", "GetLogs", "--endpoint", "cn-test.log.aliyuncs.com", "--project", "srm-test", "--logstore", "application_log", "--from", "1700000000", "--to", "1700003600", "--query", "level:ERROR", "--line", "20", "--offset", "0", "--reverse", "true"]);
     const outputBody = JSON.parse(output.content[0]!.text);
     assert.deepEqual({ from: outputBody.query.from, to: outputBody.query.to, order: outputBody.query.order, returnedRows: outputBody.query.returnedRows, possiblyIncomplete: outputBody.query.possiblyIncomplete }, { from: 1_700_000_000, to: 1_700_003_600, order: "newest_first", returnedRows: 1, possiblyIncomplete: false });
     assert.equal(outputBody.records[0].message, "ready");
@@ -80,8 +80,6 @@ test("returns complete SLS records through the secured local Aliyun CLI", async 
     await chmod(cli, 0o777);
     await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100 }), /insecure_aliyun_cli_file/);
   } finally {
-    if (previousCli === undefined) delete process.env.ISSUE_PILOT_ALIYUN_CLI;
-    else process.env.ISSUE_PILOT_ALIYUN_CLI = previousCli;
     await rm(root, { recursive: true, force: true });
   }
 });

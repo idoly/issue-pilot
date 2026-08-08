@@ -1,5 +1,5 @@
 import { Button, Input, Modal, Select, TextArea } from "@idoly/ant-design-solid";
-import { createEffect, createMemo, createSignal, createStore, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createStore, For, Show, untrack } from "solid-js";
 
 import { GitBranch, Pencil, Plus, Trash2 } from "../ui/icons";
 import { createService, deleteService, updateService, type AgentConfiguration, type AgentModelDefinition, type CapabilityConfiguration, type CapabilityName, type Config, type Service } from "../data/client";
@@ -37,7 +37,7 @@ function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploy
     baseBranch: deployment.baseBranch,
     capabilities: [...deployment.capabilities],
     agent: { ...deployment.agent },
-    ...(deployment.nacos ? { nacos: { ...deployment.nacos } } : {}),
+    ...(deployment.nacos ? { nacos: { ...deployment.nacos, dataIds: [...deployment.nacos.dataIds] } } : {}),
     ...(deployment.db ? { db: { ...deployment.db } } : {}),
     ...(deployment.sls ? { sls: { ...deployment.sls, logstores: [...deployment.sls.logstores] } } : {}),
     ...(deployment.playwright ? { playwright: { ...deployment.playwright } } : {}),
@@ -72,18 +72,20 @@ function ServiceDeploymentEditorRow(props: {
   onChange: (deployment: ServiceDeploymentDraft) => void;
   onDelete: () => void;
 }) {
-  let currentDeployment = cloneDeploymentDraft(props.deployment);
-  const [environmentKey, setEnvironmentKey] = createSignal(props.deployment.environmentKey, { ownedWrite: true });
-  const [baseBranch, setBaseBranch] = createSignal(props.deployment.baseBranch, { ownedWrite: true });
-  const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...props.deployment.capabilities], { ownedWrite: true });
-  const [agentDraft, setAgentDraft] = createSignal<AgentConfiguration>({ ...props.deployment.agent }, { ownedWrite: true });
-  const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: props.deployment.nacos?.serverUrl ?? "", namespace: props.deployment.nacos?.namespace ?? "", group: props.deployment.nacos?.group ?? "DEFAULT_GROUP", dataIds: props.deployment.nacos?.dataIds?.join(", ") ?? "", username: props.deployment.nacos?.username ?? "", password: props.deployment.nacos?.password ?? "" }, { ownedWrite: true });
-  const [dbDraft, setDbDraft] = createSignal({ url: props.deployment.db?.url ?? "", username: props.deployment.db?.username ?? "", password: props.deployment.db?.password ?? "" }, { ownedWrite: true });
-  const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: props.deployment.sls?.accessKeyId ?? "", accessKeySecret: props.deployment.sls?.accessKeySecret ?? "", region: props.deployment.sls?.region ?? "", project: props.deployment.sls?.project ?? "", logstores: props.deployment.sls?.logstores.join(", ") ?? "" }, { ownedWrite: true });
-  const [playwrightDraft, setPlaywrightDraft] = createSignal({ baseUrl: props.deployment.playwright?.baseUrl ?? "", username: props.deployment.playwright?.username ?? "", password: props.deployment.playwright?.password ?? "" }, { ownedWrite: true });
-  const [redisDraft, setRedisDraft] = createSignal({ host: props.deployment.redis?.host ?? "", port: String(props.deployment.redis?.port ?? 6379), username: props.deployment.redis?.username ?? "", password: props.deployment.redis?.password ?? "", database: String(props.deployment.redis?.database ?? 0) }, { ownedWrite: true });
-  const [mqDraft, setMqDraft] = createSignal({ host: props.deployment.mq?.host ?? "", port: String(props.deployment.mq?.port ?? 5672), managementPort: String(props.deployment.mq?.managementPort ?? 15672), username: props.deployment.mq?.username ?? "", password: props.deployment.mq?.password ?? "", virtualHost: props.deployment.mq?.virtualHost ?? "/" }, { ownedWrite: true });
-  const [esDraft, setEsDraft] = createSignal({ url: props.deployment.es?.url ?? "", username: props.deployment.es?.username ?? "", password: props.deployment.es?.password ?? "" }, { ownedWrite: true });
+  // The row owns its draft after mount; parent updates are emitted through onChange, not reapplied.
+  const initialDeployment = untrack(() => cloneDeploymentDraft(props.deployment));
+  let currentDeployment = initialDeployment;
+  const [environmentKey, setEnvironmentKey] = createSignal(initialDeployment.environmentKey, { ownedWrite: true });
+  const [baseBranch, setBaseBranch] = createSignal(initialDeployment.baseBranch, { ownedWrite: true });
+  const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
+  const [agentDraft, setAgentDraft] = createSignal<AgentConfiguration>({ ...initialDeployment.agent }, { ownedWrite: true });
+  const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: initialDeployment.nacos?.serverUrl ?? "", namespace: initialDeployment.nacos?.namespace ?? "", group: initialDeployment.nacos?.group ?? "DEFAULT_GROUP", dataIds: initialDeployment.nacos?.dataIds?.join(", ") ?? "", username: initialDeployment.nacos?.username ?? "", password: initialDeployment.nacos?.password ?? "" }, { ownedWrite: true });
+  const [dbDraft, setDbDraft] = createSignal({ url: initialDeployment.db?.url ?? "", username: initialDeployment.db?.username ?? "", password: initialDeployment.db?.password ?? "" }, { ownedWrite: true });
+  const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: initialDeployment.sls?.accessKeyId ?? "", accessKeySecret: initialDeployment.sls?.accessKeySecret ?? "", region: initialDeployment.sls?.region ?? "", project: initialDeployment.sls?.project ?? "", logstores: initialDeployment.sls?.logstores.join(", ") ?? "" }, { ownedWrite: true });
+  const [playwrightDraft, setPlaywrightDraft] = createSignal({ baseUrl: initialDeployment.playwright?.baseUrl ?? "", username: initialDeployment.playwright?.username ?? "", password: initialDeployment.playwright?.password ?? "" }, { ownedWrite: true });
+  const [redisDraft, setRedisDraft] = createSignal({ host: initialDeployment.redis?.host ?? "", port: String(initialDeployment.redis?.port ?? 6379), username: initialDeployment.redis?.username ?? "", password: initialDeployment.redis?.password ?? "", database: String(initialDeployment.redis?.database ?? 0) }, { ownedWrite: true });
+  const [mqDraft, setMqDraft] = createSignal({ host: initialDeployment.mq?.host ?? "", port: String(initialDeployment.mq?.port ?? 5672), managementPort: String(initialDeployment.mq?.managementPort ?? 15672), username: initialDeployment.mq?.username ?? "", password: initialDeployment.mq?.password ?? "", virtualHost: initialDeployment.mq?.virtualHost ?? "/" }, { ownedWrite: true });
+  const [esDraft, setEsDraft] = createSignal({ url: initialDeployment.es?.url ?? "", username: initialDeployment.es?.username ?? "", password: initialDeployment.es?.password ?? "" }, { ownedWrite: true });
   const agent = (value = agentDraft()) => ({ ...value, provider: value.provider.trim(), model: value.model.trim() });
   const providerOptions = () => [...new Set(props.agentModels.map((model) => model.provider))].map((provider) => ({ value: provider, label: provider }));
   const modelOptions = () => props.agentModels.filter((model) => model.provider === agentDraft().provider);
@@ -157,9 +159,14 @@ export function ConfigurationView() {
       setConfigurationError(error instanceof Error ? error.message : String(error));
     }
   };
-  createEffect(() => configuration().services, (services) => {
-    if (!services.some((service) => service.key === selectedServiceKey())) setSelectedServiceKey(services[0]?.key ?? null);
-  });
+  createEffect(
+    () => {
+      const services = configuration().services;
+      const selectedKey = selectedServiceKey();
+      return { fallbackKey: services[0]?.key ?? null, selectedExists: services.some((service) => service.key === selectedKey) };
+    },
+    ({ fallbackKey, selectedExists }) => { if (!selectedExists) setSelectedServiceKey(fallbackKey); },
+  );
   const selectedService = createMemo(() => configuration().services.find((service) => service.key === selectedServiceKey()));
   const resetServiceForm = () => {
     setServiceName(""); setDescription(""); setServiceRepositories([{ kind: "backend", url: "" }]); setServiceDeployments(() => []); setEditingServiceKey(null);
@@ -262,7 +269,7 @@ export function ConfigurationView() {
             </header>
             <div class="service-detail">
               <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
-              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><Show when={service().deployments.length} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}><div class="deployment-detail-head"><span>环境</span><span>分支</span><span>模型</span><span>能力</span></div><For each={service().deployments}>{(deployment) => { const environment = configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div data-label="环境"><strong>{environment?.name ?? deployment.environmentId}</strong></div><div data-label="分支"><code>{deployment.baseBranch}</code></div><div data-label="模型"><Show when={deployment.agent} fallback={<span class="capability-empty">未配置</span>}>{(agent) => <code>{agent().provider}/{agent().model} · {agent().thinkingLevel}</code>}</Show></div><div data-label="能力"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityLabels catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div>; }}</For></Show></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><Show when={service().deployments.length} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}><div class="deployment-detail-head"><span>环境</span><span>分支</span><span>模型</span><span>能力</span></div><For each={service().deployments}>{(deployment) => { const environment = () => configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div data-label="环境"><strong>{environment()?.name ?? deployment.environmentId}</strong></div><div data-label="分支"><code>{deployment.baseBranch}</code></div><div data-label="模型"><Show when={deployment.agent} fallback={<span class="capability-empty">未配置</span>}>{(agent) => <code>{agent().provider}/{agent().model} · {agent().thinkingLevel}</code>}</Show></div><div data-label="能力"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityLabels catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div>; }}</For></Show></div></section>
               <section class="service-detail-section"><div class="service-detail-heading"><h3>项目描述</h3></div><Show when={service().description.trim()} fallback={<div class="service-detail-empty">暂无项目描述</div>}><Markdown source={service().description} /></Show></section>
             </div>
           </>}
@@ -273,7 +280,7 @@ export function ConfigurationView() {
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { kind: "backend", url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? cloneDeploymentDraft(next) : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 Pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? cloneDeploymentDraft(next) : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
         </div>

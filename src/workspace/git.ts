@@ -10,7 +10,7 @@ import { issueWorkspaceRoot, workspacesRoot } from "./state.ts";
 const execFileAsync = promisify(execFile);
 
 export interface PrepareWorktreeInput {
-  issueId: string;
+  issueKey: string;
   workspaceName: string;
   url: string;
   baseBranch: string;
@@ -32,20 +32,20 @@ async function exists(candidate: string): Promise<boolean> {
   try { await access(candidate); return true; } catch { return false; }
 }
 
-function segment(value: string): string {
+function safePathSegment(value: string): string {
   const safe = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!safe) throw new Error("invalid_workspace_segment");
   return safe;
 }
 
-function repositoryName(url: string): string {
+function repositoryBasename(url: string): string {
   const withoutQuery = url.replace(/[?#].*$/, "").replace(/\/+$/, "");
   const name = withoutQuery.slice(Math.max(withoutQuery.lastIndexOf("/"), withoutQuery.lastIndexOf(":")) + 1).replace(/\.git$/i, "");
-  return segment(name);
+  return safePathSegment(name);
 }
 
 export function repositoryWorkspaceNames(urls: string[]): Map<string, string> {
-  const bases = urls.map((url) => repositoryName(url));
+  const bases = urls.map((url) => repositoryBasename(url));
   const counts = new Map<string, number>();
   for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
   return new Map(urls.map((url, index) => {
@@ -55,7 +55,7 @@ export function repositoryWorkspaceNames(urls: string[]): Map<string, string> {
   }));
 }
 
-export class Worktrees {
+export class WorktreeManager {
   private readonly stateRoot: string;
   private readonly repositoriesRoot: string;
   private readonly workspacesRoot: string;
@@ -82,7 +82,7 @@ export class Worktrees {
   }
 
   async prepare(input: PrepareWorktreeInput): Promise<PreparedWorktree> {
-    const issueKey = normalizeIssueKey(input.issueId);
+    const issueKey = normalizeIssueKey(input.issueKey);
     if (input.url.startsWith("-") || !input.baseBranch.trim() || input.baseBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
     const repositoryKey = createHash("sha256").update(input.url).digest("hex").slice(0, 20);
     const previous = this.tails.get(repositoryKey) ?? Promise.resolve();
@@ -101,7 +101,7 @@ export class Worktrees {
     await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
 
     const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
-    const workspacePath = await this.workspacePath(issueRoot, cachePath, input.workspaceName, input.existingWorkspacePath);
+    const workspacePath = await this.resolveWorkspacePath(issueRoot, cachePath, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.mode === "detached" ? null : input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     if (workingBranch) {
       await this.git(["check-ref-format", "--branch", workingBranch]);
@@ -140,8 +140,8 @@ export class Worktrees {
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
   }
 
-  private async workspacePath(issueRoot: string, cachePath: string, workspaceName: string, existingWorkspacePath?: string): Promise<string> {
-    const desiredPath = resolve(issueRoot, segment(workspaceName));
+  private async resolveWorkspacePath(issueRoot: string, cachePath: string, workspaceName: string, existingWorkspacePath?: string): Promise<string> {
+    const desiredPath = resolve(issueRoot, safePathSegment(workspaceName));
     if (dirname(desiredPath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
     if (!existingWorkspacePath) return desiredPath;
 

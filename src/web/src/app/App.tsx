@@ -47,14 +47,14 @@ function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; code
   );
 }
 
-function LocalIdentity() {
+function CurrentUserIdentity() {
   const { currentUser } = useApplicationResources();
   const name = () => currentUser()?.name || currentUser()?.subject || "本地用户";
   const detail = () => currentUser()?.email || currentUser()?.subject || "本地工作区";
   return <div class="identity"><span>本地</span><div><strong>{name()}</strong><small>{detail()}</small></div></div>;
 }
 
-function CurrentIssueQueue(props: { selectedId: string; refreshToken: number; onSelect: (id: string) => void }) {
+function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; onSelect: (id: string) => void }) {
   const { currentUser } = useApplicationResources();
   return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} onSelect={props.onSelect} />;
 }
@@ -124,11 +124,11 @@ export function App() {
               onChange={(value) => setView(value as "issues" | "statistics" | "configuration")}
             />
           </div>
-          <LocalIdentity />
+          <CurrentUserIdentity />
         </Layout.Header>
         <Layout.Content class={`app-content${codeExpanded() && view() === "issues" ? " code-expanded" : ""}`}>
           <Show when={view() === "issues"} fallback={view() === "statistics" ? <Statistics /> : <ConfigurationView />}>
-            <Show when={!codeExpanded()}><CurrentIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
+            <Show when={!codeExpanded()}><ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
             <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
               <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                 {(current) => (

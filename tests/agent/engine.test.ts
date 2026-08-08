@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "node:test";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";

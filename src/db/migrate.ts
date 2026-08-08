@@ -5,5 +5,5 @@ const database = openDatabase();
 try {
   await migrateDatabase(database);
 } finally {
-  database.close();
+  await database.close();
 }
