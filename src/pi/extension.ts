@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { MAX_BROWSER_ACTIONS, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS, MAX_SLS_RESULTS } from "../capabilities/limits.ts";
 import type { CapabilityName } from "../domain/contracts.ts";
 
 export interface IssuePilotExtensionOptions {
@@ -38,7 +39,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
   register("nacos", {
     name: "nacos",
     label: "Read Service Configuration",
-    description: "Return the effective service configuration from repository files and Nacos.",
+    description: "Return the raw configuration for the deployment's authorized Nacos data IDs.",
     parameters: Type.Object({}),
     execute: (_id, input, signal) => broker(options, "nacos", input, signal),
   });
@@ -54,13 +55,12 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     label: "Read SLS Logs",
     description: "Query the selected deployment's Simple Log Service.",
     parameters: Type.Object({
-      project: Type.String({ maxLength: 63 }),
       logstore: Type.String({ maxLength: 63 }),
       from: Type.Optional(Type.Integer({ minimum: 0 })),
       to: Type.Optional(Type.Integer({ minimum: 1 })),
       query: Type.Optional(Type.String({ maxLength: 4096 })),
       trace_id: Type.Optional(Type.String({ maxLength: 36 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SLS_RESULTS })),
     }),
     execute: (_id, input, signal) => broker(options, "sls", input, signal),
   });
@@ -71,11 +71,11 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     parameters: Type.Object({
       action: StringEnum(["get", "mget", "hget", "hgetall", "type", "ttl", "scan"] as const),
       key: Type.Optional(Type.String({ maxLength: 1024 })),
-      keys: Type.Optional(Type.Array(Type.String({ maxLength: 1024 }))),
+      keys: Type.Optional(Type.Array(Type.String({ maxLength: 1024 }), { maxItems: MAX_REDIS_KEYS })),
       field: Type.Optional(Type.String({ maxLength: 1024 })),
       pattern: Type.Optional(Type.String({ maxLength: 1024 })),
       cursor: Type.Optional(Type.String({ maxLength: 30 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_REDIS_RESULTS })),
     }),
     execute: (_id, input, signal) => broker(options, "redis", input, signal),
   });
@@ -86,7 +86,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     parameters: Type.Object({
       action: StringEnum(["search", "count", "mapping"] as const),
       query: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_ES_RESULTS })),
     }),
     execute: (_id, input, signal) => broker(options, "es", input, signal),
   });
@@ -97,7 +97,6 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
     parameters: Type.Object({
       action: StringEnum(["overview", "queues", "queue", "bindings"] as const),
       queue: Type.Optional(Type.String({ maxLength: 255 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
     execute: (_id, input, signal) => broker(options, "mq", input, signal),
   });
@@ -113,7 +112,7 @@ export function registerIssuePilotExtension(pi: ExtensionAPI, options: IssuePilo
         Type.Object({ type: Type.Literal("fill"), selector: Type.String({ maxLength: 500 }), value: Type.String({ maxLength: 10_000 }) }),
         Type.Object({ type: Type.Literal("select"), selector: Type.String({ maxLength: 500 }), value: Type.String({ maxLength: 10_000 }) }),
         Type.Object({ type: Type.Literal("wait_for"), selector: Type.String({ maxLength: 500 }) }),
-      ]), { minItems: 1 }),
+      ]), { minItems: 1, maxItems: MAX_BROWSER_ACTIONS }),
       screenshot: Type.Optional(Type.Boolean()),
     }),
     execute: (_id, input, signal) => broker(options, "playwright", input, signal),

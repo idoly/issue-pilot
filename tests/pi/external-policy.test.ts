@@ -8,6 +8,7 @@ test("freezes credential-free Redis, Elasticsearch, and RabbitMQ grants", () => 
     issueKey: "ISSUE-20260805-101",
     issueType: "smart_analysis",
     workspaceRoot: "/tmp/issue-policy-external",
+    model: { provider: "test", modelId: "test-model", thinkingLevel: "medium" },
     service: {
       serviceKey: "orders",
       environmentKey: "prod",

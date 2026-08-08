@@ -72,7 +72,7 @@ test("reads RabbitMQ management data with encoded scope and credentials", async 
   assert(address && typeof address === "object");
   try {
     const config = { host: "127.0.0.1", port: 5672, managementPort: address.port, username: "reader", password: "secret", virtualHost: "/" };
-    const result = await readRabbitMq(policy, config, { action: "bindings", queue: "orders", limit: 3 });
+    const result = await readRabbitMq(policy, config, { action: "bindings", queue: "orders" });
     const output = JSON.parse(result.content[0]!.text) as { output: unknown[] };
     assert.equal(output.output.length, 150);
     assert.equal(requests[0]?.url, "/api/queues/%2F/orders/bindings");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -71,6 +71,10 @@ test("uses detached latest baselines for read-only environments and prefixed dev
     await assert.rejects(access(legacy.workspacePath));
     assert.match(await git(["-C", migrated.workspacePath, "status", "--porcelain"]), /uncommitted\.txt/);
     assert.equal(await git(["-C", migrated.workspacePath, "branch", "--show-current"]), "hotfix-issue-20260805-013");
+    await assert.rejects(worktrees.remove(remote, migrated.workspacePath), /obsolete_workspace_has_changes/);
+    await unlink(join(migrated.workspacePath, "uncommitted.txt"));
+    await worktrees.remove(remote, migrated.workspacePath);
+    await assert.rejects(access(migrated.workspacePath));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

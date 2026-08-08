@@ -1,5 +1,4 @@
 interface RepositoryContext {
-  url: string;
   branch: string;
   path: string;
   readOnly: boolean;

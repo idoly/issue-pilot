@@ -17,6 +17,8 @@ export interface CommandExecutor {
   exec(command: string, args: string[], options?: CommandOptions): Promise<CommandResult>;
 }
 
+const MAX_COMMAND_OUTPUT_BYTES = 5 * 1024 * 1024;
+
 export async function execLocal(command: string, args: string[], options: CommandOptions = {}): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -28,6 +30,8 @@ export async function execLocal(command: string, args: string[], options: Comman
     let stderr = "";
     let killed = false;
     let settled = false;
+    let outputBytes = 0;
+    let outputLimitExceeded = false;
     const finish = (operation: () => void) => {
       if (settled) return;
       settled = true;
@@ -36,6 +40,7 @@ export async function execLocal(command: string, args: string[], options: Comman
       operation();
     };
     const terminate = () => {
+      if (killed) return;
       killed = true;
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 1_000).unref();
@@ -46,10 +51,20 @@ export async function execLocal(command: string, args: string[], options: Comman
     options.signal?.addEventListener("abort", abort, { once: true });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.stdout.on("data", (chunk: string) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) { outputLimitExceeded = true; terminate(); return; }
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) { outputLimitExceeded = true; terminate(); return; }
+      stderr += chunk;
+    });
     child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1, killed })));
+    child.on("close", (code) => finish(() => outputLimitExceeded
+      ? reject(new Error("command_output_too_large"))
+      : resolve({ stdout, stderr, code: code ?? 1, killed })));
     if (options.signal?.aborted) terminate();
   });
 }

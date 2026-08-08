@@ -16,15 +16,14 @@ test("prepares pinned connector binaries without persistent tool containers", as
   const workspace = join(root, "workspaces");
   const log = join(root, "podman.log");
   try {
-    await Promise.all([mkdir(bin), mkdir(join(home, ".nacos-cli"), { recursive: true }), mkdir(workspace)]);
+    await Promise.all([mkdir(bin), mkdir(home), mkdir(workspace)]);
     const podman = join(bin, "podman");
     await writeFile(podman, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PODMAN_LOG"\nif [ "$1 $2" = "volume exists" ]; then exit 0; fi\nexit 0\n`, "utf8");
     await chmod(podman, 0o700);
     await execFileAsync(script, ["prepare"], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, PODMAN_LOG: log, PI_WORKSPACE_ROOT: workspace, PI_TOOL_CACHE_ROOT: join(root, "cache") } });
     const calls = await readFile(log, "utf8");
     assert.doesNotMatch(calls, /--name |--detach| sleep infinity/);
-    assert.match(calls, /run --rm --user 0 --volume nacos-cli-data/);
-    assert.match(calls, /volume exists nacos-cli-data/);
+    assert.doesNotMatch(calls, /nacos-cli|nacos-cli-data|volume create/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

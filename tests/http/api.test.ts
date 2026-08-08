@@ -16,7 +16,7 @@ const engine = {
   recordedMessages: [] as boolean[],
   closedSessions: [] as string[],
   running: new Set<string>(),
-  enqueue(issueId: string, message?: string, recordMessage = true) { this.enqueued.push(issueId); this.messages.push(message); this.recordedMessages.push(recordMessage); },
+  enqueue(issueId: string, message?: string, recordMessage = true) { this.running.add(issueId); this.enqueued.push(issueId); this.messages.push(message); this.recordedMessages.push(recordMessage); },
   isRunning(issueId: string) { return this.running.has(issueId); },
   async send(issueId: string, message: string) {
     this.messages.push(message); this.enqueued.push(issueId);
@@ -73,8 +73,8 @@ test("configuration and issue API preserves relational integrity", async () => {
           description: `${service.name} service`,
           repositories: service.repositoryUrls.map((url, index) => ({ kind: index === 0 ? "frontend" : "backend", url })),
           deployments: [
-            { environmentKey: "test", baseBranch: "main", capabilities: [], ...(service.key === "alpha" ? { agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } } : {}) },
-            ...(service.key === "beta" ? [{ environmentKey: "dev", baseBranch: "develop", capabilities: [] }] : []),
+            { environmentKey: "test", baseBranch: "main", capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } },
+            ...(service.key === "beta" ? [{ environmentKey: "dev", baseBranch: "develop", capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } }] : []),
           ],
         },
       });
@@ -172,11 +172,19 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(runningRetry.statusCode, 409);
     assert.equal((await json(runningRetry)).error, "issue_already_running");
     engine.running.delete(createdInternalId);
-    const retryResponse = await app.inject({ method: "POST", url: `/api/issues/${created.id}/retry` });
-    assert.equal(retryResponse.statusCode, 202, retryResponse.body);
+    const failedRun = openDatabase(join(root, "issues.db"));
+    await failedRun.db.update(issues).set({ status: "open" }).where(eq(issues.key, String(created.id)));
+    await failedRun.db.update(issueWorkspaces).set({ status: "failed" }).where(eq(issueWorkspaces.issueId, createdInternalId));
+    await failedRun.close();
+    const retryResponses = await Promise.all([
+      app.inject({ method: "POST", url: `/api/issues/${created.id}/retry` }),
+      app.inject({ method: "POST", url: `/api/issues/${created.id}/retry` }),
+    ]);
+    assert.deepEqual(retryResponses.map((response) => response.statusCode).sort(), [202, 409]);
     assert.equal(engine.enqueued.filter((id) => id === createdInternalId).length, 2);
     const retried = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string };
-    assert.equal(retried.status, "in_progress");
+    assert.equal(retried.status, "open");
+    engine.running.delete(createdInternalId);
     const prematureResolve = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "resolved" } });
     assert.equal(prematureResolve.statusCode, 409);
     const direct = openDatabase(join(root, "issues.db"));
@@ -185,6 +193,14 @@ test("configuration and issue API preserves relational integrity", async () => {
     const resolved = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "resolved" } });
     assert.equal(resolved.statusCode, 200, resolved.body);
     assert.equal((await json(resolved)).status, "resolved");
+    for (const [url, payload] of [
+      [`/api/issues/${created.id}/retry`, undefined],
+      [`/api/issues/${created.id}/sync`, undefined],
+      [`/api/issues/${created.id}/agent-messages`, { message: "must reopen first" }],
+    ] as const) {
+      const rejected = await app.inject({ method: "POST", url, ...(payload ? { payload } : {}) });
+      assert.equal(rejected.statusCode, 409, rejected.body);
+    }
     const reopened = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "open" } });
     assert.equal(reopened.statusCode, 200, reopened.body);
     assert.equal((await json(reopened)).status, "open");
@@ -223,6 +239,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const concurrentKeys = await Promise.all(concurrent.map(async (response) => String((await json(response)).id)));
     assert.equal(new Set(concurrentKeys).size, 2);
     assert.deepEqual(concurrentKeys.sort(), [String(created.id).replace(/001$/, "002"), String(created.id).replace(/001$/, "003")]);
+    engine.running.clear();
 
     const invalidIssuePath = await app.inject({ method: "GET", url: "/api/issues/not-an-issue" });
     assert.equal(invalidIssuePath.statusCode, 404);
@@ -260,27 +277,28 @@ test("configuration and issue API preserves relational integrity", async () => {
         name: "Alpha renamed",
         description: "multiple repositories",
         repositories: [{ id: retainedRepository.id, kind: "frontend", url: retainedRepository.url }, { kind: "backend", url: "https://example.test/alpha-extra.git" }],
-        deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "sls"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "operator", password: "nacos-secret" }, db: { url: "jdbc:mysql://db.example.test:3306/alpha?useUnicode=true", username: "readonly", password: "db-secret" }, redis: { host: "192.168.27.122", port: 6379, username: "", password: "redis-secret", database: 0 }, mq: { host: "192.168.27.122", port: 5672, managementPort: 15672, username: "admin", password: "mq-secret", virtualHost: "/" }, es: { url: "http://es-6.example.test", username: "", password: "" }, sls: { accessKeyId: "fixture-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"] }, playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", password: "deployment-secret" } }],
+        deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "sls"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha-test.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/alpha", username: "readonly", password: "db-secret" }, redis: { host: "192.168.27.122", port: 6379, username: "", password: "redis-secret", database: 0 }, mq: { host: "192.168.27.122", port: 5672, managementPort: 15672, username: "admin", password: "mq-secret", virtualHost: "/" }, es: { url: "http://es-6.example.test", username: "", password: "" }, sls: { accessKeyId: "fixture-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"] }, playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", password: "deployment-secret" } }],
       },
     });
     assert.equal(repositoryUpdate.statusCode, 200, repositoryUpdate.body);
     assert.equal(engine.closedSessions.includes(createdInternalId), true);
-    const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[]; nacos: { password: string }; db: { url: string; password: string }; sls: { accessKeySecret: string }; playwright: { baseUrl: string; username: string; password: string } | null }>; repositories: Array<{ id: string; kind: string; url: string }> }> };
+    const afterRepositoryUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: Array<{ baseBranch: string; capabilities: string[]; nacos: { dataIds: string[]; password: string }; db: { url: string; password: string }; sls: { accessKeySecret: string }; playwright: { baseUrl: string; username: string; password: string } | null }>; repositories: Array<{ id: string; kind: string; url: string }> }> };
     const updatedAlpha = afterRepositoryUpdate.services.find((service) => service.key === "alpha")!;
     assert.equal(updatedAlpha.name, "Alpha renamed");
     assert.equal(updatedAlpha.repositories.find((repository) => repository.url === retainedRepository.url)?.id, retainedRepository.id);
     assert.deepEqual(updatedAlpha.repositories.map((repository) => repository.url).sort(), ["https://example.test/alpha-extra.git", "https://example.test/alpha.git"]);
     assert.deepEqual(updatedAlpha.deployments.map((deployment) => ({ baseBranch: deployment.baseBranch, capabilities: deployment.capabilities, playwright: deployment.playwright })), [{ baseBranch: "main", capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "sls"], playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", password: "deployment-secret" } }]);
     assert.match(JSON.stringify(afterRepositoryUpdate), /deployment-secret/);
+    assert.deepEqual(updatedAlpha.deployments[0]?.nacos.dataIds, ["alpha-test.yaml"]);
     assert.equal(updatedAlpha.deployments[0]?.nacos.password, "nacos-secret");
-    assert.equal(updatedAlpha.deployments[0]?.db.url, "mysql://db.example.test:3306/alpha?useUnicode=true");
+    assert.equal(updatedAlpha.deployments[0]?.db.url, "mysql://db.example.test:3306/alpha");
     assert.equal(updatedAlpha.deployments[0]?.db.password, "db-secret");
     assert.equal(updatedAlpha.deployments[0]?.sls.accessKeySecret, "sls-secret");
 
     const missingDbPassword = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
-      payload: { name: "Invalid DB", description: "", repositories: updatedAlpha.repositories, deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["db"], db: { url: "mysql://db.example.test:3306/alpha", username: "readonly" } }] },
+      payload: { name: "Invalid DB", description: "", repositories: updatedAlpha.repositories, deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: ["db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" }, db: { url: "mysql://db.example.test:3306/alpha", username: "readonly" } }] },
     });
     assert.equal(missingDbPassword.statusCode, 400, missingDbPassword.body);
     assert.equal((await json(missingDbPassword)).error, "invalid_db_password");
@@ -293,7 +311,8 @@ test("configuration and issue API preserves relational integrity", async () => {
         repositories: updatedAlpha.repositories,
         deployments: [{
           environmentKey: "test", baseBranch: "main", capabilities: ["playwright", "nacos", "es"],
-          nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "", password: "" },
+          agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" },
+          nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha-test.yaml"], username: "", password: "" },
           es: { url: "http://es-6.example.test/proxy", username: "", password: "" },
           playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "", password: "" },
         }],
@@ -381,6 +400,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     const createdWithAttachmentDetail = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ fileName: string; sha256: string }> };
     assert.deepEqual(createdWithAttachmentDetail.attachments.map(({ fileName }) => fileName), ["initial.txt"]);
     assert.equal(createdWithAttachmentDetail.attachments[0]?.sha256, createHash("sha256").update("initial evidence").digest("hex"));
+    engine.running.delete(engine.enqueued.at(-1)!);
 
     const boundary = "issue-pilot-test-boundary";
     const attachmentContent = "diagnostic output\n";
@@ -431,6 +451,36 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.match(engine.messages.at(-1) ?? "", /diagnostic\.txt/);
     assert.match(engine.messages.at(-1) ?? "", /attachments are available in \.issue-pilot\/attachments/);
     assert.equal(engine.recordedMessages.at(-1), false);
+    engine.running.delete(createdInternalId);
+
+    const largeBoundary = "issue-pilot-large-attachment";
+    const largeContent = Buffer.alloc(1_100_000, "a");
+    const largeUpload = await app.inject({
+      method: "POST",
+      url: `/api/issues/${created.id}/attachments`,
+      headers: { "content-type": `multipart/form-data; boundary=${largeBoundary}` },
+      payload: Buffer.concat([
+        Buffer.from(`--${largeBoundary}\r\nContent-Disposition: form-data; name="files"; filename="large.txt"\r\nContent-Type: text/plain\r\n\r\n`),
+        largeContent,
+        Buffer.from(`\r\n--${largeBoundary}--\r\n`),
+      ]),
+    });
+    assert.equal(largeUpload.statusCode, 201, largeUpload.body);
+    const [largeAttachment] = await json(largeUpload) as unknown as Array<{ id: string }>;
+
+    const oversizedBoundary = "issue-pilot-oversized-attachment";
+    const oversizedUpload = await app.inject({
+      method: "POST",
+      url: `/api/issues/${created.id}/attachments`,
+      headers: { "content-type": `multipart/form-data; boundary=${oversizedBoundary}` },
+      payload: Buffer.concat([
+        Buffer.from(`--${oversizedBoundary}\r\nContent-Disposition: form-data; name="files"; filename="oversized.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+        Buffer.alloc(20 * 1024 * 1024 + 1),
+        Buffer.from(`\r\n--${oversizedBoundary}--\r\n`),
+      ]),
+    });
+    assert.equal(oversizedUpload.statusCode, 413, oversizedUpload.body);
+    assert.equal((await json(oversizedUpload)).error, "attachment_limit_exceeded");
 
     const excessiveBoundary = "issue-pilot-excessive-attachments";
     const excessiveBody = Buffer.from([
@@ -453,9 +503,9 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(excessiveUpload.statusCode, 201, excessiveUpload.body);
     const additionalAttachments = await json(excessiveUpload) as unknown as Array<{ id: string }>;
     assert.equal(additionalAttachments.length, 10);
-    assert.equal((await readdir(attachmentDirectory)).length, 11);
+    assert.equal((await readdir(attachmentDirectory)).length, 12);
 
-    const deleteAttachment = await app.inject({ method: "DELETE", url: `/api/issues/${created.id}/attachments`, payload: { attachmentIds: [uploaded[0]!.id, ...additionalAttachments.map(({ id }) => id)] } });
+    const deleteAttachment = await app.inject({ method: "DELETE", url: `/api/issues/${created.id}/attachments`, payload: { attachmentIds: [uploaded[0]!.id, largeAttachment!.id, ...additionalAttachments.map(({ id }) => id)] } });
     assert.equal(deleteAttachment.statusCode, 204, deleteAttachment.body);
     assert.equal((await readdir(attachmentDirectory)).length, 0);
     const detailWithoutAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: unknown[] };
@@ -470,7 +520,7 @@ test("configuration and issue API preserves relational integrity", async () => {
         name: "Partially changed",
         description: "changed",
         repositories: [{ id: "missing-repository", kind: "frontend", url: "https://example.test/alpha.git" }],
-        deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [] }],
+        deployments: [{ environmentKey: "test", baseBranch: "main", capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } }],
       },
     });
     assert.equal(invalidServiceUpdate.statusCode, 400);
@@ -485,6 +535,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     });
     assert.equal(devIssue.statusCode, 201, devIssue.body);
     const devIssueKey = String((await json(devIssue)).id);
+    engine.running.delete(engine.enqueued.at(-1)!);
     const invalidDevUpdate = await app.inject({
       method: "PATCH",
       url: `/api/issues/${devIssueKey}`,

@@ -4,7 +4,6 @@ import { ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from
 import { CAPABILITY_KEYS, configuredCapabilities, type CapabilityName } from "../domain/contracts.ts";
 import { normalizeIssueKey } from "../domain/issue-key.ts";
 
-export type ServiceCapabilityName = CapabilityName;
 export interface RepositoryGrant {
   codeAccess: "read" | "write";
   repositoryPath: string;
@@ -15,8 +14,8 @@ export interface ServiceGrant {
   serviceKey: string;
   environmentKey: string;
   environmentKind: EnvironmentKind;
-  capabilities: ServiceCapabilityName[];
-  nacos?: { deploymentId: string; serverUrl: string; namespace: string; group: string };
+  capabilities: CapabilityName[];
+  nacos?: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
   db?: { deploymentId: string };
   sls?: { deploymentId: string; region: string; project: string; logstores: string[] };
   browser?: { deploymentId: string; baseUrl: string };
@@ -24,12 +23,6 @@ export interface ServiceGrant {
   es?: { deploymentId: string };
   mq?: { deploymentId: string; virtualHost: string };
   repositories: RepositoryGrant[];
-}
-
-export interface GrantedRepository extends RepositoryGrant {
-  serviceKey: string;
-  environmentKey: string;
-  environmentKind: EnvironmentKind;
 }
 
 export interface ModelGrant {
@@ -54,7 +47,7 @@ export function createIssuePolicy(input: {
   issueKey: string;
   issueType: IssueType;
   workspaceRoot: string;
-  model?: ModelGrant;
+  model: ModelGrant;
   service: ServiceGrant;
 }): IssuePolicy {
   const capabilities = new Set(input.service.capabilities);
@@ -84,7 +77,7 @@ export function createIssuePolicy(input: {
     issueKey: normalizeIssueKey(input.issueKey),
     issueType: input.issueType,
     workspaceRoot: path.resolve(input.workspaceRoot),
-    model: input.model ?? { provider: "managed", modelId: "default", thinkingLevel: "medium" },
+    model: input.model,
     service: {
       ...input.service,
       capabilities: CAPABILITY_KEYS.filter((capability) => capabilities.has(capability)),
@@ -113,13 +106,12 @@ export function createDeploymentPolicy(input: {
     const value = input.deploymentConfig[key];
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
   };
-  const agent = object("agent") ?? {};
-  const provider = isString(agent.provider) ? agent.provider : process.env.ISSUE_PILOT_PROVIDER ?? process.env.PI_PROVIDER;
-  const modelId = isString(agent.model) ? agent.model : process.env.ISSUE_PILOT_MODEL ?? process.env.PI_MODEL;
-  if (!provider || !modelId) throw new Error("issue_pilot_model_not_configured");
+  const agent = object("agent");
+  const provider = agent && isString(agent.provider) ? agent.provider : undefined;
+  const modelId = agent && isString(agent.model) ? agent.model : undefined;
   const levels = new Set<ModelGrant["thinkingLevel"]>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-  const requestedLevel = isString(agent.thinkingLevel) ? agent.thinkingLevel : process.env.ISSUE_PILOT_REASONING ?? process.env.PI_REASONING_LEVEL;
-  const thinkingLevel = levels.has(requestedLevel as ModelGrant["thinkingLevel"]) ? requestedLevel as ModelGrant["thinkingLevel"] : "medium";
+  const thinkingLevel = agent && levels.has(agent.thinkingLevel as ModelGrant["thinkingLevel"]) ? agent.thinkingLevel as ModelGrant["thinkingLevel"] : undefined;
+  if (!provider || !modelId || !thinkingLevel) throw new Error("issue_pilot_model_not_configured");
 
   const nacos = object("nacos");
   const sls = object("sls");
@@ -136,7 +128,7 @@ export function createDeploymentPolicy(input: {
       environmentKey: input.environmentKey,
       environmentKind: input.environmentKind,
       capabilities,
-      ...(nacos && isString(nacos.serverUrl) && typeof nacos.namespace === "string" && isString(nacos.group) ? { nacos: { deploymentId: input.deploymentId, serverUrl: nacos.serverUrl, namespace: nacos.namespace, group: nacos.group } } : {}),
+      ...(nacos && isString(nacos.serverUrl) && typeof nacos.namespace === "string" && isString(nacos.group) && Array.isArray(nacos.dataIds) && nacos.dataIds.length && nacos.dataIds.every(isString) ? { nacos: { deploymentId: input.deploymentId, serverUrl: nacos.serverUrl, namespace: nacos.namespace, group: nacos.group, dataIds: [...new Set(nacos.dataIds)] } } : {}),
       ...(object("db") ? { db: { deploymentId: input.deploymentId } } : {}),
       ...(sls && isString(sls.region) && isString(sls.project) && Array.isArray(sls.logstores) && sls.logstores.every(isString) ? { sls: { deploymentId: input.deploymentId, region: sls.region, project: sls.project, logstores: sls.logstores } } : {}),
       ...(playwright && isString(playwright.baseUrl) ? { browser: { deploymentId: input.deploymentId, baseUrl: playwright.baseUrl } } : {}),
@@ -146,18 +138,4 @@ export function createDeploymentPolicy(input: {
       repositories: input.repositories,
     },
   });
-}
-
-export function assertSlsGranted(policy: IssuePolicy, project: string, logstore: string): void {
-  if (!policy.service.capabilities.includes("sls") || policy.service.sls?.project !== project || !policy.service.sls.logstores.includes(logstore)) throw new Error("sls_scope_not_granted_for_service");
-}
-
-export function grantedRepositories(policy: IssuePolicy, capability?: ServiceCapabilityName): GrantedRepository[] {
-  if (capability && !policy.service.capabilities.includes(capability)) throw new Error("capability_not_granted_for_service");
-  return policy.service.repositories.map((repository) => ({
-    ...repository,
-    serviceKey: policy.service.serviceKey,
-    environmentKey: policy.service.environmentKey,
-    environmentKind: policy.service.environmentKind,
-  }));
 }

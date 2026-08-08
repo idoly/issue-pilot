@@ -1,18 +1,12 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { MAX_NACOS_DATA_IDS } from "./limits.ts";
 import type { CommandExecutor } from "./local-exec.ts";
-import YAML from "yaml";
 
-import type { GrantedRepository } from "../pi/policy.ts";
-
-const execFileAsync = promisify(execFile);
-const CONFIG_FILE = /(?:^|\/)(?:application|bootstrap)(?:-[a-zA-Z0-9._-]+)?\.(?:ya?ml|properties)$/;
-const PLACEHOLDER = /\$\{([^}:]+)(?::([^}]*))?\}/g;
+const NACOS_TARGET = /^[a-zA-Z0-9._-]{1,255}$/;
 
 export interface NacosConnection {
   serverUrl: string;
@@ -20,164 +14,7 @@ export interface NacosConnection {
   group: string;
   username: string;
   password: string;
-}
-
-export interface ResolvedConfiguration {
-  properties: Record<string, unknown>;
-  sources: string[];
-  missingSources: string[];
-}
-
-function propertiesDocument(content: string): Record<string, unknown> {
-  const output: Record<string, unknown> = {};
-  for (const raw of content.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#") || line.startsWith("!")) continue;
-    const separator = line.search(/(?<!\\)[:=]/);
-    const key = (separator < 0 ? line : line.slice(0, separator)).trim();
-    if (key) output[key] = separator < 0 ? "" : line.slice(separator + 1).trim();
-  }
-  return output;
-}
-
-function flatten(value: unknown, prefix = "", output: Record<string, unknown> = {}): Record<string, unknown> {
-  if (Array.isArray(value)) {
-    value.forEach((entry, index) => flatten(entry, `${prefix}[${index}]`, output));
-    return output;
-  }
-  if (value && typeof value === "object") {
-    for (const [key, entry] of Object.entries(value)) flatten(entry, prefix ? `${prefix}.${key}` : key, output);
-    return output;
-  }
-  if (prefix) output[prefix] = value;
-  return output;
-}
-
-function parse(file: string, content: string): Record<string, unknown> {
-  if (file.endsWith(".properties")) return propertiesDocument(content);
-  const documents = YAML.parseAllDocuments(content);
-  if (documents.some((document) => document.errors.length)) throw new Error("service_configuration_parse_failed");
-  return Object.assign({}, ...documents.map((document) => flatten(document.toJS())));
-}
-
-function score(file: string, environmentKey: string): number {
-  const name = path.basename(file);
-  const configuredProfile = name.match(/^(?:application|bootstrap)-(.+)\.(?:ya?ml|properties)$/)?.[1];
-  const profile = !configuredProfile ? 0 : configuredProfile === environmentKey ? 20 : 10;
-  return profile + (name.startsWith("application") ? 2 : 1);
-}
-
-async function git(repository: string, args: string[]): Promise<string> {
-  const metadata = await stat(repository);
-  if (!metadata.isDirectory()) throw new Error("service_repository_not_available");
-  const { stdout } = await execFileAsync("git", ["-C", repository, ...args], { encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
-  return stdout;
-}
-
-function configurationScope(file: string): string | null {
-  if (!CONFIG_FILE.test(file)) return null;
-  if (!file.includes("/") || file.startsWith("config/") || file.startsWith("src/main/resources/")) return ".";
-  const marker = "/src/main/resources/";
-  const index = file.indexOf(marker);
-  return index > 0 ? file.slice(0, index) : null;
-}
-
-async function frozenFiles(service: GrantedRepository, candidates: string[]): Promise<Array<{ file: string; content: string }>> {
-  const profiles = new Set([service.environmentKey, service.environmentKind]);
-  const selected = new Map<string, string>();
-  for (let pass = 0; pass < 10; pass += 1) {
-    const files = candidates.filter((file) => {
-      const profile = path.basename(file).match(/^(?:application|bootstrap)-(.+)\.(?:ya?ml|properties)$/)?.[1];
-      return !profile || profiles.has(profile);
-    });
-    for (const file of files) {
-      if (selected.has(file)) continue;
-      const content = await git(service.repositoryPath, ["show", `${service.baseCommit}:${file}`]);
-      selected.set(file, content);
-    }
-    const properties = Object.assign({}, ...[...selected].map(([file, content]) => parse(file, content)));
-    const discovered = [value(properties, "spring.profiles.active"), value(properties, "spring.profiles.include")]
-      .flatMap((entry) => entry?.split(",") ?? [])
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    const previousSize = profiles.size;
-    for (const profile of discovered) profiles.add(profile);
-    if (profiles.size === previousSize) break;
-  }
-  return [...selected].map(([file, content]) => ({ file, content }))
-    .sort((left, right) => score(left.file, service.environmentKey) - score(right.file, service.environmentKey) || left.file.localeCompare(right.file));
-}
-
-async function frozenConfigurationScopes(service: GrantedRepository): Promise<Array<{ scope: string; files: Array<{ file: string; content: string }> }>> {
-  const names = (await git(service.repositoryPath, ["ls-tree", "-r", "--name-only", service.baseCommit])).split("\n").filter(Boolean);
-  const candidatesByScope = new Map<string, string[]>();
-  for (const name of names) {
-    const scope = configurationScope(name);
-    if (scope === null) continue;
-    candidatesByScope.set(scope, [...(candidatesByScope.get(scope) ?? []), name]);
-  }
-  const scopes = [];
-  for (const [scope, candidates] of [...candidatesByScope].sort(([left], [right]) => left.localeCompare(right))) scopes.push({ scope, files: await frozenFiles(service, candidates) });
-  return scopes;
-}
-
-function value(properties: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const candidate = properties[key];
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-    if (typeof candidate === "number") return String(candidate);
-  }
-  return undefined;
-}
-
-function resolvePlaceholders(properties: Record<string, unknown>, secrets: Record<string, string>): Record<string, unknown> {
-  const resolved = { ...properties };
-  for (let pass = 0; pass < 20; pass += 1) {
-    let changed = false;
-    for (const [key, entry] of Object.entries(resolved)) {
-      if (typeof entry !== "string") continue;
-      const next = entry.replace(PLACEHOLDER, (match, name: string, fallback: string | undefined) => {
-        const replacement = resolved[name];
-        if (typeof replacement === "string" || typeof replacement === "number" || typeof replacement === "boolean") return String(replacement);
-        if (secrets[name] !== undefined) return secrets[name];
-        return fallback ?? match;
-      });
-      if (next !== entry) { resolved[key] = next; changed = true; }
-    }
-    if (!changed) break;
-  }
-  return resolved;
-}
-
-function nacosTargets(properties: Record<string, unknown>, environmentKey: string): Array<{ dataId: string; group: string; required: boolean }> {
-  const targets: Array<{ dataId: string; group: string; required: boolean }> = [];
-  for (const [key, entry] of Object.entries(properties)) {
-    if (typeof entry !== "string") continue;
-    if (/spring\.config\.import(?:\[\d+\])?$/.test(key)) {
-      for (const item of entry.split(",")) {
-        const configured = item.trim();
-        const match = configured.match(/^(?:optional:)?nacos:([^?]+)(?:\?(.*))?$/);
-        if (!match) continue;
-        const query = new URLSearchParams(match[2] ?? "");
-        targets.push({ dataId: match[1]!, group: query.get("group") ?? "DEFAULT_GROUP", required: !configured.startsWith("optional:") });
-      }
-    }
-    if (/spring\.cloud\.nacos\.config\.(?:shared|extension)-configs\[\d+\]\.data-id$/.test(key)) {
-      const prefix = key.slice(0, key.lastIndexOf(".data-id"));
-      targets.push({ dataId: entry, group: value(properties, `${prefix}.group`) ?? "DEFAULT_GROUP", required: true });
-    }
-  }
-  const application = value(properties, "spring.cloud.nacos.config.prefix", "spring.cloud.nacos.config.name", "spring.application.name");
-  if (application) {
-    const profile = value(properties, "spring.profiles.active") ?? environmentKey;
-    const extension = value(properties, "spring.cloud.nacos.config.file-extension") ?? "yaml";
-    const group = value(properties, "spring.cloud.nacos.config.group") ?? "DEFAULT_GROUP";
-    targets.push({ dataId: `${application}.${extension}`, group, required: true });
-    if (profile) targets.push({ dataId: `${application}-${profile}.${extension}`, group, required: false });
-  }
-  const unique = [...new Map(targets.map((target) => [`${target.dataId}\0${target.group}`, target])).values()];
-  if (unique.some((target) => !/^[a-zA-Z0-9._-]{1,255}$/.test(target.dataId) || !/^[a-zA-Z0-9._-]{1,255}$/.test(target.group))) throw new Error("invalid_nacos_configuration_target");
-  return unique;
+  dataIds: string[];
 }
 
 function nacosOrigin(value: string): string {
@@ -187,103 +24,37 @@ function nacosOrigin(value: string): string {
   return `${server.protocol}//${server.hostname.toLowerCase()}:${port}`;
 }
 
-async function nacosContent(pi: CommandExecutor, properties: Record<string, unknown>, target: { dataId: string; group: string }, signal?: AbortSignal): Promise<string | null> {
-  const configuredServer = value(properties, "spring.cloud.nacos.config.server-addr", "spring.cloud.nacos.server-addr", "nacos.server-addr");
-  if (!configuredServer || configuredServer.includes("${")) throw new Error("nacos_server_not_resolved");
-  const server = new URL(nacosOrigin(configuredServer));
+async function nacosContent(pi: CommandExecutor, dataId: string, connection: NacosConnection, signal?: AbortSignal): Promise<string | null> {
+  const server = new URL(nacosOrigin(connection.serverUrl));
   const profileRoot = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-nacos-"));
   try {
     const profile = {
       host: server.hostname,
       port: Number(server.port || (server.protocol === "https:" ? 443 : 8848)),
       scheme: server.protocol.slice(0, -1),
-      authType: value(properties, "spring.cloud.nacos.username", "spring.cloud.nacos.config.username") ? "nacos" : "none",
-      username: value(properties, "spring.cloud.nacos.username", "spring.cloud.nacos.config.username") ?? "",
-      password: value(properties, "spring.cloud.nacos.password", "spring.cloud.nacos.config.password") ?? "",
-      accessKey: "",
-      secretKey: "",
-      securityToken: "",
-      token: "",
-      namespace: value(properties, "spring.cloud.nacos.config.namespace", "spring.cloud.nacos.namespace") ?? "",
+      username: connection.username,
+      password: connection.password,
+      namespace: connection.namespace,
     };
-    const profileFile = path.join(profileRoot, "issue.conf");
-    const fallbackProfileFile = path.join(profileRoot, "issue.json");
-    await Promise.all([
-      writeFile(profileFile, YAML.stringify(profile), { mode: 0o600 }),
-      writeFile(fallbackProfileFile, JSON.stringify(profile), { mode: 0o600 }),
-    ]);
-    const image = process.env.PI_NACOS_CLI_IMAGE ?? "docker.io/library/node:26.5.1-bookworm-slim";
-    const container = ["run", "--rm", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--read-only", "--tmpfs", "/tmp:size=64m,mode=1777"];
-    const explicitConnection = ["--host", profile.host, "--port", String(profile.port), "--scheme", profile.scheme, "--auth-type", profile.authType, ...(profile.namespace ? ["--namespace", profile.namespace] : [])];
-    const execution = await pi.exec("podman", [...container, "--volume", "nacos-cli-data:/opt/nacos-cli:ro", "--volume", `${profileRoot}:/home/node/.nacos-cli:ro,z`, "--env", "HOME=/home/node", image, "node", "/opt/nacos-cli/node_modules/@nacos-group/cli/bin/cli.js", "--profile", "issue", ...explicitConnection, "config-get", target.dataId, target.group], { timeout: 20_000, ...(signal ? { signal } : {}) });
-    if (execution.code === 0) {
-      const content = execution.stdout.replace(/^Fetching config:.*?\r?\n\r?\n═+\r?\nData ID:.*?\r?\nGroup:.*?\r?\n═+\r?\n/s, "");
-      return content;
-    }
-    const adapter = fileURLToPath(new URL("../../infra/nacos-config-get.mjs", import.meta.url));
-    const fallback = await pi.exec("podman", [...container, "--volume", `${profileRoot}:/profile:ro,z`, "--volume", `${adapter}:/opt/issue-pilot/nacos-config-get.mjs:ro,z`, image, "node", "/opt/issue-pilot/nacos-config-get.mjs", "/profile/issue.json", target.dataId, target.group], { timeout: 20_000, ...(signal ? { signal } : {}) });
-    if (fallback.code !== 0) {
-      if (/nacos_configuration_read_failed:404|404 Not Found|resource not found/i.test(`${fallback.stdout}\n${fallback.stderr}`)) return null;
+    const profileFile = path.join(profileRoot, "connection.json");
+    await writeFile(profileFile, JSON.stringify(profile), { mode: 0o600 });
+    const runner = fileURLToPath(new URL("../../infra/nacos-read.mjs", import.meta.url));
+    const image = process.env.PI_NACOS_IMAGE ?? "docker.io/library/node:26.5.1-bookworm-slim";
+    const container = ["run", "--rm", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--read-only", "--pids-limit", "64", "--memory", "128m", "--tmpfs", "/tmp:size=32m,mode=1777"];
+    const execution = await pi.exec("podman", [...container, "--volume", `${profileRoot}:/run/secret:ro,z`, "--volume", `${runner}:/run/nacos-read.mjs:ro,z`, image, "node", "/run/nacos-read.mjs", "/run/secret/connection.json", dataId, connection.group], { timeout: 20_000, ...(signal ? { signal } : {}) });
+    if (execution.code !== 0) {
+      if (/nacos_configuration_read_failed:404/i.test(`${execution.stdout}\n${execution.stderr}`)) return null;
       throw new Error("nacos_configuration_read_failed");
     }
-    return fallback.stdout;
+    return execution.stdout;
   } finally {
     await rm(profileRoot, { recursive: true, force: true });
   }
 }
 
-function withNacosConnection(properties: Record<string, unknown>, nacos: NacosConnection): Record<string, unknown> {
-  return {
-    ...properties,
-    "spring.cloud.nacos.server-addr": nacos.serverUrl,
-    "spring.cloud.nacos.namespace": nacos.namespace,
-    "spring.cloud.nacos.username": nacos.username,
-    "spring.cloud.nacos.password": nacos.password,
-    "spring.cloud.nacos.config.server-addr": nacos.serverUrl,
-    "spring.cloud.nacos.config.namespace": nacos.namespace,
-    "spring.cloud.nacos.config.group": nacos.group,
-    "spring.cloud.nacos.config.username": nacos.username,
-    "spring.cloud.nacos.config.password": nacos.password,
-  };
-}
-
-async function resolveFiles(pi: CommandExecutor, service: GrantedRepository, files: Array<{ file: string; content: string }>, signal?: AbortSignal, secrets: Record<string, string> = {}, nacos?: NacosConnection): Promise<ResolvedConfiguration> {
-  let properties: Record<string, unknown> = {};
-  const sources: string[] = [];
-  const missingSources: string[] = [];
-  for (const file of files) {
-    properties = { ...properties, ...parse(file.file, file.content) };
-    sources.push(`repository:${file.file}`);
-  }
-  properties = resolvePlaceholders(properties, secrets);
-  if (nacos) properties = withNacosConnection(properties, nacos);
-  const server = value(properties, "spring.cloud.nacos.config.server-addr", "spring.cloud.nacos.server-addr", "nacos.server-addr");
-  if (server) {
-    for (const discovered of nacosTargets(properties, service.environmentKey)) {
-      const target = nacos ? { ...discovered, group: nacos.group } : discovered;
-      const source = `nacos:${target.dataId}/${target.group}`;
-      const content = await nacosContent(pi, properties, target, signal);
-      if (content === null) {
-        if (target.required) missingSources.push(source);
-        continue;
-      }
-      properties = resolvePlaceholders({ ...properties, ...parse(target.dataId, content) }, secrets);
-      if (nacos) properties = withNacosConnection(properties, nacos);
-      sources.push(source);
-    }
-  }
-  return { properties, sources, missingSources };
-}
-
-export async function resolveConfigurations(pi: CommandExecutor, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}, nacos?: NacosConnection): Promise<Array<{ scope: string; configuration: ResolvedConfiguration }>> {
-  const scopes = await frozenConfigurationScopes(service);
-  const resolved = [];
-  for (const { scope, files } of scopes) resolved.push({ scope, configuration: await resolveFiles(pi, service, files, signal, secrets, nacos) });
-  return resolved;
-}
-
-export async function resolveConfiguration(pi: CommandExecutor, service: GrantedRepository, signal?: AbortSignal, secrets: Record<string, string> = {}): Promise<ResolvedConfiguration> {
-  const resolved = await resolveConfigurations(pi, service, signal, secrets);
-  if (resolved.length > 1) throw new Error("multiple_service_configuration_scopes_found");
-  return resolved[0]?.configuration ?? { properties: {}, sources: [], missingSources: [] };
+export async function readNacosConfigurations(pi: CommandExecutor, connection: NacosConnection, signal?: AbortSignal): Promise<Array<{ dataId: string; group: string; content: string | null }>> {
+  if (!NACOS_TARGET.test(connection.group) || !Array.isArray(connection.dataIds) || !connection.dataIds.length || connection.dataIds.length > MAX_NACOS_DATA_IDS || connection.dataIds.some((dataId) => !NACOS_TARGET.test(dataId)) || new Set(connection.dataIds).size !== connection.dataIds.length) throw new Error("invalid_nacos_configuration_target");
+  const configurations = [];
+  for (const dataId of connection.dataIds) configurations.push({ dataId, group: connection.group, content: await nacosContent(pi, dataId, connection, signal) });
+  return configurations;
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { IssuePolicy } from "../pi/policy.ts";
+import { capabilityResultText, MAX_BROWSER_ACTIONS, MAX_CAPABILITY_RESULT_BYTES } from "./limits.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
 const DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.62.1-noble";
@@ -37,7 +38,7 @@ function credentials(policy: IssuePolicy, config: Record<string, unknown>): { us
 }
 
 function validateActions(actions: BrowserAction[]): void {
-  if (!Array.isArray(actions) || actions.length < 1) throw new Error("invalid_browser_actions");
+  if (!Array.isArray(actions) || actions.length < 1 || actions.length > MAX_BROWSER_ACTIONS) throw new Error("invalid_browser_actions");
   for (const action of actions) {
     if (!action || typeof action !== "object") throw new Error("invalid_browser_action");
     if (action.type === "goto") {
@@ -102,12 +103,12 @@ export async function useBrowser(pi: CommandExecutor, policy: IssuePolicy, confi
     try { output = JSON.parse(execution.stdout) as Record<string, unknown>; } catch { throw new Error("browser_invalid_response"); }
     const screenshot = typeof output.screenshot === "string" ? output.screenshot : undefined;
     delete output.screenshot;
-    const content: [{ type: "text"; text: string }, ...Array<{ type: "image"; data: string; mimeType: string }>] = [
-      { type: "text", text: JSON.stringify(output, null, 2) },
-    ];
+    const text = capabilityResultText(output);
+    const image = screenshot ? Buffer.from(screenshot, "base64") : undefined;
+    if (image && image.length + Buffer.byteLength(text) > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
+    const content: [{ type: "text"; text: string }, ...Array<{ type: "image"; data: string; mimeType: string }>] = [{ type: "text", text }];
     const response = { content, details: { runtime: "container", baseUrl: scope.baseUrl, actionCount: input.actions.length } };
-    if (screenshot) {
-      const image = Buffer.from(screenshot, "base64");
+    if (image) {
       (response.content as Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>).push({ type: "image", data: image.toString("base64"), mimeType: "image/png" });
     }
     return response;

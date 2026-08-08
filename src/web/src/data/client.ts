@@ -1,8 +1,8 @@
 import { ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type CapabilityName, type IssueStatus, type IssueType } from "../../../domain/contracts";
-import type { RunEvent } from "../../../agent/events";
+export type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
-export type { IssueStatus, IssueType };
+export type { CapabilityName, IssueStatus, IssueType };
 export type IssuePriority = "p0" | "p1" | "p2" | "p3";
 
 export interface Person { subject: string; name: string; email: string }
@@ -40,8 +40,6 @@ export interface IssueDetail extends IssueListItem {
   comments: IssueComment[];
 }
 
-export type AgentEvent = RunEvent;
-
 export interface Environment {
   id: string;
   key: string;
@@ -50,15 +48,13 @@ export interface Environment {
   scope: "global";
 }
 
-export type DeploymentCapability = CapabilityName;
-
 export interface ServiceDeployment {
   id: string;
   environmentId: string;
   baseBranch: string;
-  capabilities: DeploymentCapability[];
+  capabilities: CapabilityName[];
   agent?: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } | null;
-  nacos?: { serverUrl: string; namespace: string; group: string; username: string; password?: string } | null;
+  nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string } | null;
   db?: { url: string; username: string; password: string } | null;
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] } | null;
   playwright?: { baseUrl: string; username: string | null; password: string } | null;
@@ -80,7 +76,7 @@ export interface Service {
 
 export interface Config {
   environments: Environment[];
-  capabilityCatalog: Array<{ key: DeploymentCapability }>;
+  capabilityCatalog: Array<{ key: CapabilityName }>;
   services: Service[];
 }
 
@@ -88,7 +84,7 @@ export interface ServiceInput {
   name: string;
   description: string;
   repositories: Array<{ id?: string; kind: "frontend" | "backend"; url: string }>;
-  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: DeploymentCapability[]; agent?: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }; nacos?: { serverUrl: string; namespace: string; group: string; username: string; password?: string }; db?: { url: string; username: string; password: string }; sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] }; playwright?: { baseUrl: string; username: string; password?: string }; redis?: { host: string; port: number; username: string; password?: string; database: number }; mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string }; es?: { url: string; username: string; password?: string } }>;
+  deployments: Array<{ environmentKey: string; baseBranch: string; capabilities: CapabilityName[]; agent?: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }; nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string }; db?: { url: string; username: string; password: string }; sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] }; playwright?: { baseUrl: string; username: string; password?: string }; redis?: { host: string; port: number; username: string; password?: string; database: number }; mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string }; es?: { url: string; username: string; password?: string } }>;
 }
 
 export interface IssueInput {

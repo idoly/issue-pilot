@@ -387,7 +387,7 @@ button, input { font: inherit; }
 .repository-detail-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 44px; padding: 7px 12px; border-top: 1px solid #edf0ee; color: #65716c; }
 .repository-detail-row code, .deployment-detail-row code { min-width: 0; overflow: hidden; color: #46524d; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-detail-list { border-block: 1px solid #e2e7e4; }
-.deployment-detail-head, .deployment-detail-row { display: grid; grid-template-columns: 120px 180px minmax(0, 1fr); align-items: center; gap: 12px; padding: 0 12px; }
+.deployment-detail-head, .deployment-detail-row { display: grid; grid-template-columns: 110px 150px minmax(180px, 0.8fr) minmax(220px, 1fr); align-items: center; gap: 12px; padding: 0 12px; }
 .deployment-detail-head { min-height: 30px; background: #f7f9f8; color: #7a8680; font-size: 10px; }
 .deployment-detail-row { min-height: 46px; border-top: 1px solid #edf0ee; }
 .deployment-detail-row > div { min-width: 0; }
@@ -411,28 +411,27 @@ button, input { font: inherit; }
 .service-form-section-header span { color: #7a8580; font-size: 11px; }
 .service-repository-editor, .service-deployment-editor { display: grid; gap: 8px; }
 .service-repository-row { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
-.service-deployment-row { display: grid; grid-template-columns: 120px 150px minmax(240px, 1fr) 30px; grid-template-areas: "environment branch capabilities delete" "playwright playwright playwright playwright" "nacos nacos nacos nacos" "db db db db" "redis redis redis redis" "mq mq mq mq" "es es es es" "sls sls sls sls"; align-items: end; gap: 10px 12px; padding: 12px 2px; border-block: 1px solid #e2e7e4; background: #fff; }
-.service-deployment-row > label, .deployment-capabilities { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
+.service-deployment-row { display: grid; grid-template-columns: 140px 120px 56px minmax(273px, 1fr) 30px; grid-template-areas: "environment branch model capabilities delete"; align-items: end; gap: 10px 6px; padding: 12px 2px; border-block: 1px solid #e2e7e4; background: #fff; }
+.service-deployment-row > label, .deployment-model, .deployment-capabilities { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .deployment-environment { grid-area: environment; }
 .deployment-branch { grid-area: branch; }
 .service-deployment-row > .ads-button { grid-area: delete; align-self: end; }
 .service-deployment-row .ads-select { width: 100%; }
+.deployment-model { grid-area: model; align-self: stretch; justify-items: start; }
+.deployment-model > span { color: #68736e; }
+.deployment-model .deployment-capability-option { width: 56px; }
 .deployment-capabilities { grid-area: capabilities; align-self: stretch; }
 .deployment-capabilities > span { color: #68736e; }
 .deployment-capability-options { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; gap: 5px; }
 .deployment-capability-option { min-width: 0; height: 30px; padding: 0 8px; overflow: hidden; border: 1px solid #d7dfdb; border-radius: 4px; background: #fff; color: #5c6862; font: 10px/28px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .deployment-capability-option:hover { border-color: #86aa9d; color: #176b5b; }
 .deployment-capability-option.selected { border-color: #176b5b; background: #eaf4f0; color: #176b5b; font-weight: 700; }
+.deployment-capabilities .deployment-capability-option { padding-inline: 6px; }
 .deployment-capability-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px 12px 12px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
 .deployment-capability-settings label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .required-field::after { content: " *"; color: #c43832; font-weight: 700; }
-.deployment-nacos { grid-area: nacos; }
-.deployment-db { grid-area: db; }
-.deployment-sls { grid-area: sls; }
-.deployment-playwright { grid-area: playwright; }
-.deployment-redis { grid-area: redis; }
-.deployment-mq { grid-area: mq; }
-.deployment-es { grid-area: es; }
+.service-deployment-row > .deployment-capability-settings { grid-column: 1 / -1; }
+.deployment-agent { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .capability-settings-head { display: flex; grid-column: 1 / -1; min-height: 24px; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid #e5eae8; }
 .capability-settings-head code { color: #176b5b; font-size: 12px; font-weight: 700; }
 .capability-settings-head .ads-button { justify-self: end; }
@@ -481,9 +480,9 @@ button, input { font: inherit; }
   .service-detail { gap: 24px; padding: 16px 12px 28px; }
   .repository-detail-head { grid-template-columns: 52px minmax(0, 1fr); padding-left: 38px; }
   .repository-detail-row { grid-template-columns: 16px 42px minmax(0, 1fr); gap: 8px; padding-inline: 9px; }
-  .deployment-detail-head, .deployment-detail-row { grid-template-columns: 52px 80px minmax(0, 1fr); gap: 8px; padding-inline: 8px; }
+  .deployment-detail-head, .deployment-detail-row { grid-template-columns: 70px 90px minmax(130px, 0.8fr) minmax(160px, 1fr); gap: 8px; padding-inline: 8px; }
   .service-repository-row { grid-template-columns: minmax(0, 1fr) 30px; }
-  .service-deployment-row { grid-template-columns: minmax(0, 1fr) 30px; grid-template-areas: "environment delete" "branch branch" "capabilities capabilities" "playwright playwright" "nacos nacos" "db db" "redis redis" "mq mq" "es es" "sls sls"; align-items: stretch; }
+  .service-deployment-row { grid-template-columns: minmax(0, 1fr) 30px; grid-template-areas: "environment delete" "branch branch" "model model" "capabilities capabilities"; align-items: stretch; }
   .service-deployment-row > .ads-button { align-self: end; justify-self: end; }
   .deployment-capability-options { flex-wrap: wrap; }
   .deployment-capability-settings { grid-template-columns: minmax(0, 1fr); }
@@ -501,4 +500,11 @@ button, input { font: inherit; }
   .issue-facts > div:nth-child(-n+2) { border-bottom: 1px solid #e3e7e5; }
   .repository-row { grid-template-columns: 1fr; }
   .repository-row { gap: 3px; }
+}
+
+@media (max-width: 600px) {
+  .deployment-detail-head { display: none; }
+  .deployment-detail-row { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px 16px; min-height: 0; padding: 12px 8px; }
+  .deployment-detail-row > div { display: grid; gap: 4px; }
+  .deployment-detail-row > div::before { content: attr(data-label); color: #7a8680; font-size: 10px; }
 }

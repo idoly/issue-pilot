@@ -2,6 +2,7 @@ import { Client as ElasticsearchClient } from "@elastic/elasticsearch";
 import { createClient } from "redis";
 
 import type { IssuePolicy } from "../pi/policy.ts";
+import { capabilityResultText, MAX_ES_RESULTS, MAX_REDIS_KEYS, MAX_REDIS_RESULTS } from "./limits.ts";
 
 function operationSignal(signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(15_000);
@@ -18,7 +19,6 @@ async function redisCommand(config: Record<string, unknown>, command: string[], 
       port: config.port as number,
       connectTimeout: 10_000,
       reconnectStrategy: false,
-      ...(config.tls === true ? { tls: true, servername: config.host as string } : {}),
     },
     ...(username ? { username } : {}),
     ...(password ? { password } : {}),
@@ -85,22 +85,22 @@ async function elasticsearchRead(config: Record<string, unknown>, input: { actio
 export async function readRedis(policy: IssuePolicy, config: Record<string, unknown>, input: { action: string; key?: string; keys?: string[]; field?: string; pattern?: string; cursor?: string; limit?: number }, signal?: AbortSignal) {
   const grant = policy.service.redis;
   if (!grant) throw new Error("redis_scope_not_granted_for_service");
-  if (typeof config.host !== "string" || !Number.isInteger(config.port) || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string") || !Number.isInteger(config.database) || (config.tls !== undefined && typeof config.tls !== "boolean")) throw new Error("redis_configuration_changed");
+  if (typeof config.host !== "string" || !Number.isInteger(config.port) || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string") || !Number.isInteger(config.database)) throw new Error("redis_configuration_changed");
   const text = (value: unknown, name: string) => { if (typeof value !== "string" || !value || value.length > 1024 || value.includes("\0")) throw new Error(`invalid_redis_${name}`); return value; };
   let command: string[];
   if (input.action === "get" || input.action === "type" || input.action === "ttl" || input.action === "hgetall") command = [input.action.toUpperCase(), text(input.key, "key")];
   else if (input.action === "hget") command = ["HGET", text(input.key, "key"), text(input.field, "field")];
   else if (input.action === "mget") {
-    if (!Array.isArray(input.keys) || !input.keys.length) throw new Error("invalid_redis_keys");
+    if (!Array.isArray(input.keys) || !input.keys.length || input.keys.length > MAX_REDIS_KEYS) throw new Error("invalid_redis_keys");
     command = ["MGET", ...input.keys.map((key) => text(key, "key"))];
   } else if (input.action === "scan") {
     const limit = input.limit ?? 50;
-    if (!Number.isInteger(limit) || limit < 1) throw new Error("invalid_redis_limit");
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_REDIS_RESULTS) throw new Error("invalid_redis_limit");
     command = ["SCAN", input.cursor && /^\d+$/.test(input.cursor) ? input.cursor : "0", "MATCH", input.pattern ? text(input.pattern, "pattern") : "*", "COUNT", String(limit)];
   } else throw new Error("invalid_redis_action");
   const output = await redisCommand(config, command, signal);
   return {
-    content: [{ type: "text" as const, text: JSON.stringify({ action: input.action, output }, null, 2) }],
+    content: [{ type: "text" as const, text: capabilityResultText({ action: input.action, output }) }],
     details: { deploymentId: grant.deploymentId },
   };
 }
@@ -111,14 +111,15 @@ export async function readElasticsearch(policy: IssuePolicy, config: Record<stri
   if (typeof config.url !== "string" || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string")) throw new Error("es_configuration_changed");
   const query = input.query ?? { match_all: {} };
   if (!query || typeof query !== "object") throw new Error("invalid_es_query");
+  if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > MAX_ES_RESULTS)) throw new Error("invalid_es_limit");
   const output = await elasticsearchRead(config, { action: input.action, query, ...(input.limit === undefined ? {} : { limit: input.limit }) }, signal);
   return {
-    content: [{ type: "text" as const, text: JSON.stringify({ action: input.action, output }, null, 2) }],
+    content: [{ type: "text" as const, text: capabilityResultText({ action: input.action, output }) }],
     details: { deploymentId: grant.deploymentId },
   };
 }
 
-export async function readRabbitMq(policy: IssuePolicy, config: Record<string, unknown>, input: { action: "overview" | "queues" | "queue" | "bindings"; queue?: string; limit?: number }, signal?: AbortSignal) {
+export async function readRabbitMq(policy: IssuePolicy, config: Record<string, unknown>, input: { action: "overview" | "queues" | "queue" | "bindings"; queue?: string }, signal?: AbortSignal) {
   const grant = policy.service.mq;
   if (!grant) throw new Error("mq_scope_not_granted_for_service");
   if (config.virtualHost !== grant.virtualHost || typeof config.host !== "string" || !Number.isInteger(config.port) || !Number.isInteger(config.managementPort) || typeof config.username !== "string" || typeof config.password !== "string") throw new Error("mq_configuration_changed");
@@ -131,7 +132,7 @@ export async function readRabbitMq(policy: IssuePolicy, config: Record<string, u
         : `/api/queues/${vhost}/${encodeURIComponent(queue!)}/bindings`;
   const output = await httpJson(config, requestPath, signal);
   return {
-    content: [{ type: "text" as const, text: JSON.stringify({ action: input.action, output }, null, 2) }],
+    content: [{ type: "text" as const, text: capabilityResultText({ action: input.action, output }) }],
     details: { deploymentId: grant.deploymentId, virtualHost: grant.virtualHost },
   };
 }

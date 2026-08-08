@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assertSlsGranted, createDeploymentPolicy, createIssuePolicy, grantedRepositories } from "../../src/pi/policy.ts";
+import { createDeploymentPolicy, createIssuePolicy as createPolicy } from "../../src/pi/policy.ts";
+
+const model = { provider: "test", modelId: "test-model", thinkingLevel: "medium" as const };
+const createIssuePolicy = (input: Omit<Parameters<typeof createPolicy>[0], "model">) => createPolicy({ ...input, model });
 
 function service(environmentKind: "prod" | "test" | "dev" = "dev") {
   return {
@@ -27,7 +30,7 @@ test("keeps policy focused on model and service scopes", () => {
   assert.equal("attachments" in policy, false);
   assert.equal(policy.issueKey, "ISSUE-20260804-002");
   assert.equal(policy.service.repositories[0]?.codeAccess, "write");
-  assert.equal(grantedRepositories(policy)[1]?.codeAccess, "read");
+  assert.equal(policy.service.repositories[1]?.codeAccess, "read");
 });
 
 test("derives credential-free capability scopes from deployment configuration", () => {
@@ -38,7 +41,7 @@ test("derives credential-free capability scopes from deployment configuration", 
     deploymentId: "deployment-1",
     deploymentConfig: {
       agent: { provider: "provider", model: "model", thinkingLevel: "high" },
-      nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", username: "reader", password: "nacos-secret" },
+      nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders-test.yaml"], username: "reader", password: "nacos-secret" },
       db: { url: "mysql://db.example.test/app", username: "reader", password: "db-secret" },
     },
     serviceKey: "orders",
@@ -49,6 +52,23 @@ test("derives credential-free capability scopes from deployment configuration", 
   assert.deepEqual(policy.service.capabilities, ["nacos", "db"]);
   assert.equal(policy.model.thinkingLevel, "high");
   assert.doesNotMatch(JSON.stringify(policy), /nacos-secret|db-secret|username/);
+});
+
+test("requires model authorization from deployment configuration", () => {
+  const previous = { provider: process.env.PI_PROVIDER, model: process.env.PI_MODEL, reasoning: process.env.PI_REASONING_LEVEL };
+  try {
+    process.env.PI_PROVIDER = "environment-provider";
+    process.env.PI_MODEL = "environment-model";
+    process.env.PI_REASONING_LEVEL = "high";
+    assert.throws(() => createDeploymentPolicy({
+      issueKey: "ISSUE-20260804-008", issueType: "smart_analysis", workspaceRoot: "/tmp/no-model", deploymentId: "deployment-no-model",
+      deploymentConfig: {}, serviceKey: "orders", environmentKey: "test", environmentKind: "test", repositories: service("test").repositories,
+    }), /issue_pilot_model_not_configured/);
+  } finally {
+    if (previous.provider === undefined) delete process.env.PI_PROVIDER; else process.env.PI_PROVIDER = previous.provider;
+    if (previous.model === undefined) delete process.env.PI_MODEL; else process.env.PI_MODEL = previous.model;
+    if (previous.reasoning === undefined) delete process.env.PI_REASONING_LEVEL; else process.env.PI_REASONING_LEVEL = previous.reasoning;
+  }
 });
 
 test("turns repositories read-only outside writable dev issue types", () => {
@@ -69,9 +89,7 @@ test("freezes and validates external capability scopes", () => {
       sls: { deploymentId: "orders-test", region: "cn-test", project: "orders-test", logstores: ["application"] },
     },
   });
-  assert.doesNotThrow(() => assertSlsGranted(policy, "orders-test", "application"));
-  assert.throws(() => assertSlsGranted(policy, "other", "application"), /sls_scope_not_granted/);
-  assert.throws(() => grantedRepositories(policy, "db"), /capability_not_granted/);
+  assert.deepEqual(policy.service.sls, { deploymentId: "orders-test", region: "cn-test", project: "orders-test", logstores: ["application"] });
 });
 
 test("rejects capability declarations without matching scopes", () => {

@@ -109,6 +109,7 @@ export class AgentEngine {
   private schedule(issueId: string, operation: () => Promise<void>): void {
     this.runCounts.set(issueId, (this.runCounts.get(issueId) ?? 0) + 1);
     void this.queue.run(issueId, operation).catch(async (error) => {
+      await this.stopSession(issueId).catch(() => undefined);
       try {
         await this.db.transaction(async (transaction) => {
           await transaction.update(issueWorkspaces).set({
@@ -132,6 +133,7 @@ export class AgentEngine {
   private async run(issueId: string, latestMessage?: string, displayMessage = false): Promise<void> {
     const [issue] = await this.db.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
+    if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
     const currentMessage = latestMessage?.trim() || undefined;
     await this.db.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
 
@@ -162,18 +164,21 @@ export class AgentEngine {
       this.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
       this.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
-    if (!repositoryRows.length) {
-      await this.db.delete(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
-      throw new Error("selected_service_has_no_repository");
+    const repositoryUrls = new Set(repositoryRows.map((repository) => repository.url));
+    const obsoleteRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
+    for (const repository of obsoleteRepositories) {
+      if (repository.localPath) await this.worktrees.remove(repository.url, repository.localPath);
     }
+    if (obsoleteRepositories.length) {
+      await this.db.delete(issueRepositories).where(repositoryUrls.size
+        ? and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls]))
+        : eq(issueRepositories.issueId, issue.id));
+    }
+    if (!repositoryRows.length) throw new Error("selected_service_has_no_repository");
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
     const workspaceNames = repositoryWorkspaceNames(repositoryRows.map((repository) => repository.url));
-    await this.db.delete(issueRepositories).where(and(
-      eq(issueRepositories.issueId, issue.id),
-      notInArray(issueRepositories.url, repositoryRows.map((repository) => repository.url)),
-    ));
 
-    const prepared: Array<{ repository: (typeof repositoryRows)[number]; workspace: Awaited<ReturnType<Worktrees["prepare"]>> }> = [];
+    const prepared: Array<Awaited<ReturnType<Worktrees["prepare"]>>> = [];
     for (const repository of repositoryRows) {
       const existingRepository = existingRepositoryByUrl.get(repository.url);
       const workspace = await this.worktrees.prepare({
@@ -186,7 +191,7 @@ export class AgentEngine {
         ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
         ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
       });
-      prepared.push({ repository, workspace });
+      prepared.push(workspace);
       await this.db.insert(issueRepositories).values({
         issueId: issue.id,
         url: repository.url,
@@ -220,7 +225,7 @@ export class AgentEngine {
       serviceKey: service.key,
       environmentKey: service.environmentKey,
       environmentKind: service.environmentKind,
-      repositories: prepared.map(({ workspace }) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
+      repositories: prepared.map((workspace) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
     });
     await preparePiWorkspace(workspaceRoot);
     let codeServerUrl: string | null = null;
@@ -246,7 +251,7 @@ export class AgentEngine {
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerUrl, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
-    const repositoryContexts = prepared.map(({ repository, workspace }) => ({ url: repository.url, branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, workspace.workspacePath), readOnly: worktreeMode === "detached" }));
+    const repositoryContexts = prepared.map((workspace) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, workspace.workspacePath), readOnly: worktreeMode === "detached" }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, currentMessage)
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
@@ -350,9 +355,12 @@ export class AgentEngine {
     if (!managed) return;
     this.sessions.delete(issueId);
     if (managed.streaming) await managed.client.abort().catch(() => undefined);
-    managed.unsubscribe();
-    await managed.client.stop();
-    await rm(managed.runtimeConfigFile, { force: true });
+    try { managed.unsubscribe(); } catch { /* Session access is already revoked by removing it from the map. */ }
+    try {
+      await managed.client.stop();
+    } finally {
+      await rm(managed.runtimeConfigFile, { force: true });
+    }
   }
 
   async invokeCapability(issueId: string, token: string, capability: string, input: unknown, signal?: AbortSignal) {

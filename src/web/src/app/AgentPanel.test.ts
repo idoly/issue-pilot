@@ -1,10 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import type { AgentEvent } from "../data/client";
-import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type ConversationEntry } from "./AgentPanel";
+import type { IssueDetail, RunEvent } from "../data/client";
+import { EventSourceMock } from "../test-setup";
+import { activityForEvent, AgentPanel, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, toolStatus, type ConversationEntry } from "./AgentPanel";
 
-function event(payload: AgentEvent["event"], id: string = crypto.randomUUID()): AgentEvent {
+function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "ISSUE-1", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
 }
 
@@ -135,5 +137,29 @@ describe("Agent conversation state", () => {
       lines: Array.from({ length: 5 }, (_, index) => `line ${index + 10}`),
       omitted: 9,
     });
+  });
+
+  it("renders the real EventSource lifecycle and active transcript", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-1", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" }, version: 1,
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "running", url: null }, agentSession: { sessionId: "session-1" },
+    } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, expanded: false, onToggleExpanded: () => undefined, onRefresh: async () => issue }));
+    const source = EventSourceMock.instances[0]!;
+    expect(source.url).toBe("/api/issues/ISSUE-1/agent-stream");
+    source.emit("open");
+    source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
+    source.emit("ready", { agent: { provider: "test", model: "model", thinkingLevel: "medium" }, running: false });
+    await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
+    expect(screen.getByText("test/model")).toBeTruthy();
+    view.unmount();
+    expect(source.closed).toBe(true);
+
+    const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, expanded: false, onToggleExpanded: () => undefined, onRefresh: async () => issue }));
+    expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
+    resolvedView.unmount();
   });
 });

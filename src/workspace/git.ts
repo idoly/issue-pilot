@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, mkdir, rename } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { normalizeIssueKey } from "../domain/issue-key.ts";
@@ -71,6 +71,20 @@ export class Worktrees {
     const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(issueId));
     const cachePath = resolve(this.repositoriesRoot, createHash("sha256").update(url).digest("hex").slice(0, 20));
     return this.workspacePath(issueRoot, cachePath, workspaceName, existingWorkspacePath);
+  }
+
+  async remove(url: string, workspacePath: string): Promise<void> {
+    const resolvedWorkspace = resolve(workspacePath);
+    const relativePath = relative(this.workspacesRoot, resolvedWorkspace);
+    if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath) || relativePath.split(sep).length !== 2) throw new Error("workspace_path_outside_workspaces_root");
+    const cachePath = resolve(this.repositoriesRoot, createHash("sha256").update(url).digest("hex").slice(0, 20));
+    if (!await exists(resolvedWorkspace)) {
+      if (await exists(cachePath)) await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
+      return;
+    }
+    const dirty = await execFileAsync("git", ["-C", resolvedWorkspace, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim());
+    if (dirty) throw new Error("obsolete_workspace_has_changes");
+    await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
   }
 
   async prepare(input: PrepareWorktreeInput): Promise<PreparedWorktree> {

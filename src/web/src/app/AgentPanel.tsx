@@ -3,7 +3,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
 
-import { abortAgent, agentStreamUrl, sendAgentMessage, type AgentEvent, type IssueDetail } from "../data/client";
+import { abortAgent, agentStreamUrl, sendAgentMessage, type IssueDetail, type RunEvent } from "../data/client";
 import { ArrowDown, Bot, CircleStop, Maximize2, Minimize2, Send } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
 
@@ -33,7 +33,7 @@ function streamingAssistantIndex(entries: ConversationEntry[]): number {
   return -1;
 }
 
-export function applyAgentEvent(entries: ConversationEntry[], envelope: AgentEvent): ConversationEntry[] {
+export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent): ConversationEntry[] {
   const event = envelope.event;
   if (event.type === "issue_user" && typeof event.message === "string") return [...entries, { id: envelope.id, kind: "user", text: event.message }];
   if (event.type === "message_start" && typeof event.message === "object" && event.message?.role === "assistant") {
@@ -111,13 +111,13 @@ export interface AgentActivity {
   tone: "info" | "warning" | "error";
 }
 
-export function processingAfterEvent(current: boolean, event: AgentEvent["event"]): boolean {
+export function processingAfterEvent(current: boolean, event: RunEvent["event"]): boolean {
   if (event.type === "agent_start") return true;
   if (event.type === "agent_settled" || event.type === "issue_status") return false;
   return current;
 }
 
-export function activityForEvent(event: AgentEvent["event"]): AgentActivity | null | undefined {
+export function activityForEvent(event: RunEvent["event"]): AgentActivity | null | undefined {
   if (event.type === "agent_start" || event.type === "compaction_end" || event.type === "summarization_retry_finished") return null;
   if (event.type === "compaction_start") return { text: "Compacting context...", tone: "info" };
   if (event.type === "auto_retry_start") return { text: `Retrying ${event.attempt}/${event.maxAttempts} in ${duration(event.delayMs)}...`, tone: "warning" };
@@ -226,9 +226,6 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
 }
 
 export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onToggleExpanded: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
-  if (import.meta.env.MODE === "test") {
-    return <section class="agent-panel" aria-label={`${props.issue.id} Agent 会话`}><div class="agent-conversation" /><div class="agent-composer" /><div class="agent-meta" /></section>;
-  }
   const [connected, setConnected] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [processing, setProcessing] = createSignal(false, { ownedWrite: true });
@@ -248,13 +245,14 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
   const eventIds = new Set<string>();
 
   const running = () => processing() || props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
+  const canSend = () => props.issue.status !== "resolved";
   const statusText = () => running() ? "Working..." : connected() ? "ready" : "connecting";
   const scrollLatest = () => {
     transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
     followLatest = true;
     setUnread(0);
   };
-  const append = (event: AgentEvent) => {
+  const append = (event: RunEvent) => {
     if (eventIds.has(event.id)) return;
     eventIds.add(event.id);
     setEntries((current) => applyAgentEvent(current, event));
@@ -268,12 +266,12 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
       else if (replayComplete) setUnread((value) => value + 1);
     });
   };
-  const connect = () => {
+  const connect = (issueId: string) => {
     stream?.close();
     if (reconnectTimer) clearTimeout(reconnectTimer);
     eventIds.clear(); setEntries([]); setUnread(0); setError(""); setConnected(false); replayComplete = false;
     const currentConnection = ++connectionId;
-    const source = new EventSource(agentStreamUrl(props.issue.id));
+    const source = new EventSource(agentStreamUrl(issueId));
     stream = source;
     source.addEventListener("open", () => { if (currentConnection === connectionId) { setConnected(true); setError(""); } });
     source.addEventListener("ready", (event) => {
@@ -287,9 +285,9 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     source.addEventListener("message", (event) => {
       if (currentConnection !== connectionId) return;
       try {
-        const parsed = JSON.parse(event.data) as Partial<AgentEvent>;
+        const parsed = JSON.parse(event.data) as Partial<RunEvent>;
         if (!parsed.event || typeof parsed.event.type !== "string") throw new Error("agent_event_protocol_error");
-        const envelope = parsed as AgentEvent;
+        const envelope = parsed as RunEvent;
         append(envelope);
         if (replayComplete && envelope.event.type === "issue_status") void props.onRefresh(props.issue.id);
       } catch { setError("agent_event_protocol_error"); }
@@ -297,12 +295,12 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     source.addEventListener("error", () => {
       if (currentConnection !== connectionId) return;
       source.close(); setConnected(false); setError("agent_event_connection_failed");
-      reconnectTimer = setTimeout(connect, 1_000);
+      reconnectTimer = setTimeout(() => connect(issueId), 1_000);
     });
   };
   const submit = async () => {
     const message = draft().trim();
-    if (!message || sending()) return;
+    if (!message || sending() || !canSend()) return;
     setDraft(""); setSending(true); setError(""); scrollLatest();
     try { await sendAgentMessage(props.issue.id, message); setProcessing(true); }
     catch (cause) { setDraft(message); setError(cause instanceof Error ? cause.message : "agent_message_failed"); }
@@ -314,7 +312,7 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     catch (cause) { setError(cause instanceof Error ? cause.message : "agent_abort_failed"); }
   };
 
-  createEffect(() => props.issue.id, () => connect());
+  createEffect(() => props.issue.id, (issueId) => connect(issueId));
   onCleanup(() => { connectionId += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
 
   return <section class="agent-panel" aria-label={`${props.issue.id} Agent 会话`}>
@@ -338,8 +336,8 @@ export function AgentPanel(props: { issue: IssueDetail; expanded: boolean; onTog
     <Show when={queue().steering.length || queue().followUp.length}><div class="agent-queue"><For each={queue().steering}>{(message) => <span><strong>Steering:</strong> {message}</span>}</For><For each={queue().followUp}>{(message) => <span><strong>Follow-up:</strong> {message}</span>}</For></div></Show>
     <Show when={running() || activity()}><div class={`agent-working ${activity()?.tone ?? "info"}`} role="status"><i />{activity()?.text ?? "Working..."}</div></Show>
     <div class="agent-composer">
-      <textarea aria-label="发送给 Agent" value={draft()} disabled={sending()} onInput={(event) => setDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} />
-      <Button type="primary" shape="circle" icon={<Send size={16} />} title={running() ? "发送 steer" : "发送"} aria-label={running() ? "发送 steer" : "发送"} disabled={!draft().trim() || sending()} onClick={() => void submit()} />
+      <textarea aria-label="发送给 Agent" value={draft()} disabled={sending() || !canSend()} onInput={(event) => setDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} />
+      <Button type="primary" shape="circle" icon={<Send size={16} />} title={running() ? "发送 steer" : "发送"} aria-label={running() ? "发送 steer" : "发送"} disabled={!draft().trim() || sending() || !canSend()} onClick={() => void submit()} />
     </div>
     <Show when={error()}><div class="agent-panel-error" role="alert">{panelError(error())}</div></Show>
     <footer class="agent-meta"><span>{agent().provider}/{agent().model}</span><span>thinking {agent().thinkingLevel}</span></footer>

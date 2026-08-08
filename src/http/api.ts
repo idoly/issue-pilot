@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import multipart from "@fastify/multipart";
+import multipart, { type MultipartFile } from "@fastify/multipart";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -31,8 +31,30 @@ const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const REPOSITORY_KINDS = ["frontend", "backend"] as const;
-function agentConfiguration(value: unknown): { provider: string; model: string; thinkingLevel: typeof THINKING_LEVELS[number] } | undefined {
-  if (value === undefined || value === null) return undefined;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENT_FILES = 20;
+const MAX_ATTACHMENT_REQUEST_BYTES = 40 * 1024 * 1024;
+
+type PendingAttachment = { fileName: string; mediaType: string; data: Buffer; sha256: string };
+
+async function readAttachment(part: MultipartFile, currentBytes: number): Promise<PendingAttachment> {
+  const chunks: Buffer[] = [];
+  let size = currentBytes;
+  for await (const chunk of part.file) {
+    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += data.length;
+    if (size > MAX_ATTACHMENT_REQUEST_BYTES) throw new ApiError(413, "attachment_limit_exceeded");
+    chunks.push(data);
+  }
+  if (part.file.truncated) throw new ApiError(413, "attachment_limit_exceeded");
+  const data = Buffer.concat(chunks);
+  const fileName = path.basename(part.filename);
+  if (!fileName) throw new ApiError(400, "invalid_attachment_name");
+  return { fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") };
+}
+
+function agentConfiguration(value: unknown): { provider: string; model: string; thinkingLevel: typeof THINKING_LEVELS[number] } {
+  if (value === undefined || value === null) throw new ApiError(400, "agent_configuration_required");
   const input = record(value);
   return {
     provider: text(input.provider, "agent_provider", 200),
@@ -125,7 +147,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   }
   await pruneState(stateRoot, (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key));
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test" });
-  await app.register(multipart);
+  await app.register(multipart, { limits: { fileSize: MAX_ATTACHMENT_BYTES, files: MAX_ATTACHMENT_FILES, parts: MAX_ATTACHMENT_FILES + 1, fieldSize: 100_000 } });
 
   const listeners = new Map<string, Set<(event: RunEvent) => void>>();
   const publish = (event: RunEvent) => { for (const listener of listeners.get(event.issueId) ?? []) listener(event); };
@@ -141,6 +163,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
+    const errorCode = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+    if (["FST_REQ_FILE_TOO_LARGE", "FST_FILES_LIMIT", "FST_PARTS_LIMIT", "FST_FIELDS_LIMIT"].includes(errorCode)) return reply.code(413).send({ error: "attachment_limit_exceeded" });
     const messages: string[] = [];
     const seen = new Set<unknown>();
     let current: unknown = error;
@@ -391,16 +415,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.get("/api/issues", async () => listItems(await database.db.select().from(issues).orderBy(desc(issues.updatedAt))));
 
   app.post("/api/issues", async (request, reply) => {
-    const initialAttachments: Array<{ fileName: string; mediaType: string; data: Buffer; sha256: string }> = [];
+    const initialAttachments: PendingAttachment[] = [];
+    let attachmentBytes = 0;
     let input: Record<string, unknown>;
     if (request.isMultipart()) {
       let issuePart: unknown;
       for await (const part of request.parts()) {
         if (part.type === "file") {
-          const data = await part.toBuffer();
-          const fileName = path.basename(part.filename);
-          if (!fileName) throw new ApiError(400, "invalid_attachment_name");
-          initialAttachments.push({ fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") });
+          const attachment = await readAttachment(part, attachmentBytes);
+          attachmentBytes += attachment.data.length;
+          initialAttachments.push(attachment);
         } else if (part.fieldname === "issue") {
           issuePart = part.value;
         }
@@ -533,11 +557,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
+    if (issue.status !== "open") throw new ApiError(409, "issue_not_retryable");
     if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
-    await database.db.transaction(async (transaction) => {
-      await transaction.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
-    });
     engine.enqueue(issue.id);
     return reply.code(202).send({ ok: true });
   });
@@ -557,6 +578,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.post<{ Params: { key: string } }>("/api/issues/:key/sync", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
+    if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     const [service, environment, attachments] = await Promise.all([
       database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, issue.serviceId)).limit(1).then((rows) => rows[0]),
@@ -570,9 +592,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       attachments.length ? "Issue attachments are available in .issue-pilot/attachments/." : "The issue has no attachments.",
       "Re-evaluate the issue using the updated metadata and respond to the user.",
     ].join("\n\n");
-    await database.db.transaction(async (transaction) => {
-      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
-    });
+    if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     engine.enqueue(issue.id, message, false);
     return reply.code(202).send({ ok: true });
   });
@@ -585,7 +605,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const directory = issueAttachmentRoot(stateRoot, issue.key);
     const source = path.resolve(attachment.objectKey);
     const metadata = await stat(source).catch(() => undefined);
-    if (path.dirname(source) !== directory || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || metadata.size !== attachment.size || metadata.size > 20 * 1024 * 1024) throw new Error("insecure_issue_attachment_file");
+    if (path.dirname(source) !== directory || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || metadata.size !== attachment.size || metadata.size > MAX_ATTACHMENT_BYTES) throw new Error("insecure_issue_attachment_file");
     const data = await readFile(source);
     if (createHash("sha256").update(data).digest("hex") !== attachment.sha256) throw new Error("attachment_integrity_check_failed");
     const safeInline = attachment.mediaType.startsWith("text/")
@@ -637,12 +657,12 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     if (!issue) throw new ApiError(404, "issue_not_found");
     if (engine.isRunning(issue.id)) throw new ApiError(409, "issue_already_running");
     const uploader = await subject();
-    const pending: Array<{ fileName: string; mediaType: string; data: Buffer; sha256: string }> = [];
+    const pending: PendingAttachment[] = [];
+    let attachmentBytes = 0;
     for await (const part of request.files()) {
-      const data = await part.toBuffer();
-      const fileName = path.basename(part.filename);
-      if (!fileName) throw new ApiError(400, "invalid_attachment_name");
-      pending.push({ fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") });
+      const attachment = await readAttachment(part, attachmentBytes);
+      attachmentBytes += attachment.data.length;
+      pending.push(attachment);
     }
     if (!pending.length) return reply.code(201).send([]);
     await engine.closeSession(issue.id);
@@ -677,10 +697,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       .where(and(eq(serviceDeployments.serviceId, issue.serviceId), eq(serviceDeployments.environmentId, issue.environmentId))).limit(1);
     const deploymentConfig = deployment?.config as Record<string, unknown> | undefined;
     const configuredAgent = deploymentConfig?.agent && typeof deploymentConfig.agent === "object" ? deploymentConfig.agent as Record<string, unknown> : {};
-    const provider = typeof configuredAgent.provider === "string" && configuredAgent.provider ? configuredAgent.provider : process.env.ISSUE_PILOT_PROVIDER ?? process.env.PI_PROVIDER ?? "not-configured";
-    const model = typeof configuredAgent.model === "string" && configuredAgent.model ? configuredAgent.model : process.env.ISSUE_PILOT_MODEL ?? process.env.PI_MODEL ?? "not-configured";
+    const provider = typeof configuredAgent.provider === "string" && configuredAgent.provider ? configuredAgent.provider : "not-configured";
+    const model = typeof configuredAgent.model === "string" && configuredAgent.model ? configuredAgent.model : "not-configured";
     const thinkingLevel = typeof configuredAgent.thinkingLevel === "string" && THINKING_LEVELS.includes(configuredAgent.thinkingLevel as typeof THINKING_LEVELS[number])
-      ? configuredAgent.thinkingLevel : process.env.ISSUE_PILOT_REASONING ?? process.env.PI_REASONING_LEVEL ?? "medium";
+      ? configuredAgent.thinkingLevel : "not-configured";
     reply.hijack();
     reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
     const send = (event: RunEvent) => reply.raw.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
@@ -698,6 +718,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
     const issue = await issueByKey(request.params.key);
     if (!issue) throw new ApiError(404, "issue_not_found");
+    if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     const input = record(request.body);
     const message = text(input.message, "agent_message", 50_000);
     await engine.send(issue.id, message);

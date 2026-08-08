@@ -1,5 +1,7 @@
 import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type RowDataPacket } from "mysql2/promise";
 
+import { MAX_CAPABILITY_RESULT_BYTES, MAX_DATABASE_ROWS } from "./limits.ts";
+
 export function validateReadOnlyQuery(value: string): string {
   const statement = value.trim().replace(/;\s*$/, "");
   if (!statement || statement.length > 20_000) throw new Error("invalid_database_query");
@@ -14,7 +16,7 @@ export type MysqlConnectionFactory = (options: ConnectionOptions) => Promise<Con
 
 export async function queryMysql(input: { connectionUrl: string; statement: string }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
   const connectionUrl = new URL(input.connectionUrl);
-  if (connectionUrl.protocol !== "mysql:" && connectionUrl.protocol !== "mariadb:") throw new Error("unsupported_mysql_connection_protocol");
+  if (connectionUrl.protocol !== "mysql:") throw new Error("unsupported_mysql_connection_protocol");
   const database = decodeURIComponent(connectionUrl.pathname.replace(/^\//, ""));
   if (!connectionUrl.hostname || !connectionUrl.username || !database) throw new Error("invalid_mysql_connection_url");
   const password = decodeURIComponent(connectionUrl.password);
@@ -22,13 +24,14 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
 
   let connection: Connection | undefined;
   let destroyed = false;
+  const activeSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
   const abort = () => {
     destroyed = true;
     connection?.destroy();
   };
-  signal?.addEventListener("abort", abort, { once: true });
+  activeSignal.addEventListener("abort", abort, { once: true });
   try {
-    if (signal?.aborted) throw signal.reason;
+    if (activeSignal.aborted) throw activeSignal.reason;
     connection = await connectionFactory({
       host: connectionUrl.hostname,
       port: Number(connectionUrl.port || 3306),
@@ -43,15 +46,17 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
       bigNumberStrings: true,
       typeCast: (field) => field.string(),
     });
-    if (signal?.aborted) throw signal.reason;
+    if (activeSignal.aborted) throw activeSignal.reason;
     const [result, fields] = await connection.query<RowDataPacket[]>(input.statement);
-    if (signal?.aborted) throw signal.reason;
+    if (activeSignal.aborted) throw activeSignal.reason;
     if (!Array.isArray(result)) throw new Error("mysql_query_did_not_return_rows");
     const columns = (fields as FieldPacket[]).map((field) => field.name);
+    if (result.length > MAX_DATABASE_ROWS) throw new Error("capability_result_too_large");
     const rows = result.map((row) => Object.fromEntries(columns.map((column) => [column, row[column] ?? null])));
-    return { columns, rows, truncated: false, runtime: "node" as const };
+    if (Buffer.byteLength(JSON.stringify(rows)) > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
+    return { columns, rows, runtime: "node" as const };
   } finally {
-    signal?.removeEventListener("abort", abort);
+    activeSignal.removeEventListener("abort", abort);
     if (connection && !destroyed) await connection.end();
   }
 }

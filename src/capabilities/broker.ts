@@ -1,5 +1,5 @@
 import type { CapabilityName } from "../domain/contracts.ts";
-import { grantedRepositories, type IssuePolicy } from "../pi/policy.ts";
+import type { IssuePolicy } from "../pi/policy.ts";
 import { readConfiguration, readDatabase } from "./queries.ts";
 import { useBrowser, type BrowserAction } from "./browser.ts";
 import { readElasticsearch, readRabbitMq, readRedis } from "./external.ts";
@@ -19,13 +19,14 @@ export async function executeCapability(policy: IssuePolicy, deploymentConfig: R
   if (capability === "nacos") {
     const grant = policy.service.nacos;
     if (!grant || typeof config.serverUrl !== "string" || typeof config.username !== "string") throw new Error("nacos_configuration_not_found");
-    return readConfiguration(localExecutor, grantedRepositories(policy, "nacos"), deploymentConfig, signal, {
+    return readConfiguration(localExecutor, policy.service.serviceKey, {
       serverUrl: grant.serverUrl,
       namespace: grant.namespace,
       group: grant.group,
+      dataIds: grant.dataIds,
       username: config.username,
       password: typeof config.password === "string" ? config.password : "",
-    });
+    }, signal);
   }
   if (capability === "db") return readDatabase(policy, config, value as { statement: string }, signal);
   if (capability === "sls") return readSlsLogs(localExecutor, policy, value as Parameters<typeof readSlsLogs>[2], config, signal);

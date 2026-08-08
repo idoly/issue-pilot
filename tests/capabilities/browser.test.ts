@@ -23,6 +23,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
       issueKey: "ISSUE-20260805-001",
       issueType: "defect_fix",
       workspaceRoot: workspace,
+      model: { provider: "test", modelId: "test-model", thinkingLevel: "medium" },
       service: {
         serviceKey: "orders",
         environmentKey: "dev",
@@ -33,6 +34,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
       },
     });
     let command: string[] = [];
+    let response: Record<string, unknown> = { url: "https://orders.example.test/dashboard", title: "Orders", text: "Ready", controls: [] };
     let mountedRequest = "";
     let mountedCredentials = "";
     const pi = {
@@ -43,7 +45,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
         const secretDirectory = mounts.find((value) => value.includes(":/run/secrets:"))!.split(":/run/secrets:")[0]!;
         mountedRequest = await readFile(join(requestDirectory, "request.json"), "utf8");
         mountedCredentials = await readFile(join(secretDirectory, "credentials.json"), "utf8");
-        return { code: 0, stdout: JSON.stringify({ url: "https://orders.example.test/dashboard", title: "Orders", text: "Ready", controls: [] }), stderr: "", killed: false };
+        return { code: 0, stdout: JSON.stringify(response), stderr: "", killed: false };
       },
     } as CommandExecutor;
     const deploymentConfig = { playwright: { baseUrl: "https://orders.example.test/", username: "operator", password: "deployment-secret" } };
@@ -61,6 +63,8 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
     const requestMount = command.find((value) => value.includes(":/run/input:"))!.split(":/run/input:")[0]!;
     await assert.rejects(stat(requestMount));
     await assert.rejects(useBrowser(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "https://other.example.test/" }] }), /invalid_browser_path/);
+    response = { screenshot: Buffer.alloc(1024 * 1024).toString("base64") };
+    await assert.rejects(useBrowser(pi, policy, deploymentConfig, { actions: [{ type: "goto", path: "/dashboard" }], screenshot: true }), /capability_result_too_large/);
   } finally {
     const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
     restore("ISSUE_PILOT_STATE_ROOT", previous.stateRoot);

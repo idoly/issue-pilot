@@ -51,10 +51,24 @@ test("queries MySQL through mysql2 with bounded, read-only connection settings",
   assert.deepEqual(result, {
     columns: ["order_id", "status", "nullable"],
     rows: [{ order_id: "123", status: "ready", nullable: null }],
-    truncated: false,
     runtime: "node",
   });
+  assert.doesNotMatch(JSON.stringify(result), /db-secret|mysql\.example\.test|readonly/);
   assert.equal(ended, true);
+  await assert.rejects(queryMysql({ connectionUrl: "mariadb://readonly:secret@mysql.example.test/orders", statement: "SELECT 1" }, undefined, factory), /unsupported_mysql_connection_protocol/);
+});
+
+test("bounds MySQL results before returning them to Pi", async () => {
+  const connection = {
+    async query() { return [Array.from({ length: 600 }, (_, id) => ({ id })), [{ name: "id" }]]; },
+    async end() {},
+    destroy() {},
+  } as unknown as Connection;
+  await assert.rejects(queryMysql(
+    { connectionUrl: "mysql://readonly:secret@mysql.example.test/orders", statement: "SELECT id FROM orders" },
+    undefined,
+    async () => connection,
+  ), /capability_result_too_large/);
 });
 
 test("destroys an active MySQL connection when the operation is aborted", async () => {
