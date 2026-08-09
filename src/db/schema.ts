@@ -41,12 +41,12 @@ export const issues = sqliteTable("issues", {
   type: text("type", { enum: ISSUE_TYPES }).notNull().default("smart_analysis"),
   serviceId: text("service_id").notNull().references(() => services.id), environmentId: text("environment_id").notNull().references(() => environments.id),
   reporterSubject: text("reporter_subject").notNull().references(() => subjects.subject), assigneeSubject: text("assignee_subject").references(() => subjects.subject),
-  resolvedAt: date("resolved_at"), version: integer("version").notNull().default(1), ...timestamps,
+  resolvedAt: date("resolved_at"), ...timestamps,
 }, (table) => [uniqueIndex("issues_key_unique").on(table.key), index("issues_queue_idx").on(table.status, table.priority, table.updatedAt), index("issues_assignee_idx").on(table.assigneeSubject, table.status)]);
 
 export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
-  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), subject: text("subject").notNull().references(() => subjects.subject), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
-}, (table) => [uniqueIndex("issue_cc_recipient_unique").on(table.issueId, table.subject), index("issue_cc_recipient_subject_idx").on(table.subject, table.createdAt)]);
+  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), subject: text("subject").notNull().references(() => subjects.subject),
+}, (table) => [uniqueIndex("issue_cc_recipient_unique").on(table.issueId, table.subject)]);
 
 export const issueRepositories = sqliteTable("issue_repositories", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), url: text("url").notNull(), baseBranch: text("base_branch").notNull(),
@@ -64,15 +64,10 @@ export const issueComments = sqliteTable("issue_comments", {
 }, (table) => [index("issue_comments_issue_idx").on(table.issueId, table.createdAt)]);
 
 export const agentSessions = sqliteTable("issue_pilot_sessions", {
-  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), piSessionId: text("pi_session_id").notNull(), sessionFile: text("session_file").notNull(), workspacePath: text("workspace_path").notNull(), ...timestamps,
-}, (table) => [uniqueIndex("issue_pilot_pi_session_unique").on(table.piSessionId)]);
+  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), sessionFile: text("session_file").notNull(), workspacePath: text("workspace_path").notNull(), ...timestamps,
+});
 
 export const issueWorkspaces = sqliteTable("issue_workspaces", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: ["not_created", "preparing", "running", "ready", "stopped", "failed"] }).notNull().default("not_created"),
   codeServerReady: integer("code_server_ready", { mode: "boolean" }).notNull().default(false), lastError: text("last_error"), ...timestamps,
 });
-
-export const issueHistory = sqliteTable("issue_history", {
-  id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), actorSubject: text("actor_subject").notNull(), action: text("action").notNull(),
-  changes: json<Record<string, unknown>>("changes").notNull(), createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
-}, (table) => [index("issue_history_issue_idx").on(table.issueId, table.createdAt)]);

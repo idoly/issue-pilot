@@ -218,6 +218,20 @@
       "when": 1786229580029,
       "tag": "0030_remove_repository_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1786230759440,
+      "tag": "0031_remove_unused_issue_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1786233608845,
+      "tag": "0032_remove_redundant_pi_session_id",
+      "breakpoints": true
     }
   ]
 }

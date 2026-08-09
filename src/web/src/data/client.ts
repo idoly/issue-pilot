@@ -1,8 +1,9 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type EnvironmentKind, type IssuePriority, type IssueStatus, type IssueType } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type IssuePriority, type IssueStatus, type IssueType } from "../../../domain/contracts";
 export type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
-export type { AgentConfiguration, AgentFooterStats, AgentModelDefinition, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType };
+export type { AgentConfiguration, AgentFooterStats, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType };
+export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;
 
 export interface Person { subject: string; name: string; email: string }
 
@@ -15,7 +16,6 @@ export interface IssueListItem {
   assignee: string | null;
   assigneeSubject: string | null;
   service: { key: string; name: string };
-  version: number;
   createdAt?: string;
   updatedAt: string;
 }
@@ -29,9 +29,8 @@ export interface IssueComment {
 
 export interface IssueDetail extends IssueListItem {
   description: string;
-  repositories: Array<{ id: string; url: string; baseBranch: string; workingBranch: string | null; codeServerPath: string | null }>;
+  repositories: Array<{ url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean };
-  agentSession?: { sessionId: string } | null;
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
@@ -40,33 +39,27 @@ export interface IssueDetail extends IssueListItem {
 }
 
 export interface Environment {
-  id: string;
   key: string;
   name: string;
-  kind: EnvironmentKind;
 }
 
 export interface ServiceDeployment extends CapabilityConfiguration {
-  id: string;
-  environmentId: string;
+  environmentKey: string;
   baseBranch: string;
   capabilities: CapabilityName[];
   agent: AgentConfiguration | null;
 }
 
 export interface Service {
-  id: string;
   key: string;
   name: string;
   description: string;
-  createdAt: string;
-  environmentIds: string[];
   deployments: ServiceDeployment[];
   repositories: Array<{ id: string; url: string }>;
 }
 
 export interface Config {
-  agentModels: AgentModelDefinition[];
+  agentModels: AgentModelOption[];
   environments: Environment[];
   capabilityCatalog: Array<{ key: CapabilityName }>;
   services: Service[];

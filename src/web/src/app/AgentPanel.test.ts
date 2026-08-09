@@ -158,9 +158,9 @@ describe("Agent conversation state", () => {
     EventSourceMock.instances.length = 0;
     const issue = {
       id: "ISSUE-1", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
-      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" }, version: 1,
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
-      workspace: { status: "running", url: null }, agentSession: { sessionId: "session-1" },
+      workspace: { status: "running", url: null },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;

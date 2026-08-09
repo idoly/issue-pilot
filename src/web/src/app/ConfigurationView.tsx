@@ -2,7 +2,7 @@ import { Button, Input, Modal, Select, TextArea } from "@idoly/ant-design-solid"
 import { createEffect, createMemo, createSignal, createStore, For, Show, untrack } from "solid-js";
 
 import { GitBranch, Pencil, Plus, Trash2 } from "../ui/icons";
-import { createService, deleteService, updateService, type AgentConfiguration, type AgentModelDefinition, type CapabilityConfiguration, type CapabilityName, type Config, type Service } from "../data/client";
+import { createService, deleteService, updateService, type AgentConfiguration, type AgentModelOption, type CapabilityConfiguration, type CapabilityName, type Config, type Service } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { selectedChoice } from "./IssueForm";
@@ -65,7 +65,7 @@ function ServiceDeploymentEditorRow(props: {
   index: number;
   deployment: ServiceDeploymentDraft;
   capabilityCatalog: Config["capabilityCatalog"];
-  agentModels: AgentModelDefinition[];
+  agentModels: AgentModelOption[];
   environmentOptions: () => Config["environments"];
   onChange: (deployment: ServiceDeploymentDraft) => void;
   onDelete: () => void;
@@ -181,7 +181,7 @@ export function ConfigurationView() {
     setServiceName(service.name); setDescription(service.description);
     setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, url: repository.url })));
     const deployments = service.deployments.map((deployment) => ({
-      environmentKey: configuration().environments.find((environment) => environment.id === deployment.environmentId)?.key ?? "",
+      environmentKey: deployment.environmentKey,
       baseBranch: deployment.baseBranch,
       capabilities: [...deployment.capabilities],
       agent: deployment.agent ? { ...deployment.agent } : defaultAgent(),
@@ -267,7 +267,7 @@ export function ConfigurationView() {
             </header>
             <div class="service-detail">
               <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
-              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><Show when={service().deployments.length} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}><div class="deployment-detail-head"><span>环境</span><span>分支</span><span>模型</span><span>能力</span></div><For each={service().deployments}>{(deployment) => { const environment = () => configuration().environments.find((item) => item.id === deployment.environmentId); return <div class="deployment-detail-row"><div data-label="环境"><strong>{environment()?.name ?? deployment.environmentId}</strong></div><div data-label="分支"><code>{deployment.baseBranch}</code></div><div data-label="模型"><Show when={deployment.agent} fallback={<span class="capability-empty">未配置</span>}>{(agent) => <code>{agent().provider}/{agent().model} · {agent().thinkingLevel}</code>}</Show></div><div data-label="能力"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityLabels catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div>; }}</For></Show></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><Show when={service().deployments.length} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}><div class="deployment-detail-head"><span>环境</span><span>分支</span><span>模型</span><span>能力</span></div><For each={service().deployments}>{(deployment) => { const environment = () => configuration().environments.find((item) => item.key === deployment.environmentKey); return <div class="deployment-detail-row"><div data-label="环境"><strong>{environment()?.name ?? deployment.environmentKey}</strong></div><div data-label="分支"><code>{deployment.baseBranch}</code></div><div data-label="模型"><Show when={deployment.agent} fallback={<span class="capability-empty">未配置</span>}>{(agent) => <code>{agent().provider}/{agent().model} · {agent().thinkingLevel}</code>}</Show></div><div data-label="能力"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityLabels catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div>; }}</For></Show></div></section>
               <section class="service-detail-section"><div class="service-detail-heading"><h3>项目描述</h3></div><Show when={service().description.trim()} fallback={<div class="service-detail-empty">暂无项目描述</div>}><Markdown source={service().description} /></Show></section>
             </div>
           </>}

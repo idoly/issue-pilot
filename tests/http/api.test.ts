@@ -7,13 +7,13 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
-import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { agentSessions, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { AGENT_THINKING_LEVELS } from "../../src/domain/contracts.ts";
 
 const modelCatalog = {
   async list() {
-    return [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", contextWindow: 32_000, thinkingLevels: AGENT_THINKING_LEVELS.filter((level) => level === "medium" || level === "high") }];
+    return [{ provider: "enterprise-ai", id: "engineering-model", contextWindow: 32_000, thinkingLevels: AGENT_THINKING_LEVELS.filter((level) => level === "medium" || level === "high") }];
   },
 };
 
@@ -59,8 +59,10 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(configurationResponse.statusCode, 200);
     assert.equal(configurationResponse.headers["cache-control"], "private, no-store");
     assert.equal(configurationResponse.headers.pragma, "no-cache");
-    const configuredEnvironments = (await json(configurationResponse)).environments as Array<{ key: string; name: string }>;
-    assert.deepEqual(configuredEnvironments.map((environment) => environment.key).sort(), ["dev", "prod", "test"]);
+    const initialConfiguration = await json(configurationResponse) as { agentModels: Array<Record<string, unknown>>; environments: Array<Record<string, unknown>> };
+    assert.deepEqual(initialConfiguration.environments.map((environment) => environment.key).sort(), ["dev", "prod", "test"]);
+    assert.equal(initialConfiguration.environments.some((environment) => "id" in environment || "kind" in environment), false);
+    assert.deepEqual(Object.keys(initialConfiguration.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     assert.equal((await app.inject({ method: "POST", url: "/api/environments", payload: { key: "staging", name: "Staging" } })).statusCode, 404);
     assert.equal((await app.inject({ method: "PATCH", url: "/api/environments/test", payload: { name: "Changed" } })).statusCode, 404);
     assert.equal((await app.inject({ method: "DELETE", url: "/api/environments/test" })).statusCode, 404);
@@ -83,6 +85,9 @@ test("configuration and issue API preserves relational integrity", async () => {
         },
       });
       assert.equal(response.statusCode, 201, response.body);
+      const createdService = await json(response);
+      assert.deepEqual(Object.keys(createdService).sort(), ["key", "name"]);
+      assert.deepEqual(createdService, { key: service.key, name: service.name });
     }
 
     for (const [key, agent, expected] of [
@@ -94,9 +99,11 @@ test("configuration and issue API preserves relational integrity", async () => {
       assert.equal((await json(response)).error, expected);
     }
 
-    const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ id: string; key: string; repositories: Array<{ id: string; url: string }>; deployments: Array<{ agent: unknown }> }> };
+    const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; repositories: Array<{ id: string; url: string }>; deployments: Array<{ environmentKey: string; agent: unknown }> }> };
     const alphaModel = modeled.services.find((service) => service.key === "alpha")!;
-    assert.equal("kind" in alphaModel, false);
+    for (const field of ["id", "kind", "createdAt", "environmentIds"]) assert.equal(field in alphaModel, false);
+    assert.equal(alphaModel.deployments.some((deployment) => "id" in deployment || "environmentId" in deployment), false);
+    assert.equal(alphaModel.deployments[0]?.environmentKey, "test");
     assert.equal(alphaModel.repositories.some((repository) => "kind" in repository), false);
     assert.deepEqual(alphaModel.repositories.map((repository) => repository.url).sort(), ["https://example.test/alpha-shared.git", "https://example.test/alpha.git"]);
     assert.deepEqual(alphaModel.deployments[0]?.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" });
@@ -257,17 +264,21 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal((detail.service as { key: string }).key, "alpha");
     assert.equal("affectedModules" in detail, false);
     assert.equal("scopeCandidates" in detail, false);
+    assert.equal("version" in detail, false);
+    assert.equal("agentSession" in detail, false);
 
     const staleSessionFile = join(root, "historical-session.jsonl");
     await writeFile(staleSessionFile, "{}\n", "utf8");
     const staleSession = openDatabase(join(root, "issues.db"));
     await staleSession.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, createdInternalId));
-      await transaction.insert(agentSessions).values({ issueId: createdInternalId, piSessionId: "historical-session", sessionFile: staleSessionFile, workspacePath: root });
+      await transaction.insert(agentSessions).values({ issueId: createdInternalId, sessionFile: staleSessionFile, workspacePath: root });
+      await transaction.insert(issueRepositories).values({ issueId: createdInternalId, url: "https://example.test/alpha.git", baseBranch: "main", workingBranch: "hotfix", localPath: join(root, "workspaces", String(created.id).toLowerCase(), "alpha") });
     });
     await staleSession.close();
-    const staleSessionDetail = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { agentSession: unknown; workspace: { retryable: boolean } };
-    assert.deepEqual(staleSessionDetail.agentSession, { sessionId: "historical-session" });
+    const staleSessionDetail = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { repositories: Array<Record<string, unknown>>; workspace: { retryable: boolean } };
+    assert.equal("agentSession" in staleSessionDetail, false);
+    assert.deepEqual(Object.keys(staleSessionDetail.repositories[0]!).sort(), ["baseBranch", "url", "workingBranch"]);
     assert.equal(staleSessionDetail.workspace.retryable, false);
     const completedSession = openDatabase(join(root, "issues.db"));
     await completedSession.db.update(issues).set({ status: "pending" }).where(eq(issues.id, createdInternalId));

@@ -27,8 +27,6 @@ export interface AgentConfiguration {
 export interface AgentModelDefinition {
   provider: string;
   id: string;
-  name: string;
-  api: string;
   contextWindow: number;
   thinkingLevels: AgentThinkingLevel[];
 }

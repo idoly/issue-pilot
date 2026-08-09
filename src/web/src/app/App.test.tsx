@@ -8,9 +8,9 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
-    service, version: 1, createdAt: now, updatedAt: now, repositories: [{ id: "issue-repository", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue", codeServerPath: "/home/coder/state/workspaces/issue-0042/repository-id" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable }, agentSession: null,
+    workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable },
   });
   const issues = [
     issue("ISSUE-0041", "客户导出的 CSV 缺少时区信息", "resolved"),
@@ -18,8 +18,8 @@ vi.mock("../data/client", async (importOriginal) => {
     issue("ISSUE-0038", "批量审批偶发超时", "open", true),
   ];
   const configuration = {
-    agentModels: [{ provider: "enterprise-ai", id: "engineering-model", name: "Engineering Model", api: "openai-completions", contextWindow: 32_000, thinkingLevels: ["low", "medium", "high"] }],
-    environments: [{ id: "env-test", key: "test", name: "测试", kind: "test" }],
+    agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
+    environments: [{ key: "test", name: "测试" }],
     capabilityCatalog: [
       { key: "playwright" },
       { key: "nacos" },
@@ -30,8 +30,8 @@ vi.mock("../data/client", async (importOriginal) => {
       { key: "sls" },
     ],
     services: [{
-      id: "service-srm", key: "srm", name: "SRM", description: "供应商关系管理服务。", createdAt: "2026-08-07T00:00:00.000Z", environmentIds: ["env-test"],
-      deployments: [{ id: "srm-test", environmentId: "env-test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
+      key: "srm", name: "SRM", description: "供应商关系管理服务。",
+      deployments: [{ environmentKey: "test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
       repositories: [{ id: "srm-repository", url: "git@example.com:team/srm.git" }],
     }],
   };

@@ -44,18 +44,20 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       database.db.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
       database.db.select().from(serviceDeployments), database.db.select().from(serviceRepositories), modelCatalog.list(),
     ]);
+    const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
     return {
-      agentModels,
-      environments: environmentRows.map((environment) => ({ id: environment.id, key: environment.key, name: environment.name, kind: environment.kind })),
+      agentModels: agentModels.map((model) => ({ provider: model.provider, id: model.id, thinkingLevels: model.thinkingLevels })),
+      environments: environmentRows.map((environment) => ({ key: environment.key, name: environment.name })),
       capabilityCatalog: CAPABILITY_KEYS.map((key) => ({ key })),
       services: serviceRows.map((service) => {
         const deployments = deploymentRows.filter((deployment) => deployment.serviceId === service.id);
         return {
-          id: service.id, key: service.key, name: service.name, description: service.description, createdAt: service.createdAt.toISOString(),
-          environmentIds: deployments.map((deployment) => deployment.environmentId),
+          key: service.key, name: service.name, description: service.description,
           deployments: deployments.map((deployment) => {
             const deploymentConfig = record(deployment.config);
-            return { id: deployment.id, environmentId: deployment.environmentId, baseBranch: deployment.baseBranch, ...structuredClone(deploymentConfig), capabilities: configuredCapabilities(deploymentConfig), agent: deploymentConfig.agent ?? null };
+            const environmentKey = environmentKeyById.get(deployment.environmentId);
+            if (!environmentKey) throw new Error("deployment_environment_not_found");
+            return { environmentKey, baseBranch: deployment.baseBranch, ...structuredClone(deploymentConfig), capabilities: configuredCapabilities(deploymentConfig), agent: deploymentConfig.agent ?? null };
           }),
           repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, url: repository.url })),
         };
@@ -74,7 +76,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       await replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service!.id, input });
       return service!;
     });
-    return reply.code(201).send(created);
+    return reply.code(201).send({ key: created.key, name: created.name });
   });
 
   app.patch<{ Params: { key: string } }>("/api/services/:key", async (request) => {

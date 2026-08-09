@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { MultipartFile } from "@fastify/multipart";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { issueAttachments, issues } from "../db/schema.ts";
 import { issueAttachmentRoot } from "../workspace/state.ts";
@@ -97,7 +97,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
       }
       await database.db.transaction(async (transaction) => {
         await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
-        await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+        await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
       });
     } catch (error) {
       await Promise.all(quarantined.map(({ source, temporary }) => rename(temporary, source).catch(() => undefined)));
@@ -134,7 +134,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
           const [attachment] = await transaction.insert(issueAttachments).values({ issueId: issue.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: uploader }).returning();
           rows.push(serializeAttachment(attachment!));
         }
-        await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+        await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
         return rows;
       });
       return reply.code(201).send(created);

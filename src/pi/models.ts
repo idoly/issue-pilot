@@ -25,8 +25,6 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
       .map((model) => ({
         provider: model.provider,
         id: model.id,
-        name: model.name,
-        api: model.api,
         contextWindow: model.contextWindow,
         thinkingLevels: getSupportedThinkingLevels(model).filter((level): level is AgentThinkingLevel => AGENT_THINKING_LEVELS.includes(level as AgentThinkingLevel)),
       }))

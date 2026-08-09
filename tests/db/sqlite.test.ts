@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -9,6 +9,53 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { openDatabase } from "../../src/db/client.ts";
 import { environments, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { configuredCapabilities } from "../../src/domain/contracts.ts";
+
+test("preserves issue, CC, and session data when removing unused metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-migration-"));
+  const file = join(root, "issues.db");
+  const migrations = join(root, "migrations");
+  const migrationSource = resolve("drizzle");
+  const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
+  assert.deepEqual(journal.entries.slice(-2).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -2) };
+  await mkdir(join(migrations, "meta"), { recursive: true });
+  await Promise.all([
+    writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
+    ...previousJournal.entries.map(({ tag }) => copyFile(join(migrationSource, `${tag}.sql`), join(migrations, `${tag}.sql`))),
+  ]);
+
+  const { db, client, close } = openDatabase(file);
+  try {
+    await migrate(db, { migrationsFolder: migrations });
+    await client.execute("pragma foreign_keys = on");
+    const now = Date.now();
+    for (const statement of [
+      "insert into subjects (subject, display_name, created_at, updated_at) values ('reporter', 'Reporter', 1, 1), ('recipient', 'Recipient', 1, 1)",
+      "insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)",
+      "insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)",
+      `insert into issues (id, key, title, service_id, environment_id, reporter_subject, version, created_at, updated_at) values ('issue', 'ISSUE-20260809-001', 'Preserved', 'service', 'environment', 'reporter', 7, ${now}, ${now})`,
+      "insert into issue_cc_recipients (issue_id, subject, created_at) values ('issue', 'recipient', 2)",
+      "insert into issue_history (id, issue_id, actor_subject, action, changes, created_at) values ('history', 'issue', 'reporter', 'created', '{}', 3)",
+      "insert into issue_pilot_sessions (issue_id, pi_session_id, session_file, workspace_path, created_at, updated_at) values ('issue', 'pi-session', '/sessions/issue.jsonl', '/workspaces/issue', 4, 4)",
+    ]) await client.execute(statement);
+
+    await migrate(db, { migrationsFolder: migrationSource });
+
+    assert.deepEqual((await client.execute("select key, title from issues")).rows, [{ key: "ISSUE-20260809-001", title: "Preserved" }]);
+    assert.deepEqual((await client.execute("select issue_id, subject from issue_cc_recipients")).rows, [{ issue_id: "issue", subject: "recipient" }]);
+    assert.deepEqual((await client.execute("select issue_id, session_file, workspace_path from issue_pilot_sessions")).rows, [{ issue_id: "issue", session_file: "/sessions/issue.jsonl", workspace_path: "/workspaces/issue" }]);
+    assert.equal((await client.execute("select name from sqlite_master where type = 'table' and name = 'issue_history'")).rows.length, 0);
+    assert.equal((await client.execute("pragma table_info('issues')")).rows.some((column) => column.name === "version"), false);
+    assert.equal((await client.execute("pragma table_info('issue_cc_recipients')")).rows.some((column) => column.name === "created_at"), false);
+    assert.equal((await client.execute("pragma table_info('issue_pilot_sessions')")).rows.some((column) => column.name === "pi_session_id"), false);
+    await assert.rejects(client.execute("insert into issue_cc_recipients (issue_id, subject) values ('issue', 'recipient')"));
+    await assert.rejects(client.execute("insert into issue_cc_recipients (issue_id, subject) values ('missing', 'recipient')"));
+    assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
+  } finally {
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("creates a private SQLite database with JSON, dates, transactions, and foreign keys", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-sqlite-"));
@@ -44,18 +91,27 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:second.git" });
     assert.equal((await db.select().from(serviceRepositories)).length, 2);
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
-    const obsoleteTables = await client.execute("select name from sqlite_master where type = 'table' and name in ('deployment_capabilities', 'issue_pilot_events', 'service_modules', 'service_relations', 'service_relation_modules', 'issue_service_modules', 'issue_services', 'issue_diagnoses', 'issue_test_runs', 'issue_evidence')");
+    const obsoleteTables = await client.execute("select name from sqlite_master where type = 'table' and name in ('deployment_capabilities', 'issue_pilot_events', 'issue_history', 'service_modules', 'service_relations', 'service_relation_modules', 'issue_service_modules', 'issue_services', 'issue_diagnoses', 'issue_test_runs', 'issue_evidence')");
     assert.equal(obsoleteTables.rows.length, 0);
     const issueColumns = await client.execute("pragma table_info('issues')");
     assert.equal(issueColumns.rows.some((column) => column.name === "labels"), false);
+    assert.equal(issueColumns.rows.some((column) => column.name === "version"), false);
     for (const table of ["environments", "services", "issue_workspaces"]) {
       const columns = await client.execute(`pragma table_info('${table}')`);
       assert.equal(columns.rows.some((column) => column.name === "owner_subject"), false);
     }
     const repositoryColumns = await client.execute("pragma table_info('service_repositories')");
     assert.equal(repositoryColumns.rows.some((column) => column.name === "kind"), false);
+    const ccColumns = await client.execute("pragma table_info('issue_cc_recipients')");
+    assert.equal(ccColumns.rows.some((column) => column.name === "created_at"), false);
+    const ccIndexes = await client.execute("pragma index_list('issue_cc_recipients')");
+    assert.equal(ccIndexes.rows.some((entry) => entry.name === "issue_cc_recipient_subject_idx"), false);
     const attachmentColumns = await client.execute("pragma table_info('issue_attachments')");
     assert.equal(attachmentColumns.rows.some((column) => column.name === "scan_status"), false);
+    const sessionColumns = await client.execute("pragma table_info('issue_pilot_sessions')");
+    assert.equal(sessionColumns.rows.some((column) => column.name === "pi_session_id"), false);
+    const sessionIndexes = await client.execute("pragma index_list('issue_pilot_sessions')");
+    assert.equal(sessionIndexes.rows.some((entry) => entry.name === "issue_pilot_pi_session_unique"), false);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
   } finally {
     await close();

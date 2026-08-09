@@ -69,8 +69,7 @@ export function IssueQueue(props: {
     setEnvironment(selectedEnvironment);
     const allowedTypes = issueTypesForEnvironment(selectedEnvironment);
     setIssueType((current) => allowedTypes.includes(current) ? current : allowedTypes[0] ?? "smart_analysis");
-    const environmentId = value.environments.find((item) => item.key === selectedEnvironment)?.id;
-    const availableServices = value.services.filter((item) => environmentId && item.environmentIds.includes(environmentId));
+    const availableServices = value.services.filter((item) => item.deployments.some((deployment) => deployment.environmentKey === selectedEnvironment));
     setService((current) => availableServices.some((item) => item.key === current) ? current : availableServices[0]?.key ?? "");
   });
   const submitIssue = async () => {
@@ -159,7 +158,7 @@ export function IssueQueue(props: {
       <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => { setCcOpen(false); setCreateOpen(false); }} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form compact-issue-form new-issue-form">
           <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={(value) => { const selected = selectedChoice(value, configuration().environments.map((item) => item.key)); if (selected) { setEnvironment(selected); setService(""); if (!issueTypesForEnvironment(selected).includes(issueType())) setIssueType(issueTypesForEnvironment(selected)[0] ?? "smart_analysis"); } }} options={configuration().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
-          <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((item) => item.key)); if (selected) setService(selected); }} options={configuration().services.filter((item) => item.environmentIds.includes(configuration().environments.find((item) => item.key === environment())?.id ?? "")).map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((item) => item.key)); if (selected) setService(selected); }} options={configuration().services.filter((item) => item.deployments.some((deployment) => deployment.environmentKey === environment())).map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(environment())); if (selected) setIssueType(selected); }} options={issueTypesForEnvironment(environment()).map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>

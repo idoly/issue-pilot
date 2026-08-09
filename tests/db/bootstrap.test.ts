@@ -38,9 +38,7 @@ test("restores interrupted and ready workspaces when the application database re
   try {
     const recoveredIssues = Object.fromEntries((await reopened.db.select().from(issues)).map((issue) => [issue.key, issue]));
     assert.equal(recoveredIssues["ISSUE-20260809-001"]?.status, "open");
-    assert.equal(recoveredIssues["ISSUE-20260809-001"]?.version, 2);
     assert.equal(recoveredIssues["ISSUE-20260809-002"]?.status, "pending");
-    assert.equal(recoveredIssues["ISSUE-20260809-002"]?.version, 2);
     const workspaces = Object.fromEntries((await reopened.db.select().from(issueWorkspaces)).map((workspace) => [workspace.issueId, workspace]));
     const interrupted = Object.values(workspaces).find((workspace) => workspace.issueId === recoveredIssues["ISSUE-20260809-001"]?.id);
     assert.equal(interrupted?.status, "failed");

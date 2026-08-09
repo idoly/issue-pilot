@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { and, eq, ne, notInArray, sql } from "drizzle-orm";
+import { and, eq, ne, notInArray } from "drizzle-orm";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import type { RunEvent } from "./events.ts";
@@ -125,7 +125,7 @@ export class AgentEngine implements AgentController {
             lastError: error instanceof Error ? error.message : String(error),
             updatedAt: new Date(),
           }).where(eq(issueWorkspaces.issueId, issueId));
-          await transaction.update(issues).set({ status: "open", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
+          await transaction.update(issues).set({ status: "open", updatedAt: new Date() }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
         });
         this.publishStatus(issueId, "error");
       } catch {
@@ -261,13 +261,13 @@ export class AgentEngine implements AgentController {
     this.sessions.set(issue.id, managed);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
-    await this.db.insert(agentSessions).values({ issueId: issue.id, piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
+    await this.db.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
       target: agentSessions.issueId,
-      set: { piSessionId: managed.session.sessionId, sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
+      set: { sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-    await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
+    await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
     const repositoryContexts = prepared.map((workspace) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, workspace.workspacePath), readOnly: worktreeMode === "detached" }));
     const prompt = hadMessages
@@ -290,7 +290,7 @@ export class AgentEngine implements AgentController {
   private async promptExisting(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "running", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
-      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
+      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
     });
     await managed.prompt(promptWithRuntimeTime(message));
     await this.finalizeRun(issueId);
@@ -299,7 +299,7 @@ export class AgentEngine implements AgentController {
   private async finalizeRun(issueId: string): Promise<void> {
     await this.db.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
-      await transaction.update(issues).set({ status: "pending", updatedAt: new Date(), version: sql`${issues.version} + 1` }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")));
+      await transaction.update(issues).set({ status: "pending", updatedAt: new Date() }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")));
     });
     this.publishStatus(issueId, "complete");
   }

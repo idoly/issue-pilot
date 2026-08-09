@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
-import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueHistory, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
+import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
 import { issueAttachmentRoot } from "../workspace/state.ts";
@@ -87,19 +87,11 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         id: issue.key, title: issue.title, priority: issue.priority, type: issue.type, status: issue.status,
         assignee: assignee?.displayName ?? assignee?.username ?? null, assigneeSubject: issue.assigneeSubject,
         service: { key: service.key, name: service.name },
-        version: issue.version, createdAt: isoDate(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
+        createdAt: isoDate(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
       };
     });
   };
   const serializeIssueSummary = async (issue: typeof issues.$inferSelect) => (await serializeIssueSummaries([issue]))[0]!;
-  const codeServerFolder = (localPath: string | null): string | null => {
-    if (!localPath) return null;
-    const workspaceRoot = path.join(stateRoot, "workspaces");
-    const relativePath = path.relative(workspaceRoot, path.resolve(localPath));
-    if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) return null;
-    return path.posix.join("/home/coder/state/workspaces", ...relativePath.split(path.sep));
-  };
-
   app.get("/api/issues", async () => serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.updatedAt))));
 
   app.post("/api/issues", async (request, reply) => {
@@ -141,7 +133,6 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
           const [row] = await transaction.insert(issues).values({ key, title: parsed.title, description: parsed.description, priority: parsed.priority, type: parsed.type, serviceId: parsed.serviceId, environmentId: environment.id, reporterSubject: reporter, assigneeSubject: parsed.assignee }).returning();
           if (parsed.cc.length) await transaction.insert(issueCcRecipients).values(parsed.cc.map((recipient) => ({ issueId: row!.id, subject: recipient })));
           await transaction.insert(issueWorkspaces).values({ issueId: row!.id });
-          await transaction.insert(issueHistory).values({ issueId: row!.id, actorSubject: reporter, action: "created", changes: {} });
           if (initialAttachments.length) {
             const directory = issueAttachmentRoot(stateRoot, key);
             await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -172,7 +163,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const parsed = await parseIssueInput(input, environment);
     await engine.closeSession(issue.id);
     await database.db.transaction(async (transaction) => {
-      await transaction.update(issues).set({ title: parsed.title, description: parsed.description, priority: parsed.priority, type: parsed.type, serviceId: parsed.serviceId, assigneeSubject: parsed.assignee, version: issue.version + 1, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transaction.update(issues).set({ title: parsed.title, description: parsed.description, priority: parsed.priority, type: parsed.type, serviceId: parsed.serviceId, assigneeSubject: parsed.assignee, updatedAt: new Date() }).where(eq(issues.id, issue.id));
       await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
       if (parsed.cc.length) await transaction.insert(issueCcRecipients).values(parsed.cc.map((recipient) => ({ issueId: issue.id, subject: recipient })));
     });
@@ -184,13 +175,8 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const target = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     const allowed = (target === "resolved" && issue.status === "pending") || (target === "open" && issue.status === "resolved");
     if (!allowed) throw new ApiError(409, "invalid_issue_status_transition");
-    const actor = await ensureCurrentSubject(database);
-    const updated = await database.db.transaction(async (transaction) => {
-      const [row] = await transaction.update(issues).set({ status: target, resolvedAt: target === "resolved" ? new Date() : null, version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, issue.status))).returning();
-      if (!row) throw new ApiError(409, "invalid_issue_status_transition");
-      await transaction.insert(issueHistory).values({ issueId: issue.id, actorSubject: actor, action: `status:${target}`, changes: { from: issue.status, to: target } });
-      return row;
-    });
+    const [updated] = await database.db.update(issues).set({ status: target, resolvedAt: target === "resolved" ? new Date() : null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, issue.status))).returning();
+    if (!updated) throw new ApiError(409, "invalid_issue_status_transition");
     return serializeIssueSummary(updated);
   });
 
@@ -206,7 +192,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const sessionReady = session ? await readFile(session.sessionFile).then(() => true, () => false) : false;
     return {
       ...base, description: issue.description,
-      repositories: repositoryRows.map((item) => ({ id: item.id, url: item.url, baseBranch: item.baseBranch, workingBranch: item.workingBranch, codeServerPath: codeServerFolder(item.localPath) })),
+      repositories: repositoryRows.map((item) => ({ url: item.url, baseBranch: item.baseBranch, workingBranch: item.workingBranch })),
       attachments: attachmentRows.map(serializeAttachment),
       workspace: {
         status: workspace?.status ?? "not_created",
@@ -217,7 +203,6 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
           || (workspace?.status === "ready" && !sessionReady && ["open", "in_progress"].includes(issue.status))
         ),
       },
-      agentSession: sessionReady ? { sessionId: session!.piSessionId } : null,
       reporter: reporter ? { subject: reporter.subject, name: reporter.displayName ?? reporter.username ?? reporter.subject, email: reporter.email ?? "" } : undefined,
       ccRecipients: ccRows.map(({ person }) => ({ subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "" })),
       environmentKey: (await database.db.select().from(environments).where(eq(environments.id, issue.environmentId)).limit(1))[0]?.key,
@@ -230,7 +215,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const input = record(request.body); const author = await ensureCurrentSubject(database);
     const comment = await database.db.transaction(async (transaction) => {
       const [created] = await transaction.insert(issueComments).values({ issueId: issue.id, authorSubject: author, body: text(input.body, "comment", 50_000) }).returning();
-      await transaction.update(issues).set({ version: sql`${issues.version} + 1`, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
       return created!;
     });
     return reply.code(201).send({ id: comment.id, author, body: comment.body, createdAt: comment.createdAt.toISOString() });

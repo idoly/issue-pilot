@@ -21,7 +21,7 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
     await migrateDatabase(database);
     await database.client.execute("PRAGMA foreign_keys = ON");
     await database.client.execute({
-      sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() * 1000, version = version + 1 WHERE status != 'resolved' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
+      sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() * 1000 WHERE status != 'resolved' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
       args: [],
     });
     await database.client.execute({
@@ -29,7 +29,7 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
       args: [],
     });
     await database.client.execute({
-      sql: "UPDATE issues SET status = 'pending', updated_at = unixepoch() * 1000, version = version + 1 WHERE status = 'in_progress' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status = 'ready')",
+      sql: "UPDATE issues SET status = 'pending', updated_at = unixepoch() * 1000 WHERE status = 'in_progress' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status = 'ready')",
       args: [],
     });
 
