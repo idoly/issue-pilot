@@ -56,10 +56,10 @@ export function agentSystemPrompt(policy: IssuePolicy): string {
   ].join("\n");
 }
 
-function workspaceContext(repositories: RepositoryContext[]): string {
+function workspaceContext(repositories: RepositoryContext[], attachmentPath: string): string {
   const readOnly = repositories.every((repository) => repository.readOnly);
   return [
-    "Attachments, if present, are in .issue-pilot/attachments/.",
+    `Attachments, if present, are in ${attachmentPath}.`,
     ...(readOnly
       ? ["Repositories are shared read-only snapshots of the latest configured deployment branches. Do not attempt to modify them."]
       : [
@@ -70,14 +70,14 @@ function workspaceContext(repositories: RepositoryContext[]): string {
   ].join("\n");
 }
 
-export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], latestUpdate?: string, now = new Date()): string {
+export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], attachmentPath: string, latestUpdate?: string, now = new Date()): string {
   return [
     `Continue ${issueKey}.`,
     runtimeTimeContext(now),
     ...(latestUpdate ? ["Latest update:", latestUpdate] : []),
     "Repositories:",
     ...repositories.map(repositoryLine),
-    workspaceContext(repositories),
+    workspaceContext(repositories, attachmentPath),
     "Use the existing Pi session context and provide a clear final answer when this turn is complete.",
   ].join("\n\n");
 }
@@ -89,6 +89,7 @@ export function initialPrompt(input: {
   issueType: string;
   repositories: RepositoryContext[];
   service: ServiceContext;
+  attachmentPath: string;
   latestUpdate?: string;
 }, now = new Date()): string {
   return [
@@ -99,7 +100,7 @@ export function initialPrompt(input: {
     `Service: ${input.service.key} (${input.service.name})\n${input.service.description?.trim() || ""}`.trim(),
     ...(input.latestUpdate ? [`Latest update:\n${input.latestUpdate}`] : []),
     `Repositories:\n${input.repositories.map(repositoryLine).join("\n")}`,
-    workspaceContext(input.repositories),
+    workspaceContext(input.repositories, input.attachmentPath),
     input.repositories.every((repository) => repository.readOnly)
       ? "Investigate, verify the available evidence, and provide a clear final answer."
       : "Investigate, make appropriate local changes, verify them, and provide a clear final answer.",

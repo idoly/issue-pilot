@@ -37,7 +37,7 @@ Pi session + policy-selected built-in/custom tools
 - `src/agent/engine.ts` 维护工单执行顺序和业务状态；`pi-session.ts` 管理 Pi SDK session；`session.ts` 初始化私有 JSONL；`events.ts` 负责 replay/live 事件顺序。
 - `src/pi/policy.ts` 创建 deployment policy 和工具 allowlist；`tools.ts` 创建 policy-scoped custom tools。
 - `src/capabilities/` 中每个客户端拥有自己的协议、输入、超时和结果大小边界。
-- `src/workspace/` 管理共享 checkout、开发 worktree、只读 session runtime、可重复生成的 project wrappers 和共享 code-server。
+- `src/workspace/` 管理共享 checkout、开发 worktree、session runtime、可重复生成的 project wrappers 和共享 code-server。
 - `src/web/src/app/App.tsx` 维护顶层导航和工作台布局；conversation reducer 只做 UI projection，不改变原始 Pi 事件。
 
 小文件只在拥有独立协议、进程、流控、事务或安全边界时保留。历史 Drizzle migration 是顺序升级契约，不按当前 schema 合并或删除。
@@ -80,6 +80,8 @@ resolved -> open                  用户显式 reopen
   workspaces/<dev-issue-key>/<repository-name>/
   sessions/<issue-key>/<pi-session>.jsonl
   sessions/<issue-key>/runtime/<repository-link>
+  sessions/<issue-key>/runtime/attachments/
+  sessions/<dev-issue-key>/runtime/bin/
   attachments/<issue-key>/
   code-server/
 ```
@@ -93,11 +95,11 @@ resolved -> open                  用户显式 reopen
 | `dev` + `defect_fix` | 从 dev deployment 配置分支创建 `hotfix-<issue-key>` | write |
 | `dev` + `feature_development` | 从 dev deployment 配置分支创建 `feature-<issue-key>` | write |
 
-共享 bare repository 的 fetch 按 URL 串行。prod/test checkout 以 branch hash 和完整 commit 定址：同一 commit 被多个 Issue 复用，远端前进时创建新目录，因此已有 Agent 读取的代码不会被 reset 覆盖。每个只读 Issue 只在 `sessions/<issue-key>/runtime` 生成 repository/attachment 链接，不创建 `workspaces/<issue-key>`、代码分支、依赖目录或 code-server。API 冷启动删除可重建 runtime/checkouts，再 prune bare repository worktree metadata；下一次执行重新 fetch 最新基线。
+共享 bare repository 的 fetch 按 URL 串行。prod/test checkout 以 branch hash 和完整 commit 定址：同一 commit 被多个 Issue 复用，远端前进时创建新目录，因此已有 Agent 读取的代码不会被 reset 覆盖。每个只读 Issue 只在 `sessions/<issue-key>/runtime` 生成 repository/attachment 链接，不创建 `workspaces/<issue-key>`、代码分支或依赖目录。API 冷启动删除可重建 runtime/checkouts、prune bare repository worktree metadata，再为已有只读 session fetch 最新基线并恢复 code-server 入口。
 
 每个 deployment（包括 dev）都必须配置 `baseBranch`；开发工作分支以 dev deployment 的配置分支为基线。Git 2.55.0 使用 relative worktree metadata，使共享 checkout 和开发 worktree 在固定状态目录中可恢复。已有 dirty 开发 workspace 不会被自动删除或覆盖。code-server 必须使用与宿主一致的 Git binary、exec path、templates 和动态库。
 
-开发 Issue workspace 是可释放、可重建的 cache。释放前串行检查 Issue idle 状态、全部 worktree 的 modified/untracked 状态和根目录布局；成功后通过 Git worktree remove 清理 metadata，并在一个数据库事务中清空所有 `local_path`、关闭 code-server ready 状态。branch、base commit、Pi session binding/JSONL 与持久附件不属于 cache。附件原件存放在 `attachments/<issue-key>`；开发 Agent 获得 workspace 内 `0400` 副本，只读 Agent 通过 session runtime 链接读取原件。API 提供手动释放、dry-run 容量统计、resolved 保留期清理和 high-water/target 配额清理。旧 prod/test detached workspace 会在该 Issue 下次运行时经过完整 layout/clean 预检后删除；任何 dirty 或未知内容都会阻止迁移。
+开发 Issue workspace 是可释放、可重建的 cache，根目录只包含 Git worktree。释放前串行检查 Issue idle 状态、全部 worktree 的 modified/untracked 状态和根目录布局；成功后通过 Git worktree remove 清理 metadata，并在一个数据库事务中清空所有 `local_path`、关闭 code-server ready 状态。branch、base commit、Pi session binding/JSONL 与持久附件不属于 cache。附件原件存放在 `attachments/<issue-key>`；开发 Agent 在 session runtime 获得 `0400` 副本，只读 Agent 通过 runtime 链接读取原件。API 提供手动释放、dry-run 容量统计、resolved 保留期清理和 high-water/target 配额清理。旧 workspace `.issue-pilot/{attachments,bin}` 只在内容完全属于受管生成物时由启动迁移删除；任何未知内容都会保留。旧 prod/test detached workspace 仍需经过完整 layout/clean 预检后删除。
 
 ## Pi SDK 和 session
 
@@ -198,12 +200,12 @@ SLS 是显式分页：累计到调用方 `limit` 后再探测下一条；存在�
 
 ## Project wrappers
 
-可写 Agent 的 bash PATH 包含当前工单 `.issue-pilot/bin`：
+可写 Agent 的 bash PATH 包含 `sessions/<issue-key>/runtime/bin`：
 
 - `node-project` 校验项目位于 issue workspace 后，按 `packageManager` 使用宿主 npm/corepack 执行 install、test、build 或 typecheck。
 - `maven-project` 验证相同路径边界后，使用宿主 Maven/Java 执行 test、verify 或 package。
 
-Wrapper 是可重复生成的 workspace 文件，不是容器或长驻服务。
+Wrapper 是可重复生成的 session runtime 文件，不进入开发 workspace，也不是容器或长驻服务。
 
 ## SSE 和 backpressure
 
@@ -211,4 +213,4 @@ Wrapper 是可重复生成的 workspace 文件，不是容器或长驻服务。
 
 ## code-server
 
-所有开发工单共享一个官方 code-server 4.131.0 容器。容器不构建自定义镜像，直接挂载固定宿主 Node/Pi、Java、Maven、Git、Maven repository、npm cache/config 和 Pi agent 目录。容器只监听 `127.0.0.1:18080`，使用 `userns=keep-id`、`no-new-privileges`、`cap-drop ALL`。详细路径、更新和恢复流程见 [运维说明](OPERATIONS.md#code-server-部署)。
+所有工单共享一个官方 code-server 4.131.0 容器；开发工单打开可写的独立 workspace，prod/test 打开共享快照组成的 session runtime。session、shared checkout 和持久附件分别只读挂载，runtime 使用相对链接，使宿主和容器解析到同一目录结构。容器不构建自定义镜像，直接挂载固定宿主 Node/Pi、Java、Maven、Git、Maven repository、npm cache/config 和 Pi agent 目录。容器只监听 `127.0.0.1:18080`，使用 `userns=keep-id`、`no-new-privileges`、`cap-drop ALL`。详细路径、更新和恢复流程见 [运维说明](OPERATIONS.md#code-server-部署)。

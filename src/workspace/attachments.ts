@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
-import { access, chmod, copyFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq } from "drizzle-orm";
 
 import type { openDatabase } from "../db/client.ts";
-import { issueAttachments, issues } from "../db/schema.ts";
-import { issueAttachmentRoot, issueWorkspaceRoot, legacyIssueAttachmentRoot } from "./state.ts";
+import { environments, issueAttachments, issues } from "../db/schema.ts";
+import { assertManagedProjectWrappers, prepareProjectWrappers } from "./project-wrappers.ts";
+import { issueAttachmentRoot, issueRuntimeRoot, legacyIssueAttachmentRoot, issueWorkspaceRoot } from "./state.ts";
 
 type Database = ReturnType<typeof openDatabase>["db"];
 
@@ -57,22 +58,73 @@ export async function migrateAttachmentStorage(database: Database, stateRoot: st
       throw error;
     }
   }
-
-  const issuesWithAttachments = new Map(rows.map(({ attachment, issueKey }) => [attachment.issueId, issueKey]));
-  for (const [issueId, issueKey] of issuesWithAttachments) {
-    if (await exists(issueWorkspaceRoot(stateRoot, issueKey))) await materializeWorkspaceAttachments(database, stateRoot, issueId, issueKey);
-  }
 }
 
-export async function materializeWorkspaceAttachments(database: Database, stateRoot: string, issueId: string, issueKey: string): Promise<void> {
-  const cacheRoot = legacyIssueAttachmentRoot(stateRoot, issueKey);
+export async function migrateDevelopmentRuntimeArtifacts(database: Database, stateRoot: string): Promise<{ prepared: string[]; migrated: string[]; blocked: Array<{ issueKey: string; reason: string }> }> {
+  const developmentIssues = await database.select({ id: issues.id, key: issues.key }).from(issues)
+    .innerJoin(environments, eq(environments.id, issues.environmentId))
+    .where(eq(environments.kind, "dev"));
+  const prepared: string[] = [];
+  const migrated: string[] = [];
+  const blocked: Array<{ issueKey: string; reason: string }> = [];
+
+  for (const issue of developmentIssues) {
+    const workspaceRoot = issueWorkspaceRoot(stateRoot, issue.key);
+    if (!await exists(workspaceRoot)) continue;
+    const metadataRoot = path.join(workspaceRoot, ".issue-pilot");
+    let metadataEntries;
+    try {
+      metadataEntries = await readdir(metadataRoot, { withFileTypes: true });
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+        blocked.push({ issueKey: issue.key, reason: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
+    }
+    try {
+      for (const entry of metadataEntries ?? []) {
+        if (!entry.isDirectory() || !["attachments", "bin"].includes(entry.name)) throw new Error("workspace_has_untracked_files");
+      }
+      const legacyAttachments = path.join(metadataRoot, "attachments");
+      if (metadataEntries?.some((entry) => entry.name === "attachments")) {
+        const attachments = await database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
+        const expected = new Map(attachments.map((attachment) => [path.basename(attachment.objectKey), attachment]));
+        for (const entry of await readdir(legacyAttachments, { withFileTypes: true })) {
+          const attachment = expected.get(entry.name);
+          if (!entry.isFile() || !attachment) throw new Error("workspace_has_untracked_files");
+          await assertMatchingFile(path.join(legacyAttachments, entry.name), attachment.size, attachment.sha256);
+        }
+      }
+      if (metadataEntries?.some((entry) => entry.name === "bin")) await assertManagedProjectWrappers(path.join(metadataRoot, "bin"));
+
+      const runtimeRoot = issueRuntimeRoot(stateRoot, issue.key);
+      await Promise.all([
+        materializeRuntimeAttachments(database, stateRoot, issue.id, issue.key),
+        prepareProjectWrappers(runtimeRoot),
+      ]);
+      prepared.push(issue.key);
+      if (metadataEntries) {
+        await rm(metadataRoot, { recursive: true });
+        migrated.push(issue.key);
+      }
+    } catch (error) {
+      blocked.push({ issueKey: issue.key, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { prepared, migrated, blocked };
+}
+
+export async function materializeRuntimeAttachments(database: Database, stateRoot: string, issueId: string, issueKey: string): Promise<string> {
+  const runtimeRoot = issueRuntimeRoot(stateRoot, issueKey);
+  const cacheRoot = path.join(runtimeRoot, "attachments");
   const durableRoot = issueAttachmentRoot(stateRoot, issueKey);
   const attachments = await database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issueId));
+  await mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
+  await chmod(runtimeRoot, 0o700);
   await rm(cacheRoot, { recursive: true, force: true });
-  if (!attachments.length) return;
-
   await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
   await chmod(cacheRoot, 0o700);
+  if (!attachments.length) return cacheRoot;
   for (const attachment of attachments) {
     const source = path.resolve(attachment.objectKey);
     if (path.dirname(source) !== durableRoot) throw new Error("attachment_path_outside_managed_storage");
@@ -81,4 +133,5 @@ export async function materializeWorkspaceAttachments(database: Database, stateR
     await copyFile(source, destination);
     await chmod(destination, 0o400);
   }
+  return cacheRoot;
 }

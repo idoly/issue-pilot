@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, test } from "node:test";
 
+import { issueCodeServerUrl } from "../../src/workspace/code-server.ts";
+
 const exec = promisify(execFile);
 const directories: string[] = [];
 const sourceScript = resolve("infra/code-server.sh");
@@ -54,6 +56,14 @@ async function fixture(): Promise<CodeServerFixture> {
   return { root, script, log, path: `${bin}:${process.env.PATH}`, host };
 }
 
+test("maps development workspaces and read-only runtimes into the shared code-server mount", () => {
+  const stateRoot = "/srv/issue-pilot/state";
+  const issueKey = "ISSUE-20260810-001";
+  assert.equal(new URL(issueCodeServerUrl(stateRoot, issueKey, `${stateRoot}/workspaces/issue-20260810-001`)).searchParams.get("folder"), "/home/coder/state/workspaces/issue-20260810-001");
+  assert.equal(new URL(issueCodeServerUrl(stateRoot, issueKey, `${stateRoot}/sessions/issue-20260810-001/runtime`)).searchParams.get("folder"), "/home/coder/state/sessions/issue-20260810-001/runtime");
+  assert.throws(() => issueCodeServerUrl(stateRoot, issueKey, "/srv/other"), /invalid_code_server_workspace/);
+});
+
 test("uses one shared code-server container", async () => {
   const value = await fixture();
   const result = await exec(value.script, ["status"], { env: { ...process.env, PATH: value.path, PODMAN_LOG: value.log } });
@@ -80,11 +90,14 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.ok(calls.includes(`--volume ${value.root}/.m2:/home/coder/.m2`));
   assert.ok(calls.includes(`--volume ${value.root}/.npm:/home/coder/.npm`));
   assert.ok(calls.includes(`--volume ${value.root}/.pi/agent:/home/coder/.pi/agent`));
+  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/sessions:/home/coder/state/sessions:ro`));
+  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/checkouts:/home/coder/state/checkouts:ro`));
+  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/attachments:/home/coder/state/attachments:ro`));
   assert.ok(calls.includes(`--volume ${value.host.git}:/opt/host/git/bin/git:ro`));
   assert.ok(calls.includes(`--volume ${value.host.gitLibexec}:/opt/host/git/libexec/git-core:ro`));
   assert.match(calls, /--env-file .*\/\.issue-pilot\/code-server\/container\.env/);
   assert.doesNotMatch(calls, /PASSWORD=|--env /);
-  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v18-code-server-4\.131\.0-host-development-runtime/);
+  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v19-code-server-4\.131\.0-read-only-runtimes/);
   assert.match(calls, /--workdir \/home\/coder\/state\/workspaces/);
   assert.doesNotMatch(calls, /--bind-addr/);
   const settings = JSON.parse(await readFile(join(value.root, ".issue-pilot", "code-server", "data", "User", "settings.json"), "utf8"));

@@ -41,6 +41,11 @@ vi.mock("../data/client", async (importOriginal) => {
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: async () => structuredClone(issues),
+    loadWorkspaceStats: async () => ({
+      totalBytes: 4 * 1024 ** 3,
+      policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
+      workspaces: [{ issueKey: "ISSUE-0041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null }],
+    }),
     getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
     addIssueComment: async (id: string, body: string) => {
       const selected = issues.find((item) => item.id === id)!;
@@ -49,13 +54,6 @@ vi.mock("../data/client", async (importOriginal) => {
       return structuredClone(comment);
     },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
-    releaseIssueWorkspace: vi.fn(async (id: string) => {
-      const selected = issues.find((item) => item.id === id)!;
-      const releasedBytes = selected.workspace.bytes;
-      selected.status = "resolved";
-      selected.workspace = { ...selected.workspace, status: "stopped", url: "", bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" };
-      return { issueKey: id, releasedBytes, alreadyReleased: false };
-    }),
     fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
     sendAgentMessage: vi.fn(async () => undefined),
     updateService: vi.fn(async () => undefined),
@@ -78,8 +76,8 @@ describe("issue pilot workspace", () => {
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/sessions/issue-0042/runtime");
-    expect(screen.getByRole("heading", { name: "代码仓库" })).toBeTruthy();
-    expect(screen.queryByText("hotfix-issue")).toBeNull();
+    expect(screen.getByRole("heading", { name: "代码分支" })).toBeTruthy();
+    expect(screen.getByText("hotfix-issue")).toBeTruthy();
     const agentInput = within(agentRegion).getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     const pastedMessage = Array.from({ length: 41 }, (_, index) => `line ${index + 1}`).join("\n");
     fireEvent.paste(agentInput, { clipboardData: { getData: () => pastedMessage } });
@@ -88,7 +86,7 @@ describe("issue pilot workspace", () => {
     fireEvent.keyDown(agentInput, { key: "Enter", code: "Enter", shiftKey: false });
     const { fetchAttachment, sendAgentMessage } = await import("../data/client");
     await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-0042", pastedMessage));
-    fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单工作区" }));
+    fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
     const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-0042 code-server 编辑器") as HTMLIFrameElement);
     const codeServerUrl = new URL(codeServerFrame.src);
     expect(codeServerUrl.pathname).toBe("/code-server/");
@@ -141,18 +139,11 @@ describe("issue pilot workspace", () => {
 
     fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
     fireEvent.click(await screen.findByText("ISSUE-0041"));
-    const releaseButton = await waitFor(() => screen.getByRole("button", { name: "释放工作区" }));
-    const issueActions = releaseButton.closest(".issue-actions");
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
+    const issueActions = document.querySelector(".issue-actions");
     expect(issueActions).toBeTruthy();
-    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "释放工作区", "编辑工单"]);
+    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
-    fireEvent.click(releaseButton);
-    const releaseDialog = await waitFor(() => screen.getByRole("dialog", { name: "释放工作区" }));
-    expect(within(releaseDialog).getByText(/4\.0 GB/)).toBeTruthy();
-    fireEvent.click(within(releaseDialog).getByRole("button", { name: "确认释放" }));
-    const { releaseIssueWorkspace } = await import("../data/client");
-    await waitFor(() => expect(releaseIssueWorkspace).toHaveBeenCalledWith("ISSUE-0041"));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "释放工作区" })).toBeNull());
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
     fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
     await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
@@ -164,7 +155,11 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "工单处理统计" })).toBeTruthy());
     const submitted = await waitFor(() => screen.getByText("提出工单"));
     expect(submitted.parentElement?.textContent).toContain("3");
-    expect(screen.getByText("已完成").parentElement?.textContent).toContain("1");
+    expect(screen.getByText("已完成").parentElement?.textContent).toContain("0");
+    expect(screen.getByRole("heading", { name: "Workspace 存储" })).toBeTruthy();
+    expect(screen.getByText("每 15 分钟自动检查 · 已解决保留 7 天")).toBeTruthy();
+    expect(screen.getByText("20.0 GB")).toBeTruthy();
+    expect(screen.getByText("解决后纳入")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "个人处理情况" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));

@@ -77,9 +77,9 @@ API 收到 `SIGINT`/`SIGTERM` 时只关闭一次 Fastify、Agent session 和 dat
 
 ## Workspace 存储维护
 
-`workspaces/<issue-key>` 只用于开发工单，是包含 Git worktree、Issue 本地依赖和构建输出的可重建 cache。Git branch 保存在共享 bare repository，Pi JSONL 保存在 `sessions/<issue-key>`，附件原件保存在 `attachments/<issue-key>`。开发 Agent 在 workspace 的 `.issue-pilot/attachments` 获得 `0400` 副本。
+`workspaces/<issue-key>` 只用于开发工单，是包含 Git worktree、Issue 本地依赖和构建输出的可重建 cache；workspace 根目录不再保存 Issue Pilot 元数据。Git branch 保存在共享 bare repository，Pi JSONL 保存在 `sessions/<issue-key>`，附件原件保存在 `attachments/<issue-key>`。开发 Agent 的 `0400` 附件副本和 project wrapper 位于 `sessions/<issue-key>/runtime`。
 
-prod/test 不创建 Issue workspace 或分支。每次执行先 fetch deployment `baseBranch`，代码按 commit 复用在 `checkouts/`；`sessions/<issue-key>/runtime` 只有 repository 和附件链接。API 冷启动会删除这些可重建链接和 checkout，再从最新远端按需恢复。旧版本创建的 prod/test detached workspace 会在该 Issue 下次运行时先检查全部 worktree clean 状态和根目录布局，只有完整预检通过才迁移删除。
+prod/test 不创建 Issue workspace 或分支。每次执行先 fetch deployment `baseBranch`，代码按 commit 复用在 `checkouts/`；`sessions/<issue-key>/runtime` 只有 repository 和附件链接。API 冷启动会重建这些可生成目录，并为已有只读 session 恢复最新快照和 code-server 入口。旧版本创建的 workspace `.issue-pilot/{attachments,bin}` 只有在不含未知内容时才删除；prod/test detached workspace 还必须通过全部 worktree clean 状态和根目录布局预检。
 
 手动和自动释放只处理开发 workspace，并使用相同预检：Issue 必须空闲，所有 Git worktree 必须没有 modified/untracked 文件，Issue 根目录也不能有未知文件。任一仓库不满足时拒绝整个预检，不更新数据库；已经部分完成的基础设施错误可通过重复调用恢复。成功后清空 `issue_repositories.local_path`，workspace 变为 `stopped`，但保留 branch、base commit、session binding、JSONL 和附件。
 
@@ -91,7 +91,7 @@ curl -fsS http://127.0.0.1:3000/api/workspaces/stats
 curl -fsS -X DELETE http://127.0.0.1:3000/api/issues/ISSUE-20260807-002/workspace
 ```
 
-API 启动时执行一次维护，之后按 interval 周期执行。保留期只处理已解决 Issue；超过 high-water 后也只处理已解决 Issue，并按 workspace 最近活动时间从旧到新释放，直到 target。dirty、运行中或布局异常的 workspace 会跳过并保留。Web 工单详情中只在精确预检通过时显示“释放工作区”。
+API 启动时执行一次维护，之后按 interval 周期执行。保留期只处理已解决 Issue；超过 high-water 后也只处理已解决 Issue，并按 workspace 最近活动时间从旧到新释放，直到 target。dirty、运行中或布局异常的 workspace 会跳过并保留。Web 不提供手动释放按钮；`DELETE /api/issues/:key/workspace` 只保留给运维排障，日常回收由框架维护任务负责。
 
 ## 首次部署
 
@@ -115,7 +115,7 @@ infra/code-server.sh ensure
 3. 创建 service 和 repository。
 4. 为需要的每个 environment（包括 dev）配置 base branch、model、thinking level 和 capability。
 5. 用 `/api/config` 或页面复核 deployment，但不要记录 response。
-6. 创建一个只读测试 issue，验证 model、SSE replay、共享 checkout，并确认没有 Issue workspace/code-server。
+6. 创建一个只读测试 issue，验证 model、SSE replay、共享 checkout、session runtime code-server，并确认没有 Issue workspace。
 
 项目不提供业务 seed。环境由 database bootstrap 创建，用户由当前 subject 创建，service/deployment 必须由部署者明确配置。
 
@@ -259,13 +259,28 @@ Issue Pilot 使用 `/usr/local/sbin/aliyun` 的内置 `Sls 2020-12-30 GetLogs`�
 | container name | `code-server` |
 | image | `ghcr.io/coder/code-server:4.131.0-39` |
 | address | `127.0.0.1:18080` -> container `8080` |
-| workspace | `<repo>/.issue-pilot/workspaces` |
+| development workspace | `<repo>/.issue-pilot/workspaces` |
+| session runtime | `<repo>/.issue-pilot/sessions` |
+| shared checkout | `<repo>/.issue-pilot/checkouts` |
+| durable attachments | `<repo>/.issue-pilot/attachments` |
 | repository cache | `<repo>/.issue-pilot/repositories` |
 | data/extensions | `<repo>/.issue-pilot/code-server/data` |
 | password | `<repo>/.issue-pilot/code-server/password` |
 | container env file | `<repo>/.issue-pilot/code-server/container.env` |
 
 脚本不构建 custom image。`ensure` 校验固定 host runtime、更新 editor settings、创建 private password/env file，并按 runtime label 启动或重建容器。Password 不出现在 `podman run` command line；`status` 只输出 state、image 和 runtime label，不输出完整 inspect。
+
+### State mounts
+
+| host | container | mode |
+| --- | --- | --- |
+| `.issue-pilot/workspaces` | `/home/coder/state/workspaces` | read-write |
+| `.issue-pilot/repositories` | `/home/coder/state/repositories` | read-write |
+| `.issue-pilot/sessions` | `/home/coder/state/sessions` | read-only |
+| `.issue-pilot/checkouts` | `/home/coder/state/checkouts` | read-only |
+| `.issue-pilot/attachments` | `/home/coder/state/attachments` | read-only |
+
+prod/test runtime 使用相对链接指向只读 checkout 和附件挂载，因此宿主 Agent 与容器内 code-server 看到相同目录结构；开发 workspace 保持可写。
 
 ### Host runtime mounts
 
@@ -380,8 +395,8 @@ ss -ltnp | grep -E ':3000|:18080'
 
 - service/deployment/repository count
 - provider/model/thinking readiness
-- prod/test issue 不出现 mutation tools、Issue workspace 或 code-server
-- prod/test shared checkout 对应 deployment 最新 commit
+- prod/test issue 不出现 mutation tools 或 Issue workspace
+- prod/test shared checkout 对应 deployment 最新 commit，code-server folder 指向 session runtime
 - dev issue 从 dev deployment 配置分支创建 worktree branch，并获得正确 tool allowlist
 - SSE replay 后 live event 不丢失
 - compaction 后 active context 正确

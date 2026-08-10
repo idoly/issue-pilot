@@ -40,8 +40,8 @@ export interface IssueDetail extends IssueListItem {
 
 export interface WorkspaceStats {
   totalBytes: number;
-  policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number };
-  workspaces: Array<{ issueKey: string; issueStatus: string; workspaceStatus: string; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
+  policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
+  workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: string; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
 
 export interface Environment {
@@ -154,6 +154,5 @@ export const updateIssueStatus = (key: string, status: "open" | "resolved") => j
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
 export const syncIssueUpdate = (key: string) => request<void>(issuePath(key, "/sync"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
-export const releaseIssueWorkspace = (key: string) => request<{ issueKey: string; releasedBytes: number; alreadyReleased: boolean }>(issuePath(key, "/workspace"), { method: "DELETE" });
 export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
 export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

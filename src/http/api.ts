@@ -9,9 +9,9 @@ import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
 import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
-import { migrateAttachmentStorage } from "../workspace/attachments.ts";
+import { migrateAttachmentStorage, migrateDevelopmentRuntimeArtifacts } from "../workspace/attachments.ts";
 import { WorkspaceLifecycleManager, type WorkspaceRetentionPolicy } from "../workspace/lifecycle.ts";
-import { migrateReadOnlyIssueWorkspaces } from "../workspace/read-only.ts";
+import { migrateReadOnlyIssueWorkspaces, prepareReadOnlyIssueRuntimes } from "../workspace/read-only.ts";
 import { pruneState } from "../workspace/state.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILES, registerAttachmentRoutes } from "./attachments.ts";
@@ -39,9 +39,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   await pruneState(stateRoot, (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key));
 
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test", forceCloseConnections: true });
+  const developmentRuntimeMigration = await migrateDevelopmentRuntimeArtifacts(database.db, stateRoot);
+  for (const blocked of developmentRuntimeMigration.blocked) app.log.warn(blocked, "Development runtime migration retained legacy workspace metadata");
+  if (developmentRuntimeMigration.prepared.length) app.log.info({ issueKeys: developmentRuntimeMigration.prepared }, "Prepared development session runtimes");
+  if (developmentRuntimeMigration.migrated.length) app.log.info({ issueKeys: developmentRuntimeMigration.migrated }, "Moved development runtime artifacts out of issue workspaces");
   const readOnlyMigration = await migrateReadOnlyIssueWorkspaces(database.db, stateRoot);
   for (const blocked of readOnlyMigration.blocked) app.log.warn(blocked, "Read-only workspace migration retained an existing workspace");
   if (readOnlyMigration.migrated.length) app.log.info({ issueKeys: readOnlyMigration.migrated }, "Migrated read-only issue workspaces to shared checkouts");
+  const readOnlyRuntimes = await prepareReadOnlyIssueRuntimes(database.db, stateRoot);
+  for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only code-server runtime could not be prepared");
+  if (readOnlyRuntimes.prepared.length) app.log.info({ issueKeys: readOnlyRuntimes.prepared }, "Prepared read-only code-server runtimes");
   const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog();
   await app.register(multipart, { limits: { fileSize: MAX_ATTACHMENT_BYTES, files: MAX_ATTACHMENT_FILES, parts: MAX_ATTACHMENT_FILES + 1, fieldSize: 100_000 } });
 

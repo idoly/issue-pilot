@@ -5,13 +5,16 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 state_root="$root/.issue-pilot"
 workspace_root="$state_root/workspaces"
 repositories_root="$state_root/repositories"
+sessions_root="$state_root/sessions"
+checkouts_root="$state_root/checkouts"
+attachments_root="$state_root/attachments"
 code_server_root="$state_root/code-server"
 data_root="$code_server_root/data"
 password_file="$code_server_root/password"
 container_env_file="$code_server_root/container.env"
 name=code-server
 image=ghcr.io/coder/code-server:4.131.0-39
-runtime_version=keep-id-v18-code-server-4.131.0-host-development-runtime
+runtime_version=keep-id-v19-code-server-4.131.0-read-only-runtimes
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -89,7 +92,7 @@ write_container_environment() {
 
 ensure() {
   require_host
-  mkdir -p "$workspace_root" "$repositories_root" "$data_root/User"
+  mkdir -p "$workspace_root" "$repositories_root" "$sessions_root" "$checkouts_root" "$attachments_root" "$data_root/User"
   chmod 0700 "$code_server_root" "$data_root" "$data_root/User"
   configure_editor
   if [ ! -s "$password_file" ]; then
@@ -118,6 +121,9 @@ ensure() {
     --env-file "$container_env_file" \
     --volume "$workspace_root:/home/coder/state/workspaces:Z" \
     --volume "$repositories_root:/home/coder/state/repositories:Z" \
+    --volume "$sessions_root:/home/coder/state/sessions:ro" \
+    --volume "$checkouts_root:/home/coder/state/checkouts:ro" \
+    --volume "$attachments_root:/home/coder/state/attachments:ro" \
     --volume "$data_root:/home/coder/.local/share/code-server:Z" \
     --volume /usr/local/node:/opt/host/node:ro \
     --volume /usr/local/java:/opt/host/java:ro \

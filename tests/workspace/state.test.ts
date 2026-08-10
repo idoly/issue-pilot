@@ -14,7 +14,7 @@ test("prunes state for issues that no longer exist", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-state-"));
   try {
     await Promise.all([
-      mkdir(path.join(root, "workspaces", "issue-20260807-001"), { recursive: true }),
+      mkdir(path.join(root, "workspaces", "issue-20260807-001", ".issue-pilot", "bin"), { recursive: true }),
       mkdir(path.join(root, "workspaces", "issue-20260807-002"), { recursive: true }),
       mkdir(path.join(root, "sessions", "issue-20260807-001", "runtime"), { recursive: true }),
       mkdir(path.join(root, "sessions", "issue-20260807-002"), { recursive: true }),
@@ -26,6 +26,7 @@ test("prunes state for issues that no longer exist", async () => {
     await exec("git", ["init", "--bare", path.join(root, "repositories", "repository")]);
     await pruneState(root, ["ISSUE-20260807-001"]);
     assert.equal((await stat(path.join(root, "workspaces", "issue-20260807-001"))).isDirectory(), true);
+    assert.equal((await stat(path.join(root, "workspaces", "issue-20260807-001", ".issue-pilot"))).isDirectory(), true);
     await assert.rejects(stat(path.join(root, "workspaces", "issue-20260807-002")));
     await assert.rejects(stat(path.join(root, "sessions", "issue-20260807-002")));
     assert.equal((await stat(path.join(root, "attachments", "issue-20260807-001"))).isDirectory(), true);

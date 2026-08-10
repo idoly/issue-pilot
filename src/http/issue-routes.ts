@@ -197,7 +197,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       attachments: attachmentRows.map(serializeAttachment),
       workspace: {
         status: workspace?.status ?? "not_created",
-        url: workspace?.codeServerReady ? issueCodeServerUrl(issue.key) : null,
+        url: workspace?.codeServerReady && session ? issueCodeServerUrl(stateRoot, issue.key, session.workspacePath) : null,
         lastError: workspace?.lastError ?? null,
         bytes: workspaceStorage.bytes,
         releasable: workspaceStorage.releasable,

@@ -26,17 +26,17 @@ export async function prepareReadOnlyRuntime(stateRoot: string, issueKey: string
   await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
   await chmod(sessionRoot, 0o700);
   try {
-    await mkdir(path.join(temporaryRoot, ".issue-pilot"), { recursive: true, mode: 0o700 });
+    await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const repository of repositories) {
       if (!/^[a-z0-9._-]+$/.test(repository.name) || names.has(repository.name)) throw new Error("invalid_runtime_repository_name");
       names.add(repository.name);
-      await symlink(managedCheckout(stateRoot, repository.checkoutPath), path.join(temporaryRoot, repository.name), "dir");
+      await symlink(path.relative(temporaryRoot, managedCheckout(stateRoot, repository.checkoutPath)), path.join(temporaryRoot, repository.name), "dir");
     }
 
     const attachmentRoot = issueAttachmentRoot(stateRoot, issueKey);
     await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
     await chmod(attachmentRoot, 0o700);
-    await symlink(attachmentRoot, path.join(temporaryRoot, ".issue-pilot", "attachments"), "dir");
+    await symlink(path.relative(temporaryRoot, attachmentRoot), path.join(temporaryRoot, "attachments"), "dir");
 
     await rm(runtimeRoot, { recursive: true, force: true });
     await rename(temporaryRoot, runtimeRoot);

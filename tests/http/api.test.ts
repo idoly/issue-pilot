@@ -272,7 +272,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(workspaceStats.statusCode, 200, workspaceStats.body);
     const workspaceStatsBody = await json(workspaceStats) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };
     assert.equal(typeof workspaceStatsBody.totalBytes, "number");
-    assert.deepEqual(Object.keys(workspaceStatsBody.policy).sort(), ["highWaterBytes", "retentionHours", "targetBytes"]);
+    assert.deepEqual(Object.keys(workspaceStatsBody.policy).sort(), ["highWaterBytes", "maintenanceIntervalMinutes", "retentionHours", "targetBytes"]);
     assert.equal(workspaceStatsBody.workspaces.some((workspace) => "issueId" in workspace), false);
 
     const staleSessionFile = join(root, "historical-session.jsonl");
@@ -474,7 +474,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(syncResponse.statusCode, 202, syncResponse.body);
     assert.match(engine.messages.at(-1) ?? "", /Issue metadata was updated/);
     assert.match(engine.messages.at(-1) ?? "", /diagnostic\.txt/);
-    assert.match(engine.messages.at(-1) ?? "", /attachments are available in \.issue-pilot\/attachments/);
+    assert.match(engine.messages.at(-1) ?? "", /sessions\/issue-20260810-001\/runtime\/attachments/);
     assert.equal(engine.recordedMessages.at(-1), false);
     engine.running.delete(createdInternalId);
 

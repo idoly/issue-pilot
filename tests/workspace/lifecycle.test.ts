@@ -11,10 +11,10 @@ import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
-import { migrateAttachmentStorage } from "../../src/workspace/attachments.ts";
+import { migrateAttachmentStorage, migrateDevelopmentRuntimeArtifacts } from "../../src/workspace/attachments.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, workspacePolicyFromEnvironment } from "../../src/workspace/lifecycle.ts";
-import { issueAttachmentRoot, issueSessionRoot, legacyIssueAttachmentRoot } from "../../src/workspace/state.ts";
+import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, legacyIssueAttachmentRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -123,7 +123,26 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal((await stat(durableAttachment)).mode & 0o777, 0o600);
     const [migratedAttachment] = await database.db.select().from(issueAttachments).where(eq(issueAttachments.id, attachment!.id));
     assert.equal(migratedAttachment!.objectKey, durableAttachment);
-    assert.equal((await stat(legacyAttachment)).mode & 0o777, 0o400);
+    await assert.rejects(access(legacyAttachment));
+
+    const runtimeMigration = await migrateDevelopmentRuntimeArtifacts(database.db, root);
+    assert.deepEqual(runtimeMigration, { prepared: [issue!.key], migrated: [issue!.key], blocked: [] });
+    const runtimeAttachment = path.join(issueRuntimeRoot(root, issue!.key), "attachments", path.basename(durableAttachment));
+    assert.equal(await readFile(runtimeAttachment, "utf8"), attachmentContent);
+    assert.equal((await stat(runtimeAttachment)).mode & 0o777, 0o400);
+    assert.equal((await stat(issueRuntimeRoot(root, issue!.key))).mode & 0o777, 0o700);
+    assert.equal((await stat(path.join(issueRuntimeRoot(root, issue!.key), "bin"))).mode & 0o777, 0o700);
+    assert.equal((await stat(path.join(issueRuntimeRoot(root, issue!.key), "bin", "node-project"))).mode & 0o777, 0o700);
+    await assert.rejects(access(path.dirname(legacyRoot)));
+
+    const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
+    await mkdir(path.dirname(unknownMetadata), { recursive: true });
+    await writeFile(unknownMetadata, "preserve\n", "utf8");
+    const blockedMigration = await migrateDevelopmentRuntimeArtifacts(database.db, root);
+    assert.deepEqual(blockedMigration, { prepared: [], migrated: [], blocked: [{ issueKey: issue!.key, reason: "workspace_has_untracked_files" }] });
+    assert.equal(await readFile(unknownMetadata, "utf8"), "preserve\n");
+    await rm(path.dirname(unknownMetadata), { recursive: true });
+    assert.deepEqual(await migrateDevelopmentRuntimeArtifacts(database.db, root), { prepared: [issue!.key], migrated: [], blocked: [] });
 
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
       retentionMs: Number.POSITIVE_INFINITY,

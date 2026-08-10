@@ -8,10 +8,10 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import type { RunEvent } from "./events.ts";
 import { PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { createPrivateSessionManager } from "./session.ts";
-import { materializeWorkspaceAttachments } from "../workspace/attachments.ts";
+import { materializeRuntimeAttachments } from "../workspace/attachments.ts";
 import { CodeServerManager } from "../workspace/code-server.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
-import { issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
+import { issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
 import type { openDatabase } from "../db/client.ts";
 import {
   agentSessions,
@@ -253,10 +253,22 @@ export class AgentEngine implements AgentController {
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await chmod(sessionDirectory, 0o700);
+    const runtimeRoot = issueRuntimeRoot(this.stateRoot, issue.key);
     const workspaceRoot = sharedRepositories
       ? await prepareReadOnlyRuntime(this.stateRoot, issue.key, prepared.map(({ name, workspace }) => ({ name, checkoutPath: workspace.workspacePath })))
       : issueWorkspaceRoot(this.stateRoot, issue.key);
-    if (!sharedRepositories) await mkdir(workspaceRoot, { recursive: true });
+    let attachmentPath = path.join(runtimeRoot, "attachments");
+    let executableRoot: string | undefined;
+    if (!sharedRepositories) {
+      await Promise.all([
+        mkdir(workspaceRoot, { recursive: true }),
+        mkdir(runtimeRoot, { recursive: true, mode: 0o700 }).then(() => chmod(runtimeRoot, 0o700)),
+      ]);
+      [executableRoot, attachmentPath] = await Promise.all([
+        prepareProjectWrappers(runtimeRoot),
+        materializeRuntimeAttachments(this.db, this.stateRoot, issue.id, issue.key),
+      ]);
+    }
     const repositoryPaths = prepared.map(({ name, workspace }) => sharedRepositories ? path.join(workspaceRoot, name) : workspace.workspacePath);
     const policy = createDeploymentPolicy({
       issueKey: issue.key,
@@ -269,20 +281,12 @@ export class AgentEngine implements AgentController {
       environmentKind,
       repositories: prepared.map(({ workspace }, index) => ({ codeAccess: sharedRepositories ? "read" : "write", repositoryPath: repositoryPaths[index]!, baseCommit: workspace.baseCommit })),
     });
-    if (!sharedRepositories) {
-      await Promise.all([
-        prepareProjectWrappers(workspaceRoot),
-        materializeWorkspaceAttachments(this.db, this.stateRoot, issue.id, issue.key),
-      ]);
-    }
     let codeServerReady = false;
-    if (!sharedRepositories) {
-      try {
-        await this.codeServerManager.ensure(issue.key, workspaceRoot);
-        codeServerReady = true;
-      } catch {
-        codeServerReady = false;
-      }
+    try {
+      await this.codeServerManager.ensure(issue.key, workspaceRoot);
+      codeServerReady = true;
+    } catch {
+      codeServerReady = false;
     }
     const [binding] = await this.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const manager = binding && await exists(binding.sessionFile)
@@ -295,6 +299,7 @@ export class AgentEngine implements AgentController {
       policy,
       deploymentConfig: service.deploymentConfig,
       manager,
+      ...(executableRoot ? { executableRoot } : {}),
       systemPrompt: agentSystemPrompt(policy),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
@@ -312,8 +317,8 @@ export class AgentEngine implements AgentController {
 
     const repositoryContexts = prepared.map(({ workspace }, index) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, repositoryPaths[index]!), readOnly: sharedRepositories }));
     const prompt = hadMessages
-      ? continuationPrompt(issue.key, repositoryContexts, currentMessage)
-      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
+      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage)
+      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
     await managed.prompt(prompt);
     if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);

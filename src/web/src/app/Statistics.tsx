@@ -1,16 +1,20 @@
 import { Select, Skeleton } from "@idoly/ant-design-solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-import { listIssues, type IssueListItem } from "../data/client";
-import { typeLabel } from "./model";
+import { listIssues, loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
+import { fileSize, statusLabel, typeLabel } from "./model";
 
 export function Statistics() {
   const [issues, setIssues] = createSignal<IssueListItem[]>([], { ownedWrite: true });
+  const [workspaceStats, setWorkspaceStats] = createSignal<WorkspaceStats | null>(null, { ownedWrite: true });
   const [period, setPeriod] = createSignal("30d", { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
 
-  void listIssues().then(setIssues).catch((reason) => {
+  void Promise.all([listIssues(), loadWorkspaceStats()]).then(([loadedIssues, loadedWorkspaceStats]) => {
+    setIssues(loadedIssues);
+    setWorkspaceStats(loadedWorkspaceStats);
+  }).catch((reason) => {
     setError(reason instanceof Error ? reason.message : "统计数据加载失败");
   }).finally(() => setLoading(false));
 
@@ -49,6 +53,32 @@ export function Statistics() {
     }
     return [...rows.values()].sort((left, right) => right.active - left.active || right.completed - left.completed || left.name.localeCompare(right.name));
   });
+  const storedWorkspaces = createMemo(() => [...(workspaceStats()?.workspaces ?? [])].filter((workspace) => workspace.bytes > 0).sort((left, right) => right.bytes - left.bytes || left.issueKey.localeCompare(right.issueKey)));
+  const automaticRelease = createMemo(() => storedWorkspaces().filter((workspace) => workspace.issueStatus === "resolved" && workspace.releasable));
+  const automaticReleaseBytes = createMemo(() => automaticRelease().reduce((total, workspace) => total + workspace.bytes, 0));
+  const capacityPercent = createMemo(() => {
+    const stats = workspaceStats();
+    if (!stats?.policy.highWaterBytes) return 0;
+    return Math.min(100, stats.totalBytes / stats.policy.highWaterBytes * 100);
+  });
+  const retentionLabel = () => {
+    const hours = workspaceStats()?.policy.retentionHours;
+    if (hours === null || hours === undefined) return "保留期回收关闭";
+    if (hours % 24 === 0) return `已解决保留 ${hours / 24} 天`;
+    return `已解决保留 ${hours} 小时`;
+  };
+  const releaseState = (workspace: WorkspaceStats["workspaces"][number]) => {
+    if (workspace.issueStatus !== "resolved") return "解决后纳入";
+    if (workspace.releasable) return "等待策略回收";
+    const labels: Record<string, string> = {
+      issue_already_running: "Agent 运行中",
+      workspace_busy: "Agent 运行中",
+      workspace_has_changes: "存在未提交改动",
+      workspace_has_untracked_files: "存在未知文件",
+      workspace_path_outside_issue_root: "路径异常",
+    };
+    return workspace.blockedReason ? (labels[workspace.blockedReason] ?? "安全检查未通过") : "安全检查未通过";
+  };
 
   return (
     <main class="statistics-workspace">
@@ -65,6 +95,32 @@ export function Statistics() {
             <div><span>高优先级</span><strong>{urgent()}</strong><small>活动 P0 / P1</small></div>
             <div><span>当前未分配</span><strong>{unassigned()}</strong><small>未解决工单</small></div>
           </section>
+          <Show when={workspaceStats()}>{(stats) =>
+            <section class="statistics-section workspace-capacity-section" aria-labelledby="workspace-capacity-title">
+              <div class="statistics-title workspace-capacity-title">
+                <div><h2 id="workspace-capacity-title">Workspace 存储</h2><span>{stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}</span></div>
+                <span>{storedWorkspaces().length} 个占用空间</span>
+              </div>
+              <div class="workspace-capacity-metrics">
+                <div><span>当前占用</span><strong>{fileSize(stats().totalBytes)}</strong></div>
+                <div><span>容量上限</span><strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong></div>
+                <div><span>回收目标</span><strong>{stats().policy.targetBytes > 0 ? fileSize(stats().policy.targetBytes) : "-"}</strong></div>
+                <div><span>待自动回收</span><strong>{fileSize(automaticReleaseBytes())}</strong><small>{automaticRelease().length} 个 workspace</small></div>
+              </div>
+              <Show when={stats().policy.highWaterBytes > 0}>
+                <div class="workspace-capacity-meter" aria-label={`Workspace 容量使用 ${Math.round(capacityPercent())}%`}>
+                  <div><i style={{ width: `${capacityPercent()}%` }} /></div>
+                  <span>{Math.round(capacityPercent())}%</span>
+                </div>
+              </Show>
+              <div class="workspace-capacity-table">
+                <div class="workspace-capacity-head"><span>工单</span><span>工单状态</span><span>占用</span><span>自动回收</span></div>
+                <For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的开发 workspace</div>}>
+                  {(workspace) => <div class="workspace-capacity-row"><strong>{workspace.issueKey}</strong><span>{statusLabel[workspace.issueStatus]}</span><span>{fileSize(workspace.bytes)}</span><span class={workspace.issueStatus === "resolved" ? (workspace.releasable ? "release-ready" : "release-blocked") : ""}>{releaseState(workspace)}</span></div>}
+                </For>
+              </div>
+            </section>
+          }</Show>
           <div class="statistics-grid">
             <section class="statistics-section">
               <div class="statistics-title"><h2>服务工单量</h2><span>按工单服务计数</span></div>

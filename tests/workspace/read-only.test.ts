@@ -9,9 +9,9 @@ import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { migrateReadOnlyIssueWorkspaces } from "../../src/workspace/read-only.ts";
+import { migrateReadOnlyIssueWorkspaces, prepareReadOnlyIssueRuntimes } from "../../src/workspace/read-only.ts";
 import { issueRuntimeRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +39,8 @@ test("startup migration removes only clean legacy read-only workspaces", async (
     const [prod] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester" });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
+    await database.db.insert(serviceRepositories).values({ serviceId: service!.id, url: remote });
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, baseBranch: "main", config: {} });
     const [cleanIssue, dirtyIssue] = await database.db.insert(issues).values([
       { key: "ISSUE-20260810-201", title: "Clean", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
       { key: "ISSUE-20260810-202", title: "Dirty", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
@@ -75,6 +77,13 @@ test("startup migration removes only clean legacy read-only workspaces", async (
     assert.equal(cleanSession!.workspacePath, issueRuntimeRoot(root, cleanIssue!.key));
     assert.equal(dirtyRepository!.localPath, dirty.workspacePath);
     assert.equal(dirtyWorkspace!.codeServerReady, true);
+
+    let codeServerPath = "";
+    const runtimes = await prepareReadOnlyIssueRuntimes(database.db, root, { async ensure(_issueKey, workspacePath) { codeServerPath = workspacePath; return "http://127.0.0.1:18080"; } });
+    assert.deepEqual(runtimes, { prepared: [cleanIssue!.key], blocked: [] });
+    assert.equal(codeServerPath, issueRuntimeRoot(root, cleanIssue!.key));
+    const [hydratedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, cleanIssue!.id));
+    assert.equal(hydratedWorkspace!.codeServerReady, true);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

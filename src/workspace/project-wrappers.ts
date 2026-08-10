@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const NODE_PROJECT = `#!/bin/sh
@@ -33,11 +33,27 @@ cd "$project"
 exec mvn --batch-mode --no-transfer-progress "$action" "$@"
 `;
 
-export async function prepareProjectWrappers(workspaceRoot: string): Promise<void> {
-  const binRoot = path.join(workspaceRoot, ".issue-pilot", "bin");
-  await mkdir(binRoot, { recursive: true });
+export async function assertManagedProjectWrappers(binRoot: string): Promise<void> {
+  const expected = new Map([["node-project", NODE_PROJECT], ["maven-project", MAVEN_PROJECT]]);
+  const entries = await readdir(binRoot, { withFileTypes: true });
+  if (entries.length !== expected.size) throw new Error("workspace_has_untracked_files");
+  for (const entry of entries) {
+    const content = expected.get(entry.name);
+    if (!entry.isFile() || content === undefined) throw new Error("workspace_has_untracked_files");
+    const wrapperPath = path.join(binRoot, entry.name);
+    if (await readFile(wrapperPath, "utf8") !== content || !(await stat(wrapperPath)).isFile()) throw new Error("workspace_has_untracked_files");
+  }
+}
+
+export async function prepareProjectWrappers(runtimeRoot: string): Promise<string> {
+  const binRoot = path.join(runtimeRoot, "bin");
+  await mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
+  await chmod(runtimeRoot, 0o700);
+  await mkdir(binRoot, { recursive: true, mode: 0o700 });
+  await chmod(binRoot, 0o700);
   await Promise.all([
-    writeFile(path.join(binRoot, "node-project"), NODE_PROJECT, { mode: 0o700 }),
-    writeFile(path.join(binRoot, "maven-project"), MAVEN_PROJECT, { mode: 0o700 }),
+    writeFile(path.join(binRoot, "node-project"), NODE_PROJECT, { mode: 0o700 }).then(() => chmod(path.join(binRoot, "node-project"), 0o700)),
+    writeFile(path.join(binRoot, "maven-project"), MAVEN_PROJECT, { mode: 0o700 }).then(() => chmod(path.join(binRoot, "maven-project"), 0o700)),
   ]);
+  return binRoot;
 }

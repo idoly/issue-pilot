@@ -85,7 +85,7 @@ test("uses shared runtimes for prod and configured issue workspaces for dev", as
     assert.equal(prodRepository!.baseBranch, "prod");
     assert.equal(prodRepository!.workingBranch, null);
     assert.equal(prodRepository!.localPath, null);
-    assert.equal(prodWorkspace!.codeServerReady, false);
+    assert.equal(prodWorkspace!.codeServerReady, true);
     assert.equal(prodSession!.workspacePath, issueRuntimeRoot(stateRoot, prodIssue!.key));
     assert.equal(policies[0]!.service.repositories[0]!.codeAccess, "read");
     assert.equal(sessionStops, 1);
@@ -113,7 +113,7 @@ test("uses shared runtimes for prod and configured issue workspaces for dev", as
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.codeServerReady, true);
     assert.equal(policies[2]!.service.repositories[0]!.codeAccess, "write");
-    assert.equal(codeServerCalls, 1);
+    assert.equal(codeServerCalls, 3);
     await engine.close();
     assert.equal(sessionStops, 3);
   } finally {

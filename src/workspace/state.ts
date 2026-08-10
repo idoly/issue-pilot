@@ -49,7 +49,7 @@ async function directories(root: string): Promise<string[]> {
 }
 
 export async function assertManagedIssueWorkspaceLayout(root: string, localPaths: string[]): Promise<void> {
-  const allowed = new Set([".issue-pilot"]);
+  const allowed = new Set<string>();
   for (const localPath of localPaths) {
     const resolved = path.resolve(localPath);
     if (path.dirname(resolved) !== root) throw new Error("workspace_path_outside_issue_root");
@@ -57,10 +57,6 @@ export async function assertManagedIssueWorkspaceLayout(root: string, localPaths
   }
   for (const entry of await readdir(root, { withFileTypes: true })) {
     if (!allowed.has(entry.name)) throw new Error("workspace_has_untracked_files");
-  }
-  const metadataRoot = path.join(root, ".issue-pilot");
-  for (const entry of await readdir(metadataRoot, { withFileTypes: true }).catch(() => [])) {
-    if (!["attachments", "bin"].includes(entry.name)) throw new Error("workspace_has_untracked_files");
   }
 }
 

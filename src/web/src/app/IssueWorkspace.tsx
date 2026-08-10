@@ -1,8 +1,8 @@
 import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "@idoly/ant-design-solid";
 import { createEffect, createSignal, For, Show } from "solid-js";
 
-import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send, Trash2 } from "../ui/icons";
-import { addIssueComment, attachmentUrl, deleteIssueAttachments, releaseIssueWorkspace, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, uploadAttachments, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
+import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
+import { addIssueComment, attachmentUrl, deleteIssueAttachments, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, uploadAttachments, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
@@ -30,9 +30,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
   const [statusSaving, setStatusSaving] = createSignal(false, { ownedWrite: true });
   const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
-  const [releaseOpen, setReleaseOpen] = createSignal(false, { ownedWrite: true });
-  const [releasing, setReleasing] = createSignal(false, { ownedWrite: true });
-  const [releaseError, setReleaseError] = createSignal("", { ownedWrite: true });
   const [commentBody, setCommentBody] = createSignal("", { ownedWrite: true });
   const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
   const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
@@ -43,7 +40,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
     if (previousIssueId === undefined || issueId === previousIssueId) return;
     issueGeneration += 1;
     setEditOpen(false); setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
-    setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setReleaseOpen(false); setReleasing(false); setReleaseError("");
+    setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError("");
     setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null);
   });
   const openEditor = () => {
@@ -110,19 +107,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
     catch (error) { if (issueGeneration === generation) setStatusError(error instanceof Error ? error.message : String(error)); }
     finally { if (issueGeneration === generation) setStatusSaving(false); }
   };
-  const releaseWorkspace = async () => {
-    const issueId = props.issue.id;
-    const generation = issueGeneration;
-    setReleasing(true); setReleaseError("");
-    try {
-      await releaseIssueWorkspace(issueId);
-      if (issueGeneration !== generation) return;
-      await props.onUpdated();
-      setReleaseOpen(false);
-    } catch (error) {
-      if (issueGeneration === generation) setReleaseError(error instanceof Error ? error.message : String(error));
-    } finally { if (issueGeneration === generation) setReleasing(false); }
-  };
+  const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
   return (
     <section class="issue-workspace">
       <header class="issue-header">
@@ -142,7 +127,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
           </Show>
           <Show when={props.issue.status === "pending"}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
           <Show when={props.issue.status === "resolved"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
-          <Show when={props.issue.workspace.releasable && props.issue.workspace.bytes > 0}><Button danger icon={<Trash2 size={15} />} onClick={() => { setReleaseError(""); setReleaseOpen(true); }}>释放工作区</Button></Show>
           <Button icon={<Pencil size={15} />} disabled={props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running"} onClick={openEditor}>编辑工单</Button>
         </div>
       </header>
@@ -159,22 +143,12 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
       <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{props.issue.workspace.lastError}</div></Show>
       <section class="repository-band" aria-labelledby="repositories-title">
-        <div class="band-title">
-          <GitBranch size={16} />
-          <h2 id="repositories-title">代码仓库</h2>
-          <span>{props.issue.repositories.length}</span>
+        <div class="band-title"><GitBranch size={16} /><h2 id="repositories-title">代码分支</h2></div>
+        <div class="issue-branch-row">
+          <code title={branchName()}>{branchName()}</code>
           <Show when={workspaceUrl(props.issue.workspace.url)}>
-            {(url) => <span class="band-actions"><Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在 code-server 中打开工单工作区" aria-label="在 code-server 中打开工单工作区" onClick={() => props.onOpenCodeServer(url())} /></span>}
+            {(url) => <Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在 code-server 中打开工单代码" aria-label="在 code-server 中打开工单代码" onClick={() => props.onOpenCodeServer(url())} />}
           </Show>
-        </div>
-        <div class="repository-list">
-          <For each={props.issue.repositories} fallback={<span class="muted">尚未绑定仓库</span>}>
-            {(repository) => (
-              <div class="repository-row">
-                <span class="repo-name">{repository.url.split(/[/:]/).at(-1)?.replace(/\.git$/, "")}</span>
-              </div>
-            )}
-          </For>
         </div>
       </section>
 
@@ -203,12 +177,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
         </div>
       </section>
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
-      <Modal open={releaseOpen()} title="释放工作区" okText="确认释放" cancelText="取消" confirmLoading={releasing()} okButtonProps={{ danger: true }} onOk={() => { void releaseWorkspace(); }} onCancel={() => { if (!releasing()) setReleaseOpen(false); }}>
-        <div class="workspace-release-confirm">
-          <p>将释放 {fileSize(props.issue.workspace.bytes)} 的本地依赖和构建文件。Git 分支、Agent 会话和附件会保留，可在重新处理时恢复工作区。</p>
-          <Show when={releaseError()}><div class="workspace-error" role="alert">{releaseError()}</div></Show>
-        </div>
-      </Modal>
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
         <div class="create-issue-form compact-issue-form edit-issue-form">
           <Show when={editError() || peopleError()}><div class="create-error modal-form-error" role="alert">{editError() || peopleError()}</div></Show>

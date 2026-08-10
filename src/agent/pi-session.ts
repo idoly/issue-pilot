@@ -25,6 +25,7 @@ export interface StartPiSessionOptions {
   policy: IssuePolicy;
   deploymentConfig: Record<string, unknown>;
   workspaceRoot: string;
+  executableRoot?: string;
   systemPrompt: string;
   onEvent: (event: JsonAgentSessionEvent) => void;
 }
@@ -43,10 +44,10 @@ function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
   return { ...event, assistantMessageEvent } as JsonAgentSessionEvent;
 }
 
-function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string): ToolDefinition<any, any, any>[] {
+function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string, executableRoot?: string): ToolDefinition<any, any, any>[] {
   const tools = createCapabilityTools(policy, deploymentConfig);
   if (!piToolAllowlist(policy).includes("bash")) return tools;
-  const executableRoot = join(workspaceRoot, ".issue-pilot", "bin");
+  const projectBinRoot = executableRoot ?? join(workspaceRoot, ".issue-pilot", "bin");
   tools.unshift(createBashToolDefinition(workspaceRoot, {
     spawnHook: (context) => ({
       ...context,
@@ -55,7 +56,7 @@ function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unkn
         AI_AGENT: "pi",
         PI_CODING_AGENT: "true",
         ISSUE_WORKSPACE: workspaceRoot,
-        PATH: `${executableRoot}${pathSeparator}${context.env.PATH ?? ""}`,
+        PATH: `${projectBinRoot}${pathSeparator}${context.env.PATH ?? ""}`,
       },
     }),
   }));
@@ -118,7 +119,7 @@ export class PiSessionRuntime {
       model,
       thinkingLevel: policy.model.thinkingLevel,
       tools: expectedTools,
-      customTools: sessionTools(policy, options.deploymentConfig, workspaceRoot),
+      customTools: sessionTools(policy, options.deploymentConfig, workspaceRoot, options.executableRoot),
       sessionManager: options.manager,
       settingsManager,
       resourceLoader,

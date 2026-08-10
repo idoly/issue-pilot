@@ -112,7 +112,7 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  async stats(): Promise<{ totalBytes: number; policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number }; workspaces: WorkspaceInspection[] }> {
+  async stats(): Promise<{ totalBytes: number; policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number }; workspaces: WorkspaceInspection[] }> {
     return this.exclusive(async () => {
       const rows = await this.issueRows();
       const workspaces: WorkspaceInspection[] = [];
@@ -123,6 +123,7 @@ export class WorkspaceLifecycleManager {
           retentionHours: Number.isFinite(this.policy.retentionMs) ? this.policy.retentionMs / 3_600_000 : null,
           highWaterBytes: this.policy.highWaterBytes,
           targetBytes: this.policy.targetBytes,
+          maintenanceIntervalMinutes: this.policy.maintenanceIntervalMs / 60_000,
         },
         workspaces,
       };

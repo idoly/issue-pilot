@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -21,9 +21,15 @@ test("prepares an issue session runtime from shared repositories without an issu
     const runtime = await prepareReadOnlyRuntime(root, issueKey, [{ name: "orders", checkoutPath: checkout }]);
     assert.equal(runtime, issueRuntimeRoot(root, issueKey));
     assert.equal((await lstat(path.join(runtime, "orders"))).isSymbolicLink(), true);
-    assert.equal((await lstat(path.join(runtime, ".issue-pilot", "attachments"))).isSymbolicLink(), true);
+    assert.equal((await lstat(path.join(runtime, "attachments"))).isSymbolicLink(), true);
+    const repositoryLink = await readlink(path.join(runtime, "orders"));
+    const attachmentLink = await readlink(path.join(runtime, "attachments"));
+    assert.equal(path.isAbsolute(repositoryLink), false);
+    assert.equal(path.resolve(runtime, repositoryLink), checkout);
+    assert.equal(path.isAbsolute(attachmentLink), false);
+    assert.equal(path.resolve(runtime, attachmentLink), attachments);
     assert.equal(await readFile(path.join(runtime, "orders", "README.md"), "utf8"), "shared checkout\n");
-    assert.equal(await readFile(path.join(runtime, ".issue-pilot", "attachments", "evidence.txt"), "utf8"), "evidence\n");
+    assert.equal(await readFile(path.join(runtime, "attachments", "evidence.txt"), "utf8"), "evidence\n");
     await assert.rejects(access(issueWorkspaceRoot(root, issueKey)));
   } finally {
     await rm(root, { recursive: true, force: true });
