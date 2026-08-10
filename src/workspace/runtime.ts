@@ -74,7 +74,11 @@ export async function prepareIssueRuntime(
       await symlink(path.relative(temporaryRoot, repositoryTarget), path.join(temporaryRoot, repository.name), "dir");
     }
     const workspaceFile = path.join(temporaryRoot, path.basename(issueRuntimeWorkspaceFile(stateRoot, issueKey)));
-    await writeFile(workspaceFile, `${JSON.stringify({ folders: repositories.map((repository) => ({ name: repository.name, path: repository.name })) }, null, 2)}\n`, { mode: 0o400 });
+    const workspace = {
+      folders: repositories.map((repository) => ({ name: repository.name, path: repository.name })),
+      ...(access === "read" ? { settings: { "files.readonlyInclude": { "**": true } } } : {}),
+    };
+    await writeFile(workspaceFile, `${JSON.stringify(workspace, null, 2)}\n`, { mode: 0o400 });
     await chmod(workspaceFile, 0o400);
 
     await rm(runtimeRoot, { recursive: true, force: true });

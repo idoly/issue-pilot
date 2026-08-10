@@ -35,10 +35,16 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     await writeFile(path.join(writableRuntime, "orders", "created-through-runtime.txt"), "writable\n", "utf8");
     assert.equal(await readFile(path.join(worktree, "created-through-runtime.txt"), "utf8"), "writable\n");
 
+    const readOnlyWorkspaceFile = issueRuntimeWorkspaceFile(root, readOnlyIssue);
+    assert.deepEqual(JSON.parse(await readFile(readOnlyWorkspaceFile, "utf8")), {
+      folders: [{ name: "orders", path: "orders" }],
+      settings: { "files.readonlyInclude": { "**": true } },
+    });
+    assert.deepEqual(JSON.parse(await readFile(issueRuntimeWorkspaceFile(root, writableIssue), "utf8")), {
+      folders: [{ name: "orders", path: "orders" }],
+    });
     for (const issueKey of [readOnlyIssue, writableIssue]) {
-      const workspaceFile = issueRuntimeWorkspaceFile(root, issueKey);
-      assert.deepEqual(JSON.parse(await readFile(workspaceFile, "utf8")), { folders: [{ name: "orders", path: "orders" }] });
-      assert.equal((await stat(workspaceFile)).mode & 0o777, 0o400);
+      assert.equal((await stat(issueRuntimeWorkspaceFile(root, issueKey))).mode & 0o777, 0o400);
     }
     await assert.rejects(
       prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"),

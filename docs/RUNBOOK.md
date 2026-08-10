@@ -205,7 +205,7 @@ curl -fsS -X DELETE \
 | Explorer 没有文件 | Runtime links、state root mount、checkout 是否存在 |
 | 有文件但 Git 为 0 repositories | URL 是否为 `workspace=`、manifest 是否列出 Repository |
 | Git Graph 无历史 | 容器内 `git -C <repo> log`、host Git mounts、worktree metadata |
-| Dev 无法修改 | 是否误打开 released/read-only runtime；重新打开工单应从本地 working branch 恢复 active dev worktree |
+| 文件显示只读或无法修改 | prod/test 和 released snapshot 应由 workspace setting 与只读 mount 双重保护；dev 工单重新打开后应从本地 working branch 恢复 active worktree |
 | Container 启动失败 | 固定 host runtime、Podman image、`container.env` 权限 |
 
 命令：

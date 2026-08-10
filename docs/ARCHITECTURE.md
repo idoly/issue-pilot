@@ -275,7 +275,7 @@ Manifest 显式声明每个 Repository link，因此 VS Code Git extension 在�
 
 Web 在 code-server 展开期间只隐藏工单列表、Agent 面板和工单详情，不卸载这些组件；“还原 code-server”会恢复原筛选、选中工单和草稿。已加载的 iframe 同样不会销毁，再次打开同一工单时会复用原编辑器会话和未保存缓冲。
 
-Runtime 通过临时目录完整生成后再替换，避免 code-server 看到只生成一半的 links 或 manifest。Manifest 为 `0400`，整个 `issues` mount 在容器内只读；链接目标是否可写由 workspaces/checkouts mount 决定。
+Runtime 通过临时目录完整生成后再替换，避免 code-server 看到只生成一半的 links 或 manifest。Manifest 为 `0400`；只读 runtime 还通过 workspace 级 `files.readonlyInclude` 让 VS Code 在编辑前显示只读状态。整个 `issues` mount 在容器内只读，链接目标是否可写最终仍由 workspaces/checkouts mount 强制决定。
 
 具体 mounts 见 [部署说明](DEPLOYMENT.md#code-server)，故障处理见 [运维手册](RUNBOOK.md#code-server-排障)。
 
