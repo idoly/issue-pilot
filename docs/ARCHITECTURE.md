@@ -93,6 +93,8 @@ resolved -> open                  用户显式 reopen
 
 Git 2.55.0 使用 relative worktree metadata，使同一 worktree 在宿主和 code-server 的同构 `workspaces/`、`repositories/` 挂载下都可解析。已有 dirty workspace 不会被自动删除或覆盖。code-server 必须使用与宿主一致的 Git binary、exec path、templates 和动态库。
 
+Issue workspace 是可释放、可重建的 cache。释放前串行检查 Issue idle 状态、全部 worktree 的 modified/untracked 状态和根目录布局；成功后通过 Git worktree remove 清理 metadata，并在一个数据库事务中清空所有 `local_path`、关闭 code-server ready 状态。branch、base commit、Pi session binding/JSONL 与持久附件不属于 cache。附件原件存放在 `attachments/<issue-key>`，Agent 准备时复制成 workspace 内 `0400` 只读副本。API 提供手动释放、dry-run 容量统计、resolved 保留期清理和 high-water/target 配额清理。
+
 ## Pi SDK 和 session
 
 Issue Pilot 直接使用 Pi `createAgentSession()` SDK，不启动 Pi RPC 子进程：

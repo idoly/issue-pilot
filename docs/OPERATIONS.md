@@ -65,11 +65,31 @@ podman version
 | `ISSUE_PILOT_STATE_ROOT` | `.issue-pilot` | database/workspace/session root |
 | `ISSUE_PILOT_DATABASE` | `<state-root>/issues.db` | SQLite file |
 | `ISSUE_PILOT_SUBJECT` | local default subject | 当前未认证操作人 |
+| `ISSUE_PILOT_WORKSPACE_RETENTION_HOURS` | `168` | resolved workspace 保留小时数；`off` 关闭按时间清理，`0` 表示立即可清理 |
+| `ISSUE_PILOT_WORKSPACE_HIGH_WATER_BYTES` | `21474836480` | workspace 总量高水位；`0` 关闭配额清理 |
+| `ISSUE_PILOT_WORKSPACE_TARGET_BYTES` | high-water 的 `80%` | 超过高水位后释放到此目标；必须小于 high-water |
+| `ISSUE_PILOT_WORKSPACE_MAINTENANCE_MINUTES` | `15` | 周期维护间隔；`0` 关闭定时执行，启动维护仍会运行 |
 | `NODE_ENV` | unset | `test` 时关闭默认 Fastify logger |
 
 这些变量只配置 API process/state，不配置 model、credential、connection 或 capability authorization。Deployment 授权只能来自 SQLite 中的页面配置。
 
 API 收到 `SIGINT`/`SIGTERM` 时只关闭一次 Fastify、Agent session 和 database。下次启动会把中断的 workspace 标记为 failed，并恢复 issue 状态。
+
+## Workspace 存储维护
+
+`workspaces/<issue-key>` 是可重建 cache，包含 Git worktree、Issue 本地依赖和构建输出。Git branch 保存在共享 bare repository，Pi JSONL 保存在 `sessions/<issue-key>`，附件原件保存在 `attachments/<issue-key>`。升级后的首次 API 启动会按数据库记录把旧的 workspace 内附件迁到持久目录；Agent 准备时只在 workspace 的 `.issue-pilot/attachments` 生成 `0400` 副本。
+
+手动和自动释放使用相同预检：Issue 必须空闲，所有 Git worktree 必须没有 modified/untracked 文件，Issue 根目录也不能有未知文件。任一仓库不满足时拒绝整个预检，不更新数据库；已经部分完成的基础设施错误可通过重复调用恢复。成功后清空 `issue_repositories.local_path`，workspace 变为 `stopped`，但保留 branch、base commit、session binding、JSONL 和附件。
+
+```bash
+# dry-run：容量、每个 Issue 的 releasable 状态和拒绝原因
+curl -fsS http://127.0.0.1:3000/api/workspaces/stats
+
+# 手动释放一个空闲、干净的 workspace
+curl -fsS -X DELETE http://127.0.0.1:3000/api/issues/ISSUE-20260807-002/workspace
+```
+
+API 启动时执行一次维护，之后按 interval 周期执行。保留期只处理已解决 Issue；超过 high-water 后也只处理已解决 Issue，并按 workspace 最近活动时间从旧到新释放，直到 target。dirty、运行中或布局异常的 workspace 会跳过并保留。Web 工单详情中只在精确预检通过时显示“释放工作区”。
 
 ## 首次部署
 

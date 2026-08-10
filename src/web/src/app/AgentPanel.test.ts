@@ -160,7 +160,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-1", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
-      workspace: { status: "running", url: null },
+      workspace: { status: "running", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_busy" },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;

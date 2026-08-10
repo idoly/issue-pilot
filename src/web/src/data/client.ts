@@ -30,12 +30,18 @@ export interface IssueComment {
 export interface IssueDetail extends IssueListItem {
   description: string;
   repositories: Array<{ url: string; baseBranch: string; workingBranch: string | null }>;
-  workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean };
+  workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean; bytes: number; releasable: boolean; releaseBlockedReason: string | null };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
   environmentKey: string;
   comments: IssueComment[];
+}
+
+export interface WorkspaceStats {
+  totalBytes: number;
+  policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number };
+  workspaces: Array<{ issueKey: string; issueStatus: string; workspaceStatus: string; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
 
 export interface Environment {
@@ -103,6 +109,7 @@ export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadConfig = () => request<Config>("/api/config");
 export const listIssues = () => request<IssueListItem[]>("/api/issues");
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
+export const loadWorkspaceStats = () => request<WorkspaceStats>("/api/workspaces/stats");
 
 const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
 
@@ -147,5 +154,6 @@ export const updateIssueStatus = (key: string, status: "open" | "resolved") => j
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
 export const syncIssueUpdate = (key: string) => request<void>(issuePath(key, "/sync"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
+export const releaseIssueWorkspace = (key: string) => request<{ issueKey: string; releasedBytes: number; alreadyReleased: boolean }>(issuePath(key, "/workspace"), { method: "DELETE" });
 export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
 export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

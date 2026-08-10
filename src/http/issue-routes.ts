@@ -29,7 +29,7 @@ function shanghaiDateStamp(now = new Date()): string {
 }
 
 export function registerIssueRoutes(context: ApiRouteContext): void {
-  const { app, database, engine, stateRoot } = context;
+  const { app, database, engine, stateRoot, workspaces } = context;
   let issueCreationTail = Promise.resolve();
   const serializeIssueCreation = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = issueCreationTail;
@@ -182,11 +182,12 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
 
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
-    const [base, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows] = await Promise.all([
+    const [base, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, workspaceStorage] = await Promise.all([
       serializeIssueSummary(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
       database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
       database.db.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)), database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
       database.db.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)), database.db.select({ comment: issueComments, person: subjects }).from(issueComments).innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject)).where(eq(issueComments.issueId, issue.id)).orderBy(asc(issueComments.createdAt)),
+      workspaces.inspectIssue(issue.id),
     ]);
     const workspace = workspaceRows[0]; const session = sessionRows[0]; const reporter = reporterRows[0];
     const sessionReady = session ? await readFile(session.sessionFile).then(() => true, () => false) : false;
@@ -198,7 +199,10 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         status: workspace?.status ?? "not_created",
         url: workspace?.codeServerReady ? issueCodeServerUrl(issue.key) : null,
         lastError: workspace?.lastError ?? null,
-        retryable: !engine.isRunning(issue.id) && (
+        bytes: workspaceStorage.bytes,
+        releasable: workspaceStorage.releasable,
+        releaseBlockedReason: workspaceStorage.blockedReason,
+        retryable: issue.status !== "resolved" && !engine.isRunning(issue.id) && (
           ["not_created", "preparing", "running", "stopped", "failed"].includes(workspace?.status ?? "not_created")
           || (workspace?.status === "ready" && !sessionReady && ["open", "in_progress"].includes(issue.status))
         ),

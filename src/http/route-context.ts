@@ -7,6 +7,7 @@ import type { openDatabase } from "../db/client.ts";
 import { issues, subjects } from "../db/schema.ts";
 import { isIssueKey, normalizeIssueKey } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
+import type { WorkspaceLifecycleManager } from "../workspace/lifecycle.ts";
 import { ApiError } from "./input.ts";
 
 export interface ApiRouteContext {
@@ -16,6 +17,7 @@ export interface ApiRouteContext {
   stateRoot: string;
   modelCatalog: AgentModelCatalog;
   events: AgentEventBus;
+  workspaces: WorkspaceLifecycleManager;
 }
 
 export async function ensureCurrentSubject(database: ApiRouteContext["database"]): Promise<string> {

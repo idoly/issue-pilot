@@ -266,6 +266,12 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal("scopeCandidates" in detail, false);
     assert.equal("version" in detail, false);
     assert.equal("agentSession" in detail, false);
+    const workspaceStats = await app.inject({ method: "GET", url: "/api/workspaces/stats" });
+    assert.equal(workspaceStats.statusCode, 200, workspaceStats.body);
+    const workspaceStatsBody = await json(workspaceStats) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };
+    assert.equal(typeof workspaceStatsBody.totalBytes, "number");
+    assert.deepEqual(Object.keys(workspaceStatsBody.policy).sort(), ["highWaterBytes", "retentionHours", "targetBytes"]);
+    assert.equal(workspaceStatsBody.workspaces.some((workspace) => "issueId" in workspace), false);
 
     const staleSessionFile = join(root, "historical-session.jsonl");
     await writeFile(staleSessionFile, "{}\n", "utf8");
@@ -443,7 +449,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal("objectKey" in uploaded[0]!, false);
     assert.equal("issueId" in uploaded[0]!, false);
     assert.equal("scanStatus" in uploaded[0]!, false);
-    const attachmentDirectory = join(root, "workspaces", String(created.id).toLowerCase(), ".issue-pilot", "attachments");
+    const attachmentDirectory = join(root, "attachments", String(created.id).toLowerCase());
     const attachmentFiles = await readdir(attachmentDirectory);
     assert.equal(attachmentFiles.length, 1);
     assert.equal((await stat(join(attachmentDirectory, attachmentFiles[0]!))).mode & 0o777, 0o600);

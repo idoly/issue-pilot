@@ -8,6 +8,7 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import type { RunEvent } from "./events.ts";
 import { PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { createPrivateSessionManager } from "./session.ts";
+import { materializeWorkspaceAttachments } from "../workspace/attachments.ts";
 import { CodeServerManager } from "../workspace/code-server.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
 import { issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
@@ -235,7 +236,10 @@ export class AgentEngine implements AgentController {
       environmentKind: service.environmentKind,
       repositories: prepared.map((workspace) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
     });
-    await prepareProjectWrappers(workspaceRoot);
+    await Promise.all([
+      prepareProjectWrappers(workspaceRoot),
+      materializeWorkspaceAttachments(this.db, this.stateRoot, issue.id, issue.key),
+    ]);
     let codeServerReady = false;
     try {
       await this.codeServerManager.ensure(issue.key, workspaceRoot);

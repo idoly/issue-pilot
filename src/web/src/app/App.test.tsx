@@ -10,11 +10,11 @@ vi.mock("../data/client", async (importOriginal) => {
     assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
     service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable },
+    workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable, bytes: id === "ISSUE-0041" ? 4 * 1024 ** 3 : 0, releasable: id === "ISSUE-0041", releaseBlockedReason: id === "ISSUE-0041" ? null : "workspace_missing" },
   });
   const issues = [
-    issue("ISSUE-0041", "客户导出的 CSV 缺少时区信息", "resolved"),
     issue("ISSUE-0042", "结算页提交后订单状态未刷新", "in_progress"),
+    issue("ISSUE-0041", "客户导出的 CSV 缺少时区信息", "pending"),
     issue("ISSUE-0038", "批量审批偶发超时", "open", true),
   ];
   const configuration = {
@@ -49,6 +49,13 @@ vi.mock("../data/client", async (importOriginal) => {
       return structuredClone(comment);
     },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
+    releaseIssueWorkspace: vi.fn(async (id: string) => {
+      const selected = issues.find((item) => item.id === id)!;
+      const releasedBytes = selected.workspace.bytes;
+      selected.status = "resolved";
+      selected.workspace = { ...selected.workspace, status: "stopped", url: "", bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" };
+      return { issueKey: id, releasedBytes, alreadyReleased: false };
+    }),
     fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
     sendAgentMessage: vi.fn(async () => undefined),
     updateService: vi.fn(async () => undefined),
@@ -131,6 +138,16 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
+    fireEvent.click(await screen.findByText("ISSUE-0041"));
+    const releaseButton = await waitFor(() => screen.getByRole("button", { name: "释放工作区" }));
+    fireEvent.click(releaseButton);
+    const releaseDialog = await waitFor(() => screen.getByRole("dialog", { name: "释放工作区" }));
+    expect(within(releaseDialog).getByText(/4\.0 GB/)).toBeTruthy();
+    fireEvent.click(within(releaseDialog).getByRole("button", { name: "确认释放" }));
+    const { releaseIssueWorkspace } = await import("../data/client");
+    await waitFor(() => expect(releaseIssueWorkspace).toHaveBeenCalledWith("ISSUE-0041"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "释放工作区" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
     fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
     await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));

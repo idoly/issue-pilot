@@ -9,6 +9,8 @@ import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
 import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
+import { migrateAttachmentStorage } from "../workspace/attachments.ts";
+import { WorkspaceLifecycleManager, type WorkspaceRetentionPolicy } from "../workspace/lifecycle.ts";
 import { pruneState } from "../workspace/state.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILES, registerAttachmentRoutes } from "./attachments.ts";
@@ -16,6 +18,7 @@ import { registerConfigurationRoutes } from "./configuration-routes.ts";
 import { ApiError } from "./input.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
 import { installShutdownHandlers } from "./lifecycle.ts";
+import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
 export type { AgentController } from "../agent/engine.ts";
 
@@ -25,11 +28,13 @@ export interface ApiOptions {
   engine?: AgentController;
   logger?: boolean;
   modelCatalog?: AgentModelCatalog;
+  workspacePolicy?: WorkspaceRetentionPolicy;
 }
 
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? process.env.ISSUE_PILOT_STATE_ROOT ?? ".issue-pilot");
   const database = await openApplicationDatabase(options.databaseFile ?? process.env.ISSUE_PILOT_DATABASE ?? path.join(stateRoot, "issues.db"));
+  await migrateAttachmentStorage(database.db, stateRoot);
   await pruneState(stateRoot, (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key));
 
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test", forceCloseConnections: true });
@@ -38,6 +43,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
   const events = new AgentEventBus();
   const engine: AgentController = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event));
+  const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
+  await workspaces.maintain();
+  const stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(error));
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
@@ -58,13 +66,15 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     return reply.code(500).send({ error: "internal_error" });
   });
 
-  const routeContext = { app, database, engine, stateRoot, modelCatalog, events };
+  const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces };
   app.get("/health", async () => ({ ok: true }));
   registerConfigurationRoutes(routeContext);
   registerIssueRoutes(routeContext);
   registerAttachmentRoutes(routeContext);
   registerAgentRoutes(routeContext);
+  registerWorkspaceRoutes(routeContext);
   app.addHook("onClose", async () => {
+    stopWorkspaceMaintenance();
     await engine.close?.();
     await database.close();
   });
