@@ -113,6 +113,7 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.match(calls, /--auth none/);
   assert.doesNotMatch(calls, /--bind-addr/);
   const settings = JSON.parse(await readFile(join(stateRoot, "code-server", "data", "User", "settings.json"), "utf8"));
+  assert.equal(settings["chat.disableAIFeatures"], true);
   assert.equal(settings["git.path"], "/opt/host/git/bin/git");
   assert.equal(settings["java.jdt.ls.java.home"], "/opt/host/java");
   assert.equal(settings["maven.executable.path"], "/opt/host/maven/bin/mvn");

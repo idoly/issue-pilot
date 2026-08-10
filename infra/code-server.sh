@@ -50,6 +50,7 @@ load_runtime_configuration() {
   container_port=$(configuration_value runtime.codeServer.containerPort)
   image=$(configuration_value runtime.codeServer.image)
   runtime_version=$(configuration_value runtime.codeServer.version)
+  chat_disable_ai_features=$(configuration_value runtime.codeServer.chatDisableAiFeatures)
 }
 
 require_host() {
@@ -80,10 +81,12 @@ configure_editor() {
   /usr/local/node/bin/node -e '
     const fs = require("node:fs");
     const file = process.argv[1];
+    const chatDisableAiFeatures = process.argv[2] === "true";
     const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
     delete settings["npm.packageManager"];
     Object.assign(settings, {
       "security.workspace.trust.enabled": false,
+      "chat.disableAIFeatures": chatDisableAiFeatures,
       "git.path": "/opt/host/git/bin/git",
       "git.autoRepositoryDetection": "subFolders",
       "git.repositoryScanMaxDepth": 2,
@@ -94,7 +97,7 @@ configure_editor() {
       "maven.executable.path": "/opt/host/maven/bin/mvn"
     });
     fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-  ' "$settings_file"
+  ' "$settings_file" "$chat_disable_ai_features"
 }
 
 write_container_environment() {

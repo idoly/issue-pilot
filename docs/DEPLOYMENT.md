@@ -100,7 +100,7 @@ npm run build
 | `defaults.*` | 见配置文件 | Environment、Deployment 和 capability 表单/API 共用默认值 |
 | `workspace.*` | 见 [运维手册](RUNBOOK.md#项目配置) | Retention、quota 和 maintenance policy |
 | `limits.*` | 见配置文件 | Agent、附件、进程和 capability 的 timeout/size/count 上限 |
-| `runtime.codeServer.*` | `127.0.0.1:18080` | Public URL、监听地址、镜像和 runtime label |
+| `runtime.codeServer.*` | `127.0.0.1:18080` | Public URL、监听地址、镜像、runtime label 和编辑器默认设置 |
 | `runtime.playwright.*` | 见配置文件 | Tool/image 版本、浏览器 timeout、viewport 和容器资源 |
 | `runtime.redisWorker.*` | 见配置文件 | Redis 隔离 worker heap |
 | `runtime.containerUser`, `runtime.aliyunCli` | 见配置文件 | 临时容器用户 fallback 和 SLS CLI 路径 |
@@ -244,7 +244,7 @@ infra/code-server.sh status
 infra/code-server.sh stop
 ```
 
-`ensure` 默认使用该项目配置解析出的 state root；API 调用时会显式传入同一个绝对路径。镜像、监听端口和 runtime label 由脚本通过 `infra/config-value.mjs` 从根配置读取，Shell 中没有第二份默认值。
+`ensure` 默认使用该项目配置解析出的 state root；API 调用时会显式传入同一个绝对路径。镜像、监听端口、runtime label 和 `chat.disableAIFeatures` 默认值由脚本通过 `infra/config-value.mjs` 从根配置读取，Shell 中没有第二份默认值。
 
 ### Mounts
 

@@ -43,6 +43,7 @@ export const issuePilotConfig = Object.freeze({
       containerPort: 8080,
       image: "ghcr.io/coder/code-server:4.131.0-39",
       version: "keep-id-v24-code-server-4.131.0-current-layout-auth-none",
+      chatDisableAiFeatures: true,
     }),
     playwright: Object.freeze({
       version: "1.62.1",
