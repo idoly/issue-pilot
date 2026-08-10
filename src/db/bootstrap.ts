@@ -3,20 +3,19 @@ import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 
-import { ENVIRONMENT_KINDS, type EnvironmentKind } from "../domain/contracts.ts";
-import { openDatabase } from "./client.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
+import { openDatabase, type DatabaseConnection } from "./client.ts";
 import { environments } from "./schema.ts";
 
-type OpenDatabase = ReturnType<typeof openDatabase>;
-
-export async function migrateDatabase(database: OpenDatabase): Promise<void> {
+export async function migrateDatabase(database: DatabaseConnection): Promise<void> {
   await migrate(database.db, { migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url)) });
 }
 
-export async function openApplicationDatabase(file?: string, connect: typeof openDatabase = openDatabase): Promise<OpenDatabase> {
+export async function openApplicationDatabase(file?: string, connect: typeof openDatabase = openDatabase): Promise<DatabaseConnection> {
   const database = connect(file);
   try {
-    await database.client.execute("PRAGMA busy_timeout = 5000");
+    await database.client.execute(`PRAGMA busy_timeout = ${issuePilotConfig.state.sqliteBusyTimeoutMs}`);
     await database.client.execute("PRAGMA journal_mode = WAL");
     await migrateDatabase(database);
     await database.client.execute("PRAGMA foreign_keys = ON");
@@ -33,9 +32,8 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
       args: [],
     });
 
-    const names: Record<EnvironmentKind, string> = { prod: "正式", test: "测试", dev: "开发" };
     for (const kind of ENVIRONMENT_KINDS) {
-      const definition = { key: kind, name: names[kind], kind };
+      const definition = { key: kind, name: issuePilotConfig.defaults.environments[kind], kind };
       const [existing] = await database.db.select().from(environments).where(eq(environments.key, kind)).limit(1);
       if (existing) {
         await database.db.update(environments).set({ name: definition.name, kind, updatedAt: new Date() }).where(eq(environments.id, existing.id));

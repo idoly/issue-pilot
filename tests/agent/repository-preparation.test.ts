@@ -33,12 +33,12 @@ async function createRemote(root: string): Promise<{ source: string; remote: str
   return { source, remote };
 }
 
-test("uses shared runtimes for prod and configured issue workspaces for dev", async () => {
+test("uses unified code-server runtimes while preserving read-only and writable Agent workspaces", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
   const policies: IssuePolicy[] = [];
-  let codeServerCalls = 0;
+  const codeServerPaths: string[] = [];
   let sessionStops = 0;
   try {
     const { source, remote } = await createRemote(root);
@@ -72,7 +72,7 @@ test("uses shared runtimes for prod and configured issue workspaces for dev", as
       },
     };
     internal.codeServerManager = {
-      async ensure() { codeServerCalls += 1; return "http://127.0.0.1:18080"; },
+      async ensure(_issueKey, workspacePath) { codeServerPaths.push(workspacePath); return "http://127.0.0.1:18080"; },
     };
 
     await internal.run(prodIssue!.id);
@@ -110,7 +110,11 @@ test("uses shared runtimes for prod and configured issue workspaces for dev", as
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.codeServerReady, true);
     assert.equal(policies[2]!.service.repositories[0]!.codeAccess, "write");
-    assert.equal(codeServerCalls, 3);
+    assert.deepEqual(codeServerPaths, [
+      issueRuntimeRoot(stateRoot, prodIssue!.key),
+      issueRuntimeRoot(stateRoot, prodIssue!.key),
+      issueRuntimeRoot(stateRoot, devIssue!.key),
+    ]);
     await engine.close();
     assert.equal(sessionStops, 3);
   } finally {

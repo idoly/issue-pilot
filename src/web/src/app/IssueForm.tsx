@@ -16,8 +16,6 @@ export function selectedChoice<T extends string>(value: unknown, allowed: readon
   return typeof value === "string" && allowed.includes(value as T) ? value as T : undefined;
 }
 
-export const environmentLabel: Record<string, string> = { prod: "正式", test: "测试", dev: "开发" };
-
 export function issueTypesForEnvironment(environmentKey: string): IssueType[] {
   return [...(ISSUE_TYPES_BY_ENVIRONMENT[environmentKey as keyof typeof ISSUE_TYPES_BY_ENVIRONMENT] ?? [])];
 }

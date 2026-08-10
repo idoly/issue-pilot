@@ -2,11 +2,13 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { createClient } from "redis";
 
+import { errorMessage } from "../domain/contracts.ts";
 import { capabilityResultText } from "./contracts.ts";
 
 type Input = {
   action: string;
   command: string[];
+  connectTimeoutMs: number;
   config: { host: string; port: number; username: string; password?: string; database: number };
 };
 
@@ -16,7 +18,7 @@ const client = createClient({
   socket: {
     host: input.config.host,
     port: input.config.port,
-    connectTimeout: 10_000,
+    connectTimeout: input.connectTimeoutMs,
     reconnectStrategy: false,
   },
   ...(input.config.username ? { username: input.config.username } : {}),
@@ -31,7 +33,7 @@ try {
   const output = await client.sendCommand(input.command);
   parentPort?.postMessage({ ok: true, text: capabilityResultText({ action: input.action, output }) });
 } catch (error) {
-  parentPort?.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  parentPort?.postMessage({ ok: false, error: errorMessage(error) });
 } finally {
   if (client.isOpen) client.destroy();
 }

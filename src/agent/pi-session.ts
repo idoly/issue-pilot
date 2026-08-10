@@ -1,14 +1,16 @@
+import { writeFile } from "node:fs/promises";
+
 import {
   createAgentSession,
   createBashToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
+  SessionManager,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type JsonAgentSessionEvent,
-  type SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -35,6 +37,17 @@ export interface ManagedPiSession {
   stop(): Promise<void>;
 }
 
+export async function createPrivateSessionManager(cwd: string, sessionDirectory: string): Promise<SessionManager> {
+  const manager = SessionManager.create(cwd, sessionDirectory);
+  const sessionFile = manager.getSessionFile();
+  const header = manager.getHeader();
+  if (!sessionFile || !header) throw new Error("failed_to_initialize_agent_session");
+
+  await writeFile(sessionFile, `${JSON.stringify(header)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  manager.setSessionFile(sessionFile);
+  return manager;
+}
+
 function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
   if (event.type !== "message_update" || !("partial" in event.assistantMessageEvent)) return event;
   const assistantMessageEvent = { ...event.assistantMessageEvent };
@@ -53,7 +66,6 @@ function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unkn
         ...context.env,
         AI_AGENT: "pi",
         PI_CODING_AGENT: "true",
-        ISSUE_WORKSPACE: workspaceRoot,
         PATH: `${executableRoot}${pathSeparator}${context.env.PATH ?? ""}`,
       },
     }),
@@ -69,6 +81,14 @@ function assertSessionState(session: AgentSession, policy: IssuePolicy, expected
   const active = [...session.getActiveToolNames()].sort();
   const expected = [...expectedTools].sort();
   if (active.length !== expected.length || active.some((name, index) => name !== expected[index])) throw new Error("pi_session_tools_mismatch");
+}
+
+async function abortAndDispose(session: AgentSession): Promise<void> {
+  try {
+    if (session.isStreaming) await session.abort();
+  } finally {
+    session.dispose();
+  }
 }
 
 export class PiSessionRuntime {
@@ -125,11 +145,7 @@ export class PiSessionRuntime {
     try {
       assertSessionState(session, policy, options.manager.getSessionId(), expectedTools);
     } catch (error) {
-      try {
-        if (session.isStreaming) await session.abort();
-      } finally {
-        session.dispose();
-      }
+      await abortAndDispose(session);
       throw error;
     }
     const unsubscribe = session.subscribe((event) => options.onEvent(toWireEvent(event)));
@@ -145,11 +161,7 @@ export class PiSessionRuntime {
         if (stopped) return;
         stopped = true;
         unsubscribe();
-        try {
-          if (session.isStreaming) await session.abort();
-        } finally {
-          session.dispose();
-        }
+        await abortAndDispose(session);
       },
     };
   }

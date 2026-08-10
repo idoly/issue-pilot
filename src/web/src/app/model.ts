@@ -1,3 +1,4 @@
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_PRIORITIES, type IssuePriority, type IssueStatus, type IssueType } from "../data/client";
 
 export const priorityColor: Record<IssuePriority, string> = { p0: "red", p1: "volcano", p2: "blue", p3: "default" };
@@ -23,6 +24,13 @@ export const typeLabel: Record<IssueType, string> = {
   feature_development: "功能开发",
 };
 
+const dateFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, {
+  timeZone: issuePilotConfig.regional.timeZone,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 export function relativeTime(value: string): string {
   const elapsed = Date.now() - new Date(value).getTime();
   if (!Number.isFinite(elapsed)) return value;
@@ -33,7 +41,7 @@ export function relativeTime(value: string): string {
   if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days} 天前`;
-  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+  return dateFormat.format(new Date(value));
 }
 
 export function fileSize(bytes: number): string {
@@ -45,7 +53,8 @@ export function fileSize(bytes: number): string {
 
 function codeServerUrl(value: string): URL {
   const url = new URL(value, window.location.href);
-  const loopbackCodeServer = (url.hostname === "127.0.0.1" || url.hostname === "localhost") && url.port === "18080";
+  const configuredOrigin = new URL(issuePilotConfig.runtime.codeServer.publicUrl).origin;
+  const loopbackCodeServer = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.origin === configuredOrigin;
   if (loopbackCodeServer && url.origin !== window.location.origin) {
     url.protocol = window.location.protocol;
     url.host = window.location.host;

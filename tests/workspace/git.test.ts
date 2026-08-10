@@ -65,23 +65,33 @@ test("shares immutable latest baselines for read-only environments and creates p
     assert.equal(hotfix.workingBranch, "hotfix-issue-20260805-011");
     assert.equal(await git(["-C", hotfix.workspacePath, "branch", "--show-current"]), hotfix.workingBranch);
     await assert.rejects(git(["-C", hotfix.workspacePath, "rev-parse", "@{upstream}"]));
+    await assert.rejects(git(["--git-dir", remote, "rev-parse", `refs/heads/${hotfix.workingBranch}`]));
+    const unchangedSnapshot = await worktreeManager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: hotfix.workingBranch! });
+    assert.equal(unchangedSnapshot.workspacePath, refreshed.workspacePath);
+    await writeFile(join(hotfix.workspacePath, "branch.txt"), "branch snapshot\n", "utf8");
+    await git(["-C", hotfix.workspacePath, "add", "."]);
+    await git(["-C", hotfix.workspacePath, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "branch snapshot"]);
+    const changedSnapshot = await worktreeManager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: hotfix.workingBranch! });
+    assert.equal(await git(["-C", changedSnapshot.workspacePath, "rev-parse", "HEAD"]), await git(["-C", hotfix.workspacePath, "rev-parse", "HEAD"]));
+    assert.equal(await readFile(join(changedSnapshot.workspacePath, "branch.txt"), "utf8"), "branch snapshot\n");
     assert.doesNotMatch(await readFile(join(hotfix.workspacePath, ".git"), "utf8"), new RegExp(root));
     assert.doesNotMatch(await readFile(join(hotfix.cachePath, "worktrees", basename(hotfix.workspacePath), "gitdir"), "utf8"), new RegExp(root));
     const feature = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-012", workspaceName: "remote", url: remote, baseBranch: "main", mode: "feature" });
     assert.equal(feature.workingBranch, "feature-issue-20260805-012");
     assert.equal(await git(["-C", feature.workspacePath, "branch", "--show-current"]), feature.workingBranch);
 
-    const previous = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-013", workspaceName: "e8291771-d16d-4161-a70f-2e6c04f4dc45", url: remote, baseBranch: "main", mode: "hotfix" });
-    await writeFile(join(previous.workspacePath, "uncommitted.txt"), "preserved\n", "utf8");
-    const renamed = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-013", workspaceName: "srm-server", url: remote, baseBranch: "main", mode: "hotfix", existingWorkspacePath: previous.workspacePath });
-    assert.equal(basename(renamed.workspacePath), "srm-server");
-    await assert.rejects(access(previous.workspacePath));
-    assert.match(await git(["-C", renamed.workspacePath, "status", "--porcelain"]), /uncommitted\.txt/);
-    assert.equal(await git(["-C", renamed.workspacePath, "branch", "--show-current"]), "hotfix-issue-20260805-013");
-    await assert.rejects(worktreeManager.remove(remote, renamed.workspacePath), /workspace_has_changes/);
-    await unlink(join(renamed.workspacePath, "uncommitted.txt"));
-    await worktreeManager.remove(remote, renamed.workspacePath);
-    await assert.rejects(access(renamed.workspacePath));
+    const unexpected = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-013", workspaceName: "unexpected-name", url: remote, baseBranch: "main", mode: "hotfix" });
+    await writeFile(join(unexpected.workspacePath, "uncommitted.txt"), "preserved\n", "utf8");
+    await assert.rejects(
+      worktreeManager.prepare({ issueKey: "ISSUE-20260805-013", workspaceName: "srm-server", url: remote, baseBranch: "main", mode: "hotfix", existingWorkspacePath: unexpected.workspacePath }),
+      /workspace_path_does_not_match_repository/,
+    );
+    assert.match(await git(["-C", unexpected.workspacePath, "status", "--porcelain"]), /uncommitted\.txt/);
+    assert.equal(await git(["-C", unexpected.workspacePath, "branch", "--show-current"]), "hotfix-issue-20260805-013");
+    await assert.rejects(worktreeManager.remove(remote, unexpected.workspacePath), /workspace_has_changes/);
+    await unlink(join(unexpected.workspacePath, "uncommitted.txt"));
+    await worktreeManager.remove(remote, unexpected.workspacePath);
+    await assert.rejects(access(unexpected.workspacePath));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -55,20 +55,10 @@ test("derives credential-free capability scopes from deployment configuration", 
 });
 
 test("requires model authorization from deployment configuration", () => {
-  const previous = { provider: process.env.PI_PROVIDER, model: process.env.PI_MODEL, reasoning: process.env.PI_REASONING_LEVEL };
-  try {
-    process.env.PI_PROVIDER = "environment-provider";
-    process.env.PI_MODEL = "environment-model";
-    process.env.PI_REASONING_LEVEL = "high";
-    assert.throws(() => createDeploymentPolicy({
-      issueKey: "ISSUE-20260804-008", issueType: "smart_analysis", workspaceRoot: "/tmp/no-model", deploymentId: "deployment-no-model",
-      deploymentConfig: {}, serviceKey: "orders", environmentKey: "test", environmentKind: "test", repositories: service("test").repositories,
-    }), /issue_pilot_model_not_configured/);
-  } finally {
-    if (previous.provider === undefined) delete process.env.PI_PROVIDER; else process.env.PI_PROVIDER = previous.provider;
-    if (previous.model === undefined) delete process.env.PI_MODEL; else process.env.PI_MODEL = previous.model;
-    if (previous.reasoning === undefined) delete process.env.PI_REASONING_LEVEL; else process.env.PI_REASONING_LEVEL = previous.reasoning;
-  }
+  assert.throws(() => createDeploymentPolicy({
+    issueKey: "ISSUE-20260804-008", issueType: "smart_analysis", workspaceRoot: "/tmp/no-model", deploymentId: "deployment-no-model",
+    deploymentConfig: {}, serviceKey: "orders", environmentKey: "test", environmentKind: "test", repositories: service("test").repositories,
+  }), /issue_pilot_model_not_configured/);
 });
 
 test("turns repositories read-only outside writable dev issue types", () => {

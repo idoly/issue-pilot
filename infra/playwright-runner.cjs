@@ -4,7 +4,6 @@ const fs = require("node:fs");
 const { chromium } = require("/tool/node_modules/playwright-core");
 
 const [requestFile, credentialsFile] = process.argv.slice(2);
-const MAX_ACTIONS = 50;
 if (!requestFile || !credentialsFile) process.exit(2);
 
 function readJsonFile(file) {
@@ -24,13 +23,17 @@ async function run() {
   const credentials = readJsonFile(credentialsFile);
   const baseUrl = new URL(request.baseUrl);
   if ((baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) throw new Error("invalid_base_url");
-  if (!Array.isArray(request.actions) || request.actions.length < 1 || request.actions.length > MAX_ACTIONS) throw new Error("invalid_actions");
+  if (!Number.isSafeInteger(request.maxActions) || request.maxActions < 1) throw new Error("invalid_action_limit");
+  if (!Number.isSafeInteger(request.actionTimeoutMs) || request.actionTimeoutMs < 1) throw new Error("invalid_action_timeout");
+  if (!Number.isSafeInteger(request.navigationTimeoutMs) || request.navigationTimeoutMs < 1) throw new Error("invalid_navigation_timeout");
+  if (!request.viewport || !Number.isSafeInteger(request.viewport.width) || request.viewport.width < 1 || !Number.isSafeInteger(request.viewport.height) || request.viewport.height < 1) throw new Error("invalid_viewport");
+  if (!Array.isArray(request.actions) || request.actions.length < 1 || request.actions.length > request.maxActions) throw new Error("invalid_actions");
 
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({
       acceptDownloads: false,
-      viewport: { width: 1280, height: 720 },
+      viewport: request.viewport,
       serviceWorkers: "block",
     });
     await context.route("**/*", async (route) => {
@@ -47,8 +50,8 @@ async function run() {
     context.on("page", (candidate) => { if (candidate !== page) void candidate.close(); });
     page.on("dialog", (dialog) => { void dialog.dismiss(); });
     page.on("download", (download) => { void download.cancel(); });
-    page.setDefaultTimeout(10_000);
-    page.setDefaultNavigationTimeout(20_000);
+    page.setDefaultTimeout(request.actionTimeoutMs);
+    page.setDefaultNavigationTimeout(request.navigationTimeoutMs);
     await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
 
     for (const action of request.actions) {

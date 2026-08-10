@@ -1,12 +1,14 @@
 import { and, eq, inArray } from "drizzle-orm";
 
-import { isNacosTarget, isSlsLogstore, MAX_NACOS_DATA_IDS } from "../capabilities/contracts.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { isNacosTarget, isSlsLogstore } from "../capabilities/contracts.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 
+const defaults = issuePilotConfig.defaults;
 const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
@@ -28,17 +30,17 @@ function boundedInteger(value: unknown, name: string, minimum: number, maximum: 
 }
 
 function parseConnectionUrl(value: unknown, name: string, protocols: string[], options: { rootOnly?: boolean } = {}): string {
-  const configured = text(value, name, 4096);
-  let parsed: URL;
-  try { parsed = new URL(configured); } catch { throw new ApiError(400, `invalid_${name}`); }
-  if (!protocols.includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || (options.rootOnly && parsed.pathname !== "/")) throw new ApiError(400, `invalid_${name}`);
-  return configured;
+  const configuredUrl = text(value, name, 4096);
+  let url: URL;
+  try { url = new URL(configuredUrl); } catch { throw new ApiError(400, `invalid_${name}`); }
+  if (!protocols.includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash || (options.rootOnly && url.pathname !== "/")) throw new ApiError(400, `invalid_${name}`);
+  return configuredUrl;
 }
 
 export function parseCapabilities(value: unknown): CapabilityName[] {
-  const entries = strings(value, "capabilities");
-  if (new Set(entries).size !== entries.length || entries.some((entry) => !CAPABILITY_KEYS.includes(entry as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
-  return CAPABILITY_KEYS.filter((key) => entries.includes(key));
+  const capabilities = strings(value, "capabilities");
+  if (new Set(capabilities).size !== capabilities.length || capabilities.some((capability) => !CAPABILITY_KEYS.includes(capability as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
+  return CAPABILITY_KEYS.filter((key) => capabilities.includes(key));
 }
 
 export function parseNacosConfiguration(value: unknown, required: boolean) {
@@ -46,7 +48,7 @@ export function parseNacosConfiguration(value: unknown, required: boolean) {
   if (!input) return undefined;
   const credentials = optionalCredentials(input, "nacos");
   const dataIds = [...new Set(strings(input.dataIds, "nacos_data_ids").map((value) => text(value, "nacos_data_id", 255)))];
-  if (!dataIds.length || dataIds.length > MAX_NACOS_DATA_IDS || dataIds.some((dataId) => !isNacosTarget(dataId))) throw new ApiError(400, "invalid_nacos_data_ids");
+  if (!dataIds.length || dataIds.length > issuePilotConfig.limits.capability.nacos.dataIds || dataIds.some((dataId) => !isNacosTarget(dataId))) throw new ApiError(400, "invalid_nacos_data_ids");
   const group = text(input.group, "nacos_group", 255);
   if (!isNacosTarget(group)) throw new ApiError(400, "invalid_nacos_group");
   return {
@@ -80,7 +82,7 @@ export function parseRedisConfiguration(value: unknown, required: boolean) {
   const input = configurationInput(value, required);
   if (!input) return undefined;
   const password = optionalString(input.password);
-  return { host: text(input.host, "redis_host", 255), port: boundedInteger(input.port ?? 6379, "redis_port", 1, 65_535), username: optionalString(input.username, 500), ...(password ? { password } : {}), database: boundedInteger(input.database ?? 0, "redis_database", 0, 1_000_000) };
+  return { host: text(input.host, "redis_host", 255), port: boundedInteger(input.port ?? defaults.redis.port, "redis_port", 1, 65_535), username: optionalString(input.username, 500), ...(password ? { password } : {}), database: boundedInteger(input.database ?? defaults.redis.database, "redis_database", 0, 1_000_000) };
 }
 
 export function parseElasticsearchConfiguration(value: unknown, required: boolean) {
@@ -92,7 +94,7 @@ export function parseElasticsearchConfiguration(value: unknown, required: boolea
 export function parseRabbitMqConfiguration(value: unknown, required: boolean) {
   const input = configurationInput(value, required);
   if (!input) return undefined;
-  return { host: text(input.host, "mq_host", 255), port: boundedInteger(input.port ?? 5672, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? 15672, "mq_management_port", 1, 65_535), username: text(input.username, "mq_username", 500), password: text(input.password, "mq_password"), virtualHost: text(input.virtualHost, "mq_virtual_host", 255) };
+  return { host: text(input.host, "mq_host", 255), port: boundedInteger(input.port ?? defaults.rabbitmq.port, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: text(input.username, "mq_username", 500), password: text(input.password, "mq_password"), virtualHost: text(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
 }
 
 export function parsePlaywrightConfiguration(value: unknown, required: boolean) {
@@ -202,12 +204,12 @@ export async function replaceServiceConfiguration(options: {
   const retainedDeploymentIds = new Set<string>();
   for (const deploymentInput of deploymentsInput) {
     const environment = environmentsByKey.get(deploymentInput.environmentKey)!;
-    const existing = existingByEnvironmentId.get(environment.id);
-    const config = storedDeploymentConfiguration(deploymentInput);
-    const deployment = existing
-      ? (await executor.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config, updatedAt: new Date() }).where(eq(serviceDeployments.id, existing.id)).returning())[0]!
-      : (await executor.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config }).returning())[0]!;
-    retainedDeploymentIds.add(deployment.id);
+    const existingDeployment = existingByEnvironmentId.get(environment.id);
+    const deploymentConfig = storedDeploymentConfiguration(deploymentInput);
+    const savedDeployment = existingDeployment
+      ? (await executor.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config: deploymentConfig, updatedAt: new Date() }).where(eq(serviceDeployments.id, existingDeployment.id)).returning())[0]!
+      : (await executor.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config: deploymentConfig }).returning())[0]!;
+    retainedDeploymentIds.add(savedDeployment.id);
   }
   for (const deployment of existingDeployments) if (!retainedDeploymentIds.has(deployment.id)) await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
 }

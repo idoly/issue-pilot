@@ -6,7 +6,7 @@ describe("API client", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("creates an issue and its initial attachments in one request", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-1" }), { status: 201 }));
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 201 }));
     vi.stubGlobal("fetch", fetch);
     const file = new File(["evidence"], "evidence.txt", { type: "text/plain" });
 
@@ -35,7 +35,7 @@ describe("API client", () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
     vi.stubGlobal("fetch", fetch);
 
-    await expect(sendAgentMessage("ISSUE-1", "Continue")).resolves.toBeUndefined();
-    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-1/agent-messages", expect.objectContaining({ method: "POST", body: JSON.stringify({ message: "Continue" }) }));
+    await expect(sendAgentMessage("ISSUE-20260810-001", "Continue")).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-20260810-001/agent-messages", expect.objectContaining({ method: "POST", body: JSON.stringify({ message: "Continue" }) }));
   });
 });

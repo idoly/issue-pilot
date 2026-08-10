@@ -2,7 +2,16 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-state_root="$root/.issue-pilot"
+node=/usr/local/node/bin/node
+config_reader="$root/infra/config-value.mjs"
+state_root=$("$node" --experimental-strip-types "$config_reader" state.directory)
+if [ "${1:-}" = ensure ] && [ "$#" -eq 2 ]; then
+  state_root=$2
+fi
+case "$state_root" in
+  /*) ;;
+  *) state_root="$root/$state_root" ;;
+esac
 workspace_root="$state_root/workspaces"
 git_root="$state_root/git"
 repositories_root="$git_root/repositories"
@@ -12,8 +21,6 @@ code_server_root="$state_root/code-server"
 data_root="$code_server_root/data"
 container_env_file="$code_server_root/container.env"
 name=code-server
-image=ghcr.io/coder/code-server:4.131.0-39
-runtime_version=keep-id-v24-code-server-4.131.0-current-layout-auth-none
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -32,8 +39,21 @@ require_directory() {
   [ -d "$1" ] || fail "Directory not found: $1"
 }
 
+configuration_value() {
+  "$node" --experimental-strip-types "$config_reader" "$1"
+}
+
+load_runtime_configuration() {
+  require_file "$config_reader"
+  listen_host=$(configuration_value runtime.codeServer.listenHost)
+  listen_port=$(configuration_value runtime.codeServer.listenPort)
+  container_port=$(configuration_value runtime.codeServer.containerPort)
+  image=$(configuration_value runtime.codeServer.image)
+  runtime_version=$(configuration_value runtime.codeServer.version)
+}
+
 require_host() {
-  require_executable /usr/local/node/bin/node
+  require_executable "$node"
   require_executable /usr/local/node/bin/npm
   require_executable /usr/local/node/bin/corepack
   require_executable /usr/local/node/bin/pi
@@ -91,6 +111,7 @@ write_container_environment() {
 
 ensure() {
   require_host
+  load_runtime_configuration
   mkdir -p "$workspace_root" "$repositories_root" "$issues_root" "$checkouts_root" "$data_root/User"
   chmod 0700 "$code_server_root" "$data_root" "$data_root/User"
   configure_editor
@@ -111,7 +132,7 @@ ensure() {
     --label "io.issue-pilot.code-server-runtime=$runtime_version" \
     --security-opt no-new-privileges --cap-drop ALL --userns=keep-id \
     --workdir /home/coder/state/workspaces \
-    --publish 127.0.0.1:18080:8080 \
+    --publish "$listen_host:$listen_port:$container_port" \
     --env-file "$container_env_file" \
     --volume "$workspace_root:/home/coder/state/workspaces:Z" \
     --volume "$repositories_root:/home/coder/state/git/repositories:Z" \
@@ -144,8 +165,8 @@ stop() {
 }
 
 case "${1:-}" in
-  ensure) [ "$#" -eq 1 ] || exit 2; ensure ;;
+  ensure) [ "$#" -le 2 ] || exit 2; ensure ;;
   status) [ "$#" -eq 1 ] || exit 2; status ;;
   stop) [ "$#" -eq 1 ] || exit 2; stop ;;
-  *) printf 'Usage: %s ensure|status|stop\n' "$0" >&2; exit 2 ;;
+  *) printf 'Usage: %s ensure [state-root]|status|stop\n' "$0" >&2; exit 2 ;;
 esac

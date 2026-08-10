@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 
 import { readNacosCapability } from "../../src/capabilities/broker.ts";
-import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/contracts.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/external-data.ts";
 
 async function nacosServer(): Promise<{
@@ -32,7 +32,7 @@ async function nacosServer(): Promise<{
       return;
     }
     if (url.searchParams.get("dataId") === "oversized.yaml") {
-      response.end("x".repeat(MAX_CAPABILITY_RESULT_BYTES + 1));
+      response.end("x".repeat(issuePilotConfig.limits.capability.resultBytes + 1));
       return;
     }
     response.end("spring:\n  datasource:\n    password: business-secret\n");

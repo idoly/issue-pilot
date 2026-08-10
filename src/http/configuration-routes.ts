@@ -5,7 +5,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 import { configuredCapabilities, CAPABILITY_KEYS, ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { environments, issues, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
-import { ensureCurrentSubject, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, serializePerson, type ApiRouteContext } from "./route-context.ts";
 import { replaceServiceConfiguration } from "./service-configuration.ts";
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
@@ -20,9 +20,6 @@ function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
 export function registerConfigurationRoutes(context: ApiRouteContext): void {
   const { app, database, engine, modelCatalog } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
-  const serializePerson = (person: typeof subjects.$inferSelect) => ({
-    subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "",
-  });
 
   app.get("/api/me", async () => {
     const subject = await ensureCurrentSubject(database);
@@ -70,13 +67,13 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const name = text(input.name, "name", 200);
     const description = optionalText(input.description) ?? "";
     const existingKeys = new Set((await database.db.select({ key: services.key }).from(services)).map(({ key }) => key));
-    const key = uniqueServiceKey(name, existingKeys);
-    const created = await database.db.transaction(async (transaction) => {
-      const [service] = await transaction.insert(services).values({ key, name, description }).returning();
+    const serviceKey = uniqueServiceKey(name, existingKeys);
+    const createdService = await database.db.transaction(async (transaction) => {
+      const [service] = await transaction.insert(services).values({ key: serviceKey, name, description }).returning();
       await replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service!.id, input });
       return service!;
     });
-    return reply.code(201).send({ key: created.key, name: created.name });
+    return reply.code(201).send({ key: createdService.key, name: createdService.name });
   });
 
   app.patch<{ Params: { key: string } }>("/api/services/:key", async (request) => {
@@ -87,9 +84,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const input = record(request.body);
     const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
     await database.db.transaction((transaction) => replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service.id, input, serviceUpdate }));
-    if (affectedIssues.length) {
-      await Promise.all(affectedIssues.map((issue) => engine.closeSession(issue.id)));
-    }
+    await Promise.all(affectedIssues.map((issue) => engine.closeSession(issue.id)));
     return { ok: true };
   });
 

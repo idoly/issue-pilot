@@ -9,7 +9,7 @@ import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent,
 import { piDarkThemeStyle } from "./pi-theme";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
-  return { id, issueId: "ISSUE-1", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
+  return { id, issueId: "ISSUE-20260810-001", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
 }
 
 const usage = {
@@ -121,7 +121,7 @@ describe("Agent conversation state", () => {
       id: "tool-1", kind: "tool", toolCallId: "call-1", name: "read", status: "complete",
       startedAt: "2026-08-06T00:00:00.000Z",
       arguments: {
-        path: "/home/idoly/issue-pilot/.issue-pilot/workspaces/issue-20260807-001/e8291771-d16d-4161-a70f-2e6c04f4dc45/srm-api-manage/src/PurchaseOrderServiceImpl.java",
+        path: "/home/idoly/issue-pilot/.issue-pilot/workspaces/issue-20260807-001/srm-api-manage/src/PurchaseOrderServiceImpl.java",
         offset: 2940,
         limit: 220,
       },
@@ -157,14 +157,14 @@ describe("Agent conversation state", () => {
   it("renders the real EventSource lifecycle and active transcript", async () => {
     EventSourceMock.instances.length = 0;
     const issue = {
-      id: "ISSUE-1", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "running", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_busy" },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;
-    expect(source.url).toBe("/api/issues/ISSUE-1/agent-stream");
+    expect(source.url).toBe("/api/issues/ISSUE-20260810-001/agent-stream");
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
     source.emit("ready", {

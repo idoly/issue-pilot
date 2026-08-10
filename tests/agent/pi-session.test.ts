@@ -1,15 +1,39 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import type { Model } from "@earendil-works/pi-ai";
-import { ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
-import { PiSessionRuntime } from "../../src/agent/pi-session.ts";
-import { createPrivateSessionManager } from "../../src/agent/session.ts";
+import { createPrivateSessionManager, PiSessionRuntime } from "../../src/agent/pi-session.ts";
 import { createIssuePolicy, piToolAllowlist, type IssuePolicy } from "../../src/pi/policy.ts";
+
+test("creates a private Pi session file before the first Agent prompt", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-session-"));
+  try {
+    const workspace = join(root, "workspace");
+    const sessionDirectory = join(root, "sessions");
+    await mkdir(workspace);
+    await mkdir(sessionDirectory, { mode: 0o700 });
+
+    const manager = await createPrivateSessionManager(workspace, sessionDirectory);
+    const sessionFile = manager.getSessionFile();
+    assert.ok(sessionFile);
+    assert.equal((await stat(sessionFile)).mode & 0o777, 0o600);
+
+    const [header] = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(header.type, "session");
+    assert.equal(header.id, manager.getSessionId());
+
+    manager.appendCustomEntry("issue-pilot-user", { message: "hello" });
+    const reopened = SessionManager.open(sessionFile, sessionDirectory, workspace);
+    assert.deepEqual(reopened.getEntries().map((entry) => entry.type), ["custom"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function policy(options: { writable: boolean; capability?: "db" | "playwright" }): IssuePolicy {
   const capability = options.capability;

@@ -1,11 +1,31 @@
 import { execFile } from "node:child_process";
-import { chmod, lstat, mkdir, readlink, readdir, rm, symlink } from "node:fs/promises";
+import { access, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 
 const execFileAsync = promisify(execFile);
+
+export interface RepositoryStateRecord {
+  localPath: string | null;
+  workingBranch: string | null;
+}
+
+export type RepositoryState = "read_only" | "development_workspace" | "development_snapshot" | "invalid";
+
+export function classifyRepositoryState(repositories: RepositoryStateRecord[]): RepositoryState {
+  if (!repositories.length) return "invalid";
+  if (repositories.every((repository) => repository.localPath === null && repository.workingBranch === null)) return "read_only";
+  if (repositories.every((repository) => Boolean(repository.localPath) && Boolean(repository.workingBranch))) return "development_workspace";
+  if (repositories.every((repository) => repository.localPath === null && Boolean(repository.workingBranch))) return "development_snapshot";
+  return "invalid";
+}
+
+export function pathExists(candidate: string): Promise<boolean> {
+  return access(candidate).then(() => true, () => false);
+}
 
 function issueSegment(issueKey: string): string {
   return normalizeIssueKey(issueKey).toLowerCase();
@@ -35,40 +55,13 @@ export function issueRuntimeRoot(stateRoot: string, issueKey: string): string {
   return path.join(issueRoot(stateRoot, issueKey), "runtime");
 }
 
+export function issueRuntimeWorkspaceFile(stateRoot: string, issueKey: string): string {
+  const segment = issueSegment(issueKey);
+  return path.join(issuesRoot(stateRoot), segment, "runtime", `${segment}.code-workspace`);
+}
+
 export function issueAttachmentRoot(stateRoot: string, issueKey: string): string {
   return path.join(issueRoot(stateRoot, issueKey), "attachments");
-}
-
-export function issueWorkspaceLink(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "workspace");
-}
-
-export async function ensureIssueWorkspaceLink(stateRoot: string, issueKey: string): Promise<string> {
-  const root = issueRoot(stateRoot, issueKey);
-  const link = issueWorkspaceLink(stateRoot, issueKey);
-  const target = path.relative(root, issueWorkspaceRoot(stateRoot, issueKey));
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await chmod(root, 0o700);
-  try {
-    const metadata = await lstat(link);
-    if (!metadata.isSymbolicLink() || await readlink(link) !== target) throw new Error("issue_workspace_link_conflict");
-  } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-    await symlink(target, link, "dir");
-  }
-  return link;
-}
-
-export async function removeIssueWorkspaceLink(stateRoot: string, issueKey: string): Promise<void> {
-  const link = issueWorkspaceLink(stateRoot, issueKey);
-  try {
-    const metadata = await lstat(link);
-    const expected = path.relative(issueRoot(stateRoot, issueKey), issueWorkspaceRoot(stateRoot, issueKey));
-    if (!metadata.isSymbolicLink() || await readlink(link) !== expected) throw new Error("issue_workspace_link_conflict");
-    await rm(link);
-  } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-  }
 }
 
 function gitRoot(stateRoot: string): string {
@@ -83,41 +76,43 @@ export function sharedCheckoutsRoot(stateRoot: string): string {
   return path.join(gitRoot(stateRoot), "checkouts");
 }
 
-async function directories(root: string): Promise<string[]> {
+async function directoryNames(directory: string): Promise<string[]> {
   try {
-    return (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
     throw error;
   }
 }
 
-export async function assertManagedIssueWorkspaceLayout(root: string, localPaths: string[]): Promise<void> {
-  const allowed = new Set<string>();
+export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, localPaths: string[]): Promise<void> {
+  const allowedEntries = new Set<string>();
   for (const localPath of localPaths) {
     const resolved = path.resolve(localPath);
-    if (path.dirname(resolved) !== root) throw new Error("workspace_path_outside_issue_root");
-    allowed.add(path.basename(resolved));
+    if (path.dirname(resolved) !== workspaceRoot) throw new Error("workspace_path_outside_issue_root");
+    allowedEntries.add(path.basename(resolved));
   }
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (!allowed.has(entry.name)) throw new Error("workspace_has_untracked_files");
+  for (const entry of await readdir(workspaceRoot, { withFileTypes: true })) {
+    if (!allowedEntries.has(entry.name)) throw new Error("workspace_has_untracked_files");
   }
 }
 
 export async function pruneState(stateRoot: string, issueKeys: string[]): Promise<void> {
   const active = new Set(issueKeys.map((key) => normalizeIssueKey(key).toLowerCase()));
+  const managedIssuesRoot = issuesRoot(stateRoot);
+  const unmanaged: string[] = [];
   for (const category of ["workspaces", "issues"]) {
-    const root = path.resolve(stateRoot, category);
-    for (const entry of await directories(root)) {
-      if (!active.has(entry.toLowerCase())) await rm(path.join(root, entry), { recursive: true, force: true });
+    for (const entry of await directoryNames(path.resolve(stateRoot, category))) {
+      if (!active.has(entry.toLowerCase())) unmanaged.push(`${category}/${entry}`);
     }
   }
-  for (const entry of await directories(issuesRoot(stateRoot))) {
-    if (active.has(entry.toLowerCase())) await rm(path.join(issuesRoot(stateRoot), entry, "runtime"), { recursive: true, force: true });
+  if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
+  for (const entry of await directoryNames(managedIssuesRoot)) {
+    if (active.has(entry.toLowerCase())) await rm(path.join(managedIssuesRoot, entry, "runtime"), { recursive: true, force: true });
   }
   await rm(sharedCheckoutsRoot(stateRoot), { recursive: true, force: true });
-  const repositoryStorage = repositoriesRoot(stateRoot);
-  for (const entry of await directories(repositoryStorage)) {
-    await execFileAsync("git", ["-C", path.join(repositoryStorage, entry), "worktree", "prune", "--expire", "now"], { timeout: 30_000 });
+  const repositoriesDirectory = repositoriesRoot(stateRoot);
+  for (const entry of await directoryNames(repositoriesDirectory)) {
+    await execFileAsync("git", ["-C", path.join(repositoriesDirectory, entry), "worktree", "prune", "--expire", "now"], { timeout: issuePilotConfig.limits.process.gitPruneMs });
   }
 }

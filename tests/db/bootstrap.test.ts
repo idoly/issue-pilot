@@ -1,15 +1,27 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, test } from "node:test";
 
+import { applicationConfig } from "../../src/config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
 
 const directories: string[] = [];
 
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
+
+test("keeps application paths and workspace defaults in the project configuration", () => {
+  assert.equal(applicationConfig.databaseFile, join(applicationConfig.stateRoot, "issues.db"));
+  assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");
+  assert.equal(applicationConfig.workspace.highWaterBytes, 20 * 1024 ** 3);
+  assert.equal(applicationConfig.workspace.targetBytes, 16 * 1024 ** 3);
+  assert.equal(applicationConfig.runtime.codeServer.publicUrl, `http://${applicationConfig.runtime.codeServer.listenHost}:${applicationConfig.runtime.codeServer.listenPort}/`);
+  assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
+  assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
+  assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
+});
 
 test("restores interrupted and ready workspaces when the application database reopens", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-bootstrap-"));

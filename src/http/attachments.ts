@@ -5,43 +5,43 @@ import path from "node:path";
 import type { MultipartFile } from "@fastify/multipart";
 import { and, eq, inArray } from "drizzle-orm";
 
-import { issueAttachments, issues } from "../db/schema.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import type { Database } from "../db/client.ts";
+import { issueAttachments } from "../db/schema.ts";
 import { issueAttachmentRoot } from "../workspace/state.ts";
 import { ApiError, record, strings } from "./input.ts";
-import { assertIssueIdle, ensureCurrentSubject, requireIssue, type ApiRouteContext } from "./route-context.ts";
+import { assertIssueIdle, ensureCurrentSubject, requireIssue, touchIssue, type ApiRouteContext } from "./route-context.ts";
 
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-export const MAX_ATTACHMENT_FILES = 20;
-export const MAX_ATTACHMENT_REQUEST_BYTES = 40 * 1024 * 1024;
+const limits = issuePilotConfig.limits.attachment;
 
 export interface PendingAttachment {
   fileName: string;
   mediaType: string;
-  data: Buffer;
+  content: Buffer;
   sha256: string;
 }
 
-export async function readMultipartAttachment(part: MultipartFile, currentBytes: number): Promise<PendingAttachment> {
+export async function readMultipartAttachment(part: MultipartFile, consumedBytes: number): Promise<PendingAttachment> {
   const chunks: Buffer[] = [];
-  let size = currentBytes;
+  let totalBytes = consumedBytes;
   for await (const chunk of part.file) {
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += data.length;
-    if (size > MAX_ATTACHMENT_REQUEST_BYTES) throw new ApiError(413, "attachment_limit_exceeded");
-    chunks.push(data);
+    const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += chunkBuffer.length;
+    if (totalBytes > limits.requestBytes) throw new ApiError(413, "attachment_limit_exceeded");
+    chunks.push(chunkBuffer);
   }
   if (part.file.truncated) throw new ApiError(413, "attachment_limit_exceeded");
-  const data = Buffer.concat(chunks);
+  const content = Buffer.concat(chunks);
   const fileName = path.basename(part.filename);
   if (!fileName) throw new ApiError(400, "invalid_attachment_name");
-  return { fileName, mediaType: part.mimetype, data, sha256: createHash("sha256").update(data).digest("hex") };
+  return { fileName, mediaType: part.mimetype, content, sha256: createHash("sha256").update(content).digest("hex") };
 }
 
-export async function resolveSecureAttachmentFile(directory: string, objectKey: string, expectedSize?: number): Promise<string> {
-  const source = path.resolve(objectKey);
-  const metadata = await stat(source).catch(() => undefined);
-  if (path.dirname(source) !== directory || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && (metadata.size !== expectedSize || metadata.size > MAX_ATTACHMENT_BYTES))) throw new Error("insecure_issue_attachment_file");
-  return source;
+export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
+  const attachmentPath = path.resolve(objectKey);
+  const metadata = await stat(attachmentPath).catch(() => undefined);
+  if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && (metadata.size !== expectedSize || metadata.size > limits.fileBytes))) throw new Error("insecure_issue_attachment_file");
+  return attachmentPath;
 }
 
 export function serializeAttachment(attachment: typeof issueAttachments.$inferSelect) {
@@ -55,6 +55,35 @@ export function serializeAttachment(attachment: typeof issueAttachments.$inferSe
   };
 }
 
+type AttachmentWriter = Pick<Database, "insert">;
+
+export async function removeWrittenAttachments(objectKeys: string[]): Promise<void> {
+  await Promise.all(objectKeys.map((objectKey) => rm(objectKey, { force: true }).catch(() => undefined)));
+}
+
+export async function writePendingAttachments(
+  executor: AttachmentWriter,
+  stateRoot: string,
+  issue: { id: string; key: string },
+  uploadedBy: string,
+  pendingAttachments: PendingAttachment[],
+  writtenObjectKeys: string[],
+): Promise<Array<ReturnType<typeof serializeAttachment>>> {
+  if (!pendingAttachments.length) return [];
+  const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+  await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
+  await Promise.all([chmod(path.dirname(attachmentRoot), 0o700), chmod(attachmentRoot, 0o700)]);
+  const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
+  for (const pendingAttachment of pendingAttachments) {
+    const objectKey = path.join(attachmentRoot, `${randomUUID()}-${pendingAttachment.fileName}`);
+    writtenObjectKeys.push(objectKey);
+    await writeFile(objectKey, pendingAttachment.content, { mode: 0o400 });
+    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, mediaType: pendingAttachment.mediaType, size: pendingAttachment.content.length, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
+    createdAttachments.push(serializeAttachment(attachment!));
+  }
+  return createdAttachments;
+}
+
 export function registerAttachmentRoutes(context: ApiRouteContext): void {
   const { app, database, engine, stateRoot } = context;
 
@@ -62,10 +91,10 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const [attachment] = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId))).limit(1);
     if (!attachment) throw new ApiError(404, "attachment_not_found");
-    const directory = issueAttachmentRoot(stateRoot, issue.key);
-    const source = await resolveSecureAttachmentFile(directory, attachment.objectKey, attachment.size);
-    const data = await readFile(source);
-    if (createHash("sha256").update(data).digest("hex") !== attachment.sha256) throw new Error("attachment_integrity_check_failed");
+    const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+    const attachmentPath = await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey, attachment.size);
+    const attachmentData = await readFile(attachmentPath);
+    if (createHash("sha256").update(attachmentData).digest("hex") !== attachment.sha256) throw new Error("attachment_integrity_check_failed");
     const safeInline = attachment.mediaType.startsWith("text/")
       || ["application/json", "application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType);
     const fallbackName = attachment.fileName.replace(/[^a-zA-Z0-9._-]/g, "_") || "attachment";
@@ -74,7 +103,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     reply.header("X-Content-Type-Options", "nosniff");
     const inlineMediaType = attachment.mediaType.startsWith("image/") || attachment.mediaType === "application/pdf" ? attachment.mediaType : "text/plain; charset=utf-8";
     reply.type(safeInline ? inlineMediaType : "application/octet-stream");
-    return reply.send(data);
+    return reply.send(attachmentData);
   });
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
@@ -86,24 +115,24 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     const attachments = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
     if (attachments.length !== attachmentIds.length) throw new ApiError(404, "attachment_not_found");
 
-    const directory = issueAttachmentRoot(stateRoot, issue.key);
-    const quarantined: Array<{ source: string; temporary: string }> = [];
+    const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+    const quarantined: Array<{ sourcePath: string; temporaryPath: string }> = [];
     try {
       for (const attachment of attachments) {
-        const source = await resolveSecureAttachmentFile(directory, attachment.objectKey);
-        const temporary = path.join(directory, `.${attachment.id}-${randomUUID()}.deleting`);
-        await rename(source, temporary);
-        quarantined.push({ source, temporary });
+        const sourcePath = await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey);
+        const temporaryPath = path.join(attachmentRoot, `.${attachment.id}-${randomUUID()}.deleting`);
+        await rename(sourcePath, temporaryPath);
+        quarantined.push({ sourcePath, temporaryPath });
       }
       await database.db.transaction(async (transaction) => {
         await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
-        await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
+        await touchIssue(transaction, issue.id);
       });
     } catch (error) {
-      await Promise.all(quarantined.map(({ source, temporary }) => rename(temporary, source).catch(() => undefined)));
+      await Promise.all(quarantined.map(({ sourcePath, temporaryPath }) => rename(temporaryPath, sourcePath).catch(() => undefined)));
       throw error;
     }
-    await Promise.all(quarantined.map(({ temporary }) => rm(temporary, { force: true }).catch(() => undefined)));
+    await Promise.all(quarantined.map(({ temporaryPath }) => rm(temporaryPath, { force: true }).catch(() => undefined)));
     return reply.code(204).send();
   });
 
@@ -111,36 +140,26 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     assertIssueIdle(engine, issue.id);
     const uploader = await ensureCurrentSubject(database);
-    const pending: PendingAttachment[] = [];
+    const pendingAttachments: PendingAttachment[] = [];
     let attachmentBytes = 0;
     for await (const part of request.files()) {
       const attachment = await readMultipartAttachment(part, attachmentBytes);
-      attachmentBytes += attachment.data.length;
-      pending.push(attachment);
+      attachmentBytes += attachment.content.length;
+      pendingAttachments.push(attachment);
     }
-    if (!pending.length) return reply.code(201).send([]);
+    if (!pendingAttachments.length) return reply.code(201).send([]);
     await engine.closeSession(issue.id);
 
-    const directory = issueAttachmentRoot(stateRoot, issue.key);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    await Promise.all([chmod(path.dirname(directory), 0o700), chmod(directory, 0o700)]);
-    const written: string[] = [];
+    const writtenObjectKeys: string[] = [];
     try {
-      const created = await database.db.transaction(async (transaction) => {
-        const rows: Array<ReturnType<typeof serializeAttachment>> = [];
-        for (const file of pending) {
-          const objectKey = path.join(directory, `${randomUUID()}-${file.fileName}`);
-          await writeFile(objectKey, file.data, { mode: 0o400 });
-          written.push(objectKey);
-          const [attachment] = await transaction.insert(issueAttachments).values({ issueId: issue.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: uploader }).returning();
-          rows.push(serializeAttachment(attachment!));
-        }
-        await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
-        return rows;
+      const createdAttachments = await database.db.transaction(async (transaction) => {
+        const attachments = await writePendingAttachments(transaction, stateRoot, issue, uploader, pendingAttachments, writtenObjectKeys);
+        await touchIssue(transaction, issue.id);
+        return attachments;
       });
-      return reply.code(201).send(created);
+      return reply.code(201).send(createdAttachments);
     } catch (error) {
-      await Promise.all(written.map((objectKey) => rm(objectKey, { force: true }).catch(() => undefined)));
+      await removeWrittenAttachments(writtenObjectKeys);
       throw error;
     }
   });

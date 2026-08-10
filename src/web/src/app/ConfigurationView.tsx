@@ -1,14 +1,15 @@
 import { Button, Input, Modal, Select, TextArea } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, createStore, For, Show, untrack } from "solid-js";
 
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { GitBranch, Pencil, Plus, Trash2 } from "../ui/icons";
-import { createService, deleteService, updateService, type AgentConfiguration, type AgentModelOption, type CapabilityConfiguration, type CapabilityName, type Config, type Service } from "../data/client";
+import { createService, deleteService, errorMessage, updateService, type AgentConfiguration, type AgentModelOption, type CapabilityConfiguration, type CapabilityName, type Config, type Service } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { selectedChoice } from "./IssueForm";
 
 function serviceSaveErrorMessage(error: unknown): string {
-  const code = error instanceof Error ? error.message : String(error);
+  const code = errorMessage(error);
   const messages: Record<string, string> = {
     invalid_db_password: "请填写数据库密码",
     invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
@@ -57,8 +58,8 @@ function ServiceRepositoryEditorRow(props: {
 }
 
 function CapabilityLabels(props: { catalog: Config["capabilityCatalog"]; keys: CapabilityName[] }) {
-  const entries = () => props.catalog.filter((capability) => props.keys.includes(capability.key));
-  return <div class="capability-labels"><For each={entries()}>{(capability) => <code>{capability.key}</code>}</For></div>;
+  const capabilities = () => props.catalog.filter((capability) => props.keys.includes(capability.key));
+  return <div class="capability-labels"><For each={capabilities()}>{(capability) => <code>{capability.key}</code>}</For></div>;
 }
 
 function ServiceDeploymentEditorRow(props: {
@@ -77,12 +78,12 @@ function ServiceDeploymentEditorRow(props: {
   const [baseBranch, setBaseBranch] = createSignal(initialDeployment.baseBranch, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
   const [agentDraft, setAgentDraft] = createSignal<AgentConfiguration>({ ...initialDeployment.agent }, { ownedWrite: true });
-  const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: initialDeployment.nacos?.serverUrl ?? "", namespace: initialDeployment.nacos?.namespace ?? "", group: initialDeployment.nacos?.group ?? "DEFAULT_GROUP", dataIds: initialDeployment.nacos?.dataIds?.join(", ") ?? "", username: initialDeployment.nacos?.username ?? "", password: initialDeployment.nacos?.password ?? "" }, { ownedWrite: true });
+  const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: initialDeployment.nacos?.serverUrl ?? "", namespace: initialDeployment.nacos?.namespace ?? "", group: initialDeployment.nacos?.group ?? issuePilotConfig.defaults.nacos.group, dataIds: initialDeployment.nacos?.dataIds?.join(", ") ?? "", username: initialDeployment.nacos?.username ?? "", password: initialDeployment.nacos?.password ?? "" }, { ownedWrite: true });
   const [dbDraft, setDbDraft] = createSignal({ url: initialDeployment.db?.url ?? "", username: initialDeployment.db?.username ?? "", password: initialDeployment.db?.password ?? "" }, { ownedWrite: true });
   const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: initialDeployment.sls?.accessKeyId ?? "", accessKeySecret: initialDeployment.sls?.accessKeySecret ?? "", region: initialDeployment.sls?.region ?? "", project: initialDeployment.sls?.project ?? "", logstores: initialDeployment.sls?.logstores.join(", ") ?? "" }, { ownedWrite: true });
   const [playwrightDraft, setPlaywrightDraft] = createSignal({ baseUrl: initialDeployment.playwright?.baseUrl ?? "", username: initialDeployment.playwright?.username ?? "", password: initialDeployment.playwright?.password ?? "" }, { ownedWrite: true });
-  const [redisDraft, setRedisDraft] = createSignal({ host: initialDeployment.redis?.host ?? "", port: String(initialDeployment.redis?.port ?? 6379), username: initialDeployment.redis?.username ?? "", password: initialDeployment.redis?.password ?? "", database: String(initialDeployment.redis?.database ?? 0) }, { ownedWrite: true });
-  const [mqDraft, setMqDraft] = createSignal({ host: initialDeployment.mq?.host ?? "", port: String(initialDeployment.mq?.port ?? 5672), managementPort: String(initialDeployment.mq?.managementPort ?? 15672), username: initialDeployment.mq?.username ?? "", password: initialDeployment.mq?.password ?? "", virtualHost: initialDeployment.mq?.virtualHost ?? "/" }, { ownedWrite: true });
+  const [redisDraft, setRedisDraft] = createSignal({ host: initialDeployment.redis?.host ?? "", port: String(initialDeployment.redis?.port ?? issuePilotConfig.defaults.redis.port), username: initialDeployment.redis?.username ?? "", password: initialDeployment.redis?.password ?? "", database: String(initialDeployment.redis?.database ?? issuePilotConfig.defaults.redis.database) }, { ownedWrite: true });
+  const [mqDraft, setMqDraft] = createSignal({ host: initialDeployment.mq?.host ?? "", port: String(initialDeployment.mq?.port ?? issuePilotConfig.defaults.rabbitmq.port), managementPort: String(initialDeployment.mq?.managementPort ?? issuePilotConfig.defaults.rabbitmq.managementPort), username: initialDeployment.mq?.username ?? "", password: initialDeployment.mq?.password ?? "", virtualHost: initialDeployment.mq?.virtualHost ?? issuePilotConfig.defaults.rabbitmq.virtualHost }, { ownedWrite: true });
   const [esDraft, setEsDraft] = createSignal({ url: initialDeployment.es?.url ?? "", username: initialDeployment.es?.username ?? "", password: initialDeployment.es?.password ?? "" }, { ownedWrite: true });
   const agent = (value = agentDraft()) => ({ ...value, provider: value.provider.trim(), model: value.model.trim() });
   const providerOptions = () => [...new Set(props.agentModels.map((model) => model.provider))].map((provider) => ({ value: provider, label: provider }));
@@ -99,23 +100,23 @@ function ServiceDeploymentEditorRow(props: {
     currentDeployment = { ...currentDeployment, ...change };
     props.onChange(cloneDeploymentDraft(currentDeployment));
   };
-  const updateNacos = (change: Partial<ReturnType<typeof nacosDraft>>) => { const next = { ...nacosDraft(), ...change }; setNacosDraft(next); update({ nacos: nacos(next) }); };
-  const updateDb = (change: Partial<ReturnType<typeof dbDraft>>) => { const next = { ...dbDraft(), ...change }; setDbDraft(next); update({ db: db(next) }); };
-  const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const next = { ...slsDraft(), ...change }; setSlsDraft(next); update({ sls: sls(next) }); };
-  const updatePlaywright = (change: Partial<ReturnType<typeof playwrightDraft>>) => { const next = { ...playwrightDraft(), ...change }; setPlaywrightDraft(next); update({ playwright: playwright(next) }); };
-  const updateRedis = (change: Partial<ReturnType<typeof redisDraft>>) => { const next = { ...redisDraft(), ...change }; setRedisDraft(next); update({ redis: redis(next) }); };
-  const updateMq = (change: Partial<ReturnType<typeof mqDraft>>) => { const next = { ...mqDraft(), ...change }; setMqDraft(next); update({ mq: mq(next) }); };
-  const updateEs = (change: Partial<ReturnType<typeof esDraft>>) => { const next = { ...esDraft(), ...change }; setEsDraft(next); update({ es: es(next) }); };
+  const updateNacos = (change: Partial<ReturnType<typeof nacosDraft>>) => { const draft = { ...nacosDraft(), ...change }; setNacosDraft(draft); update({ nacos: nacos(draft) }); };
+  const updateDb = (change: Partial<ReturnType<typeof dbDraft>>) => { const draft = { ...dbDraft(), ...change }; setDbDraft(draft); update({ db: db(draft) }); };
+  const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
+  const updatePlaywright = (change: Partial<ReturnType<typeof playwrightDraft>>) => { const draft = { ...playwrightDraft(), ...change }; setPlaywrightDraft(draft); update({ playwright: playwright(draft) }); };
+  const updateRedis = (change: Partial<ReturnType<typeof redisDraft>>) => { const draft = { ...redisDraft(), ...change }; setRedisDraft(draft); update({ redis: redis(draft) }); };
+  const updateMq = (change: Partial<ReturnType<typeof mqDraft>>) => { const draft = { ...mqDraft(), ...change }; setMqDraft(draft); update({ mq: mq(draft) }); };
+  const updateEs = (change: Partial<ReturnType<typeof esDraft>>) => { const draft = { ...esDraft(), ...change }; setEsDraft(draft); update({ es: es(draft) }); };
   const addCapability = (key: CapabilityName) => {
     if (selectedCapabilities().includes(key)) return;
-    const next = [...selectedCapabilities(), key];
-    setSelectedCapabilities(next);
-    update({ capabilities: next, ...(key === "nacos" ? { nacos: nacos() } : {}), ...(key === "db" ? { db: db() } : {}), ...(key === "sls" ? { sls: sls() } : {}), ...(key === "playwright" ? { playwright: playwright() } : {}), ...(key === "redis" ? { redis: redis() } : {}), ...(key === "mq" ? { mq: mq() } : {}), ...(key === "es" ? { es: es() } : {}) });
+    const capabilities = [...selectedCapabilities(), key];
+    setSelectedCapabilities(capabilities);
+    update({ capabilities, ...(key === "nacos" ? { nacos: nacos() } : {}), ...(key === "db" ? { db: db() } : {}), ...(key === "sls" ? { sls: sls() } : {}), ...(key === "playwright" ? { playwright: playwright() } : {}), ...(key === "redis" ? { redis: redis() } : {}), ...(key === "mq" ? { mq: mq() } : {}), ...(key === "es" ? { es: es() } : {}) });
   };
   const removeCapability = (key: CapabilityName) => {
-    const next = selectedCapabilities().filter((item) => item !== key);
-    setSelectedCapabilities(next);
-    update({ capabilities: next });
+    const capabilities = selectedCapabilities().filter((capability) => capability !== key);
+    setSelectedCapabilities(capabilities);
+    update({ capabilities });
   };
   return (
     <div class="service-deployment-row">
@@ -150,11 +151,11 @@ export function ConfigurationView() {
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
   const refresh = async () => {
     try {
-      const next = await refreshConfiguration();
-      if (!next.services.some((service) => service.key === selectedServiceKey())) setSelectedServiceKey(next.services[0]?.key ?? null);
+      const refreshed = await refreshConfiguration();
+      if (!refreshed.services.some((service) => service.key === selectedServiceKey())) setSelectedServiceKey(refreshed.services[0]?.key ?? null);
       setConfigurationError("");
     } catch (error) {
-      setConfigurationError(error instanceof Error ? error.message : String(error));
+      setConfigurationError(errorMessage(error));
     }
   };
   createEffect(
@@ -193,7 +194,7 @@ export function ConfigurationView() {
       ...(deployment.mq ? { mq: { ...deployment.mq } } : {}),
       ...(deployment.es ? { es: { ...deployment.es, password: deployment.es.password ?? "" } } : {}),
     })).filter((deployment) => deployment.environmentKey);
-    setServiceDeployments(() => deployments.map(cloneDeploymentDraft));
+    setServiceDeployments(() => deployments);
     setConfigurationError(""); setServiceOpen(true);
   };
   const serviceValidationError = () => {
@@ -210,8 +211,8 @@ export function ConfigurationView() {
   const addServiceDeployment = () => {
     const environment = availableDeploymentEnvironments()[0];
     if (environment) {
-      const deployment = { environmentKey: environment.key, baseBranch: "main", capabilities: [], agent: defaultAgent() } satisfies ServiceDeploymentDraft;
-      setServiceDeployments((current) => [...current, cloneDeploymentDraft(deployment)]);
+      const deployment = { environmentKey: environment.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch, capabilities: [], agent: defaultAgent() } satisfies ServiceDeploymentDraft;
+      setServiceDeployments((current) => [...current, deployment]);
     }
   };
   const saveService = async () => {
@@ -242,7 +243,7 @@ export function ConfigurationView() {
       setDeleteTarget(null);
       await refresh();
     } catch (error) {
-      setConfigurationError(error instanceof Error ? error.message : String(error));
+      setConfigurationError(errorMessage(error));
     } finally { setSaving(false); }
   };
   return (
@@ -278,7 +279,7 @@ export function ConfigurationView() {
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 Pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? cloneDeploymentDraft(next) : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 Pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? next : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
         </div>

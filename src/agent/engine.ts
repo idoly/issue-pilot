@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { access, chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq, ne, notInArray } from "drizzle-orm";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { RunEvent } from "./events.ts";
-import { PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
-import { createPrivateSessionManager } from "./session.ts";
+import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { CodeServerManager } from "../workspace/code-server.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
-import { ensureIssueWorkspaceLink, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
-import type { openDatabase } from "../db/client.ts";
+import { classifyRepositoryState, issueAttachmentRoot, issueSessionRoot, issueWorkspaceRoot, pathExists } from "../workspace/state.ts";
+import type { Database } from "../db/client.ts";
 import {
   agentSessions,
   environments,
@@ -22,13 +22,12 @@ import {
   serviceRepositories,
   services,
 } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { repositoryWorkspaceNames, WorktreeManager } from "../workspace/git.ts";
-import { prepareReadOnlyRuntime } from "../workspace/runtime.ts";
+import { prepareIssueRuntime } from "../workspace/runtime.ts";
 import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
-type Database = ReturnType<typeof openDatabase>["db"];
 
 export interface AgentController {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
@@ -42,27 +41,18 @@ class KeyedSerialQueue {
   private readonly tails = new Map<string, Promise<void>>();
 
   async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.tails.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => { release = resolve; });
-    const tail = previous.catch(() => undefined).then(() => current);
-    this.tails.set(key, tail);
-    await previous.catch(() => undefined);
+    const preceding = this.tails.get(key) ?? Promise.resolve();
+    let complete!: () => void;
+    const queued = new Promise<void>((resolve) => { complete = resolve; });
+    const queueTail = preceding.catch(() => undefined).then(() => queued);
+    this.tails.set(key, queueTail);
+    await preceding.catch(() => undefined);
     try {
       return await operation();
     } finally {
-      release();
-      if (this.tails.get(key) === tail) this.tails.delete(key);
+      complete();
+      if (this.tails.get(key) === queueTail) this.tails.delete(key);
     }
-  }
-}
-
-async function exists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -88,14 +78,14 @@ export class AgentEngine implements AgentController {
   private readonly worktreeManager: WorktreeManager;
   private readonly codeServerManager: CodeServerManager;
   private readonly stateRoot: string;
-  private readonly db: Database;
+  private readonly database: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly sessions = new Map<string, ManagedPiSession>();
   private readonly sharedReadOnlySessions = new Set<string>();
   private readonly piRuntime = new PiSessionRuntime();
 
-  constructor(db: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
-    this.db = db;
+  constructor(database: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
+    this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.worktreeManager = new WorktreeManager(this.stateRoot);
     this.codeServerManager = new CodeServerManager(this.stateRoot);
@@ -116,7 +106,7 @@ export class AgentEngine implements AgentController {
 
   async send(issueId: string, message: string): Promise<void> {
     if (!message.trim()) throw new Error("agent_message_required");
-    if (message.length > MAX_AGENT_MESSAGE_CHARS) throw new Error("invalid_agent_message");
+    if (message.length > issuePilotConfig.limits.agentMessageChars) throw new Error("invalid_agent_message");
     const userMessage = message.trim();
     const managed = this.sessions.get(issueId);
     if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
@@ -138,10 +128,10 @@ export class AgentEngine implements AgentController {
     void this.issueQueue.run(issueId, operation).catch(async (error) => {
       await this.stopSession(issueId).catch(() => undefined);
       try {
-        await this.db.transaction(async (transaction) => {
+        await this.database.transaction(async (transaction) => {
           await transaction.update(issueWorkspaces).set({
             status: "failed",
-            lastError: error instanceof Error ? error.message : String(error),
+            lastError: errorMessage(error),
             updatedAt: new Date(),
           }).where(eq(issueWorkspaces.issueId, issueId));
           await transaction.update(issues).set({ status: "open", updatedAt: new Date() }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
@@ -158,13 +148,13 @@ export class AgentEngine implements AgentController {
   }
 
   private async run(issueId: string, latestMessage?: string, displayMessage = false): Promise<void> {
-    const [issue] = await this.db.select().from(issues).where(eq(issues.id, issueId)).limit(1);
+    const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
     const currentMessage = latestMessage?.trim() || undefined;
-    await this.db.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.database.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
 
-    const [service] = await this.db.select({
+    const [service] = await this.database.select({
       id: services.id,
       key: services.key,
       name: services.name,
@@ -192,20 +182,18 @@ export class AgentEngine implements AgentController {
     const sharedRepositories = repositoryPlan.mode === "shared";
 
     const [repositoryRows, existingRepositoryRows] = await Promise.all([
-      this.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
-      this.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
+      this.database.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
+      this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (!repositoryRows.length) throw new Error("selected_service_has_no_repository");
     const repositoryUrls = new Set(repositoryRows.map((repository) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
-    if (sharedRepositories && existingRepositoryRows.some((repository) => repository.localPath !== null || repository.workingBranch !== null)) throw new Error("readonly_repository_state_invalid");
-    if (!sharedRepositories) {
-      for (const repository of removedRepositories) {
-        if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
-      }
+    if (sharedRepositories && existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
+    for (const repository of removedRepositories) {
+      if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
     }
     if (removedRepositories.length) {
-      await this.db.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
+      await this.database.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
     }
 
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
@@ -227,42 +215,32 @@ export class AgentEngine implements AgentController {
           ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
         });
       prepared.push({ name, workspace });
-      const commitBefore = sharedRepositories ? workspace.baseCommit : existingRepository?.commitBefore ?? workspace.baseCommit;
-      await this.db.insert(issueRepositories).values({
-        issueId: issue.id,
-        url: repository.url,
+      const repositoryState = {
         baseBranch: workspace.baseBranch,
         workingBranch: workspace.workingBranch,
         localPath: sharedRepositories ? null : workspace.workspacePath,
-        commitBefore,
-      }).onConflictDoUpdate({
+        commitBefore: sharedRepositories ? workspace.baseCommit : existingRepository?.commitBefore ?? workspace.baseCommit,
+      };
+      await this.database.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...repositoryState }).onConflictDoUpdate({
         target: [issueRepositories.issueId, issueRepositories.url],
-        set: {
-          baseBranch: workspace.baseBranch,
-          workingBranch: workspace.workingBranch,
-          localPath: sharedRepositories ? null : workspace.workspacePath,
-          commitBefore,
-          updatedAt: new Date(),
-        },
+        set: { ...repositoryState, updatedAt: new Date() },
       });
     }
 
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
-    const runtimeRoot = issueRuntimeRoot(this.stateRoot, issue.key);
-    const workspaceRoot = sharedRepositories
-      ? await prepareReadOnlyRuntime(this.stateRoot, issue.key, prepared.map(({ name, workspace }) => ({ name, checkoutPath: workspace.workspacePath })))
-      : issueWorkspaceRoot(this.stateRoot, issue.key);
+    const runtimeRoot = await prepareIssueRuntime(
+      this.stateRoot,
+      issue.key,
+      prepared.map(({ name, workspace }) => ({ name, repositoryPath: workspace.workspacePath })),
+      sharedRepositories ? "read" : "write",
+    );
+    const workspaceRoot = sharedRepositories ? runtimeRoot : issueWorkspaceRoot(this.stateRoot, issue.key);
     const attachmentPath = issueAttachmentRoot(this.stateRoot, issue.key);
     await mkdir(attachmentPath, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(attachmentPath), 0o700), chmod(attachmentPath, 0o700)]);
-    let executableRoot: string | undefined;
-    if (!sharedRepositories) {
-      await mkdir(workspaceRoot, { recursive: true });
-      await ensureIssueWorkspaceLink(this.stateRoot, issue.key);
-      executableRoot = await prepareProjectWrappers(runtimeRoot);
-    }
+    const executableRoot = sharedRepositories ? undefined : await prepareProjectWrappers(runtimeRoot);
     const repositoryPaths = prepared.map(({ name, workspace }) => sharedRepositories ? path.join(workspaceRoot, name) : workspace.workspacePath);
     const policy = createDeploymentPolicy({
       issueKey: issue.key,
@@ -277,13 +255,13 @@ export class AgentEngine implements AgentController {
     });
     let codeServerReady = false;
     try {
-      await this.codeServerManager.ensure(issue.key, sharedRepositories ? runtimeRoot : workspaceRoot);
+      await this.codeServerManager.ensure(issue.key, runtimeRoot);
       codeServerReady = true;
     } catch {
-      codeServerReady = false;
+      // Agent execution remains available when the optional editor is unavailable.
     }
-    const [binding] = await this.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    const manager = binding && await exists(binding.sessionFile)
+    const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
+    const manager = binding && await pathExists(binding.sessionFile)
       ? SessionManager.open(binding.sessionFile, sessionDirectory, workspaceRoot)
       : await createPrivateSessionManager(workspaceRoot, sessionDirectory);
     const hadMessages = manager.buildContextEntries().some((entry) => entry.type === "message");
@@ -301,13 +279,13 @@ export class AgentEngine implements AgentController {
     if (sharedRepositories) this.sharedReadOnlySessions.add(issue.id);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
-    await this.db.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
+    await this.database.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
       target: agentSessions.issueId,
       set: { sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
-    await this.db.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-    await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
+    await this.database.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.database.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
     const repositoryContexts = prepared.map(({ workspace }, index) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, repositoryPaths[index]!), readOnly: sharedRepositories }));
     const prompt = hadMessages
@@ -329,7 +307,7 @@ export class AgentEngine implements AgentController {
   }
 
   private async promptExisting(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
-    await this.db.transaction(async (transaction) => {
+    await this.database.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "running", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
       await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
     });
@@ -338,7 +316,7 @@ export class AgentEngine implements AgentController {
   }
 
   private async finalizeRun(issueId: string): Promise<void> {
-    await this.db.transaction(async (transaction) => {
+    await this.database.transaction(async (transaction) => {
       await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
       await transaction.update(issues).set({ status: "pending", updatedAt: new Date() }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")));
     });

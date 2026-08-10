@@ -1,220 +1,356 @@
 # 架构说明
 
-## 总览
+本文解释 Issue Pilot 的业务状态、数据所有权和运行原理。源码入口和改动方法见 [开发指南](DEVELOPMENT.md)，字段怎么填见 [配置说明](CONFIGURATION.md)，首次部署见 [部署说明](DEPLOYMENT.md)，日常维护见 [运维手册](RUNBOOK.md)。
 
-Issue Pilot 是一个单 Node.js package，由四个主要运行边界组成：
+## 核心术语
 
-1. Fastify API 管理工单、deployment 配置、附件、Agent 命令和 SSE。
-2. SolidJS Web 应用消费 HTTP API，并把原始 Pi 事件组织为对话界面。
-3. `AgentEngine` 管理共享只读代码快照、开发 worktree、持久 Pi session 和工单生命周期。
-4. Capability tools 根据每次执行创建并冻结的 `IssuePolicy` 调用受限外部客户端。
+| 术语 | 在 Issue Pilot 中的含义 |
+| --- | --- |
+| Issue | 一张工单，也是 Agent、session、附件和代码上下文的隔离单位 |
+| Service | 一组 Repository 及其各环境配置 |
+| Deployment | 某个 Service 在一个 Environment 下的分支、模型和 capability 配置；不是发布进程 |
+| Repository | Service 使用的一个 Git remote |
+| Bare repository | 跨 Issue 共享的 Git object/ref store，不包含普通工作目录 |
+| Workspace | 活动 dev Issue 的可写目录；也泛指 Agent 当前 cwd |
+| Worktree | Git 从 bare repository 挂出的具体工作目录 |
+| Immutable checkout | 按 commit 定址的只读、可重建 Git worktree |
+| Runtime | `issues/<key>/runtime` 下供 code-server 使用的生成资源，不保存持久业务数据 |
+| Session | 一个 Issue 对应的持久 Pi JSONL 对话分支 |
+| Policy | 某次 Agent session 冻结后的代码和 capability 授权 |
+| Capability | Nacos、数据库、Redis、SLS、Playwright 等受限外部读取工具 |
 
-```text
-SolidJS Web
-    |
-    | HTTP + SSE
-    v
-Fastify API -------- SQLite
-    |
-    | keyed serial queue
-    v
-AgentEngine -------- shared snapshots / dev worktrees -------- shared code-server
-    |
-    | Pi AgentSession SDK + private append-only JSONL
-    v
-Pi session + policy-selected built-in/custom tools
-    |
-    +-- native host clients: Nacos / MySQL / Redis / Elasticsearch / RabbitMQ
-    +-- fixed host CLI: SLS
-    +-- ephemeral container: Playwright Chromium
+## 设计原则
+
+Issue Pilot 的核心不是“为每个工单复制一个项目”，而是把不同生命周期的数据分开管理：
+
+- 工单、Deployment 和状态由 SQLite 管理。
+- Repository 对象和本地工作分支由共享 bare Git repository 管理。
+- 附件和 Pi JSONL 按 Issue 持久保存。
+- Immutable checkout、runtime manifest 和 wrapper 是可重建生成物。
+- Dev workspace 保存可写代码、依赖和构建输出，可以在严格预检后回收。
+
+这种划分让系统可以释放大体积构建目录，同时保留恢复工单所需的信息。
+
+## 组件边界
+
+| 组件 | 责任 | 运行位置 |
+| --- | --- | --- |
+| SolidJS Web | 工单、配置、对话、统计和 code-server UI | 浏览器 |
+| Fastify API | HTTP、事务、启动恢复、SSE | 宿主 Node.js |
+| AgentEngine | 每工单串行执行、状态转换、Pi session 生命周期 | API 进程 |
+| SQLite / Drizzle | 业务事实源和 schema migration | 宿主文件 |
+| Workspace manager | bare repository、checkout、worktree 和回收 | 宿主 Git |
+| Capability broker | 冻结授权并调用受限 client | API 进程/宿主子进程 |
+| code-server | 查看或编辑工单代码 | 共享 Podman 容器 |
+| Playwright | 单次声明式浏览器任务 | 临时 Podman 容器 |
+
+模块按照事务、安全边界和稳定职责拆分。相关小型 helper 归回拥有它们的模块：共享业务谓词位于 `domain/contracts.ts`，workspace 路径、文件状态和 Repository 分类位于 `workspace/state.ts`，runtime 生成与批量恢复位于 `workspace/runtime.ts`，Pi session 文件与 SDK 生命周期位于 `agent/pi-session.ts`。HTTP route 不直接实现 Git 和 capability 逻辑；Agent 不直接读取页面表单；client 不信任上层已经完成授权。
+
+## 业务状态
+
+### 工单状态
+
+```mermaid
+stateDiagram-v2
+    [*] --> open: 创建
+    open --> in_progress: Agent 开始
+    in_progress --> pending: Agent 成功
+    in_progress --> open: Agent 失败
+    pending --> in_progress: 继续处理
+    pending --> resolved: 用户解决
+    resolved --> open: 用户重开
 ```
 
-只有 code-server 和 Playwright browser 是容器边界。数据库、Agent、Git、Node/Maven project command 和其他外部能力都在宿主进程或受限宿主子进程中运行。
+`resolved` 工单不能运行 Agent。新建工单会自动入队；同一工单严格串行，不同工单可以并行。
 
-## 代码组织原则
+### Workspace 状态
 
-- `src/http/api.ts` 只装配数据库、Fastify、共享依赖和关闭流程；配置、工单、附件和 Agent 路由分别拥有自己的事务边界。
-- `src/agent/engine.ts` 维护工单执行顺序和业务状态；`pi-session.ts` 管理 Pi SDK session；`session.ts` 初始化私有 JSONL；`events.ts` 负责 replay/live 事件顺序。
-- `src/pi/policy.ts` 创建 deployment policy 和工具 allowlist；`tools.ts` 创建 policy-scoped custom tools。
-- `src/capabilities/` 中每个客户端拥有自己的协议、输入、超时和结果大小边界。
-- `src/workspace/state.ts` 定义当前状态树和启动清理；`git.ts` 管理 bare store、共享 checkout 与开发 worktree；`development.ts` 和 `read-only.ts` 分别准备两类 Issue runtime；`runtime.ts`、`project-wrappers.ts` 和 `code-server.ts` 只负责各自的可生成资源。
-- `src/web/src/app/App.tsx` 维护顶层导航和工作台布局；conversation reducer 只做 UI projection，不改变原始 Pi 事件。
+Workspace 状态描述执行基础设施，不描述业务进度：
 
-小文件只在拥有独立协议、进程、流控、事务或安全边界时保留。历史 Drizzle migration 是顺序升级契约，不按当前 schema 合并或删除。
+| 状态 | 含义 |
+| --- | --- |
+| `not_created` | 尚未准备代码和 session |
+| `preparing` | 正在准备 repository、runtime 和 policy |
+| `running` | Pi 正在处理当前轮次 |
+| `ready` | 当前轮次完成，可继续对话 |
+| `stopped` | Dev workspace 已释放，保留只读 branch runtime |
+| `failed` | 准备或执行失败，可重试 |
 
-## 数据模型和启动所有权
+工单状态和 workspace 状态分开保存。例如 Agent 失败后，工单回到 `open`，workspace 变为 `failed`；已释放的 resolved dev 工单则是 `resolved + stopped`。
 
-SQLite 是 deployment 配置、工单状态和 session binding 的事实源。核心关系包括：
+## Agent 执行
 
-- `services`、`service_repositories`、`service_deployments`
-- `issues`、`issue_repositories`、`issue_workspaces`
-- `issue_pilot_sessions`、`issue_attachments`、`issue_comments`
+```mermaid
+sequenceDiagram
+    participant API
+    participant Engine as AgentEngine
+    participant Git
+    participant Policy
+    participant Pi
+    participant Store as SQLite / JSONL / SSE
 
-数据库文件以 `0600` 创建，并启用 WAL、foreign keys 和 busy timeout。`openApplicationDatabase()` 负责：
-
-1. 按 journal 顺序执行 migration。
-2. 恢复被进程重启中断的 `preparing`/`running` workspace。
-3. 把 ready workspace 对应的遗留 `in_progress` 工单恢复为 `pending`。
-4. 确保固定环境 `prod`、`test`、`dev` 存在。
-5. 初始化失败时关闭数据库 client。
-
-Fastify 装配随后按当前状态模型执行冷启动 hydration：清理已删除 Issue 的状态目录与全部可生成 runtime/checkouts，prune bare repository worktree metadata，为现存开发 workspace 重建导航链接和 wrapper，并为已有 prod/test session fetch deployment 最新 commit、重建只读 runtime 与 code-server ready 状态。启动过程不识别或搬运旧目录布局；偏离当前不变量会保留现场并明确失败。
-
-## 工单生命周期
-
-对外状态只有四种：
-
-```text
-open -> in_progress -> pending -> resolved
-                     -> open      Agent 失败
-resolved -> open                  用户显式 reopen
+    API->>Engine: enqueue(issueId, message)
+    Engine->>Store: workspace = preparing
+    Engine->>Git: prepare repositories
+    Git-->>Engine: paths, commits, access mode
+    Engine->>Policy: build and freeze IssuePolicy
+    Engine->>Pi: open/create private session
+    Engine->>Store: save binding before visible events
+    Engine->>Store: issue = in_progress, workspace = running
+    Engine->>Pi: prompt
+    Pi-->>Store: official events
+    alt success
+        Engine->>Store: issue = pending, workspace = ready
+    else failure
+        Engine->>Pi: abort and dispose
+        Engine->>Store: issue = open, workspace = failed
+    end
 ```
 
-`resolved` 工单不能运行或发送 Agent 消息，必须先 reopen。同一工单通过 keyed serial queue 串行执行；不同工单可以并行。进程关闭、启动失败或 prompt 失败都会 abort/dispose SDK session，并把可恢复状态写回数据库。
+执行时先读取 Issue 对应的 Service 和 Environment，再选择代码模式。Repository 准备完成后才创建 policy，因此 policy 中的 path、commit 和读写权限来自实际准备结果，而不是页面声明。
 
-## 工作区和 Git
+Session binding 在第一个可见事件之前写入 SQLite。这样 SSE 客户端不会看到一个无法回放的临时会话。
+
+Prod/test 每轮结束后释放内存 session；下一轮重新获取 Deployment 最新 commit。Dev session 可以留在内存中继续对话，直到配置变化、显式关闭、失败或 API 停止。
+
+## Repository 状态模型
+
+数据库中的 `local_path` 和 `working_branch` 共同决定代码状态。所有调用点使用同一个分类器：
+
+| 状态 | `local_path` | `working_branch` | 说明 |
+| --- | --- | --- | --- |
+| `read_only` | 全部 `NULL` | 全部 `NULL` | prod/test snapshot |
+| `development_workspace` | 全部非空 | 全部非空 | 活动 dev worktrees |
+| `development_snapshot` | 全部 `NULL` | 全部非空 | 已释放 dev branch snapshots |
+| `invalid` | 其他组合 | 其他组合 | 不推断、不修复，明确失败 |
+
+空 repository 列表也属于 `invalid`。这避免“部分 repository 可写、部分只读”或 stale `local_path` 被误判为正常状态。
+
+Environment 与 Issue type 如何映射到这些状态，见 [Environment 与 Issue type](CONFIGURATION.md#environment-与-issue-type)。
+
+## Git 存储原理
+
+### Shared bare repository
+
+每个 Repository URL 对应：
+
+```text
+git/repositories/<url-sha256-prefix>
+```
+
+它同时保存：
+
+- `origin/<baseBranch>` 等远程跟踪 ref。
+- Dev Issue 的本地 `refs/heads/<workingBranch>`。
+- Worktree metadata 和 Git objects。
+
+Repository URL 的操作按 hash 串行，避免并发 fetch/worktree 命令互相修改 metadata。
+
+### Immutable checkout
+
+只读代码按完整 commit 定址：
+
+```text
+git/checkouts/<url-sha256-prefix>/<commit>
+```
+
+相同 Repository 的相同 commit 只有一份 checkout，不区分 Issue 或分支名。Checkout 使用 detached HEAD，因为文件内容只由 commit 决定；分支 ref 仍保存在 bare repository，Git Graph 可以读取这些 ref。
+
+创建或复用 checkout 时会验证：
+
+- 目录确实是 Git worktree。
+- `HEAD` 等于目标 commit。
+- `git status --porcelain` 为空。
+- Relative worktree metadata 可以 repair。
+
+Shared checkout 本身是生成物。API 冷启动会删除并按当前 ref 重建，避免长期积累失效 commit。
+
+### Dev worktree
+
+Dev workspace 路径由当前模型唯一推导：
+
+```text
+workspaces/<issue-key>/<repository-name>
+```
+
+Repository basename 冲突时追加 URL hash。数据库中的 `local_path` 必须等于推导结果；不一致时返回 `workspace_path_does_not_match_repository`，不会自动移动旧目录。
+
+Dev worktree 使用本地 `hotfix-<issue-key>` 或 `feature-<issue-key>` 分支。Git metadata 使用 relative paths，使宿主和 code-server 容器在相同 state tree 下都能解析。
+
+### Released dev
+
+```mermaid
+flowchart TD
+    W[Writable dev worktree] --> P{Resolved, idle, clean, valid layout?}
+    P -->|No| Keep[Keep workspace and evidence]
+    P -->|Yes| Remove[git worktree remove]
+    Remove --> State[local_path = NULL, status = stopped]
+    State --> Ref[Read local refs/heads/workingBranch]
+    Ref --> Snapshot[Immutable checkout]
+    Snapshot --> Runtime[Read-only code-server runtime]
+    Runtime -->|Issue reopened and Agent runs| W
+```
+
+Released dev 的权威代码来源是本地 bare repository 中的工作分支。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
+
+这一区分很重要：Deployment `baseBranch` 表示环境基线；Issue `workingBranch` 表示该工单自己的工作结果。远程 Issue 分支可以被删除，但用于后续重建的 Deployment base branch 仍应可访问。
+
+## 状态与所有权
 
 ```text
 .issue-pilot/
   issues.db
-  git/repositories/<url-sha256-prefix>/
-  git/checkouts/<url-sha256-prefix>/<branch-hash>-<commit>/
-  issues/<issue-key>/attachments/
-  issues/<issue-key>/agent/<pi-session>.jsonl
-  issues/<issue-key>/agent/<session>.runtime.json
-  issues/<read-only-issue-key>/runtime/<repository-link>
-  issues/<dev-issue-key>/runtime/bin/{node-project,maven-project}
-  issues/<dev-issue-key>/workspace -> ../../workspaces/<dev-issue-key>
-  workspaces/<dev-issue-key>/<repository-name>/
-  backups/issues.db.<label>
+  issues/<issue-key>/
+    attachments/<uuid>-<name>
+    agent/<pi-session>.jsonl
+    agent/<session>.runtime.json
+    runtime/<repository-link>
+    runtime/<issue-key>.code-workspace
+    runtime/bin/{node-project,maven-project}  # writable dev only
+  git/
+    repositories/<url-hash>/
+    checkouts/<url-hash>/<commit>/
+  workspaces/<issue-key>/<repository>/
+  backups/
   code-server/
 ```
 
-仓库 cache 使用 URL SHA-256 前缀；工单目录使用可读仓库 basename，同名时追加稳定 hash。
+| 数据 | 所有者 | 可重建 | 自动删除规则 |
+| --- | --- | --- | --- |
+| SQLite | Database | 否 | 从不自动删除 |
+| Attachments | Issue | 否 | 只通过附件 API 删除 |
+| Pi JSONL / sidecar | Issue | 否 | 从不随 workspace 删除 |
+| Bare repositories / local branches | Git | 否 | 不作为缓存清理 |
+| Runtime / manifest / wrappers | Runtime builder | 是 | 冷启动原子重建 |
+| Immutable checkouts | Git | 是 | 冷启动重建 |
+| Dev workspace | Issue execution | 是 | 仅受管 release |
+| Database backups | Operator | 否 | Operator 自己管理 |
 
-| 环境/类型 | 本地代码形态 | policy repository access |
-| --- | --- | --- |
-| `prod` + `data_processing`/`smart_analysis` | prod deployment 最新 commit 的共享 immutable checkout | read |
-| `test` + `smart_analysis` | test deployment 最新 commit 的共享 immutable checkout | read |
-| `dev` + `defect_fix` | 从 dev deployment 配置分支创建 `hotfix-<issue-key>` | write |
-| `dev` + `feature_development` | 从 dev deployment 配置分支创建 `feature-<issue-key>` | write |
+`issues/<key>/runtime` 只能放生成物。附件不会复制或链接到 runtime，Agent 直接读取 durable attachment root。
 
-共享 bare repository 的 fetch 按 URL 串行。prod/test checkout 以 branch hash 和完整 commit 定址：同一 commit 被多个 Issue 复用，远端前进时创建新目录，因此已有 Agent 读取的代码不会被 reset 覆盖。每个只读 Issue 只在 `issues/<issue-key>/runtime` 生成 repository 链接，不创建 `workspaces/<issue-key>`、代码分支或依赖目录。API 冷启动删除可重建 runtime/checkouts、prune bare repository worktree metadata，再为已有只读 session fetch 最新基线并恢复 code-server 入口。prod/test 的 `issue_repositories.local_path` 和 `working_branch` 必须为 `NULL`，偏离该不变量时 startup hydration 和 Agent 都明确失败。
+### 未登记目录
 
-每个 deployment（包括 dev）都必须配置 `baseBranch`；开发工作分支以 dev deployment 的配置分支为基线。Git 2.55.0 使用 relative worktree metadata，使共享 checkout 和开发 worktree 在固定状态目录中可恢复。已有 dirty 开发 workspace 不会被自动删除或覆盖。code-server 必须使用与宿主一致的 Git binary、exec path、templates 和动态库。
+数据库中不存在、但 `issues/` 或 `workspaces/` 中存在的 Issue 目录称为 unmanaged state。它可能来自数据库回滚、部分复制或人工操作。
 
-开发 Issue workspace 是可释放、可重建的 cache，根目录只包含 Git worktree。释放前串行检查 Issue idle 状态、全部 worktree 的 modified/untracked 状态和根目录布局；成功后通过 Git worktree remove 清理 metadata，并在一个数据库事务中清空所有 `local_path`、关闭 code-server ready 状态。branch、base commit、Pi session binding/JSONL 与持久附件不属于 cache。附件只在 `issues/<issue-key>/attachments` 保存一份 `0400` 原件，Agent prompt 直接引用该目录，不生成 runtime 副本。API 提供手动释放、dry-run 容量统计、resolved 保留期清理和 high-water/target 配额清理。
+启动会在删除任何生成物之前检查 unmanaged state；发现后返回 `unmanaged_issue_state` 并停止。这样较新的附件、JSONL 或 dirty workspace 不会因为数据库较旧而被误删。
 
-## Pi SDK 和 session
+## 启动与当前状态
 
-Issue Pilot 直接使用 Pi `createAgentSession()` SDK，不启动 Pi RPC 子进程：
+启动按以下顺序执行：
 
-- `SessionManager` 首次创建私有 session format v3 JSONL，后续运行复用 session ID 和文件。
-- Session binding 在任何可见用户事件发布前写入 SQLite，避免 SSE 能看到事件却找不到 session。
-- `ModelRuntime` 在 prompt 前刷新模型目录，验证 provider/model credentials readiness。
-- Session 创建后核验实际 session ID、model、thinking level 和 active tools。
-- `AgentSession.subscribe()` 事件转换成官方 `JsonAgentSessionEvent` 后原样发送；Web normalization 只属于 presentation。
-- `prompt()` 等待 retry、compaction 和 continuation 完整 settle；`abort()`、`dispose()` 负责失败和关闭清理。
+1. 创建或打开 `0600` SQLite 数据库。
+2. 设置 busy timeout 和 WAL，按 journal 执行 Drizzle migrations，再启用 foreign keys。
+3. 把进程中断的运行状态转为可重试状态。
+4. 确保 `prod`、`test`、`dev` 环境存在。
+5. 验证 state root 中没有 unmanaged Issue 目录。
+6. 删除可生成 runtime/checkouts，prune worktree metadata。
+7. 重建活动和已释放 dev runtime。
+8. 为有 session 的 prod/test 工单 fetch 最新 Deployment commit 并重建 runtime。
+9. 执行一次 workspace maintenance，然后注册路由。
 
-`DefaultResourceLoader` 显式关闭 extension、skill、prompt template、theme、context file 和宿主自定义 prompt 自动发现。基础 system prompt 为空，让 Pi 根据实际工具生成原生默认提示，再追加 Issue Pilot policy context。
+启动不识别旧文件布局，不移动旧目录，也不修复不符合当前模型的 `local_path`。
 
-### Session replay
+Drizzle migration 是数据库 schema 的顺序升级机制，不是文件系统兼容层。Migration 文件和 journal 一旦发布就不修改、不合并、不删除。
 
-持久文件是唯一 transcript，不创建 Issue Pilot 消息副本。SSE replay 使用 `SessionManager.buildContextEntries()` 和 `sessionEntryToContextMessages()`：
+## Runtime 与 code-server
 
-- 只回放 active leaf，并遵循 compaction 的 `firstKeptEntryId`。
-- 保留 assistant、tool result、compaction/branch summary、displayable custom message 和 bash execution。
-- `model_change`、`thinking_level_change`、`label`、`session_info` 不伪装成 chat message。
-- 页面用户消息保存为不参与 LLM context 的 custom entry；带 runtime time 的内部 prompt 不显示。
-- SSE 先取得 replay snapshot，再通过 buffered subscription 接入 live event，避免 replay/live 之间丢事件。
-- compaction 完成后 Web 重新订阅，从 authoritative active context 重建。
-
-Web 使用结构化 Solid DOM 复现 Pi 的 user/assistant/thinking/tool/custom/editor/footer 语义，不引入第二套 PTY 或 xterm session。主题基于同版本官方 `dark.json`；业务文字使用 Google Fonts variable `Noto Sans SC`，技术内容使用 `JetBrains Mono`，项目不安装或打包字体。
-
-## Policy 构建
-
-Deployment 配置是模型、连接、credential 和 capability 授权的唯一事实源。每次新 session 按以下顺序创建 policy：
+每个已准备代码的 Issue 都生成相同形态的 multi-root runtime：
 
 ```text
-HTTP deployment config
-    -> save-time validation
-    -> issue + environment + deployment + prepared repositories
-    -> createDeploymentPolicy()
-    -> strip credentials / canonicalize scopes
-    -> createIssuePolicy()
-    -> deep freeze
-    -> built-in allowlist + custom tool definitions
-    -> Pi AgentSession
+issues/<issue-key>/runtime/
+  <repository-name> -> worktree 或 immutable checkout
+  <issue-key>.code-workspace
+  bin/                                      # writable dev only
 ```
 
-`IssuePolicy` 只包含：
+活动 dev 的 Repository link 指向 `workspaces/<issue-key>/<repository>`；prod/test 和 released dev 指向 shared checkout。真实可写代码、依赖和构建输出仍只存在于 `workspaces`，runtime 只保存可重建链接、manifest 和 wrapper。
 
-- normalized issue key、工单类型和 issue runtime 或开发 workspace 绝对路径
-- provider、model ID、thinking level
-- service/environment identity 和 environment kind
-- repository 绝对路径、base commit、read/write grant
-- canonical capability names
-- 无凭据 scope，例如 deployment ID、Nacos exact Data ID、SLS logstore、RabbitMQ virtual host、Playwright base URL
+所有 code-server URL 都打开同一个入口形式：
 
-它不包含 username、password、AccessKey 或 bearer token。Policy、嵌套 scope、数组和 repository grant 均被冻结，session 运行期间不能被页面更新或其他调用者修改。
+```text
+?workspace=/home/coder/state/issues/<issue-key>/runtime/<issue-key>.code-workspace
+```
 
-### 本地工具矩阵
+Manifest 显式声明每个 Repository link，因此 VS Code Git extension 在三种代码状态下都使用相同发现方式，并显示 Source Control 和 Git Graph。活动 dev 通过链接最终访问容器中的 read-write workspaces mount；其他链接最终访问 read-only checkouts mount。
 
-| repository policy | Pi built-in tools |
-| --- | --- |
-| 零仓库或任一仓库只读 | `read`、`grep`、`find`、`ls` |
-| 至少一个仓库且全部可写 | 上述工具加 `bash`、`edit`、`write` |
+Runtime 通过临时目录完整生成后再替换，避免 code-server 看到只生成一半的 links 或 manifest。Manifest 为 `0400`，整个 `issues` mount 在容器内只读；链接目标是否可写由 workspaces/checkouts mount 决定。
 
-写权限还要求 environment 为 `dev`，且 issue type 为 `defect_fix` 或 `feature_development`。页面配置不能直接授予本地 mutation tool。
+具体 mounts 见 [部署说明](DEPLOYMENT.md#code-server)，故障处理见 [运维手册](RUNBOOK.md#code-server-排障)。
 
-Pi built-in file tools以 session workspace 为 cwd，但不是操作系统 sandbox；宿主进程文件权限仍是最终本地文件边界。因此 API/Pi 进程必须使用专用、低权限账号运行，不能以 root 启动。
+## Pi session 与 SSE
 
-### Custom capability 工具
+Pi 使用 SDK `createAgentSession()`，不启动 RPC 子进程。每个 Issue 只有一个 session binding，JSONL 是唯一 transcript。
 
-只有 `policy.service.capabilities` 中的名称会创建 tool。每个 tool 通过闭包读取 session 启动时 clone 的 deployment config，并直接调用 broker；不存在内部 HTTP endpoint、bearer token 或 RPC extension。
+Session resource loader 明确关闭 extension、skill、prompt template、theme、context file 和宿主自定义 prompt 自动发现。模型、thinking level 和 active tools 在 session 创建后再次核对。
 
-| tool | policy scope | runtime enforcement |
-| --- | --- | --- |
-| `nacos` | server/namespace/group/exact Data IDs | exact target、同 origin、共享结果预算 |
-| `db` | deployment ID | MySQL URL、单条只读 SQL、read-only transaction |
-| `redis` | deployment ID | allowlisted action、key/count/result budget |
-| `es` | deployment ID | search/count/mapping、redirect forbidden |
-| `mq` | deployment ID + virtual host | Management API metadata only |
-| `sls` | region/project/logstores | exact logstore、time range、fixed CLI |
-| `playwright` | exact base URL | declarative actions、same origin、ephemeral browser |
+回放流程遵循 Pi 的 active branch 和 compaction：
 
-授权和输入分层验证：页面表单用于 UX；HTTP save parser 验证持久配置；policy canonicalize 授权；TypeBox tool schema 验证结构；broker 和客户端再验证语义、scope 未变化和协议边界。
+- `buildContextEntries()` 生成当前有效上下文。
+- User custom entry、assistant message、tool result、summary 和 bash execution 投影为 Web 事件。
+- Model change、label 等内部 entry 不伪装成聊天消息。
+- 先建立 live event buffer，再读取 replay snapshot，最后接通 live sink。
+- SSE write 遇到 backpressure 时等待 `drain`；连接关闭后释放 listener 和 heartbeat。
 
-## Credential 生命周期
+Web 只负责 presentation，不维护第二份对话事实源。
 
-1. Credential 只保存在 SQLite deployment config 中。
-2. Agent 启动时 configuration clone 被 capability tool closure 持有，不写入 policy 或 prompt。
-3. Nacos/MySQL/Redis/ES/RabbitMQ client 只在请求构造时使用 credential。
-4. SLS 为单次调用创建 `0700` 临时 HOME 和 `0600` Aliyun profile，子进程结束后递归删除。
-5. Playwright username/password 写入单次 `0600` 文件，只挂载给临时 browser container；Podman 命令行只有文件路径。
-6. code-server 使用 `--auth none`；容器自身不提供身份认证，访问控制完全依赖 loopback 监听、Web 代理和外围网络边界。
+## Policy 与 capability
 
-Capability 结果可能包含目标系统本身返回的敏感业务字段，因为完整证据不能静默过滤；调用方必须按 deployment data classification 保护 session 和日志。
+```mermaid
+flowchart LR
+    Config[Saved Deployment] --> Validate[Save validation]
+    Validate --> Prepare[Prepared repositories]
+    Prepare --> Policy[Frozen IssuePolicy]
+    Policy --> Tools[Selected tools]
+    Tools --> Schema[Input schema]
+    Schema --> Broker[Scope revalidation]
+    Broker --> Client[Protocol client + result budget]
+```
 
-## 完整结果原则
+IssuePolicy 保存 model、Environment、Repository path/commit/access 和无 credential scope。Password、AccessKey 和 bearer token 不进入 policy 或 prompt。
 
-Capability 不返回 `truncated: true` 或“前 N 条但看起来成功”的结果。超过约定的 bytes、rows、keys、Data IDs、SLS records 或 browser actions 时返回 `capability_result_too_large`。调用者应缩小 SQL、query、时间范围或目标集合后重试。
+本地工具由实际 Repository access 决定：
 
-SLS 是显式分页：累计到调用方 `limit` 后再探测下一条；存在更多记录时整次调用失败。MySQL 使用 streaming rows，在加入结果前检查行数和序列化大小。Nacos 多 Data ID 共用一个结果预算。
+- 至少一个 Repository 且全部为 writable dev：启用 `bash`、`edit`、`write`。
+- 其他状态：只启用 `read`、`grep`、`find`、`ls`。
 
-## Project wrappers
+Capability 只为 policy 中列出的名称创建。Broker 会再次比较冻结 scope 和当前 session 持有的 Deployment config，然后由具体 client 验证协议、timeout、rows 和 bytes。
 
-可写 Agent 的 bash PATH 包含当前开发工单受管的 `issues/<issue-key>/runtime/bin`：
+Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capability-总览)，此处不重复。
 
-- `node-project` 校验项目位于 issue workspace 后，按 `packageManager` 使用宿主 npm/corepack 执行 install、test、build 或 typecheck。
-- `maven-project` 验证相同路径边界后，使用宿主 Maven/Java 执行 test、verify 或 package。
+## 附件原理
 
-Wrapper 只为拥有开发 workspace、会启用 bash 的工单生成。工单隔离由每次执行注入的 `ISSUE_WORKSPACE` 强制；wrapper 不进入开发 workspace，也不是容器或长驻服务。
+上传时先按请求预算读取文件并计算 SHA-256，再以 `0400` 写入 Issue attachment root，最后在数据库事务中创建记录。数据库失败会删除已写文件。
 
-## SSE 和 backpressure
+读取时验证：
 
-`GET /api/issues/:key/agent-stream` 回放 active branch 后发送实时事件。`AgentEventBus` 负责 issue isolation；ordered SSE writer 在 `write()` 返回 false 时等待 `drain`，客户端断开时释放 listener、heartbeat 和 backpressure wait。Footer totals 从完整 session entries 累计，context usage 使用 active context 和当前模型 context window。
+- 路径直属当前 Issue attachment root。
+- 对象是普通文件。
+- Group/world 权限为 0。
+- 文件大小等于数据库记录且不超过上限。
+- 当前 SHA-256 等于保存值。
 
-## code-server
+删除使用 quarantine：先把目标原子改名，数据库事务成功后删除；事务失败则恢复原文件名。这避免数据库记录和文件删除一半。
 
-所有工单共享一个官方 code-server 4.131.0 容器；开发工单打开可写的独立 workspace，prod/test 打开共享快照组成的 issue runtime。`issues` 和 shared checkout 分别只读挂载，runtime 使用相对链接，使宿主和容器解析到同一目录结构。容器不构建自定义镜像，直接挂载固定宿主 Node/Pi、Java、Maven、Git、Maven repository、npm cache/config 和 Pi agent 目录。容器以 `--auth none` 运行并只监听 `127.0.0.1:18080`，使用 `userns=keep-id`、`no-new-privileges`、`cap-drop ALL`。详细路径、更新和恢复流程见 [运维说明](OPERATIONS.md#code-server-部署)。
+## 并发与失败边界
+
+- Agent 按 Issue ID 串行。
+- Git 操作按 Repository URL hash 串行。
+- Workspace inspect、release 和 maintenance 全局串行。
+- Issue key 生成在 API 实例内串行，并由数据库 unique index 兜底。
+- Service 配置整体在一个数据库事务中替换。
+- API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。
+
+## 从原理进入代码
+
+理解上述状态与所有权后，可通过 [开发指南](DEVELOPMENT.md)找到源码入口、常见改动路径、测试范围和 review checklist。架构文档不重复维护文件清单。
+
+## 必须保持的不变量
+
+1. Issue key 格式为 `ISSUE-YYYYMMDD-NNN...`。
+2. Prod/test Repository state 为 `read_only`。
+3. 活动 dev 为 `development_workspace`；已释放 dev 为 `development_snapshot`。
+4. Dirty、untracked、running、invalid layout 和 unmanaged state 不自动删除。
+5. 本地 Issue branch ref 不随 workspace 释放。
+6. Durable data 不进入 runtime 或 checkout。
+7. API、database migration 和 code-server 使用同一个 state root。
+8. Credential 不进入 policy、prompt、session event 或进程命令行。

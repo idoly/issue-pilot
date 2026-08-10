@@ -91,27 +91,22 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await db.insert(serviceRepositories).values({ serviceId: service!.id, url: "git@example.test:second.git" });
     assert.equal((await db.select().from(serviceRepositories)).length, 2);
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
-    const obsoleteTables = await client.execute("select name from sqlite_master where type = 'table' and name in ('deployment_capabilities', 'issue_pilot_events', 'issue_history', 'service_modules', 'service_relations', 'service_relation_modules', 'issue_service_modules', 'issue_services', 'issue_diagnoses', 'issue_test_runs', 'issue_evidence')");
-    assert.equal(obsoleteTables.rows.length, 0);
+    const applicationTables = await client.execute("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' and name != '__drizzle_migrations' order by name");
+    assert.deepEqual(applicationTables.rows.map((row) => row.name), [
+      "environments", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_repositories",
+      "issue_workspaces", "issues", "service_deployments", "service_repositories", "services", "subjects",
+    ]);
     const issueColumns = await client.execute("pragma table_info('issues')");
-    assert.equal(issueColumns.rows.some((column) => column.name === "labels"), false);
-    assert.equal(issueColumns.rows.some((column) => column.name === "version"), false);
-    for (const table of ["environments", "services", "issue_workspaces"]) {
-      const columns = await client.execute(`pragma table_info('${table}')`);
-      assert.equal(columns.rows.some((column) => column.name === "owner_subject"), false);
-    }
-    const repositoryColumns = await client.execute("pragma table_info('service_repositories')");
-    assert.equal(repositoryColumns.rows.some((column) => column.name === "kind"), false);
-    const ccColumns = await client.execute("pragma table_info('issue_cc_recipients')");
-    assert.equal(ccColumns.rows.some((column) => column.name === "created_at"), false);
-    const ccIndexes = await client.execute("pragma index_list('issue_cc_recipients')");
-    assert.equal(ccIndexes.rows.some((entry) => entry.name === "issue_cc_recipient_subject_idx"), false);
-    const attachmentColumns = await client.execute("pragma table_info('issue_attachments')");
-    assert.equal(attachmentColumns.rows.some((column) => column.name === "scan_status"), false);
+    assert.deepEqual(issueColumns.rows.map((column) => column.name), [
+      "id", "key", "title", "description", "status", "priority", "type", "service_id", "environment_id",
+      "reporter_subject", "assignee_subject", "resolved_at", "created_at", "updated_at",
+    ]);
+    const repositoryColumns = await client.execute("pragma table_info('issue_repositories')");
+    assert.deepEqual(repositoryColumns.rows.map((column) => column.name), [
+      "id", "issue_id", "url", "base_branch", "working_branch", "local_path", "commit_before", "created_at", "updated_at",
+    ]);
     const sessionColumns = await client.execute("pragma table_info('issue_pilot_sessions')");
-    assert.equal(sessionColumns.rows.some((column) => column.name === "pi_session_id"), false);
-    const sessionIndexes = await client.execute("pragma index_list('issue_pilot_sessions')");
-    assert.equal(sessionIndexes.rows.some((entry) => entry.name === "issue_pilot_pi_session_unique"), false);
+    assert.deepEqual(sessionColumns.rows.map((column) => column.name), ["issue_id", "session_file", "workspace_path", "created_at", "updated_at"]);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
   } finally {
     await close();

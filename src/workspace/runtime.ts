@@ -1,38 +1,81 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rename, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { issueRoot, issueRuntimeRoot, sharedCheckoutsRoot } from "./state.ts";
+import { eq } from "drizzle-orm";
 
-export interface ReadOnlyRuntimeRepository {
+import type { Database } from "../db/client.ts";
+import { issueWorkspaces } from "../db/schema.ts";
+import { errorMessage } from "../domain/contracts.ts";
+import { issueRoot, issueRuntimeRoot, issueRuntimeWorkspaceFile, issueWorkspaceRoot, sharedCheckoutsRoot } from "./state.ts";
+
+export interface IssueRuntimeRepository {
   name: string;
-  checkoutPath: string;
+  repositoryPath: string;
 }
 
-function managedCheckout(stateRoot: string, checkoutPath: string): string {
-  const root = sharedCheckoutsRoot(stateRoot);
-  const resolved = path.resolve(checkoutPath);
-  const relative = path.relative(root, resolved);
+export type IssueRuntimeAccess = "read" | "write";
+
+export interface RuntimePreparationResult {
+  prepared: string[];
+  blocked: Array<{ issueKey: string; reason: string }>;
+}
+
+export async function prepareIssueRuntimeBatch<T extends { id: string; key: string }>(
+  database: Database,
+  issueRows: T[],
+  prepareRuntime: (issue: T) => Promise<unknown>,
+): Promise<RuntimePreparationResult> {
+  const prepared: string[] = [];
+  const blocked: RuntimePreparationResult["blocked"] = [];
+  for (const issue of issueRows) {
+    try {
+      await prepareRuntime(issue);
+      prepared.push(issue.key);
+    } catch (error) {
+      await database.update(issueWorkspaces).set({ codeServerReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).catch(() => undefined);
+      blocked.push({ issueKey: issue.key, reason: errorMessage(error) });
+    }
+  }
+  return { prepared, blocked };
+}
+
+function managedRepository(stateRoot: string, issueKey: string, repositoryPath: string, access: IssueRuntimeAccess): string {
+  const resolved = path.resolve(repositoryPath);
+  if (access === "write") {
+    if (path.dirname(resolved) !== issueWorkspaceRoot(stateRoot, issueKey)) throw new Error("repository_workspace_outside_issue_root");
+    return resolved;
+  }
+  const checkoutRoot = sharedCheckoutsRoot(stateRoot);
+  const relative = path.relative(checkoutRoot, resolved);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("repository_checkout_outside_shared_root");
   return resolved;
 }
 
-export async function prepareReadOnlyRuntime(stateRoot: string, issueKey: string, repositories: ReadOnlyRuntimeRepository[]): Promise<string> {
-  const root = issueRoot(stateRoot, issueKey);
+export async function prepareIssueRuntime(
+  stateRoot: string,
+  issueKey: string,
+  repositories: IssueRuntimeRepository[],
+  access: IssueRuntimeAccess,
+): Promise<string> {
+  const issueDirectory = issueRoot(stateRoot, issueKey);
   const runtimeRoot = issueRuntimeRoot(stateRoot, issueKey);
-  const temporaryRoot = path.join(root, `.runtime-${randomUUID()}`);
+  const temporaryRoot = path.join(issueDirectory, `.runtime-${randomUUID()}`);
   const names = new Set<string>();
 
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await chmod(root, 0o700);
+  await mkdir(issueDirectory, { recursive: true, mode: 0o700 });
+  await chmod(issueDirectory, 0o700);
   try {
     await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const repository of repositories) {
       if (!/^[a-z0-9._-]+$/.test(repository.name) || names.has(repository.name)) throw new Error("invalid_runtime_repository_name");
       names.add(repository.name);
-      await symlink(path.relative(temporaryRoot, managedCheckout(stateRoot, repository.checkoutPath)), path.join(temporaryRoot, repository.name), "dir");
+      const repositoryTarget = managedRepository(stateRoot, issueKey, repository.repositoryPath, access);
+      await symlink(path.relative(temporaryRoot, repositoryTarget), path.join(temporaryRoot, repository.name), "dir");
     }
-
+    const workspaceFile = path.join(temporaryRoot, path.basename(issueRuntimeWorkspaceFile(stateRoot, issueKey)));
+    await writeFile(workspaceFile, `${JSON.stringify({ folders: repositories.map((repository) => ({ name: repository.name, path: repository.name })) }, null, 2)}\n`, { mode: 0o400 });
+    await chmod(workspaceFile, 0o400);
 
     await rm(runtimeRoot, { recursive: true, force: true });
     await rename(temporaryRoot, runtimeRoot);

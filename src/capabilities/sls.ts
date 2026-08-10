@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 import type { IssuePolicy } from "../pi/policy.ts";
-import { capabilityResultText, capabilityTextResult, isSlsLogstore, MAX_SLS_RESULTS } from "./contracts.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { capabilityResultText, capabilityTextResult, isSlsLogstore } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
-const ALIYUN_CLI_PATH = "/usr/local/sbin/aliyun";
-const DEFAULT_TRACE_WINDOW_SECONDS = 24 * 60 * 60;
+const limits = issuePilotConfig.limits.capability.sls;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface SlsRuntime {
@@ -26,21 +26,21 @@ export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy
   query?: string;
   trace_id?: string;
   limit?: number;
-}, configured: Record<string, unknown>, signal?: AbortSignal, runtime: SlsRuntime = { cliPath: ALIYUN_CLI_PATH }) {
+}, configured: Record<string, unknown>, signal?: AbortSignal, runtime: SlsRuntime = { cliPath: issuePilotConfig.runtime.aliyunCli }) {
   if (!isSlsLogstore(input.logstore)) throw new Error("invalid_sls_logstore");
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
   const now = Math.floor(Date.now() / 1000);
   const to = input.to ?? now;
-  const from = input.from ?? to - (input.trace_id ? DEFAULT_TRACE_WINDOW_SECONDS : 15 * 60);
+  const from = input.from ?? to - (input.trace_id ? limits.traceWindowSeconds : limits.defaultWindowSeconds);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to <= from) throw new Error("invalid_sls_time_range");
-  if (to > now + 300) throw new Error("invalid_sls_time_range");
+  if (to > now + limits.futureToleranceSeconds) throw new Error("invalid_sls_time_range");
   const traceId = input.trace_id?.trim();
   if (traceId && !TRACE_ID.test(traceId)) throw new Error("invalid_sls_trace_id");
   if (traceId && input.query?.trim()) throw new Error("invalid_sls_query");
   const searchQuery = traceId || input.query?.trim() || "*";
   if (searchQuery.includes("\0")) throw new Error("invalid_sls_query");
-  const limit = input.limit ?? 20;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SLS_RESULTS) throw new Error("invalid_sls_limit");
+  const limit = input.limit ?? limits.defaultResults;
+  if (!Number.isInteger(limit) || limit < 1 || limit > limits.results) throw new Error("invalid_sls_limit");
 
   const scope = policy.service.sls;
   if (!scope) throw new Error("sls_scope_not_granted_for_service");
@@ -65,7 +65,7 @@ export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy
         "--offset", String(offset),
         "--reverse", "true",
       ], {
-        timeout: 30_000,
+        timeout: limits.executionMs,
         environment: { HOME: profileRoot, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" },
         ...(signal ? { signal } : {}),
       });
@@ -77,7 +77,7 @@ export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy
     };
     const records: unknown[] = [];
     while (records.length < limit) {
-      const pageSize = Math.min(100, limit - records.length);
+      const pageSize = Math.min(limits.pageResults, limit - records.length);
       const page = await fetchRecords(pageSize, records.length);
       if (page.length > pageSize) throw new Error("capability_result_too_large");
       records.push(...page);
@@ -89,7 +89,7 @@ export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy
       logstore: input.logstore,
       from,
       to,
-      timezone: "Asia/Shanghai",
+      timezone: issuePilotConfig.regional.timeZone,
       queryMode: traceId ? "trace_id_full_text" : "query",
       order: "newest_first",
       limit,

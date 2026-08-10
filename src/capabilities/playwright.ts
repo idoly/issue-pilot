@@ -3,17 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
-import { capabilityResultText, MAX_BROWSER_ACTIONS, MAX_CAPABILITY_RESULT_BYTES } from "./contracts.ts";
+import { capabilityResultText } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
-const PLAYWRIGHT_VERSION = "1.62.1";
-const BROWSER_RUNTIME = {
-  image: "mcr.microsoft.com/playwright:v1.62.1-noble",
-  playwrightCoreRoot: "/usr/local/node/lib/node_modules/playwright-core",
-} as const;
+const limits = issuePilotConfig.limits.capability;
 
-type BrowserRuntime = Readonly<{ image: string; playwrightCoreRoot: string }>;
+type BrowserRuntime = Readonly<{
+  version: string;
+  image: string;
+  playwrightCoreRoot: string;
+  actionTimeoutMs: number;
+  navigationTimeoutMs: number;
+  containerPids: number;
+  containerMemory: string;
+  viewport: Readonly<{ width: number; height: number }>;
+}>;
 
 export type BrowserAction =
   | { type: "goto"; path: string }
@@ -44,30 +50,30 @@ function browserCredentials(policy: IssuePolicy, deploymentConfig: Record<string
 }
 
 function validateBrowserActions(actions: BrowserAction[]): void {
-  if (!Array.isArray(actions) || actions.length < 1 || actions.length > MAX_BROWSER_ACTIONS) throw new Error("invalid_browser_actions");
+  if (!Array.isArray(actions) || actions.length < 1 || actions.length > limits.browser.actions) throw new Error("invalid_browser_actions");
   for (const action of actions) {
     if (!action || typeof action !== "object") throw new Error("invalid_browser_action");
     if (action.type === "goto") {
-      if (typeof action.path !== "string" || !action.path.startsWith("/") || action.path.startsWith("//") || action.path.length > 2048 || action.path.includes("\0")) throw new Error("invalid_browser_path");
+      if (typeof action.path !== "string" || !action.path.startsWith("/") || action.path.startsWith("//") || action.path.length > limits.browser.pathChars || action.path.includes("\0")) throw new Error("invalid_browser_path");
       continue;
     }
     if (action.type === "login") {
-      for (const selector of [action.usernameSelector, action.passwordSelector, action.submitSelector]) if (typeof selector !== "string" || !selector || selector.length > 500 || selector.includes("\0")) throw new Error("invalid_browser_selector");
+      for (const selector of [action.usernameSelector, action.passwordSelector, action.submitSelector]) if (typeof selector !== "string" || !selector || selector.length > limits.browser.selectorChars || selector.includes("\0")) throw new Error("invalid_browser_selector");
       continue;
     }
     if (action.type === "click" || action.type === "wait_for") {
-      if (typeof action.selector !== "string" || !action.selector || action.selector.length > 500 || action.selector.includes("\0")) throw new Error("invalid_browser_selector");
+      if (typeof action.selector !== "string" || !action.selector || action.selector.length > limits.browser.selectorChars || action.selector.includes("\0")) throw new Error("invalid_browser_selector");
       continue;
     }
     if (action.type === "fill" || action.type === "select") {
-      if (typeof action.selector !== "string" || !action.selector || action.selector.length > 500 || action.selector.includes("\0") || typeof action.value !== "string" || action.value.length > 10_000 || action.value.includes("\0")) throw new Error("invalid_browser_action");
+      if (typeof action.selector !== "string" || !action.selector || action.selector.length > limits.browser.selectorChars || action.selector.includes("\0") || typeof action.value !== "string" || action.value.length > limits.browser.valueChars || action.value.includes("\0")) throw new Error("invalid_browser_action");
       continue;
     }
     throw new Error("invalid_browser_action");
   }
 }
 
-export async function runBrowserActions(executor: CommandExecutor, policy: IssuePolicy, deploymentConfig: Record<string, unknown>, input: { actions: BrowserAction[]; screenshot?: boolean }, signal?: AbortSignal, runtime: BrowserRuntime = BROWSER_RUNTIME) {
+export async function runBrowserActions(executor: CommandExecutor, policy: IssuePolicy, deploymentConfig: Record<string, unknown>, input: { actions: BrowserAction[]; screenshot?: boolean }, signal?: AbortSignal, runtime: BrowserRuntime = issuePilotConfig.runtime.playwright) {
   const scope = policy.service.playwright;
   if (!scope) throw new Error("browser_scope_not_granted_for_service");
   validateBrowserActions(input.actions);
@@ -81,10 +87,10 @@ export async function runBrowserActions(executor: CommandExecutor, policy: Issue
   } catch {
     throw new Error("playwright_core_not_installed");
   }
-  if (installedVersion !== PLAYWRIGHT_VERSION) throw new Error("playwright_core_version_mismatch");
+  if (installedVersion !== runtime.version) throw new Error("playwright_core_version_mismatch");
   const runner = fileURLToPath(new URL("../../infra/playwright-runner.cjs", import.meta.url));
-  const uid = process.getuid?.() ?? 1000;
-  const gid = process.getgid?.() ?? 1000;
+  const uid = process.getuid?.() ?? issuePilotConfig.runtime.containerUser.uid;
+  const gid = process.getgid?.() ?? issuePilotConfig.runtime.containerUser.gid;
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-browser-"));
   const inputDirectory = path.join(temporaryRoot, "input");
   const secretDirectory = path.join(temporaryRoot, "secrets");
@@ -93,12 +99,20 @@ export async function runBrowserActions(executor: CommandExecutor, policy: Issue
     const requestFile = path.join(inputDirectory, "request.json");
     const credentialsFile = path.join(secretDirectory, "credentials.json");
     await Promise.all([
-      writeFile(requestFile, JSON.stringify({ baseUrl: scope.baseUrl, actions: input.actions, screenshot: input.screenshot === true }), { mode: 0o600 }),
+      writeFile(requestFile, JSON.stringify({
+        baseUrl: scope.baseUrl,
+        actions: input.actions,
+        screenshot: input.screenshot === true,
+        maxActions: limits.browser.actions,
+        actionTimeoutMs: runtime.actionTimeoutMs,
+        navigationTimeoutMs: runtime.navigationTimeoutMs,
+        viewport: runtime.viewport,
+      }), { mode: 0o600 }),
       writeFile(credentialsFile, JSON.stringify(credentials), { mode: 0o600 }),
     ]);
     const args = [
       "run", "--rm", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--network", "host",
-      "--pids-limit", "256", "--memory", "1g", "--userns", "keep-id", "--user", `${uid}:${gid}`,
+      "--pids-limit", String(runtime.containerPids), "--memory", runtime.containerMemory, "--userns", "keep-id", "--user", `${uid}:${gid}`,
       "--volume", `${runner}:/runner/playwright-runner.cjs:ro,Z`,
       "--volume", `${inputDirectory}:/run/input:ro,Z`,
       "--volume", `${secretDirectory}:/run/secrets:ro,Z`,
@@ -107,7 +121,7 @@ export async function runBrowserActions(executor: CommandExecutor, policy: Issue
       runtime.image,
       "/runner/playwright-runner.cjs", "/run/input/request.json", "/run/secrets/credentials.json",
     ];
-    const execution = await executor.execute("podman", args, { timeout: 90_000, ...(signal ? { signal } : {}) });
+    const execution = await executor.execute("podman", args, { timeout: limits.browser.executionMs, ...(signal ? { signal } : {}) });
     if (execution.code !== 0) throw new Error("browser_operation_failed");
     let output: Record<string, unknown>;
     try { output = JSON.parse(execution.stdout) as Record<string, unknown>; } catch { throw new Error("browser_invalid_response"); }
@@ -115,7 +129,7 @@ export async function runBrowserActions(executor: CommandExecutor, policy: Issue
     delete output.screenshot;
     const text = capabilityResultText(output);
     const image = screenshot ? Buffer.from(screenshot, "base64") : undefined;
-    if (image && image.length + Buffer.byteLength(text) > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
+    if (image && image.length + Buffer.byteLength(text) > limits.resultBytes) throw new Error("capability_result_too_large");
     const content: [{ type: "text"; text: string }, ...Array<{ type: "image"; data: string; mimeType: string }>] = [{ type: "text", text }];
     const response = { content, details: { runtime: "container", baseUrl: scope.baseUrl, actionCount: input.actions.length } };
     if (image) {

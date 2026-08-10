@@ -58,18 +58,18 @@ const metadata: Record<CapabilityName, ToolMetadata> = {
 };
 
 export function createCapabilityTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>): ToolDefinition<any, any, any>[] {
-  const config = structuredClone(deploymentConfig);
-  const execute = async (capability: CapabilityName, input: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> =>
-    await executeCapability(policy, config, capability, input, signal) as AgentToolResult<unknown>;
-  const common = (name: CapabilityName) => ({ name, ...metadata[name] });
-  const definitions: Record<CapabilityName, ToolDefinition<any, any, any>> = {
-    nacos: defineTool({ ...common("nacos"), parameters: capabilityInputSchemas.nacos, execute: (_id, input, signal) => execute("nacos", input, signal) }),
-    db: defineTool({ ...common("db"), parameters: capabilityInputSchemas.db, execute: (_id, input, signal) => execute("db", input, signal) }),
-    sls: defineTool({ ...common("sls"), parameters: capabilityInputSchemas.sls, execute: (_id, input, signal) => execute("sls", input, signal) }),
-    redis: defineTool({ ...common("redis"), parameters: capabilityInputSchemas.redis, execute: (_id, input, signal) => execute("redis", input, signal) }),
-    es: defineTool({ ...common("es"), parameters: capabilityInputSchemas.es, execute: (_id, input, signal) => execute("es", input, signal) }),
-    mq: defineTool({ ...common("mq"), parameters: capabilityInputSchemas.mq, execute: (_id, input, signal) => execute("mq", input, signal) }),
-    playwright: defineTool({ ...common("playwright"), parameters: capabilityInputSchemas.playwright, execute: (_id, input, signal) => execute("playwright", input, signal) }),
+  const sessionConfig = structuredClone(deploymentConfig);
+  const executeTool = async (capability: CapabilityName, input: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> =>
+    await executeCapability(policy, sessionConfig, capability, input, signal) as AgentToolResult<unknown>;
+  const toolMetadata = (name: CapabilityName) => ({ name, ...metadata[name] });
+  const tools: Record<CapabilityName, ToolDefinition<any, any, any>> = {
+    nacos: defineTool({ ...toolMetadata("nacos"), parameters: capabilityInputSchemas.nacos, execute: (_id, input, signal) => executeTool("nacos", input, signal) }),
+    db: defineTool({ ...toolMetadata("db"), parameters: capabilityInputSchemas.db, execute: (_id, input, signal) => executeTool("db", input, signal) }),
+    sls: defineTool({ ...toolMetadata("sls"), parameters: capabilityInputSchemas.sls, execute: (_id, input, signal) => executeTool("sls", input, signal) }),
+    redis: defineTool({ ...toolMetadata("redis"), parameters: capabilityInputSchemas.redis, execute: (_id, input, signal) => executeTool("redis", input, signal) }),
+    es: defineTool({ ...toolMetadata("es"), parameters: capabilityInputSchemas.es, execute: (_id, input, signal) => executeTool("es", input, signal) }),
+    mq: defineTool({ ...toolMetadata("mq"), parameters: capabilityInputSchemas.mq, execute: (_id, input, signal) => executeTool("mq", input, signal) }),
+    playwright: defineTool({ ...toolMetadata("playwright"), parameters: capabilityInputSchemas.playwright, execute: (_id, input, signal) => executeTool("playwright", input, signal) }),
   };
-  return policy.service.capabilities.map((capability) => definitions[capability]);
+  return policy.service.capabilities.map((capability) => tools[capability]);
 }

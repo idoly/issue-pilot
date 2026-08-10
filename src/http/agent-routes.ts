@@ -1,15 +1,14 @@
-import { access } from "node:fs/promises";
-
 import { and, eq } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
 import { agentSessions, environments, issueAttachments, serviceDeployments, services } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS, MAX_AGENT_MESSAGE_CHARS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
-import { issueAttachmentRoot } from "../workspace/state.ts";
+import { AGENT_THINKING_LEVELS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
+import { issueAttachmentRoot, pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { requireIssue, assertIssueIdle, type ApiRouteContext } from "./route-context.ts";
+import { assertIssueIdle, assertIssueRunnable, requireIssue, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
@@ -25,7 +24,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/sync", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
+    assertIssueRunnable(issue);
     assertIssueIdle(engine, issue.id);
     const [service, environment, attachments] = await Promise.all([
       database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, issue.serviceId)).limit(1).then((rows) => rows[0]),
@@ -57,8 +56,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const configuredModel = (await modelCatalog.list()).find((candidate) => candidate.provider === provider && candidate.id === model);
     const contextWindow = configuredModel?.contextWindow ?? 0;
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    const manager = binding && await access(binding.sessionFile).then(() => true, () => false)
-      ? SessionManager.open(binding.sessionFile) : undefined;
+    const manager = binding && await pathExists(binding.sessionFile) ? SessionManager.open(binding.sessionFile) : undefined;
     const transcript = manager ? sessionTranscript(manager, issue.id) : [];
     const footer: AgentFooterStats = manager ? sessionFooterStats(manager, contextWindow) : {
       input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
@@ -72,15 +70,15 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     for (const event of transcript) send(event);
     writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id) })}\n\n`);
     liveEvents.activate(send);
-    const heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), 15_000); heartbeat.unref();
+    const heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
     request.raw.once("close", () => { clearInterval(heartbeat); liveEvents.unsubscribe(); });
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
+    assertIssueRunnable(issue);
     const input = record(request.body);
-    const message = text(input.message, "agent_message", MAX_AGENT_MESSAGE_CHARS);
+    const message = text(input.message, "agent_message", issuePilotConfig.limits.agentMessageChars);
     await engine.send(issue.id, message);
     return reply.code(202).send();
   });

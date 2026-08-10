@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+
 export interface CommandExecutionOptions {
   cwd?: string;
   timeout?: number;
@@ -18,13 +20,11 @@ export interface CommandExecutor {
   execute(command: string, args: string[], options?: CommandExecutionOptions): Promise<CommandExecutionResult>;
 }
 
-const MAX_COMMAND_OUTPUT_BYTES = 5 * 1024 * 1024;
-
 export async function executeLocalCommand(command: string, args: string[], options: CommandExecutionOptions = {}): Promise<CommandExecutionResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       ...(options.cwd ? { cwd: options.cwd } : {}),
-      env: options.environment ? { ...process.env, ...options.environment } : process.env,
+      ...(options.environment ? { env: { ...options.environment } } : {}),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -44,24 +44,25 @@ export async function executeLocalCommand(command: string, args: string[], optio
       if (killed) return;
       killed = true;
       child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1_000).unref();
+      setTimeout(() => child.kill("SIGKILL"), issuePilotConfig.limits.process.terminationGraceMs).unref();
     };
     const abort = () => terminate();
     const timer = options.timeout ? setTimeout(terminate, options.timeout) : undefined;
     timer?.unref();
     options.signal?.addEventListener("abort", abort, { once: true });
+    const capture = (append: (chunk: string) => void) => (chunk: string) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > issuePilotConfig.limits.process.commandOutputBytes) {
+        outputLimitExceeded = true;
+        terminate();
+        return;
+      }
+      append(chunk);
+    };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      outputBytes += Buffer.byteLength(chunk);
-      if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) { outputLimitExceeded = true; terminate(); return; }
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      outputBytes += Buffer.byteLength(chunk);
-      if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) { outputLimitExceeded = true; terminate(); return; }
-      stderr += chunk;
-    });
+    child.stdout.on("data", capture((chunk) => { stdout += chunk; }));
+    child.stderr.on("data", capture((chunk) => { stderr += chunk; }));
     child.on("error", (error) => finish(() => reject(error)));
     child.on("close", (code) => finish(() => outputLimitExceeded
       ? reject(new Error("command_output_too_large"))

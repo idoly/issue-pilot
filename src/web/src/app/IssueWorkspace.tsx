@@ -1,15 +1,30 @@
 import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "@idoly/ant-design-solid";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
-import { addIssueComment, attachmentUrl, deleteIssueAttachments, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, uploadAttachments, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
+import { addIssueComment, attachmentUrl, deleteIssueAttachments, errorMessage, isWorkspaceBusy, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, uploadAttachments, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
-import { AttachmentPicker, DescriptionField, bindMultipleSelectBlankToggle, environmentLabel, issueTypesForEnvironment, selectedChoice, selectedStrings } from "./IssueForm";
+import { AttachmentPicker, DescriptionField, bindMultipleSelectBlankToggle, issueTypesForEnvironment, selectedChoice, selectedStrings } from "./IssueForm";
 import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workspaceUrl } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
+
+const dateTimeOptions = {
+  timeZone: issuePilotConfig.regional.timeZone,
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+} as const;
+const issueDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, { ...dateTimeOptions, year: "numeric" });
+const commentDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, dateTimeOptions);
+
+function localDateTime(value: string, includeYear = true): string {
+  return (includeYear ? issueDateTimeFormat : commentDateTimeFormat).format(new Date(value));
+}
 
 export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
   const { configuration, people, peopleError } = useApplicationResources();
@@ -69,7 +84,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
       await props.onUpdated();
       setEditCcOpen(false); setEditOpen(false);
     } catch (error) {
-      if (issueGeneration === generation) setEditError(error instanceof Error ? error.message : String(error));
+      if (issueGeneration === generation) setEditError(errorMessage(error));
     } finally { if (issueGeneration === generation) setEditSaving(false); }
   };
   const submitComment = async () => {
@@ -84,7 +99,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
       setCommentBody(""); setCommentMode("edit");
       await props.onUpdated();
     } catch (error) {
-      if (issueGeneration === generation) setCommentError(error instanceof Error ? error.message : String(error));
+      if (issueGeneration === generation) setCommentError(errorMessage(error));
     } finally { if (issueGeneration === generation) setCommentSaving(false); }
   };
 
@@ -96,7 +111,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
       await retryIssue(issueId);
       if (issueGeneration === generation) await props.onUpdated();
     } catch (error) {
-      if (issueGeneration === generation) setRetryError(error instanceof Error ? error.message : String(error));
+      if (issueGeneration === generation) setRetryError(errorMessage(error));
     } finally { if (issueGeneration === generation) setRetrying(false); }
   };
   const changeStatus = async (status: "open" | "resolved") => {
@@ -104,10 +119,12 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
     const generation = issueGeneration;
     setStatusSaving(true); setStatusError("");
     try { await updateIssueStatus(issueId, status); if (issueGeneration === generation) await props.onUpdated(); }
-    catch (error) { if (issueGeneration === generation) setStatusError(error instanceof Error ? error.message : String(error)); }
+    catch (error) { if (issueGeneration === generation) setStatusError(errorMessage(error)); }
     finally { if (issueGeneration === generation) setStatusSaving(false); }
   };
   const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
+  const environmentName = () => configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
+  const availableIssueTypes = createMemo(() => issueTypesForEnvironment(props.issue.environmentKey));
   return (
     <section class="issue-workspace">
       <header class="issue-header">
@@ -127,17 +144,17 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
           </Show>
           <Show when={props.issue.status === "pending"}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
           <Show when={props.issue.status === "resolved"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
-          <Button icon={<Pencil size={15} />} disabled={props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running"} onClick={openEditor}>编辑工单</Button>
+          <Button icon={<Pencil size={15} />} disabled={isWorkspaceBusy(props.issue.workspace.status)} onClick={openEditor}>编辑工单</Button>
         </div>
       </header>
 
       <div class="issue-facts">
         <div><span>创建人</span><strong>{props.issue.reporter?.name ?? "-"}</strong></div>
-        <div><span>创建时间</span><strong>{new Date(props.issue.createdAt ?? props.issue.updatedAt).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</strong></div>
+        <div><span>创建时间</span><strong>{localDateTime(props.issue.createdAt ?? props.issue.updatedAt)}</strong></div>
         <div><span>处理人</span><strong>{props.issue.assignee ?? "未分配"}</strong></div>
         <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
         <div><span>服务</span><strong>{props.issue.service.name}</strong></div>
-        <div><span>环境</span><strong>{environmentLabel[props.issue.environmentKey] ?? props.issue.environmentKey}</strong></div>
+        <div><span>环境</span><strong>{environmentName()}</strong></div>
       </div>
       <Show when={retryError()}><div class="workspace-error" role="alert">{retryError()}</div></Show>
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
@@ -165,7 +182,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
         <div class="band-title"><MessageSquare size={16} /><h2 id="comments-title">评论与备注</h2><span>{props.issue.comments.length}</span></div>
         <div class="comment-list">
           <For each={props.issue.comments} fallback={<div class="empty-band">暂无评论</div>}>
-            {(comment) => <article class="comment-row"><header><strong>{comment.author}</strong><time>{new Date(comment.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time></header><Markdown source={comment.body} /></article>}
+            {(comment) => <article class="comment-row"><header><strong>{comment.author}</strong><time>{localDateTime(comment.createdAt, false)}</time></header><Markdown source={comment.body} /></article>}
           </For>
         </div>
         <div class="comment-editor">
@@ -182,7 +199,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
           <Show when={editError() || peopleError()}><div class="create-error modal-form-error" role="alert">{editError() || peopleError()}</div></Show>
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === props.issue.environmentKey)).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setEditPriority(selected); }} options={priorityOptions} /></label>
-          <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, issueTypesForEnvironment(props.issue.environmentKey)); if (selected) setEditType(selected); }} options={issueTypesForEnvironment(props.issue.environmentKey).map((value) => ({ value, label: typeLabel[value] }))} /></label>
+          <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, availableIssueTypes()); if (selected) setEditType(selected); }} options={availableIssueTypes().map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>

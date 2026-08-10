@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, type DeploymentConfig } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, WORKSPACE_STATUSES, type DeploymentConfig } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -68,6 +68,6 @@ export const agentSessions = sqliteTable("issue_pilot_sessions", {
 });
 
 export const issueWorkspaces = sqliteTable("issue_workspaces", {
-  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: ["not_created", "preparing", "running", "ready", "stopped", "failed"] }).notNull().default("not_created"),
+  issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("not_created"),
   codeServerReady: integer("code_server_ready", { mode: "boolean" }).notNull().default(false), lastError: text("last_error"), ...timestamps,
 });

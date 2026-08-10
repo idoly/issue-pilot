@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { runBrowserActions } from "../../src/capabilities/playwright.ts";
 import type { CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { createIssuePolicy } from "../../src/pi/policy.ts";
@@ -46,7 +47,7 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
       },
     } as CommandExecutor;
     const deploymentConfig = { playwright: { baseUrl: "https://orders.example.test/", username: "operator", password: "deployment-secret" } };
-    const runtime = { image: "mcr.microsoft.com/playwright:v1.62.1-noble", playwrightCoreRoot };
+    const runtime = { ...issuePilotConfig.runtime.playwright, playwrightCoreRoot };
     const run = (input: Parameters<typeof runBrowserActions>[3]) => runBrowserActions(executor, policy, deploymentConfig, input, undefined, runtime);
     const output = await run({ actions: [
       { type: "goto", path: "/login" },
@@ -60,12 +61,17 @@ test("runs scoped Playwright actions without exposing deployment credentials", a
     assert.doesNotMatch(JSON.stringify(output), /deployment-secret|operator/);
     assert.match(output.content[0]!.text, /Ready/);
     await run({ actions: Array.from({ length: 21 }, (_, index) => ({ type: "goto" as const, path: `/page-${index}` })) });
-    assert.equal((JSON.parse(mountedRequest) as { actions: unknown[] }).actions.length, 21);
-    assert.match(await readFile(new URL("../../infra/playwright-runner.cjs", import.meta.url), "utf8"), /MAX_ACTIONS = 50/);
+    const runnerRequest = JSON.parse(mountedRequest) as { actions: unknown[]; maxActions: number; actionTimeoutMs: number; navigationTimeoutMs: number; viewport: { width: number; height: number } };
+    assert.equal(runnerRequest.actions.length, 21);
+    assert.equal(runnerRequest.maxActions, issuePilotConfig.limits.capability.browser.actions);
+    assert.equal(runnerRequest.actionTimeoutMs, issuePilotConfig.runtime.playwright.actionTimeoutMs);
+    assert.equal(runnerRequest.navigationTimeoutMs, issuePilotConfig.runtime.playwright.navigationTimeoutMs);
+    assert.deepEqual(runnerRequest.viewport, issuePilotConfig.runtime.playwright.viewport);
+    assert.match(await readFile(new URL("../../infra/playwright-runner.cjs", import.meta.url), "utf8"), /request\.maxActions/);
     const requestMount = command.find((value) => value.includes(":/run/input:"))!.split(":/run/input:")[0]!;
     await assert.rejects(stat(requestMount));
     await assert.rejects(run({ actions: [{ type: "goto", path: "https://other.example.test/" }] }), /invalid_browser_path/);
-    response = { screenshot: Buffer.alloc(1024 * 1024).toString("base64") };
+    response = { screenshot: Buffer.alloc(issuePilotConfig.limits.capability.resultBytes).toString("base64") };
     await assert.rejects(run({ actions: [{ type: "goto", path: "/dashboard" }], screenshot: true }), /capability_result_too_large/);
   } finally {
     await rm(root, { recursive: true, force: true });

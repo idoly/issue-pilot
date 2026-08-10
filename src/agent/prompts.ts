@@ -1,3 +1,4 @@
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
 
 interface RepositoryContext {
@@ -16,26 +17,32 @@ function repositoryLine(repository: RepositoryContext): string {
   return `- ${repository.path} (${repository.branch}, ${repository.readOnly ? "read-only" : "writable"})`;
 }
 
-function shanghaiTime(now: Date): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "00";
-  return `${value("year")}-${value("month")}-${value("day")}T${value("hour")}:${value("minute")}:${value("second")}+08:00`;
+const regionalTimeFormat = new Intl.DateTimeFormat("en-CA", {
+  timeZone: issuePilotConfig.regional.timeZone,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "longOffset",
+});
+
+function regionalTime(now: Date): string {
+  const parts = regionalTimeFormat.formatToParts(now);
+  const partValue = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "00";
+  const zone = parts.find((part) => part.type === "timeZoneName")?.value;
+  const offset = zone === "GMT" ? "+00:00" : zone?.replace(/^GMT/, "");
+  if (!offset || !/^[+-][0-9]{2}:[0-9]{2}$/.test(offset)) throw new Error("regional_time_zone_offset_unavailable");
+  return `${partValue("year")}-${partValue("month")}-${partValue("day")}T${partValue("hour")}:${partValue("minute")}:${partValue("second")}${offset}`;
 }
 
 export function runtimeTimeContext(now = new Date()): string {
   return [
     "Current time:",
     `- UTC: ${now.toISOString()}`,
-    `- Asia/Shanghai: ${shanghaiTime(now)}`,
+    `- ${issuePilotConfig.regional.timeZone}: ${regionalTime(now)}`,
   ].join("\n");
 }
 

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEngine, repositoryPreparationPlan } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
-import { MAX_AGENT_MESSAGE_CHARS } from "../../src/domain/contracts.ts";
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -25,7 +25,7 @@ test("selects shared snapshots and configured dev branch modes", () => {
 
 test("rejects oversized Agent messages at the engine boundary", async () => {
   const engine = new AgentEngine({} as never);
-  await assert.rejects(engine.send("issue", "x".repeat(MAX_AGENT_MESSAGE_CHARS + 1)), /invalid_agent_message/);
+  await assert.rejects(engine.send("issue", "x".repeat(issuePilotConfig.limits.agentMessageChars + 1)), /invalid_agent_message/);
 });
 
 test("a failed Agent operation disposes and revokes its SDK session", async () => {

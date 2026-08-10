@@ -18,6 +18,8 @@ test("prepares issue project wrappers for native Pi bash", async () => {
     assert.match(node, /corepack "\$package_manager" install --frozen-lockfile/);
     assert.match(node, /npm ci/);
     assert.match(node, /cd "\$project"/);
+    assert.match(node, /state_root\/workspaces/);
+    assert.doesNotMatch(node, /ISSUE_WORKSPACE/);
     assert.match(maven, /mvn --batch-mode --no-transfer-progress/);
     assert.doesNotMatch(node, /podman|PI_NODE_CLI_IMAGE/);
     assert.doesNotMatch(maven, /podman|PI_MAVEN_CLI_IMAGE|PI_MAVEN_REPOSITORY/);

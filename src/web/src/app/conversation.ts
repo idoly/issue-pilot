@@ -155,7 +155,7 @@ export function activityForEvent(event: RunEvent["event"]): AgentActivity | null
 }
 
 function compactPath(value: string): string {
-  const workspaceRelative = value.replace(/^.*\/\.issue-pilot\/workspaces\/[^/]+\/[^/]+(?=\/|$)/, "~");
+  const workspaceRelative = value.replace(/^.*\/\.issue-pilot\/workspaces\/[^/]+(?=\/|$)/, "~");
   return workspaceRelative.replace(/^\/home\/[^/]+(?=\/)/, "~");
 }
 

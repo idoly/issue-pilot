@@ -2,7 +2,8 @@ import { Button } from "@idoly/ant-design-solid";
 import { createEffect, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
-import { agentStreamUrl, sendAgentMessage, type AgentFooterStats, type IssueDetail, type RunEvent } from "../data/client";
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { agentStreamUrl, isWorkspaceBusy, sendAgentMessage, type AgentFooterStats, type IssueDetail, type RunEvent } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
 import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
@@ -14,16 +15,16 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
   const labelParts = () => toolLabelParts(label());
   const diff = () => {
     if (props.entry.name !== "edit" || !props.entry.result?.details || typeof props.entry.result.details !== "object") return [];
-    const value = (props.entry.result.details as Record<string, unknown>).diff;
-    return typeof value === "string" ? value.split("\n") : [];
+    const diffText = (props.entry.result.details as Record<string, unknown>).diff;
+    return typeof diffText === "string" ? diffText.split("\n") : [];
   };
-  const output = () => shellToolOutput(props.entry);
+  const shellOutput = () => shellToolOutput(props.entry);
   const genericOutput = () => ["bash", "edit", "write", "read", "grep", "find", "ls"].includes(props.entry.name) ? "" : resultText(props.entry);
   const images = () => props.entry.result?.content.filter((part): part is ImageContent => part.type === "image") ?? [];
   return <div class={`agent-tool ${props.entry.status}`}>
     <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code></div>
     <Show when={diff().length}><pre class="agent-tool-diff"><For each={diff()}>{(line) => <span class={diffLineClass(line)}>{line}{"\n"}</span>}</For></pre></Show>
-    <Show when={output()}>{(result) => <>
+    <Show when={shellOutput()}>{(result) => <>
       <Show when={result().lines.length}><pre class="agent-tool-output"><Show when={result().omitted}><span class="omitted">... ({result().omitted} earlier lines)</span></Show><For each={result().lines}>{(line) => <span>{line}{"\n"}</span>}</For></pre></Show>
       <Show when={props.entry.durationMs !== undefined}><div class="agent-tool-timing">Took {duration(props.entry.durationMs)}</div></Show>
     </>}</Show>
@@ -68,12 +69,12 @@ function ConversationItem(props: { entry: ConversationEntry }) {
   </Switch>;
 }
 
-function formatTokens(value: number): string {
-  if (value < 1_000) return String(value);
-  if (value < 10_000) return `${(value / 1_000).toFixed(1)}k`;
-  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
-  if (value < 10_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  return `${Math.round(value / 1_000_000)}M`;
+function formatTokens(tokens: number): string {
+  if (tokens < 1_000) return String(tokens);
+  if (tokens < 10_000) return `${(tokens / 1_000).toFixed(1)}k`;
+  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
+  if (tokens < 10_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(tokens / 1_000_000)}M`;
 }
 
 const emptyFooter = (): AgentFooterStats => ({
@@ -104,18 +105,18 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
   };
 }
 
-function footerText(value: AgentFooterStats): string {
-  const contextPercent = value.contextPercent === null ? "?" : `${value.contextPercent.toFixed(1)}%`;
-  const context = value.contextWindow > 0
-    ? `${contextPercent}/${formatTokens(value.contextWindow)}${value.autoCompact ? " (auto)" : ""}`
+function footerText(footer: AgentFooterStats): string {
+  const contextPercent = footer.contextPercent === null ? "?" : `${footer.contextPercent.toFixed(1)}%`;
+  const context = footer.contextWindow > 0
+    ? `${contextPercent}/${formatTokens(footer.contextWindow)}${footer.autoCompact ? " (auto)" : ""}`
     : "";
   return [
-    value.input ? `↑${formatTokens(value.input)}` : "",
-    value.output ? `↓${formatTokens(value.output)}` : "",
-    value.cacheRead ? `R${formatTokens(value.cacheRead)}` : "",
-    value.cacheWrite ? `W${formatTokens(value.cacheWrite)}` : "",
-    value.latestCacheHitRate !== null && (value.cacheRead > 0 || value.cacheWrite > 0) ? `CH${value.latestCacheHitRate.toFixed(1)}%` : "",
-    value.cost ? `$${value.cost.toFixed(3)}` : "",
+    footer.input ? `↑${formatTokens(footer.input)}` : "",
+    footer.output ? `↓${formatTokens(footer.output)}` : "",
+    footer.cacheRead ? `R${formatTokens(footer.cacheRead)}` : "",
+    footer.cacheWrite ? `W${formatTokens(footer.cacheWrite)}` : "",
+    footer.latestCacheHitRate !== null && (footer.cacheRead > 0 || footer.cacheWrite > 0) ? `CH${footer.latestCacheHitRate.toFixed(1)}%` : "",
+    footer.cost ? `$${footer.cost.toFixed(3)}` : "",
     context,
   ].filter(Boolean).join(" ");
 }
@@ -142,7 +143,7 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
   const eventIds = new Set<string>();
   const pasteEditor = new PasteEditorModel();
 
-  const running = () => processing() || props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
+  const running = () => processing() || isWorkspaceBusy(props.issue.workspace.status);
   const canSend = () => props.issue.status !== "resolved";
   const usageText = () => footerText(footer());
   const executionRoot = () => props.issue.environmentKey === "dev"
@@ -184,10 +185,10 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
     eventIds.clear(); pasteEditor.reset(); setEditorDraft(""); setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
     setConnected(false); setSending(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" }); replayComplete = false;
     const currentConnection = ++connectionId;
-    const source = new EventSource(agentStreamUrl(issueId));
-    stream = source;
-    source.addEventListener("open", () => { if (currentConnection === connectionId) { setConnected(true); setError(""); } });
-    source.addEventListener("ready", (event) => {
+    const eventSource = new EventSource(agentStreamUrl(issueId));
+    stream = eventSource;
+    eventSource.addEventListener("open", () => { if (currentConnection === connectionId) { setConnected(true); setError(""); } });
+    eventSource.addEventListener("ready", (event) => {
       if (currentConnection !== connectionId) return;
       try {
         const payload = JSON.parse(event.data) as { agent?: { provider: string; model: string; thinkingLevel: string }; footer?: AgentFooterStats; running?: boolean };
@@ -196,7 +197,7 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
         setProcessing(payload.running === true); replayComplete = true; queueMicrotask(scrollLatest);
       } catch { setError("agent_event_protocol_error"); }
     });
-    source.addEventListener("message", (event) => {
+    eventSource.addEventListener("message", (event) => {
       if (currentConnection !== connectionId) return;
       try {
         const parsed = JSON.parse(event.data) as Partial<RunEvent>;
@@ -210,10 +211,10 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
         if (replayComplete && envelope.event.type === "issue_status") void props.onRefresh(issueId);
       } catch { setError("agent_event_protocol_error"); }
     });
-    source.addEventListener("error", () => {
+    eventSource.addEventListener("error", () => {
       if (currentConnection !== connectionId) return;
-      source.close(); setConnected(false); setError("agent_event_connection_failed");
-      reconnectTimer = setTimeout(() => connect(issueId), 1_000);
+      eventSource.close(); setConnected(false); setError("agent_event_connection_failed");
+      reconnectTimer = setTimeout(() => connect(issueId), issuePilotConfig.web.agentStreamReconnectMs);
     });
   };
   const submit = async () => {
@@ -232,29 +233,29 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
       setEditorDraft(editorText); setError(cause instanceof Error ? cause.message : "agent_message_failed");
     } finally { if (submitConnection === connectionId) setSending(false); }
   };
-  const applyEditorResult = (textarea: HTMLTextAreaElement, result: PasteEditResult) => {
-    setEditorDraft(result.value);
+  const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {
+    setEditorDraft(edit.value);
     queueMicrotask(() => {
-      textarea.focus(); textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
+      textarea.focus(); textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
     });
   };
   const handlePaste = (event: ClipboardEvent & { currentTarget: HTMLTextAreaElement }) => {
     const textarea = event.currentTarget;
-    const result = pasteEditor.insert(draft(), textarea.selectionStart ?? draft().length, textarea.selectionEnd ?? draft().length, event.clipboardData?.getData("text/plain") ?? "");
-    if (!result) return;
+    const edit = pasteEditor.insert(draft(), textarea.selectionStart ?? draft().length, textarea.selectionEnd ?? draft().length, event.clipboardData?.getData("text/plain") ?? "");
+    if (!edit) return;
     event.preventDefault();
-    applyEditorResult(textarea, result);
+    applyEditorResult(textarea, edit);
   };
   const handleEditorInput = (event: InputEvent & { currentTarget: HTMLTextAreaElement }) => {
     const textarea = event.currentTarget;
     const start = textarea.selectionStart ?? textarea.value.length;
     const end = textarea.selectionEnd ?? textarea.value.length;
-    const result = pasteEditor.reconcile(textarea.value, start, end);
-    if (result.value === textarea.value && result.selectionStart === start && result.selectionEnd === end) {
-      setEditorDraft(result.value);
+    const edit = pasteEditor.reconcile(textarea.value, start, end);
+    if (edit.value === textarea.value && edit.selectionStart === start && edit.selectionEnd === end) {
+      setEditorDraft(edit.value);
       return;
     }
-    applyEditorResult(textarea, result);
+    applyEditorResult(textarea, edit);
   };
   const protectPasteSelection = (event: Event & { currentTarget: HTMLTextAreaElement }) => {
     const textarea = event.currentTarget;
@@ -281,9 +282,9 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
       return;
     }
     if (event.key === "Backspace" || event.key === "Delete") {
-      const result = pasteEditor.delete(draft(), start, end, event.key === "Backspace" ? "backward" : "forward");
-      if (result) {
-        event.preventDefault(); applyEditorResult(textarea, result);
+      const edit = pasteEditor.delete(draft(), start, end, event.key === "Backspace" ? "backward" : "forward");
+      if (edit) {
+        event.preventDefault(); applyEditorResult(textarea, edit);
       }
       return;
     }

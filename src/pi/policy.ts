@@ -74,7 +74,7 @@ export function createIssuePolicy(input: {
   if (input.service.playwright) {
     let parsedUrl: URL;
     try { parsedUrl = new URL(input.service.playwright.baseUrl); } catch { throw new Error("invalid_browser_service_scope"); }
-    if (!isNonEmptyString(input.service.playwright.deploymentId) || !["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) throw new Error("invalid_browser_service_scope");
+    if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) throw new Error("invalid_browser_service_scope");
   }
 
   const codeMutationAllowed = input.service.environmentKind === "dev" && ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(input.issueType);
@@ -113,8 +113,8 @@ export function createIssuePolicy(input: {
 }
 
 function configObject(config: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
-  const value = config[key];
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const section = config[key];
+  return section && typeof section === "object" && !Array.isArray(section) ? section as Record<string, unknown> : undefined;
 }
 
 function readStringArray(value: unknown): string[] | undefined {
@@ -122,11 +122,11 @@ function readStringArray(value: unknown): string[] | undefined {
 }
 
 function parseModelGrant(config: Record<string, unknown>): ModelGrant {
-  const agent = configObject(config, "agent");
-  const provider = agent && isNonEmptyString(agent.provider) ? agent.provider : undefined;
-  const modelId = agent && isNonEmptyString(agent.model) ? agent.model : undefined;
-  const thinkingLevel = agent && AGENT_THINKING_LEVELS.includes(agent.thinkingLevel as AgentThinkingLevel)
-    ? agent.thinkingLevel as AgentThinkingLevel
+  const agentConfig = configObject(config, "agent");
+  const provider = agentConfig && isNonEmptyString(agentConfig.provider) ? agentConfig.provider : undefined;
+  const modelId = agentConfig && isNonEmptyString(agentConfig.model) ? agentConfig.model : undefined;
+  const thinkingLevel = agentConfig && AGENT_THINKING_LEVELS.includes(agentConfig.thinkingLevel as AgentThinkingLevel)
+    ? agentConfig.thinkingLevel as AgentThinkingLevel
     : undefined;
   if (!provider || !modelId || !thinkingLevel) throw new Error("issue_pilot_model_not_configured");
   return { provider, modelId, thinkingLevel };

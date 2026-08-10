@@ -3,19 +3,25 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
+  const { issuePilotConfig } = await import("../../../../issue-pilot.config.ts");
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
+  const codeServerUrl = (id: string) => {
+    const url = new URL(issuePilotConfig.runtime.codeServer.publicUrl);
+    url.searchParams.set("workspace", `/home/coder/state/issues/${id.toLowerCase()}/runtime/${id.toLowerCase()}.code-workspace`);
+    return url.toString();
+  };
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
-    assignee: id === "ISSUE-0038" ? null : "陈默", assigneeSubject: id === "ISSUE-0038" ? null : "fixture-user",
+    assignee: id === "ISSUE-20260810-038" ? null : "陈默", assigneeSubject: id === "ISSUE-20260810-038" ? null : "fixture-user",
     service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: `http://127.0.0.1:18080/?folder=${encodeURIComponent(`/home/coder/state/workspaces/${id.toLowerCase()}`)}`, retryable, bytes: id === "ISSUE-0041" ? 4 * 1024 ** 3 : 0, releasable: id === "ISSUE-0041", releaseBlockedReason: id === "ISSUE-0041" ? null : "workspace_missing" },
+    workspace: { status: retryable ? "failed" : "ready", url: codeServerUrl(id), retryable, bytes: id === "ISSUE-20260810-041" ? 4 * 1024 ** 3 : 0, releasable: id === "ISSUE-20260810-041", releaseBlockedReason: id === "ISSUE-20260810-041" ? null : "workspace_missing" },
   });
   const issues = [
-    issue("ISSUE-0042", "结算页提交后订单状态未刷新", "in_progress"),
-    issue("ISSUE-0041", "客户导出的 CSV 缺少时区信息", "pending"),
-    issue("ISSUE-0038", "批量审批偶发超时", "open", true),
+    issue("ISSUE-20260810-042", "结算页提交后订单状态未刷新", "in_progress"),
+    issue("ISSUE-20260810-041", "客户导出的 CSV 缺少时区信息", "pending"),
+    issue("ISSUE-20260810-038", "批量审批偶发超时", "open", true),
   ];
   const configuration = {
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
@@ -31,7 +37,7 @@ vi.mock("../data/client", async (importOriginal) => {
     ],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
+      deployments: [{ environmentKey: "test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
       repositories: [{ id: "srm-repository", url: "git@example.com:team/srm.git" }],
     }],
   };
@@ -44,7 +50,7 @@ vi.mock("../data/client", async (importOriginal) => {
     loadWorkspaceStats: async () => ({
       totalBytes: 4 * 1024 ** 3,
       policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
-      workspaces: [{ issueKey: "ISSUE-0041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null }],
+      workspaces: [{ issueKey: "ISSUE-20260810-041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null }],
     }),
     getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
     addIssueComment: async (id: string, body: string) => {
@@ -72,10 +78,10 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
     expect(screen.queryByText("生产")).toBeNull();
-    const agentRegion = screen.getByRole("region", { name: "ISSUE-0042 Agent 会话" });
+    const agentRegion = screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" });
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
-    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/issues/issue-0042/runtime");
+    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/issues/issue-20260810-042/runtime");
     expect(screen.getByRole("heading", { name: "代码分支" })).toBeTruthy();
     expect(screen.getByText("hotfix-issue")).toBeTruthy();
     const agentInput = within(agentRegion).getByLabelText("发送给 Agent") as HTMLTextAreaElement;
@@ -85,14 +91,14 @@ describe("issue pilot workspace", () => {
     expect(within(agentRegion).queryByRole("button", { name: "发送" })).toBeNull();
     fireEvent.keyDown(agentInput, { key: "Enter", code: "Enter", shiftKey: false });
     const { fetchAttachment, sendAgentMessage } = await import("../data/client");
-    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-0042", pastedMessage));
+    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", pastedMessage));
     fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
-    const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-0042 code-server 编辑器") as HTMLIFrameElement);
+    const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-20260810-042 code-server 编辑器") as HTMLIFrameElement);
     const codeServerUrl = new URL(codeServerFrame.src);
     expect(codeServerUrl.pathname).toBe("/code-server/");
-    expect(codeServerUrl.searchParams.get("folder")).toBe("/home/coder/state/workspaces/issue-0042");
+    expect(codeServerUrl.searchParams.get("workspace")).toBe("/home/coder/state/issues/issue-20260810-042/runtime/issue-20260810-042.code-workspace");
     fireEvent.click(screen.getByRole("button", { name: "还原 code-server" }));
-    await waitFor(() => expect(screen.queryByTitle("ISSUE-0042 code-server 编辑器")).toBeNull());
+    await waitFor(() => expect(screen.queryByTitle("ISSUE-20260810-042 code-server 编辑器")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
     await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());
@@ -138,14 +144,14 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
-    fireEvent.click(await screen.findByText("ISSUE-0041"));
+    fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     const issueActions = document.querySelector(".issue-actions");
     expect(issueActions).toBeTruthy();
     expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
-    fireEvent.click(screen.getByText("ISSUE-0038").closest("button")!);
+    fireEvent.click(screen.getByText("ISSUE-20260810-038").closest("button")!);
     await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
     fireEvent.click(retryButton);

@@ -1,7 +1,7 @@
 import { Button, ConfigProvider, Layout, Segmented, Skeleton, theme } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
-import { getIssue, type IssueDetail } from "../data/client";
+import { getIssue, isWorkspaceBusy, type IssueDetail } from "../data/client";
 import { ExternalLink, Minimize2, TerminalSquare } from "../ui/icons";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
@@ -25,7 +25,7 @@ import "@idoly/ant-design-solid/space/style.css";
 import "@idoly/ant-design-solid/tag/style.css";
 
 function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; codeServerTarget: string | null; onCloseCode: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
-  const agentRunning = () => props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
+  const agentRunning = () => isWorkspaceBusy(props.issue.workspace.status);
   const codeServerUrl = () => props.codeServerTarget ?? workspaceUrl(props.issue.workspace.url);
   return (
     <section class={`agent-workbench${props.codeExpanded ? " code-only" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>

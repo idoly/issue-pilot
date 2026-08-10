@@ -61,8 +61,8 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
     const createdAt = timestamp(entry.timestamp);
     if (entry.type === "custom") {
       if (entry.customType === "issue-pilot-user") {
-        const data = entry.data as { message?: unknown } | undefined;
-        if (typeof data?.message === "string") events.push({ id: entry.id, issueId, createdAt, event: { type: "issue_user", message: data.message } });
+        const customData = entry.data as { message?: unknown } | undefined;
+        if (typeof customData?.message === "string") events.push({ id: entry.id, issueId, createdAt, event: { type: "issue_user", message: customData.message } });
       }
       continue;
     }

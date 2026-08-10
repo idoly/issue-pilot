@@ -1,6 +1,6 @@
 import { type Accessor, type ParentProps, createContext, createSignal, useContext } from "solid-js";
 
-import { loadConfig, loadCurrentUser, loadPeople, type Config, type Person } from "../data/client";
+import { errorMessage, loadConfig, loadCurrentUser, loadPeople, type Config, type Person } from "../data/client";
 
 const emptyConfiguration = (): Config => ({ agentModels: [], environments: [], capabilityCatalog: [], services: [] });
 
@@ -16,10 +16,6 @@ interface ApplicationResources {
 
 const ResourcesContext = createContext<ApplicationResources>();
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function ApplicationResourcesProvider(props: ParentProps) {
   const [configuration, setConfiguration] = createSignal<Config>(emptyConfiguration(), { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
@@ -29,10 +25,10 @@ export function ApplicationResourcesProvider(props: ParentProps) {
 
   const refreshConfiguration = async () => {
     try {
-      const value = await loadConfig();
-      setConfiguration(value);
+      const configuration = await loadConfig();
+      setConfiguration(configuration);
       setConfigurationError("");
-      return value;
+      return configuration;
     } catch (error) {
       setConfigurationError(errorMessage(error));
       throw error;
@@ -40,11 +36,11 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   };
   const refreshPeople = async () => {
     try {
-      const [value, user] = await Promise.all([loadPeople(), loadCurrentUser()]);
-      setPeople(value);
-      setCurrentUser(user);
+      const [people, currentUser] = await Promise.all([loadPeople(), loadCurrentUser()]);
+      setPeople(people);
+      setCurrentUser(currentUser);
       setPeopleError("");
-      return value;
+      return people;
     } catch (error) {
       setPeopleError(errorMessage(error));
       throw error;

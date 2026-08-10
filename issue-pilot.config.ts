@@ -1,0 +1,93 @@
+const gibibyte = 1024 ** 3;
+
+export const issuePilotConfig = Object.freeze({
+  state: Object.freeze({
+    directory: ".issue-pilot",
+    databaseFile: "issues.db",
+    sqliteBusyTimeoutMs: 5_000,
+  }),
+  regional: Object.freeze({
+    locale: "zh-CN",
+    timeZone: "Asia/Shanghai",
+  }),
+  subject: "zjj3753@xianhengguoji.com",
+  http: Object.freeze({
+    host: "127.0.0.1",
+    port: 3000,
+    logger: true,
+    sseHeartbeatMs: 15_000,
+  }),
+  web: Object.freeze({
+    host: "127.0.0.1",
+    port: 4173,
+    agentStreamReconnectMs: 1_000,
+  }),
+  workspace: Object.freeze({
+    retentionMs: 7 * 24 * 60 * 60 * 1000,
+    highWaterBytes: 20 * gibibyte,
+    targetBytes: 16 * gibibyte,
+    maintenanceIntervalMs: 15 * 60 * 1000,
+  }),
+  defaults: Object.freeze({
+    environments: Object.freeze({ prod: "正式", test: "测试", dev: "开发" }),
+    deployment: Object.freeze({ baseBranch: "main" }),
+    nacos: Object.freeze({ group: "DEFAULT_GROUP" }),
+    redis: Object.freeze({ port: 6379, database: 0, scanResults: 50 }),
+    rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
+  }),
+  runtime: Object.freeze({
+    codeServer: Object.freeze({
+      publicUrl: "http://127.0.0.1:18080/",
+      listenHost: "127.0.0.1",
+      listenPort: 18080,
+      containerPort: 8080,
+      image: "ghcr.io/coder/code-server:4.131.0-39",
+      version: "keep-id-v24-code-server-4.131.0-current-layout-auth-none",
+    }),
+    playwright: Object.freeze({
+      version: "1.62.1",
+      image: "mcr.microsoft.com/playwright:v1.62.1-noble",
+      playwrightCoreRoot: "/usr/local/node/lib/node_modules/playwright-core",
+      actionTimeoutMs: 10_000,
+      navigationTimeoutMs: 20_000,
+      containerPids: 256,
+      containerMemory: "1g",
+      viewport: Object.freeze({ width: 1280, height: 720 }),
+    }),
+    redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
+    containerUser: Object.freeze({ uid: 1000, gid: 1000 }),
+    aliyunCli: "/usr/local/sbin/aliyun",
+  }),
+  limits: Object.freeze({
+    agentMessageChars: 50_000,
+    attachment: Object.freeze({
+      fileBytes: 20 * 1024 * 1024,
+      requestBytes: 40 * 1024 * 1024,
+      files: 20,
+      formFieldBytes: 100_000,
+    }),
+    process: Object.freeze({
+      commandOutputBytes: 5 * 1024 * 1024,
+      terminationGraceMs: 1_000,
+      gitOperationMs: 120_000,
+      gitOutputBytes: 2 * 1024 * 1024,
+      gitPruneMs: 30_000,
+      diskUsageMs: 120_000,
+      diskUsageOutputBytes: 1024 * 1024,
+      codeServerEnsureMs: 180_000,
+      codeServerOutputBytes: 2 * 1024 * 1024,
+    }),
+    capability: Object.freeze({
+      resultBytes: 1024 * 1024,
+      timeoutMs: 15_000,
+      connectionMs: 10_000,
+      browser: Object.freeze({ actions: 50, pathChars: 2048, selectorChars: 500, valueChars: 10_000, executionMs: 90_000 }),
+      database: Object.freeze({ queryChars: 20_000, rows: 500 }),
+      elasticsearch: Object.freeze({ results: 200 }),
+      nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
+      redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),
+      rabbitmq: Object.freeze({ queueChars: 255 }),
+      sls: Object.freeze({ results: 200, defaultResults: 20, pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),
+    }),
+  }),
+});

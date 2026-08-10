@@ -1,8 +1,8 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type IssuePriority, type IssueStatus, type IssueType } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT };
-export type { AgentConfiguration, AgentFooterStats, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType };
+export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy };
+export type { AgentConfiguration, AgentFooterStats, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType, WorkspaceStatus };
 export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;
 
 export interface Person { subject: string; name: string; email: string }
@@ -30,7 +30,7 @@ export interface IssueComment {
 export interface IssueDetail extends IssueListItem {
   description: string;
   repositories: Array<{ url: string; baseBranch: string; workingBranch: string | null }>;
-  workspace: { status: string; url: string | null; lastError?: string | null; retryable?: boolean; bytes: number; releasable: boolean; releaseBlockedReason: string | null };
+  workspace: { status: WorkspaceStatus; url: string | null; lastError?: string | null; retryable?: boolean; bytes: number; releasable: boolean; releaseBlockedReason: string | null };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
@@ -41,7 +41,7 @@ export interface IssueDetail extends IssueListItem {
 export interface WorkspaceStats {
   totalBytes: number;
   policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
-  workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: string; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
+  workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
 
 export interface Environment {
@@ -88,14 +88,16 @@ export interface IssueInput {
   ccSubjects: string[];
 }
 
+async function requestError(response: Response): Promise<Error> {
+  const code = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
+  return new Error(code ?? `request_failed:${response.status}`);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    const error = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
-    throw new Error(error ?? `request_failed:${response.status}`);
-  }
+  if (!response.ok) throw await requestError(response);
   if (response.status === 204 || response.status === 205) return undefined as T;
   const body = await response.text();
   return body ? JSON.parse(body) as T : undefined as T;
@@ -113,6 +115,10 @@ export const loadWorkspaceStats = () => request<WorkspaceStats>("/api/workspaces
 
 const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
 
+function appendFiles(form: FormData, files: File[]): void {
+  for (const file of files) form.append("files", file, file.name);
+}
+
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
 export const updateService = (key: string, input: ServiceInput) => jsonRequest<void>(servicePath(key), "PATCH", input);
 export const deleteService = (key: string) => request<void>(servicePath(key), { method: "DELETE" });
@@ -123,17 +129,14 @@ export function attachmentUrl(key: string, attachmentId: string): string {
 
 export async function fetchAttachment(key: string, attachmentId: string): Promise<Blob> {
   const response = await fetch(attachmentUrl(key, attachmentId));
-  if (!response.ok) {
-    const error = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
-    throw new Error(error ?? `request_failed:${response.status}`);
-  }
+  if (!response.ok) throw await requestError(response);
   return response.blob();
 }
 
 export async function uploadAttachments(key: string, files: File[]): Promise<void> {
   if (!files.length) return;
   const form = new FormData();
-  for (const file of files) form.append("files", file, file.name);
+  appendFiles(form, files);
   await request(issuePath(key, "/attachments"), { method: "POST", body: form });
 }
 
@@ -146,7 +149,7 @@ export function createIssue(input: IssueInput & { environmentKey: string }, file
   if (!files.length) return jsonRequest("/api/issues", "POST", input);
   const form = new FormData();
   form.append("issue", JSON.stringify(input));
-  for (const file of files) form.append("files", file, file.name);
+  appendFiles(form, files);
   return request("/api/issues", { method: "POST", body: form });
 }
 export const updateIssue = (key: string, input: IssueInput) => jsonRequest<IssueListItem>(issuePath(key), "PATCH", input);

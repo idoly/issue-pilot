@@ -1,97 +1,127 @@
 # Issue Pilot
 
-Issue Pilot 是一个基于 Pi 的本地优先工单处理系统。它使用 SQLite 保存工单和 deployment 配置；正式/测试工单读取按最新 commit 复用的共享代码快照，开发工单使用隔离的 Git worktree；同进程 Pi SDK 运行持久会话，SolidJS 提供工单、配置和 Agent 对话界面。
+Issue Pilot 是一个本地优先的 AI 工单处理系统。它把工单、代码上下文、Pi Agent 会话、附件和受限外部能力组织在同一条可追踪的处理流程中，适合在可信主机上处理需要查代码、分析数据或完成开发修改的内部工单。
 
-## 运行边界
+## 核心能力
 
-- 工单状态固定为 `open`、`in_progress`、`pending`、`resolved`。
-- 环境固定为 `prod`、`test`、`dev`。
-- 每个服务包含一个或多个仓库，以及每个环境一份 deployment 配置。
-- 每份 deployment 必须选择一个已认证 Pi 模型和该模型支持的 thinking level。
-- Pi 使用内置本地工具；正式/测试 environment 只读取共享快照，只有所有仓库均为可写开发 worktree 时才启用 `bash`、`edit`、`write`。
-- Redis、MySQL、Elasticsearch、RabbitMQ 和 Nacos 使用受限的宿主原生客户端；SLS 使用固定宿主 Aliyun CLI。
-- Playwright 使用宿主全局 `playwright-core@1.62.1` 和按调用创建的固定浏览器容器。
-- code-server 使用一个共享官方容器；开发工单打开独立 workspace，正式/测试工单打开最新共享快照组成的只读 issue runtime。
-- capability 结果必须完整返回；命中行数、大小或动作边界时明确失败，不静默截断。
+- 以 Service、Environment 和 Deployment 描述业务系统及运行环境。
+- 为每张工单创建独立、持久的 Pi JSONL 会话。
+- Prod/test 始终使用最新 Deployment commit 的只读代码。
+- Dev 使用工单专属分支和 worktree，支持编辑、测试和构建。
+- 通过统一 multi-root code-server workspace 查看代码、Source Control 和 Git 历史。
+- 按冻结授权调用 Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、SLS 和 Playwright。
+- 持久保存附件、会话、本地 Issue branch 和审计所需状态。
+- 在严格检查 clean、idle 和目录布局后回收大型 dev workspace。
 
-详细设计见 [架构说明](docs/ARCHITECTURE.md)，页面字段和授权规则见 [配置说明](docs/CONFIGURATION.md)，部署、升级和故障处理见 [运维说明](docs/OPERATIONS.md)。
+## 工单流程
 
-## 固定依赖
+创建工单时选择 Service、Environment 和 Issue type。Service 定义 Repository；Deployment 定义环境基线分支、Pi model 和可用 capability。
 
-- Linux 或 WSL
-- Node.js 24 或更高版本：`/usr/local/node`
-- Pi 0.84.1：`/usr/local/node/bin/pi`，配置位于 `~/.pi/agent`
-- Git：`/usr/bin/git`、`/usr/libexec/git-core`、`/usr/share/git-core`
-- Java：`/usr/local/java`
-- Maven：`/usr/local/maven`
-- Maven settings/cache：`~/.m2/settings.xml`、`~/.m2/repository`
-- npm config/cache：`~/.npmrc`、`~/.npm`
-- Aliyun CLI 3.4.11 或兼容版本：`/usr/local/sbin/aliyun`
-- Podman：只承载 Playwright 浏览器和共享 code-server
+| 场景 | 代码来源 | Agent 权限 |
+| --- | --- | --- |
+| Prod/test | 每轮 fetch Deployment base branch，按 commit 复用只读 checkout | 读取代码和授权 capability |
+| 活动 dev | 从 base branch 创建工单专属分支和 worktree | 读取、编辑和执行项目命令 |
+| 已释放 dev | 从本地 Issue branch tip 创建只读 checkout | 查看代码、会话和 Git 历史 |
 
-Capability runtime 的路径、版本和镜像是代码内固定约定，不从环境变量覆盖。
+Dev workspace 中的依赖和构建输出可以回收，但附件、Pi JSONL、本地工作分支和数据库记录不会随之删除。工单重开后可以从本地 branch 恢复开发。
 
-## 安装
+## 系统组成
+
+```text
+SolidJS Web
+    |
+Fastify API ---- SQLite
+    |              |
+AgentEngine      Issue / Service / Deployment state
+    |
+Pi SDK ---- Workspace manager ---- bare Git / worktree / checkout
+    |
+Capability broker ---- bounded external clients
+    |
+code-server / temporary Playwright containers
+```
+
+系统运行在一台可信主机上：
+
+- Fastify 负责 API、事务、SSE 和启动恢复。
+- SQLite 是工单、配置和 workspace 状态的事实源。
+- Bare Git repositories 保存共享 objects、refs 和本地 Issue branches。
+- SolidJS 提供工单、配置、统计和 Agent 对话界面。
+- 一个共享 code-server 容器打开不同工单的 multi-root runtime。
+- Playwright 每次调用使用临时容器，不保留持久浏览器进程。
+
+完整设计见 [架构说明](docs/ARCHITECTURE.md)。
+
+## 快速开始
+
+宿主机需要 Node.js 24+、Pi、Git、Java、Maven 和 Podman。固定路径、版本及安全要求见 [部署说明](docs/DEPLOYMENT.md#运行前检查)。
 
 ```bash
 npm ci
 infra/playwright.sh prepare
-infra/playwright.sh status
-```
-
-项目使用单一根 package。`solid-js` 和 `@solidjs/web` 精确固定为 `2.0.0-beta.29`。
-
-## 初始化
-
-```bash
 npm run db:migrate
+npm run server
 ```
 
-默认状态目录为 `.issue-pilot`，数据库为 `.issue-pilot/issues.db`。持久工单数据位于 `issues/<issue-key>`，跨工单共享的 bare repositories 和 immutable checkouts 位于 `git/`，只有开发 worktree 位于可回收的 `workspaces/`。API 启动时自动执行数据库 migration、恢复中断状态、重建可生成 runtime/checkouts，并确保 `prod`、`test`、`dev` 三个环境存在。当前用户由 `ISSUE_PILOT_SUBJECT` 或本地默认 subject 创建；服务、仓库和 deployment 应通过配置页面维护，不执行带业务数据的 seed。
-
-## 本机启动
+另一个终端启动 Web：
 
 ```bash
-npm run server
 npm run dev:web
-infra/code-server.sh ensure
 ```
 
 默认地址：
 
-- API：<http://127.0.0.1:3000/>
-- Web：<http://127.0.0.1:4173/>
-- code-server：<http://127.0.0.1:18080/>
+| 服务 | 地址 |
+| --- | --- |
+| Web | <http://127.0.0.1:4173/> |
+| API | <http://127.0.0.1:3000/> |
+| code-server | <http://127.0.0.1:18080/> |
 
-生产部署不要运行 Vite dev server；执行 `npm run build` 后由同机静态服务器提供 `src/web/dist`，并把 `/api` 转发到 loopback API。完整示例和 SSE 代理要求见 [运维说明](docs/OPERATIONS.md#生产部署)。
+首次启动后，在 Web 配置页创建 Service、添加 Repository，并为所需 Environment 配置 Deployment。
 
-## 验证
+## 配置与状态
+
+所有可调整的路径、端口、默认值、timeout、资源和结果上限集中在根目录 `issue-pilot.config.ts`。应用不接受环境变量覆盖。Shell 通过 `infra/config-value.mjs` 读取同一配置。
+
+默认状态目录 `.issue-pilot` 包含真实业务数据：
+
+```text
+issues.db                     SQLite
+issues/<key>/attachments      durable attachments
+issues/<key>/agent            Pi JSONL
+issues/<key>/runtime          generated code-server resources
+git/repositories              bare repositories and local branches
+git/checkouts                 generated immutable checkouts
+workspaces/<key>              writable dev worktrees
+```
+
+不要把 `.issue-pilot` 当作普通缓存。数据所有权、备份和恢复要求见 [运维手册](docs/RUNBOOK.md)。
+
+## 安全边界
+
+Issue Pilot 没有内置身份认证，code-server 使用 `--auth none` 并提供终端。API 和 code-server 必须只监听 loopback；外部访问必须经过同机认证、授权和 TLS 代理。
+
+Deployment credential 保存在本机 SQLite。Credential 不进入 policy、prompt、session event、日志或进程参数。Capability client 即使在上层已经校验，也会再次限制目标、动作、timeout 和结果大小。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [架构说明](docs/ARCHITECTURE.md) | 状态模型、数据所有权、Git/runtime 和授权原理 |
+| [配置说明](docs/CONFIGURATION.md) | Service、Deployment、model 和 capability 字段 |
+| [部署说明](docs/DEPLOYMENT.md) | 宿主准备、服务部署、代理和容器 runtime |
+| [开发指南](docs/DEVELOPMENT.md) | 源码结构、改动方法、命名约定和测试 |
+| [运维手册](docs/RUNBOOK.md) | 健康检查、容量、备份、升级和故障处理 |
+| [Agent Guide](AGENTS.md) | Coding Agent 的状态保护和完成标准 |
+
+## 开发验证
+
+自动测试使用临时 SQLite、Git remote 和 state root，不使用项目中的真实 `.issue-pilot`。
 
 ```bash
 npm run typecheck
 npm test
 npm run build
+npm audit --omit=dev --audit-level=high
 git diff --check
 ```
-
-## 目录
-
-```text
-src/agent/          Agent 生命周期、Pi SDK session、事件和 footer
-src/capabilities/   外部只读能力、边界和固定 runtime 调用
-src/db/             SQLite/Drizzle schema、迁移和启动恢复
-src/domain/         跨层业务契约
-src/http/           Fastify 装配及配置、工单、附件、Agent 路由
-src/pi/             Pi 模型目录、custom tools 和冻结 policy
-src/web/            SolidJS Web 应用
-src/workspace/      共享 Git 快照、开发 worktree、project wrappers 和 code-server
-infra/              固定 Playwright/code-server 脚本和浏览器 runner
-drizzle/            不可删除的顺序 SQLite migration 历史
-tests/              后端与基础设施测试
-```
-
-## 安全边界
-
-当前 API 没有内置身份认证。`GET /api/config` 会返回真实保存的 password 和 AccessKey，用于配置页面完整回写。API 固定监听 `127.0.0.1`；外部访问只能通过同机、带身份认证、TLS 和访问控制的代理转发。
-
-页面表单不是安全边界。HTTP 保存校验、冻结 policy、tool schema、broker 和具体客户端分别验证自己的授权范围。Deployment credentials 不进入 policy、prompt、session、capability 结果或进程命令行。

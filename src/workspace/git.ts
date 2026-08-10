@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, rename } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
-import { issueWorkspaceRoot, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
+import { issueWorkspaceRoot, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,16 +26,16 @@ export interface PrepareSharedCheckoutInput {
   baseBranch: string;
 }
 
+export interface PrepareBranchSnapshotInput extends PrepareSharedCheckoutInput {
+  workingBranch: string;
+}
+
 export interface PreparedWorktree {
   cachePath: string;
   workspacePath: string;
   baseBranch: string;
   workingBranch: string | null;
   baseCommit: string;
-}
-
-async function exists(candidate: string): Promise<boolean> {
-  try { await access(candidate); return true; } catch { return false; }
 }
 
 function safePathSegment(value: string): string {
@@ -49,13 +50,17 @@ function repositoryBasename(url: string): string {
   return safePathSegment(name);
 }
 
+function repositoryHash(url: string, length: number): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, length);
+}
+
 export function repositoryWorkspaceNames(urls: string[]): Map<string, string> {
   const bases = urls.map((url) => repositoryBasename(url));
   const counts = new Map<string, number>();
   for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
   return new Map(urls.map((url, index) => {
     const base = bases[index]!;
-    const suffix = createHash("sha256").update(url).digest("hex").slice(0, 8);
+    const suffix = repositoryHash(url, 8);
     return [url, counts.get(base) === 1 ? base : `${base}-${suffix}`];
   }));
 }
@@ -76,7 +81,7 @@ export class WorktreeManager {
 
   async assertClean(workspacePath: string): Promise<boolean> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
-    if (!await exists(resolvedWorkspace)) return false;
+    if (!await pathExists(resolvedWorkspace)) return false;
     const dirty = await execFileAsync("git", ["-C", resolvedWorkspace, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim());
     if (dirty) throw new Error("workspace_has_changes");
     return true;
@@ -84,11 +89,11 @@ export class WorktreeManager {
 
   async remove(url: string, workspacePath: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
-    const repositoryKey = createHash("sha256").update(url).digest("hex").slice(0, 20);
+    const repositoryKey = repositoryHash(url, 20);
     await this.serialized(repositoryKey, async () => {
       const cachePath = resolve(this.repositoriesRoot, repositoryKey);
       if (!await this.assertClean(resolvedWorkspace)) {
-        if (await exists(cachePath)) await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
+        if (await pathExists(cachePath)) await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
         return;
       }
       await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
@@ -105,14 +110,21 @@ export class WorktreeManager {
   async prepare(input: PrepareWorktreeInput): Promise<PreparedWorktree> {
     const issueKey = normalizeIssueKey(input.issueKey);
     this.validateRepositoryInput(input);
-    const repositoryKey = createHash("sha256").update(input.url).digest("hex").slice(0, 20);
+    const repositoryKey = repositoryHash(input.url, 20);
     return this.serialized(repositoryKey, () => this.prepareLocked(input, issueKey, repositoryKey));
   }
 
   async prepareShared(input: PrepareSharedCheckoutInput): Promise<PreparedWorktree> {
     this.validateRepositoryInput(input);
-    const repositoryKey = createHash("sha256").update(input.url).digest("hex").slice(0, 20);
+    const repositoryKey = repositoryHash(input.url, 20);
     return this.serialized(repositoryKey, () => this.prepareSharedLocked(input, repositoryKey));
+  }
+
+  async prepareBranchSnapshot(input: PrepareBranchSnapshotInput): Promise<PreparedWorktree> {
+    this.validateRepositoryInput(input);
+    if (input.workingBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
+    const repositoryKey = repositoryHash(input.url, 20);
+    return this.serialized(repositoryKey, () => this.prepareBranchSnapshotLocked(input, repositoryKey));
   }
 
   private validateRepositoryInput(input: PrepareSharedCheckoutInput): void {
@@ -120,16 +132,16 @@ export class WorktreeManager {
   }
 
   private async serialized<T>(repositoryKey: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.tails.get(repositoryKey) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(operation);
-    this.tails.set(repositoryKey, current);
-    try { return await current; } finally { if (this.tails.get(repositoryKey) === current) this.tails.delete(repositoryKey); }
+    const preceding = this.tails.get(repositoryKey) ?? Promise.resolve();
+    const queuedOperation = preceding.catch(() => undefined).then(operation);
+    this.tails.set(repositoryKey, queuedOperation);
+    try { return await queuedOperation; } finally { if (this.tails.get(repositoryKey) === queuedOperation) this.tails.delete(repositoryKey); }
   }
 
   private async updateCache(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<string> {
     await mkdir(this.repositoriesRoot, { recursive: true });
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-    if (!await exists(cachePath)) {
+    if (!await pathExists(cachePath)) {
       await this.git(["init", "--bare", cachePath]);
       await this.git(["-C", cachePath, "remote", "add", "origin", input.url]);
     }
@@ -139,27 +151,40 @@ export class WorktreeManager {
 
   private async prepareSharedLocked(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<PreparedWorktree> {
     const cachePath = await this.updateCache(input, repositoryKey);
-    const baseRef = `origin/${input.baseBranch}`;
-    const baseCommit = (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
-    const branchKey = createHash("sha256").update(input.baseBranch).digest("hex").slice(0, 12);
+    const baseCommit = (await this.git(["-C", cachePath, "rev-parse", `origin/${input.baseBranch}`])).trim();
+    const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
+    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
+  }
+
+  private async prepareBranchSnapshotLocked(input: PrepareBranchSnapshotInput, repositoryKey: string): Promise<PreparedWorktree> {
+    const cachePath = resolve(this.repositoriesRoot, repositoryKey);
+    if (!await pathExists(cachePath)) throw new Error("repository_cache_not_found");
+    await this.git(["check-ref-format", "--branch", input.workingBranch]);
+    const baseCommit = await this.git(["-C", cachePath, "rev-parse", `refs/heads/${input.workingBranch}`])
+      .then((value) => value.trim(), () => { throw new Error("working_branch_not_found"); });
+    const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
+    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: input.workingBranch, baseCommit };
+  }
+
+  private async prepareCommitCheckout(cachePath: string, repositoryKey: string, commit: string): Promise<string> {
     const checkoutParent = resolve(this.sharedCheckoutsRoot, repositoryKey);
-    const workspacePath = resolve(checkoutParent, `${branchKey}-${baseCommit}`);
+    const workspacePath = resolve(checkoutParent, commit);
     if (dirname(workspacePath) !== checkoutParent) throw new Error("shared_checkout_path_invalid");
 
-    const workspaceExists = await exists(workspacePath);
-    if (workspaceExists && !await exists(resolve(workspacePath, ".git"))) throw new Error("shared_checkout_is_not_git_worktree");
+    const workspaceExists = await pathExists(workspacePath);
+    if (workspaceExists && !await pathExists(resolve(workspacePath, ".git"))) throw new Error("shared_checkout_is_not_git_worktree");
     if (workspaceExists) {
       await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", workspacePath]);
       const [head, dirty] = await Promise.all([
         this.git(["-C", workspacePath, "rev-parse", "HEAD"]).then((value) => value.trim()),
         execFileAsync("git", ["-C", workspacePath, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim()),
       ]);
-      if (head !== baseCommit || dirty) throw new Error("shared_checkout_changed");
+      if (head !== commit || dirty) throw new Error("shared_checkout_changed");
     } else {
       await mkdir(checkoutParent, { recursive: true });
-      await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, baseCommit]);
+      await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
     }
-    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
+    return workspacePath;
   }
 
   private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {
@@ -167,7 +192,7 @@ export class WorktreeManager {
     const cachePath = await this.updateCache(input, repositoryKey);
 
     const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
-    const workspacePath = await this.resolveWorkspacePath(issueRoot, cachePath, input.workspaceName, input.existingWorkspacePath);
+    const workspacePath = this.resolveIssueWorkspacePath(issueRoot, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     await this.git(["check-ref-format", "--branch", workingBranch]);
     if (!workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
@@ -175,8 +200,8 @@ export class WorktreeManager {
     const upstreamCommit = (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
     let baseCommit = input.existingBaseCommit ?? upstreamCommit;
 
-    const workspaceExists = await exists(workspacePath);
-    if (workspaceExists && !await exists(resolve(workspacePath, ".git"))) throw new Error("workspace_is_not_git_worktree");
+    const workspaceExists = await pathExists(workspacePath);
+    if (workspaceExists && !await pathExists(resolve(workspacePath, ".git"))) throw new Error("workspace_is_not_git_worktree");
     if (workspaceExists) {
       await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", workspacePath]);
       const currentBranch = (await this.git(["-C", workspacePath, "branch", "--show-current"])).trim();
@@ -195,31 +220,16 @@ export class WorktreeManager {
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
   }
 
-  private async resolveWorkspacePath(issueRoot: string, cachePath: string, workspaceName: string, existingWorkspacePath?: string): Promise<string> {
+  private resolveIssueWorkspacePath(issueRoot: string, workspaceName: string, existingWorkspacePath?: string): string {
     const desiredPath = resolve(issueRoot, safePathSegment(workspaceName));
     if (dirname(desiredPath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
-    if (!existingWorkspacePath) return desiredPath;
-
-    const previousPath = resolve(existingWorkspacePath);
-    if (dirname(previousPath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
-    if (previousPath === desiredPath) return desiredPath;
-    const [previousExists, desiredExists] = await Promise.all([exists(previousPath), exists(desiredPath)]);
-    if (!previousExists) return desiredPath;
-    if (desiredExists) throw new Error("workspace_path_conflict");
-
-    await rename(previousPath, desiredPath);
-    try {
-      await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", desiredPath]);
-    } catch (error) {
-      await rename(desiredPath, previousPath);
-      await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", previousPath]).catch(() => undefined);
-      throw error;
-    }
+    if (existingWorkspacePath && resolve(existingWorkspacePath) !== desiredPath) throw new Error("workspace_path_does_not_match_repository");
     return desiredPath;
   }
 
   private async git(args: string[]): Promise<string> {
-    const { stdout } = await execFileAsync("git", args, { timeout: 120_000, maxBuffer: 2 * 1024 * 1024 });
+    const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
+    const { stdout } = await execFileAsync("git", args, { timeout: gitOperationMs, maxBuffer: gitOutputBytes });
     return stdout;
   }
 }

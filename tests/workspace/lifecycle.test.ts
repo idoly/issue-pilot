@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -9,12 +9,13 @@ import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
-import { prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
+import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, workspacePolicyFromEnvironment } from "../../src/workspace/lifecycle.ts";
-import { issueAttachmentRoot, issueRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceLink } from "../../src/workspace/state.ts";
+import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal } from "../../src/workspace/lifecycle.ts";
+import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,20 +34,13 @@ async function createRemote(root: string, name: string): Promise<string> {
   return remote;
 }
 
-test("validates workspace retention and quota environment settings", () => {
-  const policy = workspacePolicyFromEnvironment({
-    ISSUE_PILOT_WORKSPACE_RETENTION_HOURS: "off",
-    ISSUE_PILOT_WORKSPACE_HIGH_WATER_BYTES: "1000",
-    ISSUE_PILOT_WORKSPACE_MAINTENANCE_MINUTES: "0",
+test("uses the central workspace retention and quota configuration", () => {
+  assert.deepEqual(issuePilotConfig.workspace, {
+    retentionMs: 7 * 24 * 60 * 60 * 1000,
+    highWaterBytes: 20 * 1024 ** 3,
+    targetBytes: 16 * 1024 ** 3,
+    maintenanceIntervalMs: 15 * 60 * 1000,
   });
-  assert.equal(policy.retentionMs, Number.POSITIVE_INFINITY);
-  assert.equal(policy.highWaterBytes, 1000);
-  assert.equal(policy.targetBytes, 800);
-  assert.equal(policy.maintenanceIntervalMs, 0);
-  assert.throws(() => workspacePolicyFromEnvironment({
-    ISSUE_PILOT_WORKSPACE_HIGH_WATER_BYTES: "1000",
-    ISSUE_PILOT_WORKSPACE_TARGET_BYTES: "1000",
-  }), /workspace_target_must_be_below_high_water/);
 });
 
 const engine = {
@@ -120,28 +114,32 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal((await stat(durableAttachment)).mode & 0o777, 0o400);
 
-    const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
+    const codeServer = { async ensure() { return "http://127.0.0.1:18080"; } };
+    const prepareRuntime = (candidate: { id: string; key: string }) => prepareDevelopmentIssueRuntime(database.db, root, candidate, codeServer);
+    const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root, codeServer);
     assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
     const wrapperRoot = path.join(issueRuntimeRoot(root, issue!.key), "bin");
     assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
     assert.equal((await stat(path.join(wrapperRoot, "node-project"))).mode & 0o777, 0o700);
-    assert.equal(path.resolve(issueRoot(root, issue!.key), await readlink(issueWorkspaceLink(root, issue!.key))), path.dirname(prepared[0]!.workspacePath));
+    const activeRuntime = issueRuntimeRoot(root, issue!.key);
+    assert.equal(path.resolve(activeRuntime, await readlink(path.join(activeRuntime, "alpha"))), prepared[0]!.workspacePath);
+    assert.equal(path.resolve(activeRuntime, await readlink(path.join(activeRuntime, "beta"))), prepared[1]!.workspacePath);
 
     const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
     await mkdir(path.dirname(unknownMetadata), { recursive: true });
     await writeFile(unknownMetadata, "preserve\n", "utf8");
-    const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
+    const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root, codeServer);
     assert.deepEqual(blockedPreparation, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "workspace_has_untracked_files" }] });
     assert.equal(await readFile(unknownMetadata, "utf8"), "preserve\n");
     await rm(path.dirname(unknownMetadata), { recursive: true });
-    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
+    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root, codeServer), { prepared: [issue!.key], blocked: [] });
 
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
       retentionMs: Number.POSITIVE_INFINITY,
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-    });
+    }, prepareRuntime);
     await writeFile(path.join(prepared[1]!.workspacePath, "untracked.txt"), "do not delete\n", "utf8");
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
     assert.equal(dirtyInspection.releasable, false);
@@ -159,7 +157,6 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(released.alreadyReleased, false);
     assert.equal(released.releasedBytes > 0, true);
     await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
-    await assert.rejects(lstat(issueWorkspaceLink(root, issue!.key)));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal(await readFile(sessionFile, "utf8"), "{}\n");
     assert.deepEqual(engine.closed, [issue!.id]);
@@ -169,7 +166,12 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(releasedRows.every((repository) => repository.workingBranch?.startsWith("hotfix-") && repository.commitBefore), true);
     const [releasedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(releasedWorkspace!.status, "stopped");
-    assert.equal(releasedWorkspace!.codeServerReady, false);
+    assert.equal(releasedWorkspace!.codeServerReady, true);
+    for (const [index, repository] of releasedRows.entries()) {
+      const runtimeRepository = path.join(issueRuntimeRoot(root, issue!.key), index === 0 ? "alpha" : "beta");
+      const repositoryRoot = path.join(root, "git", "repositories", createHash("sha256").update(repository.url).digest("hex").slice(0, 20));
+      assert.equal(await git(["-C", runtimeRepository, "rev-parse", "HEAD"]), await git(["-C", repositoryRoot, "rev-parse", `refs/heads/${repository.workingBranch}`]));
+    }
     const [sessionBinding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(sessionBinding!.sessionFile, sessionFile);
     assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, true);
@@ -196,7 +198,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-    });
+    }, prepareRuntime);
     const retention = await retentionLifecycle.maintain();
     assert.deepEqual(retention.released.map(({ issueKey }) => issueKey), [issue!.key]);
 
@@ -206,7 +208,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       highWaterBytes: 1,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-    });
+    }, prepareRuntime);
     const quota = await quotaLifecycle.maintain();
     assert.deepEqual(quota.released.map(({ issueKey }) => issueKey), [issue!.key]);
     await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
@@ -226,6 +228,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await database.db.insert(issueRepositories).values({ issueId: readOnlyIssue!.id, url: remotes[0]!, baseBranch: "main", workingBranch: null, localPath: null, commitBefore: "a".repeat(40) });
     const readOnlyMaintenance = await retentionLifecycle.maintain();
     assert.equal(readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key), false);
+    await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_not_development");
     const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
     assert.equal(readOnlyWorkspace!.codeServerReady, true);
   } finally {

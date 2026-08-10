@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { readElasticsearch, readRabbitMq, readRedis } from "../../src/capabilities/external-data.ts";
-import { MAX_CAPABILITY_RESULT_BYTES } from "../../src/capabilities/contracts.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 async function fixture() {
@@ -88,13 +88,13 @@ test("rejects oversized native Redis and HTTP responses before returning them", 
   const { root, policy } = await fixture();
   const redisServer = createTcpServer((socket) => {
     socket.once("data", () => {
-      const value = "x".repeat(MAX_CAPABILITY_RESULT_BYTES + 1);
+      const value = "x".repeat(issuePilotConfig.limits.capability.resultBytes + 1);
       socket.end(`$${value.length}\r\n${value}\r\n`);
     });
   });
   const httpServer = createServer((_request, response) => {
     response.setHeader("content-type", "application/json");
-    response.end(Buffer.alloc(MAX_CAPABILITY_RESULT_BYTES + 1, 120));
+    response.end(Buffer.alloc(issuePilotConfig.limits.capability.resultBytes + 1, 120));
   });
   await Promise.all([
     new Promise<void>((resolve) => redisServer.listen(0, "127.0.0.1", resolve)),

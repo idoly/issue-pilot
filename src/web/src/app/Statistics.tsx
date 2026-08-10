@@ -29,13 +29,13 @@ export function Statistics() {
   const urgent = createMemo(() => filteredIssues().filter((issue) => (issue.priority === "p0" || issue.priority === "p1") && issue.status !== "resolved").length);
   const completionRate = createMemo(() => filteredIssues().length ? Math.round(completed() / filteredIssues().length * 1000) / 10 : 0);
   const services = createMemo(() => {
-    const counts = new Map<string, { key: string; name: string; count: number }>();
+    const serviceCounts = new Map<string, { key: string; name: string; count: number }>();
     for (const issue of filteredIssues()) {
-      const current = counts.get(issue.service.key) ?? { ...issue.service, count: 0 };
-      current.count += 1;
-      counts.set(issue.service.key, current);
+      const serviceStats = serviceCounts.get(issue.service.key) ?? { ...issue.service, count: 0 };
+      serviceStats.count += 1;
+      serviceCounts.set(issue.service.key, serviceStats);
     }
-    return [...counts.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
+    return [...serviceCounts.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
   });
   const types = createMemo(() => Object.entries(typeLabel).map(([key, name]) => ({
     key,
@@ -43,15 +43,15 @@ export function Statistics() {
     count: filteredIssues().filter((issue) => issue.type === key).length,
   })).filter((type) => type.count > 0).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)));
   const assignees = createMemo(() => {
-    const rows = new Map<string, { name: string; completed: number; active: number }>();
+    const assigneeStats = new Map<string, { name: string; completed: number; active: number }>();
     for (const issue of filteredIssues()) {
-      const key = issue.assigneeSubject ?? "unassigned";
-      const row = rows.get(key) ?? { name: issue.assignee ?? "未分配", completed: 0, active: 0 };
-      if (issue.status === "resolved") row.completed += 1;
-      else row.active += 1;
-      rows.set(key, row);
+      const assigneeKey = issue.assigneeSubject ?? "unassigned";
+      const stats = assigneeStats.get(assigneeKey) ?? { name: issue.assignee ?? "未分配", completed: 0, active: 0 };
+      if (issue.status === "resolved") stats.completed += 1;
+      else stats.active += 1;
+      assigneeStats.set(assigneeKey, stats);
     }
-    return [...rows.values()].sort((left, right) => right.active - left.active || right.completed - left.completed || left.name.localeCompare(right.name));
+    return [...assigneeStats.values()].sort((left, right) => right.active - left.active || right.completed - left.completed || left.name.localeCompare(right.name));
   });
   const storedWorkspaces = createMemo(() => [...(workspaceStats()?.workspaces ?? [])].filter((workspace) => workspace.bytes > 0).sort((left, right) => right.bytes - left.bytes || left.issueKey.localeCompare(right.issueKey)));
   const automaticRelease = createMemo(() => storedWorkspaces().filter((workspace) => workspace.issueStatus === "resolved" && workspace.releasable));

@@ -1,43 +1,69 @@
-import { access } from "node:fs/promises";
-
 import { eq } from "drizzle-orm";
 
-import type { openDatabase } from "../db/client.ts";
-import { environments, issueRepositories, issues } from "../db/schema.ts";
+import type { Database } from "../db/client.ts";
+import { environments, issueRepositories, issueWorkspaces, issues } from "../db/schema.ts";
+import { CodeServerManager } from "./code-server.ts";
+import { repositoryWorkspaceNames, WorktreeManager } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
-import { assertManagedIssueWorkspaceLayout, ensureIssueWorkspaceLink, issueRuntimeRoot, issueWorkspaceRoot } from "./state.ts";
+import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RuntimePreparationResult } from "./runtime.ts";
+import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
-type Database = ReturnType<typeof openDatabase>["db"];
+type CodeServer = Pick<CodeServerManager, "ensure">;
 
-async function exists(candidate: string): Promise<boolean> {
-  return access(candidate).then(() => true, () => false);
+export async function prepareDevelopmentIssueRuntime(
+  database: Database,
+  stateRoot: string,
+  issue: { id: string; key: string },
+  codeServer: CodeServer = new CodeServerManager(stateRoot),
+  worktrees = new WorktreeManager(stateRoot),
+): Promise<string> {
+  const repositories = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+  if (!repositories.length) throw new Error("issue_has_no_repositories");
+  const workspaceRoot = issueWorkspaceRoot(stateRoot, issue.key);
+  const names = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
+  let runtimeRoot: string;
+
+  if (await pathExists(workspaceRoot)) {
+    if (classifyRepositoryState(repositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
+    await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
+    runtimeRoot = await prepareIssueRuntime(
+      stateRoot,
+      issue.key,
+      repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })),
+      "write",
+    );
+    await prepareProjectWrappers(runtimeRoot);
+  } else {
+    if (classifyRepositoryState(repositories) !== "development_snapshot") throw new Error("development_repository_state_invalid");
+    const snapshots = [];
+    for (const repository of repositories) {
+      const snapshot = await worktrees.prepareBranchSnapshot({
+        url: repository.url,
+        baseBranch: repository.baseBranch,
+        workingBranch: repository.workingBranch!,
+      });
+      snapshots.push({ name: names.get(repository.url)!, repositoryPath: snapshot.workspacePath });
+    }
+    runtimeRoot = await prepareIssueRuntime(stateRoot, issue.key, snapshots, "read");
+  }
+
+  await codeServer.ensure(issue.key, runtimeRoot);
+  await database.update(issueWorkspaces).set({ codeServerReady: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+  return runtimeRoot;
 }
 
 export async function prepareDevelopmentIssueRuntimes(
   database: Database,
   stateRoot: string,
-): Promise<{ prepared: string[]; blocked: Array<{ issueKey: string; reason: string }> }> {
+  codeServer: CodeServer = new CodeServerManager(stateRoot),
+): Promise<RuntimePreparationResult> {
   const developmentIssues = await database.select({ id: issues.id, key: issues.key }).from(issues)
     .innerJoin(environments, eq(environments.id, issues.environmentId))
     .where(eq(environments.kind, "dev"));
-  const prepared: string[] = [];
-  const blocked: Array<{ issueKey: string; reason: string }> = [];
-
-  for (const issue of developmentIssues) {
-    const workspaceRoot = issueWorkspaceRoot(stateRoot, issue.key);
-    if (!await exists(workspaceRoot)) continue;
-    try {
-      const repositories = await database.select({ localPath: issueRepositories.localPath }).from(issueRepositories)
-        .where(eq(issueRepositories.issueId, issue.id));
-      await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.flatMap(({ localPath }) => localPath ? [localPath] : []));
-      await Promise.all([
-        ensureIssueWorkspaceLink(stateRoot, issue.key),
-        prepareProjectWrappers(issueRuntimeRoot(stateRoot, issue.key)),
-      ]);
-      prepared.push(issue.key);
-    } catch (error) {
-      blocked.push({ issueKey: issue.key, reason: error instanceof Error ? error.message : String(error) });
-    }
-  }
-  return { prepared, blocked };
+  const worktrees = new WorktreeManager(stateRoot);
+  return prepareIssueRuntimeBatch(
+    database,
+    developmentIssues,
+    (issue) => prepareDevelopmentIssueRuntime(database, stateRoot, issue, codeServer, worktrees),
+  );
 }

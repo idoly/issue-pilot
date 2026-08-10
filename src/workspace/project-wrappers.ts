@@ -2,12 +2,18 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const NODE_PROJECT = `#!/bin/sh
+const PROJECT_WRAPPER_HEADER = `#!/bin/sh
 set -eu
+runtime_bin=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+issue_root=$(dirname "$(dirname "$runtime_bin")")
+state_root=$(dirname "$(dirname "$issue_root")")
+issue_workspace=$(realpath -e "$state_root/workspaces/$(basename "$issue_root")")
 project=$(realpath -e "\${1:-.}")
-case "$project" in "$ISSUE_WORKSPACE"|"$ISSUE_WORKSPACE"/*) ;; *) echo "project outside issue workspace" >&2; exit 2 ;; esac
+case "$project" in "$issue_workspace"|"$issue_workspace"/*) ;; *) echo "project outside issue workspace" >&2; exit 2 ;; esac
 action=\${2:-test}
-case "$action" in
+`;
+
+const NODE_PROJECT = `${PROJECT_WRAPPER_HEADER}case "$action" in
   install)
     shift 2
     package_manager=$(node -e 'process.stdout.write(require(process.argv[1]).packageManager || "npm")' "$project/package.json")
@@ -24,12 +30,7 @@ cd "$project"
 exec "$@"
 `;
 
-const MAVEN_PROJECT = `#!/bin/sh
-set -eu
-project=$(realpath -e "\${1:-.}")
-case "$project" in "$ISSUE_WORKSPACE"|"$ISSUE_WORKSPACE"/*) ;; *) echo "project outside issue workspace" >&2; exit 2 ;; esac
-action=\${2:-test}
-case "$action" in test|verify|package) shift 2 ;; *) echo "unsupported maven action" >&2; exit 2 ;; esac
+const MAVEN_PROJECT = `${PROJECT_WRAPPER_HEADER}case "$action" in test|verify|package) shift 2 ;; *) echo "unsupported maven action" >&2; exit 2 ;; esac
 cd "$project"
 exec mvn --batch-mode --no-transfer-progress "$action" "$@"
 `;

@@ -1,225 +1,292 @@
 # 配置说明
 
-## 配置事实源
+本文说明配置页面中的字段、校验和授权效果。代码生命周期见 [架构说明](ARCHITECTURE.md)，部署安全要求见 [部署说明](DEPLOYMENT.md)。
 
-Web 配置页面保存的 service deployment 是 Agent 模型、连接、credential 和 capability 授权的唯一事实源。运行时不会扫描仓库配置，也不会从环境变量补全 deployment credential 或 capability scope。
+## 配置层级
 
-每个服务必须至少配置一个 repository。每个 environment 最多一份 deployment。服务和 deployment 按创建顺序展示，不支持拖动排序。
+一个 Service 包含：
 
-保存 service 后，使用该 service 的现有内存 Agent session 会被关闭；下一次执行从最新 deployment 创建新的冻结 policy。已写入 Pi JSONL 的历史消息和 session ID 不会被修改。
+- 至少一个 Repository。
+- 每个 Environment 最多一个 Deployment。
+- 每个 Deployment 自己的 `baseBranch`、Pi model 和 capability 配置。
 
-## Environment 和 issue type
+Deployment 是 Agent 授权的唯一配置来源。Runtime 不扫描仓库配置，也不从环境变量补全 model、credential 或 capability scope。
 
-| environment | 显示名 | 允许的 issue type | repository access |
-| --- | --- | --- | --- |
-| `prod` | 正式 | `data_processing`、`smart_analysis` | 最新 prod deployment commit 的共享快照/read |
-| `test` | 测试 | `smart_analysis` | 最新 test deployment commit 的共享快照/read |
-| `dev` | 开发 | `defect_fix`、`feature_development` | 从 dev deployment 配置分支创建 hotfix 或 feature worktree/write |
+保存 Service 后，受影响的内存 Agent session 会关闭；下一次执行使用新配置。已经写入 Pi JSONL 的历史内容不会改变。
 
-前端按 environment 过滤 issue type，API 再次验证。不能通过直接 HTTP 请求给 prod/test 工单授予可写 repository。每个 deployment（包括 dev）都必须配置自己的 `baseBranch`。
+配置来源保持单一：
 
-## Repository
+| 配置 | 事实源 | 用途 |
+| --- | --- | --- |
+| 应用运行参数 | 根目录 `issue-pilot.config.ts` | 路径、端口、默认值、timeout、资源和结果上限 |
+| Service/Deployment | SQLite | Repository、环境分支、model、capability 和 credential |
+| Issue policy | 每次 session 从 Deployment 和实际代码状态生成 | 冻结本次 Agent 授权，不保存 credential |
 
-每个服务至少一个 repository，URL 在同一服务内不能重复。Repository 不区分前后端类型。每个 deployment 的 `baseBranch` 是该环境使用的远端基线；prod/test 从该分支创建共享只读快照，dev 从该分支创建 Issue 工作分支。
+页面不会定义第二份默认值，Shell 也只读取根配置。运行时 policy 不反向修改 Deployment。
 
-prod/test 在首次处理、编辑保存后的 sync 和完成后的下一轮消息开始前都会 fetch 对应远端分支，并按当时最新 commit 复用 immutable shared checkout。Issue 不创建代码副本、Git 分支或 `workspaces/<issue-key>`；`issues/<issue-key>/runtime` 只保存指向共享 checkout 的 repository links，附件直接从 `issues/<issue-key>/attachments` 的唯一原件读取。对应 `issue_repositories.local_path` 和 `working_branch` 必须为 `NULL`。Service repository 变化会在下一次准备时更新 Issue repository 记录。
+## Environment 与 Issue type
 
-开发工单继续使用独立 worktree。Service 删除 repository 时，下一次 Agent 准备会清理不再授权的 clean worktree；dirty workspace 明确失败并保留，防止丢失未提交修改。
+| Environment | 允许的 Issue type | 代码权限 |
+| --- | --- | --- |
+| `prod` | `data_processing`, `smart_analysis` | Deployment 最新 commit，只读 |
+| `test` | `smart_analysis` | Deployment 最新 commit，只读 |
+| `dev` | `defect_fix`, `feature_development` | 独立工作分支和 worktree，可写 |
 
-## Agent model
+Web 负责过滤选项，API 再次验证。直接调用 API 也不能给 prod/test 授予写权限。
 
-每个 deployment 必须配置：
+## Service 与 Repository
 
-- `provider`
-- `model`
-- `thinkingLevel`
+### Service
 
-模型列表来自 Pi 的认证模型目录。保存时 API 验证 provider/model 当前可用，并验证 thinking level 属于该模型支持列表。
+- `name` 必填，最多 200 字符。
+- `description` 可为空。
+- Service key 从名称生成并保证唯一，创建后不随名称改变。
+- 被 Issue 引用的 Service 不能删除。
+- 存在运行中 Issue 时不能更新 Service。
+
+### Repository
+
+- 每个 Service 至少一个 Repository。
+- URL 在同一 Service 内不能重复。
+- Repository 没有前端、后端等类型字段；目录名来自 URL basename。
+- Basename 冲突时自动追加稳定 URL hash。
+
+修改 Repository 列表后：
+
+- 新运行使用最新列表。
+- 被删除 Repository 的 clean dev worktree 可以在下一次准备时移除。
+- Dirty worktree 会使准备失败并保留现场。
+- 数据库 `local_path` 与当前推导路径不一致时明确失败，不自动移动目录。
+
+Released dev 为什么保留历史 Repository 和本地分支，见 [Git 存储原理](ARCHITECTURE.md#git-存储原理)。
+
+## Deployment
+
+每个 Environment 最多一份 Deployment。创建对应 Environment 的 Issue 前，Service 必须已有该 Deployment。新建表单的分支、Nacos group、Redis 和 RabbitMQ 默认值来自根目录 `issue-pilot.config.ts` 的 `defaults`，保存后以 Deployment 数据为准。
+
+### `baseBranch`
+
+`baseBranch` 是环境基线，不是 Issue 工作分支：
+
+- Prod/test 每轮 Agent 前 fetch `origin/<baseBranch>`，使用当时最新 commit。
+- Dev 首次运行时从 `origin/<baseBranch>` 创建 `hotfix-<issue-key>` 或 `feature-<issue-key>`。
+- Reopen released dev 时从本地 Issue branch 重建 worktree，但仍会 fetch Deployment base branch。
+
+因此远程 Issue 分支可以删除，Deployment base branch 仍应长期可访问。
+
+### Agent model
+
+每份 Deployment 必填：
+
+| 字段 | 含义 |
+| --- | --- |
+| `provider` | Pi model provider |
+| `model` | Provider 内的 model ID |
+| `thinkingLevel` | 该 model 支持的 thinking level |
+
+Thinking level 可选值：
 
 ```text
 off, minimal, low, medium, high, xhigh, max
 ```
 
-页面模型控件只允许选择 model catalog 中的值。模型缺失、credential 不可用或 thinking level 不支持时 deployment 不能保存或 Agent 不能启动。`PI_PROVIDER`、`PI_MODEL` 等进程环境变量不作为后备授权。
+保存时 API 从 Pi model catalog 验证 model 当前可用，并验证 thinking level。`PI_PROVIDER`、`PI_MODEL` 等进程变量不作为 fallback。
 
-## Policy snapshot
+## 本地工具授权
 
-一次 Agent session 的 policy 包含 issue、model、service/environment、repository grant 和 capability scope。Credential 不进入 policy。
+本地工具根据实际准备后的 Repository state 计算，而不是根据页面 checkbox 计算。
 
-本地工具由 repository grant 计算：
-
-| 条件 | 本地工具 |
+| 条件 | Pi built-in tools |
 | --- | --- |
-| 任一 repository 为 read，或 repository 列表为空 | `read`、`grep`、`find`、`ls` |
-| 至少一个 repository 且全部为 write | 上述工具加 `bash`、`edit`、`write` |
+| 至少一个 Repository，且全部为 writable dev | `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write` |
+| 任一 Repository 只读、列表为空或状态异常 | `read`, `grep`, `find`, `ls` |
 
-Capability tool 只在 capability 被勾选、对应配置完整且 scope 成功写入 policy 时注册。配置页面的 checkbox 本身不是授权边界，API、policy、tool schema 和客户端都会复核。
+`bash` 还会获得当前 Issue 专属的 `node-project` 和 `maven-project` wrapper。Wrapper 强制项目路径位于当前 dev workspace。
 
-## Capability 概览
+## Capability 授权原理
 
-可配置 capability 固定为：
+固定 capability key：
 
 ```text
 playwright, nacos, db, redis, mq, es, sls
 ```
 
-| capability | policy 中保留 | policy 中排除 |
-| --- | --- | --- |
-| Playwright | deployment ID、base URL | username、password |
-| Nacos | deployment ID、server、namespace、group、exact Data IDs | username、password |
-| MySQL | deployment ID | URL、username、password |
-| Redis | deployment ID | host、username、password、database |
-| RabbitMQ | deployment ID、virtual host | host、ports、username、password |
-| Elasticsearch | deployment ID | URL、username、password |
-| SLS | deployment ID、region、project、logstores | AccessKey ID/secret |
+只有被选择且配置完整的 capability 才会写入 Deployment。每次 Agent session 会从保存配置创建冻结 policy；credential 留在 session 持有的配置副本中，不进入 policy 或 prompt。
 
-取消 capability 后，对应连接对象不会进入保存的 deployment config。修改 capability config 会使依赖该 service 的内存 session 失效，避免旧 closure 继续使用旧授权。
+一次调用会经过四层检查：
+
+1. 保存配置时验证字段和 scope。
+2. Tool schema 验证输入结构。
+3. Broker 比较冻结 policy 与 session 配置。
+4. Client 验证协议、目标、timeout 和结果预算。
+
+### 能力概览
+
+| Capability | 允许操作 | 主要边界 |
+| --- | --- | --- |
+| Playwright | 固定 origin 的声明式浏览器动作 | 不执行任意脚本，不跨 origin |
+| Nacos | 读取 exact Data IDs | 不模糊扫描，不写配置 |
+| MySQL | 一条只读 SQL | Read-only transaction，不接受多语句 |
+| Redis | Allowlisted read action | 不接受 arbitrary command |
+| RabbitMQ | Management metadata | 不发布或消费消息 |
+| Elasticsearch | Search、count、mapping | 不写入，不跟随 redirect |
+| SLS | 查询授权 logstore | 不跨 project/logstore scope |
 
 ## Playwright
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `baseUrl` | `http://` 或 `https://`；不能含 credential、query、fragment |
+| `username`, `password` | 同时为空或同时填写 |
 
-- `baseUrl`：必须是 `http://` 或 `https://` URL。
-- `username`、`password`：可同时为空，或同时填写。
+允许动作：
 
-URL 不允许嵌入 username/password、query 或 fragment。Agent 只能从固定 base URL 发起相对路径导航；request、redirect 和 WebSocket 都必须保持同 origin。动作最多 50 个，单动作 selector/value 也有长度限制。
+```text
+goto, login, click, fill, select, wait_for
+```
 
-宿主固定 `/usr/local/node/lib/node_modules/playwright-core@1.62.1` 提供 runner，固定 `mcr.microsoft.com/playwright:v1.62.1-noble` 提供 Chromium。Credential 通过单次 `0600` 文件挂载，不进入 command line、policy、session 或 tool result。
+一次最多 50 个动作。所有 HTTP、redirect 和 WebSocket 都必须保持 `baseUrl` origin。Credential 写入单次 `0600` 文件，只挂载给临时 Chromium 容器。
 
 ## Nacos
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `serverUrl` | HTTP(S) origin，只允许根路径 |
+| `namespace` | 可为空 |
+| `group` | 必填 exact group；新建表单默认使用 `defaults.nacos.group` |
+| `dataIds` | 1 到 50 个 exact Data ID |
+| `username`, `password` | 同时为空或同时填写 |
 
-- `serverUrl`：`http://` 或 `https://` origin，只允许根路径。
-- `namespace`：允许为空。
-- `group`：必填 exact group。
-- `dataIds`：1 到 50 个 exact Data ID。
-- `username`、`password`：可同时为空，或同时填写。
+Group 和 Data ID 只允许字母、数字、点、下划线和连字符。不支持 `*`、`?` 或 glob。
 
-Group 和 Data ID 只允许字母、数字、点、下划线和连字符。`srm*`、`*`、`?` 等 glob 不支持。Tool 会一次返回全部授权 Data ID 的原始内容；共享结果预算超限时整次失败。
+Tool 一次读取全部授权 Data ID。任一响应或合计结果超限时整次失败。
 
 ## MySQL
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `url` | `mysql://host:port/database` |
+| `username`, `password` | 必填 |
 
-- `url`：严格格式 `mysql://host:port/database`。
-- `username`、`password`：必填。
+URL 必须包含显式 port 和单段 database path，不能嵌入 credential、query 或 fragment。
 
-拒绝：
+允许语句以 `SELECT`、`SHOW`、`DESCRIBE`、`DESC` 或 `EXPLAIN` 开始。Runtime 拒绝 comment、多语句、写操作、lock、file/variable output 和已知副作用函数，并在 server-enforced read-only transaction 中流式读取。
 
-- `mariadb://...` 或 `jdbc:mysql://...`
-- 缺少显式 port
-- 缺少 database，或包含多段 database path
-- URL 中嵌入 username/password
-- query string 或 fragment
-
-生产环境必须使用数据库侧 read-only account。运行时只接受单条 `SELECT`、`SHOW`、`DESCRIBE`/`DESC` 或 `EXPLAIN`，拒绝 comment、多 statement、file/variable output、lock 和已知副作用函数，并在 server-enforced read-only transaction 中 streaming 读取。
+应用侧检查不能代替数据库权限；生产 Deployment 应使用数据库侧 read-only account。
 
 ## Redis
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `host` | 必填 |
+| `port` | 1 到 65535，默认 6379 |
+| `username`, `password` | 可为空 |
+| `database` | 0 到 1,000,000，默认 0 |
 
-- `host`
-- `port`：1 到 65535，默认 6379
-- `username`、`password`：允许为空
-- `database`：0 到 1,000,000，默认 0
+允许 action：
 
-Redis 使用隔离 worker 中的 `node-redis` client，只接受 `get`、`type`、`ttl`、`hget`、`hgetall`、`mget`、`scan` 等约定操作，不接受 arbitrary command。Worker 有独立 heap limit，主进程还验证 key/count/result budget。
+```text
+get, mget, hget, hgetall, type, ttl, scan
+```
+
+Redis client 在隔离 worker 中运行，并受 heap、key 数量和结果大小限制。
 
 ## RabbitMQ
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `host` | 必填 |
+| `port` | AMQP port，默认 5672 |
+| `managementPort` | Management HTTP port，默认 15672 |
+| `username`, `password` | 必填 |
+| `virtualHost` | 默认 `/`，并进入冻结 policy |
 
-- `host`
-- `port`：AMQP port，默认 5672
-- `managementPort`：Management API port，默认 15672
-- `username`、`password`
-- `virtualHost`
-
-Agent 只访问 Management HTTP API 的 overview、queue 和 binding metadata，不连接 AMQP、不消费 message。每次调用都要求 config virtual host 与冻结 policy 完全一致。
+允许 action：`overview`、`queues`、`queue`、`bindings`。Runtime 只访问 Management API，不建立 AMQP 消费连接。
 
 ## Elasticsearch
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `url` | HTTP(S)，允许 reverse-proxy path |
+| `username`, `password` | 同时为空或同时填写 |
 
-- `url`：`http://` 或 `https://`，允许 reverse-proxy path
-- `username`、`password`：可同时为空，或同时填写
-
-只开放 search、count 和 mapping。Client 拒绝 HTTP redirect，避免 authorization header 被转发到其他 origin。
+只开放 `search`、`count` 和 `mapping`。Client 禁止 HTTP redirect，避免 Authorization 被转发到其他 origin。
 
 ## SLS
 
-字段：
+| 字段 | 规则 |
+| --- | --- |
+| `accessKeyId`, `accessKeySecret` | 必填 |
+| `region` | 必填 |
+| `project` | 必填 |
+| `logstores` | 至少一个 exact logstore |
 
-- `accessKeyId`
-- `accessKeySecret`
-- `region`
-- `project`
-- `logstores`：至少一个 exact logstore
+Runtime 固定调用 `/usr/local/sbin/aliyun sls GetLogs`。每次调用创建私有临时 HOME 和 `0600` profile，结束后删除。Agent 只能查询冻结 policy 中的 logstore。
 
-Agent 只能查询冻结 policy 中列出的 logstore。Runtime 固定调用 `/usr/local/sbin/aliyun` 的内置 `Sls 2020-12-30 GetLogs`，不使用 plugin，也不接受环境变量替换 CLI 路径。
+## 结果边界
 
-每次调用创建私有临时 HOME 和 `0600` profile。Query 显式分页；达到调用方 limit 后探测下一条，仍有记录则返回 `capability_result_too_large`，调用方必须缩小时间范围或 query。
+Capability 不返回部分成功结果。超过边界时返回 `capability_result_too_large`，调用方应缩小 SQL、query、时间范围或目标集合。下表当前值统一来自根目录 `issue-pilot.config.ts` 的 `limits.capability`。
 
-## 配置示例
+| 边界 | 最大值 |
+| --- | ---: |
+| 序列化结果 | 1 MiB |
+| MySQL statement / rows | 20,000 字符 / 500 行 |
+| Nacos Data IDs | 50 |
+| Redis keys / results | 100 / 500 |
+| Elasticsearch results | 200 |
+| SLS results | 200 |
+| Playwright actions | 50 |
 
-下面示例只展示结构，credential 必须在页面中实际配置，不要把真实 secret 提交到仓库：
+连接 timeout、浏览器动作 timeout、SLS 默认窗口/分页、Redis worker heap 等执行策略也集中在根配置。SLS 达到调用方 `limit` 后会探测下一条；仍有数据时整次失败，避免把“前 N 条”误认为完整结果。
+
+## 保存与删除
+
+Service 保存是一个数据库事务。API 会同时验证：
+
+- Environment 存在且不重复。
+- Repository ID 属于当前 Service，URL 不重复。
+- Model 和 thinking level 可用。
+- Capability 名称、配置和 scope 完整。
+- 即将删除的 Deployment 没有被 Issue 引用。
+
+保存成功后关闭相关内存 session。保存失败不会留下半套 Repository 或 Deployment。
+
+被 Issue 引用的 Service 或 Deployment 返回 `409`，不能通过页面或直接 HTTP 绕过引用完整性。
+
+## 示例
+
+下面只展示结构，不要把真实 secret 提交到仓库：
 
 ```json
 {
-  "environmentKey": "test",
-  "baseBranch": "develop",
-  "agent": {
-    "provider": "enterprise-provider",
-    "model": "engineering-model",
-    "thinkingLevel": "high"
-  },
-  "capabilities": ["nacos", "db", "sls"],
-  "nacos": {
-    "serverUrl": "https://nacos.example.internal",
-    "namespace": "test",
-    "group": "DEFAULT_GROUP",
-    "dataIds": ["orders-test.yaml"],
-    "username": "reader",
-    "password": "<configured-in-ui>"
-  },
-  "db": {
-    "url": "mysql://db.example.internal:3306/orders",
-    "username": "reader",
-    "password": "<configured-in-ui>"
-  },
-  "sls": {
-    "region": "cn-hangzhou",
-    "project": "orders-test",
-    "logstores": ["application"],
-    "accessKeyId": "<configured-in-ui>",
-    "accessKeySecret": "<configured-in-ui>"
-  }
+  "name": "Orders",
+  "description": "Order service",
+  "repositories": [
+    { "url": "git@example.internal:orders-api.git" },
+    { "url": "git@example.internal:orders-web.git" }
+  ],
+  "deployments": [
+    {
+      "environmentKey": "test",
+      "baseBranch": "develop",
+      "agent": {
+        "provider": "enterprise-provider",
+        "model": "engineering-model",
+        "thinkingLevel": "high"
+      },
+      "capabilities": ["db"],
+      "db": {
+        "url": "mysql://db.example.internal:3306/orders",
+        "username": "reader",
+        "password": "<configured-in-ui>"
+      }
+    }
+  ]
 }
 ```
 
 ## Secret 回写
 
-`GET /api/config` 返回真实保存的 connection password 和 AccessKey，因为编辑页面会读取、修改并完整提交 deployment config。响应不是脱敏 placeholder。
+`GET /api/config` 返回真实保存的 password 和 AccessKey，因为页面需要读取并完整回写 Deployment。响应不是脱敏 placeholder。
 
-必须遵守：
-
-- API 固定绑定 `127.0.0.1`，不接受监听地址覆盖。
-- 不把 API 直接暴露到 LAN 或公网。
-- 外部访问只通过同机 authentication/TLS proxy，并单独限制 `/api/config`。
-- 不把 `/api/config` response 写入 log、snapshot、issue comment 或 Agent prompt。
-- SQLite 数据库、backup、Pi session 和 code-server data 都按敏感数据管理。
-
-## 删除和引用完整性
-
-删除仍被 issue 引用的 deployment 或 service 会返回 conflict。更新 service config 在 transaction 内验证：
-
-- environment 存在且 deployment 不重复
-- model/thinking level 可用
-- repository ID 属于当前 service 且不重复
-- service 至少保留一个 repository
-- 即将删除的 deployment 未被现有 issue 引用
-- capability declaration 无未知值或重复值
-- 勾选 capability 的 connection config 完整
-
-浏览器表单只负责交互体验；HTTP API 和 runtime policy 始终是 authoritative boundary。
+不要记录 config request/response body，也不要把 secret 放入 Issue、prompt、comment 或 session。API 暴露和数据文件保护要求集中在 [部署安全](DEPLOYMENT.md#安全边界)。

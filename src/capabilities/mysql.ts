@@ -1,10 +1,13 @@
 import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type QueryError, type RowDataPacket } from "mysql2";
 
-import { capabilitySignal, MAX_CAPABILITY_RESULT_BYTES, MAX_DATABASE_QUERY_CHARS, MAX_DATABASE_ROWS } from "./contracts.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { capabilitySignal } from "./contracts.ts";
 
-export function validateReadOnlyQuery(value: string): string {
-  const statement = value.trim().replace(/;\s*$/, "");
-  if (!statement || statement.length > MAX_DATABASE_QUERY_CHARS) throw new Error("invalid_database_query");
+const limits = issuePilotConfig.limits.capability;
+
+export function validateReadOnlyQuery(query: string): string {
+  const statement = query.trim().replace(/;\s*$/, "");
+  if (!statement || statement.length > limits.database.queryChars) throw new Error("invalid_database_query");
   if (statement.includes(";") || /--|#|\/\*/.test(statement)) throw new Error("database_query_must_be_one_statement_without_comments");
   if (!/^(select|show|describe|desc|explain)\b/i.test(statement)) throw new Error("database_query_must_be_read_only");
   if (/\b(insert|update|delete|replace|create|alter|drop|truncate|rename|grant|revoke|call|do|handler|load|lock|unlock|set|use|begin|commit|rollback|savepoint|release)\b/i.test(statement)) throw new Error("database_query_must_be_read_only");
@@ -30,13 +33,13 @@ async function streamedRows(connection: Connection, statement: string): Promise<
   let bytes = 2;
   const query = connection.query(statement);
   query.once("fields", (fields: FieldPacket[]) => { columns = fields.map((field) => field.name); });
-  for await (const value of query.stream({ highWaterMark: 1 })) {
-    if (rows.length >= MAX_DATABASE_ROWS) throw new Error("capability_result_too_large");
-    const row = value as RowDataPacket;
-    const normalized = Object.fromEntries(columns.map((column) => [column, row[column] ?? null]));
-    bytes += Buffer.byteLength(JSON.stringify(normalized)) + (rows.length ? 1 : 0);
-    if (bytes > MAX_CAPABILITY_RESULT_BYTES) throw new Error("capability_result_too_large");
-    rows.push(normalized);
+  for await (const streamedRow of query.stream({ highWaterMark: 1 })) {
+    if (rows.length >= limits.database.rows) throw new Error("capability_result_too_large");
+    const rowData = streamedRow as RowDataPacket;
+    const record = Object.fromEntries(columns.map((column) => [column, rowData[column] ?? null]));
+    bytes += Buffer.byteLength(JSON.stringify(record)) + (rows.length ? 1 : 0);
+    if (bytes > limits.resultBytes) throw new Error("capability_result_too_large");
+    rows.push(record);
   }
   return { columns, rows };
 }
@@ -61,12 +64,12 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
     if (activeSignal.aborted) throw activeSignal.reason;
     connection = await connectionFactory({
       host: connectionUrl.hostname,
-      port: Number(connectionUrl.port || 3306),
+      port: Number(connectionUrl.port),
       user: decodeURIComponent(connectionUrl.username),
       password,
       database,
       charset: "utf8mb4",
-      connectTimeout: 10_000,
+      connectTimeout: limits.connectionMs,
       multipleStatements: false,
       rowsAsArray: false,
       supportBigNumbers: true,
@@ -75,10 +78,10 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
     });
     if (activeSignal.aborted) throw activeSignal.reason;
     await execute(connection, "START TRANSACTION READ ONLY");
-    const output = await streamedRows(connection, input.statement);
+    const result = await streamedRows(connection, input.statement);
     if (activeSignal.aborted) throw activeSignal.reason;
     await execute(connection, "ROLLBACK");
-    return { ...output, runtime: "node" as const };
+    return { ...result, runtime: "node" as const };
   } catch (error) {
     if (connection && !destroyed) await execute(connection, "ROLLBACK").catch(() => undefined);
     throw error;

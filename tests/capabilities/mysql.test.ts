@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 
 import type { Connection, ConnectionOptions, FieldPacket, RowDataPacket } from "mysql2";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { queryMysql, validateReadOnlyQuery, type MysqlConnectionFactory } from "../../src/capabilities/mysql.ts";
 
 function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }>, wait?: Promise<void>) {
@@ -63,7 +64,7 @@ test("streams MySQL reads inside a server-enforced read-only transaction", async
   assert.equal(options?.user, "readonly");
   assert.equal(options?.password, "db-secret");
   assert.equal(options?.database, "orders");
-  assert.equal(options?.connectTimeout, 10_000);
+  assert.equal(options?.connectTimeout, issuePilotConfig.limits.capability.connectionMs);
   assert.equal(options?.multipleStatements, false);
   assert.deepEqual(fixture.statements, ["START TRANSACTION READ ONLY", "SELECT order_id, status, nullable FROM orders LIMIT 20", "ROLLBACK"]);
   assert.deepEqual(result, {
