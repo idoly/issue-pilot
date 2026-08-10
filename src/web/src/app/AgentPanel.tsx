@@ -121,7 +121,7 @@ function footerText(footer: AgentFooterStats): string {
   ].filter(Boolean).join(" ");
 }
 
-export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
+export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
   const [connected, setConnected] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [processing, setProcessing] = createSignal(false, { ownedWrite: true });
@@ -295,7 +295,7 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
   createEffect(() => props.issue.id, (issueId) => connect(issueId));
   onCleanup(() => { connectionId += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
 
-  return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
+  return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
     <div class="agent-conversation" role="log" aria-live="polite">
       <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
       <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>

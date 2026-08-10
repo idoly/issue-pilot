@@ -92,8 +92,17 @@ describe("issue pilot workspace", () => {
     fireEvent.keyDown(agentInput, { key: "Enter", code: "Enter", shiftKey: false });
     const { fetchAttachment, sendAgentMessage } = await import("../data/client");
     await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", pastedMessage));
+    fireEvent.input(agentInput, { target: { value: "还原后保留的 Agent 草稿" } });
+    const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
+    fireEvent.input(commentInput, { target: { value: "还原后保留的评论草稿" } });
+    const issueQueue = screen.getByLabelText("工单队列") as HTMLElement;
+    const issueWorkspace = document.querySelector(".issue-workspace") as HTMLElement;
     fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
     const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-20260810-042 code-server 编辑器") as HTMLIFrameElement);
+    expect(issueQueue.hidden).toBe(true);
+    expect(issueWorkspace.hidden).toBe(true);
+    expect(agentRegion.hidden).toBe(true);
+    expect(issueQueue.isConnected && issueWorkspace.isConnected && agentRegion.isConnected).toBe(true);
     const codeServerUrl = new URL(codeServerFrame.src);
     expect(codeServerUrl.pathname).toBe("/code-server/");
     expect(codeServerUrl.searchParams.get("workspace")).toBe("/home/coder/state/issues/issue-20260810-042/runtime/issue-20260810-042.code-workspace");
@@ -101,6 +110,12 @@ describe("issue pilot workspace", () => {
     const codeServerPane = codeServerFrame.closest(".code-server-pane") as HTMLElement;
     await waitFor(() => expect(codeServerPane.hidden).toBe(true));
     expect(codeServerFrame.isConnected).toBe(true);
+    expect(screen.getByLabelText("工单队列")).toBe(issueQueue);
+    expect(document.querySelector(".issue-workspace")).toBe(issueWorkspace);
+    expect(screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" })).toBe(agentRegion);
+    expect(agentInput.value).toBe("还原后保留的 Agent 草稿");
+    expect(commentInput.value).toBe("还原后保留的评论草稿");
+    expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
     await waitFor(() => expect(codeServerPane.hidden).toBe(false));
     expect(screen.getByTitle("ISSUE-20260810-042 code-server 编辑器")).toBe(codeServerFrame);
@@ -113,7 +128,6 @@ describe("issue pilot workspace", () => {
     expect(within(previewDialog).getByRole("button", { name: "复制文字" })).toBeTruthy();
     fireEvent.click(within(previewDialog).getByRole("button", { name: "关闭" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "existing.csv" })).toBeNull());
-    const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
     fireEvent.input(commentInput, { target: { value: "**供其他用户查看的备注**" } });
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "评论编辑模式" })).getByRole("radio", { name: "预览" }));
     await waitFor(() => expect(screen.getByText("供其他用户查看的备注").tagName).toBe("STRONG"));

@@ -26,7 +26,7 @@ import "@idoly/ant-design-solid/tag/style.css";
 function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; codeServerTarget: string | null; onCloseCode: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
   return (
     <section class={`agent-workbench${props.codeExpanded ? " code-only" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
-      <Show when={!props.codeExpanded}><AgentPanel issue={props.issue} onRefresh={props.onRefresh} /></Show>
+      <AgentPanel issue={props.issue} hidden={props.codeExpanded} onRefresh={props.onRefresh} />
       <Show when={props.codeServerTarget}>
         {(url) => (
           <section class="code-server-pane" aria-label={`${props.issue.id} code-server`} hidden={!props.codeExpanded}>
@@ -52,9 +52,9 @@ function CurrentUserIdentity() {
   return <div class="identity"><span>本地</span><div><strong>{name()}</strong><small>{detail()}</small></div></div>;
 }
 
-function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; onSelect: (id: string) => void }) {
+function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; onSelect: (id: string) => void }) {
   const { currentUser } = useApplicationResources();
-  return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} onSelect={props.onSelect} />;
+  return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} hidden={props.hidden} onSelect={props.onSelect} />;
 }
 
 export function App() {
@@ -126,13 +126,13 @@ export function App() {
         </Layout.Header>
         <Layout.Content class={`app-content${codeExpanded() && view() === "issues" ? " code-expanded" : ""}`}>
           <Show when={view() === "issues"} fallback={view() === "statistics" ? <Statistics /> : <ConfigurationView />}>
-            <Show when={!codeExpanded()}><ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} onSelect={setSelectedId} /></Show>
+            <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={codeExpanded()} onSelect={setSelectedId} />
             <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
               <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                 {(current) => (
                   <>
                     <AgentWorkbench issue={current()} codeExpanded={codeExpanded()} codeServerTarget={codeServerTarget()} onCloseCode={() => setCodeExpanded(false)} onRefresh={refreshIssue} />
-                    <Show when={!codeExpanded()}><IssueWorkspace issue={current()} onOpenCodeServer={(url) => { setCodeServerTarget(url); setCodeExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} /></Show>
+                    <IssueWorkspace issue={current()} hidden={codeExpanded()} onOpenCodeServer={(url) => { setCodeServerTarget(url); setCodeExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} />
                   </>
                 )}
               </Show>

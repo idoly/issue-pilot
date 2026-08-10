@@ -26,7 +26,7 @@ function localDateTime(value: string, includeYear = true): string {
   return (includeYear ? issueDateTimeFormat : commentDateTimeFormat).format(new Date(value));
 }
 
-export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
+export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
   const { configuration, people, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
@@ -126,7 +126,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
   const environmentName = () => configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
   const availableIssueTypes = createMemo(() => issueTypesForEnvironment(props.issue.environmentKey));
   return (
-    <section class="issue-workspace">
+    <section class="issue-workspace" hidden={props.hidden}>
       <header class="issue-header">
         <div class="issue-heading">
           <div class="issue-heading-meta">

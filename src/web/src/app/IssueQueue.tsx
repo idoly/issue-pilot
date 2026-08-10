@@ -11,6 +11,7 @@ export function IssueQueue(props: {
   selectedId: string;
   userSubject: string;
   refreshToken: number;
+  hidden?: boolean;
   onSelect: (id: string) => void;
 }) {
   const { configuration, people, configurationError, peopleError } = useApplicationResources();
@@ -110,7 +111,7 @@ export function IssueQueue(props: {
     }
   };
   return (
-    <aside class="issue-queue" aria-label="工单队列">
+    <aside class="issue-queue" aria-label="工单队列" hidden={props.hidden}>
       <div class="queue-toolbar">
         <Input
           aria-label="搜索工单"
