@@ -4,6 +4,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
+import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { classifyRepositoryState, issueRuntimeRoot, pathExists } from "../workspace/state.ts";
 import { type PendingAttachment, readMultipartAttachment, removeWrittenAttachments, serializeAttachment, writePendingAttachments } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
@@ -170,7 +171,14 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const targetStatus = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     const validTransition = (targetStatus === "resolved" && issue.status === "pending") || (targetStatus === "open" && issue.status === "resolved");
     if (!validTransition) throw new ApiError(409, "invalid_issue_status_transition");
-    const [updatedIssue] = await database.db.update(issues).set({ status: targetStatus, resolvedAt: targetStatus === "resolved" ? new Date() : null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, issue.status))).returning();
+    if (targetStatus === "open") {
+      try { return serializeIssueSummary(await workspaces.reopenIssue(issue.id)); }
+      catch (error) {
+        if (error instanceof WorkspaceRestoreRefusal) throw new ApiError(409, error.reason);
+        throw error;
+      }
+    }
+    const [updatedIssue] = await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, "pending"))).returning();
     if (!updatedIssue) throw new ApiError(409, "invalid_issue_status_transition");
     return serializeIssueSummary(updatedIssue);
   });

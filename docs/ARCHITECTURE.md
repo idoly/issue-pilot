@@ -188,10 +188,10 @@ flowchart TD
     State --> Ref[Read local refs/heads/workingBranch]
     Ref --> Snapshot[Immutable checkout]
     Snapshot --> Runtime[Read-only code-server runtime]
-    Runtime -->|Issue reopened and Agent runs| W
+    Runtime -->|Issue reopened| W
 ```
 
-Released dev 的权威代码来源是本地 bare repository 中的工作分支。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
+Released dev 的权威代码来源是本地 bare repository 中的工作分支。重新打开工单会先从这些本地 ref 重建全部可写 worktree 和 runtime，再原子更新 Repository、workspace 和 Issue 状态；恢复失败会清理新 worktree 并还原只读 snapshot。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
 
 这一区分很重要：Deployment `baseBranch` 表示环境基线；Issue `workingBranch` 表示该工单自己的工作结果。远程 Issue 分支可以被删除，但用于后续重建的 Deployment base branch 仍应可访问。
 

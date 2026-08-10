@@ -14,8 +14,8 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
 import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal } from "../../src/workspace/lifecycle.ts";
-import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot } from "../../src/workspace/state.ts";
+import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal } from "../../src/workspace/lifecycle.ts";
+import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -139,7 +139,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-    }, prepareRuntime);
+    }, prepareRuntime, codeServer);
     await writeFile(path.join(prepared[1]!.workspacePath, "untracked.txt"), "do not delete\n", "utf8");
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
     assert.equal(dirtyInspection.releasable, false);
@@ -175,6 +175,37 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const [sessionBinding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(sessionBinding!.sessionFile, sessionFile);
     assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, true);
+
+    const failingRestore = new WorkspaceLifecycleManager(database.db, root, engine as never, {
+      retentionMs: Number.POSITIVE_INFINITY,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+    }, prepareRuntime, { async ensure() { throw new Error("code_server_unavailable"); } });
+    await assert.rejects(failingRestore.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "code_server_unavailable");
+    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    const rowsAfterFailedRestore = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.equal(rowsAfterFailedRestore.every((repository) => repository.localPath === null), true);
+    assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.status, "resolved");
+
+    const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
+    assert.equal(reopenedIssue.status, "open");
+    assert.equal(reopenedIssue.resolvedAt, null);
+    const restoredRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.equal(restoredRows.every((repository) => repository.localPath?.startsWith(issueWorkspaceRoot(root, issue!.key))), true);
+    for (const repository of restoredRows) {
+      assert.equal(await git(["-C", repository.localPath!, "branch", "--show-current"]), repository.workingBranch);
+    }
+    const restoredFile = path.join(issueRuntimeRoot(root, issue!.key), "alpha", "restored.txt");
+    await writeFile(restoredFile, "writable again\n", "utf8");
+    assert.equal(await readFile(path.join(issueWorkspaceRoot(root, issue!.key), "alpha", "restored.txt"), "utf8"), "writable again\n");
+    await unlink(restoredFile);
+    const [restoredWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
+    assert.equal(restoredWorkspace!.status, "ready");
+    assert.equal(restoredWorkspace!.codeServerReady, true);
+
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, false);
 
     const reconstruct = async () => {
       const repository = (await database.db.select().from(issueRepositories).where(eq(issueRepositories.url, remotes[0]!)).limit(1))[0]!;
