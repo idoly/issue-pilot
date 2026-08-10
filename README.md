@@ -1,6 +1,6 @@
 # Issue Pilot
 
-Issue Pilot 是一个基于 Pi 的本地优先工单处理系统。它使用 SQLite 保存工单和 deployment 配置，为每个工单准备隔离的 Git worktree，通过同进程 Pi SDK 运行持久会话，并用 SolidJS 提供工单、配置和 Agent 对话界面。
+Issue Pilot 是一个基于 Pi 的本地优先工单处理系统。它使用 SQLite 保存工单和 deployment 配置；正式/测试工单读取按最新 commit 复用的共享代码快照，开发工单使用隔离的 Git worktree；同进程 Pi SDK 运行持久会话，SolidJS 提供工单、配置和 Agent 对话界面。
 
 ## 运行边界
 
@@ -8,10 +8,10 @@ Issue Pilot 是一个基于 Pi 的本地优先工单处理系统。它使用 SQL
 - 环境固定为 `prod`、`test`、`dev`。
 - 每个服务包含一个或多个仓库，以及每个环境一份 deployment 配置。
 - 每份 deployment 必须选择一个已认证 Pi 模型和该模型支持的 thinking level。
-- Pi 使用内置本地工具；只有所有仓库均为可写开发 worktree 时才启用 `bash`、`edit`、`write`。
+- Pi 使用内置本地工具；正式/测试 environment 只读取共享快照，只有所有仓库均为可写开发 worktree 时才启用 `bash`、`edit`、`write`。
 - Redis、MySQL、Elasticsearch、RabbitMQ 和 Nacos 使用受限的宿主原生客户端；SLS 使用固定宿主 Aliyun CLI。
 - Playwright 使用宿主全局 `playwright-core@1.62.1` 和按调用创建的固定浏览器容器。
-- code-server 使用一个共享官方容器，通过 `folder` 参数打开对应工单工作区。
+- code-server 使用一个共享官方容器，仅为开发工单打开对应的独立工作区。
 - capability 结果必须完整返回；命中行数、大小或动作边界时明确失败，不静默截断。
 
 详细设计见 [架构说明](docs/ARCHITECTURE.md)，页面字段和授权规则见 [配置说明](docs/CONFIGURATION.md)，部署、升级和故障处理见 [运维说明](docs/OPERATIONS.md)。
@@ -84,7 +84,7 @@ src/domain/         跨层业务契约
 src/http/           Fastify 装配及配置、工单、附件、Agent 路由
 src/pi/             Pi 模型目录、custom tools 和冻结 policy
 src/web/            SolidJS Web 应用
-src/workspace/      Git worktree、project wrappers 和 code-server
+src/workspace/      共享 Git 快照、开发 worktree、project wrappers 和 code-server
 infra/              固定 Playwright/code-server 脚本和浏览器 runner
 drizzle/            不可删除的顺序 SQLite migration 历史
 tests/              后端与基础设施测试

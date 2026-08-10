@@ -56,12 +56,19 @@ export function agentSystemPrompt(policy: IssuePolicy): string {
   ].join("\n");
 }
 
-const workspaceContext = [
-  "Attachments, if present, are in .issue-pilot/attachments/.",
-  "Project checks: node-project <path> <install|test|build|typecheck>; maven-project <path> <test|verify|package>. Both wrappers use the configured host runtimes.",
-  "For defect_fix and feature_development, make only the minimum changes required by the issue. Avoid unrelated refactors, formatting churn, dependency changes, and speculative improvements.",
-  "Leave working tree changes uncommitted for user review in code-server unless the user explicitly asks you to commit or push them.",
-].join("\n");
+function workspaceContext(repositories: RepositoryContext[]): string {
+  const readOnly = repositories.every((repository) => repository.readOnly);
+  return [
+    "Attachments, if present, are in .issue-pilot/attachments/.",
+    ...(readOnly
+      ? ["Repositories are shared read-only snapshots of the latest configured deployment branches. Do not attempt to modify them."]
+      : [
+        "Project checks: node-project <path> <install|test|build|typecheck>; maven-project <path> <test|verify|package>. Both wrappers use the configured host runtimes.",
+        "For defect_fix and feature_development, make only the minimum changes required by the issue. Avoid unrelated refactors, formatting churn, dependency changes, and speculative improvements.",
+        "Leave working tree changes uncommitted for user review in code-server unless the user explicitly asks you to commit or push them.",
+      ]),
+  ].join("\n");
+}
 
 export function continuationPrompt(issueKey: string, repositories: RepositoryContext[], latestUpdate?: string, now = new Date()): string {
   return [
@@ -70,7 +77,7 @@ export function continuationPrompt(issueKey: string, repositories: RepositoryCon
     ...(latestUpdate ? ["Latest update:", latestUpdate] : []),
     "Repositories:",
     ...repositories.map(repositoryLine),
-    workspaceContext,
+    workspaceContext(repositories),
     "Use the existing Pi session context and provide a clear final answer when this turn is complete.",
   ].join("\n\n");
 }
@@ -92,7 +99,9 @@ export function initialPrompt(input: {
     `Service: ${input.service.key} (${input.service.name})\n${input.service.description?.trim() || ""}`.trim(),
     ...(input.latestUpdate ? [`Latest update:\n${input.latestUpdate}`] : []),
     `Repositories:\n${input.repositories.map(repositoryLine).join("\n")}`,
-    workspaceContext,
-    "Investigate, make appropriate local changes, verify them, and provide a clear final answer.",
+    workspaceContext(input.repositories),
+    input.repositories.every((repository) => repository.readOnly)
+      ? "Investigate, verify the available evidence, and provide a clear final answer."
+      : "Investigate, make appropriate local changes, verify them, and provide a clear final answer.",
   ].join("\n\n");
 }

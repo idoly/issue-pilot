@@ -145,6 +145,9 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
   const running = () => processing() || props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running";
   const canSend = () => props.issue.status !== "resolved";
   const usageText = () => footerText(footer());
+  const executionRoot = () => props.issue.environmentKey === "dev"
+    ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
+    : `~/.issue-pilot/sessions/${props.issue.id.toLowerCase()}/runtime`;
   const scrollLatest = () => {
     transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
     followLatest = true;
@@ -306,7 +309,7 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
     </div>
     <Show when={error()}><div class="agent-panel-error" role="alert">{panelError(error())}</div></Show>
     <footer class="agent-meta">
-      <div class="agent-meta-primary"><span title={`~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`}>~/.issue-pilot/workspaces/{props.issue.id.toLowerCase()}</span></div>
+      <div class="agent-meta-primary"><span title={executionRoot()}>{executionRoot()}</span></div>
       <div class="agent-meta-secondary"><span>{usageText()}</span><span><b>{agent().model || "no-model"}</b>{agent().thinkingLevel ? ` • ${agent().thinkingLevel}` : ""}</span></div>
     </footer>
   </section>;

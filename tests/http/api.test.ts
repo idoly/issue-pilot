@@ -99,8 +99,10 @@ test("configuration and issue API preserves relational integrity", async () => {
       assert.equal((await json(response)).error, expected);
     }
 
-    const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; repositories: Array<{ id: string; url: string }>; deployments: Array<{ environmentKey: string; agent: unknown }> }> };
+    const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; repositories: Array<{ id: string; url: string }>; deployments: Array<{ environmentKey: string; baseBranch: string; agent: unknown }> }> };
     const alphaModel = modeled.services.find((service) => service.key === "alpha")!;
+    const betaModel = modeled.services.find((service) => service.key === "beta")!;
+    assert.equal(betaModel.deployments.find((deployment) => deployment.environmentKey === "dev")?.baseBranch, "develop");
     for (const field of ["id", "kind", "createdAt", "environmentIds"]) assert.equal(field in alphaModel, false);
     assert.equal(alphaModel.deployments.some((deployment) => "id" in deployment || "environmentId" in deployment), false);
     assert.equal(alphaModel.deployments[0]?.environmentKey, "test");

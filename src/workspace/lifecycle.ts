@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, readdir, rm } from "node:fs/promises";
+import { access, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -9,7 +9,7 @@ import type { AgentController } from "../agent/engine.ts";
 import type { openDatabase } from "../db/client.ts";
 import { issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { WorktreeManager } from "./git.ts";
-import { issueWorkspaceRoot } from "./state.ts";
+import { assertManagedIssueWorkspaceLayout, issueWorkspaceRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 const GIB = 1024 ** 3;
@@ -224,7 +224,7 @@ export class WorkspaceLifecycleManager {
     else {
       const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
       try {
-        await this.assertManagedLayout(root, repositories.flatMap((repository) => repository.localPath ? [repository.localPath] : []));
+        await assertManagedIssueWorkspaceLayout(root, repositories.flatMap((repository) => repository.localPath ? [repository.localPath] : []));
         for (const repository of repositories) {
           if (repository.localPath) await this.worktrees.assertClean(repository.localPath);
         }
@@ -243,23 +243,6 @@ export class WorkspaceLifecycleManager {
       releasable: blockedReason === null,
       blockedReason,
     };
-  }
-
-  private async assertManagedLayout(root: string, localPaths: string[]): Promise<void> {
-    const allowed = new Set([".issue-pilot"]);
-    for (const localPath of localPaths) {
-      const resolved = path.resolve(localPath);
-      if (path.dirname(resolved) !== root) throw new Error("workspace_path_outside_issue_root");
-      allowed.add(path.basename(resolved));
-    }
-    for (const entry of await readdir(root, { withFileTypes: true })) {
-      if (!allowed.has(entry.name)) throw new Error("workspace_has_untracked_files");
-    }
-    const metadataRoot = path.join(root, ".issue-pilot");
-    if (!await exists(metadataRoot)) return;
-    for (const entry of await readdir(metadataRoot, { withFileTypes: true })) {
-      if (!["attachments", "bin"].includes(entry.name)) throw new Error("workspace_has_untracked_files");
-    }
   }
 
   private async issueRow(issueId: string): Promise<{ issue: Issue; workspace: IssueWorkspace | null }> {

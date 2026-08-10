@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { AgentEngine } from "../../src/agent/engine.ts";
+import { AgentEngine, repositoryPreparationPlan } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 import { MAX_AGENT_MESSAGE_CHARS } from "../../src/domain/contracts.ts";
 
@@ -15,6 +15,13 @@ async function waitFor(check: () => boolean): Promise<void> {
   }
   throw new Error("condition_not_met");
 }
+
+test("selects shared snapshots and configured dev branch modes", () => {
+  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "prod", issueType: "smart_analysis", deploymentBaseBranch: "prod" }), { mode: "shared", baseBranch: "prod" });
+  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "test", issueType: "smart_analysis", deploymentBaseBranch: "test" }), { mode: "shared", baseBranch: "test" });
+  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "dev", issueType: "defect_fix", deploymentBaseBranch: "release" }), { mode: "hotfix", baseBranch: "release" });
+  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "dev", issueType: "feature_development", deploymentBaseBranch: "develop" }), { mode: "feature", baseBranch: "develop" });
+});
 
 test("rejects oversized Agent messages at the engine boundary", async () => {
   const engine = new AgentEngine({} as never);

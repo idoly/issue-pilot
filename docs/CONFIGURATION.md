@@ -10,19 +10,21 @@ Web 配置页面保存的 service deployment 是 Agent 模型、连接、credent
 
 ## Environment 和 issue type
 
-| environment | 显示名 | 允许的 issue type | worktree/access |
+| environment | 显示名 | 允许的 issue type | repository access |
 | --- | --- | --- | --- |
-| `prod` | 正式 | `data_processing`、`smart_analysis` | detached/read |
-| `test` | 测试 | `smart_analysis` | detached/read |
-| `dev` | 开发 | `defect_fix`、`feature_development` | hotfix 或 feature/write |
+| `prod` | 正式 | `data_processing`、`smart_analysis` | 最新 prod deployment commit 的共享快照/read |
+| `test` | 测试 | `smart_analysis` | 最新 test deployment commit 的共享快照/read |
+| `dev` | 开发 | `defect_fix`、`feature_development` | 从 dev deployment 配置分支创建 hotfix 或 feature worktree/write |
 
-前端按 environment 过滤 issue type，API 再次验证。不能通过直接 HTTP 请求给 prod/test 工单授予可写 repository。
+前端按 environment 过滤 issue type，API 再次验证。不能通过直接 HTTP 请求给 prod/test 工单授予可写 repository。每个 deployment（包括 dev）都必须配置自己的 `baseBranch`。
 
 ## Repository
 
-每个服务至少一个 repository，URL 在同一服务内不能重复。Repository 不区分前后端类型；所有 repository 使用相同的 workspace、policy 和 Git 生命周期。Deployment 的 `baseBranch` 是该 environment 下所有 repository 使用的远端基线。
+每个服务至少一个 repository，URL 在同一服务内不能重复。Repository 不区分前后端类型。每个 deployment 的 `baseBranch` 是该环境使用的远端基线；prod/test 从该分支创建共享只读快照，dev 从该分支创建 Issue 工作分支。
 
-创建工单后，Issue Pilot 会把 service repository 固化到 issue workspace 记录。Service 删除 repository 时，下一次 Agent 准备会清理不再授权的 clean worktree；dirty workspace 明确失败并保留，防止丢失未提交修改。
+prod/test 在首次处理、编辑保存后的 sync 和完成后的下一轮消息开始前都会 fetch 对应远端分支，并按当时最新 commit 复用 immutable shared checkout。Issue 不创建代码副本、Git 分支或 `workspaces/<issue-key>`；session runtime 只保存指向共享 checkout 和持久附件的链接。Service repository 变化会在下一次准备时更新 Issue repository 记录。
+
+开发工单继续使用独立 worktree。Service 删除 repository 时，下一次 Agent 准备会清理不再授权的 clean worktree；dirty workspace 明确失败并保留，防止丢失未提交修改。
 
 ## Agent model
 

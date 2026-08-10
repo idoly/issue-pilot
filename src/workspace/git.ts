@@ -5,7 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { normalizeIssueKey } from "../domain/contracts.ts";
-import { issueWorkspaceRoot, workspacesRoot } from "./state.ts";
+import { issueWorkspaceRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +18,11 @@ export interface PrepareWorktreeInput {
   workingBranch?: string;
   existingWorkspacePath?: string;
   existingBaseCommit?: string;
+}
+
+export interface PrepareSharedCheckoutInput {
+  url: string;
+  baseBranch: string;
 }
 
 export interface PreparedWorktree {
@@ -58,12 +63,14 @@ export function repositoryWorkspaceNames(urls: string[]): Map<string, string> {
 export class WorktreeManager {
   private readonly stateRoot: string;
   private readonly repositoriesRoot: string;
+  private readonly sharedCheckoutsRoot: string;
   private readonly workspacesRoot: string;
   private readonly tails = new Map<string, Promise<unknown>>();
 
   constructor(stateRoot: string) {
     this.stateRoot = resolve(stateRoot);
     this.repositoriesRoot = resolve(this.stateRoot, "repositories");
+    this.sharedCheckoutsRoot = sharedCheckoutsRoot(this.stateRoot);
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
@@ -77,12 +84,15 @@ export class WorktreeManager {
 
   async remove(url: string, workspacePath: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
-    const cachePath = resolve(this.repositoriesRoot, createHash("sha256").update(url).digest("hex").slice(0, 20));
-    if (!await this.assertClean(resolvedWorkspace)) {
-      if (await exists(cachePath)) await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
-      return;
-    }
-    await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
+    const repositoryKey = createHash("sha256").update(url).digest("hex").slice(0, 20);
+    await this.serialized(repositoryKey, async () => {
+      const cachePath = resolve(this.repositoriesRoot, repositoryKey);
+      if (!await this.assertClean(resolvedWorkspace)) {
+        if (await exists(cachePath)) await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
+        return;
+      }
+      await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
+    });
   }
 
   private validatedWorkspacePath(workspacePath: string): string {
@@ -94,22 +104,67 @@ export class WorktreeManager {
 
   async prepare(input: PrepareWorktreeInput): Promise<PreparedWorktree> {
     const issueKey = normalizeIssueKey(input.issueKey);
-    if (input.url.startsWith("-") || !input.baseBranch.trim() || input.baseBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
+    this.validateRepositoryInput(input);
     const repositoryKey = createHash("sha256").update(input.url).digest("hex").slice(0, 20);
+    return this.serialized(repositoryKey, () => this.prepareLocked(input, issueKey, repositoryKey));
+  }
+
+  async prepareShared(input: PrepareSharedCheckoutInput): Promise<PreparedWorktree> {
+    this.validateRepositoryInput(input);
+    const repositoryKey = createHash("sha256").update(input.url).digest("hex").slice(0, 20);
+    return this.serialized(repositoryKey, () => this.prepareSharedLocked(input, repositoryKey));
+  }
+
+  private validateRepositoryInput(input: PrepareSharedCheckoutInput): void {
+    if (input.url.startsWith("-") || !input.baseBranch.trim() || input.baseBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
+  }
+
+  private async serialized<T>(repositoryKey: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.tails.get(repositoryKey) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => this.prepareLocked(input, issueKey, repositoryKey));
+    const current = previous.catch(() => undefined).then(operation);
     this.tails.set(repositoryKey, current);
     try { return await current; } finally { if (this.tails.get(repositoryKey) === current) this.tails.delete(repositoryKey); }
   }
 
-  private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {
-    await Promise.all([mkdir(this.repositoriesRoot, { recursive: true }), mkdir(this.workspacesRoot, { recursive: true })]);
+  private async updateCache(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<string> {
+    await mkdir(this.repositoriesRoot, { recursive: true });
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
     if (!await exists(cachePath)) {
       await this.git(["init", "--bare", cachePath]);
       await this.git(["-C", cachePath, "remote", "add", "origin", input.url]);
     }
     await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
+    return cachePath;
+  }
+
+  private async prepareSharedLocked(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<PreparedWorktree> {
+    const cachePath = await this.updateCache(input, repositoryKey);
+    const baseRef = `origin/${input.baseBranch}`;
+    const baseCommit = (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
+    const branchKey = createHash("sha256").update(input.baseBranch).digest("hex").slice(0, 12);
+    const checkoutParent = resolve(this.sharedCheckoutsRoot, repositoryKey);
+    const workspacePath = resolve(checkoutParent, `${branchKey}-${baseCommit}`);
+    if (dirname(workspacePath) !== checkoutParent) throw new Error("shared_checkout_path_invalid");
+
+    const workspaceExists = await exists(workspacePath);
+    if (workspaceExists && !await exists(resolve(workspacePath, ".git"))) throw new Error("shared_checkout_is_not_git_worktree");
+    if (workspaceExists) {
+      await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", workspacePath]);
+      const [head, dirty] = await Promise.all([
+        this.git(["-C", workspacePath, "rev-parse", "HEAD"]).then((value) => value.trim()),
+        execFileAsync("git", ["-C", workspacePath, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim()),
+      ]);
+      if (head !== baseCommit || dirty) throw new Error("shared_checkout_changed");
+    } else {
+      await mkdir(checkoutParent, { recursive: true });
+      await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, baseCommit]);
+    }
+    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
+  }
+
+  private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {
+    await mkdir(this.workspacesRoot, { recursive: true });
+    const cachePath = await this.updateCache(input, repositoryKey);
 
     const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
     const workspacePath = await this.resolveWorkspacePath(issueRoot, cachePath, input.workspaceName, input.existingWorkspacePath);

@@ -23,6 +23,14 @@ export function issueSessionRoot(stateRoot: string, issueKey: string): string {
   return path.resolve(stateRoot, "sessions", issueSegment(issueKey));
 }
 
+export function issueRuntimeRoot(stateRoot: string, issueKey: string): string {
+  return path.join(issueSessionRoot(stateRoot, issueKey), "runtime");
+}
+
+export function sharedCheckoutsRoot(stateRoot: string): string {
+  return path.resolve(stateRoot, "checkouts");
+}
+
 export function attachmentsRoot(stateRoot: string): string {
   return path.resolve(stateRoot, "attachments");
 }
@@ -40,6 +48,22 @@ async function directories(root: string): Promise<string[]> {
     .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name), () => []);
 }
 
+export async function assertManagedIssueWorkspaceLayout(root: string, localPaths: string[]): Promise<void> {
+  const allowed = new Set([".issue-pilot"]);
+  for (const localPath of localPaths) {
+    const resolved = path.resolve(localPath);
+    if (path.dirname(resolved) !== root) throw new Error("workspace_path_outside_issue_root");
+    allowed.add(path.basename(resolved));
+  }
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!allowed.has(entry.name)) throw new Error("workspace_has_untracked_files");
+  }
+  const metadataRoot = path.join(root, ".issue-pilot");
+  for (const entry of await readdir(metadataRoot, { withFileTypes: true }).catch(() => [])) {
+    if (!["attachments", "bin"].includes(entry.name)) throw new Error("workspace_has_untracked_files");
+  }
+}
+
 export async function pruneState(stateRoot: string, issueKeys: string[]): Promise<void> {
   const active = new Set(issueKeys.map((key) => normalizeIssueKey(key).toLowerCase()));
   for (const category of ["workspaces", "sessions", "attachments"]) {
@@ -48,6 +72,10 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
       if (!active.has(entry.toLowerCase())) await rm(path.join(root, entry), { recursive: true, force: true });
     }
   }
+  for (const entry of await directories(path.resolve(stateRoot, "sessions"))) {
+    if (active.has(entry.toLowerCase())) await rm(path.join(stateRoot, "sessions", entry, "runtime"), { recursive: true, force: true });
+  }
+  await rm(sharedCheckoutsRoot(stateRoot), { recursive: true, force: true });
   const repositoriesRoot = path.resolve(stateRoot, "repositories");
   for (const entry of await directories(repositoriesRoot)) {
     await execFileAsync("git", ["-C", path.join(repositoriesRoot, entry), "worktree", "prune", "--expire", "now"], { timeout: 30_000 });

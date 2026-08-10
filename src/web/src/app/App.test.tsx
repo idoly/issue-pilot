@@ -77,7 +77,9 @@ describe("issue pilot workspace", () => {
     const agentRegion = screen.getByRole("region", { name: "ISSUE-0042 Agent 会话" });
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
-    expect(agentRegion.querySelector(".agent-meta")).toBeTruthy();
+    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/sessions/issue-0042/runtime");
+    expect(screen.getByRole("heading", { name: "代码仓库" })).toBeTruthy();
+    expect(screen.queryByText("hotfix-issue")).toBeNull();
     const agentInput = within(agentRegion).getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     const pastedMessage = Array.from({ length: 41 }, (_, index) => `line ${index + 1}`).join("\n");
     fireEvent.paste(agentInput, { clipboardData: { getData: () => pastedMessage } });
@@ -140,6 +142,10 @@ describe("issue pilot workspace", () => {
     fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
     fireEvent.click(await screen.findByText("ISSUE-0041"));
     const releaseButton = await waitFor(() => screen.getByRole("button", { name: "释放工作区" }));
+    const issueActions = releaseButton.closest(".issue-actions");
+    expect(issueActions).toBeTruthy();
+    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "释放工作区", "编辑工单"]);
+    expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     fireEvent.click(releaseButton);
     const releaseDialog = await waitFor(() => screen.getByRole("dialog", { name: "释放工作区" }));
     expect(within(releaseDialog).getByText(/4\.0 GB/)).toBeTruthy();

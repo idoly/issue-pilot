@@ -23,8 +23,10 @@ import {
   serviceRepositories,
   services,
 } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type EnvironmentKind } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { repositoryWorkspaceNames, WorktreeManager } from "../workspace/git.ts";
+import { retireReadOnlyIssueWorkspace } from "../workspace/read-only.ts";
+import { prepareReadOnlyRuntime } from "../workspace/runtime.ts";
 import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -66,6 +68,22 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+export interface RepositoryPreparationPlan {
+  mode: "shared" | "hotfix" | "feature";
+  baseBranch: string;
+}
+
+export function repositoryPreparationPlan(input: {
+  environmentKind: EnvironmentKind;
+  issueType: IssueType;
+  deploymentBaseBranch: string;
+}): RepositoryPreparationPlan {
+  if (input.environmentKind !== "dev") return { mode: "shared", baseBranch: input.deploymentBaseBranch };
+  if (input.issueType === "defect_fix") return { mode: "hotfix", baseBranch: input.deploymentBaseBranch };
+  if (input.issueType === "feature_development") return { mode: "feature", baseBranch: input.deploymentBaseBranch };
+  throw new Error("unsupported_dev_issue_type");
+}
+
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
@@ -75,6 +93,7 @@ export class AgentEngine implements AgentController {
   private readonly db: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly sessions = new Map<string, ManagedPiSession>();
+  private readonly sharedReadOnlySessions = new Set<string>();
   private readonly piRuntime = new PiSessionRuntime();
 
   constructor(db: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
@@ -102,7 +121,8 @@ export class AgentEngine implements AgentController {
     if (message.length > MAX_AGENT_MESSAGE_CHARS) throw new Error("invalid_agent_message");
     const userMessage = message.trim();
     const managed = this.sessions.get(issueId);
-    if (!managed) {
+    if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
+      if (managed) await this.stopSession(issueId);
       this.enqueue(issueId, userMessage, true);
       return;
     }
@@ -163,68 +183,81 @@ export class AgentEngine implements AgentController {
       .limit(1);
     if (!service) throw new Error("issue_service_deployment_not_found");
     if (!ENVIRONMENT_KINDS.includes(service.environmentKind as EnvironmentKind)) throw new Error("unsupported_issue_environment_kind");
-    const worktreeMode = service.environmentKind === "dev" && issue.type === "defect_fix"
-      ? "hotfix" as const
-      : service.environmentKind === "dev" && issue.type === "feature_development"
-        ? "feature" as const
-        : "detached" as const;
+    const environmentKind = service.environmentKind as EnvironmentKind;
+    await this.stopSession(issue.id);
+
+    const repositoryPlan = repositoryPreparationPlan({
+      environmentKind,
+      issueType: issue.type,
+      deploymentBaseBranch: service.baseBranch,
+    });
+    const sharedRepositories = repositoryPlan.mode === "shared";
 
     const [repositoryRows, existingRepositoryRows] = await Promise.all([
       this.db.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
       this.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
+    if (!repositoryRows.length) throw new Error("selected_service_has_no_repository");
     const repositoryUrls = new Set(repositoryRows.map((repository) => repository.url));
     const obsoleteRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
-    for (const repository of obsoleteRepositories) {
-      if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
+    if (sharedRepositories) {
+      await retireReadOnlyIssueWorkspace(this.stateRoot, issue.key, existingRepositoryRows, this.worktreeManager);
+    } else {
+      for (const repository of obsoleteRepositories) {
+        if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
+      }
     }
     if (obsoleteRepositories.length) {
-      await this.db.delete(issueRepositories).where(repositoryUrls.size
-        ? and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls]))
-        : eq(issueRepositories.issueId, issue.id));
+      await this.db.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
     }
-    if (!repositoryRows.length) throw new Error("selected_service_has_no_repository");
+
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
     const workspaceNames = repositoryWorkspaceNames(repositoryRows.map((repository) => repository.url));
-
-    const prepared: Array<Awaited<ReturnType<WorktreeManager["prepare"]>>> = [];
+    const prepared: Array<{ name: string; workspace: Awaited<ReturnType<WorktreeManager["prepare"]>> }> = [];
     for (const repository of repositoryRows) {
       const existingRepository = existingRepositoryByUrl.get(repository.url);
-      const workspace = await this.worktreeManager.prepare({
-        issueKey: issue.key,
-        workspaceName: workspaceNames.get(repository.url)!,
-        url: repository.url,
-        baseBranch: service.baseBranch,
-        mode: worktreeMode,
-        ...(worktreeMode !== "detached" && existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
-        ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
-        ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
-      });
-      prepared.push(workspace);
+      const name = workspaceNames.get(repository.url)!;
+      const workspace = repositoryPlan.mode === "shared"
+        ? await this.worktreeManager.prepareShared({ url: repository.url, baseBranch: repositoryPlan.baseBranch })
+        : await this.worktreeManager.prepare({
+          issueKey: issue.key,
+          workspaceName: name,
+          url: repository.url,
+          baseBranch: repositoryPlan.baseBranch,
+          mode: repositoryPlan.mode,
+          ...(existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
+          ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
+          ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
+        });
+      prepared.push({ name, workspace });
+      const commitBefore = sharedRepositories ? workspace.baseCommit : existingRepository?.commitBefore ?? workspace.baseCommit;
       await this.db.insert(issueRepositories).values({
         issueId: issue.id,
         url: repository.url,
         baseBranch: workspace.baseBranch,
         workingBranch: workspace.workingBranch,
-        localPath: workspace.workspacePath,
-        commitBefore: workspace.baseCommit,
+        localPath: sharedRepositories ? null : workspace.workspacePath,
+        commitBefore,
       }).onConflictDoUpdate({
         target: [issueRepositories.issueId, issueRepositories.url],
         set: {
           baseBranch: workspace.baseBranch,
           workingBranch: workspace.workingBranch,
-          localPath: workspace.workspacePath,
-          commitBefore: existingRepository?.commitBefore ?? workspace.baseCommit,
+          localPath: sharedRepositories ? null : workspace.workspacePath,
+          commitBefore,
           updatedAt: new Date(),
         },
       });
     }
 
-    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
-    await mkdir(workspaceRoot, { recursive: true });
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await chmod(sessionDirectory, 0o700);
+    const workspaceRoot = sharedRepositories
+      ? await prepareReadOnlyRuntime(this.stateRoot, issue.key, prepared.map(({ name, workspace }) => ({ name, checkoutPath: workspace.workspacePath })))
+      : issueWorkspaceRoot(this.stateRoot, issue.key);
+    if (!sharedRepositories) await mkdir(workspaceRoot, { recursive: true });
+    const repositoryPaths = prepared.map(({ name, workspace }) => sharedRepositories ? path.join(workspaceRoot, name) : workspace.workspacePath);
     const policy = createDeploymentPolicy({
       issueKey: issue.key,
       issueType: issue.type,
@@ -233,27 +266,30 @@ export class AgentEngine implements AgentController {
       deploymentConfig: service.deploymentConfig,
       serviceKey: service.key,
       environmentKey: service.environmentKey,
-      environmentKind: service.environmentKind,
-      repositories: prepared.map((workspace) => ({ codeAccess: worktreeMode === "detached" ? "read" : "write", repositoryPath: workspace.workspacePath, baseCommit: workspace.baseCommit })),
+      environmentKind,
+      repositories: prepared.map(({ workspace }, index) => ({ codeAccess: sharedRepositories ? "read" : "write", repositoryPath: repositoryPaths[index]!, baseCommit: workspace.baseCommit })),
     });
-    await Promise.all([
-      prepareProjectWrappers(workspaceRoot),
-      materializeWorkspaceAttachments(this.db, this.stateRoot, issue.id, issue.key),
-    ]);
+    if (!sharedRepositories) {
+      await Promise.all([
+        prepareProjectWrappers(workspaceRoot),
+        materializeWorkspaceAttachments(this.db, this.stateRoot, issue.id, issue.key),
+      ]);
+    }
     let codeServerReady = false;
-    try {
-      await this.codeServerManager.ensure(issue.key, workspaceRoot);
-      codeServerReady = true;
-    } catch {
-      codeServerReady = false;
+    if (!sharedRepositories) {
+      try {
+        await this.codeServerManager.ensure(issue.key, workspaceRoot);
+        codeServerReady = true;
+      } catch {
+        codeServerReady = false;
+      }
     }
     const [binding] = await this.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const manager = binding && await exists(binding.sessionFile)
-      ? SessionManager.open(binding.sessionFile, sessionDirectory, binding.workspacePath)
+      ? SessionManager.open(binding.sessionFile, sessionDirectory, workspaceRoot)
       : await createPrivateSessionManager(workspaceRoot, sessionDirectory);
     const hadMessages = manager.buildContextEntries().some((entry) => entry.type === "message");
 
-    await this.stopSession(issue.id);
     const managed = await this.piRuntime.start({
       workspaceRoot,
       policy,
@@ -263,6 +299,7 @@ export class AgentEngine implements AgentController {
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
     this.sessions.set(issue.id, managed);
+    if (sharedRepositories) this.sharedReadOnlySessions.add(issue.id);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
     await this.db.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workspaceRoot }).onConflictDoUpdate({
@@ -273,11 +310,12 @@ export class AgentEngine implements AgentController {
     await this.db.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     await this.db.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
-    const repositoryContexts = prepared.map((workspace) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, workspace.workspacePath), readOnly: worktreeMode === "detached" }));
+    const repositoryContexts = prepared.map(({ workspace }, index) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, repositoryPaths[index]!), readOnly: sharedRepositories }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, currentMessage)
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
     await managed.prompt(prompt);
+    if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);
 
   }
@@ -310,6 +348,7 @@ export class AgentEngine implements AgentController {
 
   private async stopSession(issueId: string): Promise<void> {
     const managed = this.sessions.get(issueId);
+    this.sharedReadOnlySessions.delete(issueId);
     if (!managed) return;
     this.sessions.delete(issueId);
     await managed.stop();

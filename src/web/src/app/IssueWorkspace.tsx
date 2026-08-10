@@ -1,4 +1,4 @@
-import { Badge, Button, Input, Modal, Segmented, Select, Space, Tag, TextArea } from "@idoly/ant-design-solid";
+import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "@idoly/ant-design-solid";
 import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send, Trash2 } from "../ui/icons";
@@ -136,7 +136,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
           <h1>{props.issue.title}</h1>
           <Show when={props.issue.description.trim()}><div class="issue-description"><Markdown source={props.issue.description} /></div></Show>
         </div>
-        <Space>
+        <div class="issue-actions">
           <Show when={props.issue.workspace.retryable}>
             <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
           </Show>
@@ -144,7 +144,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
           <Show when={props.issue.status === "resolved"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
           <Show when={props.issue.workspace.releasable && props.issue.workspace.bytes > 0}><Button danger icon={<Trash2 size={15} />} onClick={() => { setReleaseError(""); setReleaseOpen(true); }}>释放工作区</Button></Show>
           <Button icon={<Pencil size={15} />} disabled={props.issue.workspace.status === "preparing" || props.issue.workspace.status === "running"} onClick={openEditor}>编辑工单</Button>
-        </Space>
+        </div>
       </header>
 
       <div class="issue-facts">
@@ -161,7 +161,8 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
       <section class="repository-band" aria-labelledby="repositories-title">
         <div class="band-title">
           <GitBranch size={16} />
-          <h2 id="repositories-title">代码分支</h2>
+          <h2 id="repositories-title">代码仓库</h2>
+          <span>{props.issue.repositories.length}</span>
           <Show when={workspaceUrl(props.issue.workspace.url)}>
             {(url) => <span class="band-actions"><Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在 code-server 中打开工单工作区" aria-label="在 code-server 中打开工单工作区" onClick={() => props.onOpenCodeServer(url())} /></span>}
           </Show>
@@ -171,7 +172,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; onOpenCodeServer: (u
             {(repository) => (
               <div class="repository-row">
                 <span class="repo-name">{repository.url.split(/[/:]/).at(-1)?.replace(/\.git$/, "")}</span>
-                <code>{repository.workingBranch ?? repository.baseBranch}{repository.workingBranch ? "" : " (只读)"}</code>
               </div>
             )}
           </For>

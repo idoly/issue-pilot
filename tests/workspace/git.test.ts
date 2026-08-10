@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { access, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
@@ -27,7 +27,7 @@ test("uses readable repository names and stable suffixes for basename collisions
   assert.equal(names.get(urls[2]!), "srm-admin-front");
 });
 
-test("uses detached latest baselines for read-only environments and prefixed dev branches", async () => {
+test("shares immutable latest baselines for read-only environments and creates prefixed dev branches", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-"));
   const source = join(root, "source");
   const remote = join(root, "remote.git");
@@ -39,20 +39,26 @@ test("uses detached latest baselines for read-only environments and prefixed dev
     await git(["clone", "--bare", source, remote]);
     await git(["-C", source, "remote", "add", "origin", remote]);
 
-    const worktreeManager = new WorktreeManager(join(root, "state"));
-    const readonly = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-010", workspaceName: "remote", url: remote, baseBranch: "main", mode: "detached" });
+    const stateRoot = join(root, "state");
+    const worktreeManager = new WorktreeManager(stateRoot);
+    const readonly = await worktreeManager.prepareShared({ url: remote, baseBranch: "main" });
     assert.equal(await git(["-C", readonly.cachePath, "rev-parse", "--is-bare-repository"]), "true");
     assert.equal(readonly.workingBranch, null);
     assert.equal(await git(["-C", readonly.workspacePath, "branch", "--show-current"]), "");
+    assert.equal(relative(join(stateRoot, "checkouts"), readonly.workspacePath).startsWith(".."), false);
+    await assert.rejects(access(join(stateRoot, "workspaces", "issue-20260805-010")));
     const firstCommit = await git(["-C", readonly.workspacePath, "rev-parse", "HEAD"]);
 
     await writeFile(join(source, "README.md"), "second\n", "utf8");
     await git(["-C", source, "add", "."]);
     await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "second"]);
     await git(["-C", source, "push", "origin", "main"]);
-    const refreshed = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-010", workspaceName: "remote", url: remote, baseBranch: "main", mode: "detached", existingWorkspacePath: readonly.workspacePath });
+    const refreshed = await worktreeManager.prepareShared({ url: remote, baseBranch: "main" });
     assert.notEqual(refreshed.baseCommit, firstCommit);
+    assert.notEqual(refreshed.workspacePath, readonly.workspacePath);
+    assert.equal(await git(["-C", readonly.workspacePath, "rev-parse", "HEAD"]), firstCommit);
     assert.equal(await git(["-C", refreshed.workspacePath, "rev-parse", "HEAD"]), refreshed.baseCommit);
+    assert.equal((await worktreeManager.prepareShared({ url: remote, baseBranch: "main" })).workspacePath, refreshed.workspacePath);
 
     const hotfix = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-011", workspaceName: "remote", url: remote, baseBranch: "main", mode: "hotfix" });
     assert.equal(hotfix.workingBranch, "hotfix-issue-20260805-011");
