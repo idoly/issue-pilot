@@ -98,7 +98,14 @@ describe("issue pilot workspace", () => {
     expect(codeServerUrl.pathname).toBe("/code-server/");
     expect(codeServerUrl.searchParams.get("workspace")).toBe("/home/coder/state/issues/issue-20260810-042/runtime/issue-20260810-042.code-workspace");
     fireEvent.click(screen.getByRole("button", { name: "还原 code-server" }));
-    await waitFor(() => expect(screen.queryByTitle("ISSUE-20260810-042 code-server 编辑器")).toBeNull());
+    const codeServerPane = codeServerFrame.closest(".code-server-pane") as HTMLElement;
+    await waitFor(() => expect(codeServerPane.hidden).toBe(true));
+    expect(codeServerFrame.isConnected).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
+    await waitFor(() => expect(codeServerPane.hidden).toBe(false));
+    expect(screen.getByTitle("ISSUE-20260810-042 code-server 编辑器")).toBe(codeServerFrame);
+    fireEvent.click(screen.getByRole("button", { name: "还原 code-server" }));
+    await waitFor(() => expect(codeServerPane.hidden).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
     await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());

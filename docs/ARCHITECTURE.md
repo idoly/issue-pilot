@@ -273,6 +273,8 @@ issues/<issue-key>/runtime/
 
 Manifest 显式声明每个 Repository link，因此 VS Code Git extension 在三种代码状态下都使用相同发现方式，并显示 Source Control 和 Git Graph。活动 dev 通过链接最终访问容器中的 read-write workspaces mount；其他链接最终访问 read-only checkouts mount。
 
+Web 中的“还原 code-server”只隐藏已加载的 iframe，不销毁编辑器会话；再次打开同一工单时会复用原 iframe，保留尚未保存的编辑缓冲。
+
 Runtime 通过临时目录完整生成后再替换，避免 code-server 看到只生成一半的 links 或 manifest。Manifest 为 `0400`，整个 `issues` mount 在容器内只读；链接目标是否可写由 workspaces/checkouts mount 决定。
 
 具体 mounts 见 [部署说明](DEPLOYMENT.md#code-server)，故障处理见 [运维手册](RUNBOOK.md#code-server-排障)。

@@ -1,7 +1,7 @@
 import { Button, ConfigProvider, Layout, Segmented, Skeleton, theme } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
-import { getIssue, isWorkspaceBusy, type IssueDetail } from "../data/client";
+import { getIssue, type IssueDetail } from "../data/client";
 import { ExternalLink, Minimize2, TerminalSquare } from "../ui/icons";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
@@ -9,7 +9,6 @@ import { ConfigurationView } from "./ConfigurationView";
 import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
 import { Statistics } from "./Statistics";
-import { workspaceUrl } from "./model";
 import "@idoly/ant-design-solid/base.css";
 import "@idoly/ant-design-solid/badge/style.css";
 import "@idoly/ant-design-solid/button/style.css";
@@ -25,23 +24,22 @@ import "@idoly/ant-design-solid/space/style.css";
 import "@idoly/ant-design-solid/tag/style.css";
 
 function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; codeServerTarget: string | null; onCloseCode: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
-  const agentRunning = () => isWorkspaceBusy(props.issue.workspace.status);
-  const codeServerUrl = () => props.codeServerTarget ?? workspaceUrl(props.issue.workspace.url);
   return (
     <section class={`agent-workbench${props.codeExpanded ? " code-only" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
-      <Show when={props.codeExpanded} fallback={<AgentPanel issue={props.issue} onRefresh={props.onRefresh} />}>
-        <section class="code-server-pane" aria-label={`${props.issue.id} code-server`}>
-          <header class="code-server-header">
-            <div><TerminalSquare size={16} /><strong>code-server</strong><small>{props.issue.id}</small></div>
-            <span class="code-server-actions">
-              <Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在新窗口打开 code-server" aria-label="在新窗口打开 code-server" disabled={!codeServerUrl()} onClick={() => { const url = codeServerUrl(); if (url) window.open(url, "_blank", "noopener"); }} />
-              <Button type="text" shape="circle" icon={<Minimize2 size={16} />} title="还原 code-server" aria-label="还原 code-server" onClick={props.onCloseCode} />
-            </span>
-          </header>
-          <Show when={codeServerUrl()} fallback={<div class="code-server-empty"><strong>{agentRunning() ? "正在准备代码工作区" : "code-server 尚未就绪"}</strong></div>}>
-            {(url) => <div class="code-server-frame-wrap"><iframe class="code-server-frame" src={url()} title={`${props.issue.id} code-server 编辑器`} allow="clipboard-read; clipboard-write" /></div>}
-          </Show>
-        </section>
+      <Show when={!props.codeExpanded}><AgentPanel issue={props.issue} onRefresh={props.onRefresh} /></Show>
+      <Show when={props.codeServerTarget}>
+        {(url) => (
+          <section class="code-server-pane" aria-label={`${props.issue.id} code-server`} hidden={!props.codeExpanded}>
+            <header class="code-server-header">
+              <div><TerminalSquare size={16} /><strong>code-server</strong><small>{props.issue.id}</small></div>
+              <span class="code-server-actions">
+                <Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在新窗口打开 code-server" aria-label="在新窗口打开 code-server" onClick={() => window.open(url(), "_blank", "noopener")} />
+                <Button type="text" shape="circle" icon={<Minimize2 size={16} />} title="还原 code-server" aria-label="还原 code-server" onClick={props.onCloseCode} />
+              </span>
+            </header>
+            <div class="code-server-frame-wrap"><iframe class="code-server-frame" src={url()} title={`${props.issue.id} code-server 编辑器`} allow="clipboard-read; clipboard-write" /></div>
+          </section>
+        )}
       </Show>
     </section>
   );
@@ -133,7 +131,7 @@ export function App() {
               <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                 {(current) => (
                   <>
-                    <AgentWorkbench issue={current()} codeExpanded={codeExpanded()} codeServerTarget={codeServerTarget()} onCloseCode={() => { setCodeExpanded(false); setCodeServerTarget(null); }} onRefresh={refreshIssue} />
+                    <AgentWorkbench issue={current()} codeExpanded={codeExpanded()} codeServerTarget={codeServerTarget()} onCloseCode={() => setCodeExpanded(false)} onRefresh={refreshIssue} />
                     <Show when={!codeExpanded()}><IssueWorkspace issue={current()} onOpenCodeServer={(url) => { setCodeServerTarget(url); setCodeExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} /></Show>
                   </>
                 )}
