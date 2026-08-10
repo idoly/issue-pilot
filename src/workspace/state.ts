@@ -76,12 +76,24 @@ export function sharedCheckoutsRoot(stateRoot: string): string {
   return path.join(gitRoot(stateRoot), "checkouts");
 }
 
+function isMissing(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
 async function directoryNames(directory: string): Promise<string[]> {
   try {
     return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    if (isMissing(error)) return [];
     throw error;
+  }
+}
+
+async function clearDirectory(directory: string): Promise<void> {
+  try {
+    await Promise.all((await readdir(directory)).map((entry) => rm(path.join(directory, entry), { recursive: true, force: true })));
+  } catch (error) {
+    if (!isMissing(error)) throw error;
   }
 }
 
@@ -110,7 +122,7 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
   for (const entry of await directoryNames(managedIssuesRoot)) {
     if (active.has(entry.toLowerCase())) await rm(path.join(managedIssuesRoot, entry, "runtime"), { recursive: true, force: true });
   }
-  await rm(sharedCheckoutsRoot(stateRoot), { recursive: true, force: true });
+  await clearDirectory(sharedCheckoutsRoot(stateRoot));
   const repositoriesDirectory = repositoriesRoot(stateRoot);
   for (const entry of await directoryNames(repositoriesDirectory)) {
     await execFileAsync("git", ["-C", path.join(repositoriesDirectory, entry), "worktree", "prune", "--expire", "now"], { timeout: issuePilotConfig.limits.process.gitPruneMs });

@@ -243,7 +243,7 @@ Released dev 的权威代码来源是本地 bare repository 中的工作分支�
 3. 把进程中断的运行状态转为可重试状态。
 4. 确保 `prod`、`test`、`dev` 环境存在。
 5. 验证 state root 中没有 unmanaged Issue 目录。
-6. 删除可生成 runtime/checkouts，prune worktree metadata。
+6. 清空可生成 runtime/checkouts，保留已挂载的 checkout 根目录 inode，并 prune worktree metadata。
 7. 重建活动和已释放 dev runtime。
 8. 为有 session 的 prod/test 工单 fetch 最新 Deployment commit 并重建 runtime。
 9. 执行一次 workspace maintenance，然后注册路由。

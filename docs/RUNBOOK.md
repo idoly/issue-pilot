@@ -201,6 +201,7 @@ curl -fsS -X DELETE \
 | 现象 | 检查 |
 | --- | --- |
 | 页面没有 code-server 按钮 | `code_server_ready`、workspace `last_error`、repository state |
+| Explorer 有根目录但无法展开 released dev 文件 | 容器内检查 runtime link target；若宿主 checkout 存在而容器挂载为空，重启 code-server 以刷新旧 bind mount |
 | Explorer 没有文件 | Runtime links、state root mount、checkout 是否存在 |
 | 有文件但 Git 为 0 repositories | URL 是否为 `workspace=`、manifest 是否列出 Repository |
 | Git Graph 无历史 | 容器内 `git -C <repo> log`、host Git mounts、worktree metadata |
