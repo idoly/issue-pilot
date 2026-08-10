@@ -10,11 +10,10 @@ issues_root="$state_root/issues"
 checkouts_root="$git_root/checkouts"
 code_server_root="$state_root/code-server"
 data_root="$code_server_root/data"
-legacy_password_file="$code_server_root/password"
 container_env_file="$code_server_root/container.env"
 name=code-server
 image=ghcr.io/coder/code-server:4.131.0-39
-runtime_version=keep-id-v23-code-server-4.131.0-consolidated-git-auth-none
+runtime_version=keep-id-v24-code-server-4.131.0-current-layout-auth-none
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -90,60 +89,11 @@ write_container_environment() {
   chmod 0600 "$container_env_file"
 }
 
-migrate_legacy_pi() {
-  legacy_pi="$code_server_root/pi"
-  [ -e "$legacy_pi" ] || return 0
-  require_directory "$legacy_pi"
-  for entry in "$legacy_pi"/*; do
-    [ -e "$entry" ] || continue
-    case "$(basename "$entry")" in auth.json|models.json|models-store.json|settings.json|bin|sessions|themes) ;; *) fail "Unexpected legacy code-server Pi entry: $entry" ;; esac
-  done
-  if [ -d "$legacy_pi/sessions" ]; then
-    if find "$legacy_pi/sessions" ! -type d ! -type f | grep -q .; then fail "Unexpected legacy code-server Pi session entry"; fi
-    find "$legacy_pi/sessions" -type f | while IFS= read -r source; do
-      case "$source" in *.jsonl) ;; *) fail "Unexpected legacy code-server Pi session file: $source" ;; esac
-      relative=${source#"$legacy_pi/sessions/"}
-      destination="$HOME/.pi/agent/sessions/$relative"
-      mkdir -p "$(dirname "$destination")"
-      chmod 0700 "$(dirname "$destination")"
-      if [ -e "$destination" ]; then
-        cmp -s "$source" "$destination" || fail "Legacy code-server Pi session conflict: $relative"
-      else
-        cp "$source" "$destination"
-      fi
-      chmod 0600 "$destination"
-    done
-  fi
-  if [ -d "$legacy_pi/themes" ]; then
-    if find "$legacy_pi/themes" ! -type d ! -type f | grep -q .; then fail "Unexpected legacy code-server Pi theme entry"; fi
-    find "$legacy_pi/themes" -type f | while IFS= read -r source; do
-      relative=${source#"$legacy_pi/themes/"}
-      destination="$HOME/.pi/agent/themes/$relative"
-      mkdir -p "$(dirname "$destination")"
-      if [ -e "$destination" ]; then
-        cmp -s "$source" "$destination" || fail "Legacy code-server Pi theme conflict: $relative"
-      else
-        cp "$source" "$destination"
-      fi
-    done
-  fi
-  if [ -d "$legacy_pi/bin" ]; then
-    bin_entries=$(find "$legacy_pi/bin" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-    [ "$bin_entries" = "fd
-rg" ] || fail "Unexpected legacy code-server Pi bin entry"
-    cmp -s "$legacy_pi/bin/rg" "$HOME/.pi/agent/bin/rg" || fail "Legacy code-server rg differs from host"
-    cmp -s "$legacy_pi/bin/fd" "$HOME/.pi/agent/bin/fd" || fail "Legacy code-server fd differs from host"
-  fi
-  rm -rf "$legacy_pi"
-}
-
 ensure() {
   require_host
-  migrate_legacy_pi
   mkdir -p "$workspace_root" "$repositories_root" "$issues_root" "$checkouts_root" "$data_root/User"
   chmod 0700 "$code_server_root" "$data_root" "$data_root/User"
   configure_editor
-  rm -f "$legacy_password_file"
   write_container_environment
   podman image exists "$image" || podman pull "$image" >/dev/null
 

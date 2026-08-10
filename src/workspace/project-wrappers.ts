@@ -1,7 +1,6 @@
-import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-
-import { globalRuntimeRoot } from "./state.ts";
 
 const NODE_PROJECT = `#!/bin/sh
 set -eu
@@ -35,42 +34,39 @@ cd "$project"
 exec mvn --batch-mode --no-transfer-progress "$action" "$@"
 `;
 
-export async function assertManagedProjectWrappers(binRoot: string): Promise<void> {
-  const expected = new Map([["node-project", NODE_PROJECT], ["maven-project", MAVEN_PROJECT]]);
-  const entries = await readdir(binRoot, { withFileTypes: true });
-  if (entries.length !== expected.size) throw new Error("workspace_has_untracked_files");
-  for (const entry of entries) {
-    const content = expected.get(entry.name);
-    if (!entry.isFile() || content === undefined) throw new Error("workspace_has_untracked_files");
-    const wrapperPath = path.join(binRoot, entry.name);
-    if (await readFile(wrapperPath, "utf8") !== content || !(await stat(wrapperPath)).isFile()) throw new Error("workspace_has_untracked_files");
-  }
-}
-
 export async function prepareProjectWrappers(runtimeRoot: string): Promise<string> {
   const binRoot = path.join(runtimeRoot, "bin");
+  const operationId = randomUUID();
+  const temporaryRoot = path.join(runtimeRoot, `.bin-${operationId}`);
+  const previousRoot = path.join(runtimeRoot, `.bin-previous-${operationId}`);
   await mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
   await chmod(runtimeRoot, 0o700);
-  await mkdir(binRoot, { recursive: true, mode: 0o700 });
-  await chmod(binRoot, 0o700);
-  await Promise.all([
-    writeFile(path.join(binRoot, "node-project"), NODE_PROJECT, { mode: 0o700 }).then(() => chmod(path.join(binRoot, "node-project"), 0o700)),
-    writeFile(path.join(binRoot, "maven-project"), MAVEN_PROJECT, { mode: 0o700 }).then(() => chmod(path.join(binRoot, "maven-project"), 0o700)),
-  ]);
-  return binRoot;
-}
-
-export async function retireGlobalProjectWrappers(stateRoot: string): Promise<boolean> {
-  const runtimeRoot = globalRuntimeRoot(stateRoot);
-  let entries;
   try {
-    entries = await readdir(runtimeRoot, { withFileTypes: true });
+    await mkdir(temporaryRoot, { mode: 0o700 });
+    await Promise.all([
+      writeFile(path.join(temporaryRoot, "node-project"), NODE_PROJECT, { mode: 0o700 }),
+      writeFile(path.join(temporaryRoot, "maven-project"), MAVEN_PROJECT, { mode: 0o700 }),
+    ]);
+    let previous = false;
+    try {
+      await rename(binRoot, previousRoot);
+      previous = true;
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+    }
+    try {
+      await rename(temporaryRoot, binRoot);
+    } catch (error) {
+      if (previous) await rename(previousRoot, binRoot);
+      throw error;
+    }
+    if (previous) await rm(previousRoot, { recursive: true });
+    return binRoot;
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    await Promise.all([
+      rm(temporaryRoot, { recursive: true, force: true }),
+      rm(previousRoot, { recursive: true, force: true }),
+    ]);
     throw error;
   }
-  if (entries.length !== 1 || entries[0]?.name !== "bin" || !entries[0].isDirectory()) throw new Error("global_runtime_has_untracked_files");
-  await assertManagedProjectWrappers(path.join(runtimeRoot, "bin"));
-  await rm(runtimeRoot, { recursive: true });
-  return true;
 }

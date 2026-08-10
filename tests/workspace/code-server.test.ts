@@ -81,14 +81,6 @@ test("mounts the fixed host development environment without image rebuilds", asy
   ]) assert.ok(productionSource.includes(mount), `missing production mount: ${mount}`);
 
   const value = await fixture();
-  const legacyPassword = join(value.root, ".issue-pilot", "code-server", "password");
-  const legacyPiSession = join(value.root, ".issue-pilot", "code-server", "pi", "sessions", "workspace", "legacy.jsonl");
-  const legacyPiTheme = join(value.root, ".issue-pilot", "code-server", "pi", "themes", "custom.json");
-  await mkdir(join(value.root, ".issue-pilot", "code-server"), { recursive: true });
-  await Promise.all([mkdir(join(legacyPiSession, ".."), { recursive: true }), mkdir(join(legacyPiTheme, ".."), { recursive: true })]);
-  await writeFile(legacyPassword, "obsolete-password\n", { mode: 0o600 });
-  await writeFile(legacyPiSession, "{\"type\":\"session\"}\n", { mode: 0o600 });
-  await writeFile(legacyPiTheme, "{\"name\":\"custom\"}\n", "utf8");
   await exec(value.script, ["ensure"], { env: { ...process.env, HOME: value.root, PATH: value.path, PODMAN_LOG: value.log } });
   const calls = await readFile(value.log, "utf8");
   assert.match(calls, /image exists ghcr\.io\/coder\/code-server:4\.131\.0-39/);
@@ -106,7 +98,7 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.ok(calls.includes(`--volume ${value.host.gitLibexec}:/opt/host/git/libexec/git-core:ro`));
   assert.match(calls, /--env-file .*\/\.issue-pilot\/code-server\/container\.env/);
   assert.doesNotMatch(calls, /PASSWORD=|--env /);
-  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v23-code-server-4\.131\.0-consolidated-git-auth-none/);
+  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v24-code-server-4\.131\.0-current-layout-auth-none/);
   assert.match(calls, /--workdir \/home\/coder\/state\/workspaces/);
   assert.match(calls, /--auth none/);
   assert.doesNotMatch(calls, /--bind-addr/);
@@ -119,14 +111,10 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.doesNotMatch(containerEnvironment, /^PASSWORD=/m);
   assert.match(containerEnvironment, /^PATH=\/home\/coder\/\.pi\/agent\/bin:/m);
   assert.match(containerEnvironment, /^GIT_EXEC_PATH=\/opt\/host\/git\/libexec\/git-core$/m);
-  await assert.rejects(readFile(join(value.root, ".issue-pilot", "code-server", "password"), "utf8"));
-  await assert.rejects(readFile(join(value.root, ".issue-pilot", "code-server", "pi"), "utf8"));
-  assert.equal(await readFile(join(value.root, ".pi", "agent", "sessions", "workspace", "legacy.jsonl"), "utf8"), "{\"type\":\"session\"}\n");
-  assert.equal(await readFile(join(value.root, ".pi", "agent", "themes", "custom.json"), "utf8"), "{\"name\":\"custom\"}\n");
   await exec(value.script, ["ensure"], { env: { ...process.env, HOME: value.root, PATH: value.path, PODMAN_LOG: value.log } });
 });
 
-test("rejects obsolete per-issue commands", async () => {
+test("rejects unsupported command arguments", async () => {
   const value = await fixture();
   await assert.rejects(
     exec(value.script, ["status", "ISSUE-20260803-001"], { env: { ...process.env, PATH: value.path, PODMAN_LOG: value.log } }),

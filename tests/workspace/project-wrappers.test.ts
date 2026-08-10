@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { prepareProjectWrappers, retireGlobalProjectWrappers } from "../../src/workspace/project-wrappers.ts";
-import { globalRuntimeRoot, issueRuntimeRoot } from "../../src/workspace/state.ts";
+import { prepareProjectWrappers } from "../../src/workspace/project-wrappers.ts";
+import { issueRuntimeRoot } from "../../src/workspace/state.ts";
 
-test("prepares issue project wrappers for native Pi bash and retires the legacy global copy", async () => {
+test("prepares issue project wrappers for native Pi bash", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pi-workspace-"));
   try {
     const runtimeRoot = issueRuntimeRoot(root, "ISSUE-20260810-001");
@@ -24,11 +24,7 @@ test("prepares issue project wrappers for native Pi bash and retires the legacy 
     assert.equal((await stat(path.join(binRoot, "node-project"))).mode & 0o777, 0o700);
     assert.equal((await stat(path.join(binRoot, "maven-project"))).mode & 0o777, 0o700);
     assert.equal(await prepareProjectWrappers(runtimeRoot), binRoot);
-
-    await prepareProjectWrappers(globalRuntimeRoot(root));
-    assert.equal(await retireGlobalProjectWrappers(root), true);
-    await assert.rejects(stat(globalRuntimeRoot(root)));
-    assert.equal(await retireGlobalProjectWrappers(root), false);
+    assert.deepEqual(await readdir(runtimeRoot), ["bin"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

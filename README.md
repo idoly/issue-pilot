@@ -47,7 +47,7 @@ infra/playwright.sh status
 npm run db:migrate
 ```
 
-默认状态目录为 `.issue-pilot`，数据库为 `.issue-pilot/issues.db`。API 启动时也会自动迁移、恢复中断状态，并确保 `prod`、`test`、`dev` 三个环境存在。当前用户由 `ISSUE_PILOT_SUBJECT` 或本地默认 subject 创建；服务、仓库和 deployment 应通过配置页面维护，不执行带业务数据的 seed。
+默认状态目录为 `.issue-pilot`，数据库为 `.issue-pilot/issues.db`。持久工单数据位于 `issues/<issue-key>`，跨工单共享的 bare repositories 和 immutable checkouts 位于 `git/`，只有开发 worktree 位于可回收的 `workspaces/`。API 启动时自动执行数据库 migration、恢复中断状态、重建可生成 runtime/checkouts，并确保 `prod`、`test`、`dev` 三个环境存在。当前用户由 `ISSUE_PILOT_SUBJECT` 或本地默认 subject 创建；服务、仓库和 deployment 应通过配置页面维护，不执行带业务数据的 seed。
 
 ## 本机启动
 

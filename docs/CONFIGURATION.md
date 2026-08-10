@@ -22,7 +22,7 @@ Web 配置页面保存的 service deployment 是 Agent 模型、连接、credent
 
 每个服务至少一个 repository，URL 在同一服务内不能重复。Repository 不区分前后端类型。每个 deployment 的 `baseBranch` 是该环境使用的远端基线；prod/test 从该分支创建共享只读快照，dev 从该分支创建 Issue 工作分支。
 
-prod/test 在首次处理、编辑保存后的 sync 和完成后的下一轮消息开始前都会 fetch 对应远端分支，并按当时最新 commit 复用 immutable shared checkout。Issue 不创建代码副本、Git 分支或 `workspaces/<issue-key>`；`issues/<issue-key>/runtime` 只保存指向共享 checkout 的 repository links，附件直接从 `issues/<issue-key>/attachments` 的唯一原件读取。Service repository 变化会在下一次准备时更新 Issue repository 记录。
+prod/test 在首次处理、编辑保存后的 sync 和完成后的下一轮消息开始前都会 fetch 对应远端分支，并按当时最新 commit 复用 immutable shared checkout。Issue 不创建代码副本、Git 分支或 `workspaces/<issue-key>`；`issues/<issue-key>/runtime` 只保存指向共享 checkout 的 repository links，附件直接从 `issues/<issue-key>/attachments` 的唯一原件读取。对应 `issue_repositories.local_path` 和 `working_branch` 必须为 `NULL`。Service repository 变化会在下一次准备时更新 Issue repository 记录。
 
 开发工单继续使用独立 worktree。Service 删除 repository 时，下一次 Agent 准备会清理不再授权的 clean worktree；dirty workspace 明确失败并保留，防止丢失未提交修改。
 

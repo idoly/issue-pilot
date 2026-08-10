@@ -12,7 +12,6 @@ import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
-import { WorktreeManager } from "../../src/workspace/git.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -59,8 +58,6 @@ test("uses shared runtimes for prod and configured issue workspaces for dev", as
       { key: "ISSUE-20260810-102", title: "Fix dev", type: "defect_fix", serviceId: service!.id, environmentId: dev.id, reporterSubject: "tester" },
     ]).returning();
     await database.db.insert(issueWorkspaces).values([{ issueId: prodIssue!.id }, { issueId: devIssue!.id }]);
-    const legacy = await new WorktreeManager(stateRoot).prepare({ issueKey: prodIssue!.key, workspaceName: "orders", url: remote, baseBranch: "prod", mode: "detached" });
-    await database.db.insert(issueRepositories).values({ issueId: prodIssue!.id, url: remote, baseBranch: "prod", localPath: legacy.workspacePath, commitBefore: legacy.baseCommit });
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {

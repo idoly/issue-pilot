@@ -11,10 +11,10 @@ import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
-import { migrateAttachmentStorage, migrateDevelopmentRuntimeArtifacts } from "../../src/workspace/attachments.ts";
+import { prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, workspacePolicyFromEnvironment } from "../../src/workspace/lifecycle.ts";
-import { issueAttachmentRoot, issueRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceLink, legacyIssueAttachmentStoreRoot } from "../../src/workspace/state.ts";
+import { issueAttachmentRoot, issueRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceLink } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -104,43 +104,37 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     const attachmentContent = "preserved evidence\n";
     const attachmentHash = createHash("sha256").update(attachmentContent).digest("hex");
-    const legacyRoot = legacyIssueAttachmentStoreRoot(root, issue!.key);
-    const legacyAttachment = path.join(legacyRoot, "attachment-evidence.txt");
-    await mkdir(legacyRoot, { recursive: true, mode: 0o700 });
-    await writeFile(legacyAttachment, attachmentContent, { mode: 0o600 });
-    const [attachment] = await database.db.insert(issueAttachments).values({
+    const attachmentRoot = issueAttachmentRoot(root, issue!.key);
+    const durableAttachment = path.join(attachmentRoot, "attachment-evidence.txt");
+    await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
+    await writeFile(durableAttachment, attachmentContent, { mode: 0o400 });
+    await database.db.insert(issueAttachments).values({
       issueId: issue!.id,
       fileName: "evidence.txt",
       mediaType: "text/plain",
       size: Buffer.byteLength(attachmentContent),
-      objectKey: legacyAttachment,
+      objectKey: durableAttachment,
       sha256: attachmentHash,
       uploadedBy: "tester",
-    }).returning();
-    await migrateAttachmentStorage(database.db, root);
-    const durableAttachment = path.join(issueAttachmentRoot(root, issue!.key), path.basename(legacyAttachment));
+    });
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal((await stat(durableAttachment)).mode & 0o777, 0o400);
-    const [migratedAttachment] = await database.db.select().from(issueAttachments).where(eq(issueAttachments.id, attachment!.id));
-    assert.equal(migratedAttachment!.objectKey, durableAttachment);
-    await assert.rejects(access(legacyAttachment));
 
-    const runtimeMigration = await migrateDevelopmentRuntimeArtifacts(database.db, root);
-    assert.deepEqual(runtimeMigration, { prepared: [issue!.key], migrated: [], blocked: [] });
+    const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
+    assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
     const wrapperRoot = path.join(issueRuntimeRoot(root, issue!.key), "bin");
     assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
     assert.equal((await stat(path.join(wrapperRoot, "node-project"))).mode & 0o777, 0o700);
     assert.equal(path.resolve(issueRoot(root, issue!.key), await readlink(issueWorkspaceLink(root, issue!.key))), path.dirname(prepared[0]!.workspacePath));
-    await assert.rejects(access(path.dirname(legacyRoot)));
 
     const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
     await mkdir(path.dirname(unknownMetadata), { recursive: true });
     await writeFile(unknownMetadata, "preserve\n", "utf8");
-    const blockedMigration = await migrateDevelopmentRuntimeArtifacts(database.db, root);
-    assert.deepEqual(blockedMigration, { prepared: [], migrated: [], blocked: [{ issueKey: issue!.key, reason: "workspace_has_untracked_files" }] });
+    const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
+    assert.deepEqual(blockedPreparation, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "workspace_has_untracked_files" }] });
     assert.equal(await readFile(unknownMetadata, "utf8"), "preserve\n");
     await rm(path.dirname(unknownMetadata), { recursive: true });
-    assert.deepEqual(await migrateDevelopmentRuntimeArtifacts(database.db, root), { prepared: [issue!.key], migrated: [], blocked: [] });
+    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
 
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
       retentionMs: Number.POSITIVE_INFINITY,

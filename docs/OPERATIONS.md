@@ -79,7 +79,7 @@ API 收到 `SIGINT`/`SIGTERM` 时只关闭一次 Fastify、Agent session 和 dat
 
 `workspaces/<issue-key>` 只用于开发工单，是包含 Git worktree、Issue 本地依赖和构建输出的可重建 cache；workspace 根目录不保存 Issue Pilot 元数据。每个工单的持久数据集中在 `issues/<issue-key>`：唯一的 `0400` 附件原件位于 `attachments/`，Pi JSONL 和私有 sidecar 位于 `agent/`。拥有 workspace、会启用 bash 的开发工单在 `runtime/bin/` 获得自己的 `node-project` 和 `maven-project`；已释放的 dev 工单不在冷启动时生成 runtime。`issues/<issue-key>/workspace` 是指向可释放 workspace 的受管相对链接，仅用于从工单目录统一导航，释放 workspace 时同步删除。数据库备份集中在 `backups/`。
 
-prod/test 不创建 Issue workspace 或分支。每次执行先 fetch deployment `baseBranch`，代码按 commit 复用在 `git/checkouts/`；`issues/<issue-key>/runtime` 只有当前工单的 repository links。API 冷启动会重建可生成 runtime，并为已有只读 session 恢复最新快照和 code-server 入口。旧版本的 `sessions/<issue-key>`、`attachments/<issue-key>` 和 workspace `.issue-pilot/{attachments,bin}` 只有在不含未知内容且文件校验通过时才删除；prod/test detached workspace 还必须通过全部 worktree clean 状态和根目录布局预检。
+prod/test 不创建 Issue workspace 或分支。每次执行先 fetch deployment `baseBranch`，代码按 commit 复用在 `git/checkouts/`；`issues/<issue-key>/runtime` 只有当前工单的 repository links。API 冷启动会重建可生成 runtime，并为已有只读 session 恢复最新快照和 code-server 入口。prod/test 数据中出现非空 `issue_repositories.local_path` 或 `working_branch` 属于不合法状态，不会自动修复或删除。
 
 手动和自动释放只处理开发 workspace，并使用相同预检：Issue 必须空闲，所有 Git worktree 必须没有 modified/untracked 文件，Issue 根目录也不能有未知文件。任一仓库不满足时拒绝整个预检，不更新数据库；已经部分完成的基础设施错误可通过重复调用恢复。成功后清空 `issue_repositories.local_path`，workspace 变为 `stopped`，但保留 branch、base commit、session binding、JSONL 和附件。
 
@@ -267,7 +267,7 @@ Issue Pilot 使用 `/usr/local/sbin/aliyun` 的内置 `Sls 2020-12-30 GetLogs`�
 | authentication | disabled with `--auth none` |
 | container env file | `<repo>/.issue-pilot/code-server/container.env` |
 
-脚本不构建 custom image。`ensure` 校验固定 host runtime、更新 editor settings、删除旧 password 文件、创建 private runtime env file，并按 runtime label 启动或重建容器。`status` 只输出 state、image 和 runtime label，不输出完整 inspect。
+脚本不构建 custom image。`ensure` 校验固定 host runtime、更新 editor settings、创建 private runtime env file，并按 runtime label 启动或重建容器。`status` 只输出 state、image 和 runtime label，不输出完整 inspect。
 
 ### State mounts
 
@@ -304,7 +304,7 @@ Git 必须与 host 保持同一版本。只挂 binary 不足以支持 relative w
 | `~/.npmrc` | `/home/coder/.npmrc` | read-only |
 | `~/.pi/agent` | `/home/coder/.pi/agent` | read-write |
 
-这些目录可能包含 credential，只能由可信本机 operator 使用。`~/.pi/agent/bin` 也直接提供本机 `rg` 和 `fd`；code-server PATH 不维护第二份工具副本。`ensure` 会先将旧 `.issue-pilot/code-server/pi/sessions` 中尚未迁移的 JSONL 无冲突复制到本机 Pi session 目录，再删除旧副本。Editor 不强制 npm/yarn；project wrapper 根据 repository `packageManager` 和 lockfile 选择。
+这些目录可能包含 credential，只能由可信本机 operator 使用。`~/.pi/agent/bin` 也直接提供本机 `rg` 和 `fd`；code-server PATH 不维护第二份工具副本。Editor 不强制 npm/yarn；project wrapper 根据 repository `packageManager` 和 lockfile 选择。
 
 ### 操作
 

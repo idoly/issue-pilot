@@ -204,7 +204,7 @@ export class WorkspaceLifecycleManager {
       try {
         await this.worktrees.remove(repository.url, repository.localPath);
       } catch (error) {
-        if (error instanceof Error && error.message === "obsolete_workspace_has_changes") throw new WorkspaceReleaseRefusal("workspace_has_changes");
+        if (error instanceof Error && error.message === "workspace_has_changes") throw new WorkspaceReleaseRefusal(error.message);
         throw error;
       }
     }
@@ -236,8 +236,7 @@ export class WorkspaceLifecycleManager {
           if (repository.localPath) await this.worktrees.assertClean(repository.localPath);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        blockedReason = message === "obsolete_workspace_has_changes" ? "workspace_has_changes" : message;
+        blockedReason = error instanceof Error ? error.message : String(error);
       }
     }
     return {

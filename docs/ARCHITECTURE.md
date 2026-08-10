@@ -37,7 +37,7 @@ Pi session + policy-selected built-in/custom tools
 - `src/agent/engine.ts` 维护工单执行顺序和业务状态；`pi-session.ts` 管理 Pi SDK session；`session.ts` 初始化私有 JSONL；`events.ts` 负责 replay/live 事件顺序。
 - `src/pi/policy.ts` 创建 deployment policy 和工具 allowlist；`tools.ts` 创建 policy-scoped custom tools。
 - `src/capabilities/` 中每个客户端拥有自己的协议、输入、超时和结果大小边界。
-- `src/workspace/` 管理共享 checkout、开发 worktree、issue runtime、可重复生成的 project wrappers 和共享 code-server。
+- `src/workspace/state.ts` 定义当前状态树和启动清理；`git.ts` 管理 bare store、共享 checkout 与开发 worktree；`development.ts` 和 `read-only.ts` 分别准备两类 Issue runtime；`runtime.ts`、`project-wrappers.ts` 和 `code-server.ts` 只负责各自的可生成资源。
 - `src/web/src/app/App.tsx` 维护顶层导航和工作台布局；conversation reducer 只做 UI projection，不改变原始 Pi 事件。
 
 小文件只在拥有独立协议、进程、流控、事务或安全边界时保留。历史 Drizzle migration 是顺序升级契约，不按当前 schema 合并或删除。
@@ -57,6 +57,8 @@ SQLite 是 deployment 配置、工单状态和 session binding 的事实源。�
 3. 把 ready workspace 对应的遗留 `in_progress` 工单恢复为 `pending`。
 4. 确保固定环境 `prod`、`test`、`dev` 存在。
 5. 初始化失败时关闭数据库 client。
+
+Fastify 装配随后按当前状态模型执行冷启动 hydration：清理已删除 Issue 的状态目录与全部可生成 runtime/checkouts，prune bare repository worktree metadata，为现存开发 workspace 重建导航链接和 wrapper，并为已有 prod/test session fetch deployment 最新 commit、重建只读 runtime 与 code-server ready 状态。启动过程不识别或搬运旧目录布局；偏离当前不变量会保留现场并明确失败。
 
 ## 工单生命周期
 
@@ -97,11 +99,11 @@ resolved -> open                  用户显式 reopen
 | `dev` + `defect_fix` | 从 dev deployment 配置分支创建 `hotfix-<issue-key>` | write |
 | `dev` + `feature_development` | 从 dev deployment 配置分支创建 `feature-<issue-key>` | write |
 
-共享 bare repository 的 fetch 按 URL 串行。prod/test checkout 以 branch hash 和完整 commit 定址：同一 commit 被多个 Issue 复用，远端前进时创建新目录，因此已有 Agent 读取的代码不会被 reset 覆盖。每个只读 Issue 只在 `issues/<issue-key>/runtime` 生成 repository 链接，不创建 `workspaces/<issue-key>`、代码分支或依赖目录。API 冷启动删除可重建 runtime/checkouts、prune bare repository worktree metadata，再为已有只读 session fetch 最新基线并恢复 code-server 入口。旧的顶层 `repositories/` 和 `checkouts/` 只有在目标目录不存在时才原子迁入 `git/`；新旧同时存在会保留双方并拒绝启动。
+共享 bare repository 的 fetch 按 URL 串行。prod/test checkout 以 branch hash 和完整 commit 定址：同一 commit 被多个 Issue 复用，远端前进时创建新目录，因此已有 Agent 读取的代码不会被 reset 覆盖。每个只读 Issue 只在 `issues/<issue-key>/runtime` 生成 repository 链接，不创建 `workspaces/<issue-key>`、代码分支或依赖目录。API 冷启动删除可重建 runtime/checkouts、prune bare repository worktree metadata，再为已有只读 session fetch 最新基线并恢复 code-server 入口。prod/test 的 `issue_repositories.local_path` 和 `working_branch` 必须为 `NULL`，偏离该不变量时 startup hydration 和 Agent 都明确失败。
 
 每个 deployment（包括 dev）都必须配置 `baseBranch`；开发工作分支以 dev deployment 的配置分支为基线。Git 2.55.0 使用 relative worktree metadata，使共享 checkout 和开发 worktree 在固定状态目录中可恢复。已有 dirty 开发 workspace 不会被自动删除或覆盖。code-server 必须使用与宿主一致的 Git binary、exec path、templates 和动态库。
 
-开发 Issue workspace 是可释放、可重建的 cache，根目录只包含 Git worktree。释放前串行检查 Issue idle 状态、全部 worktree 的 modified/untracked 状态和根目录布局；成功后通过 Git worktree remove 清理 metadata，并在一个数据库事务中清空所有 `local_path`、关闭 code-server ready 状态。branch、base commit、Pi session binding/JSONL 与持久附件不属于 cache。附件只在 `issues/<issue-key>/attachments` 保存一份 `0400` 原件，Agent prompt 直接引用该目录，不生成 runtime 副本。API 提供手动释放、dry-run 容量统计、resolved 保留期清理和 high-water/target 配额清理。旧 `sessions/<issue-key>`、`attachments/<issue-key>` 和 workspace `.issue-pilot/{attachments,bin}` 只有在内容完全属于受管生成物时才由启动迁移删除；任何未知内容都会保留。旧 prod/test detached workspace 仍需经过完整 layout/clean 预检后删除。
+开发 Issue workspace 是可释放、可重建的 cache，根目录只包含 Git worktree。释放前串行检查 Issue idle 状态、全部 worktree 的 modified/untracked 状态和根目录布局；成功后通过 Git worktree remove 清理 metadata，并在一个数据库事务中清空所有 `local_path`、关闭 code-server ready 状态。branch、base commit、Pi session binding/JSONL 与持久附件不属于 cache。附件只在 `issues/<issue-key>/attachments` 保存一份 `0400` 原件，Agent prompt 直接引用该目录，不生成 runtime 副本。API 提供手动释放、dry-run 容量统计、resolved 保留期清理和 high-water/target 配额清理。
 
 ## Pi SDK 和 session
 
@@ -207,7 +209,7 @@ SLS 是显式分页：累计到调用方 `limit` 后再探测下一条；存在�
 - `node-project` 校验项目位于 issue workspace 后，按 `packageManager` 使用宿主 npm/corepack 执行 install、test、build 或 typecheck。
 - `maven-project` 验证相同路径边界后，使用宿主 Maven/Java 执行 test、verify 或 package。
 
-Wrapper 只为拥有开发 workspace、会启用 bash 的工单生成。工单隔离由每次执行注入的 `ISSUE_WORKSPACE` 强制；wrapper 不进入开发 workspace，也不是容器或长驻服务。旧全局 `runtime/bin` 只有在内容校验通过后才删除。
+Wrapper 只为拥有开发 workspace、会启用 bash 的工单生成。工单隔离由每次执行注入的 `ISSUE_WORKSPACE` 强制；wrapper 不进入开发 workspace，也不是容器或长驻服务。
 
 ## SSE 和 backpressure
 

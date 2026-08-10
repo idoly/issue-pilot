@@ -24,7 +24,6 @@ import {
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, MAX_AGENT_MESSAGE_CHARS, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { repositoryWorkspaceNames, WorktreeManager } from "../workspace/git.ts";
-import { retireReadOnlyIssueWorkspace } from "../workspace/read-only.ts";
 import { prepareReadOnlyRuntime } from "../workspace/runtime.ts";
 import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
@@ -198,15 +197,14 @@ export class AgentEngine implements AgentController {
     ]);
     if (!repositoryRows.length) throw new Error("selected_service_has_no_repository");
     const repositoryUrls = new Set(repositoryRows.map((repository) => repository.url));
-    const obsoleteRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
-    if (sharedRepositories) {
-      await retireReadOnlyIssueWorkspace(this.stateRoot, issue.key, existingRepositoryRows, this.worktreeManager);
-    } else {
-      for (const repository of obsoleteRepositories) {
+    const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
+    if (sharedRepositories && existingRepositoryRows.some((repository) => repository.localPath !== null || repository.workingBranch !== null)) throw new Error("readonly_repository_state_invalid");
+    if (!sharedRepositories) {
+      for (const repository of removedRepositories) {
         if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
       }
     }
-    if (obsoleteRepositories.length) {
+    if (removedRepositories.length) {
       await this.db.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
     }
 

@@ -19,7 +19,7 @@ export function issueWorkspaceRoot(stateRoot: string, issueKey: string): string 
   return path.join(workspacesRoot(stateRoot), issueSegment(issueKey));
 }
 
-export function issuesRoot(stateRoot: string): string {
+function issuesRoot(stateRoot: string): string {
   return path.resolve(stateRoot, "issues");
 }
 
@@ -27,12 +27,8 @@ export function issueRoot(stateRoot: string, issueKey: string): string {
   return path.join(issuesRoot(stateRoot), issueSegment(issueKey));
 }
 
-export function issueAgentRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "agent");
-}
-
 export function issueSessionRoot(stateRoot: string, issueKey: string): string {
-  return issueAgentRoot(stateRoot, issueKey);
+  return path.join(issueRoot(stateRoot, issueKey), "agent");
 }
 
 export function issueRuntimeRoot(stateRoot: string, issueKey: string): string {
@@ -75,15 +71,7 @@ export async function removeIssueWorkspaceLink(stateRoot: string, issueKey: stri
   }
 }
 
-export function globalRuntimeRoot(stateRoot: string): string {
-  return path.resolve(stateRoot, "runtime");
-}
-
-export function backupsRoot(stateRoot: string): string {
-  return path.resolve(stateRoot, "backups");
-}
-
-export function gitRoot(stateRoot: string): string {
+function gitRoot(stateRoot: string): string {
   return path.resolve(stateRoot, "git");
 }
 
@@ -95,29 +83,13 @@ export function sharedCheckoutsRoot(stateRoot: string): string {
   return path.join(gitRoot(stateRoot), "checkouts");
 }
 
-export function legacyRepositoriesRoot(stateRoot: string): string {
-  return path.resolve(stateRoot, "repositories");
-}
-
-export function legacySharedCheckoutsRoot(stateRoot: string): string {
-  return path.resolve(stateRoot, "checkouts");
-}
-
-export function legacyIssueSessionRoot(stateRoot: string, issueKey: string): string {
-  return path.resolve(stateRoot, "sessions", issueSegment(issueKey));
-}
-
-export function legacyIssueAttachmentStoreRoot(stateRoot: string, issueKey: string): string {
-  return path.resolve(stateRoot, "attachments", issueSegment(issueKey));
-}
-
-export function legacyWorkspaceAttachmentRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issueWorkspaceRoot(stateRoot, issueKey), ".issue-pilot", "attachments");
-}
-
 async function directories(root: string): Promise<string[]> {
-  return readdir(root, { withFileTypes: true })
-    .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name), () => []);
+  try {
+    return (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 export async function assertManagedIssueWorkspaceLayout(root: string, localPaths: string[]): Promise<void> {
