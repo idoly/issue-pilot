@@ -33,13 +33,14 @@ async function fixture(): Promise<CodeServerFixture> {
     gitLibexec: join(hostRoot, "git-core"), gitShare: join(hostRoot, "git-share"), pcre: join(hostRoot, "libpcre2-8.so.0"), zlib: join(hostRoot, "libz.so.1"),
   };
   const runtimeDirectories = [join(host.node, "bin"), join(host.java, "bin"), join(host.maven, "bin"), host.gitLibexec, host.gitShare];
-  const homeDirectories = [join(root, ".m2", "repository"), join(root, ".npm"), join(root, ".pi", "agent")];
+  const homeDirectories = [join(root, ".m2", "repository"), join(root, ".npm"), join(root, ".pi", "agent", "bin")];
   await Promise.all([mkdir(infra), mkdir(bin), ...runtimeDirectories.map((directory) => mkdir(directory, { recursive: true })), ...homeDirectories.map((directory) => mkdir(directory, { recursive: true }))]);
   await Promise.all([
     ...[join(host.node, "bin", "node"), join(host.node, "bin", "npm"), join(host.node, "bin", "corepack"), join(host.node, "bin", "pi"), join(host.java, "bin", "java"), join(host.maven, "bin", "mvn"), host.git]
       .map((file) => symlink(process.execPath, file)),
     writeFile(host.pcre, "", "utf8"), writeFile(host.zlib, "", "utf8"), writeFile(join(root, ".m2", "settings.xml"), "<settings/>\n", "utf8"), writeFile(join(root, ".npmrc"), "", "utf8"),
     ...["auth.json", "models.json", "models-store.json", "settings.json"].map((file) => writeFile(join(root, ".pi", "agent", file), "{}\n", "utf8")),
+    ...["rg", "fd"].map((file) => symlink(process.execPath, join(root, ".pi", "agent", "bin", file))),
   ]);
 
   const replacements = new Map([
@@ -60,7 +61,7 @@ test("maps development workspaces and read-only runtimes into the shared code-se
   const stateRoot = "/srv/issue-pilot/state";
   const issueKey = "ISSUE-20260810-001";
   assert.equal(new URL(issueCodeServerUrl(stateRoot, issueKey, `${stateRoot}/workspaces/issue-20260810-001`)).searchParams.get("folder"), "/home/coder/state/workspaces/issue-20260810-001");
-  assert.equal(new URL(issueCodeServerUrl(stateRoot, issueKey, `${stateRoot}/sessions/issue-20260810-001/runtime`)).searchParams.get("folder"), "/home/coder/state/sessions/issue-20260810-001/runtime");
+  assert.equal(new URL(issueCodeServerUrl(stateRoot, issueKey, `${stateRoot}/issues/issue-20260810-001/runtime`)).searchParams.get("folder"), "/home/coder/state/issues/issue-20260810-001/runtime");
   assert.throws(() => issueCodeServerUrl(stateRoot, issueKey, "/srv/other"), /invalid_code_server_workspace/);
 });
 
@@ -80,6 +81,14 @@ test("mounts the fixed host development environment without image rebuilds", asy
   ]) assert.ok(productionSource.includes(mount), `missing production mount: ${mount}`);
 
   const value = await fixture();
+  const legacyPassword = join(value.root, ".issue-pilot", "code-server", "password");
+  const legacyPiSession = join(value.root, ".issue-pilot", "code-server", "pi", "sessions", "workspace", "legacy.jsonl");
+  const legacyPiTheme = join(value.root, ".issue-pilot", "code-server", "pi", "themes", "custom.json");
+  await mkdir(join(value.root, ".issue-pilot", "code-server"), { recursive: true });
+  await Promise.all([mkdir(join(legacyPiSession, ".."), { recursive: true }), mkdir(join(legacyPiTheme, ".."), { recursive: true })]);
+  await writeFile(legacyPassword, "obsolete-password\n", { mode: 0o600 });
+  await writeFile(legacyPiSession, "{\"type\":\"session\"}\n", { mode: 0o600 });
+  await writeFile(legacyPiTheme, "{\"name\":\"custom\"}\n", "utf8");
   await exec(value.script, ["ensure"], { env: { ...process.env, HOME: value.root, PATH: value.path, PODMAN_LOG: value.log } });
   const calls = await readFile(value.log, "utf8");
   assert.match(calls, /image exists ghcr\.io\/coder\/code-server:4\.131\.0-39/);
@@ -90,15 +99,16 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.ok(calls.includes(`--volume ${value.root}/.m2:/home/coder/.m2`));
   assert.ok(calls.includes(`--volume ${value.root}/.npm:/home/coder/.npm`));
   assert.ok(calls.includes(`--volume ${value.root}/.pi/agent:/home/coder/.pi/agent`));
-  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/sessions:/home/coder/state/sessions:ro`));
-  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/checkouts:/home/coder/state/checkouts:ro`));
-  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/attachments:/home/coder/state/attachments:ro`));
+  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/issues:/home/coder/state/issues:ro`));
+  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/git/repositories:/home/coder/state/git/repositories`));
+  assert.ok(calls.includes(`--volume ${value.root}/.issue-pilot/git/checkouts:/home/coder/state/git/checkouts:ro`));
   assert.ok(calls.includes(`--volume ${value.host.git}:/opt/host/git/bin/git:ro`));
   assert.ok(calls.includes(`--volume ${value.host.gitLibexec}:/opt/host/git/libexec/git-core:ro`));
   assert.match(calls, /--env-file .*\/\.issue-pilot\/code-server\/container\.env/);
   assert.doesNotMatch(calls, /PASSWORD=|--env /);
-  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v19-code-server-4\.131\.0-read-only-runtimes/);
+  assert.match(calls, /--label io\.issue-pilot\.code-server-runtime=keep-id-v23-code-server-4\.131\.0-consolidated-git-auth-none/);
   assert.match(calls, /--workdir \/home\/coder\/state\/workspaces/);
+  assert.match(calls, /--auth none/);
   assert.doesNotMatch(calls, /--bind-addr/);
   const settings = JSON.parse(await readFile(join(value.root, ".issue-pilot", "code-server", "data", "User", "settings.json"), "utf8"));
   assert.equal(settings["git.path"], "/opt/host/git/bin/git");
@@ -106,8 +116,14 @@ test("mounts the fixed host development environment without image rebuilds", asy
   assert.equal(settings["maven.executable.path"], "/opt/host/maven/bin/mvn");
   assert.equal("npm.packageManager" in settings, false);
   const containerEnvironment = await readFile(join(value.root, ".issue-pilot", "code-server", "container.env"), "utf8");
-  assert.match(containerEnvironment, /^PASSWORD=.+$/m);
+  assert.doesNotMatch(containerEnvironment, /^PASSWORD=/m);
+  assert.match(containerEnvironment, /^PATH=\/home\/coder\/\.pi\/agent\/bin:/m);
   assert.match(containerEnvironment, /^GIT_EXEC_PATH=\/opt\/host\/git\/libexec\/git-core$/m);
+  await assert.rejects(readFile(join(value.root, ".issue-pilot", "code-server", "password"), "utf8"));
+  await assert.rejects(readFile(join(value.root, ".issue-pilot", "code-server", "pi"), "utf8"));
+  assert.equal(await readFile(join(value.root, ".pi", "agent", "sessions", "workspace", "legacy.jsonl"), "utf8"), "{\"type\":\"session\"}\n");
+  assert.equal(await readFile(join(value.root, ".pi", "agent", "themes", "custom.json"), "utf8"), "{\"name\":\"custom\"}\n");
+  await exec(value.script, ["ensure"], { env: { ...process.env, HOME: value.root, PATH: value.path, PODMAN_LOG: value.log } });
 });
 
 test("rejects obsolete per-issue commands", async () => {

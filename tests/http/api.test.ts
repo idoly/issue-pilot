@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,6 +10,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { AGENT_THINKING_LEVELS } from "../../src/domain/contracts.ts";
+import { issueAttachmentRoot } from "../../src/workspace/state.ts";
 
 const modelCatalog = {
   async list() {
@@ -451,10 +452,10 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal("objectKey" in uploaded[0]!, false);
     assert.equal("issueId" in uploaded[0]!, false);
     assert.equal("scanStatus" in uploaded[0]!, false);
-    const attachmentDirectory = join(root, "attachments", String(created.id).toLowerCase());
+    const attachmentDirectory = issueAttachmentRoot(root, String(created.id));
     const attachmentFiles = await readdir(attachmentDirectory);
     assert.equal(attachmentFiles.length, 1);
-    assert.equal((await stat(join(attachmentDirectory, attachmentFiles[0]!))).mode & 0o777, 0o600);
+    assert.equal((await stat(join(attachmentDirectory, attachmentFiles[0]!))).mode & 0o777, 0o400);
     const detailWithAttachment = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<Record<string, unknown>> };
     assert.equal(detailWithAttachment.attachments.length, 1);
     assert.equal("objectKey" in detailWithAttachment.attachments[0]!, false);
@@ -467,6 +468,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(attachmentPreview.headers["cache-control"], "private, no-store");
     assert.equal((await app.inject({ method: "GET", url: `/api/issues/${created.id}/attachments/missing` })).statusCode, 404);
     const attachmentPath = join(attachmentDirectory, attachmentFiles[0]!);
+    await chmod(attachmentPath, 0o600);
     await writeFile(attachmentPath, "diagnostic outpvt\n", "utf8");
     assert.equal((await app.inject({ method: "GET", url: `/api/issues/${created.id}/attachments/${uploaded[0]!.id}` })).statusCode, 500);
     await writeFile(attachmentPath, attachmentContent, "utf8");
@@ -474,7 +476,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(syncResponse.statusCode, 202, syncResponse.body);
     assert.match(engine.messages.at(-1) ?? "", /Issue metadata was updated/);
     assert.match(engine.messages.at(-1) ?? "", /diagnostic\.txt/);
-    assert.match(engine.messages.at(-1) ?? "", /sessions\/issue-20260810-001\/runtime\/attachments/);
+    assert.match(engine.messages.at(-1) ?? "", /issues\/issue-20260810-001\/attachments/);
     assert.equal(engine.recordedMessages.at(-1), false);
     engine.running.delete(createdInternalId);
 

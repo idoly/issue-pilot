@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -7,7 +7,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
-import { issueAttachmentRoot } from "../workspace/state.ts";
+import { issueAttachmentRoot, issueRuntimeRoot, issueWorkspaceRoot } from "../workspace/state.ts";
 import { type PendingAttachment, readMultipartAttachment, serializeAttachment } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import { ensureCurrentSubject, assertIssueIdle, requireIssue, type ApiRouteContext } from "./route-context.ts";
@@ -136,9 +136,10 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
           if (initialAttachments.length) {
             const directory = issueAttachmentRoot(stateRoot, key);
             await mkdir(directory, { recursive: true, mode: 0o700 });
+            await Promise.all([chmod(path.dirname(directory), 0o700), chmod(directory, 0o700)]);
             for (const file of initialAttachments) {
               const objectKey = path.join(directory, `${randomUUID()}-${file.fileName}`);
-              await writeFile(objectKey, file.data, { mode: 0o600 });
+              await writeFile(objectKey, file.data, { mode: 0o400 });
               written.push(objectKey);
               await transaction.insert(issueAttachments).values({ issueId: row!.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: reporter });
             }
@@ -197,7 +198,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       attachments: attachmentRows.map(serializeAttachment),
       workspace: {
         status: workspace?.status ?? "not_created",
-        url: workspace?.codeServerReady && session ? issueCodeServerUrl(stateRoot, issue.key, session.workspacePath) : null,
+        url: workspace?.codeServerReady ? issueCodeServerUrl(stateRoot, issue.key, repositoryRows.some((repository) => repository.localPath !== null) ? issueWorkspaceRoot(stateRoot, issue.key) : issueRuntimeRoot(stateRoot, issue.key)) : null,
         lastError: workspace?.lastError ?? null,
         bytes: workspaceStorage.bytes,
         releasable: workspaceStorage.releasable,

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { MultipartFile } from "@fastify/multipart";
@@ -123,13 +123,14 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
 
     const directory = issueAttachmentRoot(stateRoot, issue.key);
     await mkdir(directory, { recursive: true, mode: 0o700 });
+    await Promise.all([chmod(path.dirname(directory), 0o700), chmod(directory, 0o700)]);
     const written: string[] = [];
     try {
       const created = await database.db.transaction(async (transaction) => {
         const rows: Array<ReturnType<typeof serializeAttachment>> = [];
         for (const file of pending) {
           const objectKey = path.join(directory, `${randomUUID()}-${file.fileName}`);
-          await writeFile(objectKey, file.data, { mode: 0o600 });
+          await writeFile(objectKey, file.data, { mode: 0o400 });
           written.push(objectKey);
           const [attachment] = await transaction.insert(issueAttachments).values({ issueId: issue.id, fileName: file.fileName, mediaType: file.mediaType, size: file.data.length, objectKey, sha256: file.sha256, uploadedBy: uploader }).returning();
           rows.push(serializeAttachment(attachment!));

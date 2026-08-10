@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -14,7 +14,7 @@ import { agentSessions, environments, issueAttachments, issueRepositories, issue
 import { migrateAttachmentStorage, migrateDevelopmentRuntimeArtifacts } from "../../src/workspace/attachments.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, workspacePolicyFromEnvironment } from "../../src/workspace/lifecycle.ts";
-import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, legacyIssueAttachmentRoot } from "../../src/workspace/state.ts";
+import { issueAttachmentRoot, issueRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceLink, legacyIssueAttachmentStoreRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -104,7 +104,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     const attachmentContent = "preserved evidence\n";
     const attachmentHash = createHash("sha256").update(attachmentContent).digest("hex");
-    const legacyRoot = legacyIssueAttachmentRoot(root, issue!.key);
+    const legacyRoot = legacyIssueAttachmentStoreRoot(root, issue!.key);
     const legacyAttachment = path.join(legacyRoot, "attachment-evidence.txt");
     await mkdir(legacyRoot, { recursive: true, mode: 0o700 });
     await writeFile(legacyAttachment, attachmentContent, { mode: 0o600 });
@@ -120,19 +120,17 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await migrateAttachmentStorage(database.db, root);
     const durableAttachment = path.join(issueAttachmentRoot(root, issue!.key), path.basename(legacyAttachment));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
-    assert.equal((await stat(durableAttachment)).mode & 0o777, 0o600);
+    assert.equal((await stat(durableAttachment)).mode & 0o777, 0o400);
     const [migratedAttachment] = await database.db.select().from(issueAttachments).where(eq(issueAttachments.id, attachment!.id));
     assert.equal(migratedAttachment!.objectKey, durableAttachment);
     await assert.rejects(access(legacyAttachment));
 
     const runtimeMigration = await migrateDevelopmentRuntimeArtifacts(database.db, root);
-    assert.deepEqual(runtimeMigration, { prepared: [issue!.key], migrated: [issue!.key], blocked: [] });
-    const runtimeAttachment = path.join(issueRuntimeRoot(root, issue!.key), "attachments", path.basename(durableAttachment));
-    assert.equal(await readFile(runtimeAttachment, "utf8"), attachmentContent);
-    assert.equal((await stat(runtimeAttachment)).mode & 0o777, 0o400);
-    assert.equal((await stat(issueRuntimeRoot(root, issue!.key))).mode & 0o777, 0o700);
-    assert.equal((await stat(path.join(issueRuntimeRoot(root, issue!.key), "bin"))).mode & 0o777, 0o700);
-    assert.equal((await stat(path.join(issueRuntimeRoot(root, issue!.key), "bin", "node-project"))).mode & 0o777, 0o700);
+    assert.deepEqual(runtimeMigration, { prepared: [issue!.key], migrated: [], blocked: [] });
+    const wrapperRoot = path.join(issueRuntimeRoot(root, issue!.key), "bin");
+    assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
+    assert.equal((await stat(path.join(wrapperRoot, "node-project"))).mode & 0o777, 0o700);
+    assert.equal(path.resolve(issueRoot(root, issue!.key), await readlink(issueWorkspaceLink(root, issue!.key))), path.dirname(prepared[0]!.workspacePath));
     await assert.rejects(access(path.dirname(legacyRoot)));
 
     const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
@@ -167,6 +165,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(released.alreadyReleased, false);
     assert.equal(released.releasedBytes > 0, true);
     await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
+    await assert.rejects(lstat(issueWorkspaceLink(root, issue!.key)));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal(await readFile(sessionFile, "utf8"), "{}\n");
     assert.deepEqual(engine.closed, [issue!.id]);
@@ -217,6 +216,24 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const quota = await quotaLifecycle.maintain();
     assert.deepEqual(quota.released.map(({ issueKey }) => issueKey), [issue!.key]);
     await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
+
+    const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
+    const [readOnlyIssue] = await database.db.insert(issues).values({
+      key: "ISSUE-20260810-099",
+      title: "Read-only runtime",
+      status: "resolved",
+      type: "smart_analysis",
+      serviceId: service!.id,
+      environmentId: prodEnvironment!.id,
+      reporterSubject: "tester",
+      resolvedAt: new Date(0),
+    }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", codeServerReady: true });
+    await database.db.insert(issueRepositories).values({ issueId: readOnlyIssue!.id, url: remotes[0]!, baseBranch: "main", workingBranch: null, localPath: null, commitBefore: "a".repeat(40) });
+    const readOnlyMaintenance = await retentionLifecycle.maintain();
+    assert.equal(readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key), false);
+    const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
+    assert.equal(readOnlyWorkspace!.codeServerReady, true);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

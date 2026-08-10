@@ -9,7 +9,7 @@ import type { AgentController } from "../agent/engine.ts";
 import type { openDatabase } from "../db/client.ts";
 import { issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { WorktreeManager } from "./git.ts";
-import { assertManagedIssueWorkspaceLayout, issueWorkspaceRoot } from "./state.ts";
+import { assertManagedIssueWorkspaceLayout, issueWorkspaceRoot, removeIssueWorkspaceLink } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 const GIB = 1024 ** 3;
@@ -151,7 +151,7 @@ export class WorkspaceLifecycleManager {
       const released: WorkspaceReleaseResult[] = [];
       const blocked: Array<{ issueKey: string; reason: string }> = [];
       const attempted = new Set<string>();
-      const candidates = rows.filter(({ issue }) => issue.status === "resolved");
+      const candidates = rows.filter(({ issue }) => issue.status === "resolved" && (sizes.get(issue.id) ?? 0) > 0);
       const releaseCandidate = async (row: { issue: Issue; workspace: IssueWorkspace | null }) => {
         attempted.add(row.issue.id);
         try {
@@ -187,6 +187,11 @@ export class WorkspaceLifecycleManager {
   private async releaseLocked(issue: Issue, workspace: IssueWorkspace | null): Promise<WorkspaceReleaseResult> {
     const inspection = await this.inspectLocked(issue, workspace);
     if (inspection.blockedReason === "workspace_missing") {
+      const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+      if (workspace?.codeServerReady && repositories.every((repository) => repository.localPath === null)) {
+        return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
+      }
+      await removeIssueWorkspaceLink(this.stateRoot, issue.key);
       await this.markReleased(issue.id);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
     }
@@ -204,6 +209,7 @@ export class WorkspaceLifecycleManager {
       }
     }
     await rm(issueWorkspaceRoot(this.stateRoot, issue.key), { recursive: true, force: true });
+    await removeIssueWorkspaceLink(this.stateRoot, issue.key);
     await this.markReleased(issue.id);
     return { issueKey: issue.key, releasedBytes: inspection.bytes, alreadyReleased: false };
   }

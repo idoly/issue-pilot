@@ -147,7 +147,7 @@ export function AgentPanel(props: { issue: IssueDetail; onRefresh: (issueId: str
   const usageText = () => footerText(footer());
   const executionRoot = () => props.issue.environmentKey === "dev"
     ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
-    : `~/.issue-pilot/sessions/${props.issue.id.toLowerCase()}/runtime`;
+    : `~/.issue-pilot/issues/${props.issue.id.toLowerCase()}/runtime`;
   const scrollLatest = () => {
     transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
     followLatest = true;

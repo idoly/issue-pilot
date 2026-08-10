@@ -1,5 +1,7 @@
-import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import { globalRuntimeRoot } from "./state.ts";
 
 const NODE_PROJECT = `#!/bin/sh
 set -eu
@@ -56,4 +58,19 @@ export async function prepareProjectWrappers(runtimeRoot: string): Promise<strin
     writeFile(path.join(binRoot, "maven-project"), MAVEN_PROJECT, { mode: 0o700 }).then(() => chmod(path.join(binRoot, "maven-project"), 0o700)),
   ]);
   return binRoot;
+}
+
+export async function retireGlobalProjectWrappers(stateRoot: string): Promise<boolean> {
+  const runtimeRoot = globalRuntimeRoot(stateRoot);
+  let entries;
+  try {
+    entries = await readdir(runtimeRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+  if (entries.length !== 1 || entries[0]?.name !== "bin" || !entries[0].isDirectory()) throw new Error("global_runtime_has_untracked_files");
+  await assertManagedProjectWrappers(path.join(runtimeRoot, "bin"));
+  await rm(runtimeRoot, { recursive: true });
+  return true;
 }

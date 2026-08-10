@@ -11,7 +11,7 @@ Issue Pilot 是一个基于 Pi 的本地优先工单处理系统。它使用 SQL
 - Pi 使用内置本地工具；正式/测试 environment 只读取共享快照，只有所有仓库均为可写开发 worktree 时才启用 `bash`、`edit`、`write`。
 - Redis、MySQL、Elasticsearch、RabbitMQ 和 Nacos 使用受限的宿主原生客户端；SLS 使用固定宿主 Aliyun CLI。
 - Playwright 使用宿主全局 `playwright-core@1.62.1` 和按调用创建的固定浏览器容器。
-- code-server 使用一个共享官方容器；开发工单打开独立 workspace，正式/测试工单打开最新共享快照组成的只读 session runtime。
+- code-server 使用一个共享官方容器；开发工单打开独立 workspace，正式/测试工单打开最新共享快照组成的只读 issue runtime。
 - capability 结果必须完整返回；命中行数、大小或动作边界时明确失败，不静默截断。
 
 详细设计见 [架构说明](docs/ARCHITECTURE.md)，页面字段和授权规则见 [配置说明](docs/CONFIGURATION.md)，部署、升级和故障处理见 [运维说明](docs/OPERATIONS.md)。

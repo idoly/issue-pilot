@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 
-import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, sharedCheckoutsRoot } from "./state.ts";
+import { issueRoot, issueRuntimeRoot, sharedCheckoutsRoot } from "./state.ts";
 
 export interface ReadOnlyRuntimeRepository {
   name: string;
@@ -18,13 +18,13 @@ function managedCheckout(stateRoot: string, checkoutPath: string): string {
 }
 
 export async function prepareReadOnlyRuntime(stateRoot: string, issueKey: string, repositories: ReadOnlyRuntimeRepository[]): Promise<string> {
-  const sessionRoot = issueSessionRoot(stateRoot, issueKey);
+  const root = issueRoot(stateRoot, issueKey);
   const runtimeRoot = issueRuntimeRoot(stateRoot, issueKey);
-  const temporaryRoot = path.join(sessionRoot, `.runtime-${randomUUID()}`);
+  const temporaryRoot = path.join(root, `.runtime-${randomUUID()}`);
   const names = new Set<string>();
 
-  await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
-  await chmod(sessionRoot, 0o700);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
   try {
     await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const repository of repositories) {
@@ -33,10 +33,6 @@ export async function prepareReadOnlyRuntime(stateRoot: string, issueKey: string
       await symlink(path.relative(temporaryRoot, managedCheckout(stateRoot, repository.checkoutPath)), path.join(temporaryRoot, repository.name), "dir");
     }
 
-    const attachmentRoot = issueAttachmentRoot(stateRoot, issueKey);
-    await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
-    await chmod(attachmentRoot, 0o700);
-    await symlink(path.relative(temporaryRoot, attachmentRoot), path.join(temporaryRoot, "attachments"), "dir");
 
     await rm(runtimeRoot, { recursive: true, force: true });
     await rename(temporaryRoot, runtimeRoot);

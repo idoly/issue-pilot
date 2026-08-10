@@ -11,7 +11,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(promptWithRuntimeTime("sls latest record", now), /User request:\nsls latest record/);
 
   const readOnlyRepositories = [{ url: "git@example/repo.git", branch: "main", path: "/workspace/repo", readOnly: true }];
-  const continuation = continuationPrompt("ISSUE-1", readOnlyRepositories, "/runtime/attachments", undefined, now);
+  const continuation = continuationPrompt("ISSUE-1", readOnlyRepositories, "/issues/issue-1/attachments", undefined, now);
   assert.match(continuation, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(continuation, /shared read-only snapshots of the latest configured deployment branches/);
   assert.doesNotMatch(continuation, /unless the user explicitly asks you to commit or push them/);
@@ -22,12 +22,12 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
     issueType: "smart_analysis",
     repositories: readOnlyRepositories,
     service: { key: "service", name: "Service" },
-    attachmentPath: "/runtime/attachments",
+    attachmentPath: "/issues/issue-1/attachments",
   }, now);
   assert.match(initial, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(initial, /Investigate, verify the available evidence/);
 
-  const writable = continuationPrompt("ISSUE-2", [{ ...readOnlyRepositories[0]!, readOnly: false }], "/session/runtime/attachments", undefined, now);
+  const writable = continuationPrompt("ISSUE-2", [{ ...readOnlyRepositories[0]!, readOnly: false }], "/issues/issue-2/attachments", undefined, now);
   assert.match(writable, /defect_fix and feature_development, make only the minimum changes required/);
   assert.match(writable, /unless the user explicitly asks you to commit or push them/);
 });

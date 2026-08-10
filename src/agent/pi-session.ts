@@ -1,5 +1,3 @@
-import { join } from "node:path";
-
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -47,7 +45,7 @@ function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
 function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string, executableRoot?: string): ToolDefinition<any, any, any>[] {
   const tools = createCapabilityTools(policy, deploymentConfig);
   if (!piToolAllowlist(policy).includes("bash")) return tools;
-  const projectBinRoot = executableRoot ?? join(workspaceRoot, ".issue-pilot", "bin");
+  if (!executableRoot) throw new Error("project_wrapper_root_required");
   tools.unshift(createBashToolDefinition(workspaceRoot, {
     spawnHook: (context) => ({
       ...context,
@@ -56,7 +54,7 @@ function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unkn
         AI_AGENT: "pi",
         PI_CODING_AGENT: "true",
         ISSUE_WORKSPACE: workspaceRoot,
-        PATH: `${projectBinRoot}${pathSeparator}${context.env.PATH ?? ""}`,
+        PATH: `${executableRoot}${pathSeparator}${context.env.PATH ?? ""}`,
       },
     }),
   }));

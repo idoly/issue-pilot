@@ -5,7 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { normalizeIssueKey } from "../domain/contracts.ts";
-import { issueWorkspaceRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
+import { issueWorkspaceRoot, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,7 +69,7 @@ export class WorktreeManager {
 
   constructor(stateRoot: string) {
     this.stateRoot = resolve(stateRoot);
-    this.repositoriesRoot = resolve(this.stateRoot, "repositories");
+    this.repositoriesRoot = repositoriesRoot(this.stateRoot);
     this.sharedCheckoutsRoot = sharedCheckoutsRoot(this.stateRoot);
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }

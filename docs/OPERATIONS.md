@@ -77,9 +77,9 @@ API 收到 `SIGINT`/`SIGTERM` 时只关闭一次 Fastify、Agent session 和 dat
 
 ## Workspace 存储维护
 
-`workspaces/<issue-key>` 只用于开发工单，是包含 Git worktree、Issue 本地依赖和构建输出的可重建 cache；workspace 根目录不再保存 Issue Pilot 元数据。Git branch 保存在共享 bare repository，Pi JSONL 保存在 `sessions/<issue-key>`，附件原件保存在 `attachments/<issue-key>`。开发 Agent 的 `0400` 附件副本和 project wrapper 位于 `sessions/<issue-key>/runtime`。
+`workspaces/<issue-key>` 只用于开发工单，是包含 Git worktree、Issue 本地依赖和构建输出的可重建 cache；workspace 根目录不保存 Issue Pilot 元数据。每个工单的持久数据集中在 `issues/<issue-key>`：唯一的 `0400` 附件原件位于 `attachments/`，Pi JSONL 和私有 sidecar 位于 `agent/`。拥有 workspace、会启用 bash 的开发工单在 `runtime/bin/` 获得自己的 `node-project` 和 `maven-project`；已释放的 dev 工单不在冷启动时生成 runtime。`issues/<issue-key>/workspace` 是指向可释放 workspace 的受管相对链接，仅用于从工单目录统一导航，释放 workspace 时同步删除。数据库备份集中在 `backups/`。
 
-prod/test 不创建 Issue workspace 或分支。每次执行先 fetch deployment `baseBranch`，代码按 commit 复用在 `checkouts/`；`sessions/<issue-key>/runtime` 只有 repository 和附件链接。API 冷启动会重建这些可生成目录，并为已有只读 session 恢复最新快照和 code-server 入口。旧版本创建的 workspace `.issue-pilot/{attachments,bin}` 只有在不含未知内容时才删除；prod/test detached workspace 还必须通过全部 worktree clean 状态和根目录布局预检。
+prod/test 不创建 Issue workspace 或分支。每次执行先 fetch deployment `baseBranch`，代码按 commit 复用在 `git/checkouts/`；`issues/<issue-key>/runtime` 只有当前工单的 repository links。API 冷启动会重建可生成 runtime，并为已有只读 session 恢复最新快照和 code-server 入口。旧版本的 `sessions/<issue-key>`、`attachments/<issue-key>` 和 workspace `.issue-pilot/{attachments,bin}` 只有在不含未知内容且文件校验通过时才删除；prod/test detached workspace 还必须通过全部 worktree clean 状态和根目录布局预检。
 
 手动和自动释放只处理开发 workspace，并使用相同预检：Issue 必须空闲，所有 Git worktree 必须没有 modified/untracked 文件，Issue 根目录也不能有未知文件。任一仓库不满足时拒绝整个预检，不更新数据库；已经部分完成的基础设施错误可通过重复调用恢复。成功后清空 `issue_repositories.local_path`，workspace 变为 `stopped`，但保留 branch、base commit、session binding、JSONL 和附件。
 
@@ -115,7 +115,7 @@ infra/code-server.sh ensure
 3. 创建 service 和 repository。
 4. 为需要的每个 environment（包括 dev）配置 base branch、model、thinking level 和 capability。
 5. 用 `/api/config` 或页面复核 deployment，但不要记录 response。
-6. 创建一个只读测试 issue，验证 model、SSE replay、共享 checkout、session runtime code-server，并确认没有 Issue workspace。
+6. 创建一个只读测试 issue，验证 model、SSE replay、共享 checkout、issue runtime code-server，并确认没有 Issue workspace。
 
 项目不提供业务 seed。环境由 database bootstrap 创建，用户由当前 subject 创建，service/deployment 必须由部署者明确配置。
 
@@ -216,7 +216,7 @@ location /code/ {
 }
 ```
 
-code-server 自身还有 private password，但不能替代统一身份认证。不要把 `18080` 直接发布到 LAN。
+code-server 使用 `--auth none`，自身没有身份认证。不要把 `18080` 直接发布到 LAN；通过 `4173/code-server` 访问时，任何能访问 Web 入口的客户端都拥有编辑器和终端权限。
 
 ## Playwright runtime
 
@@ -260,27 +260,25 @@ Issue Pilot 使用 `/usr/local/sbin/aliyun` 的内置 `Sls 2020-12-30 GetLogs`�
 | image | `ghcr.io/coder/code-server:4.131.0-39` |
 | address | `127.0.0.1:18080` -> container `8080` |
 | development workspace | `<repo>/.issue-pilot/workspaces` |
-| session runtime | `<repo>/.issue-pilot/sessions` |
-| shared checkout | `<repo>/.issue-pilot/checkouts` |
-| durable attachments | `<repo>/.issue-pilot/attachments` |
-| repository cache | `<repo>/.issue-pilot/repositories` |
+| issue data/runtime | `<repo>/.issue-pilot/issues` |
+| shared checkout | `<repo>/.issue-pilot/git/checkouts` |
+| repository cache | `<repo>/.issue-pilot/git/repositories` |
 | data/extensions | `<repo>/.issue-pilot/code-server/data` |
-| password | `<repo>/.issue-pilot/code-server/password` |
+| authentication | disabled with `--auth none` |
 | container env file | `<repo>/.issue-pilot/code-server/container.env` |
 
-脚本不构建 custom image。`ensure` 校验固定 host runtime、更新 editor settings、创建 private password/env file，并按 runtime label 启动或重建容器。Password 不出现在 `podman run` command line；`status` 只输出 state、image 和 runtime label，不输出完整 inspect。
+脚本不构建 custom image。`ensure` 校验固定 host runtime、更新 editor settings、删除旧 password 文件、创建 private runtime env file，并按 runtime label 启动或重建容器。`status` 只输出 state、image 和 runtime label，不输出完整 inspect。
 
 ### State mounts
 
 | host | container | mode |
 | --- | --- | --- |
 | `.issue-pilot/workspaces` | `/home/coder/state/workspaces` | read-write |
-| `.issue-pilot/repositories` | `/home/coder/state/repositories` | read-write |
-| `.issue-pilot/sessions` | `/home/coder/state/sessions` | read-only |
-| `.issue-pilot/checkouts` | `/home/coder/state/checkouts` | read-only |
-| `.issue-pilot/attachments` | `/home/coder/state/attachments` | read-only |
+| `.issue-pilot/git/repositories` | `/home/coder/state/git/repositories` | read-write |
+| `.issue-pilot/issues` | `/home/coder/state/issues` | read-only |
+| `.issue-pilot/git/checkouts` | `/home/coder/state/git/checkouts` | read-only |
 
-prod/test runtime 使用相对链接指向只读 checkout 和附件挂载，因此宿主 Agent 与容器内 code-server 看到相同目录结构；开发 workspace 保持可写。
+prod/test runtime 使用相对链接指向只读 checkout，因此宿主 Agent 与容器内 code-server 看到相同 repository 目录；开发 workspace 保持可写。
 
 ### Host runtime mounts
 
@@ -306,7 +304,7 @@ Git 必须与 host 保持同一版本。只挂 binary 不足以支持 relative w
 | `~/.npmrc` | `/home/coder/.npmrc` | read-only |
 | `~/.pi/agent` | `/home/coder/.pi/agent` | read-write |
 
-这些目录可能包含 credential，只能由可信本机 operator 使用。Editor 不强制 npm/yarn；project wrapper 根据 repository `packageManager` 和 lockfile 选择。
+这些目录可能包含 credential，只能由可信本机 operator 使用。`~/.pi/agent/bin` 也直接提供本机 `rg` 和 `fd`；code-server PATH 不维护第二份工具副本。`ensure` 会先将旧 `.issue-pilot/code-server/pi/sessions` 中尚未迁移的 JSONL 无冲突复制到本机 Pi session 目录，再删除旧副本。Editor 不强制 npm/yarn；project wrapper 根据 repository `packageManager` 和 lockfile 选择。
 
 ### 操作
 
@@ -341,8 +339,9 @@ npm run db:migrate
 
 ```bash
 systemctl stop issue-pilot-api
+install -d -m 0700 .issue-pilot/backups
 cp --preserve=mode .issue-pilot/issues.db \
-  ".issue-pilot/issues.db.backup-$(date +%Y%m%d%H%M%S)"
+  ".issue-pilot/backups/issues.db.before-$(date +%Y%m%d%H%M%S)"
 npm run db:migrate
 systemctl start issue-pilot-api
 ```
@@ -396,7 +395,7 @@ ss -ltnp | grep -E ':3000|:18080'
 - service/deployment/repository count
 - provider/model/thinking readiness
 - prod/test issue 不出现 mutation tools 或 Issue workspace
-- prod/test shared checkout 对应 deployment 最新 commit，code-server folder 指向 session runtime
+- prod/test shared checkout 对应 deployment 最新 commit，code-server folder 指向 issue runtime
 - dev issue 从 dev deployment 配置分支创建 worktree branch，并获得正确 tool allowlist
 - SSE replay 后 live event 不丢失
 - compaction 后 active context 正确

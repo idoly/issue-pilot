@@ -10,7 +10,10 @@ import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
 import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
 import { migrateAttachmentStorage, migrateDevelopmentRuntimeArtifacts } from "../workspace/attachments.ts";
+import { migrateGitStorage } from "../workspace/git-storage.ts";
+import { migrateDatabaseBackups, migrateIssueSessionStorage } from "../workspace/issue-storage.ts";
 import { WorkspaceLifecycleManager, type WorkspaceRetentionPolicy } from "../workspace/lifecycle.ts";
+import { retireGlobalProjectWrappers } from "../workspace/project-wrappers.ts";
 import { migrateReadOnlyIssueWorkspaces, prepareReadOnlyIssueRuntimes } from "../workspace/read-only.ts";
 import { pruneState } from "../workspace/state.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
@@ -35,14 +38,23 @@ export interface ApiOptions {
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? process.env.ISSUE_PILOT_STATE_ROOT ?? ".issue-pilot");
   const database = await openApplicationDatabase(options.databaseFile ?? process.env.ISSUE_PILOT_DATABASE ?? path.join(stateRoot, "issues.db"));
-  await migrateAttachmentStorage(database.db, stateRoot);
-  await pruneState(stateRoot, (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key));
-
   const app = Fastify({ logger: options.logger ?? process.env.NODE_ENV !== "test", forceCloseConnections: true });
+  const migratedBackups = await migrateDatabaseBackups(stateRoot);
+  if (migratedBackups.length) app.log.info({ files: migratedBackups }, "Moved database backups into backup storage");
+  await migrateAttachmentStorage(database.db, stateRoot);
+  const sessionStorageMigration = await migrateIssueSessionStorage(database.db, stateRoot);
+  for (const blocked of sessionStorageMigration.blocked) app.log.warn(blocked, "Issue session storage migration retained a legacy directory");
+  if (sessionStorageMigration.migrated.length) app.log.info({ issueKeys: sessionStorageMigration.migrated }, "Moved Agent sessions into issue storage");
+  const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
+  const gitStorageMigration = await migrateGitStorage(stateRoot);
+  if (gitStorageMigration.repositories || gitStorageMigration.checkouts) app.log.info(gitStorageMigration, "Consolidated shared Git storage");
+  await pruneState(stateRoot, issueKeys);
+
   const developmentRuntimeMigration = await migrateDevelopmentRuntimeArtifacts(database.db, stateRoot);
   for (const blocked of developmentRuntimeMigration.blocked) app.log.warn(blocked, "Development runtime migration retained legacy workspace metadata");
-  if (developmentRuntimeMigration.prepared.length) app.log.info({ issueKeys: developmentRuntimeMigration.prepared }, "Prepared development session runtimes");
+  if (developmentRuntimeMigration.prepared.length) app.log.info({ issueKeys: developmentRuntimeMigration.prepared }, "Prepared development issue runtimes");
   if (developmentRuntimeMigration.migrated.length) app.log.info({ issueKeys: developmentRuntimeMigration.migrated }, "Moved development runtime artifacts out of issue workspaces");
+  if (await retireGlobalProjectWrappers(stateRoot)) app.log.info("Retired global project wrappers");
   const readOnlyMigration = await migrateReadOnlyIssueWorkspaces(database.db, stateRoot);
   for (const blocked of readOnlyMigration.blocked) app.log.warn(blocked, "Read-only workspace migration retained an existing workspace");
   if (readOnlyMigration.migrated.length) app.log.info({ issueKeys: readOnlyMigration.migrated }, "Migrated read-only issue workspaces to shared checkouts");

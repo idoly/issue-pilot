@@ -75,7 +75,7 @@ describe("issue pilot workspace", () => {
     const agentRegion = screen.getByRole("region", { name: "ISSUE-0042 Agent 会话" });
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
-    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/sessions/issue-0042/runtime");
+    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/issues/issue-0042/runtime");
     expect(screen.getByRole("heading", { name: "代码分支" })).toBeTruthy();
     expect(screen.getByText("hotfix-issue")).toBeTruthy();
     const agentInput = within(agentRegion).getByLabelText("发送给 Agent") as HTMLTextAreaElement;

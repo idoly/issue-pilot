@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 import { repositoryWorkspaceNames, WorktreeManager } from "../../src/workspace/git.ts";
+import { sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +46,7 @@ test("shares immutable latest baselines for read-only environments and creates p
     assert.equal(await git(["-C", readonly.cachePath, "rev-parse", "--is-bare-repository"]), "true");
     assert.equal(readonly.workingBranch, null);
     assert.equal(await git(["-C", readonly.workspacePath, "branch", "--show-current"]), "");
-    assert.equal(relative(join(stateRoot, "checkouts"), readonly.workspacePath).startsWith(".."), false);
+    assert.equal(relative(sharedCheckoutsRoot(stateRoot), readonly.workspacePath).startsWith(".."), false);
     await assert.rejects(access(join(stateRoot, "workspaces", "issue-20260805-010")));
     const firstCommit = await git(["-C", readonly.workspacePath, "rev-parse", "HEAD"]);
 

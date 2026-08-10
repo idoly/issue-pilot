@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rename, rm, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq } from "drizzle-orm";
@@ -7,7 +7,7 @@ import { and, eq } from "drizzle-orm";
 import type { openDatabase } from "../db/client.ts";
 import { environments, issueAttachments, issues } from "../db/schema.ts";
 import { assertManagedProjectWrappers, prepareProjectWrappers } from "./project-wrappers.ts";
-import { issueAttachmentRoot, issueRuntimeRoot, legacyIssueAttachmentRoot, issueWorkspaceRoot } from "./state.ts";
+import { ensureIssueWorkspaceLink, issueAttachmentRoot, issueRuntimeRoot, issueWorkspaceRoot, legacyIssueAttachmentStoreRoot, legacyWorkspaceAttachmentRoot } from "./state.ts";
 
 type Database = ReturnType<typeof openDatabase>["db"];
 
@@ -29,18 +29,18 @@ export async function migrateAttachmentStorage(database: Database, stateRoot: st
 
   for (const { attachment, issueKey } of rows) {
     const durableRoot = issueAttachmentRoot(stateRoot, issueKey);
-    const legacyRoot = legacyIssueAttachmentRoot(stateRoot, issueKey);
     const source = path.resolve(attachment.objectKey);
     const destination = path.join(durableRoot, path.basename(source));
     if (path.dirname(source) === durableRoot) {
       await assertMatchingFile(source, attachment.size, attachment.sha256);
-      await chmod(source, 0o600);
+      await chmod(source, 0o400);
       continue;
     }
-    if (path.dirname(source) !== legacyRoot) throw new Error("attachment_path_outside_managed_storage");
+    const legacyRoots = new Set([legacyIssueAttachmentStoreRoot(stateRoot, issueKey), legacyWorkspaceAttachmentRoot(stateRoot, issueKey)]);
+    if (!legacyRoots.has(path.dirname(source))) throw new Error("attachment_path_outside_managed_storage");
 
     await mkdir(durableRoot, { recursive: true, mode: 0o700 });
-    await chmod(durableRoot, 0o700);
+    await Promise.all([chmod(path.dirname(durableRoot), 0o700), chmod(durableRoot, 0o700)]);
     const [sourceExists, destinationExists] = await Promise.all([exists(source), exists(destination)]);
     let moved = false;
     if (sourceExists && !destinationExists) {
@@ -50,7 +50,7 @@ export async function migrateAttachmentStorage(database: Database, stateRoot: st
       throw new Error("attachment_file_missing");
     }
     await assertMatchingFile(destination, attachment.size, attachment.sha256);
-    await chmod(destination, 0o600);
+    await chmod(destination, 0o400);
     try {
       await database.update(issueAttachments).set({ objectKey: destination }).where(and(eq(issueAttachments.id, attachment.id), eq(issueAttachments.objectKey, attachment.objectKey)));
     } catch (error) {
@@ -58,6 +58,16 @@ export async function migrateAttachmentStorage(database: Database, stateRoot: st
       throw error;
     }
   }
+
+  const issueKeys = new Set(rows.map(({ issueKey }) => issueKey));
+  for (const issueKey of issueKeys) {
+    await rmdir(legacyIssueAttachmentStoreRoot(stateRoot, issueKey)).catch((error) => {
+      if (!(error && typeof error === "object" && "code" in error && ["ENOENT", "ENOTEMPTY"].includes(String(error.code)))) throw error;
+    });
+  }
+  await rmdir(path.resolve(stateRoot, "attachments")).catch((error) => {
+    if (!(error && typeof error === "object" && "code" in error && ["ENOENT", "ENOTEMPTY"].includes(String(error.code)))) throw error;
+  });
 }
 
 export async function migrateDevelopmentRuntimeArtifacts(database: Database, stateRoot: string): Promise<{ prepared: string[]; migrated: string[]; blocked: Array<{ issueKey: string; reason: string }> }> {
@@ -97,10 +107,9 @@ export async function migrateDevelopmentRuntimeArtifacts(database: Database, sta
       }
       if (metadataEntries?.some((entry) => entry.name === "bin")) await assertManagedProjectWrappers(path.join(metadataRoot, "bin"));
 
-      const runtimeRoot = issueRuntimeRoot(stateRoot, issue.key);
       await Promise.all([
-        materializeRuntimeAttachments(database, stateRoot, issue.id, issue.key),
-        prepareProjectWrappers(runtimeRoot),
+        ensureIssueWorkspaceLink(stateRoot, issue.key),
+        prepareProjectWrappers(issueRuntimeRoot(stateRoot, issue.key)),
       ]);
       prepared.push(issue.key);
       if (metadataEntries) {
@@ -112,26 +121,4 @@ export async function migrateDevelopmentRuntimeArtifacts(database: Database, sta
     }
   }
   return { prepared, migrated, blocked };
-}
-
-export async function materializeRuntimeAttachments(database: Database, stateRoot: string, issueId: string, issueKey: string): Promise<string> {
-  const runtimeRoot = issueRuntimeRoot(stateRoot, issueKey);
-  const cacheRoot = path.join(runtimeRoot, "attachments");
-  const durableRoot = issueAttachmentRoot(stateRoot, issueKey);
-  const attachments = await database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issueId));
-  await mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
-  await chmod(runtimeRoot, 0o700);
-  await rm(cacheRoot, { recursive: true, force: true });
-  await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
-  await chmod(cacheRoot, 0o700);
-  if (!attachments.length) return cacheRoot;
-  for (const attachment of attachments) {
-    const source = path.resolve(attachment.objectKey);
-    if (path.dirname(source) !== durableRoot) throw new Error("attachment_path_outside_managed_storage");
-    await assertMatchingFile(source, attachment.size, attachment.sha256);
-    const destination = path.join(cacheRoot, path.basename(source));
-    await copyFile(source, destination);
-    await chmod(destination, 0o400);
-  }
-  return cacheRoot;
 }

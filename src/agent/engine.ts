@@ -8,10 +8,9 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import type { RunEvent } from "./events.ts";
 import { PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { createPrivateSessionManager } from "./session.ts";
-import { materializeRuntimeAttachments } from "../workspace/attachments.ts";
 import { CodeServerManager } from "../workspace/code-server.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
-import { issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
+import { ensureIssueWorkspaceLink, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../workspace/state.ts";
 import type { openDatabase } from "../db/client.ts";
 import {
   agentSessions,
@@ -252,22 +251,19 @@ export class AgentEngine implements AgentController {
 
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
-    await chmod(sessionDirectory, 0o700);
+    await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
     const runtimeRoot = issueRuntimeRoot(this.stateRoot, issue.key);
     const workspaceRoot = sharedRepositories
       ? await prepareReadOnlyRuntime(this.stateRoot, issue.key, prepared.map(({ name, workspace }) => ({ name, checkoutPath: workspace.workspacePath })))
       : issueWorkspaceRoot(this.stateRoot, issue.key);
-    let attachmentPath = path.join(runtimeRoot, "attachments");
+    const attachmentPath = issueAttachmentRoot(this.stateRoot, issue.key);
+    await mkdir(attachmentPath, { recursive: true, mode: 0o700 });
+    await Promise.all([chmod(path.dirname(attachmentPath), 0o700), chmod(attachmentPath, 0o700)]);
     let executableRoot: string | undefined;
     if (!sharedRepositories) {
-      await Promise.all([
-        mkdir(workspaceRoot, { recursive: true }),
-        mkdir(runtimeRoot, { recursive: true, mode: 0o700 }).then(() => chmod(runtimeRoot, 0o700)),
-      ]);
-      [executableRoot, attachmentPath] = await Promise.all([
-        prepareProjectWrappers(runtimeRoot),
-        materializeRuntimeAttachments(this.db, this.stateRoot, issue.id, issue.key),
-      ]);
+      await mkdir(workspaceRoot, { recursive: true });
+      await ensureIssueWorkspaceLink(this.stateRoot, issue.key);
+      executableRoot = await prepareProjectWrappers(runtimeRoot);
     }
     const repositoryPaths = prepared.map(({ name, workspace }) => sharedRepositories ? path.join(workspaceRoot, name) : workspace.workspacePath);
     const policy = createDeploymentPolicy({
@@ -283,7 +279,7 @@ export class AgentEngine implements AgentController {
     });
     let codeServerReady = false;
     try {
-      await this.codeServerManager.ensure(issue.key, workspaceRoot);
+      await this.codeServerManager.ensure(issue.key, sharedRepositories ? runtimeRoot : workspaceRoot);
       codeServerReady = true;
     } catch {
       codeServerReady = false;
