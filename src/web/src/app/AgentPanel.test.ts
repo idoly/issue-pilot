@@ -173,13 +173,13 @@ describe("Agent conversation state", () => {
       running: false,
     });
     await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
-    const conversation = screen.getByRole("log");
-    Object.defineProperties(conversation, {
+    const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
+    Object.defineProperties(panel, {
       scrollHeight: { configurable: true, value: 1_000 },
       clientHeight: { configurable: true, value: 200 },
       scrollTop: { configurable: true, value: 0, writable: true },
     });
-    fireEvent.scroll(conversation);
+    fireEvent.scroll(panel);
     source.emit("message", event({ type: "issue_user", message: "Arrived after scrolling" }, "message-unread"));
     await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
     expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 32.9%/272k (auto)")).toBeTruthy();

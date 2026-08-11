@@ -230,23 +230,17 @@ button, input, textarea { font: inherit; }
   display: flex;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--pi-scrollbar-thumb) var(--pi-bg);
+  scrollbar-gutter: stable;
   flex-direction: column;
   background: var(--pi-bg);
   color: var(--pi-text);
   font-family: var(--pi-font);
 }
-.agent-conversation {
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0 2px 12px 12px;
-  scrollbar-color: var(--pi-scrollbar-thumb) var(--pi-bg);
-  scrollbar-gutter: stable;
-}
+.agent-conversation { min-width: 0; min-height: 0; flex: 1 0 auto; overflow: visible; padding: 0 2px 12px 12px; }
 .agent-message { min-width: 0; overflow-wrap: anywhere; }
 .agent-message.user { margin: 18px 0 0; padding: 14px; background: var(--pi-user-bg); color: var(--pi-user-message-text); }
 .agent-message.assistant { display: grid; gap: 18px; margin-top: 18px; padding: 0 14px; color: #e4e6e5; font-weight: 350; }

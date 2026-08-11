@@ -133,7 +133,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [queue, setQueue] = createSignal<{ steering: string[]; followUp: string[] }>({ steering: [], followUp: [] }, { ownedWrite: true });
   const [agent, setAgent] = createSignal({ provider: "", model: "", thinkingLevel: "" }, { ownedWrite: true });
   const [footer, setFooter] = createSignal<AgentFooterStats>(emptyFooter(), { ownedWrite: true });
-  let transcript: HTMLDivElement | undefined;
+  let transcript: HTMLElement | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let stream: EventSource | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -295,8 +295,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   createEffect(() => props.issue.id, (issueId) => connect(issueId));
   onCleanup(() => { connectionId += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
 
-  return <section class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden}>
-    <div ref={transcript} class="agent-conversation" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
+  return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
+    <div class="agent-conversation" role="log" aria-live="polite">
       <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
       <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>
     </div>
