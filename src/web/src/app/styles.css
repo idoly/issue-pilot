@@ -61,7 +61,8 @@ button, input, textarea { font: inherit; }
   font-size: 11px;
   font-weight: 700;
 }
-.identity .ads-select { width: 250px; min-width: 0; }
+.identity .ads-select { width: 260px; min-width: 0; }
+.identity .ads-select-selector > span:first-child { max-width: calc(100% - 40px); }
 
 .app-content {
   --side-panel-width: clamp(300px, 25vw, 380px);
@@ -78,7 +79,7 @@ button, input, textarea { font: inherit; }
 .issue-queue[hidden], .issue-workspace[hidden], .agent-panel[hidden], .code-server-pane[hidden] { display: none; }
 .queue-toolbar { display: grid; grid-template-columns: 1fr 32px; gap: 8px; padding: 12px; border-bottom: 1px solid #e0e4e2; }
 .queue-filter { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 8px; padding: 8px 12px; color: #65706c; border-bottom: 1px solid #e0e4e2; }
-.queue-filter .ads-select { width: 130px; }
+.queue-filter .ads-select { width: 150px; }
 .queue-count { min-width: 22px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
 .queue-list { min-height: 0; overflow-y: auto; }
 .queue-item {
@@ -461,6 +462,10 @@ button, input, textarea { font: inherit; }
 
 @media (max-width: 1180px) {
   .app-header { --side-panel-width: 260px; grid-template-columns: var(--side-panel-width) minmax(440px, 1fr) var(--side-panel-width); }
+  .brand strong { display: none; }
+  .identity { padding-right: 0; }
+  .identity > span { display: none; }
+  .identity .ads-select { width: 260px; }
   .app-content { --side-panel-width: 260px; grid-template-columns: var(--side-panel-width) minmax(440px, 1fr) var(--side-panel-width); }
   .app-content.code-expanded { grid-template-columns: minmax(0, 1fr); }
   .app-content.code-expanded .agent-workbench { grid-column: 1; }
@@ -474,10 +479,8 @@ button, input, textarea { font: inherit; }
 @media (max-width: 960px) {
   .app-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 0 12px; }
   .brand { grid-column: 1; padding-left: 0; }
-  .brand strong { display: none; }
   .header-context { display: flex; min-width: 0; grid-column: 2; justify-self: stretch; justify-content: center; }
-  .identity { grid-column: 3; justify-self: end; padding-right: 0; }
-  .identity .ads-select { width: 124px; }
+  .identity { grid-column: 3; justify-self: end; }
   .header-context [role="radiogroup"] { width: min(210px, 100%); }
   .app-content { display: block; overflow-y: auto; }
   .app-content.code-expanded { display: block; overflow: hidden; }

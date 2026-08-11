@@ -84,7 +84,8 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
-    expect(screen.getByLabelText("当前用户")).toBeTruthy();
+    const currentUserSelect = screen.getByLabelText("当前用户");
+    expect(currentUserSelect.closest(".ads-select")?.textContent).toContain("owner@example.test");
     expect(screen.queryByText("生产")).toBeNull();
     expect(screen.queryByText("ISSUE-20260810-038")).toBeNull();
     const agentRegion = screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" });
@@ -183,6 +184,7 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
     fireEvent.click(screen.getByLabelText("当前用户"));
     fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
+    await waitFor(() => expect(currentUserSelect.closest(".ads-select")?.textContent).toContain("lyz@example.test"));
     await waitFor(() => expect(screen.getByText("ISSUE-20260810-038")).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));

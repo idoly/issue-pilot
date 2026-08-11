@@ -56,6 +56,8 @@ function CurrentUserIdentity() {
         size="small"
         value={currentUser()?.subject}
         options={users().map((user) => ({ value: user.subject, label: `${user.name} · ${user.email}` }))}
+        labelRender={(selected) => users().find((user) => user.subject === selected.value)?.email ?? selected.label}
+        popupMatchSelectWidth={320}
         onChange={(subject) => { if (typeof subject === "string") selectCurrentUser(subject); }}
       />
     </div>
