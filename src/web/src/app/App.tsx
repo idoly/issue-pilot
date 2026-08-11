@@ -1,4 +1,4 @@
-import { Button, ConfigProvider, Layout, Segmented, Skeleton, theme } from "@idoly/ant-design-solid";
+import { Button, ConfigProvider, Layout, Segmented, Select, Skeleton, theme } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
@@ -46,10 +46,20 @@ function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; code
 }
 
 function CurrentUserIdentity() {
-  const { currentUser } = useApplicationResources();
+  const { currentUser, selectCurrentUser, users } = useApplicationResources();
   const name = () => currentUser()?.name || currentUser()?.subject || "本地用户";
-  const detail = () => currentUser()?.email || currentUser()?.subject || "本地工作区";
-  return <div class="identity"><span>本地</span><div><strong>{name()}</strong><small>{detail()}</small></div></div>;
+  return (
+    <div class="identity">
+      <span>{name().slice(0, 1)}</span>
+      <Select
+        aria-label="当前用户"
+        size="small"
+        value={currentUser()?.subject}
+        options={users().map((user) => ({ value: user.subject, label: `${user.name} · ${user.email}` }))}
+        onChange={(subject) => { if (typeof subject === "string") selectCurrentUser(subject); }}
+      />
+    </div>
+  );
 }
 
 function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; onSelect: (id: string) => void }) {

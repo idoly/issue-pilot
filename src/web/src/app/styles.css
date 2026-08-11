@@ -48,9 +48,10 @@ button, input, textarea { font: inherit; }
 .app-header .ads-segmented button { color: #b8c3be; box-shadow: none; }
 .app-header .ads-segmented button:hover { color: #fff; }
 .app-header .ads-segmented button[aria-checked="true"] { background: #edf5f2; color: #174e43; box-shadow: 0 1px 2px rgb(0 0 0 / 18%); }
-.identity { grid-column: 3; grid-row: 1; justify-self: end; gap: 8px; padding-right: 18px; }
+.identity { min-width: 0; grid-column: 3; grid-row: 1; justify-self: end; gap: 8px; padding-right: 18px; }
 .identity > span {
   display: grid;
+  flex: 0 0 auto;
   place-items: center;
   width: 30px;
   height: 30px;
@@ -60,9 +61,7 @@ button, input, textarea { font: inherit; }
   font-size: 11px;
   font-weight: 700;
 }
-.identity div { display: grid; line-height: 1.2; }
-.identity strong { font-size: 13px; }
-.identity small { color: #9eaaa6; font-size: 11px; }
+.identity .ads-select { width: 250px; min-width: 0; }
 
 .app-content {
   --side-panel-width: clamp(300px, 25vw, 380px);
@@ -474,9 +473,10 @@ button, input, textarea { font: inherit; }
 @media (max-width: 960px) {
   .app-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 0 12px; }
   .brand { grid-column: 1; padding-left: 0; }
-  .brand strong, .identity div { display: none; }
+  .brand strong { display: none; }
   .header-context { display: flex; min-width: 0; grid-column: 2; justify-self: stretch; justify-content: center; }
   .identity { grid-column: 3; justify-self: end; padding-right: 0; }
+  .identity .ads-select { width: 124px; }
   .header-context [role="radiogroup"] { width: min(210px, 100%); }
   .app-content { display: block; overflow-y: auto; }
   .app-content.code-expanded { display: block; overflow: hidden; }
@@ -522,6 +522,8 @@ button, input, textarea { font: inherit; }
 }
 
 @media (max-width: 600px) {
+  .identity > span { display: none; }
+  .identity .ads-select { width: 42px; }
   .workspace-capacity-section { padding: 14px; }
   .workspace-capacity-title { align-items: start; flex-wrap: wrap; }
   .workspace-capacity-title > div > span { white-space: normal; }

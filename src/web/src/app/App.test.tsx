@@ -13,7 +13,7 @@ vi.mock("../data/client", async (importOriginal) => {
   };
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
-    assignee: id === "ISSUE-20260810-038" ? null : "陈默", assigneeSubject: id === "ISSUE-20260810-038" ? null : "fixture-user",
+    assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
     service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", url: codeServerUrl(id), retryable, bytes: id === "ISSUE-20260810-041" ? 4 * 1024 ** 3 : 0, releasable: id === "ISSUE-20260810-041", releaseBlockedReason: id === "ISSUE-20260810-041" ? null : "workspace_missing" },
@@ -43,7 +43,14 @@ vi.mock("../data/client", async (importOriginal) => {
   };
   return {
     ...actual,
-    loadPeople: vi.fn(async () => [{ subject: "fixture-user", name: "严欣", email: "owner@example.test" }]),
+    loadUsers: vi.fn(async () => [
+      { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
+      { subject: "second-user", name: "刘宜展", email: "lyz@example.test" },
+    ]),
+    loadPeople: vi.fn(async () => [
+      { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
+      { subject: "second-user", name: "刘宜展", email: "lyz@example.test" },
+    ]),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: async () => structuredClone(issues),
@@ -69,7 +76,7 @@ vi.mock("../data/client", async (importOriginal) => {
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
-  afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
+  afterEach(() => { localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); });
 
   test("renders issues and data-backed statistics, then opens configuration", async () => {
     const consoleWarning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -77,7 +84,9 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
+    expect(screen.getByLabelText("当前用户")).toBeTruthy();
     expect(screen.queryByText("生产")).toBeNull();
+    expect(screen.queryByText("ISSUE-20260810-038")).toBeNull();
     const agentRegion = screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" });
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
@@ -172,7 +181,9 @@ describe("issue pilot workspace", () => {
     expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
-    fireEvent.click(screen.getByText("ISSUE-20260810-038").closest("button")!);
+    fireEvent.click(screen.getByLabelText("当前用户"));
+    fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
+    await waitFor(() => expect(screen.getByText("ISSUE-20260810-038")).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
     fireEvent.click(retryButton);
@@ -247,6 +258,7 @@ describe("issue pilot workspace", () => {
     expect(savedService?.deployments[0]?.db?.password).toBe("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
+    expect(client.loadUsers).toHaveBeenCalledTimes(1);
     expect(client.loadPeople).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);

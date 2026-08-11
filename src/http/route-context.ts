@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
@@ -26,9 +26,26 @@ export function serializePerson(person: typeof subjects.$inferSelect) {
   return { subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "" };
 }
 
-export async function ensureCurrentSubject(database: ApiRouteContext["database"]): Promise<string> {
-  const subject = issuePilotConfig.subject;
-  await database.db.insert(subjects).values({ subject, username: subject, displayName: subject, email: "" }).onConflictDoNothing();
+async function ensureConfiguredSubject(database: ApiRouteContext["database"], user: typeof issuePilotConfig.users[number]): Promise<void> {
+  const [existing] = await database.db.select().from(subjects).where(eq(subjects.subject, user.subject)).limit(1);
+  if (!existing) {
+    await database.db.insert(subjects).values({ subject: user.subject, username: user.subject, displayName: user.name, email: user.email });
+  } else if (existing.username !== user.subject || existing.displayName !== user.name || existing.email !== user.email) {
+    await database.db.update(subjects).set({ username: user.subject, displayName: user.name, email: user.email, updatedAt: new Date() }).where(eq(subjects.subject, user.subject));
+  }
+}
+
+export async function ensureConfiguredSubjects(database: ApiRouteContext["database"]): Promise<void> {
+  for (const user of issuePilotConfig.users) await ensureConfiguredSubject(database, user);
+}
+
+export async function ensureCurrentSubject(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">): Promise<string> {
+  const requested = request?.headers["x-issue-pilot-subject"];
+  if (Array.isArray(requested)) throw new ApiError(400, "invalid_current_subject");
+  const subject = requested ?? issuePilotConfig.subject;
+  const user = issuePilotConfig.users.find((candidate) => candidate.subject === subject);
+  if (!user) throw new ApiError(400, "invalid_current_subject");
+  await ensureConfiguredSubject(database, user);
   return subject;
 }
 

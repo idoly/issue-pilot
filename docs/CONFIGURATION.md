@@ -22,7 +22,7 @@ Deployment 是 Agent 授权的唯一配置来源。Runtime 不扫描仓库配置
 | Service/Deployment | SQLite | Repository、环境分支、model、capability 和 credential |
 | Issue policy | 每次 session 从 Deployment 和实际代码状态生成 | 冻结本次 Agent 授权，不保存 credential |
 
-页面不会定义第二份默认值，Shell 也只读取根配置。运行时 policy 不反向修改 Deployment。
+页面不会定义第二份默认值，Shell 也只读取根配置。根配置中的 `subject` 是默认操作人，`users` 是右上角允许切换的操作人名单；配置用户会同步到 SQLite 人员目录。运行时 policy 不反向修改 Deployment。
 
 ## Environment 与 Issue type
 

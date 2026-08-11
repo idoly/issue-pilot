@@ -23,8 +23,9 @@ export function IssueQueue(props: {
   const filtered = createMemo(() => {
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
+      const assigneeMatch = !props.userSubject || issue.assigneeSubject === props.userSubject;
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
-      return statusMatch && (!term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name}`.toLowerCase().includes(term));
+      return assigneeMatch && statusMatch && (!term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name}`.toLowerCase().includes(term));
     });
   });
   let listRequest = 0;
@@ -58,8 +59,8 @@ export function IssueQueue(props: {
   const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(null, { ownedWrite: true });
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
   createEffect(
-    () => ({ assignee: assigneeSubject(), createOpen: createOpen(), subject: props.userSubject }),
-    ({ assignee, createOpen, subject }) => { if (subject && !createOpen && assignee === null) setAssigneeSubject(subject); },
+    () => ({ createOpen: createOpen(), subject: props.userSubject }),
+    ({ createOpen, subject }) => { if (subject && !createOpen) setAssigneeSubject(subject); },
   );
   const [ccOpen, setCcOpen] = createSignal(false);
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });

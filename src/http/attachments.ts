@@ -139,7 +139,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
   app.post<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
     assertIssueIdle(engine, issue.id);
-    const uploader = await ensureCurrentSubject(database);
+    const uploader = await ensureCurrentSubject(database, request);
     const pendingAttachments: PendingAttachment[] = [];
     let attachmentBytes = 0;
     for await (const part of request.files()) {

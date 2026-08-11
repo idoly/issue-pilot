@@ -88,6 +88,18 @@ export interface IssueInput {
   ccSubjects: string[];
 }
 
+const currentUserStorageKey = "issue-pilot.current-user";
+
+export function currentUserSubject(): string | null {
+  return typeof localStorage === "undefined" ? null : localStorage.getItem(currentUserStorageKey);
+}
+
+export function setCurrentUserSubject(subject: string | null): void {
+  if (typeof localStorage === "undefined") return;
+  if (subject) localStorage.setItem(currentUserStorageKey, subject);
+  else localStorage.removeItem(currentUserStorageKey);
+}
+
 async function requestError(response: Response): Promise<Error> {
   const code = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
   return new Error(code ?? `request_failed:${response.status}`);
@@ -95,6 +107,8 @@ async function requestError(response: Response): Promise<Error> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
+  const subject = currentUserSubject();
+  if (subject) headers.set("X-Issue-Pilot-Subject", subject);
   if (init?.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) throw await requestError(response);
@@ -106,6 +120,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponent(key)}${suffix}`;
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
 
+export const loadUsers = () => request<Person[]>("/api/users");
 export const loadPeople = () => request<Person[]>("/api/people");
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadConfig = () => request<Config>("/api/config");

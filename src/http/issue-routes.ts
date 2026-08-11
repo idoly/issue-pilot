@@ -125,7 +125,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     }
     const selectedEnvironment = await findEnvironmentByKey(text(input.environmentKey, "environment_key", 100));
     if (!selectedEnvironment) throw new ApiError(400, "invalid_environment");
-    const reporterSubject = await ensureCurrentSubject(database);
+    const reporterSubject = await ensureCurrentSubject(database, request);
     const issueValues = await parseIssueInput(input, selectedEnvironment);
     const createdIssue = await serializeIssueCreation(async () => {
       const prefix = `ISSUE-${regionalDateStamp()}-`;
@@ -223,7 +223,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
   app.post<{ Params: { key: string } }>("/api/issues/:key/comments", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
     const input = record(request.body);
-    const authorSubject = await ensureCurrentSubject(database);
+    const authorSubject = await ensureCurrentSubject(database, request);
     const comment = await database.db.transaction(async (transaction) => {
       const [createdComment] = await transaction.insert(issueComments).values({ issueId: issue.id, authorSubject, body: text(input.body, "comment", 50_000) }).returning();
       await touchIssue(transaction, issue.id);

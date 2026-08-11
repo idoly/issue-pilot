@@ -94,7 +94,8 @@ npm run build
 | `state.databaseFile` | `issues.db` | 相对 state directory 的 SQLite 文件 |
 | `state.sqliteBusyTimeoutMs` | `5000` | SQLite 等待并发锁的时间 |
 | `regional.*` | `zh-CN`, `Asia/Shanghai` | 工单日期、Agent 时间上下文和页面时间显示；UTC offset 由时区计算 |
-| `subject` | 配置文件中的账号 | 当前未认证操作人 |
+| `subject` | 配置文件中的账号 | 页面首次打开时的默认操作人 |
+| `users` | 见配置文件 | 页面允许切换的操作人名单；启动时同步到人员目录 |
 | `http.*` | `127.0.0.1:3000` | API、logger 和 SSE heartbeat |
 | `web.*` | `127.0.0.1:4173` | Vite dev server 和 Agent stream 重连间隔 |
 | `defaults.*` | 见配置文件 | Environment、Deployment 和 capability 表单/API 共用默认值 |
@@ -285,6 +286,7 @@ SLS 固定调用宿主 `/usr/local/sbin/aliyun`。每次查询创建临时 HOME 
 - 外部入口必须由代理执行 authentication、authorization 和 TLS。
 - `/api/config` 应单独限制并审计。
 - 不信任同一 LAN 内的匿名访问者。
+- 右上角用户切换和 `X-Issue-Pilot-Subject` 只选择本地操作人、列表视角和写入署名，不构成认证或授权；代理仍必须验证真实用户。
 
 ### Secret
 
@@ -310,6 +312,7 @@ Pi built-in file tools 不是操作系统 sandbox。API/Pi 必须使用专用低
 ```bash
 curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:3000/api/me
+curl -fsS http://127.0.0.1:3000/api/users
 infra/playwright.sh status
 infra/code-server.sh status
 ss -ltnp | rg ':3000|:18080'

@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import { asc, eq, inArray, sql } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { configuredCapabilities, CAPABILITY_KEYS, ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { environments, issues, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
-import { ensureCurrentSubject, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import { ensureConfiguredSubjects, ensureCurrentSubject, serializePerson, type ApiRouteContext } from "./route-context.ts";
 import { replaceServiceConfiguration } from "./service-configuration.ts";
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
@@ -21,15 +22,20 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
   const { app, database, engine, modelCatalog } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
 
-  app.get("/api/me", async () => {
-    const subject = await ensureCurrentSubject(database);
+  app.get("/api/users", async () => {
+    await ensureConfiguredSubjects(database);
+    return issuePilotConfig.users.map((user) => ({ subject: user.subject, name: user.name, email: user.email }));
+  });
+
+  app.get("/api/me", async (request) => {
+    const subject = await ensureCurrentSubject(database, request);
     const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
     if (!person) throw new Error("current_subject_not_found");
     return serializePerson(person);
   });
 
   app.get("/api/people", async () => {
-    await ensureCurrentSubject(database);
+    await ensureConfiguredSubjects(database);
     return (await database.db.select().from(subjects).orderBy(asc(subjects.displayName))).map(serializePerson);
   });
 

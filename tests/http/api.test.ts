@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
@@ -52,9 +53,17 @@ test("configuration and issue API preserves relational integrity", async () => {
     const currentUser = await app.inject({ method: "GET", url: "/api/me" });
     assert.equal(currentUser.statusCode, 200);
     const currentSubject = (await json(currentUser)).subject;
-    assert.equal(typeof currentSubject, "string");
+    assert.equal(currentSubject, issuePilotConfig.subject);
+    const users = JSON.parse((await app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string; name: string }>;
+    assert.deepEqual(users.map((user) => user.subject), issuePilotConfig.users.map((user) => user.subject));
+    const switchedUser = await app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" } });
+    assert.deepEqual(await json(switchedUser), { subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" });
+    const invalidUser = await app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } });
+    assert.equal(invalidUser.statusCode, 400);
+    assert.equal((await json(invalidUser)).error, "invalid_current_subject");
     const people = JSON.parse((await app.inject({ method: "GET", url: "/api/people" })).body) as Array<{ subject: string }>;
     assert.ok(people.some((person) => person.subject === currentSubject));
+    assert.ok(people.some((person) => person.subject === "lyz5613@xianhengguoji.com"));
 
     const configurationResponse = await app.inject({ method: "GET", url: "/api/config" });
     assert.equal(configurationResponse.statusCode, 200);
@@ -224,11 +233,11 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(reopened.statusCode, 200, reopened.body);
     assert.equal((await json(reopened)).status, "open");
     const enqueueCountBeforeComment = engine.enqueued.length;
-    const followUp = await app.inject({ method: "POST", url: `/api/issues/${created.id}/comments`, payload: { body: "A note for other users" } });
+    const followUp = await app.inject({ method: "POST", url: `/api/issues/${created.id}/comments`, headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" }, payload: { body: "A note for other users" } });
     assert.equal(followUp.statusCode, 201, followUp.body);
-    const afterFollowUp = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string; comments: Array<{ body: string }> };
+    const afterFollowUp = await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string; comments: Array<{ author: string; body: string }> };
     assert.equal(afterFollowUp.status, "open");
-    assert.deepEqual(afterFollowUp.comments.map((comment) => comment.body), ["A note for other users"]);
+    assert.deepEqual(afterFollowUp.comments.map(({ author, body }) => ({ author, body })), [{ author: "刘宜展", body: "A note for other users" }]);
     assert.equal(engine.enqueued.length, enqueueCountBeforeComment);
     const agentMessage = await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-messages`, payload: { message: "Check the latest evidence" } });
     assert.equal(agentMessage.statusCode, 202, agentMessage.body);
@@ -476,7 +485,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(syncResponse.statusCode, 202, syncResponse.body);
     assert.match(engine.messages.at(-1) ?? "", /Issue metadata was updated/);
     assert.match(engine.messages.at(-1) ?? "", /diagnostic\.txt/);
-    assert.match(engine.messages.at(-1) ?? "", /issues\/issue-20260810-001\/attachments/);
+    assert.ok((engine.messages.at(-1) ?? "").includes(`/issues/${String(created.id).toLowerCase()}/attachments`));
     assert.equal(engine.recordedMessages.at(-1), false);
     engine.running.delete(createdInternalId);
 
