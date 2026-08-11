@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { render, screen, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
 import type { IssueDetail, RunEvent } from "../data/client";
@@ -173,6 +173,15 @@ describe("Agent conversation state", () => {
       running: false,
     });
     await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
+    const conversation = screen.getByRole("log");
+    Object.defineProperties(conversation, {
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent.scroll(conversation);
+    source.emit("message", event({ type: "issue_user", message: "Arrived after scrolling" }, "message-unread"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
     expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 32.9%/272k (auto)")).toBeTruthy();
     expect(screen.getByText("model")).toBeTruthy();
     expect(screen.queryByLabelText("中止处理")).toBeNull();

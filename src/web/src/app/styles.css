@@ -230,17 +230,23 @@ button, input, textarea { font: inherit; }
   display: flex;
   min-width: 0;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-color: var(--pi-scrollbar-thumb) var(--pi-bg);
-  scrollbar-gutter: stable;
+  overflow: hidden;
   flex-direction: column;
   background: var(--pi-bg);
   color: var(--pi-text);
   font-family: var(--pi-font);
 }
-.agent-conversation { min-width: 0; min-height: 0; flex: none; overflow: visible; padding: 0 2px 12px 12px; }
+.agent-conversation {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 2px 12px 12px;
+  scrollbar-color: var(--pi-scrollbar-thumb) var(--pi-bg);
+  scrollbar-gutter: stable;
+}
 .agent-message { min-width: 0; overflow-wrap: anywhere; }
 .agent-message.user { margin: 18px 0 0; padding: 14px; background: var(--pi-user-bg); color: var(--pi-user-message-text); }
 .agent-message.assistant { display: grid; gap: 18px; margin-top: 18px; padding: 0 14px; color: #e4e6e5; font-weight: 350; }
@@ -283,7 +289,7 @@ button, input, textarea { font: inherit; }
 .agent-summary > button svg.expanded { transform: rotate(90deg); }
 .agent-summary-content { margin-top: 14px; }
 .agent-custom-message > .markdown { margin-top: 14px; }
-.agent-empty { display: grid; min-height: 120px; place-items: center; color: var(--pi-dim); font-size: var(--pi-font-size); }
+.agent-empty { display: grid; height: 100%; min-height: 120px; place-items: center; color: var(--pi-dim); font-size: var(--pi-font-size); }
 .agent-scroll-latest { position: absolute; z-index: 4; right: 12px; bottom: 126px; border-color: var(--pi-border-accent); background: var(--pi-export-card-bg, #1e1e24); color: var(--pi-border-accent); box-shadow: 0 3px 12px rgb(0 0 0 / 42%); }
 .agent-working { display: flex; min-height: 30px; align-items: center; gap: 8px; padding: 4px 14px; background: var(--pi-bg); color: var(--pi-muted); font: var(--pi-font-size)/1.5 var(--pi-code-font); }
 .agent-working i { width: 11px; height: 11px; border: 2px solid var(--pi-border-muted); border-top-color: var(--pi-accent); border-radius: 50%; animation: agent-spin 0.8s linear infinite; }
