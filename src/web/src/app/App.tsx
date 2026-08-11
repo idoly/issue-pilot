@@ -49,7 +49,7 @@ function CurrentUserIdentity() {
   const { currentUser, selectCurrentUser, users } = useApplicationResources();
   const name = () => currentUser()?.name || currentUser()?.subject || "本地用户";
   return (
-    <div class="identity">
+    <div class="identity" title={`${name()} · ${currentUser()?.email ?? ""}`}>
       <span>{name().slice(0, 1)}</span>
       <Select
         aria-label="当前用户"

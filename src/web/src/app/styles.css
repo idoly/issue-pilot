@@ -522,8 +522,10 @@ button, input, textarea { font: inherit; }
 }
 
 @media (max-width: 600px) {
-  .identity > span { display: none; }
-  .identity .ads-select { width: 42px; }
+  .identity { position: relative; }
+  .identity > span { display: grid; }
+  .identity .ads-select { position: absolute; z-index: 1; inset: 0; width: 30px; height: 30px; opacity: 0; }
+  .identity .ads-select input[role="combobox"] { position: absolute; inset: 0; width: 30px; height: 30px; }
   .workspace-capacity-section { padding: 14px; }
   .workspace-capacity-title { align-items: start; flex-wrap: wrap; }
   .workspace-capacity-title > div > span { white-space: normal; }
