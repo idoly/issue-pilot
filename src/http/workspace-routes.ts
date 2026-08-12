@@ -1,5 +1,5 @@
 import { ApiError } from "./input.ts";
-import { assertIssueIdle, requireIssue, type ApiRouteContext } from "./route-context.ts";
+import { requireIssue, type ApiRouteContext } from "./route-context.ts";
 import { WorkspaceReleaseRefusal } from "../workspace/lifecycle.ts";
 
 function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["workspaces"]["inspectIssue"]>>) {
@@ -15,7 +15,7 @@ function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["wor
 }
 
 export function registerWorkspaceRoutes(context: ApiRouteContext): void {
-  const { app, database, engine, workspaces } = context;
+  const { app, database, workspaces } = context;
 
   app.get("/api/workspaces/stats", async () => {
     const stats = await workspaces.stats();
@@ -24,7 +24,6 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key/workspace", async (request) => {
     const issue = await requireIssue(database, request.params.key);
-    assertIssueIdle(engine, issue.id);
     try {
       return await workspaces.releaseIssue(issue.id);
     } catch (error) {

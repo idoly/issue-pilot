@@ -112,10 +112,11 @@ Migration 中重建 SQLite table 时，要显式复制需要保留的列、恢�
 2. 通过 `ApiRouteContext` 使用 database、engine、events 和 workspace manager。
 3. 使用 `requireIssue()` 等共享 guard。
 4. 多表更新放在同一个 transaction。
-5. Running Issue 的破坏性修改使用 `assertIssueIdle()`。
-6. 预期业务错误使用稳定的小写错误码和适当 HTTP status。
-7. 在 `src/web/src/data/client.ts` 增加明确 DTO 和 helper。
-8. 添加 HTTP 测试，再添加必要的 Web 交互测试。
+5. 影响代码、policy、附件、session 或 lifecycle 的操作使用 `runIssueExclusive()`，不要在 `isRunning()` 检查后再单独执行。
+6. Service 配置、Issue 创建或 Issue scope 迁移还要先进入共享 scope mutex；固定顺序是 `scope -> Issue reservation`，不要反向获取。
+7. 预期业务错误使用稳定的小写错误码和适当 HTTP status。
+8. 在 `src/web/src/data/client.ts` 增加明确 DTO 和 helper。
+9. 添加 HTTP 测试，再添加必要的 Web 交互测试。
 
 不要返回 raw database error、绝对 credential path 或 secret。Fastify error handler 只把已知 conflict 映射为公开错误；未知错误记录服务端并返回 `internal_error`。
 
@@ -128,8 +129,8 @@ AgentEngine 负责每 Issue 串行、状态转换和 session 生命周期。改�
 - 成功、失败、abort 和 API close 都要释放对应资源。
 - Prod/test 下一轮需要刷新当前 Deployment commit。
 - 已有 dev Repository 必须保留 Issue `base_branch` 历史；只有新加入工单的 Repository 使用当前 Deployment 分支。
-- Resolved Issue 不能运行 Agent。
-- 配置变化要关闭受影响的内存 session。
+- Resolved Issue 不能运行 Agent；排队消息在状态转换失败时不能写入 JSONL 或污染 workspace 状态。
+- 配置变化要一次性 reservation 全部受影响 Issue，并在事务提交前成功关闭内存 session。
 
 Pi JSONL 是 transcript 事实源。不要另建聊天消息表或从 Web 状态重建历史。新增 Pi entry 投影时，先确认它属于 active branch 和 replay 语义；内部 metadata 不应伪装成用户可见消息。
 
@@ -310,6 +311,7 @@ git diff --check
 - 新增可调整默认值时写入 `issue-pilot.config.ts`，不要在调用点、Web 和 Shell 各设 fallback。
 - 错误码稳定、可测试，不用长自然语言作为程序分支。
 - 文件和数据库更新需要说明失败后的状态；Repository 集合变化先准备完整目标文件系统，再用一个事务替换关系事实。
+- 同一页面动作涉及 metadata、CC 和附件时使用一个 API/事务边界，不让 Web 串联多个可被 Agent 穿插的写请求；文件 rollback 失败必须返回稳定错误并保留现场。
 - 只为复杂约束添加注释，不重复代码表面含义。
 - 不加入旧路径、旧状态或旧 key 的自动兼容；异常当前状态明确失败并保留证据。
 

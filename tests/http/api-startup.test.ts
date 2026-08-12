@@ -12,11 +12,14 @@ import { openDatabase } from "../../src/db/client.ts";
 
 class StartupEngine implements AgentController {
   closed = 0;
+  closeError: Error | undefined;
   enqueue(): void {}
   async send(): Promise<void> {}
   isRunning(): boolean { return false; }
-  async closeSession(): Promise<void> {}
-  async close(): Promise<void> { this.closed += 1; }
+  async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(): Promise<void> }) => Promise<T>): Promise<T> {
+    return operation({ enqueue() {}, async closeSession() {} });
+  }
+  async close(): Promise<void> { this.closed += 1; if (this.closeError) throw this.closeError; }
 }
 
 test("closes Fastify exactly once when the process receives a shutdown signal", async () => {
@@ -34,6 +37,22 @@ test("closes Fastify exactly once when the process receives a shutdown signal", 
   removeHandlers();
   assert.equal(target.listenerCount("SIGTERM"), 0);
   assert.equal(target.listenerCount("SIGINT"), 0);
+});
+
+test("closes the database when Agent shutdown fails", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-close-"));
+  const databaseFile = path.join(root, "issues.db");
+  const engine = new StartupEngine();
+  engine.closeError = new Error("agent_close_failed");
+  try {
+    const app = await buildApi({ stateRoot: root, databaseFile, engine, logger: false });
+    await assert.rejects(app.close(), /agent_close_failed/);
+    const database = openDatabase(databaseFile);
+    assert.deepEqual((await database.client.execute("pragma integrity_check")).rows, [{ integrity_check: "ok" }]);
+    await database.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("closes initialized resources when API assembly fails", async () => {

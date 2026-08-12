@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createIssue, loadCurrentUser, sendAgentMessage, setCurrentUserSubject } from "./client";
+import { createIssue, loadCurrentUser, sendAgentMessage, setCurrentUserSubject, updateIssue } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -29,6 +29,22 @@ describe("API client", () => {
     expect(submittedFile.name).toBe("evidence.txt");
     expect(submittedFile.type).toBe("text/plain");
     expect(await submittedFile.text()).toBe("evidence");
+  });
+
+  it("updates issue metadata and attachment changes in one request", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const file = new File(["new evidence"], "new.txt", { type: "text/plain" });
+    const input = { title: "Updated", description: "Details", priority: "p2" as const, type: "smart_analysis" as const, serviceKey: "service-a", assigneeSubject: null, ccSubjects: [] };
+
+    await updateIssue("ISSUE-20260810-001", input, ["attachment-1"], [file]);
+
+    const [, init] = fetch.mock.calls[0]!;
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(JSON.parse(String((init.body as FormData).get("issue")))).toEqual({ ...input, removedAttachmentIds: ["attachment-1"] });
+    expect(((init.body as FormData).get("files") as File).name).toBe("new.txt");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("sends the selected user identity with API requests", async () => {

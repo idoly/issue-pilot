@@ -6,7 +6,7 @@ import { afterEach, test } from "node:test";
 
 import { applicationConfig } from "../../src/config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { environments, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
+import { environments, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 
 const directories: string[] = [];
 
@@ -35,6 +35,7 @@ test("restores interrupted and ready workspaces when the application database re
     await initial.db.insert(subjects).values({ subject: "owner", displayName: "Owner" });
     const [service] = await initial.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     assert.ok(service);
+    await initial.db.insert(serviceDeployments).values({ serviceId: service.id, environmentId: environment.id, config: {} });
     const created = await initial.db.insert(issues).values([
       { key: "ISSUE-20260809-001", title: "Interrupted", status: "in_progress", serviceId: service.id, environmentId: environment.id, reporterSubject: "owner" },
       { key: "ISSUE-20260809-002", title: "Ready", status: "in_progress", serviceId: service.id, environmentId: environment.id, reporterSubject: "owner" },

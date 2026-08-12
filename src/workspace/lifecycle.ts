@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { and, asc, eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { AgentController } from "../agent/engine.ts";
+import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
@@ -138,12 +138,22 @@ export class WorkspaceLifecycleManager {
 
   async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {
     return this.exclusive(async () => {
-      return this.releaseLocked(await this.issueRow(issueId));
+      try { return await this.engine.runExclusive([issueId], async (reservation) => this.releaseLocked(await this.issueRow(issueId), reservation)); }
+      catch (error) {
+        if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceReleaseRefusal(error.message);
+        throw error;
+      }
     });
   }
 
   async reopenIssue(issueId: string): Promise<Issue> {
-    return this.exclusive(async () => this.reopenLocked(await this.issueRow(issueId)));
+    return this.exclusive(async () => {
+      try { return await this.engine.runExclusive([issueId], async () => this.reopenLocked(await this.issueRow(issueId))); }
+      catch (error) {
+        if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceRestoreRefusal(error.message);
+        throw error;
+      }
+    });
   }
 
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }> }> {
@@ -164,13 +174,14 @@ export class WorkspaceLifecycleManager {
       const releaseCandidate = async (candidate: IssueRow) => {
         attemptedIssues.add(candidate.issue.id);
         try {
-          const release = await this.releaseLocked(candidate);
+          const release = await this.engine.runExclusive([candidate.issue.id], (reservation) => this.releaseLocked(candidate, reservation));
           if (!release.alreadyReleased) {
             released.push(release);
             totalBytes = Math.max(0, totalBytes - (workspaceBytes.get(candidate.issue.id) ?? release.releasedBytes));
           }
         } catch (error) {
           if (error instanceof WorkspaceReleaseRefusal) blocked.push({ issueKey: candidate.issue.key, reason: error.reason });
+          else if (error instanceof Error && error.message === "issue_already_running") blocked.push({ issueKey: candidate.issue.key, reason: error.message });
           else throw error;
         }
       };
@@ -269,7 +280,7 @@ export class WorkspaceLifecycleManager {
     return reopened;
   }
 
-  private async releaseLocked(issueRow: IssueRow): Promise<WorkspaceReleaseResult> {
+  private async releaseLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<WorkspaceReleaseResult> {
     const { issue, workspace } = issueRow;
     if (issueRow.environmentKind !== "dev") throw new WorkspaceReleaseRefusal("workspace_not_development");
     const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
@@ -296,7 +307,7 @@ export class WorkspaceLifecycleManager {
     let mode: ReturnType<typeof developmentWorktreeMode>;
     try { mode = developmentWorktreeMode(issue.type); }
     catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
-    await this.engine.closeSession(issue.id);
+    await reservation.closeSession(issue.id);
     try {
       await this.worktrees.removeBatch({
         issueKey: issue.key,

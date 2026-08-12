@@ -109,7 +109,7 @@ sequenceDiagram
 
 执行时先读取 Issue 对应的 Service 和 Environment，再由共享 loader 解析 Deployment 及其完整 Repository 分支集合。Loader 按 Service Repository 定义顺序返回结果，并拒绝缺失、额外或跨 Service 的分支关联。Repository 准备完成后才创建 policy，因此 policy 中的 path、commit 和读写权限来自实际准备结果，而不是页面声明。
 
-Session binding 在第一个可见事件之前写入 SQLite。这样 SSE 客户端不会看到一个无法回放的临时会话。
+Session binding 在第一个可见事件之前写入 SQLite。这样 SSE 客户端不会看到一个无法回放的临时会话。已有非流式 session 的用户消息只有在 `open/pending -> in_progress` 事务成功后才写入 JSONL；若工单已解决，排队消息不会留下未执行的 transcript entry。
 
 Prod/test 每轮结束后释放内存 session；下一轮重新获取 Deployment 最新 commit。Dev session 可以留在内存中继续对话，直到配置变化、显式关闭、失败或 API 停止。
 
@@ -337,13 +337,15 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 
 ## 并发与失败边界
 
-- Agent 按 Issue ID 串行。
+- Agent 按 Issue ID 串行。HTTP 与 workspace maintenance 对工单代码、policy、附件或 lifecycle 的破坏性操作使用同一 Issue reservation；reservation 与 enqueue、send 和其他 reservation 互斥。
 - Git 操作按 state root 和 Repository URL hash 在进程内跨 manager 串行。
 - Workspace inspect、release、reopen 和 maintenance 全局串行。
 - Agent 切换 Repository 集合时先准备完整目标 worktree/checkout，再用一个事务替换全部 Repository 行；prepare 或 finalize 失败会清理新 worktree 并恢复已移除 worktree。
 - Issue key 生成在 API 实例内串行，并由数据库 unique index 兜底。
-- Service 配置整体在一个数据库事务中替换。
-- API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。
+- Service 配置和 Issue scope 变更共享 API 实例内 scope mutex；受影响 Issue 一次性 reservation、成功关闭 session 后，Service 配置才在一个数据库事务中替换。
+- Issue 的 `(service_id, environment_id)` 必须存在对应 Deployment；SQLite trigger 同时阻止无 Deployment 的 Issue insert/update，以及被 Issue 引用的 Deployment scope update/delete。
+- Issue 编辑将 metadata、CC、附件增删和一次 Agent metadata sync 合并为一个 reservation。附件文件先 quarantine/写入，数据库事务失败时恢复；rollback 无法完成会保留现场并显式失败。
+- API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。Agent shutdown 先拒绝新 activity，等待已开始的队列任务和 reservation 完成，再尝试停止全部内存 session；即使 session stop 失败也会关闭数据库。
 
 ## 从原理进入代码
 

@@ -162,14 +162,15 @@ function storedDeploymentConfiguration(deployment: ReturnType<typeof parseServic
   };
 }
 
-export async function replaceServiceConfiguration(options: {
+interface ServiceConfigurationOptions {
   executor: DatabaseExecutor;
   modelCatalog: AgentModelCatalog;
   serviceId: string;
   input: Record<string, unknown>;
-  serviceUpdate?: { name: string; description: string };
-}): Promise<void> {
-  const { executor, modelCatalog, serviceId, input, serviceUpdate } = options;
+}
+
+async function validatedServiceConfiguration(options: ServiceConfigurationOptions) {
+  const { executor, modelCatalog, serviceId, input } = options;
   const { repositories: repositoriesInput, deployments: deploymentsInput } = parseServiceConfigurationInput(input);
 
   const [existingRepositories, existingDeployments, referencedIssues, environmentRows, availableModels] = await Promise.all([
@@ -193,6 +194,16 @@ export async function replaceServiceConfiguration(options: {
   const retainedEnvironmentIds = new Set(deploymentsInput.map((deployment) => environmentsByKey.get(deployment.environmentKey)!.id));
   const referencedEnvironmentIds = new Set(referencedIssues.map((issue) => issue.environmentId));
   if (existingDeployments.some((deployment) => !retainedEnvironmentIds.has(deployment.environmentId) && referencedEnvironmentIds.has(deployment.environmentId))) throw new ApiError(409, "deployment_is_used_by_issues");
+  return { repositoriesInput, deploymentsInput, existingRepositories, existingDeployments, environmentsByKey, existingById };
+}
+
+export async function validateServiceConfiguration(options: ServiceConfigurationOptions): Promise<void> {
+  await validatedServiceConfiguration(options);
+}
+
+export async function replaceServiceConfiguration(options: ServiceConfigurationOptions & { serviceUpdate?: { name: string; description: string } }): Promise<void> {
+  const { executor, modelCatalog, serviceId, input, serviceUpdate } = options;
+  const { repositoriesInput, deploymentsInput, existingRepositories, existingDeployments, environmentsByKey, existingById } = await validatedServiceConfiguration({ executor, modelCatalog, serviceId, input });
 
   if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
   const retainedRepositoryIds = new Set<string>();

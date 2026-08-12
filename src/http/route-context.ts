@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
-import type { AgentController } from "../agent/engine.ts";
+import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { AgentEventBus } from "../agent/events.ts";
 import type { Database, DatabaseConnection } from "../db/client.ts";
 import { issues, subjects } from "../db/schema.ts";
@@ -20,6 +20,7 @@ export interface ApiRouteContext {
   modelCatalog: AgentModelCatalog;
   events: AgentEventBus;
   workspaces: WorkspaceLifecycleManager;
+  runScopeExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export function serializePerson(person: typeof subjects.$inferSelect) {
@@ -58,8 +59,12 @@ export async function requireIssue(database: ApiRouteContext["database"], key: s
   return issue;
 }
 
-export function assertIssueIdle(engine: AgentController, issueId: string): void {
-  if (engine.isRunning(issueId)) throw new ApiError(409, "issue_already_running");
+export async function runIssueExclusive<T>(engine: AgentController, issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T> {
+  try { return await engine.runExclusive(issueIds, operation); }
+  catch (error) {
+    if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
+    throw error;
+  }
 }
 
 export function assertIssueRunnable(issue: Pick<typeof issues.$inferSelect, "status">): void {

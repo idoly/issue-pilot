@@ -47,7 +47,7 @@ PRAGMA integrity_check;
 PRAGMA foreign_key_check;
 ```
 
-`integrity_check` 应为 `ok`，`foreign_key_check` 应返回 0 行。
+`integrity_check` 应为 `ok`，`foreign_key_check` 应返回 0 行。还应确认每张 Issue 的 `(service_id, environment_id)` 都能关联唯一 Deployment；当前 schema 的 trigger 会拒绝新增无 Deployment scope 的 Issue，也会阻止更新或删除仍被 Issue 引用的 Deployment scope。
 
 ### 工单与代码
 
@@ -177,6 +177,9 @@ curl -fsS -X DELETE \
 | `workspace_restore_cleanup_failed` | Reopen 失败后无法完整移除新 worktree、删除空根或记录只读恢复结果 | 保留未知文件、runtime previous、数据库和 bare store，停止重复操作后逐项核对 |
 | `workspace_path_does_not_match_repository` | `workspace_name`、DB path 或当前稳定命名不一致 | 保留现场，核对匹配的数据库与 worktree；不要自动移动或通过 release 改名 |
 | `workspace_not_development` | 对 prod/test 调用了 release | 不需要释放；它们没有 dev workspace |
+| `issue_deployment_required` | Issue 的 Service/Environment 没有匹配 Deployment | 保留 Issue 输入和配置现场，补齐或选择有效 Deployment 后重试；不要绕过 trigger |
+| `attachment_rollback_failed` | 附件写入/删除失败后无法完整恢复文件 | 停止重复编辑，备份 attachment root 和数据库后核对 quarantine、对象路径与记录 |
+| `issue_update_rollback_failed` | 原子工单编辑失败后附件 cleanup/restore 不完整 | 保留 attachment root、Issue 行和日志，逐项核对新增文件与 `.deleting` 文件 |
 
 ## Git 与 runtime 排障
 

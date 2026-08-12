@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { and, eq, ne, notInArray } from "drizzle-orm";
+import { and, eq, inArray, ne, notInArray } from "drizzle-orm";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -29,11 +29,16 @@ import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
 
+export interface AgentReservation {
+  enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
+  closeSession(issueId: string): Promise<void>;
+}
+
 export interface AgentController {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
   send(issueId: string, message: string): Promise<void>;
   isRunning(issueId: string): boolean;
-  closeSession(issueId: string): Promise<void>;
+  runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
   close?(): Promise<void>;
 }
 
@@ -63,6 +68,8 @@ export function repositoryPreparationMode(environmentKind: EnvironmentKind, issu
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
+  private readonly reservations = new Set<string>();
+  private readonly idleWaiters = new Set<() => void>();
   private readonly worktreeManager: WorktreeManager;
   private readonly codeServerManager: CodeServerManager;
   private readonly stateRoot: string;
@@ -71,6 +78,8 @@ export class AgentEngine implements AgentController {
   private readonly sessions = new Map<string, ManagedPiSession>();
   private readonly sharedReadOnlySessions = new Set<string>();
   private readonly piRuntime = new PiSessionRuntime();
+  private closePromise: Promise<void> | undefined;
+  private closing = false;
 
   constructor(database: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
     this.database = database;
@@ -81,6 +90,8 @@ export class AgentEngine implements AgentController {
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
+    this.assertOpen();
+    this.assertNotReserved(issueId);
     this.schedule(issueId, () => this.run(issueId, latestMessage, displayMessage));
   }
 
@@ -88,51 +99,128 @@ export class AgentEngine implements AgentController {
     return (this.runCounts.get(issueId) ?? 0) > 0;
   }
 
-  async closeSession(issueId: string): Promise<void> {
-    await this.stopSession(issueId);
+  async runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T> {
+    this.assertOpen();
+    const reserved = [...new Set(issueIds)].sort();
+    const reservedSet = new Set(reserved);
+    if (reserved.some((issueId) => this.isRunning(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
+    for (const issueId of reserved) this.reservations.add(issueId);
+    let active = true;
+    const assertReserved = (issueId: string) => { if (!active || !reservedSet.has(issueId)) throw new Error("issue_not_reserved"); };
+    try {
+      return await operation({
+        enqueue: (issueId, message, recordMessage) => {
+          assertReserved(issueId);
+          this.schedule(issueId, () => this.run(issueId, message, recordMessage));
+        },
+        closeSession: async (issueId) => {
+          assertReserved(issueId);
+          await this.stopSession(issueId);
+        },
+      });
+    } finally {
+      active = false;
+      for (const issueId of reserved) this.reservations.delete(issueId);
+      this.notifyIdle();
+    }
   }
 
   async send(issueId: string, message: string): Promise<void> {
     if (!message.trim()) throw new Error("agent_message_required");
     if (message.length > issuePilotConfig.limits.agentMessageChars) throw new Error("invalid_agent_message");
-    const userMessage = message.trim();
-    const managed = this.sessions.get(issueId);
-    if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
-      if (managed) await this.stopSession(issueId);
-      this.enqueue(issueId, userMessage, true);
-      return;
+    this.assertOpen();
+    this.assertNotReserved(issueId);
+    this.beginActivity(issueId);
+    try {
+      const [issue] = await this.database.select({ status: issues.status }).from(issues).where(eq(issues.id, issueId)).limit(1);
+      if (!issue) throw new Error("issue_not_found");
+      if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+      const userMessage = message.trim();
+      const managed = this.sessions.get(issueId);
+      if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
+        if (managed) await this.stopSession(issueId);
+        this.assertNotReserved(issueId);
+        this.schedule(issueId, () => this.run(issueId, userMessage, true));
+        return;
+      }
+      if (managed.streaming) {
+        await this.recordUserMessage(issueId, managed, userMessage);
+        await managed.session.steer(promptWithRuntimeTime(userMessage));
+      } else {
+        this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage));
+      }
+    } finally {
+      this.endActivity(issueId);
     }
-    await this.recordUserMessage(issueId, managed, userMessage);
-    if (managed.streaming) await managed.session.steer(promptWithRuntimeTime(userMessage));
-    else this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage));
   }
 
   async close(): Promise<void> {
-    await Promise.all([...this.sessions.keys()].map((issueId) => this.stopSession(issueId)));
+    this.closePromise ??= this.closeLocked();
+    return this.closePromise;
+  }
+
+  private async closeLocked(): Promise<void> {
+    this.closing = true;
+    await this.waitForIdle();
+    const failures: unknown[] = [];
+    for (const issueId of [...this.sessions.keys()]) {
+      try { await this.stopSession(issueId); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "agent_close_failed");
+  }
+
+  private assertOpen(): void {
+    if (this.closing) throw new Error("agent_engine_closing");
+  }
+
+  private assertNotReserved(issueId: string): void {
+    if (this.reservations.has(issueId)) throw new Error("issue_already_running");
+  }
+
+  private beginActivity(issueId: string): void {
+    this.runCounts.set(issueId, (this.runCounts.get(issueId) ?? 0) + 1);
+  }
+
+  private endActivity(issueId: string): void {
+    const remaining = (this.runCounts.get(issueId) ?? 1) - 1;
+    if (remaining > 0) this.runCounts.set(issueId, remaining);
+    else this.runCounts.delete(issueId);
+    this.notifyIdle();
+  }
+
+  private async waitForIdle(): Promise<void> {
+    if (!this.runCounts.size && !this.reservations.size) return;
+    await new Promise<void>((resolve) => { this.idleWaiters.add(resolve); });
+  }
+
+  private notifyIdle(): void {
+    if (this.runCounts.size || this.reservations.size) return;
+    for (const resolve of this.idleWaiters) resolve();
+    this.idleWaiters.clear();
   }
 
   private schedule(issueId: string, operation: () => Promise<void>): void {
-    this.runCounts.set(issueId, (this.runCounts.get(issueId) ?? 0) + 1);
+    this.beginActivity(issueId);
     void this.issueQueue.run(issueId, operation).catch(async (error) => {
       await this.stopSession(issueId).catch(() => undefined);
       try {
-        await this.database.transaction(async (transaction) => {
+        const failed = await this.database.transaction(async (transaction) => {
+          const [failedIssue] = await transaction.update(issues).set({ status: "open", updatedAt: new Date() })
+            .where(and(eq(issues.id, issueId), ne(issues.status, "resolved"))).returning({ id: issues.id });
+          if (!failedIssue) return false;
           await transaction.update(issueWorkspaces).set({
             status: "failed",
             lastError: errorMessage(error),
             updatedAt: new Date(),
           }).where(eq(issueWorkspaces.issueId, issueId));
-          await transaction.update(issues).set({ status: "open", updatedAt: new Date() }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
+          return true;
         });
-        this.publishStatus(issueId, "error");
+        if (failed) this.publishStatus(issueId, "error");
       } catch {
         // A reporting write must not turn a handled background failure into an unhandled rejection.
       }
-    }).finally(() => {
-      const remaining = (this.runCounts.get(issueId) ?? 1) - 1;
-      if (remaining > 0) this.runCounts.set(issueId, remaining);
-      else this.runCounts.delete(issueId);
-    });
+    }).finally(() => this.endActivity(issueId));
   }
 
   private async run(issueId: string, latestMessage?: string, displayMessage = false): Promise<void> {
@@ -298,9 +386,8 @@ export class AgentEngine implements AgentController {
       target: agentSessions.issueId,
       set: { sessionFile, workspacePath: workspaceRoot, updatedAt: new Date() },
     });
+    await this.markRunning(issue.id, codeServerReady);
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
-    await this.database.update(issueWorkspaces).set({ status: "running", codeServerReady, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-    await this.database.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issue.id), ne(issues.status, "resolved")));
 
     const repositoryContexts = prepared.map(({ workspace }, index) => ({ branch: workspace.workingBranch ?? workspace.baseBranch, path: path.relative(workspaceRoot, repositoryPaths[index]!), readOnly: sharedRepositories }));
     const prompt = hadMessages
@@ -322,12 +409,24 @@ export class AgentEngine implements AgentController {
   }
 
   private async promptExisting(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
-    await this.database.transaction(async (transaction) => {
-      await transaction.update(issueWorkspaces).set({ status: "running", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
-      await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() }).where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
-    });
+    await this.markRunning(issueId);
+    await this.recordUserMessage(issueId, managed, message);
     await managed.prompt(promptWithRuntimeTime(message));
     await this.finalizeRun(issueId);
+  }
+
+  private async markRunning(issueId: string, codeServerReady?: boolean): Promise<void> {
+    await this.database.transaction(async (transaction) => {
+      const [runningIssue] = await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() })
+        .where(and(eq(issues.id, issueId), inArray(issues.status, ["open", "pending"]))).returning({ id: issues.id });
+      if (!runningIssue) throw new Error("issue_not_runnable");
+      await transaction.update(issueWorkspaces).set({
+        status: "running",
+        ...(codeServerReady !== undefined ? { codeServerReady } : {}),
+        lastError: null,
+        updatedAt: new Date(),
+      }).where(eq(issueWorkspaces.issueId, issueId));
+    });
   }
 
   private async finalizeRun(issueId: string): Promise<void> {

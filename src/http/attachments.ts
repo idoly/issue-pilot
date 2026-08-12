@@ -10,7 +10,7 @@ import type { Database } from "../db/client.ts";
 import { issueAttachments } from "../db/schema.ts";
 import { issueAttachmentRoot } from "../workspace/state.ts";
 import { ApiError, record, strings } from "./input.ts";
-import { assertIssueIdle, ensureCurrentSubject, requireIssue, touchIssue, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireIssue, runIssueExclusive, touchIssue, type ApiRouteContext } from "./route-context.ts";
 
 const limits = issuePilotConfig.limits.attachment;
 
@@ -57,8 +57,27 @@ export function serializeAttachment(attachment: typeof issueAttachments.$inferSe
 
 type AttachmentWriter = Pick<Database, "insert">;
 
+export interface QuarantinedAttachment {
+  sourcePath: string;
+  temporaryPath: string;
+}
+
+export async function restoreQuarantinedAttachments(quarantined: QuarantinedAttachment[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const { sourcePath, temporaryPath } of [...quarantined].reverse()) {
+    try { await rename(temporaryPath, sourcePath); }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
+}
+
 export async function removeWrittenAttachments(objectKeys: string[]): Promise<void> {
-  await Promise.all(objectKeys.map((objectKey) => rm(objectKey, { force: true }).catch(() => undefined)));
+  const failures: unknown[] = [];
+  await Promise.all(objectKeys.map(async (objectKey) => {
+    try { await rm(objectKey, { force: true }); }
+    catch (error) { failures.push(error); }
+  }));
+  if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
 export async function writePendingAttachments(
@@ -110,35 +129,39 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const attachmentIds = [...new Set(strings(record(request.body).attachmentIds, "attachment_ids"))];
     if (!attachmentIds.length) return reply.code(204).send();
-    assertIssueIdle(engine, issue.id);
-    await engine.closeSession(issue.id);
-    const attachments = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
-    if (attachments.length !== attachmentIds.length) throw new ApiError(404, "attachment_not_found");
+    await runIssueExclusive(engine, [issue.id], async (reservation) => {
+      const attachments = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
+      if (attachments.length !== attachmentIds.length) throw new ApiError(404, "attachment_not_found");
 
-    const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
-    const quarantined: Array<{ sourcePath: string; temporaryPath: string }> = [];
-    try {
-      for (const attachment of attachments) {
-        const sourcePath = await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey);
-        const temporaryPath = path.join(attachmentRoot, `.${attachment.id}-${randomUUID()}.deleting`);
-        await rename(sourcePath, temporaryPath);
-        quarantined.push({ sourcePath, temporaryPath });
+      const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+      const removableFiles = await Promise.all(attachments.map(async (attachment) => ({
+        attachment,
+        sourcePath: await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey, attachment.size),
+      })));
+      await reservation.closeSession(issue.id);
+      const quarantined: QuarantinedAttachment[] = [];
+      try {
+        for (const { attachment, sourcePath } of removableFiles) {
+          const temporaryPath = path.join(attachmentRoot, `.${attachment.id}-${randomUUID()}.deleting`);
+          await rename(sourcePath, temporaryPath);
+          quarantined.push({ sourcePath, temporaryPath });
+        }
+        await database.db.transaction(async (transaction) => {
+          await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
+          await touchIssue(transaction, issue.id);
+        });
+      } catch (error) {
+        try { await restoreQuarantinedAttachments(quarantined); }
+        catch (rollbackError) { throw new Error("attachment_rollback_failed", { cause: new AggregateError([error, rollbackError], "attachment_rollback_failed") }); }
+        throw error;
       }
-      await database.db.transaction(async (transaction) => {
-        await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, attachmentIds)));
-        await touchIssue(transaction, issue.id);
-      });
-    } catch (error) {
-      await Promise.all(quarantined.map(({ sourcePath, temporaryPath }) => rename(temporaryPath, sourcePath).catch(() => undefined)));
-      throw error;
-    }
-    await Promise.all(quarantined.map(({ temporaryPath }) => rm(temporaryPath, { force: true }).catch(() => undefined)));
+      await Promise.all(quarantined.map(({ temporaryPath }) => rm(temporaryPath, { force: true }).catch(() => undefined)));
+    });
     return reply.code(204).send();
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/attachments", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    assertIssueIdle(engine, issue.id);
     const uploader = await ensureCurrentSubject(database, request);
     const pendingAttachments: PendingAttachment[] = [];
     let attachmentBytes = 0;
@@ -148,19 +171,21 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
       pendingAttachments.push(attachment);
     }
     if (!pendingAttachments.length) return reply.code(201).send([]);
-    await engine.closeSession(issue.id);
-
-    const writtenObjectKeys: string[] = [];
-    try {
-      const createdAttachments = await database.db.transaction(async (transaction) => {
-        const attachments = await writePendingAttachments(transaction, stateRoot, issue, uploader, pendingAttachments, writtenObjectKeys);
-        await touchIssue(transaction, issue.id);
-        return attachments;
-      });
-      return reply.code(201).send(createdAttachments);
-    } catch (error) {
-      await removeWrittenAttachments(writtenObjectKeys);
-      throw error;
-    }
+    const createdAttachments = await runIssueExclusive(engine, [issue.id], async (reservation) => {
+      await reservation.closeSession(issue.id);
+      const writtenObjectKeys: string[] = [];
+      try {
+        return await database.db.transaction(async (transaction) => {
+          const attachments = await writePendingAttachments(transaction, stateRoot, issue, uploader, pendingAttachments, writtenObjectKeys);
+          await touchIssue(transaction, issue.id);
+          return attachments;
+        });
+      } catch (error) {
+        try { await removeWrittenAttachments(writtenObjectKeys); }
+        catch (rollbackError) { throw new Error("attachment_rollback_failed", { cause: new AggregateError([error, rollbackError], "attachment_rollback_failed") }); }
+        throw error;
+      }
+    });
+    return reply.code(201).send(createdAttachments);
   });
 }

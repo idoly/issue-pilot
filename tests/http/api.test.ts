@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -25,13 +25,32 @@ const engine = {
   recordedMessages: [] as boolean[],
   closedSessions: [] as string[],
   running: new Set<string>(),
+  reservations: new Set<string>(),
+  closeSessionHook: undefined as undefined | ((issueId: string) => Promise<void>),
   enqueue(issueId: string, message?: string, recordMessage = true) { this.running.add(issueId); this.enqueued.push(issueId); this.messages.push(message); this.recordedMessages.push(recordMessage); },
   isRunning(issueId: string) { return this.running.has(issueId); },
+  async runExclusive<T>(issueIds: string[], operation: (reservation: { enqueue(issueId: string, message?: string, recordMessage?: boolean): void; closeSession(issueId: string): Promise<void> }) => Promise<T>): Promise<T> {
+    const reserved = [...new Set(issueIds)];
+    if (reserved.some((issueId) => this.running.has(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
+    for (const issueId of reserved) this.reservations.add(issueId);
+    try {
+      return await operation({
+        enqueue: (issueId, message, recordMessage = true) => this.enqueue(issueId, message, recordMessage),
+        closeSession: (issueId) => this.closeSession(issueId),
+      });
+    } finally {
+      for (const issueId of reserved) this.reservations.delete(issueId);
+    }
+  },
   async send(issueId: string, message: string) {
+    if (this.reservations.has(issueId)) throw new Error("issue_already_running");
     this.messages.push(message); this.enqueued.push(issueId);
     return { id: `user-${this.messages.length}`, issueId, kind: "user", message, createdAt: new Date().toISOString() };
   },
-  async closeSession(issueId: string) { this.closedSessions.push(issueId); },
+  async closeSession(issueId: string) {
+    this.closedSessions.push(issueId);
+    await this.closeSessionHook?.(issueId);
+  },
 };
 
 async function json(response: { body: string }): Promise<Record<string, unknown>> {
@@ -45,6 +64,8 @@ test("configuration and issue API preserves relational integrity", async () => {
   engine.recordedMessages = [];
   engine.closedSessions = [];
   engine.running.clear();
+  engine.reservations.clear();
+  engine.closeSessionHook = undefined;
   const app = await buildApi({ databaseFile: join(root, "issues.db"), stateRoot: root, engine: engine as never, modelCatalog, logger: false });
   let appClosed = false;
   try {
@@ -243,6 +264,11 @@ test("configuration and issue API preserves relational integrity", async () => {
     const direct = openDatabase(join(root, "issues.db"));
     await direct.db.update(issues).set({ status: "pending" }).where(eq(issues.key, String(created.id)));
     await direct.close();
+    engine.closeSessionHook = async () => { throw new Error("simulated_resolve_session_stop_failure"); };
+    const failedResolve = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "resolved" } });
+    assert.equal(failedResolve.statusCode, 500, failedResolve.body);
+    assert.equal((await app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((response) => JSON.parse(response.body)) as { status: string }).status, "pending");
+    engine.closeSessionHook = undefined;
     const resolved = await app.inject({ method: "PATCH", url: `/api/issues/${created.id}/status`, payload: { status: "resolved" } });
     assert.equal(resolved.statusCode, 200, resolved.body);
     assert.equal((await json(resolved)).status, "resolved");
@@ -355,6 +381,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(updatedAlpha.deployments[0]?.db.password, "db-secret");
     assert.equal(updatedAlpha.deployments[0]?.sls.accessKeySecret, "sls-secret");
 
+    const closedSessionsBeforeInvalidConfiguration = engine.closedSessions.length;
     const missingDbPassword = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
@@ -362,6 +389,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     });
     assert.equal(missingDbPassword.statusCode, 400, missingDbPassword.body);
     assert.equal((await json(missingDbPassword)).error, "invalid_db_password");
+    assert.equal(engine.closedSessions.length, closedSessionsBeforeInvalidConfiguration);
     const clearedOptionalCredentials = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
@@ -391,6 +419,44 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal((await json(runningServiceUpdate)).error, "service_has_running_issues");
     engine.running.delete(createdInternalId);
 
+    const gatedServicePayload = {
+      name: "Alpha gated",
+      description: "serialized with Agent sessions",
+      repositories: updatedAlpha.repositories,
+      deployments: [{
+        environmentKey: "test",
+        repositoryBranches: updatedAlpha.deployments[0]!.repositoryBranches,
+        capabilities: [],
+        agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" },
+      }],
+    };
+    let closeStarted!: () => void;
+    let releaseClose!: () => void;
+    const closeStartedPromise = new Promise<void>((resolve) => { closeStarted = resolve; });
+    const closeGate = new Promise<void>((resolve) => { releaseClose = resolve; });
+    let firstClose = true;
+    engine.closeSessionHook = async () => {
+      if (!firstClose) return;
+      firstClose = false;
+      closeStarted();
+      await closeGate;
+    };
+    const gatedUpdate = app.inject({ method: "PATCH", url: "/api/services/alpha", payload: gatedServicePayload });
+    await closeStartedPromise;
+    const messageDuringUpdate = await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-messages`, payload: { message: "must wait for config" } });
+    assert.equal(messageDuringUpdate.statusCode, 409, messageDuringUpdate.body);
+    assert.equal((await json(messageDuringUpdate)).error, "issue_already_running");
+    const configDuringUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
+    assert.equal(configDuringUpdate.services.find((service) => service.key === "alpha")!.name, "Alpha renamed");
+    releaseClose();
+    assert.equal((await gatedUpdate).statusCode, 200);
+    engine.closeSessionHook = async () => { throw new Error("simulated_session_stop_failure"); };
+    const failedStopUpdate = await app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...gatedServicePayload, name: "Must not persist" } });
+    assert.equal(failedStopUpdate.statusCode, 500, failedStopUpdate.body);
+    const configAfterStopFailure = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
+    assert.equal(configAfterStopFailure.services.find((service) => service.key === "alpha")!.name, "Alpha gated");
+    engine.closeSessionHook = undefined;
+
     const duplicateRepository = await app.inject({
       method: "PATCH",
       url: "/api/services/alpha",
@@ -414,7 +480,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal((await json(missingDeploymentBranch)).error, "invalid_deployment_repository_branches");
     const afterRejectedUpdate = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; repositories: Array<{ url: string }> }> };
     const preservedAlpha = afterRejectedUpdate.services.find((service) => service.key === "alpha")!;
-    assert.equal(preservedAlpha.name, "Alpha renamed");
+    assert.equal(preservedAlpha.name, "Alpha gated");
     assert.deepEqual(preservedAlpha.repositories.map((repository) => repository.url).sort(), ["https://example.test/alpha-extra.git", "https://example.test/alpha.git"]);
 
     const usedDeploymentRemoval = await app.inject({
@@ -425,7 +491,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(usedDeploymentRemoval.statusCode, 409, usedDeploymentRemoval.body);
     assert.equal((await json(usedDeploymentRemoval)).error, "deployment_is_used_by_issues");
     const afterDeploymentRollback = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; deployments: unknown[] }> };
-    assert.equal(afterDeploymentRollback.services.find((service) => service.key === "alpha")?.name, "Alpha renamed");
+    assert.equal(afterDeploymentRollback.services.find((service) => service.key === "alpha")?.name, "Alpha gated");
     assert.equal(afterDeploymentRollback.services.find((service) => service.key === "alpha")?.deployments.length, 1);
 
     const validUpdate = await app.inject({
@@ -434,6 +500,10 @@ test("configuration and issue API preserves relational integrity", async () => {
       payload: { title: "Moved to beta", description: "", priority: "p2", type: "smart_analysis", serviceKey: "beta", assigneeSubject: null, ccSubjects: [] },
     });
     assert.equal(validUpdate.statusCode, 200, validUpdate.body);
+    assert.equal(engine.enqueued.at(-1), createdInternalId);
+    assert.equal(engine.recordedMessages.at(-1), false);
+    assert.match(engine.messages.at(-1) ?? "", /\"key\": "beta"/);
+    engine.running.delete(createdInternalId);
     const updatedList = await app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; service: { key: string } }>;
     assert.equal(updatedList.find((item) => item.id === created.id)?.service.key, "beta");
 
@@ -474,7 +544,72 @@ test("configuration and issue API preserves relational integrity", async () => {
     const createdWithAttachmentDetail = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ fileName: string; sha256: string }> };
     assert.deepEqual(createdWithAttachmentDetail.attachments.map(({ fileName }) => fileName), ["initial.txt"]);
     assert.equal(createdWithAttachmentDetail.attachments[0]?.sha256, createHash("sha256").update("initial evidence").digest("hex"));
-    engine.running.delete(engine.enqueued.at(-1)!);
+    const createdWithAttachmentFull = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string }> };
+    const attachmentIssueInternalId = engine.enqueued.at(-1)!;
+    engine.running.delete(attachmentIssueInternalId);
+    const editBoundary = "issue-pilot-atomic-edit";
+    const editIssue = {
+      title: "Updated with replacement evidence", description: "Atomic edit", priority: "p2", type: "smart_analysis", serviceKey: "alpha", assigneeSubject: null, ccSubjects: [],
+      removedAttachmentIds: [createdWithAttachmentFull.attachments[0]!.id],
+    };
+    const atomicEdit = await app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issueWithAttachment.id}`,
+      headers: { "content-type": `multipart/form-data; boundary=${editBoundary}`, "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" },
+      payload: Buffer.from([
+        `--${editBoundary}`,
+        'Content-Disposition: form-data; name="issue"',
+        "",
+        JSON.stringify(editIssue),
+        `--${editBoundary}`,
+        'Content-Disposition: form-data; name="files"; filename="replacement.txt"',
+        "Content-Type: text/plain",
+        "",
+        "replacement evidence",
+        `--${editBoundary}--`,
+        "",
+      ].join("\r\n")),
+    });
+    assert.equal(atomicEdit.statusCode, 200, atomicEdit.body);
+    const afterAtomicEdit = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { title: string; attachments: Array<{ fileName: string }> };
+    assert.equal(afterAtomicEdit.title, "Updated with replacement evidence");
+    assert.deepEqual(afterAtomicEdit.attachments.map(({ fileName }) => fileName), ["replacement.txt"]);
+    assert.match(engine.messages.at(-1) ?? "", /replacement\.txt/);
+    assert.doesNotMatch(engine.messages.at(-1) ?? "", /initial\.txt/);
+    engine.running.delete(attachmentIssueInternalId);
+
+    const atomicDetail = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string }> };
+    const failingEditDatabase = openDatabase(join(root, "issues.db"));
+    await failingEditDatabase.client.execute("CREATE TRIGGER fail_atomic_attachment_insert BEFORE INSERT ON issue_attachments BEGIN SELECT RAISE(ABORT, 'simulated_atomic_edit_failure'); END");
+    const failedEditBoundary = "issue-pilot-failed-atomic-edit";
+    const failedAtomicEdit = await app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issueWithAttachment.id}`,
+      headers: { "content-type": `multipart/form-data; boundary=${failedEditBoundary}` },
+      payload: Buffer.from([
+        `--${failedEditBoundary}`,
+        'Content-Disposition: form-data; name="issue"',
+        "",
+        JSON.stringify({ ...editIssue, title: "Must roll back", removedAttachmentIds: [atomicDetail.attachments[0]!.id] }),
+        `--${failedEditBoundary}`,
+        'Content-Disposition: form-data; name="files"; filename="must-not-persist.txt"',
+        "Content-Type: text/plain",
+        "",
+        "failed replacement",
+        `--${failedEditBoundary}--`,
+        "",
+      ].join("\r\n")),
+    });
+    assert.equal(failedAtomicEdit.statusCode, 500, failedAtomicEdit.body);
+    await failingEditDatabase.client.execute("DROP TRIGGER fail_atomic_attachment_insert");
+    await failingEditDatabase.close();
+    const afterFailedAtomicEdit = await app.inject({ method: "GET", url: `/api/issues/${issueWithAttachment.id}` }).then((response) => JSON.parse(response.body)) as { title: string; attachments: Array<{ fileName: string }> };
+    assert.equal(afterFailedAtomicEdit.title, "Updated with replacement evidence");
+    assert.deepEqual(afterFailedAtomicEdit.attachments.map(({ fileName }) => fileName), ["replacement.txt"]);
+    const restoredAttachmentDirectory = issueAttachmentRoot(root, String(issueWithAttachment.id));
+    const restoredAttachmentFiles = await readdir(restoredAttachmentDirectory);
+    assert.equal(restoredAttachmentFiles.length, 1);
+    assert.equal(await readFile(join(restoredAttachmentDirectory, restoredAttachmentFiles[0]!), "utf8"), "replacement evidence");
 
     const boundary = "issue-pilot-test-boundary";
     const attachmentContent = "diagnostic output\n";
@@ -613,7 +748,7 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(crossServiceRepositoryUpdate.statusCode, 400);
     assert.equal((await json(crossServiceRepositoryUpdate)).error, "invalid_repository");
     const configuration = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
-    assert.equal(configuration.services.find((service) => service.key === "alpha")?.name, "Alpha renamed");
+    assert.equal(configuration.services.find((service) => service.key === "alpha")?.name, "Alpha gated");
 
     const devIssue = await app.inject({
       method: "POST",

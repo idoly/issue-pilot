@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentEngine, repositoryPreparationMode } from "../../src/agent/engine.ts";
+import { AgentEngine, repositoryPreparationMode, type AgentReservation } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
 async function waitFor(check: () => boolean): Promise<void> {
@@ -28,11 +28,104 @@ test("rejects oversized Agent messages at the engine boundary", async () => {
   await assert.rejects(engine.send("issue", "x".repeat(issuePilotConfig.limits.agentMessageChars + 1)), /invalid_agent_message/);
 });
 
+test("reserves issues against concurrent Agent activity and always releases reservations", async () => {
+  const engine = new AgentEngine({} as never);
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const exclusive = engine.runExclusive(["issue-1"], async () => {
+    assert.equal(engine.isRunning("issue-1"), false);
+    assert.throws(() => engine.enqueue("issue-1"), /issue_already_running/);
+    await assert.rejects(engine.send("issue-1", "message"), /issue_already_running/);
+    await blocked;
+    throw new Error("operation_failed");
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(engine.runExclusive(["issue-1"], async () => undefined), /issue_already_running/);
+  release();
+  await assert.rejects(exclusive, /operation_failed/);
+  let expiredReservation: AgentReservation | undefined;
+  await engine.runExclusive(["issue-1"], async (reservation) => { expiredReservation = reservation; });
+  assert.throws(() => expiredReservation!.enqueue("issue-1"), /issue_not_reserved/);
+  await assert.rejects(expiredReservation!.closeSession("issue-1"), /issue_not_reserved/);
+});
+
+test("drains active reservations before closing and rejects new activity", async () => {
+  const engine = new AgentEngine({} as never);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const reservation = engine.runExclusive(["issue-1"], async () => { await gate; });
+  await new Promise((resolve) => setImmediate(resolve));
+  let closed = false;
+  const closing = engine.close().then(() => { closed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closed, false);
+  assert.throws(() => engine.enqueue("issue-2"), /agent_engine_closing/);
+  await assert.rejects(engine.send("issue-2", "message"), /agent_engine_closing/);
+  await assert.rejects(engine.runExclusive(["issue-2"], async () => undefined), /agent_engine_closing/);
+  release();
+  await reservation;
+  await closing;
+  assert.equal(closed, true);
+});
+
+test("attempts to stop every session when closing", async () => {
+  const engine = new AgentEngine({} as never);
+  const stopped: string[] = [];
+  const internal = engine as unknown as { sessions: Map<string, unknown> };
+  internal.sessions.set("issue-1", { async stop() { stopped.push("issue-1"); throw new Error("stop_failed"); } });
+  internal.sessions.set("issue-2", { async stop() { stopped.push("issue-2"); } });
+  await assert.rejects(engine.close(), /agent_close_failed/);
+  assert.deepEqual(stopped, ["issue-1", "issue-2"]);
+});
+
+test("does not record queued user messages after an issue becomes resolved", async () => {
+  let status = "pending";
+  let recorded = 0;
+  let prompted = 0;
+  let workspaceUpdates = 0;
+  const published: RunEvent[] = [];
+  const issueSelect = { from: () => ({ where: () => ({ limit: async () => [{ status }] }) }) };
+  const transaction = {
+    update: (_table: unknown) => ({
+      set: () => ({
+        where: () => ({
+          returning: async () => status === "open" || status === "pending" ? [{ id: "issue-1" }] : [],
+          then: (resolve: (value: undefined) => void) => { workspaceUpdates += 1; resolve(undefined); },
+        }),
+      }),
+    }),
+  };
+  const database = {
+    select: () => issueSelect,
+    transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction),
+  };
+  const engine = new AgentEngine(database as never, ".issue-pilot", (event) => published.push(event));
+  const internal = engine as unknown as { sessions: Map<string, unknown>; issueQueue: { run<T>(key: string, operation: () => Promise<T>): Promise<T> } };
+  internal.sessions.set("issue-1", {
+    streaming: false,
+    session: {
+      sessionManager: { appendCustomEntry() { recorded += 1; } },
+      async prompt() { prompted += 1; },
+    },
+    async prompt() { prompted += 1; },
+    async stop() {},
+  });
+  await internal.issueQueue.run("issue-1", async () => {
+    await engine.send("issue-1", "queued message");
+    status = "resolved";
+  });
+  await waitFor(() => !engine.isRunning("issue-1"));
+  assert.equal(recorded, 0);
+  assert.equal(prompted, 0);
+  assert.equal(workspaceUpdates, 0);
+  assert.equal(published.length, 0);
+});
+
 test("a failed Agent operation disposes and revokes its SDK session", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-"));
   let stopped = false;
   const published: RunEvent[] = [];
-  const transaction = { update: () => ({ set: () => ({ where: async () => undefined }) }) };
+  const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }], then: (resolve: (value: undefined) => void) => resolve(undefined) }) }) }) };
   const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
   const engine = new AgentEngine(database as never, root, (event) => published.push(event));
   const internal = engine as unknown as {

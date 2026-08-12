@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
+import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 
 import { openDatabase } from "../../src/db/client.ts";
@@ -16,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-4).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -4) };
+  assert.deepEqual(journal.entries.slice(-5).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -5) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -54,6 +55,9 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     assert.equal((await client.execute("pragma table_info('issue_cc_recipients')")).rows.some((column) => column.name === "created_at"), false);
     assert.equal((await client.execute("pragma table_info('issue_pilot_sessions')")).rows.some((column) => column.name === "pi_session_id"), false);
     assert.equal((await client.execute("pragma table_info('service_deployments')")).rows.some((column) => column.name === "base_branch"), false);
+    assert.deepEqual((await client.execute("select name from sqlite_master where type = 'trigger' and name like '%deployment%' order by name")).rows.map((row) => row.name), [
+      "issues_deployment_required_insert", "issues_deployment_required_update", "service_deployments_issues_restrict_delete", "service_deployments_issues_restrict_update",
+    ]);
     assert.deepEqual((await client.execute("select id, alias from service_repositories order by id")).rows, [
       { id: "orders-api", alias: "orders-api" },
       { id: "orders-web", alias: "orders-web" },
@@ -86,15 +90,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const [prod] = await db.insert(environments).values({ key: "prod", name: "Prod", kind: "prod" }).returning();
     const [service] = await db.insert(services).values({ key: "orders", name: "Orders", description: "" }).returning();
     const [repository] = await db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: "git@example.test:orders.git" }).returning();
-    const deployments = await db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: environment!.id, config: { db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" } } },
-      { serviceId: service!.id, environmentId: prod!.id, config: { es: { url: "http://es.example.test", username: "" } } },
-    ]).returning();
-    await db.insert(serviceDeploymentRepositories).values([
-      { deploymentId: deployments[0]!.id, repositoryId: repository!.id, baseBranch: "develop" },
-      { deploymentId: deployments[1]!.id, repositoryId: repository!.id, baseBranch: "release" },
-    ]);
-    assert.deepEqual(deployments.map(({ config }) => configuredCapabilities(config)), [["db"], ["es"]]);
+    const [testDeployment] = await db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: { db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" } } }).returning();
     await assert.rejects(client.execute({
       sql: "insert into issues (id, key, title, reporter_subject, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
       args: ["invalid-scope", "ISSUE-20260805-001", "Invalid scope", "demo-owner", environment!.id, Date.now(), Date.now()],
@@ -104,6 +100,28 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       args: ["valid-scope", "ISSUE-20260805-002", "Valid scope", "demo-owner", service!.id, environment!.id, Date.now(), Date.now()],
     });
     await assert.rejects(client.execute({ sql: "update issues set service_id = null where id = ?", args: ["valid-scope"] }), /issue_scope_required/);
+    await assert.rejects(client.execute({
+      sql: "insert into issues (id, key, title, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      args: ["missing-deployment", "ISSUE-20260805-003", "Missing deployment", "demo-owner", service!.id, prod!.id, Date.now(), Date.now()],
+    }), /issue_deployment_required/);
+    await assert.rejects(client.execute({ sql: "update issues set environment_id = ? where id = ?", args: [prod!.id, "valid-scope"] }), /issue_deployment_required/);
+    const deploymentIsUsed = (error: unknown) => {
+      let cause = error;
+      while (cause && typeof cause === "object") {
+        if (cause instanceof Error && cause.message.includes("deployment_is_used_by_issues")) return true;
+        cause = "cause" in cause ? cause.cause : undefined;
+      }
+      return false;
+    };
+    await assert.rejects(db.update(serviceDeployments).set({ environmentId: prod!.id }).where(eq(serviceDeployments.id, testDeployment!.id)), deploymentIsUsed);
+    await assert.rejects(db.delete(serviceDeployments).where(eq(serviceDeployments.id, testDeployment!.id)), deploymentIsUsed);
+    const [prodDeployment] = await db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, config: { es: { url: "http://es.example.test", username: "" } } }).returning();
+    const deployments = [testDeployment!, prodDeployment!];
+    await db.insert(serviceDeploymentRepositories).values([
+      { deploymentId: testDeployment!.id, repositoryId: repository!.id, baseBranch: "develop" },
+      { deploymentId: prodDeployment!.id, repositoryId: repository!.id, baseBranch: "release" },
+    ]);
+    assert.deepEqual(deployments.map(({ config }) => configuredCapabilities(config)), [["db"], ["es"]]);
     assert.deepEqual((await db.select().from(serviceDeploymentRepositories)).map((branch) => branch.baseBranch).sort(), ["develop", "release"]);
     await assert.rejects(db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} }));
     await db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "second", url: "git@example.test:second.git" });

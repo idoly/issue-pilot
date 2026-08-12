@@ -148,18 +148,6 @@ export async function fetchAttachment(key: string, attachmentId: string): Promis
   return response.blob();
 }
 
-export async function uploadAttachments(key: string, files: File[]): Promise<void> {
-  if (!files.length) return;
-  const form = new FormData();
-  appendFiles(form, files);
-  await request(issuePath(key, "/attachments"), { method: "POST", body: form });
-}
-
-export async function deleteIssueAttachments(key: string, attachmentIds: string[]): Promise<void> {
-  if (!attachmentIds.length) return;
-  await jsonRequest(issuePath(key, "/attachments"), "DELETE", { attachmentIds });
-}
-
 export function createIssue(input: IssueInput & { environmentKey: string }, files: File[] = []): Promise<IssueListItem> {
   if (!files.length) return jsonRequest("/api/issues", "POST", input);
   const form = new FormData();
@@ -167,10 +155,15 @@ export function createIssue(input: IssueInput & { environmentKey: string }, file
   appendFiles(form, files);
   return request("/api/issues", { method: "POST", body: form });
 }
-export const updateIssue = (key: string, input: IssueInput) => jsonRequest<IssueListItem>(issuePath(key), "PATCH", input);
+export function updateIssue(key: string, input: IssueInput, removedAttachmentIds: string[] = [], files: File[] = []): Promise<IssueListItem> {
+  if (!removedAttachmentIds.length && !files.length) return jsonRequest(issuePath(key), "PATCH", input);
+  const form = new FormData();
+  form.append("issue", JSON.stringify({ ...input, removedAttachmentIds }));
+  appendFiles(form, files);
+  return request(issuePath(key), { method: "PATCH", body: form });
+}
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueListItem>(issuePath(key, "/status"), "PATCH", { status });
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
-export const syncIssueUpdate = (key: string) => request<void>(issuePath(key, "/sync"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
 export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

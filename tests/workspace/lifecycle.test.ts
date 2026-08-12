@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal } from "../../src/workspace/lifecycle.ts";
@@ -49,6 +49,9 @@ const engine = {
   enqueue() {},
   async send() {},
   isRunning(issueId: string) { return this.running.has(issueId); },
+  async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
+    return operation({ enqueue() {}, closeSession: (issueId) => this.closeSession(issueId) });
+  },
   async closeSession(issueId: string) { this.closed.push(issueId); },
 };
 
@@ -60,6 +63,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.ok(environment);
     await database.db.insert(subjects).values({ subject: "tester", username: "tester", displayName: "Tester", email: "tester@example.test" });
     const [service] = await database.db.insert(services).values({ key: "workspace-test", name: "Workspace Test" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment.id, config: {} });
     const [issue] = await database.db.insert(issues).values({
       key: "ISSUE-20260810-001",
       title: "Workspace lifecycle",
@@ -385,6 +389,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
 
     const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment!.id, config: {} });
     const [readOnlyIssue] = await database.db.insert(issues).values({
       key: "ISSUE-20260810-099",
       title: "Read-only runtime",

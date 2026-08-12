@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
-import { addIssueComment, attachmentUrl, deleteIssueAttachments, errorMessage, isWorkspaceBusy, retryIssue, syncIssueUpdate, updateIssue, updateIssueStatus, uploadAttachments, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
+import { addIssueComment, attachmentUrl, errorMessage, isWorkspaceBusy, retryIssue, updateIssue, updateIssueStatus, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
@@ -75,10 +75,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
     const additions = [...editAttachments()];
     setEditSaving(true); setEditError("");
     try {
-      await updateIssue(issueId, input);
-      if (removals.length) await deleteIssueAttachments(issueId, removals);
-      if (additions.length) await uploadAttachments(issueId, additions);
-      await syncIssueUpdate(issueId);
+      await updateIssue(issueId, input, removals, additions);
       if (issueGeneration !== generation) return;
       setRemovedAttachmentIds([]); setEditAttachments([]);
       await props.onUpdated();

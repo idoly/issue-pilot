@@ -76,6 +76,15 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
     const events = new AgentEventBus();
     engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event));
+    let scopeTail = Promise.resolve();
+    const runScopeExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
+      const preceding = scopeTail;
+      let complete!: () => void;
+      const queued = new Promise<void>((resolve) => { complete = resolve; });
+      scopeTail = preceding.catch(() => undefined).then(() => queued);
+      await preceding.catch(() => undefined);
+      try { return await operation(); } finally { complete(); }
+    };
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
     await workspaces.maintain();
     stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(error));
@@ -93,13 +102,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         cause = typeof cause === "object" && "cause" in cause ? (cause as { cause?: unknown }).cause : undefined;
       }
       const errorChain = errorMessages.join("\n");
+      for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues"]) {
+        if (errorChain.includes(conflict)) return reply.code(409).send({ error: conflict });
+      }
       if (/UNIQUE constraint failed/i.test(errorChain)) return reply.code(409).send({ error: "conflict" });
       if (/FOREIGN KEY constraint failed/i.test(errorChain)) return reply.code(409).send({ error: "resource_in_use" });
       app.log.error(error);
       return reply.code(500).send({ error: "internal_error" });
     });
 
-    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces };
+    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, runScopeExclusive };
     app.get("/health", async () => ({ ok: true }));
     registerConfigurationRoutes(routeContext);
     registerIssueRoutes(routeContext);
@@ -108,8 +120,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerWorkspaceRoutes(routeContext);
     app.addHook("onClose", async () => {
       stopWorkspaceMaintenance?.();
-      await engine?.close?.();
-      await database.close();
+      try { await engine?.close?.(); }
+      finally { await database.close(); }
     });
     return app;
   } catch (error) {

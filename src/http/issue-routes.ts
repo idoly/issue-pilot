@@ -1,14 +1,19 @@
+import { randomUUID } from "node:crypto";
+import { rename, rm } from "node:fs/promises";
+import path from "node:path";
+
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
-import { classifyRepositoryState, issueRuntimeRoot, pathExists } from "../workspace/state.ts";
-import { type PendingAttachment, readMultipartAttachment, removeWrittenAttachments, serializeAttachment, writePendingAttachments } from "./attachments.ts";
+import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists } from "../workspace/state.ts";
+import { type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { assertIssueIdle, ensureCurrentSubject, requireIssue, serializePerson, touchIssue, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireIssue, runIssueExclusive, serializePerson, touchIssue, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 
@@ -34,15 +39,7 @@ function regionalDateStamp(now = new Date()): string {
 }
 
 export function registerIssueRoutes(context: ApiRouteContext): void {
-  const { app, database, engine, stateRoot, workspaces } = context;
-  let issueCreationTail = Promise.resolve();
-  const serializeIssueCreation = async <T>(operation: () => Promise<T>): Promise<T> => {
-    const precedingCreation = issueCreationTail;
-    let completeCreation!: () => void;
-    issueCreationTail = new Promise<void>((resolve) => { completeCreation = resolve; });
-    await precedingCreation;
-    try { return await operation(); } finally { completeCreation(); }
-  };
+  const { app, database, engine, stateRoot, workspaces, runScopeExclusive } = context;
   const findEnvironmentByKey = async (key: string) => ENVIRONMENT_KINDS.includes(key as EnvironmentKind)
     ? (await database.db.select().from(environments).where(eq(environments.key, key)).limit(1))[0]
     : undefined;
@@ -71,6 +68,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       priority: choice(input.priority, "priority", ISSUE_PRIORITIES),
       type: issueType,
       serviceId: serviceDeployment.service.id,
+      service: { key: serviceDeployment.service.key, name: serviceDeployment.service.name },
       assigneeSubject,
       ccSubjects,
     };
@@ -123,54 +121,118 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     } else {
       input = record(request.body);
     }
-    const selectedEnvironment = await findEnvironmentByKey(text(input.environmentKey, "environment_key", 100));
-    if (!selectedEnvironment) throw new ApiError(400, "invalid_environment");
     const reporterSubject = await ensureCurrentSubject(database, request);
-    const issueValues = await parseIssueInput(input, selectedEnvironment);
-    const createdIssue = await serializeIssueCreation(async () => {
-      const prefix = `ISSUE-${regionalDateStamp()}-`;
-      const existingIssueKeys = await database.db.select({ key: issues.key }).from(issues);
-      const sequence = Math.max(0, ...existingIssueKeys.flatMap(({ key }) => key.startsWith(prefix) ? [Number(key.slice(prefix.length)) || 0] : [])) + 1;
-      const issueKey = `${prefix}${String(sequence).padStart(3, "0")}`;
-      const writtenObjectKeys: string[] = [];
-      try {
-        return await database.db.transaction(async (transaction) => {
-          const [insertedIssue] = await transaction.insert(issues).values({ key: issueKey, title: issueValues.title, description: issueValues.description, priority: issueValues.priority, type: issueValues.type, serviceId: issueValues.serviceId, environmentId: selectedEnvironment.id, reporterSubject, assigneeSubject: issueValues.assigneeSubject }).returning();
-          if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: insertedIssue!.id, subject: recipient })));
-          await transaction.insert(issueWorkspaces).values({ issueId: insertedIssue!.id });
-          await writePendingAttachments(transaction, stateRoot, { id: insertedIssue!.id, key: issueKey }, reporterSubject, initialAttachments, writtenObjectKeys);
-          return insertedIssue!;
-        });
-      } catch (error) {
-        await removeWrittenAttachments(writtenObjectKeys);
-        throw error;
-      }
+    const createdIssue = await runScopeExclusive(async () => {
+      const selectedEnvironment = await findEnvironmentByKey(text(input.environmentKey, "environment_key", 100));
+      if (!selectedEnvironment) throw new ApiError(400, "invalid_environment");
+      const issueValues = await parseIssueInput(input, selectedEnvironment);
+      const issueId = randomUUID();
+      return runIssueExclusive(engine, [issueId], async (reservation) => {
+        const prefix = `ISSUE-${regionalDateStamp()}-`;
+        const existingIssueKeys = await database.db.select({ key: issues.key }).from(issues);
+        const sequence = Math.max(0, ...existingIssueKeys.flatMap(({ key }) => key.startsWith(prefix) ? [Number(key.slice(prefix.length)) || 0] : [])) + 1;
+        const issueKey = `${prefix}${String(sequence).padStart(3, "0")}`;
+        const writtenObjectKeys: string[] = [];
+        let issue: typeof issues.$inferSelect;
+        try {
+          issue = await database.db.transaction(async (transaction) => {
+            const [insertedIssue] = await transaction.insert(issues).values({ id: issueId, key: issueKey, title: issueValues.title, description: issueValues.description, priority: issueValues.priority, type: issueValues.type, serviceId: issueValues.serviceId, environmentId: selectedEnvironment.id, reporterSubject, assigneeSubject: issueValues.assigneeSubject }).returning();
+            if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: insertedIssue!.id, subject: recipient })));
+            await transaction.insert(issueWorkspaces).values({ issueId: insertedIssue!.id });
+            await writePendingAttachments(transaction, stateRoot, { id: insertedIssue!.id, key: issueKey }, reporterSubject, initialAttachments, writtenObjectKeys);
+            return insertedIssue!;
+          });
+        } catch (error) {
+          try { await removeWrittenAttachments(writtenObjectKeys); }
+          catch (rollbackError) { throw new Error("attachment_rollback_failed", { cause: new AggregateError([error, rollbackError], "attachment_rollback_failed") }); }
+          throw error;
+        }
+        reservation.enqueue(issue.id);
+        return issue;
+      });
     });
-    engine.enqueue(createdIssue.id);
     return reply.code(201).send(await serializeIssueSummary(createdIssue));
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
-    assertIssueIdle(engine, issue.id);
-    const input = record(request.body);
-    const [issueEnvironment] = await database.db.select({ id: environments.id, kind: environments.kind }).from(environments).where(eq(environments.id, issue.environmentId)).limit(1);
-    if (!issueEnvironment) throw new ApiError(409, "issue_scope_not_found");
-    const issueValues = await parseIssueInput(input, issueEnvironment);
-    await engine.closeSession(issue.id);
-    await database.db.transaction(async (transaction) => {
-      await transaction.update(issues).set({ title: issueValues.title, description: issueValues.description, priority: issueValues.priority, type: issueValues.type, serviceId: issueValues.serviceId, assigneeSubject: issueValues.assigneeSubject, updatedAt: new Date() }).where(eq(issues.id, issue.id));
-      await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
-      if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: issue.id, subject: recipient })));
-    });
-    return serializeIssueSummary(await requireIssue(database, issue.key));
+    const pendingAttachments: PendingAttachment[] = [];
+    let attachmentBytes = 0;
+    let input: Record<string, unknown>;
+    if (request.isMultipart()) {
+      let issueField: unknown;
+      for await (const part of request.parts()) {
+        if (part.type === "file") {
+          const attachment = await readMultipartAttachment(part, attachmentBytes);
+          attachmentBytes += attachment.content.length;
+          pendingAttachments.push(attachment);
+        } else if (part.fieldname === "issue") {
+          issueField = part.value;
+        }
+      }
+      try { input = record(JSON.parse(text(issueField, "issue", 100_000))); }
+      catch (error) {
+        if (error instanceof ApiError) throw error;
+        throw new ApiError(400, "invalid_issue");
+      }
+    } else {
+      input = record(request.body);
+    }
+    const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
+    const editorSubject = await ensureCurrentSubject(database, request);
+    return runScopeExclusive(() => runIssueExclusive(engine, [issue.id], async (reservation) => {
+      const currentIssue = await requireIssue(database, issue.key);
+      const [issueEnvironment] = await database.db.select({ id: environments.id, key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1);
+      if (!issueEnvironment) throw new ApiError(409, "issue_scope_not_found");
+      const issueValues = await parseIssueInput(input, issueEnvironment);
+      const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
+      const removedAttachmentIdSet = new Set(removedAttachmentIds);
+      const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
+      if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
+      const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+      const removableFiles = await Promise.all(removedAttachments.map(async (attachment) => ({
+        attachment,
+        sourcePath: await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey, attachment.size),
+      })));
+      await reservation.closeSession(issue.id);
+      const quarantined: QuarantinedAttachment[] = [];
+      const writtenObjectKeys: string[] = [];
+      let attachmentDtos: Array<ReturnType<typeof serializeAttachment>> = [];
+      try {
+        for (const { attachment, sourcePath } of removableFiles) {
+          const temporaryPath = path.join(attachmentRoot, `.${attachment.id}-${randomUUID()}.deleting`);
+          await rename(sourcePath, temporaryPath);
+          quarantined.push({ sourcePath, temporaryPath });
+        }
+        const createdAttachments = await database.db.transaction(async (transaction) => {
+          await transaction.update(issues).set({ title: issueValues.title, description: issueValues.description, priority: issueValues.priority, type: issueValues.type, serviceId: issueValues.serviceId, assigneeSubject: issueValues.assigneeSubject, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+          await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
+          if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: issue.id, subject: recipient })));
+          if (removedAttachmentIds.length) await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, removedAttachmentIds)));
+          return writePendingAttachments(transaction, stateRoot, issue, editorSubject, pendingAttachments, writtenObjectKeys);
+        });
+        attachmentDtos = [
+          ...currentAttachments.filter((attachment) => !removedAttachmentIdSet.has(attachment.id)).map(serializeAttachment),
+          ...createdAttachments,
+        ];
+      } catch (error) {
+        const rollbackErrors: unknown[] = [];
+        try { await restoreQuarantinedAttachments(quarantined); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
+        if (rollbackErrors.length) throw new Error("issue_update_rollback_failed", { cause: new AggregateError([error, ...rollbackErrors], "issue_update_rollback_failed") });
+        throw error;
+      }
+      await Promise.all(quarantined.map(({ temporaryPath }) => rm(temporaryPath, { force: true }).catch(() => undefined)));
+      if (currentIssue.status !== "resolved") {
+        reservation.enqueue(issue.id, issueMetadataUpdatePrompt({ issue: { ...currentIssue, ...issueValues }, service: issueValues.service, environmentKey: issueEnvironment.key, attachments: attachmentDtos, attachmentPath: attachmentRoot }), false);
+      }
+      return serializeIssueSummary(await requireIssue(database, issue.key));
+    }));
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key/status", async (request) => {
     const issue = await requireIssue(database, request.params.key);
     const targetStatus = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
-    const validTransition = (targetStatus === "resolved" && issue.status === "pending") || (targetStatus === "open" && issue.status === "resolved");
-    if (!validTransition) throw new ApiError(409, "invalid_issue_status_transition");
     if (targetStatus === "open") {
       try { return serializeIssueSummary(await workspaces.reopenIssue(issue.id)); }
       catch (error) {
@@ -178,9 +240,14 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         throw error;
       }
     }
-    const [updatedIssue] = await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, "pending"))).returning();
-    if (!updatedIssue) throw new ApiError(409, "invalid_issue_status_transition");
-    return serializeIssueSummary(updatedIssue);
+    return runIssueExclusive(engine, [issue.id], async (reservation) => {
+      const currentIssue = await requireIssue(database, issue.key);
+      if (currentIssue.status !== "pending") throw new ApiError(409, "invalid_issue_status_transition");
+      await reservation.closeSession(issue.id);
+      const [updatedIssue] = await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() }).where(and(eq(issues.id, issue.id), eq(issues.status, "pending"))).returning();
+      if (!updatedIssue) throw new ApiError(409, "invalid_issue_status_transition");
+      return serializeIssueSummary(updatedIssue);
+    });
   });
 
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
