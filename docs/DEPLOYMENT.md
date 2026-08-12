@@ -143,7 +143,7 @@ Vite 监听所有 Web 接口并配置 `/api` 和 `/code-server` proxy，只用�
 1. 创建 Service。
 2. 添加一个或多个 Repository。
 3. 为需要的 Environment 添加 Deployment。
-4. 填写 `baseBranch`。
+4. 按 Repository 别名分别填写 `baseBranch`。
 5. 选择 Pi provider、model 和 thinking level。
 6. 只启用确实需要的 capability，并填写连接信息。
 
@@ -328,6 +328,6 @@ ss -ltnp | rg ':3000|:18080'
 - 所有 code-server 会话使用 Issue multi-root runtime，全部 Repository 的 Git Graph 可见。
 - Attachment 可以预览/下载，文件 mode 和 hash 正确。
 
-已有工单的部署应做全量代码验收，而不是只抽查一个 URL：逐个读取 `/api/issues/<key>`，确认 code-server URL 返回 200；解析对应 `.code-workspace`，确认每个 folder link 可达；以 `GIT_OPTIONAL_LOCKS=0` 只读检查 HEAD、branch ref、`git status --porcelain` 和最近 Git log。Prod/test 应为 detached read-only checkout，dev runtime HEAD 应等于本地 working branch ref。
+已有工单的部署应做全量代码验收，而不是只抽查一个 URL：逐个读取 `/api/issues/<key>`，确认 code-server URL 返回 200；解析对应 `.code-workspace`，确认每个 folder link 可达；以 `GIT_OPTIONAL_LOCKS=0` 只读检查 HEAD、branch ref、`git status --porcelain` 和最近 Git log。Prod/test 应为 detached read-only checkout，dev runtime HEAD 应等于本地 working branch ref。当前 Service Repository 数量与 released dev 历史集合不一致不一定是错误；先比较 Repository 加入时间和 Issue 首次准备时间，不要直接回填历史数据。
 
 日常健康检查和数据库验证命令见 [运维手册](RUNBOOK.md#日常检查)。

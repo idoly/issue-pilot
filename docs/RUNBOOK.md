@@ -63,6 +63,8 @@ PRAGMA foreign_key_check;
 
 Git 验收使用只读命令，并设置 `GIT_OPTIONAL_LOCKS=0`，避免健康检查刷新 worktree index。逐个记录 remote、HEAD、当前 branch、`status --porcelain` 和最近 log；released dev 还要比较 `refs/heads/<workingBranch>` 与 runtime HEAD。
 
+对比当前 Service 配置时分开判断：prod/test 应覆盖当前全部 Repository；活动 dev 会在下一轮补入新增 Repository；released dev 可以合法保留首次准备/释放时的历史集合。若数量不同，先比较 `service_repositories.created_at`、Issue/`issue_repositories.created_at`、本地 working branch 和 runtime manifest。不要只按当前 Service 数量批量插入 `issue_repositories` 或改写历史 `base_branch`。
+
 ### 持久文件
 
 建议定期检查：
@@ -188,7 +190,7 @@ curl -fsS -X DELETE \
 
 ### Dev 无法重建 worktree
 
-除了本地 working branch，还需要检查 Deployment `baseBranch` 是否能 fetch。Base branch 用于确认当前环境基线；Issue branch 用于恢复工单代码，两者用途不同。
+除了本地 working branch，还需要检查该 Issue Repository 保存的 `base_branch` 是否能 fetch。已有 dev Repository 使用这个历史基线恢复，不会因当前 Deployment 改分支而自动改写；新加入工单的 Repository 才读取当前 Deployment `baseBranch`。Base branch 用于确认基线；Issue branch 用于恢复工单代码，两者用途不同。
 
 如果 `local_path` 与当前 Repository 名称不一致，系统不会自动移动目录。先检查 worktree 是否 dirty；clean workspace 可以通过受管 release 后重新创建，dirty workspace 应先人工处理修改。
 
@@ -307,7 +309,7 @@ Agent 失败后：
 | API 启动失败 | Startup error、state root、DB integrity | 删除未知 Issue 目录 |
 | Agent 回到 open | `last_error`、model、Deployment、Git | 把 credential 放进 prompt |
 | Workspace 无法释放 | Git status、Agent、根目录布局 | 直接删除 workspace |
-| Released dev 无代码 | 本地 branch ref、bare repository | 依赖远程 Issue branch |
+| Released dev 无代码 | 本地 branch ref、历史 Repository 集合、bare repository | 按当前 Service 数量直接回填 |
 | code-server 无 Git 历史 | Manifest、`workspace=`、host Git | 复制 `.git` |
 | Capability 超限 | 缩小查询 | 静默截断或无限放宽 |
 | 配置保存 409 | Running Issue、引用完整性 | 直接改 SQLite 绕过事务 |

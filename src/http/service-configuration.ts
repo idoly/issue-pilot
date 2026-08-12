@@ -172,9 +172,10 @@ export async function replaceServiceConfiguration(options: {
   const { executor, modelCatalog, serviceId, input, serviceUpdate } = options;
   const { repositories: repositoriesInput, deployments: deploymentsInput } = parseServiceConfigurationInput(input);
 
-  const [existingRepositories, existingDeployments, environmentRows, availableModels] = await Promise.all([
+  const [existingRepositories, existingDeployments, referencedIssues, environmentRows, availableModels] = await Promise.all([
     executor.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
     executor.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId)),
+    executor.select({ environmentId: issues.environmentId }).from(issues).where(eq(issues.serviceId, serviceId)),
     executor.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)),
     modelCatalog.list(),
   ]);
@@ -190,10 +191,8 @@ export async function replaceServiceConfiguration(options: {
   const configuredIds = repositoriesInput.flatMap((repository) => repository.id ? [repository.id] : []);
   if (new Set(configuredIds).size !== configuredIds.length || (serviceUpdate && configuredIds.some((id) => !existingById.has(id)))) throw new ApiError(400, "invalid_repository");
   const retainedEnvironmentIds = new Set(deploymentsInput.map((deployment) => environmentsByKey.get(deployment.environmentKey)!.id));
-  for (const deployment of existingDeployments) {
-    const used = !retainedEnvironmentIds.has(deployment.environmentId) && (await executor.select({ id: issues.id }).from(issues).where(and(eq(issues.serviceId, serviceId), eq(issues.environmentId, deployment.environmentId))).limit(1))[0];
-    if (used) throw new ApiError(409, "deployment_is_used_by_issues");
-  }
+  const referencedEnvironmentIds = new Set(referencedIssues.map((issue) => issue.environmentId));
+  if (existingDeployments.some((deployment) => !retainedEnvironmentIds.has(deployment.environmentId) && referencedEnvironmentIds.has(deployment.environmentId))) throw new ApiError(409, "deployment_is_used_by_issues");
 
   if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
   const retainedRepositoryIds = new Set<string>();

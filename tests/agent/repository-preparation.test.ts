@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -135,13 +135,30 @@ test("uses unified code-server runtimes while preserving read-only and writable 
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.codeServerReady, true);
     assert.equal(policies[2]!.service.repositories[0]!.codeAccess, "write");
+
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "prod" }).where(and(
+      eq(serviceDeploymentRepositories.deploymentId, deployments[1]!.id),
+      eq(serviceDeploymentRepositories.repositoryId, repositories[0]!.id),
+    ));
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "develop" }).where(and(
+      eq(serviceDeploymentRepositories.deploymentId, deployments[1]!.id),
+      eq(serviceDeploymentRepositories.repositoryId, repositories[1]!.id),
+    ));
+    await internal.run(devIssue!.id);
+    const repeatedDevRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));
+    assert.deepEqual(repeatedDevRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)), [
+      { url: remotes[0], baseBranch: "develop" },
+      { url: remotes[1], baseBranch: "prod" },
+    ]);
+
     assert.deepEqual(codeServerPaths, [
       issueRuntimeRoot(stateRoot, prodIssue!.key),
       issueRuntimeRoot(stateRoot, prodIssue!.key),
       issueRuntimeRoot(stateRoot, devIssue!.key),
+      issueRuntimeRoot(stateRoot, devIssue!.key),
     ]);
     await engine.close();
-    assert.equal(sessionStops, 3);
+    assert.equal(sessionStops, 4);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

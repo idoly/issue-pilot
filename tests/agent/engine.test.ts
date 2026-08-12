@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentEngine, repositoryPreparationPlan } from "../../src/agent/engine.ts";
+import { AgentEngine, repositoryPreparationMode } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
 async function waitFor(check: () => boolean): Promise<void> {
@@ -16,11 +16,11 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error("condition_not_met");
 }
 
-test("selects shared snapshots and configured dev branch modes", () => {
-  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "prod", issueType: "smart_analysis", deploymentBaseBranch: "prod" }), { mode: "shared", baseBranch: "prod" });
-  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "test", issueType: "smart_analysis", deploymentBaseBranch: "test" }), { mode: "shared", baseBranch: "test" });
-  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "dev", issueType: "defect_fix", deploymentBaseBranch: "release" }), { mode: "hotfix", baseBranch: "release" });
-  assert.deepEqual(repositoryPreparationPlan({ environmentKind: "dev", issueType: "feature_development", deploymentBaseBranch: "develop" }), { mode: "feature", baseBranch: "develop" });
+test("selects repository preparation modes from environment and issue type", () => {
+  assert.equal(repositoryPreparationMode("prod", "smart_analysis"), "shared");
+  assert.equal(repositoryPreparationMode("test", "smart_analysis"), "shared");
+  assert.equal(repositoryPreparationMode("dev", "defect_fix"), "hotfix");
+  assert.equal(repositoryPreparationMode("dev", "feature_development"), "feature");
 });
 
 test("rejects oversized Agent messages at the engine boundary", async () => {

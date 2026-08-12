@@ -43,6 +43,7 @@ Never automatically delete or rewrite evidence when state is dirty, untracked, r
 | Project paths, server, retention, runtime, and limits | `issue-pilot.config.ts` |
 | Current business constants and states | `src/domain/contracts.ts` |
 | Repository state classification | `src/workspace/state.ts` |
+| Runtime Deployment repository resolution | `src/workspace/deployment.ts` |
 | Dev Issue code after workspace release | Local bare-store working branch ref |
 | Prod/test code | Latest fetched Deployment base-branch commit |
 | Conversation history | Per-Issue Pi JSONL active branch |
@@ -63,7 +64,7 @@ Do not create a second source for one of these facts.
 | Agent lifecycle or events | `src/agent` |
 | Model/tool authorization | `src/pi` |
 | External capability | `src/capabilities` |
-| Git, checkout, worktree, runtime, release | `src/workspace` |
+| Deployment repository resolution, Git, worktree, runtime, release | `src/workspace` |
 | Web DTO/request | `src/web/src/data/client.ts` |
 | Web interaction | `src/web/src/app` |
 | Container/runtime integration | `infra` |
@@ -78,6 +79,7 @@ Any change must continue to satisfy:
 - Prod/test repositories are always `read_only`.
 - Active dev repositories are `development_workspace`; released dev repositories are `development_snapshot`.
 - Released dev recovery uses local `refs/heads/<workingBranch>`, never a remote Issue-branch fallback.
+- Existing dev repository `base_branch` values remain Issue history; current Deployment branches apply to prod/test refreshes and repositories newly added to an Issue.
 - Writable dependencies and build trees are never shared across Issues.
 - Attachments remain one durable `0400` copy; runtime contains no attachment copy or link.
 - Dirty, untracked, running, invalid-layout, and unmanaged state is preserved and fails explicitly.
@@ -114,7 +116,7 @@ A complete behavior change may require updates in several places:
 - Focused tests for success and failure.
 - The one document that owns the changed fact.
 
-Do not duplicate shared arrays, numeric limits, defaults, or state conditions to make one layer compile. Reuse `issue-pilot.config.ts`, a domain helper, or the owning manager.
+Do not duplicate shared arrays, numeric limits, defaults, state conditions, or Deployment repository joins to make one layer compile. Reuse `issue-pilot.config.ts`, `CAPABILITY_KEYS`, a domain helper, or the owning workspace manager.
 
 ## Verification
 

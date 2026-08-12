@@ -1,8 +1,9 @@
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
-import { agentSessions, environments, issueRepositories, issueWorkspaces, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories } from "../db/schema.ts";
+import { agentSessions, environments, issueRepositories, issueWorkspaces, issues } from "../db/schema.ts";
 import { CodeServerManager } from "./code-server.ts";
+import { loadDeploymentRepositories } from "./deployment.ts";
 import { repositoryWorkspaceNames, WorktreeManager } from "./git.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RuntimePreparationResult } from "./runtime.ts";
 import { classifyRepositoryState } from "./state.ts";
@@ -17,18 +18,10 @@ async function prepareReadOnlyIssueRuntime(
   codeServer: CodeServer,
   worktrees: WorktreeManager,
 ): Promise<void> {
-  const [deployment, repositories, allRepositories, existingRepositories] = await Promise.all([
-    database.select().from(serviceDeployments).where(and(eq(serviceDeployments.serviceId, issue.serviceId), eq(serviceDeployments.environmentId, issue.environmentId))).limit(1).then((rows) => rows[0]),
-    database.select({ repository: serviceRepositories, baseBranch: serviceDeploymentRepositories.baseBranch }).from(serviceRepositories)
-      .innerJoin(serviceDeploymentRepositories, eq(serviceDeploymentRepositories.repositoryId, serviceRepositories.id))
-      .innerJoin(serviceDeployments, and(eq(serviceDeployments.id, serviceDeploymentRepositories.deploymentId), eq(serviceDeployments.serviceId, issue.serviceId), eq(serviceDeployments.environmentId, issue.environmentId)))
-      .where(eq(serviceRepositories.serviceId, issue.serviceId)),
-    database.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, issue.serviceId)),
+  const [{ repositories }, existingRepositories] = await Promise.all([
+    loadDeploymentRepositories(database, { serviceId: issue.serviceId, environmentId: issue.environmentId }),
     database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
   ]);
-  if (!deployment) throw new Error("issue_service_deployment_not_found");
-  if (!allRepositories.length) throw new Error("selected_service_has_no_repository");
-  if (repositories.length !== allRepositories.length) throw new Error("deployment_repository_branches_invalid");
   if (existingRepositories.length && classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
   const urls = repositories.map(({ repository }) => repository.url);
   const names = repositoryWorkspaceNames(urls);

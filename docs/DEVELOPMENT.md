@@ -38,7 +38,7 @@ API 为 `http://127.0.0.1:3000`，Vite 本机入口为 `http://127.0.0.1:4173`�
 | `src/agent` | `engine.ts`, `pi-session.ts` | Issue queue、Pi session 和事件 |
 | `src/pi` | `policy.ts`, `tools.ts` | 冻结授权、model 和 custom tools |
 | `src/capabilities` | `broker.ts`, `contracts.ts` | 外部读取工具的 scope、schema 和 client |
-| `src/workspace` | `git.ts`, `state.ts`, `runtime.ts`, `lifecycle.ts` | Git、路径与 repository state、runtime 和回收 |
+| `src/workspace` | `deployment.ts`, `git.ts`, `state.ts`, `runtime.ts`, `lifecycle.ts` | Deployment 仓库解析、Git、repository state、runtime 和回收 |
 | `src/web/src/data` | `client.ts` | Web 使用的 API contract 和 request helpers |
 | `src/web/src/app` | `App.tsx` | 页面状态、业务组件和对话投影 |
 | `infra` | `playwright.sh`, `code-server.sh` | 固定容器和宿主 runtime 边界 |
@@ -63,7 +63,7 @@ Agent 请求多经过两条额外路径：
 - `agent-routes.ts -> AgentEngine -> repository preparation -> IssuePolicy -> Pi session`
 - `Pi official event -> AgentEventBus -> SSE -> conversation projection`
 
-Workspace 操作必须经过 `src/workspace` manager，不能在 route 中直接删除目录或执行零散 Git 命令。
+Workspace 操作必须经过 `src/workspace` manager，不能在 route 中直接删除目录或执行零散 Git 命令。执行期 Service/Environment 的 Repository 分支集合统一通过 `loadDeploymentRepositories()` 解析；Agent、冷启动和后续 runtime 入口不要各自重写 join 与完整性判断。
 
 ## 共享业务 contract
 
@@ -126,7 +126,8 @@ AgentEngine 负责每 Issue 串行、状态转换和 session 生命周期。改�
 - Repository 必须先准备，policy 才能构造。
 - Session binding 必须早于第一个可见事件持久化。
 - 成功、失败、abort 和 API close 都要释放对应资源。
-- Prod/test 下一轮需要刷新 Deployment commit。
+- Prod/test 下一轮需要刷新当前 Deployment commit。
+- 已有 dev Repository 必须保留 Issue `base_branch` 历史；只有新加入工单的 Repository 使用当前 Deployment 分支。
 - Resolved Issue 不能运行 Agent。
 - 配置变化要关闭受影响的内存 session。
 
@@ -171,7 +172,7 @@ Workspace release 必须继续拒绝：
 - 路径不符合当前推导规则。
 - 非 dev Issue。
 
-Git tests 使用临时本地 remote 和真实 Git 命令，至少覆盖 success、dirty refusal、missing ref、重复准备和 cold-start reconstruction。
+Git tests 使用临时本地 remote 和真实 Git 命令，至少覆盖 success、dirty refusal、missing ref、重复准备和 cold-start reconstruction。`tests/workspace/deployment.test.ts` 单独覆盖 Deployment 仓库顺序、完整性和 Service 归属。
 
 ## 新增 capability
 
@@ -283,7 +284,7 @@ git diff --check
 
 - 小型纯函数放回拥有其事实或生命周期的模块，不为单个三五行 helper 新建文件。
 - 只有事务边界、安全边界、独立进程、外部协议 client 或稳定可复用组件才单独成文件。
-- `workspace/state.ts` 统一拥有 state 路径、文件存在性和 Repository 状态分类；`workspace/runtime.ts` 统一拥有 runtime 生成和批量恢复。
+- `workspace/state.ts` 统一拥有 state 路径、文件存在性和 Repository 状态分类；`workspace/deployment.ts` 统一拥有执行期 Deployment Repository 解析与完整性校验；`workspace/runtime.ts` 统一拥有 runtime 生成和批量恢复。
 - `agent/pi-session.ts` 统一拥有 Pi session 文件初始化与 SDK session 生命周期；`http/api.ts` 统一拥有 API 装配和进程关闭处理。
 - 测试按被测职责归类；只有能独立失败、独立演进的行为才新建测试文件。
 
@@ -300,7 +301,7 @@ git diff --check
 - TypeScript 使用 ESM 和显式 `.ts` import。
 - 保持 strict、`noUncheckedIndexedAccess` 和 `exactOptionalPropertyTypes` 通过。
 - 在边界解析 `unknown`，内部使用明确类型。
-- 共享事实只定义一次；调用方复用 domain helper、根配置或 owning manager。
+- 共享事实只定义一次；调用方复用 domain helper、根配置或 owning manager。能力顺序使用 `CAPABILITY_KEYS`/API catalog，Deployment 仓库使用 `loadDeploymentRepositories()`。
 - 新增可调整默认值时写入 `issue-pilot.config.ts`，不要在调用点、Web 和 Shell 各设 fallback。
 - 错误码稳定、可测试，不用长自然语言作为程序分支。
 - 文件和数据库更新需要说明失败后的状态。
@@ -315,7 +316,7 @@ git diff --check
 - Prod/test 是否仍严格只读，dev 是否仍按 Issue 隔离。
 - Credential 是否没有进入 policy、prompt、event、日志或命令行。
 - Dirty、untracked、running 和 unmanaged state 是否仍会阻止删除。
-- Attachments、Pi JSONL、本地 Issue branch 和 migration history 是否保留。
+- Attachments、Pi JSONL、本地 Issue branch、dev `base_branch` 历史和 migration history 是否保留。
 - 新生成目录是否原子替换且可冷启动重建。
 - 数据库多表更新是否有 transaction 和 rollback test。
 - 超时、abort、partial failure 和重复调用是否有确定结果。

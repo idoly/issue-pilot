@@ -54,9 +54,11 @@ Web 负责过滤选项，API 再次验证。直接调用 API 也不能给 prod/t
 
 修改 Repository 列表后：
 
-- 新运行使用最新列表。
+- Prod/test 下一轮使用最新列表和当前 Deployment 分支。
+- 活动 dev 下一轮补入新增 Repository；新增仓库使用当前 Deployment 分支，已有仓库继续保留该 Issue 的历史 `base_branch`。
 - 被删除 Repository 的 clean dev worktree 可以在下一次准备时移除。
 - Dirty worktree 会使准备失败并保留现场。
+- Released dev 在重新打开前保留其历史 Repository 集合；不要仅因当前 Service 仓库更多就直接回填数据库。
 - 数据库 `local_path` 与当前推导路径不一致时明确失败，不自动移动目录。
 
 Released dev 为什么保留历史 Repository 和本地分支，见 [Git 存储原理](ARCHITECTURE.md#git-存储原理)。
@@ -70,11 +72,12 @@ Released dev 为什么保留历史 Repository 和本地分支，见 [Git 存储�
 每个 Repository 的 `baseBranch` 是该仓库在当前环境的基线，不是 Issue 工作分支。同一 Deployment 的不同 Repository 可以使用不同分支：
 
 - Prod/test 每轮 Agent 前分别 fetch 各 Repository 的 `origin/<baseBranch>`，使用当时最新 commit。
-- Dev 首次运行时分别从各 Repository 的 `origin/<baseBranch>` 创建同名 `hotfix-<issue-key>` 或 `feature-<issue-key>` 本地工作分支。
-- Reopen released dev 时从各自本地 Issue branch 重建 worktree，但仍会 fetch 对应 Repository 的 Deployment base branch。
-- 首次准备代码时，每个分支会写入 `issue_repositories.base_branch` 作为该 Issue 的代码历史快照。
+- Dev Repository 首次加入工单时，从当前 Deployment 的 `origin/<baseBranch>` 创建同名 `hotfix-<issue-key>` 或 `feature-<issue-key>` 本地工作分支。
+- 首次准备后，每个 Repository 的分支写入 `issue_repositories.base_branch` 作为该 Issue 的代码历史快照；以后修改 Deployment 分支不会改写已有 dev Repository。
+- Reopen released dev 时从各自本地 Issue branch 重建 worktree，并使用保存的 Issue `base_branch` 验证远程基线。
+- Service 后续新增 Repository 时，该 Repository 第一次加入活动 dev 工单才采用当前 Deployment 分支；released dev 不在后台自动扩充历史集合。
 
-因此远程 Issue 分支可以删除，各 Repository 配置的 Deployment base branch 仍应长期可访问。
+因此远程 Issue 分支可以删除；当前 Deployment 分支和历史 Issue `base_branch` 都应长期可访问。Prod/test 的 `issue_repositories` 会在每轮准备时刷新到当前 Deployment 分支和 commit，不承担 dev 历史快照语义。
 
 ### Agent model
 
@@ -107,13 +110,13 @@ off, minimal, low, medium, high, xhigh, max
 
 ## Capability 授权原理
 
-固定 capability key：
+固定 capability key 及顺序由 `CAPABILITY_KEYS` 唯一定义：
 
 ```text
 playwright, nacos, db, redis, mq, es, sls
 ```
 
-只有被选择且配置完整的 capability 才会写入 Deployment。每次 Agent session 会从保存配置创建冻结 policy；credential 留在 session 持有的配置副本中，不进入 policy 或 prompt。
+API 的 `capabilityCatalog`、配置页按钮、详情标签和编辑表单都按这一顺序投影。只有被选择且配置完整的 capability 才会写入 Deployment。每次 Agent session 会从保存配置创建冻结 policy；credential 留在 session 持有的配置副本中，不进入 policy 或 prompt。
 
 一次调用会经过四层检查：
 
@@ -246,7 +249,8 @@ Capability 不返回部分成功结果。超过边界时返回 `capability_resul
 Service 保存是一个数据库事务。API 会同时验证：
 
 - Environment 存在且不重复。
-- Repository ID 属于当前 Service，URL 不重复。
+- Repository ID 属于当前 Service，别名和 URL 不重复。
+- 每个 Deployment 恰好覆盖当前 Service 的全部 Repository；运行时还会再次拒绝缺失、额外或跨 Service 的关联。
 - Model 和 thinking level 可用。
 - Capability 名称、配置和 scope 完整。
 - 即将删除的 Deployment 没有被 Issue 引用。

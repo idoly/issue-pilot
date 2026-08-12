@@ -4,7 +4,7 @@ Issue Pilot 是一个本地优先的 AI 工单处理系统。它把工单、代�
 
 ## 核心能力
 
-- 以 Service、Environment 和 Deployment 描述业务系统及运行环境。
+- 以 Service、Repository 别名、Environment 和按仓库分支配置的 Deployment 描述业务系统。
 - 为每张工单创建独立、持久的 Pi JSONL 会话。
 - Prod/test 始终使用最新 Deployment commit 的只读代码。
 - Dev 使用工单专属分支和 worktree，支持编辑、测试和构建。
@@ -15,7 +15,7 @@ Issue Pilot 是一个本地优先的 AI 工单处理系统。它把工单、代�
 
 ## 工单流程
 
-创建工单时选择 Service、Environment 和 Issue type。Service 定义 Repository；Deployment 定义环境基线分支、Pi model 和可用 capability。
+创建工单时选择 Service、Environment 和 Issue type。Service 定义有稳定 ID 和唯一别名的 Repository；Deployment 为每个 Repository 定义环境基线分支，并配置 Pi model 和可用 capability。
 
 | 场景 | 代码来源 | Agent 权限 |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ Issue Pilot 是一个本地优先的 AI 工单处理系统。它把工单、代�
 | 活动 dev | 从 base branch 创建工单专属分支和 worktree | 读取、编辑和执行项目命令 |
 | 已释放 dev | 从本地 Issue branch tip 创建只读 checkout | 查看代码、会话和 Git 历史 |
 
-Dev workspace 中的依赖和构建输出可以回收，但附件、Pi JSONL、本地工作分支和数据库记录不会随之删除。工单重开后可以从本地 branch 恢复开发。
+Dev workspace 中的依赖和构建输出可以回收，但附件、Pi JSONL、本地工作分支和数据库记录不会随之删除。工单重开后可以从本地 branch 恢复开发。已有 dev Repository 的 `base_branch` 是工单首次准备时的历史基线；之后修改 Service 分支不会改写它，新加入该工单的 Repository 才使用当前 Deployment 分支。
 
 ## 系统组成
 
@@ -77,7 +77,7 @@ npm run dev:web
 | API | <http://127.0.0.1:3000/> |
 | code-server | <http://127.0.0.1:18080/> |
 
-首次启动后，在 Web 配置页创建 Service、添加 Repository，并为所需 Environment 配置 Deployment。
+首次启动后，在 Web 配置页创建 Service、为 Repository 设置唯一别名，并为所需 Environment 的每个 Repository 配置 Deployment 分支。
 
 ## 配置与状态
 

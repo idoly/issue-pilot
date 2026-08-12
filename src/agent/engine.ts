@@ -9,6 +9,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { CodeServerManager } from "../workspace/code-server.ts";
+import { loadDeploymentRepositories } from "../workspace/deployment.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
 import { classifyRepositoryState, issueAttachmentRoot, issueSessionRoot, issueWorkspaceRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
@@ -18,9 +19,6 @@ import {
   issueRepositories,
   issueWorkspaces,
   issues,
-  serviceDeploymentRepositories,
-  serviceDeployments,
-  serviceRepositories,
   services,
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
@@ -57,19 +55,10 @@ class KeyedSerialQueue {
   }
 }
 
-export interface RepositoryPreparationPlan {
-  mode: "shared" | "hotfix" | "feature";
-  baseBranch: string;
-}
-
-export function repositoryPreparationPlan(input: {
-  environmentKind: EnvironmentKind;
-  issueType: IssueType;
-  deploymentBaseBranch: string;
-}): RepositoryPreparationPlan {
-  if (input.environmentKind !== "dev") return { mode: "shared", baseBranch: input.deploymentBaseBranch };
-  if (input.issueType === "defect_fix") return { mode: "hotfix", baseBranch: input.deploymentBaseBranch };
-  if (input.issueType === "feature_development") return { mode: "feature", baseBranch: input.deploymentBaseBranch };
+export function repositoryPreparationMode(environmentKind: EnvironmentKind, issueType: IssueType): "shared" | "hotfix" | "feature" {
+  if (environmentKind !== "dev") return "shared";
+  if (issueType === "defect_fix") return "hotfix";
+  if (issueType === "feature_development") return "feature";
   throw new Error("unsupported_dev_issue_type");
 }
 
@@ -160,30 +149,23 @@ export class AgentEngine implements AgentController {
       key: services.key,
       name: services.name,
       description: services.description,
-      deploymentId: serviceDeployments.id,
-      deploymentConfig: serviceDeployments.config,
       environmentKey: environments.key,
       environmentKind: environments.kind,
     }).from(services)
-      .innerJoin(serviceDeployments, and(eq(serviceDeployments.serviceId, services.id), eq(serviceDeployments.environmentId, issue.environmentId)))
       .innerJoin(environments, eq(environments.id, issue.environmentId))
       .where(eq(services.id, issue.serviceId))
       .limit(1);
-    if (!service) throw new Error("issue_service_deployment_not_found");
+    if (!service) throw new Error("issue_service_not_found");
     if (!ENVIRONMENT_KINDS.includes(service.environmentKind as EnvironmentKind)) throw new Error("unsupported_issue_environment_kind");
     const environmentKind = service.environmentKind as EnvironmentKind;
     await this.stopSession(issue.id);
 
-    const [repositoryRows, configuredRepositoryCount, existingRepositoryRows] = await Promise.all([
-      this.database.select({ repository: serviceRepositories, baseBranch: serviceDeploymentRepositories.baseBranch }).from(serviceRepositories)
-        .innerJoin(serviceDeploymentRepositories, and(eq(serviceDeploymentRepositories.repositoryId, serviceRepositories.id), eq(serviceDeploymentRepositories.deploymentId, service.deploymentId)))
-        .where(eq(serviceRepositories.serviceId, service.id)),
-      this.database.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
+    const [{ deployment, repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
+      loadDeploymentRepositories(this.database, { serviceId: service.id, environmentId: issue.environmentId }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
-    if (!configuredRepositoryCount.length) throw new Error("selected_service_has_no_repository");
-    if (repositoryRows.length !== configuredRepositoryCount.length) throw new Error("deployment_repository_branches_invalid");
-    const sharedRepositories = repositoryPreparationPlan({ environmentKind, issueType: issue.type, deploymentBaseBranch: repositoryRows[0]!.baseBranch }).mode === "shared";
+    const preparationMode = repositoryPreparationMode(environmentKind, issue.type);
+    const sharedRepositories = preparationMode === "shared";
     const repositoryUrls = new Set(repositoryRows.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
     if (sharedRepositories && existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
@@ -198,17 +180,17 @@ export class AgentEngine implements AgentController {
     const workspaceNames = repositoryWorkspaceNames(repositoryRows.map(({ repository }) => repository.url));
     const prepared: Array<{ name: string; workspace: Awaited<ReturnType<WorktreeManager["prepare"]>> }> = [];
     for (const { repository, baseBranch } of repositoryRows) {
-      const repositoryPlan = repositoryPreparationPlan({ environmentKind, issueType: issue.type, deploymentBaseBranch: baseBranch });
       const existingRepository = existingRepositoryByUrl.get(repository.url);
+      const preparedBaseBranch = sharedRepositories ? baseBranch : existingRepository?.baseBranch ?? baseBranch;
       const name = workspaceNames.get(repository.url)!;
-      const workspace = repositoryPlan.mode === "shared"
-        ? await this.worktreeManager.prepareShared({ url: repository.url, baseBranch: repositoryPlan.baseBranch })
+      const workspace = preparationMode === "shared"
+        ? await this.worktreeManager.prepareShared({ url: repository.url, baseBranch: preparedBaseBranch })
         : await this.worktreeManager.prepare({
           issueKey: issue.key,
           workspaceName: name,
           url: repository.url,
-          baseBranch: repositoryPlan.baseBranch,
-          mode: repositoryPlan.mode,
+          baseBranch: preparedBaseBranch,
+          mode: preparationMode,
           ...(existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
           ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
           ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
@@ -245,8 +227,8 @@ export class AgentEngine implements AgentController {
       issueKey: issue.key,
       issueType: issue.type,
       workspaceRoot,
-      deploymentId: service.deploymentId,
-      deploymentConfig: service.deploymentConfig,
+      deploymentId: deployment.id,
+      deploymentConfig: deployment.config,
       serviceKey: service.key,
       environmentKey: service.environmentKey,
       environmentKind,
@@ -268,7 +250,7 @@ export class AgentEngine implements AgentController {
     const managed = await this.piRuntime.start({
       workspaceRoot,
       policy,
-      deploymentConfig: service.deploymentConfig,
+      deploymentConfig: deployment.config,
       manager,
       ...(executableRoot ? { executableRoot } : {}),
       systemPrompt: agentSystemPrompt(policy),

@@ -44,7 +44,7 @@ Issue Pilot 的核心不是“为每个工单复制一个项目”，而是把�
 | code-server | 查看或编辑工单代码 | 共享 Podman 容器 |
 | Playwright | 单次声明式浏览器任务 | 临时 Podman 容器 |
 
-模块按照事务、安全边界和稳定职责拆分。相关小型 helper 归回拥有它们的模块：共享业务谓词位于 `domain/contracts.ts`，workspace 路径、文件状态和 Repository 分类位于 `workspace/state.ts`，runtime 生成与批量恢复位于 `workspace/runtime.ts`，Pi session 文件与 SDK 生命周期位于 `agent/pi-session.ts`。HTTP route 不直接实现 Git 和 capability 逻辑；Agent 不直接读取页面表单；client 不信任上层已经完成授权。
+模块按照事务、安全边界和稳定职责拆分。相关小型 helper 归回拥有它们的模块：共享业务谓词位于 `domain/contracts.ts`，workspace 路径、文件状态和 Repository 分类位于 `workspace/state.ts`，执行期 Deployment 仓库解析位于 `workspace/deployment.ts`，runtime 生成与批量恢复位于 `workspace/runtime.ts`，Pi session 文件与 SDK 生命周期位于 `agent/pi-session.ts`。HTTP route 不直接实现 Git 和 capability 逻辑；Agent 不直接拼 Deployment 关联或读取页面表单；client 不信任上层已经完成授权。
 
 ## 业务状态
 
@@ -107,7 +107,7 @@ sequenceDiagram
     end
 ```
 
-执行时先读取 Issue 对应的 Service 和 Environment，再选择代码模式。Repository 准备完成后才创建 policy，因此 policy 中的 path、commit 和读写权限来自实际准备结果，而不是页面声明。
+执行时先读取 Issue 对应的 Service 和 Environment，再由共享 loader 解析 Deployment 及其完整 Repository 分支集合。Loader 按 Service Repository 定义顺序返回结果，并拒绝缺失、额外或跨 Service 的分支关联。Repository 准备完成后才创建 policy，因此 policy 中的 path、commit 和读写权限来自实际准备结果，而不是页面声明。
 
 Session binding 在第一个可见事件之前写入 SQLite。这样 SSE 客户端不会看到一个无法回放的临时会话。
 
@@ -193,7 +193,9 @@ flowchart TD
 
 Released dev 的权威代码来源是本地 bare repository 中的工作分支。重新打开工单会先从这些本地 ref 重建全部可写 worktree 和 runtime，再原子更新 Repository、workspace 和 Issue 状态；恢复失败会清理新 worktree 并还原只读 snapshot。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
 
-这一区分很重要：Deployment 中每个 Repository 的 `baseBranch` 表示该仓库的环境基线；Issue `workingBranch` 表示该工单自己的工作结果。远程 Issue 分支可以被删除，但用于后续重建的各 Repository base branch 仍应可访问。
+这一区分很重要：Deployment 中每个 Repository 的 `baseBranch` 表示当前环境配置；`issue_repositories.base_branch` 保存该 dev Repository 首次加入工单时的历史基线；Issue `workingBranch` 表示工单自己的工作结果。已有 dev Repository 后续运行继续使用历史 `base_branch`，Service 新增到该工单的 Repository 才采用当前 Deployment 分支。Prod/test 没有开发历史分支，每轮继续使用当前 Deployment 配置。远程 Issue 分支可以被删除，但用于后续重建的各 Repository base branch 仍应可访问。
+
+因此当前 Service 配置与 released dev 的 Repository 集合可能合法不同。不要为追求数量一致而给历史工单批量补仓库或改基线；应先根据 Repository 加入时间、工单准备时间、本地 branch ref 和 runtime 状态判断是否真的损坏。
 
 ## 状态与所有权
 
@@ -356,3 +358,5 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 6. Durable data 不进入 runtime 或 checkout。
 7. API、database migration 和 code-server 使用同一个 state root。
 8. Credential 不进入 policy、prompt、session event 或进程命令行。
+9. Dev Issue 已记录的 Repository 基线是历史事实，不随当前 Deployment 分支改写。
+10. Deployment 的运行时 Repository 集合必须完整属于同一 Service，不能缺失或额外挂载。
