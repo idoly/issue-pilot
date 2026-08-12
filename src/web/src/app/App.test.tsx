@@ -239,6 +239,9 @@ describe("issue pilot workspace", () => {
     const modelButton = within(serviceDialog).getByRole("button", { name: "model" }) as HTMLButtonElement;
     expect(modelButton.disabled).toBe(true);
     expect(modelButton.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "playwright" }));
+    await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "model", "playwright", "nacos", "db"]));
+    expect(screen.getByLabelText("playwright baseUrl 1")).toBeTruthy();
     const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
     expect((screen.getByLabelText("nacos dataIds 1") as HTMLInputElement).value).toBe("srm-test.yaml, srm-shared.yaml");
     const databaseUrl = screen.getByLabelText("db url 1");
@@ -256,6 +259,8 @@ describe("issue pilot workspace", () => {
     expect(screen.getByLabelText("db url 1")).toBeTruthy();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
     await waitFor(() => expect(screen.queryByLabelText("es url 1")).toBeNull());
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "playwright" }));
+    await waitFor(() => expect(screen.queryByLabelText("playwright baseUrl 1")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
     const client = await import("../data/client");
     await waitFor(() => {
