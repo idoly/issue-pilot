@@ -226,9 +226,13 @@ describe("issue pilot workspace", () => {
     expect(repositoryInput.value).toBe("git@example.test:team/updated.git");
     const branchInput = screen.getByLabelText("部署 1 仓库 srm 分支") as HTMLInputElement;
     branchInput.focus();
-    fireEvent.input(branchInput, { target: { value: "release/test" } });
-    expect(document.activeElement).toBe(branchInput);
-    expect(branchInput.value).toBe("release/test");
+    for (const value of ["r", "re", "rel", "release/test"]) {
+      fireEvent.input(branchInput, { target: { value } });
+      expect(document.activeElement).toBe(branchInput);
+      expect(branchInput.isConnected).toBe(true);
+      expect(screen.getByLabelText("部署 1 仓库 srm 分支")).toBe(branchInput);
+      expect(branchInput.value).toBe(value);
+    }
     expect(screen.getByLabelText("model provider 1")).toBeTruthy();
     expect(screen.getByLabelText("model id 1")).toBeTruthy();
     expect(screen.getByLabelText("model thinkingLevel 1")).toBeTruthy();
