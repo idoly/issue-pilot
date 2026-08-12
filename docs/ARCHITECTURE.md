@@ -8,8 +8,8 @@
 | --- | --- |
 | Issue | 一张工单，也是 Agent、session、附件和代码上下文的隔离单位 |
 | Service | 一组 Repository 及其各环境配置 |
-| Deployment | 某个 Service 在一个 Environment 下的分支、模型和 capability 配置；不是发布进程 |
-| Repository | Service 使用的一个 Git remote |
+| Deployment | 某个 Service 在一个 Environment 下的各 Repository 基线分支、模型和 capability 配置；不是发布进程 |
+| Repository | Service 使用的一个带唯一别名的 Git remote |
 | Bare repository | 跨 Issue 共享的 Git object/ref store，不包含普通工作目录 |
 | Workspace | 活动 dev Issue 的可写目录；也泛指 Agent 当前 cwd |
 | Worktree | Git 从 bare repository 挂出的具体工作目录 |
@@ -193,7 +193,7 @@ flowchart TD
 
 Released dev 的权威代码来源是本地 bare repository 中的工作分支。重新打开工单会先从这些本地 ref 重建全部可写 worktree 和 runtime，再原子更新 Repository、workspace 和 Issue 状态；恢复失败会清理新 worktree 并还原只读 snapshot。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
 
-这一区分很重要：Deployment `baseBranch` 表示环境基线；Issue `workingBranch` 表示该工单自己的工作结果。远程 Issue 分支可以被删除，但用于后续重建的 Deployment base branch 仍应可访问。
+这一区分很重要：Deployment 中每个 Repository 的 `baseBranch` 表示该仓库的环境基线；Issue `workingBranch` 表示该工单自己的工作结果。远程 Issue 分支可以被删除，但用于后续重建的各 Repository base branch 仍应可访问。
 
 ## 状态与所有权
 

@@ -51,7 +51,7 @@ export interface Environment {
 
 export interface ServiceDeployment extends CapabilityConfiguration {
   environmentKey: string;
-  baseBranch: string;
+  repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];
   agent: AgentConfiguration | null;
 }
@@ -61,7 +61,7 @@ export interface Service {
   name: string;
   description: string;
   deployments: ServiceDeployment[];
-  repositories: Array<{ id: string; url: string }>;
+  repositories: Array<{ id: string; alias: string; url: string }>;
 }
 
 export interface Config {
@@ -74,8 +74,8 @@ export interface Config {
 export interface ServiceInput {
   name: string;
   description: string;
-  repositories: Array<{ id?: string; url: string }>;
-  deployments: Array<CapabilityConfiguration & { environmentKey: string; baseBranch: string; capabilities: CapabilityName[]; agent: AgentConfiguration }>;
+  repositories: Array<{ id?: string; alias: string; url: string }>;
+  deployments: Array<CapabilityConfiguration & { environmentKey: string; repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>; capabilities: CapabilityName[]; agent: AgentConfiguration }>;
 }
 
 export interface IssueInput {

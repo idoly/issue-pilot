@@ -8,7 +8,7 @@
 
 - 至少一个 Repository。
 - 每个 Environment 最多一个 Deployment。
-- 每个 Deployment 自己的 `baseBranch`、Pi model 和 capability 配置。
+- 每个 Deployment 为各 Repository 分别配置 `baseBranch`，并配置自己的 Pi model 和 capability。
 
 Deployment 是 Agent 授权的唯一配置来源。Runtime 不扫描仓库配置，也不从环境变量补全 model、credential 或 capability scope。
 
@@ -19,7 +19,7 @@ Deployment 是 Agent 授权的唯一配置来源。Runtime 不扫描仓库配置
 | 配置 | 事实源 | 用途 |
 | --- | --- | --- |
 | 应用运行参数 | 根目录 `issue-pilot.config.ts` | 路径、端口、默认值、timeout、资源和结果上限 |
-| Service/Deployment | SQLite | Repository、环境分支、model、capability 和 credential |
+| Service/Deployment | SQLite | Repository 别名、各环境仓库分支、model、capability 和 credential |
 | Issue policy | 每次 session 从 Deployment 和实际代码状态生成 | 冻结本次 Agent 授权，不保存 credential |
 
 页面不会定义第二份默认值，Shell 也只读取根配置。根配置中的 `subject` 是默认操作人，`users` 是右上角允许切换的操作人名单；配置用户会同步到 SQLite 人员目录。运行时 policy 不反向修改 Deployment。
@@ -47,8 +47,9 @@ Web 负责过滤选项，API 再次验证。直接调用 API 也不能给 prod/t
 ### Repository
 
 - 每个 Service 至少一个 Repository。
-- URL 在同一 Service 内不能重复。
-- Repository 没有前端、后端等类型字段；目录名来自 URL basename。
+- 每个 Repository 必填别名和 URL；别名、URL 在同一 Service 内都不能重复。
+- 别名用于配置页面识别仓库，Deployment 通过稳定 Repository ID 保存关联，修改别名不会把分支绑定到其他仓库。
+- 已有 Issue 的 workspace/runtime 目录名继续来自其 Repository URL basename，修改 Service 别名不会移动真实代码目录。
 - Basename 冲突时自动追加稳定 URL hash。
 
 修改 Repository 列表后：
@@ -62,17 +63,18 @@ Released dev 为什么保留历史 Repository 和本地分支，见 [Git 存储�
 
 ## Deployment
 
-每个 Environment 最多一份 Deployment。创建对应 Environment 的 Issue 前，Service 必须已有该 Deployment。新建表单的分支、Nacos group、Redis 和 RabbitMQ 默认值来自根目录 `issue-pilot.config.ts` 的 `defaults`，保存后以 Deployment 数据为准。
+每个 Environment 最多一份 Deployment。创建对应 Environment 的 Issue 前，Service 必须已有该 Deployment。每份 Deployment 必须为 Service 的每个 Repository 配置且只配置一个分支。新建表单的仓库分支、Nacos group、Redis 和 RabbitMQ 默认值来自根目录 `issue-pilot.config.ts` 的 `defaults`，保存后以 Deployment 数据为准。
 
-### `baseBranch`
+### Repository `baseBranch`
 
-`baseBranch` 是环境基线，不是 Issue 工作分支：
+每个 Repository 的 `baseBranch` 是该仓库在当前环境的基线，不是 Issue 工作分支。同一 Deployment 的不同 Repository 可以使用不同分支：
 
-- Prod/test 每轮 Agent 前 fetch `origin/<baseBranch>`，使用当时最新 commit。
-- Dev 首次运行时从 `origin/<baseBranch>` 创建 `hotfix-<issue-key>` 或 `feature-<issue-key>`。
-- Reopen released dev 时从本地 Issue branch 重建 worktree，但仍会 fetch Deployment base branch。
+- Prod/test 每轮 Agent 前分别 fetch 各 Repository 的 `origin/<baseBranch>`，使用当时最新 commit。
+- Dev 首次运行时分别从各 Repository 的 `origin/<baseBranch>` 创建同名 `hotfix-<issue-key>` 或 `feature-<issue-key>` 本地工作分支。
+- Reopen released dev 时从各自本地 Issue branch 重建 worktree，但仍会 fetch 对应 Repository 的 Deployment base branch。
+- 首次准备代码时，每个分支会写入 `issue_repositories.base_branch` 作为该 Issue 的代码历史快照。
 
-因此远程 Issue 分支可以删除，Deployment base branch 仍应长期可访问。
+因此远程 Issue 分支可以删除，各 Repository 配置的 Deployment base branch 仍应长期可访问。
 
 ### Agent model
 
@@ -262,13 +264,16 @@ Service 保存是一个数据库事务。API 会同时验证：
   "name": "Orders",
   "description": "Order service",
   "repositories": [
-    { "url": "git@example.internal:orders-api.git" },
-    { "url": "git@example.internal:orders-web.git" }
+    { "alias": "orders-api", "url": "git@example.internal:orders-api.git" },
+    { "alias": "orders-web", "url": "git@example.internal:orders-web.git" }
   ],
   "deployments": [
     {
       "environmentKey": "test",
-      "baseBranch": "develop",
+      "repositoryBranches": [
+        { "repositoryAlias": "orders-api", "baseBranch": "develop" },
+        { "repositoryAlias": "orders-web", "baseBranch": "release/test" }
+      ],
       "agent": {
         "provider": "enterprise-provider",
         "model": "engineering-model",

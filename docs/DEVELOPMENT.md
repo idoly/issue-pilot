@@ -96,7 +96,7 @@ Schema 变化时：
 2. 添加下一个连续编号的 SQL migration。
 3. 在 journal 末尾追加匹配 entry。
 4. 在新建临时数据库执行 `npm run db:migrate`。
-5. 从上一版本数据库副本执行 upgrade test。
+5. 从上一版本数据库副本执行 upgrade test；涉及真实 Service/Deployment 数据时还要在真实数据库备份副本上验证迁移结果。
 6. 验证 `PRAGMA integrity_check` 和 `PRAGMA foreign_key_check`。
 7. 更新 `tests/db/sqlite.test.ts` 的当前 schema 断言。
 

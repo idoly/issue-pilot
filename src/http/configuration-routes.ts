@@ -4,7 +4,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { configuredCapabilities, CAPABILITY_KEYS, ENVIRONMENT_KINDS } from "../domain/contracts.ts";
-import { environments, issues, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
+import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
 import { ensureConfiguredSubjects, ensureCurrentSubject, serializePerson, type ApiRouteContext } from "./route-context.ts";
 import { replaceServiceConfiguration } from "./service-configuration.ts";
@@ -42,10 +42,12 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
   app.get("/api/config", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     reply.header("Pragma", "no-cache");
-    const [environmentRows, serviceRows, deploymentRows, repositoryRows, agentModels] = await Promise.all([
+    const [environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows, agentModels] = await Promise.all([
       database.db.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
       database.db.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
-      database.db.select().from(serviceDeployments), database.db.select().from(serviceRepositories), modelCatalog.list(),
+      database.db.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
+      database.db.select().from(serviceRepositories).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
+      database.db.select().from(serviceDeploymentRepositories), modelCatalog.list(),
     ]);
     const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
     return {
@@ -60,9 +62,18 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
             const deploymentConfig = record(deployment.config);
             const environmentKey = environmentKeyById.get(deployment.environmentId);
             if (!environmentKey) throw new Error("deployment_environment_not_found");
-            return { environmentKey, baseBranch: deployment.baseBranch, ...structuredClone(deploymentConfig), capabilities: configuredCapabilities(deploymentConfig), agent: deploymentConfig.agent ?? null };
+            const serviceRepositoryRows = repositoryRows.filter((repository) => repository.serviceId === service.id);
+            const branchByRepositoryId = new Map(deploymentRepositoryRows.filter((branch) => branch.deploymentId === deployment.id).map((branch) => [branch.repositoryId, branch.baseBranch]));
+            if (serviceRepositoryRows.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== serviceRepositoryRows.length) throw new Error("deployment_repository_branches_invalid");
+            return {
+              environmentKey,
+              repositoryBranches: serviceRepositoryRows.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
+              ...structuredClone(deploymentConfig),
+              capabilities: configuredCapabilities(deploymentConfig),
+              agent: deploymentConfig.agent ?? null,
+            };
           }),
-          repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, url: repository.url })),
+          repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, alias: repository.alias, url: repository.url })),
         };
       }),
     };

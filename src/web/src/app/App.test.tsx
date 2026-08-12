@@ -37,8 +37,8 @@ vi.mock("../data/client", async (importOriginal) => {
     ],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", baseBranch: "develop", capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
-      repositories: [{ id: "srm-repository", url: "git@example.com:team/srm.git" }],
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" } }],
+      repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }],
   };
   return {
@@ -209,18 +209,22 @@ describe("issue pilot workspace", () => {
     expect(screen.getByText("供应商关系管理服务。")).toBeTruthy();
     const deploymentHead = document.querySelector(".deployment-detail-head");
     expect([...deploymentHead!.children].map((item) => item.textContent)).toEqual(["环境", "分支", "模型", "能力"]);
+    expect(document.querySelector('.deployment-detail-row [data-label="分支"]')?.textContent).toBe("develop");
     expect(document.querySelector('.deployment-detail-row [data-label="模型"]')?.textContent).toContain("enterprise-ai/engineering-model");
 
     fireEvent.click(screen.getByRole("button", { name: "编辑服务" }));
     const serviceDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑服务" }));
     expect(screen.queryByLabelText("服务类型")).toBeNull();
     expect(serviceDialog.textContent).toContain("环境部署");
+    const repositoryAliasInput = screen.getByLabelText("仓库别名 1") as HTMLInputElement;
+    fireEvent.input(repositoryAliasInput, { target: { value: "srm-api" } });
+    expect(repositoryAliasInput.value).toBe("srm-api");
     const repositoryInput = screen.getByLabelText("仓库地址 1") as HTMLInputElement;
     repositoryInput.focus();
     fireEvent.input(repositoryInput, { target: { value: "git@example.test:team/updated.git" } });
     expect(document.activeElement).toBe(repositoryInput);
     expect(repositoryInput.value).toBe("git@example.test:team/updated.git");
-    const branchInput = screen.getByLabelText("部署分支 1") as HTMLInputElement;
+    const branchInput = screen.getByLabelText("部署 1 仓库 srm 分支") as HTMLInputElement;
     branchInput.focus();
     fireEvent.input(branchInput, { target: { value: "release/test" } });
     expect(document.activeElement).toBe(branchInput);
@@ -256,6 +260,8 @@ describe("issue pilot workspace", () => {
       expect(client.updateService).toHaveBeenCalled();
     });
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
+    expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
+    expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
     expect(savedService?.deployments[0]?.db?.password).toBe("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());

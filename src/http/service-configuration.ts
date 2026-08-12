@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { isNacosTarget, isSlsLogstore } from "../capabilities/contracts.ts";
 import type { Database } from "../db/client.ts";
-import { environments, issues, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
+import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
@@ -116,16 +116,24 @@ function parseAgentConfiguration(value: unknown): AgentConfiguration {
 function parseServiceConfigurationInput(input: Record<string, unknown>) {
   const repositories = Array.isArray(input.repositories) ? input.repositories.map(record).map((repository) => ({
     id: optionalText(repository.id, 255),
+    alias: text(repository.alias, "repository_alias", 100),
     url: text(repository.url, "repository_url"),
   })) : [];
   if (!repositories.length) throw new ApiError(400, "repository_required");
+  if (new Set(repositories.map((repository) => repository.alias)).size !== repositories.length) throw new ApiError(400, "duplicate_repository_alias");
   if (new Set(repositories.map((repository) => repository.url)).size !== repositories.length) throw new ApiError(400, "duplicate_repository");
+  const repositoryAliases = new Set(repositories.map((repository) => repository.alias));
 
   const deployments = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => {
     const capabilities = parseCapabilities(deployment.capabilities ?? []);
+    const repositoryBranches = Array.isArray(deployment.repositoryBranches) ? deployment.repositoryBranches.map(record).map((branch) => ({
+      repositoryAlias: text(branch.repositoryAlias, "repository_alias", 100),
+      baseBranch: text(branch.baseBranch, "base_branch", 255),
+    })) : [];
+    if (repositoryBranches.length !== repositories.length || new Set(repositoryBranches.map((branch) => branch.repositoryAlias)).size !== repositoryBranches.length || repositoryBranches.some((branch) => !repositoryAliases.has(branch.repositoryAlias))) throw new ApiError(400, "invalid_deployment_repository_branches");
     return {
       environmentKey: text(deployment.environmentKey, "environment_key", 100),
-      baseBranch: text(deployment.baseBranch, "base_branch", 255),
+      repositoryBranches,
       capabilities,
       agent: parseAgentConfiguration(deployment.agent),
       nacos: parseNacosConfiguration(deployment.nacos, capabilities.includes("nacos")),
@@ -189,14 +197,15 @@ export async function replaceServiceConfiguration(options: {
 
   if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
   const retainedRepositoryIds = new Set<string>();
+  const savedRepositoryByAlias = new Map<string, typeof serviceRepositories.$inferSelect>();
   for (const repository of repositoriesInput) {
-    if (repository.id && existingById.has(repository.id)) {
-      retainedRepositoryIds.add(repository.id);
-      await executor.update(serviceRepositories).set({ url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId)));
-    } else {
-      const [created] = await executor.insert(serviceRepositories).values({ serviceId, url: repository.url }).returning();
-      retainedRepositoryIds.add(created!.id);
-    }
+    const savedRows = repository.id && existingById.has(repository.id)
+      ? await executor.update(serviceRepositories).set({ alias: repository.alias, url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId))).returning()
+      : await executor.insert(serviceRepositories).values({ serviceId, alias: repository.alias, url: repository.url }).returning();
+    const savedRepository = savedRows[0];
+    if (!savedRepository) throw new Error("repository_save_failed");
+    retainedRepositoryIds.add(savedRepository.id);
+    savedRepositoryByAlias.set(repository.alias, savedRepository);
   }
   for (const repository of existingRepositories) if (!retainedRepositoryIds.has(repository.id)) await executor.delete(serviceRepositories).where(eq(serviceRepositories.id, repository.id));
 
@@ -207,9 +216,15 @@ export async function replaceServiceConfiguration(options: {
     const existingDeployment = existingByEnvironmentId.get(environment.id);
     const deploymentConfig = storedDeploymentConfiguration(deploymentInput);
     const savedDeployment = existingDeployment
-      ? (await executor.update(serviceDeployments).set({ baseBranch: deploymentInput.baseBranch, config: deploymentConfig, updatedAt: new Date() }).where(eq(serviceDeployments.id, existingDeployment.id)).returning())[0]!
-      : (await executor.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, baseBranch: deploymentInput.baseBranch, config: deploymentConfig }).returning())[0]!;
+      ? (await executor.update(serviceDeployments).set({ config: deploymentConfig, updatedAt: new Date() }).where(eq(serviceDeployments.id, existingDeployment.id)).returning())[0]!
+      : (await executor.insert(serviceDeployments).values({ serviceId, environmentId: environment.id, config: deploymentConfig }).returning())[0]!;
     retainedDeploymentIds.add(savedDeployment.id);
+    await executor.delete(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, savedDeployment.id));
+    await executor.insert(serviceDeploymentRepositories).values(deploymentInput.repositoryBranches.map((branch) => ({
+      deploymentId: savedDeployment.id,
+      repositoryId: savedRepositoryByAlias.get(branch.repositoryAlias)!.id,
+      baseBranch: branch.baseBranch,
+    })));
   }
   for (const deployment of existingDeployments) if (!retainedDeploymentIds.has(deployment.id)) await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
 }

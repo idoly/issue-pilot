@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/read-only.ts";
 import { issueRuntimeRoot, issueSessionRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
@@ -38,8 +38,9 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     const [prod] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester" });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
-    await database.db.insert(serviceRepositories).values({ serviceId: service!.id, url: remote });
-    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, baseBranch: "main", config: {} });
+    const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: remote }).returning();
+    const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, config: {} }).returning();
+    await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" });
     const [issue] = await database.db.insert(issues).values({
       key: "ISSUE-20260810-201",
       title: "Inspect production",

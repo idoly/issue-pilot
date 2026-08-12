@@ -27,12 +27,18 @@ export const services = sqliteTable("services", {
 export const serviceDeployments = sqliteTable("service_deployments", {
   id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
   environmentId: text("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
-  baseBranch: text("base_branch").notNull(), config: json<DeploymentConfig>("config").notNull(), ...timestamps,
+  config: json<DeploymentConfig>("config").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("service_deployment_unique").on(table.serviceId, table.environmentId)]);
 
 export const serviceRepositories = sqliteTable("service_repositories", {
-  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), url: text("url").notNull(), ...timestamps,
-}, (table) => [uniqueIndex("service_repository_url_unique").on(table.serviceId, table.url)]);
+  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), alias: text("alias").notNull(), url: text("url").notNull(), ...timestamps,
+}, (table) => [uniqueIndex("service_repository_alias_unique").on(table.serviceId, table.alias), uniqueIndex("service_repository_url_unique").on(table.serviceId, table.url)]);
+
+export const serviceDeploymentRepositories = sqliteTable("service_deployment_repositories", {
+  deploymentId: text("deployment_id").notNull().references(() => serviceDeployments.id, { onDelete: "cascade" }),
+  repositoryId: text("repository_id").notNull().references(() => serviceRepositories.id, { onDelete: "cascade" }),
+  baseBranch: text("base_branch").notNull(), ...timestamps,
+}, (table) => [uniqueIndex("service_deployment_repository_unique").on(table.deploymentId, table.repositoryId), index("service_deployment_repository_repository_idx").on(table.repositoryId)]);
 
 export const issues = sqliteTable("issues", {
   id: id(), key: text("key").notNull(), title: text("title").notNull(), description: text("description").notNull().default(""),

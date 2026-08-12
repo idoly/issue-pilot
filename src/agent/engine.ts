@@ -18,6 +18,7 @@ import {
   issueRepositories,
   issueWorkspaces,
   issues,
+  serviceDeploymentRepositories,
   serviceDeployments,
   serviceRepositories,
   services,
@@ -160,7 +161,6 @@ export class AgentEngine implements AgentController {
       name: services.name,
       description: services.description,
       deploymentId: serviceDeployments.id,
-      baseBranch: serviceDeployments.baseBranch,
       deploymentConfig: serviceDeployments.config,
       environmentKey: environments.key,
       environmentKind: environments.kind,
@@ -174,19 +174,17 @@ export class AgentEngine implements AgentController {
     const environmentKind = service.environmentKind as EnvironmentKind;
     await this.stopSession(issue.id);
 
-    const repositoryPlan = repositoryPreparationPlan({
-      environmentKind,
-      issueType: issue.type,
-      deploymentBaseBranch: service.baseBranch,
-    });
-    const sharedRepositories = repositoryPlan.mode === "shared";
-
-    const [repositoryRows, existingRepositoryRows] = await Promise.all([
+    const [repositoryRows, configuredRepositoryCount, existingRepositoryRows] = await Promise.all([
+      this.database.select({ repository: serviceRepositories, baseBranch: serviceDeploymentRepositories.baseBranch }).from(serviceRepositories)
+        .innerJoin(serviceDeploymentRepositories, and(eq(serviceDeploymentRepositories.repositoryId, serviceRepositories.id), eq(serviceDeploymentRepositories.deploymentId, service.deploymentId)))
+        .where(eq(serviceRepositories.serviceId, service.id)),
       this.database.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, service.id)),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
-    if (!repositoryRows.length) throw new Error("selected_service_has_no_repository");
-    const repositoryUrls = new Set(repositoryRows.map((repository) => repository.url));
+    if (!configuredRepositoryCount.length) throw new Error("selected_service_has_no_repository");
+    if (repositoryRows.length !== configuredRepositoryCount.length) throw new Error("deployment_repository_branches_invalid");
+    const sharedRepositories = repositoryPreparationPlan({ environmentKind, issueType: issue.type, deploymentBaseBranch: repositoryRows[0]!.baseBranch }).mode === "shared";
+    const repositoryUrls = new Set(repositoryRows.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
     if (sharedRepositories && existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
     for (const repository of removedRepositories) {
@@ -197,9 +195,10 @@ export class AgentEngine implements AgentController {
     }
 
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
-    const workspaceNames = repositoryWorkspaceNames(repositoryRows.map((repository) => repository.url));
+    const workspaceNames = repositoryWorkspaceNames(repositoryRows.map(({ repository }) => repository.url));
     const prepared: Array<{ name: string; workspace: Awaited<ReturnType<WorktreeManager["prepare"]>> }> = [];
-    for (const repository of repositoryRows) {
+    for (const { repository, baseBranch } of repositoryRows) {
+      const repositoryPlan = repositoryPreparationPlan({ environmentKind, issueType: issue.type, deploymentBaseBranch: baseBranch });
       const existingRepository = existingRepositoryByUrl.get(repository.url);
       const name = workspaceNames.get(repository.url)!;
       const workspace = repositoryPlan.mode === "shared"

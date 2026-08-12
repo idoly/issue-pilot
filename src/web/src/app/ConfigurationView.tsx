@@ -14,14 +14,26 @@ function serviceSaveErrorMessage(error: unknown): string {
     invalid_db_password: "请填写数据库密码",
     invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
     invalid_mq_password: "请填写 RabbitMQ 密码",
+    duplicate_repository_alias: "仓库别名不能重复",
+    invalid_deployment_repository_branches: "请为每个环境配置全部仓库分支",
     service_has_running_issues: "该服务有正在处理的工单，请等待处理结束或先中止 Agent",
   };
   return messages[code] ?? code;
 }
 
+interface ServiceRepositoryDraft {
+  id?: string;
+  key: string;
+  alias: string;
+  url: string;
+}
+
+let repositoryDraftSequence = 0;
+const newRepositoryDraft = (): ServiceRepositoryDraft => ({ key: `new-${++repositoryDraftSequence}`, alias: "", url: "" });
+
 interface ServiceDeploymentDraft extends CapabilityConfiguration {
   environmentKey: string;
-  baseBranch: string;
+  repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
   capabilities: CapabilityName[];
   agent: AgentConfiguration;
   nacos?: NonNullable<CapabilityConfiguration["nacos"]> & { password: string };
@@ -33,7 +45,7 @@ interface ServiceDeploymentDraft extends CapabilityConfiguration {
 function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploymentDraft {
   return {
     environmentKey: deployment.environmentKey,
-    baseBranch: deployment.baseBranch,
+    repositoryBranches: deployment.repositoryBranches.map((branch) => ({ ...branch })),
     capabilities: [...deployment.capabilities],
     agent: { ...deployment.agent },
     ...(deployment.nacos ? { nacos: { ...deployment.nacos, dataIds: [...deployment.nacos.dataIds] } } : {}),
@@ -48,13 +60,16 @@ function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploy
 
 function ServiceRepositoryEditorRow(props: {
   index: number;
-  repository: { id?: string; url: string };
+  repository: ServiceRepositoryDraft;
   only: boolean;
-  onChange: (repository: { url: string }) => void;
+  onChange: (repository: { alias: string; url: string }) => void;
   onDelete: () => void;
 }) {
-  const [url, setUrl] = createSignal(props.repository.url, { ownedWrite: true });
-  return <div class="service-repository-row"><Input aria-label={`仓库地址 ${props.index + 1}`} placeholder="git@example.com:team/project.git" value={url()} onInput={(event) => { const next = event.currentTarget.value; setUrl(next); props.onChange({ url: next }); }} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除仓库${props.index + 1}`} aria-label={`删除仓库${props.index + 1}`} disabled={props.only} onClick={props.onDelete} /></div>;
+  let currentRepository = { alias: props.repository.alias, url: props.repository.url };
+  const [alias, setAlias] = createSignal(currentRepository.alias, { ownedWrite: true });
+  const [url, setUrl] = createSignal(currentRepository.url, { ownedWrite: true });
+  const update = (change: Partial<typeof currentRepository>) => { currentRepository = { ...currentRepository, ...change }; props.onChange(currentRepository); };
+  return <div class="service-repository-row"><Input aria-label={`仓库别名 ${props.index + 1}`} placeholder="orders-api" value={alias()} onInput={(event) => { const next = event.currentTarget.value; setAlias(next); update({ alias: next }); }} /><Input aria-label={`仓库地址 ${props.index + 1}`} placeholder="git@example.com:team/project.git" value={url()} onInput={(event) => { const next = event.currentTarget.value; setUrl(next); update({ url: next }); }} /><Button type="text" shape="circle" icon={<Trash2 size={14} />} title={`删除仓库${props.index + 1}`} aria-label={`删除仓库${props.index + 1}`} disabled={props.only} onClick={props.onDelete} /></div>;
 }
 
 function CapabilityLabels(props: { catalog: Config["capabilityCatalog"]; keys: CapabilityName[] }) {
@@ -68,6 +83,7 @@ function ServiceDeploymentEditorRow(props: {
   capabilityCatalog: Config["capabilityCatalog"];
   agentModels: AgentModelOption[];
   environmentOptions: () => Config["environments"];
+  repositories: () => ServiceRepositoryDraft[];
   onChange: (deployment: ServiceDeploymentDraft) => void;
   onDelete: () => void;
 }) {
@@ -75,7 +91,7 @@ function ServiceDeploymentEditorRow(props: {
   const initialDeployment = untrack(() => cloneDeploymentDraft(props.deployment));
   let currentDeployment = initialDeployment;
   const [environmentKey, setEnvironmentKey] = createSignal(initialDeployment.environmentKey, { ownedWrite: true });
-  const [baseBranch, setBaseBranch] = createSignal(initialDeployment.baseBranch, { ownedWrite: true });
+  const [repositoryBranches, setRepositoryBranches] = createSignal(initialDeployment.repositoryBranches, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
   const [agentDraft, setAgentDraft] = createSignal<AgentConfiguration>({ ...initialDeployment.agent }, { ownedWrite: true });
   const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: initialDeployment.nacos?.serverUrl ?? "", namespace: initialDeployment.nacos?.namespace ?? "", group: initialDeployment.nacos?.group ?? issuePilotConfig.defaults.nacos.group, dataIds: initialDeployment.nacos?.dataIds?.join(", ") ?? "", username: initialDeployment.nacos?.username ?? "", password: initialDeployment.nacos?.password ?? "" }, { ownedWrite: true });
@@ -100,6 +116,21 @@ function ServiceDeploymentEditorRow(props: {
     currentDeployment = { ...currentDeployment, ...change };
     props.onChange(cloneDeploymentDraft(currentDeployment));
   };
+  createEffect(
+    () => props.repositories(),
+    (repositories) => {
+      const current = untrack(repositoryBranches);
+      const next = repositories.map((repository) => current.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch });
+      if (next.length === current.length && next.every((branch, index) => branch.repositoryKey === current[index]?.repositoryKey && branch.baseBranch === current[index]?.baseBranch)) return;
+      setRepositoryBranches(next);
+      update({ repositoryBranches: next });
+    },
+  );
+  const updateRepositoryBranch = (repositoryKey: string, baseBranch: string) => {
+    const next = repositoryBranches().map((branch) => branch.repositoryKey === repositoryKey ? { ...branch, baseBranch } : branch);
+    setRepositoryBranches(next);
+    update({ repositoryBranches: next });
+  };
   const updateNacos = (change: Partial<ReturnType<typeof nacosDraft>>) => { const draft = { ...nacosDraft(), ...change }; setNacosDraft(draft); update({ nacos: nacos(draft) }); };
   const updateDb = (change: Partial<ReturnType<typeof dbDraft>>) => { const draft = { ...dbDraft(), ...change }; setDbDraft(draft); update({ db: db(draft) }); };
   const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
@@ -121,9 +152,9 @@ function ServiceDeploymentEditorRow(props: {
   return (
     <div class="service-deployment-row">
       <label class="deployment-environment"><span class="required-field">环境</span><Select aria-label={`部署环境 ${props.index + 1}`} value={environmentKey()} onChange={(value) => { const options = props.environmentOptions(); const selected = selectedChoice(value, options.map((environment) => environment.key)); if (selected) { setEnvironmentKey(selected); update({ environmentKey: selected }); } }} options={props.environmentOptions().map((environment) => ({ value: environment.key, label: environment.name }))} /></label>
-      <label class="deployment-branch"><span class="required-field">分支</span><Input aria-label={`部署分支 ${props.index + 1}`} value={baseBranch()} onInput={(event) => { const next = event.currentTarget.value; setBaseBranch(next); update({ baseBranch: next }); }} /></label>
       <div class="deployment-model"><span>模型</span><button type="button" class="deployment-capability-option selected" aria-pressed="true" disabled>model</button></div>
       <div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-options"><For each={props.capabilityCatalog}>{(capability) => { const selected = () => selectedCapabilities().includes(capability.key); return <button type="button" class={`deployment-capability-option${selected() ? " selected" : ""}`} aria-pressed={selected() ? "true" : "false"} onClick={() => selected() ? removeCapability(capability.key) : addCapability(capability.key)}>{capability.key}</button>; }}</For></div></div>
+      <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{repository.alias || "未命名仓库"}</span><Input aria-label={`部署 ${props.index + 1} 仓库 ${repository.alias || repository.key} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} /></label>}</For></div>
       <div class="deployment-capability-settings deployment-agent"><div class="capability-settings-head"><code>model</code></div><label><span class="required-field">provider</span><Select aria-label={`model provider ${props.index + 1}`} value={agentDraft().provider} onChange={(value) => { const provider = selectedChoice(value, providerOptions().map((option) => option.value)); if (!provider) return; const model = props.agentModels.find((candidate) => candidate.provider === provider); if (!model) return; const next = { provider, model: model.id, thinkingLevel: model.thinkingLevels.includes("medium") ? "medium" as const : model.thinkingLevels[0]! }; setAgentDraft(next); update({ agent: agent(next) }); }} options={providerOptions()} /></label><label><span class="required-field">modelId</span><Select aria-label={`model id ${props.index + 1}`} value={agentDraft().model} onChange={(value) => { const model = modelOptions().find((candidate) => candidate.id === value); if (!model) return; const current = agentDraft(); const next = { ...current, model: model.id, thinkingLevel: model.thinkingLevels.includes(current.thinkingLevel) ? current.thinkingLevel : model.thinkingLevels[0]! }; setAgentDraft(next); update({ agent: agent(next) }); }} options={modelOptions().map((model) => ({ value: model.id, label: model.id }))} /></label><label><span class="required-field">thinkingLevel</span><Select aria-label={`model thinkingLevel ${props.index + 1}`} value={agentDraft().thinkingLevel} onChange={(value) => { const selected = selectedChoice(value, selectedModel()?.thinkingLevels ?? []); if (selected) { const next = { ...agentDraft(), thinkingLevel: selected }; setAgentDraft(next); update({ agent: agent(next) }); } }} options={(selectedModel()?.thinkingLevels ?? []).map((value) => ({ value, label: value }))} /></label></div>
       <Show when={selectedCapabilities().includes("nacos")}><div class="deployment-capability-settings deployment-nacos"><div class="capability-settings-head"><code>nacos</code></div><label><span class="required-field">serverUrl</span><Input aria-label={`nacos serverUrl ${props.index + 1}`} value={nacosDraft().serverUrl} onInput={(event) => { updateNacos({ serverUrl: event.currentTarget.value }); }} /></label><label><span>namespace</span><Input aria-label={`nacos namespace ${props.index + 1}`} value={nacosDraft().namespace} onInput={(event) => { updateNacos({ namespace: event.currentTarget.value }); }} /></label><label><span class="required-field">group</span><Input aria-label={`nacos group ${props.index + 1}`} value={nacosDraft().group} onInput={(event) => { updateNacos({ group: event.currentTarget.value }); }} /></label><label><span class="required-field">dataIds</span><Input aria-label={`nacos dataIds ${props.index + 1}`} placeholder="多个 Data ID 用逗号分隔" value={nacosDraft().dataIds} onInput={(event) => { updateNacos({ dataIds: event.currentTarget.value }); }} /></label><label><span class={nacosDraft().password ? "required-field" : undefined}>username</span><Input aria-label={`nacos username ${props.index + 1}`} value={nacosDraft().username} onInput={(event) => { updateNacos({ username: event.currentTarget.value }); }} /></label><label><span class={nacosDraft().username.trim() ? "required-field" : undefined}>password</span><Input.Password autocomplete="off" aria-label={`nacos password ${props.index + 1}`}  value={nacosDraft().password} onInput={(event) => { updateNacos({ password: event.currentTarget.value }); }} /></label></div></Show>
       <Show when={selectedCapabilities().includes("db")}><div class="deployment-capability-settings deployment-db"><div class="capability-settings-head"><code>db</code></div><label><span class="required-field">url</span><Input aria-label={`db url ${props.index + 1}`} value={dbDraft().url} onInput={(event) => { updateDb({ url: event.currentTarget.value }); }} /></label><label><span class="required-field">username</span><Input aria-label={`db username ${props.index + 1}`} value={dbDraft().username} onInput={(event) => { updateDb({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><Input.Password autocomplete="off" aria-label={`db password ${props.index + 1}`}  value={dbDraft().password} onInput={(event) => { updateDb({ password: event.currentTarget.value }); }} /></label></div></Show>
@@ -142,7 +173,7 @@ export function ConfigurationView() {
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
-  const [serviceRepositories, setServiceRepositories] = createSignal<Array<{ id?: string; url: string }>>([{ url: "" }], { ownedWrite: true });
+  const [serviceRepositories, setServiceRepositories] = createSignal<ServiceRepositoryDraft[]>([newRepositoryDraft()], { ownedWrite: true });
   const [serviceDeployments, setServiceDeployments] = createStore<ServiceDeploymentDraft[]>([]);
   const [editingServiceKey, setEditingServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
   const [selectedServiceKey, setSelectedServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
@@ -168,7 +199,7 @@ export function ConfigurationView() {
   );
   const selectedService = createMemo(() => configuration().services.find((service) => service.key === selectedServiceKey()));
   const resetServiceForm = () => {
-    setServiceName(""); setDescription(""); setServiceRepositories([{ url: "" }]); setServiceDeployments(() => []); setEditingServiceKey(null);
+    setServiceName(""); setDescription(""); setServiceRepositories([newRepositoryDraft()]); setServiceDeployments(() => []); setEditingServiceKey(null);
   };
   const openNewService = () => {
     resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
@@ -180,10 +211,10 @@ export function ConfigurationView() {
   const openServiceEditor = (service: Service) => {
     setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
-    setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, url: repository.url })));
+    setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, key: repository.id, alias: repository.alias, url: repository.url })));
     const deployments = service.deployments.map((deployment) => ({
       environmentKey: deployment.environmentKey,
-      baseBranch: deployment.baseBranch,
+      repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })),
       capabilities: [...deployment.capabilities],
       agent: deployment.agent ? { ...deployment.agent } : defaultAgent(),
       ...(deployment.nacos ? { nacos: { ...deployment.nacos, dataIds: deployment.nacos.dataIds ?? [], password: deployment.nacos.password ?? "" } } : {}),
@@ -199,19 +230,29 @@ export function ConfigurationView() {
   };
   const serviceValidationError = () => {
     if (!serviceName().trim()) return "请填写服务名称";
-    if (!serviceRepositories().length || serviceRepositories().some((repository) => !repository.url.trim())) return "请填写所有仓库地址";
+    if (!serviceRepositories().length || serviceRepositories().some((repository) => !repository.alias.trim() || !repository.url.trim())) return "请填写所有仓库别名和地址";
+    if (new Set(serviceRepositories().map((repository) => repository.alias.trim())).size !== serviceRepositories().length) return "仓库别名不能重复";
     if (new Set(serviceRepositories().map((repository) => repository.url.trim())).size !== serviceRepositories().length) return "仓库地址不能重复";
-    if (serviceDeployments.some((deployment) => !deployment.environmentKey || !deployment.baseBranch.trim())) return "请填写所有部署环境和分支";
+    if (serviceDeployments.some((deployment) => !deployment.environmentKey || deployment.repositoryBranches.length !== serviceRepositories().length || deployment.repositoryBranches.some((branch) => !branch.baseBranch.trim()))) return "请填写所有部署环境和仓库分支";
     if (new Set(serviceDeployments.map((deployment) => deployment.environmentKey)).size !== serviceDeployments.length) return "同一环境只能配置一个部署";
     if (serviceDeployments.some((deployment) => !deployment.agent.provider.trim() || !deployment.agent.model.trim())) return "请配置所有部署模型";
     if (serviceDeployments.some((deployment) => deployment.capabilities.includes("nacos") && !deployment.nacos?.dataIds.length)) return "请填写 Nacos dataIds";
     return "";
   };
   const availableDeploymentEnvironments = createMemo(() => configuration().environments.filter((environment) => !serviceDeployments.some((deployment) => deployment.environmentKey === environment.key)));
+  const addServiceRepository = () => {
+    const repository = newRepositoryDraft();
+    setServiceRepositories((current) => [...current, repository]);
+    setServiceDeployments((current) => current.map((deployment) => ({ ...deployment, repositoryBranches: [...deployment.repositoryBranches, { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch }] })));
+  };
+  const deleteServiceRepository = (repository: ServiceRepositoryDraft) => {
+    setServiceRepositories((current) => current.filter((item) => item !== repository));
+    setServiceDeployments((current) => current.map((deployment) => ({ ...deployment, repositoryBranches: deployment.repositoryBranches.filter((branch) => branch.repositoryKey !== repository.key) })));
+  };
   const addServiceDeployment = () => {
     const environment = availableDeploymentEnvironments()[0];
     if (environment) {
-      const deployment = { environmentKey: environment.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch, capabilities: [], agent: defaultAgent() } satisfies ServiceDeploymentDraft;
+      const deployment = { environmentKey: environment.key, repositoryBranches: serviceRepositories().map((repository) => ({ repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })), capabilities: [], agent: defaultAgent() } satisfies ServiceDeploymentDraft;
       setServiceDeployments((current) => [...current, deployment]);
     }
   };
@@ -222,8 +263,8 @@ export function ConfigurationView() {
     try {
       const definition = {
         name: serviceName().trim(), description: description().trim(),
-        repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), url: repository.url.trim() })),
-        deployments: serviceDeployments.map((deployment) => ({ environmentKey: deployment.environmentKey, baseBranch: deployment.baseBranch.trim(), capabilities: deployment.capabilities, agent: { provider: deployment.agent.provider.trim(), model: deployment.agent.model.trim(), thinkingLevel: deployment.agent.thinkingLevel }, ...(deployment.capabilities.includes("nacos") && deployment.nacos ? { nacos: { serverUrl: deployment.nacos.serverUrl.trim(), namespace: deployment.nacos.namespace.trim(), group: deployment.nacos.group.trim(), dataIds: deployment.nacos.dataIds, username: deployment.nacos.username.trim(), password: deployment.nacos.password } } : {}), ...(deployment.capabilities.includes("db") && deployment.db ? { db: { url: deployment.db.url.trim(), username: deployment.db.username.trim(), password: deployment.db.password } } : {}), ...(deployment.capabilities.includes("sls") && deployment.sls ? { sls: { accessKeyId: deployment.sls.accessKeyId.trim(), accessKeySecret: deployment.sls.accessKeySecret, region: deployment.sls.region.trim(), project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}), ...(deployment.capabilities.includes("playwright") && deployment.playwright ? { playwright: { baseUrl: deployment.playwright.baseUrl.trim(), username: deployment.playwright.username.trim(), password: deployment.playwright.password } } : {}), ...(deployment.capabilities.includes("redis") && deployment.redis ? { redis: { host: deployment.redis.host.trim(), port: deployment.redis.port, username: deployment.redis.username.trim(), password: deployment.redis.password, database: deployment.redis.database } } : {}), ...(deployment.capabilities.includes("mq") && deployment.mq ? { mq: { host: deployment.mq.host.trim(), port: deployment.mq.port, managementPort: deployment.mq.managementPort, username: deployment.mq.username.trim(), password: deployment.mq.password, virtualHost: deployment.mq.virtualHost.trim() } } : {}), ...(deployment.capabilities.includes("es") && deployment.es ? { es: { url: deployment.es.url.trim(), username: deployment.es.username.trim(), password: deployment.es.password } } : {}) })),
+        repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), alias: repository.alias.trim(), url: repository.url.trim() })),
+        deployments: serviceDeployments.map((deployment) => ({ environmentKey: deployment.environmentKey, repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryAlias: serviceRepositories().find((repository) => repository.key === branch.repositoryKey)!.alias.trim(), baseBranch: branch.baseBranch.trim() })), capabilities: deployment.capabilities, agent: { provider: deployment.agent.provider.trim(), model: deployment.agent.model.trim(), thinkingLevel: deployment.agent.thinkingLevel }, ...(deployment.capabilities.includes("nacos") && deployment.nacos ? { nacos: { serverUrl: deployment.nacos.serverUrl.trim(), namespace: deployment.nacos.namespace.trim(), group: deployment.nacos.group.trim(), dataIds: deployment.nacos.dataIds, username: deployment.nacos.username.trim(), password: deployment.nacos.password } } : {}), ...(deployment.capabilities.includes("db") && deployment.db ? { db: { url: deployment.db.url.trim(), username: deployment.db.username.trim(), password: deployment.db.password } } : {}), ...(deployment.capabilities.includes("sls") && deployment.sls ? { sls: { accessKeyId: deployment.sls.accessKeyId.trim(), accessKeySecret: deployment.sls.accessKeySecret, region: deployment.sls.region.trim(), project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}), ...(deployment.capabilities.includes("playwright") && deployment.playwright ? { playwright: { baseUrl: deployment.playwright.baseUrl.trim(), username: deployment.playwright.username.trim(), password: deployment.playwright.password } } : {}), ...(deployment.capabilities.includes("redis") && deployment.redis ? { redis: { host: deployment.redis.host.trim(), port: deployment.redis.port, username: deployment.redis.username.trim(), password: deployment.redis.password, database: deployment.redis.database } } : {}), ...(deployment.capabilities.includes("mq") && deployment.mq ? { mq: { host: deployment.mq.host.trim(), port: deployment.mq.port, managementPort: deployment.mq.managementPort, username: deployment.mq.username.trim(), password: deployment.mq.password, virtualHost: deployment.mq.virtualHost.trim() } } : {}), ...(deployment.capabilities.includes("es") && deployment.es ? { es: { url: deployment.es.url.trim(), username: deployment.es.username.trim(), password: deployment.es.password } } : {}) })),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
@@ -267,8 +308,8 @@ export function ConfigurationView() {
               <Button icon={<Pencil size={14} />} onClick={() => openServiceEditor(service())}>编辑服务</Button>
             </header>
             <div class="service-detail">
-              <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
-              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><Show when={service().deployments.length} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}><div class="deployment-detail-head"><span>环境</span><span>分支</span><span>模型</span><span>能力</span></div><For each={service().deployments}>{(deployment) => { const environment = () => configuration().environments.find((item) => item.key === deployment.environmentKey); return <div class="deployment-detail-row"><div data-label="环境"><strong>{environment()?.name ?? deployment.environmentKey}</strong></div><div data-label="分支"><code>{deployment.baseBranch}</code></div><div data-label="模型"><Show when={deployment.agent} fallback={<span class="capability-empty">未配置</span>}>{(agent) => <code>{agent().provider}/{agent().model} · {agent().thinkingLevel}</code>}</Show></div><div data-label="能力"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityLabels catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div>; }}</For></Show></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>代码仓库</h3><span>{service().repositories.length} 个授权根目录</span></div><div class="detail-repositories"><div class="repository-detail-head"><span>别名</span><span>仓库地址</span></div><For each={service().repositories}>{(repository) => <div class="repository-detail-row"><GitBranch size={15} /><strong>{repository.alias}</strong><code title={repository.url}>{repository.url}</code></div>}</For></div></section>
+              <section class="service-detail-section"><div class="service-detail-heading"><h3>环境部署</h3><span>{service().deployments.length} 个环境</span></div><div class="deployment-detail-list"><Show when={service().deployments.length} fallback={<div class="service-detail-empty">尚未配置环境部署</div>}><div class="deployment-detail-head"><span>环境</span><span>分支</span><span>模型</span><span>能力</span></div><For each={service().deployments}>{(deployment) => { const environment = () => configuration().environments.find((item) => item.key === deployment.environmentKey); const branches = () => service().repositories.map((repository) => ({ alias: repository.alias, baseBranch: deployment.repositoryBranches.find((item) => item.repositoryId === repository.id)?.baseBranch ?? "-" })); return <div class="deployment-detail-row"><div data-label="环境"><strong>{environment()?.name ?? deployment.environmentKey}</strong></div><div data-label="分支"><code class="deployment-branch-values" title={branches().map((branch) => `${branch.alias}: ${branch.baseBranch}`).join("\n")}>{branches().map((branch) => branch.baseBranch).join(" / ")}</code></div><div data-label="模型"><Show when={deployment.agent} fallback={<span class="capability-empty">未配置</span>}>{(agent) => <code>{agent().provider}/{agent().model} · {agent().thinkingLevel}</code>}</Show></div><div data-label="能力"><Show when={deployment.capabilities.length} fallback={<span class="capability-empty">无外部能力</span>}><CapabilityLabels catalog={configuration().capabilityCatalog} keys={deployment.capabilities} /></Show></div></div>; }}</For></Show></div></section>
               <section class="service-detail-section"><div class="service-detail-heading"><h3>项目描述</h3></div><Show when={service().description.trim()} fallback={<div class="service-detail-empty">暂无项目描述</div>}><Markdown source={service().description} /></Show></section>
             </div>
           </>}
@@ -278,8 +319,8 @@ export function ConfigurationView() {
         <div class="service-form">
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>服务可以关联一个或多个 Git 仓库</span></div><Button icon={<Plus size={14} />} onClick={() => setServiceRepositories((current) => [...current, { url: "" }])}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => setServiceRepositories((current) => current.filter((item) => item !== repository))} />}</For></div></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>配置分支和 Pi 按需使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? next : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>别名用于环境分支配置，服务内必须唯一</span></div><Button icon={<Plus size={14} />} onClick={addServiceRepository}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => current.map((item) => item.key === repository.key ? { ...item, ...next } : item))} onDelete={() => deleteServiceRepository(repository)} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>按仓库别名配置分支和 Pi 使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} capabilityCatalog={configuration().capabilityCatalog} agentModels={configuration().agentModels} repositories={serviceRepositories} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => current.map((item, itemIndex) => itemIndex === index() ? next : item))} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
         </div>

@@ -402,16 +402,18 @@ button, input, textarea { font: inherit; }
 .service-detail-heading h3 { margin: 0; color: #39443f; font-size: 13px; letter-spacing: 0; }
 .service-detail-heading span { color: #84908a; font-size: 10px; }
 .detail-repositories { min-width: 0; border-block: 1px solid #e2e7e4; }
-.repository-detail-head { min-height: 30px; padding: 8px 12px 8px 42px; background: #f7f9f8; color: #7a8680; font-size: 10px; }
-.repository-detail-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 44px; padding: 7px 12px; border-top: 1px solid #edf0ee; color: #65716c; }
+.repository-detail-head { display: grid; min-height: 30px; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 8px 12px 8px 42px; background: #f7f9f8; color: #7a8680; font-size: 10px; }
+.repository-detail-row { display: grid; grid-template-columns: 18px 140px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 44px; padding: 7px 12px; border-top: 1px solid #edf0ee; color: #65716c; }
+.repository-detail-row strong { min-width: 0; overflow: hidden; color: #26342e; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-detail-row code, .deployment-detail-row code { min-width: 0; overflow: hidden; color: #46524d; font-family: var(--mono-font); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-detail-list { border-block: 1px solid #e2e7e4; }
-.deployment-detail-head, .deployment-detail-row { display: grid; grid-template-columns: 110px 150px minmax(180px, 0.8fr) minmax(220px, 1fr); align-items: center; gap: 12px; padding: 0 12px; }
+.deployment-detail-head, .deployment-detail-row { display: grid; grid-template-columns: 72px minmax(130px, 0.65fr) minmax(190px, 0.9fr) minmax(360px, 1.4fr); align-items: center; gap: 16px; padding: 0 12px; }
 .deployment-detail-head { min-height: 30px; background: #f7f9f8; color: #7a8680; font-size: 10px; }
-.deployment-detail-row { min-height: 46px; border-top: 1px solid #edf0ee; }
+.deployment-detail-row { min-height: 48px; border-top: 1px solid #edf0ee; }
 .deployment-detail-row > div { min-width: 0; }
 .deployment-detail-row strong { color: #26342e; font-size: 12px; }
-.deployment-detail-row code { display: block; overflow: hidden; color: #46524d; font-family: var(--mono-font); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.deployment-detail-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deployment-branch-values { color: #176b5b !important; font-weight: 600; }
 .capability-empty { color: #88928e; font-size: 11px; }
 .service-detail-empty { padding: 13px 2px; border-top: 1px solid #e7ebe9; color: #828d88; font-size: 12px; }
 .markdown { max-width: 900px; color: #3f4a45; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
@@ -429,12 +431,11 @@ button, input, textarea { font: inherit; }
 .service-form-section-header strong { color: #303936; font-size: 13px; }
 .service-form-section-header span { color: #7a8580; font-size: 11px; }
 .service-repository-editor, .service-deployment-editor { display: grid; gap: 8px; }
-.service-repository-row { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
-.service-deployment-row { display: grid; grid-template-columns: 125px 108px 72px minmax(280px, 1fr) 30px; grid-template-areas: "environment branch model capabilities delete"; align-items: end; gap: 10px 6px; padding: 12px 2px; background: #fff; }
+.service-repository-row { display: grid; grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
+.service-deployment-row { display: grid; grid-template-columns: 125px 72px minmax(280px, 1fr) 30px; grid-template-areas: "environment model capabilities delete"; align-items: end; gap: 10px 6px; padding: 12px 2px; background: #fff; }
 .service-deployment-row + .service-deployment-row { border-top: 1px solid #e2e7e4; }
 .service-deployment-row > label, .deployment-model, .deployment-capabilities { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .deployment-environment { grid-area: environment; }
-.deployment-branch { grid-area: branch; }
 .service-deployment-row > .ads-button { grid-area: delete; align-self: end; }
 .service-deployment-row .ads-select { width: 100%; }
 .deployment-model { grid-area: model; align-self: stretch; justify-items: start; }
@@ -447,15 +448,17 @@ button, input, textarea { font: inherit; }
 .deployment-capability-option:hover { border-color: #86aa9d; color: #176b5b; }
 .deployment-capability-option.selected { border-color: #176b5b; background: #eaf4f0; color: #176b5b; font-weight: 700; }
 .deployment-capabilities .deployment-capability-option { padding-inline: 6px; }
-.deployment-capability-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px 12px 12px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
-.deployment-capability-settings label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
+.deployment-capability-settings, .deployment-repositories { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px 12px 12px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
+.deployment-capability-settings label, .deployment-repositories label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .required-field::after { content: " *"; color: #c43832; font-weight: 700; }
-.service-deployment-row > .deployment-capability-settings { grid-column: 1 / -1; }
+.service-deployment-row > .deployment-capability-settings, .service-deployment-row > .deployment-repositories { grid-column: 1 / -1; }
+.deployment-repositories { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .deployment-agent { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .capability-settings-head { display: flex; grid-column: 1 / -1; min-height: 24px; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid #e5eae8; }
 .capability-settings-head code { color: #176b5b; font-size: 12px; font-weight: 700; }
 .capability-settings-head .ads-button { justify-self: end; }
-.capability-labels { display: flex; min-width: 0; flex-wrap: wrap; gap: 6px; }
+.capability-labels { display: flex; min-width: 0; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.capability-labels::-webkit-scrollbar { display: none; }
 .capability-labels code { padding: 4px 8px; border: 1px solid #d7e1dd; border-radius: 4px; background: #f4f7f6; color: #38564b; font-size: 10px; }
 .service-form-empty { padding: 16px; border: 1px dashed #d8dfdb; border-radius: 5px; color: #7d8883; text-align: center; font-size: 12px; }
 .destructive-action { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid #ecefed; }
@@ -505,12 +508,14 @@ button, input, textarea { font: inherit; }
   .service-detail { gap: 24px; padding: 16px 12px 28px; }
   .repository-detail-head { grid-template-columns: 52px minmax(0, 1fr); padding-left: 38px; }
   .repository-detail-row { grid-template-columns: 16px 42px minmax(0, 1fr); gap: 8px; padding-inline: 9px; }
-  .deployment-detail-head, .deployment-detail-row { grid-template-columns: 70px 90px minmax(130px, 0.8fr) minmax(160px, 1fr); gap: 8px; padding-inline: 8px; }
   .service-repository-row { grid-template-columns: minmax(0, 1fr) 30px; }
-  .service-deployment-row { grid-template-columns: minmax(0, 1fr) 30px; grid-template-areas: "environment delete" "branch branch" "model model" "capabilities capabilities"; align-items: stretch; }
+  .service-repository-row .ads-input-affix-wrapper:first-child { grid-column: 1; }
+  .service-repository-row .ads-input-affix-wrapper:nth-child(2) { grid-column: 1; }
+  .service-repository-row > .ads-button { grid-column: 2; grid-row: 1 / span 2; }
+  .service-deployment-row { grid-template-columns: minmax(0, 1fr) 30px; grid-template-areas: "environment delete" "model model" "capabilities capabilities"; align-items: stretch; }
   .service-deployment-row > .ads-button { align-self: end; justify-self: end; }
   .deployment-capability-options { flex-wrap: wrap; }
-  .deployment-capability-settings { grid-template-columns: minmax(0, 1fr); }
+  .deployment-capability-settings, .deployment-repositories { grid-template-columns: minmax(0, 1fr); }
   .service-form-section-header { align-items: flex-end; }
   .issue-queue { height: 30vh; border-right: 0; border-bottom: 1px solid #d8ddda; }
   .agent-workbench { display: grid; width: 100%; height: calc(70vh - 52px); min-height: 420px; grid-template-rows: minmax(0, 1fr); }
@@ -543,4 +548,7 @@ button, input, textarea { font: inherit; }
   .deployment-detail-row { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px 16px; min-height: 0; padding: 12px 8px; }
   .deployment-detail-row > div { display: grid; gap: 4px; }
   .deployment-detail-row > div::before { content: attr(data-label); color: #7a8680; font-size: 10px; }
+  .deployment-detail-row > div:nth-child(4) { grid-column: 1 / -1; }
+  .deployment-detail-row > div:nth-child(4) .capability-labels { width: 100%; }
+  .deployment-detail-row > div:nth-child(4) .capability-labels code { padding-inline: 6px; }
 }
