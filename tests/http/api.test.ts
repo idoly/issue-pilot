@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { agentSessions, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { agentSessions, issueRepositories, issues, issueWorkspaces, serviceDeployments, services } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { AGENT_THINKING_LEVELS } from "../../src/domain/contracts.ts";
 import { issueAttachmentRoot } from "../../src/workspace/state.ts";
@@ -110,10 +110,27 @@ test("configuration and issue API preserves relational integrity", async () => {
       assert.equal((await json(response)).error, expected);
     }
 
+    const forgedCreateRepository = await app.inject({
+      method: "POST",
+      url: "/api/services",
+      payload: { name: "Forged repository", repositories: [{ id: "foreign-id", alias: "forged", url: "https://example.test/forged.git" }], deployments: [] },
+    });
+    assert.equal(forgedCreateRepository.statusCode, 400, forgedCreateRepository.body);
+    assert.equal((await json(forgedCreateRepository)).error, "invalid_repository");
+
+    const shadowedConfiguration = openDatabase(join(root, "issues.db"));
+    const [betaService] = await shadowedConfiguration.db.select({ id: services.id }).from(services).where(eq(services.key, "beta")).limit(1);
+    const betaDeployments = await shadowedConfiguration.db.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, betaService!.id));
+    for (const deployment of betaDeployments) {
+      await shadowedConfiguration.db.update(serviceDeployments).set({ config: { ...deployment.config, environmentKey: "shadow", repositoryBranches: [] } }).where(eq(serviceDeployments.id, deployment.id));
+    }
+    await shadowedConfiguration.close();
+
     const modeled = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; repositories: Array<{ id: string; alias: string; url: string }>; deployments: Array<{ environmentKey: string; repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>; agent: unknown }> }> };
     const alphaModel = modeled.services.find((service) => service.key === "alpha")!;
     const betaModel = modeled.services.find((service) => service.key === "beta")!;
     assert.deepEqual(betaModel.deployments.find((deployment) => deployment.environmentKey === "dev")?.repositoryBranches.map(({ repositoryAlias, baseBranch }) => ({ repositoryAlias, baseBranch })), [{ repositoryAlias: "beta-1", baseBranch: "develop" }]);
+    assert.deepEqual(betaModel.deployments.map((deployment) => deployment.environmentKey), ["test", "dev"]);
     for (const field of ["id", "kind", "createdAt", "environmentIds"]) assert.equal(field in alphaModel, false);
     assert.equal(alphaModel.deployments.some((deployment) => "id" in deployment || "environmentId" in deployment), false);
     assert.equal(alphaModel.deployments[0]?.environmentKey, "test");
@@ -583,6 +600,18 @@ test("configuration and issue API preserves relational integrity", async () => {
     });
     assert.equal(invalidServiceUpdate.statusCode, 400);
     assert.equal((await json(invalidServiceUpdate)).error, "invalid_repository");
+    const crossServiceRepositoryUpdate = await app.inject({
+      method: "PATCH",
+      url: "/api/services/alpha",
+      payload: {
+        name: "Partially changed",
+        description: "changed",
+        repositories: [{ id: betaModel.repositories[0]!.id, alias: "alpha", url: "https://example.test/alpha.git" }],
+        deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha", baseBranch: "main" }], capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" } }],
+      },
+    });
+    assert.equal(crossServiceRepositoryUpdate.statusCode, 400);
+    assert.equal((await json(crossServiceRepositoryUpdate)).error, "invalid_repository");
     const configuration = await app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
     assert.equal(configuration.services.find((service) => service.key === "alpha")?.name, "Alpha renamed");
 

@@ -14,6 +14,7 @@ function serviceSaveErrorMessage(error: unknown): string {
     invalid_db_password: "请填写数据库密码",
     invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
     invalid_mq_password: "请填写 RabbitMQ 密码",
+    invalid_repository: "仓库标识无效，请刷新配置后重试",
     duplicate_repository_alias: "仓库别名不能重复",
     invalid_deployment_repository_branches: "请为每个环境配置全部仓库分支",
     service_has_running_issues: "该服务有正在处理的工单，请等待处理结束或先中止 Agent",

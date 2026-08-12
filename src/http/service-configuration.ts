@@ -189,7 +189,7 @@ export async function replaceServiceConfiguration(options: {
 
   const existingById = new Map(existingRepositories.map((repository) => [repository.id, repository]));
   const configuredIds = repositoriesInput.flatMap((repository) => repository.id ? [repository.id] : []);
-  if (new Set(configuredIds).size !== configuredIds.length || (serviceUpdate && configuredIds.some((id) => !existingById.has(id)))) throw new ApiError(400, "invalid_repository");
+  if (new Set(configuredIds).size !== configuredIds.length || configuredIds.some((id) => !existingById.has(id))) throw new ApiError(400, "invalid_repository");
   const retainedEnvironmentIds = new Set(deploymentsInput.map((deployment) => environmentsByKey.get(deployment.environmentKey)!.id));
   const referencedEnvironmentIds = new Set(referencedIssues.map((issue) => issue.environmentId));
   if (existingDeployments.some((deployment) => !retainedEnvironmentIds.has(deployment.environmentId) && referencedEnvironmentIds.has(deployment.environmentId))) throw new ApiError(409, "deployment_is_used_by_issues");

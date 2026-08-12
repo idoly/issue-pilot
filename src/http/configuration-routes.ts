@@ -50,30 +50,48 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       database.db.select().from(serviceDeploymentRepositories), modelCatalog.list(),
     ]);
     const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
+    const deploymentsByServiceId = new Map<string, typeof deploymentRows>();
+    const repositoriesByServiceId = new Map<string, typeof repositoryRows>();
+    const branchesByDeploymentId = new Map<string, Map<string, string>>();
+    for (const deployment of deploymentRows) {
+      const grouped = deploymentsByServiceId.get(deployment.serviceId) ?? [];
+      grouped.push(deployment);
+      deploymentsByServiceId.set(deployment.serviceId, grouped);
+    }
+    for (const repository of repositoryRows) {
+      const grouped = repositoriesByServiceId.get(repository.serviceId) ?? [];
+      grouped.push(repository);
+      repositoriesByServiceId.set(repository.serviceId, grouped);
+    }
+    for (const branch of deploymentRepositoryRows) {
+      const grouped = branchesByDeploymentId.get(branch.deploymentId) ?? new Map<string, string>();
+      grouped.set(branch.repositoryId, branch.baseBranch);
+      branchesByDeploymentId.set(branch.deploymentId, grouped);
+    }
     return {
       agentModels: agentModels.map((model) => ({ provider: model.provider, id: model.id, thinkingLevels: model.thinkingLevels })),
       environments: environmentRows.map((environment) => ({ key: environment.key, name: environment.name })),
       capabilityCatalog: CAPABILITY_KEYS.map((key) => ({ key })),
       services: serviceRows.map((service) => {
-        const deployments = deploymentRows.filter((deployment) => deployment.serviceId === service.id);
+        const deployments = deploymentsByServiceId.get(service.id) ?? [];
+        const repositories = repositoriesByServiceId.get(service.id) ?? [];
         return {
           key: service.key, name: service.name, description: service.description,
           deployments: deployments.map((deployment) => {
             const deploymentConfig = record(deployment.config);
             const environmentKey = environmentKeyById.get(deployment.environmentId);
             if (!environmentKey) throw new Error("deployment_environment_not_found");
-            const serviceRepositoryRows = repositoryRows.filter((repository) => repository.serviceId === service.id);
-            const branchByRepositoryId = new Map(deploymentRepositoryRows.filter((branch) => branch.deploymentId === deployment.id).map((branch) => [branch.repositoryId, branch.baseBranch]));
-            if (serviceRepositoryRows.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== serviceRepositoryRows.length) throw new Error("deployment_repository_branches_invalid");
+            const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();
+            if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
             return {
-              environmentKey,
-              repositoryBranches: serviceRepositoryRows.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
               ...structuredClone(deploymentConfig),
+              environmentKey,
+              repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
               capabilities: configuredCapabilities(deploymentConfig),
               agent: deploymentConfig.agent ?? null,
             };
           }),
-          repositories: repositoryRows.filter((repository) => repository.serviceId === service.id).map((repository) => ({ id: repository.id, alias: repository.alias, url: repository.url })),
+          repositories: repositories.map((repository) => ({ id: repository.id, alias: repository.alias, url: repository.url })),
         };
       }),
     };

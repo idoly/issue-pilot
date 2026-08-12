@@ -34,6 +34,58 @@ async function createRemote(root: string): Promise<{ source: string; remotes: [s
   return { source, remotes };
 }
 
+test("preflights every removed development repository before deleting worktrees", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-removal-"));
+  const stateRoot = path.join(root, "state");
+  const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
+  try {
+    const { source, remotes: initialRemotes } = await createRemote(root);
+    const thirdRemote = path.join(root, "tertiary.git");
+    await git(["clone", "--bare", source, thirdRemote]);
+    const remotes = [...initialRemotes, thirdRemote];
+    const [dev] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester" });
+    const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
+    const repositories = await database.db.insert(serviceRepositories).values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url }))).returning();
+    const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: { agent: { provider: "test-provider", model: "test-model", thinkingLevel: "medium" } } }).returning();
+    await database.db.insert(serviceDeploymentRepositories).values(repositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
+    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-103", title: "Remove repositories", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
+
+    const engine = new AgentEngine(database.db, stateRoot);
+    const internal = engine as unknown as {
+      piRuntime: { start(): Promise<unknown> };
+      codeServerManager: { ensure(issueKey: string, workspacePath: string): Promise<string> };
+      run(issueId: string): Promise<void>;
+    };
+    internal.piRuntime = {
+      async start() { return { session: {}, streaming: false, async prompt() {}, async stop() {} }; },
+    };
+    internal.codeServerManager = {
+      async ensure() { return "http://127.0.0.1:18080"; },
+    };
+
+    await internal.run(issue!.id);
+    const prepared = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    const preparedByUrl = new Map(prepared.map((repository) => [repository.url, repository]));
+    const firstRemovedPath = preparedByUrl.get(remotes[1]!)!.localPath!;
+    const dirtyRemovedPath = preparedByUrl.get(remotes[2]!)!.localPath!;
+    await writeFile(path.join(dirtyRemovedPath, "untracked.txt"), "preserve\n", "utf8");
+    await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[1]!.id));
+    await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[2]!.id));
+
+    await assert.rejects(internal.run(issue!.id), /workspace_has_changes/);
+    await access(firstRemovedPath);
+    await access(dirtyRemovedPath);
+    const retained = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(retained.map((repository) => repository.url).sort(), [...remotes].sort());
+    await engine.close();
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("uses unified code-server runtimes while preserving read-only and writable Agent workspaces", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");

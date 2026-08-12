@@ -169,6 +169,7 @@ export class AgentEngine implements AgentController {
     const repositoryUrls = new Set(repositoryRows.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
     if (sharedRepositories && existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
+    await Promise.all(removedRepositories.flatMap((repository) => repository.localPath ? [this.worktreeManager.assertClean(repository.localPath)] : []));
     for (const repository of removedRepositories) {
       if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
     }

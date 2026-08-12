@@ -57,7 +57,7 @@ Web 负责过滤选项，API 再次验证。直接调用 API 也不能给 prod/t
 - Prod/test 下一轮使用最新列表和当前 Deployment 分支。
 - 活动 dev 下一轮补入新增 Repository；新增仓库使用当前 Deployment 分支，已有仓库继续保留该 Issue 的历史 `base_branch`。
 - 被删除 Repository 的 clean dev worktree 可以在下一次准备时移除。
-- Dirty worktree 会使准备失败并保留现场。
+- 删除前会先检查全部待移除 worktree；任意一个 dirty 时准备失败，并完整保留所有待移除 worktree 和数据库记录。
 - Released dev 在重新打开前保留其历史 Repository 集合；不要仅因当前 Service 仓库更多就直接回填数据库。
 - 数据库 `local_path` 与当前推导路径不一致时明确失败，不自动移动目录。
 
@@ -249,7 +249,7 @@ Capability 不返回部分成功结果。超过边界时返回 `capability_resul
 Service 保存是一个数据库事务。API 会同时验证：
 
 - Environment 存在且不重复。
-- Repository ID 属于当前 Service，别名和 URL 不重复。
+- 新建 Service 的 Repository 不接受 ID；编辑时 Repository ID 必须属于当前 Service，且不能重复，别名和 URL 也不能重复。
 - 每个 Deployment 恰好覆盖当前 Service 的全部 Repository；运行时还会再次拒绝缺失、额外或跨 Service 的关联。
 - Model 和 thinking level 可用。
 - Capability 名称、配置和 scope 完整。
