@@ -413,7 +413,6 @@ button, input, textarea { font: inherit; }
 .deployment-detail-row > div { min-width: 0; }
 .deployment-detail-row strong { color: #26342e; font-size: 12px; }
 .deployment-detail-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.deployment-branch-values { color: #176b5b !important; font-weight: 600; }
 .capability-empty { color: #88928e; font-size: 11px; }
 .service-detail-empty { padding: 13px 2px; border-top: 1px solid #e7ebe9; color: #828d88; font-size: 12px; }
 .markdown { max-width: 900px; color: #3f4a45; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
