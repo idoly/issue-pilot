@@ -25,7 +25,7 @@ export const issuePilotConfig = Object.freeze({
     sseHeartbeatMs: 15_000,
   }),
   web: Object.freeze({
-    host: "127.0.0.1",
+    host: "0.0.0.0",
     port: 4173,
     agentStreamReconnectMs: 1_000,
   }),

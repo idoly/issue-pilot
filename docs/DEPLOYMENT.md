@@ -97,7 +97,7 @@ npm run build
 | `subject` | 配置文件中的账号 | 页面首次打开时的默认操作人 |
 | `users` | 见配置文件 | 页面允许切换的操作人名单；启动时同步到人员目录 |
 | `http.*` | `127.0.0.1:3000` | API、logger 和 SSE heartbeat |
-| `web.*` | `127.0.0.1:4173` | Vite dev server 和 Agent stream 重连间隔 |
+| `web.*` | `0.0.0.0:4173` | Vite dev server 监听地址、端口和 Agent stream 重连间隔 |
 | `defaults.*` | 见配置文件 | Environment、Deployment 和 capability 表单/API 共用默认值 |
 | `workspace.*` | 见 [运维手册](RUNBOOK.md#项目配置) | Retention、quota 和 maintenance policy |
 | `limits.*` | 见配置文件 | Agent、附件、进程和 capability 的 timeout/size/count 上限 |
@@ -130,11 +130,11 @@ npm run dev:web
 
 | 服务 | 地址 |
 | --- | --- |
-| Web | `http://127.0.0.1:4173` |
+| Web | `http://127.0.0.1:4173`；WSL 端口转发配置完成后也可使用宿主局域网地址 |
 | API | `http://127.0.0.1:3000` |
 | code-server | `http://127.0.0.1:18080` |
 
-Vite 已配置 `/api` 和 `/code-server` proxy，只用于开发。
+Vite 监听所有 Web 接口并配置 `/api` 和 `/code-server` proxy，只用于受信任的开发网络。API 和 code-server 自身仍只监听 loopback。Issue Pilot 没有内置认证，Vite 代理可访问工单数据和 code-server，不能直接暴露到不受信任网络。
 
 ## 首次业务配置
 

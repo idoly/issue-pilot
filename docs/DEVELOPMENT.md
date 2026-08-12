@@ -23,7 +23,7 @@ npm run server
 npm run dev:web
 ```
 
-API 为 `http://127.0.0.1:3000`，Vite 为 `http://127.0.0.1:4173`。Playwright 和 code-server 需要固定宿主 runtime，准备方式见 [运行前检查](DEPLOYMENT.md#运行前检查)。
+API 为 `http://127.0.0.1:3000`，Vite 本机入口为 `http://127.0.0.1:4173`，并按根配置监听 Web 接口以支持受信任开发网络访问。Playwright 和 code-server 需要固定宿主 runtime，准备方式见 [运行前检查](DEPLOYMENT.md#运行前检查)。
 
 自动测试通过 `buildApi({ stateRoot })` 和 manager constructor 注入 temporary directory，不会使用项目状态。需要隔离的手工服务器时使用独立项目副本；不要为当前 checkout 添加环境变量覆盖或临时修改真实 state 配置。Credential 和数据库不能提交到 Git。
 

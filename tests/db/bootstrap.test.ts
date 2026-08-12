@@ -21,6 +21,7 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
+  assert.equal(applicationConfig.web.host, "0.0.0.0");
 });
 
 test("restores interrupted and ready workspaces when the application database reopens", async () => {
