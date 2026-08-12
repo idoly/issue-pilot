@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import { replaceGeneratedDirectory } from "./generated-directory.ts";
 
 const PROJECT_WRAPPER_HEADER = `#!/bin/sh
 set -eu
@@ -48,26 +50,10 @@ export async function prepareProjectWrappers(runtimeRoot: string): Promise<strin
       writeFile(path.join(temporaryRoot, "node-project"), NODE_PROJECT, { mode: 0o700 }),
       writeFile(path.join(temporaryRoot, "maven-project"), MAVEN_PROJECT, { mode: 0o700 }),
     ]);
-    let previous = false;
-    try {
-      await rename(binRoot, previousRoot);
-      previous = true;
-    } catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-    }
-    try {
-      await rename(temporaryRoot, binRoot);
-    } catch (error) {
-      if (previous) await rename(previousRoot, binRoot);
-      throw error;
-    }
-    if (previous) await rm(previousRoot, { recursive: true });
+    await replaceGeneratedDirectory(binRoot, temporaryRoot, previousRoot);
     return binRoot;
   } catch (error) {
-    await Promise.all([
-      rm(temporaryRoot, { recursive: true, force: true }),
-      rm(previousRoot, { recursive: true, force: true }),
-    ]);
+    await rm(temporaryRoot, { recursive: true, force: true });
     throw error;
   }
 }

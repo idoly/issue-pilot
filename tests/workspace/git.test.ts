@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { repositoryWorkspaceNames, WorktreeManager, WorktreeRemovalFailure } from "../../src/workspace/git.ts";
+import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRemovalFailure } from "../../src/workspace/git.ts";
 import { sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -26,6 +26,55 @@ test("uses readable repository names and stable suffixes for basename collisions
   assert.match(names.get(urls[1]!)!, /^srm-server-[a-f0-9]{8}$/);
   assert.notEqual(names.get(urls[0]!), names.get(urls[1]!));
   assert.equal(names.get(urls[2]!), "srm-admin-front");
+});
+
+test("preserves persisted issue repository workspace names", () => {
+  const active = issueRepositoryWorkspaceNames([
+    { url: "https://example.test/team/orders.git", localPath: "/state/workspaces/issue-20260805-001/orders", workspaceName: null },
+  ]);
+  assert.equal(active.get("https://example.test/team/orders.git"), "orders");
+
+  const snapshotUrls = ["https://example.test/team-a/orders.git", "https://example.test/team-b/orders.git"];
+  const snapshot = issueRepositoryWorkspaceNames(snapshotUrls.map((url) => ({ url, localPath: null, workspaceName: null })));
+  assert.deepEqual(snapshot, repositoryWorkspaceNames(snapshotUrls));
+  assert.throws(() => issueRepositoryWorkspaceNames([
+    { url: snapshotUrls[0]!, localPath: "/state/workspaces/issue-20260805-001/orders", workspaceName: "other" },
+  ]), /workspace_path_does_not_match_repository/);
+  assert.throws(() => repositoryWorkspaceNames(snapshotUrls, new Map(snapshotUrls.map((url) => [url, "orders"] as const))), /repository_workspace_name_conflict/);
+});
+
+test("serializes repository operations across manager instances sharing one state root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-lock-"));
+  try {
+    const managers = [new WorktreeManager(root), new WorktreeManager(root)];
+    let active = 0;
+    let maximumActive = 0;
+    for (const manager of managers) {
+      const internal = manager as unknown as { git(args: string[]): Promise<string> };
+      internal.git = async (args) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return args.includes("rev-parse") ? "a".repeat(40) : "";
+      };
+    }
+    const url = "https://example.test/team/orders.git";
+    await Promise.all(managers.map((manager) => manager.prepareShared({ url, baseBranch: "main" })));
+    assert.equal(maximumActive, 1);
+
+    active = 0;
+    maximumActive = 0;
+    const cleanPath = join(root, "workspaces", "issue-20260805-001", "orders");
+    await mkdir(cleanPath, { recursive: true });
+    await Promise.all([
+      managers[0]!.prepareShared({ url, baseBranch: "main" }),
+      managers[1]!.assertClean(url, cleanPath),
+    ]);
+    assert.equal(maximumActive, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("shares immutable latest baselines for read-only environments and creates prefixed dev branches", async () => {

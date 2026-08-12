@@ -72,6 +72,32 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     assert.equal(workspace!.codeServerReady, true);
     assert.equal(session!.workspacePath, issueRuntimeRoot(root, issue!.key));
 
+    const extraRemote = path.join(root, "extra.git");
+    await git(["clone", "--bare", remote, extraRemote]);
+    const [extraRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "extra", url: extraRemote }).returning();
+    await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: extraRepository!.id, baseBranch: "missing" });
+    const failedSwitch = await prepareReadOnlyIssueRuntimes(database.db, root, { async ensure() { throw new Error("code_server_must_not_run"); } });
+    assert.equal(failedSwitch.blocked[0]?.issueKey, issue!.key);
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "main" }).where(eq(serviceDeploymentRepositories.repositoryId, extraRepository!.id));
+    const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
+    const runTransaction = runtimeDatabase.transaction.bind(runtimeDatabase);
+    let failRepositoryTransaction = true;
+    runtimeDatabase.transaction = (async (operation) => {
+      if (failRepositoryTransaction) {
+        failRepositoryTransaction = false;
+        throw new Error("simulated_readonly_repository_transaction_failure");
+      }
+      return runTransaction(operation);
+    }) as typeof runtimeDatabase.transaction;
+    const failedTransaction = await prepareReadOnlyIssueRuntimes(database.db, root, { async ensure() { return "http://127.0.0.1:18080"; } });
+    assert.deepEqual(failedTransaction, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "simulated_readonly_repository_transaction_failure" }] });
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
+    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.codeServerReady, false);
+    runtimeDatabase.transaction = runTransaction;
+    assert.deepEqual(await prepareReadOnlyIssueRuntimes(database.db, root, { async ensure() { return "http://127.0.0.1:18080"; } }), { prepared: [issue!.key], blocked: [] });
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote, extraRemote]);
+
     await database.db.update(issueRepositories).set({ workingBranch: "unexpected-branch" }).where(eq(issueRepositories.issueId, issue!.id));
     const invalid = await prepareReadOnlyIssueRuntimes(database.db, root, {
       async ensure() { throw new Error("code_server_must_not_run"); },

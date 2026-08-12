@@ -4,7 +4,7 @@ import type { Database } from "../db/client.ts";
 import { environments, issueRepositories, issueWorkspaces, issues } from "../db/schema.ts";
 import type { IssueType } from "../domain/contracts.ts";
 import { CodeServerManager } from "./code-server.ts";
-import { repositoryWorkspaceNames, WorktreeManager } from "./git.ts";
+import { issueRepositoryWorkspaceNames, WorktreeManager } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RuntimePreparationResult } from "./runtime.ts";
 import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
@@ -27,7 +27,7 @@ export async function prepareDevelopmentIssueRuntime(
   const repositories = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
   if (!repositories.length) throw new Error("issue_has_no_repositories");
   const workspaceRoot = issueWorkspaceRoot(stateRoot, issue.key);
-  const names = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
+  const names = issueRepositoryWorkspaceNames(repositories);
   let runtimeRoot: string;
 
   if (await pathExists(workspaceRoot)) {

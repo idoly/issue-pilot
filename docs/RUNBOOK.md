@@ -55,8 +55,8 @@ PRAGMA foreign_key_check;
 
 | 类型 | 数据库状态 | 文件状态 |
 | --- | --- | --- |
-| 活动 dev | `development_workspace` | Worktree HEAD 等于本地 working branch |
-| Released dev | `development_snapshot` | Runtime HEAD 等于本地 working branch tip |
+| 活动 dev | `development_workspace` | Worktree HEAD 等于本地 working branch；`workspace_name` 等于 `local_path` basename |
+| Released dev | `development_snapshot` | Runtime HEAD 等于本地 working branch tip；新 release 保留 `workspace_name`，升级前旧 snapshot 可在首次 reopen 前为 `NULL` |
 | Prod/test | `read_only` | Runtime HEAD 等于 `origin/<baseBranch>` |
 
 所有 code-server URL 都应包含 `workspace=`，指向对应 Issue runtime 的 multi-root manifest，并返回 HTTP 200。Manifest 中每个 folder link 都应可解析到登记的 Repository。
@@ -77,7 +77,7 @@ Git 验收使用只读命令，并设置 `GIT_OPTIONAL_LOCKS=0`，避免健康�
 
 ## 启动与关闭
 
-API 启动会执行 migration、恢复中断状态、验证 state tree、重建 runtime/checkouts，再执行一次 workspace maintenance。
+API 启动会执行 migration、恢复中断状态、验证 state tree、清理 UUID 命名的中断 runtime 临时/previous 目录、重建 runtime/checkouts，再执行一次 workspace maintenance。其他未知目录仍保留并按异常处理。
 
 正常停止：
 
@@ -174,7 +174,8 @@ curl -fsS -X DELETE \
 | `workspace_repository_missing` | 数据库登记的 Repository 目录缺失或不是目录 | 保留数据库、剩余目录和 bare ref，检查是否发生了人工或部分删除 |
 | `development_repository_state_invalid` | Repository 行为空、mixed 或不符合完整 dev state | 保留现场，核对 `local_path`、`working_branch` 和目录 |
 | `workspace_release_rollback_failed` | Release 中途失败，且已删除 worktree 无法从原本地 branch commit 完整恢复 | 停止自动操作，备份数据库、workspace 和 bare store 后逐项核对 |
-| `workspace_path_does_not_match_repository` | DB path 不符合当前命名 | 保留现场，释放后按当前名称重建 |
+| `workspace_restore_cleanup_failed` | Reopen 失败后无法完整移除新 worktree、删除空根或记录只读恢复结果 | 保留未知文件、runtime previous、数据库和 bare store，停止重复操作后逐项核对 |
+| `workspace_path_does_not_match_repository` | `workspace_name`、DB path 或当前稳定命名不一致 | 保留现场，核对匹配的数据库与 worktree；不要自动移动或通过 release 改名 |
 | `workspace_not_development` | 对 prod/test 调用了 release | 不需要释放；它们没有 dev workspace |
 
 ## Git 与 runtime 排障
@@ -196,7 +197,7 @@ curl -fsS -X DELETE \
 
 除了本地 working branch，还需要检查该 Issue Repository 保存的 `base_branch` 是否能 fetch。已有 dev Repository 使用这个历史基线恢复，不会因当前 Deployment 改分支而自动改写；新加入工单的 Repository 才读取当前 Deployment `baseBranch`。Base branch 用于确认基线；Issue branch 用于恢复工单代码，两者用途不同。
 
-如果 `local_path` 与当前 Repository 名称不一致，系统不会自动移动目录。先检查 worktree 是否 dirty；clean workspace 可以通过受管 release 后重新创建，dirty workspace 应先人工处理修改。
+如果 `workspace_name` 与 `local_path` basename 不一致，系统不会自动移动目录或通过 release 静默改名。保留数据库、worktree 和本地 branch，确认哪一项来自匹配的状态版本后再进行 operator-controlled 恢复。
 
 ### Shared checkout changed
 

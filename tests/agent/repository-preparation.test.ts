@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -12,6 +12,7 @@ import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
+import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -34,7 +35,7 @@ async function createRemote(root: string): Promise<{ source: string; remotes: [s
   return { source, remotes };
 }
 
-test("preserves removed development repositories when preflight or finalization fails", async () => {
+test("atomically switches development repository sets across preparation and finalization failures", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-removal-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
@@ -43,6 +44,11 @@ test("preserves removed development repositories when preflight or finalization 
     const thirdRemote = path.join(root, "tertiary.git");
     await git(["clone", "--bare", source, thirdRemote]);
     const remotes = [...initialRemotes, thirdRemote];
+    const targetRemotes: [string, string] = [path.join(root, "target-a", "shared.git"), path.join(root, "target-b", "shared.git")];
+    await Promise.all(targetRemotes.map(async (remote) => {
+      await mkdir(path.dirname(remote), { recursive: true });
+      await git(["clone", "--bare", source, remote]);
+    }));
     const [dev] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester" });
     const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
@@ -65,6 +71,15 @@ test("preserves removed development repositories when preflight or finalization 
       async ensure() { return "http://127.0.0.1:18080"; },
     };
 
+    const [unmanagedIssue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-104", title: "Preserve unmanaged workspace", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: unmanagedIssue!.id });
+    const unmanagedEvidence = path.join(issueWorkspaceRoot(stateRoot, unmanagedIssue!.key), "operator-evidence.txt");
+    await mkdir(path.dirname(unmanagedEvidence), { recursive: true });
+    await writeFile(unmanagedEvidence, "preserve\n", "utf8");
+    await assert.rejects(internal.run(unmanagedIssue!.id), /workspace_has_untracked_files/);
+    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, unmanagedIssue!.id))).length, 0);
+    assert.equal(await readFile(unmanagedEvidence, "utf8"), "preserve\n");
+
     await internal.run(issue!.id);
     const prepared = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     const preparedByUrl = new Map(prepared.map((repository) => [repository.url, repository]));
@@ -73,33 +88,60 @@ test("preserves removed development repositories when preflight or finalization 
     await writeFile(path.join(dirtyRemovedPath, "untracked.txt"), "preserve\n", "utf8");
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[1]!.id));
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[2]!.id));
+    const targetRepositories = await database.db.insert(serviceRepositories).values(targetRemotes.map((url, index) => ({ serviceId: service!.id, alias: `target-${index}`, url }))).returning();
+    await database.db.insert(serviceDeploymentRepositories).values(targetRepositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
+    const targetNames = repositoryWorkspaceNames(targetRemotes);
+    const targetPaths = targetRemotes.map((remote) => path.join(issueWorkspaceRoot(stateRoot, issue!.key), targetNames.get(remote)!));
 
     await assert.rejects(internal.run(issue!.id), /workspace_has_changes/);
-    await access(firstRemovedPath);
-    await access(dirtyRemovedPath);
+    await Promise.all([access(firstRemovedPath), access(dirtyRemovedPath), ...targetPaths.map((targetPath) => assert.rejects(access(targetPath)))]);
     const retained = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.deepEqual(retained.map((repository) => repository.url).sort(), [...remotes].sort());
 
     await rm(path.join(dirtyRemovedPath, "untracked.txt"));
-    const engineDatabase = (engine as unknown as { database: { delete(table: unknown): unknown } }).database;
-    const deleteRows = engineDatabase.delete.bind(engineDatabase);
-    let failRepositoryDelete = true;
-    engineDatabase.delete = ((table: unknown) => {
-      if (failRepositoryDelete && table === issueRepositories) {
-        failRepositoryDelete = false;
-        throw new Error("simulated_repository_delete_failure");
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "missing" }).where(and(
+      eq(serviceDeploymentRepositories.deploymentId, deployment!.id),
+      eq(serviceDeploymentRepositories.repositoryId, targetRepositories[1]!.id),
+    ));
+    await assert.rejects(internal.run(issue!.id));
+    await Promise.all([...prepared.map((repository) => access(repository.localPath!)), ...targetPaths.map((targetPath) => assert.rejects(access(targetPath)))]);
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map((repository) => repository.url).sort(), [...remotes].sort());
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "develop" }).where(and(
+      eq(serviceDeploymentRepositories.deploymentId, deployment!.id),
+      eq(serviceDeploymentRepositories.repositoryId, targetRepositories[1]!.id),
+    ));
+    const engineDatabase = (engine as unknown as { database: { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> } }).database;
+    const runTransaction = engineDatabase.transaction.bind(engineDatabase);
+    let failRepositoryTransaction = true;
+    engineDatabase.transaction = (async (operation) => {
+      if (failRepositoryTransaction) {
+        failRepositoryTransaction = false;
+        throw new Error("simulated_repository_transaction_failure");
       }
-      return deleteRows(table);
-    }) as typeof engineDatabase.delete;
-    await assert.rejects(internal.run(issue!.id), /simulated_repository_delete_failure/);
-    await Promise.all([access(firstRemovedPath), access(dirtyRemovedPath)]);
+      return runTransaction(operation);
+    }) as typeof engineDatabase.transaction;
+    await assert.rejects(internal.run(issue!.id), /simulated_repository_transaction_failure/);
+    await Promise.all([...prepared.map((repository) => access(repository.localPath!)), ...targetPaths.map((targetPath) => assert.rejects(access(targetPath)))]);
     assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map((repository) => repository.url).sort(), [...remotes].sort());
 
-    engineDatabase.delete = deleteRows;
+    engineDatabase.transaction = runTransaction;
     await internal.run(issue!.id);
-    await assert.rejects(access(firstRemovedPath));
-    await assert.rejects(access(dirtyRemovedPath));
-    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map((repository) => repository.url), [remotes[0]]);
+    await Promise.all([assert.rejects(access(firstRemovedPath)), assert.rejects(access(dirtyRemovedPath)), ...targetPaths.map((targetPath) => access(targetPath))]);
+    const switched = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(switched.map((repository) => repository.url), [remotes[0], ...targetRemotes]);
+    const retainedTarget = switched.find((repository) => repository.url === targetRemotes[0])!;
+    const retainedTargetName = retainedTarget.workspaceName!;
+    assert.equal(retainedTargetName, targetNames.get(targetRemotes[0]));
+    assert.equal(retainedTarget.localPath, targetPaths[0]);
+
+    await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, targetRepositories[1]!.id));
+    await internal.run(issue!.id);
+    await assert.rejects(access(targetPaths[1]!));
+    assert.equal((await readdir(issueWorkspaceRoot(stateRoot, issue!.key))).includes(retainedTargetName), true);
+    const reduced = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(reduced.map((repository) => repository.url), [remotes[0], targetRemotes[0]]);
+    assert.equal(reduced.find((repository) => repository.url === targetRemotes[0])!.localPath, retainedTarget.localPath);
+    assert.equal(reduced.find((repository) => repository.url === targetRemotes[0])!.workspaceName, retainedTarget.workspaceName);
     await engine.close();
   } finally {
     await database.close();

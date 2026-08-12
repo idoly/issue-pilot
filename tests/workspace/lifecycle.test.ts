@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readlink, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -163,6 +163,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     const releasedRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(releasedRows.every((repository) => repository.localPath === null), true);
+    assert.deepEqual(releasedRows.map((repository) => repository.workspaceName), ["alpha", "beta"]);
     assert.equal(releasedRows.every((repository) => repository.workingBranch?.startsWith("hotfix-") && repository.commitBefore), true);
     const [releasedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(releasedWorkspace!.status, "stopped");
@@ -186,13 +187,52 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
     const rowsAfterFailedRestore = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(rowsAfterFailedRestore.every((repository) => repository.localPath === null), true);
+    assert.deepEqual(rowsAfterFailedRestore.map((repository) => repository.workspaceName), ["alpha", "beta"]);
     assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.status, "resolved");
+
+    const lifecycleDatabase = (lifecycle as unknown as { database: { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> } }).database;
+    const runTransaction = lifecycleDatabase.transaction.bind(lifecycleDatabase);
+    let failRestoreTransaction = true;
+    lifecycleDatabase.transaction = (async (operation) => {
+      if (failRestoreTransaction) {
+        failRestoreTransaction = false;
+        throw new Error("simulated_restore_transaction_failure");
+      }
+      return runTransaction(operation);
+    }) as typeof lifecycleDatabase.transaction;
+    await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "simulated_restore_transaction_failure");
+    lifecycleDatabase.transaction = runTransaction;
+    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null), true);
+
+    const cleanupEvidence = path.join(issueWorkspaceRoot(root, issue!.key), "concurrent-restore-evidence.txt");
+    const failingCleanup = new WorkspaceLifecycleManager(database.db, root, engine as never, {
+      retentionMs: Number.POSITIVE_INFINITY,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+    }, prepareRuntime, { async ensure() { throw new Error("code_server_unavailable"); } });
+    const cleanupWorktrees = (failingCleanup as unknown as { worktrees: WorktreeManager }).worktrees;
+    const cleanupRemove = cleanupWorktrees.remove.bind(cleanupWorktrees);
+    let cleanupRemovalCount = 0;
+    cleanupWorktrees.remove = async (url, workspacePath) => {
+      const commit = await cleanupRemove(url, workspacePath);
+      cleanupRemovalCount += 1;
+      if (cleanupRemovalCount === releasedRows.length) await writeFile(cleanupEvidence, "preserve restore evidence\n", "utf8");
+      return commit;
+    };
+    await assert.rejects(failingCleanup.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_restore_cleanup_failed");
+    assert.equal(await readFile(cleanupEvidence, "utf8"), "preserve restore evidence\n");
+    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null), true);
+    await unlink(cleanupEvidence);
+    await rmdir(issueWorkspaceRoot(root, issue!.key));
 
     const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
     assert.equal(reopenedIssue.status, "open");
     assert.equal(reopenedIssue.resolvedAt, null);
     const restoredRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(restoredRows.every((repository) => repository.localPath?.startsWith(issueWorkspaceRoot(root, issue!.key))), true);
+    assert.deepEqual(restoredRows.map((repository) => repository.workspaceName), ["alpha", "beta"]);
     for (const repository of restoredRows) {
       assert.equal(await git(["-C", repository.localPath!, "branch", "--show-current"]), repository.workingBranch);
     }
@@ -207,7 +247,11 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_not_resolved");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
 
+    await database.db.update(issueRepositories).set({ workspaceName: "mismatched-name" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_path_does_not_match_repository");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_path_does_not_match_repository");
+    await database.db.update(issueRepositories).set({ workspaceName: "alpha" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     const lifecycleWorktrees = (lifecycle as unknown as { worktrees: WorktreeManager }).worktrees;
     const removeWorktree = lifecycleWorktrees.remove.bind(lifecycleWorktrees);
     let removalCount = 0;

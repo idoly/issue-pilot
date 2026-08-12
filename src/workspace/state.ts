@@ -130,7 +130,11 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
   }
   if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
   for (const entry of await directoryNames(managedIssuesRoot)) {
-    if (active.has(entry.toLowerCase())) await rm(path.join(managedIssuesRoot, entry, "runtime"), { recursive: true, force: true });
+    if (!active.has(entry.toLowerCase())) continue;
+    const managedIssueRoot = path.join(managedIssuesRoot, entry);
+    const generatedRuntime = /^\.runtime-(?:previous-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const generated = (await readdir(managedIssueRoot)).filter((name) => name === "runtime" || generatedRuntime.test(name));
+    await Promise.all(generated.map((name) => rm(path.join(managedIssueRoot, name), { recursive: true, force: true })));
   }
   await clearDirectory(sharedCheckoutsRoot(stateRoot));
   const repositoriesDirectory = repositoriesRoot(stateRoot);

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { mkdir, rmdir } from "node:fs/promises";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -48,6 +48,11 @@ export interface RestoreWorktreeInput {
   workspacePath: string;
 }
 
+export interface PrepareWorktreeBatchInput<T> {
+  worktrees: PrepareWorktreeInput[];
+  finalize: (prepared: PreparedWorktree[]) => Promise<T>;
+}
+
 export interface RemoveWorktreeBatchInput {
   issueKey: string;
   mode: "hotfix" | "feature";
@@ -72,7 +77,7 @@ export class WorktreeRollbackFailure extends Error {
 
 function safePathSegment(value: string): string {
   const safe = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!safe) throw new Error("invalid_workspace_segment");
+  if (!safe || safe === "." || safe === "..") throw new Error("invalid_workspace_segment");
   return safe;
 }
 
@@ -86,23 +91,50 @@ function repositoryHash(url: string, length: number): string {
   return createHash("sha256").update(url).digest("hex").slice(0, length);
 }
 
-export function repositoryWorkspaceNames(urls: string[]): Map<string, string> {
-  const bases = urls.map((url) => repositoryBasename(url));
+export function repositoryWorkspaceNames(urls: string[], existingNames: ReadonlyMap<string, string> = new Map()): Map<string, string> {
+  const names = new Map<string, string>();
+  const usedNames = new Set<string>();
+  for (const existingName of existingNames.values()) {
+    if (safePathSegment(existingName) !== existingName || usedNames.has(existingName)) throw new Error("repository_workspace_name_conflict");
+    usedNames.add(existingName);
+  }
+  for (const url of urls) {
+    const existingName = existingNames.get(url);
+    if (existingName) names.set(url, existingName);
+  }
+  const unassigned = urls.filter((url) => !names.has(url));
+  const bases = unassigned.map((url) => repositoryBasename(url));
   const counts = new Map<string, number>();
   for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
-  return new Map(urls.map((url, index) => {
+  for (const [index, url] of unassigned.entries()) {
     const base = bases[index]!;
-    const suffix = repositoryHash(url, 8);
-    return [url, counts.get(base) === 1 ? base : `${base}-${suffix}`];
-  }));
+    let name = counts.get(base) === 1 && !usedNames.has(base) ? base : `${base}-${repositoryHash(url, 8)}`;
+    if (usedNames.has(name)) name = `${base}-${repositoryHash(url, 20)}`;
+    if (usedNames.has(name)) throw new Error("repository_workspace_name_conflict");
+    names.set(url, name);
+    usedNames.add(name);
+  }
+  return names;
 }
+
+export function issueRepositoryWorkspaceNames(repositories: Array<{ url: string; localPath: string | null; workspaceName: string | null }>): Map<string, string> {
+  const existingNames = new Map<string, string>();
+  for (const repository of repositories) {
+    const localName = repository.localPath ? basename(repository.localPath) : undefined;
+    if (repository.workspaceName && localName && repository.workspaceName !== localName) throw new Error("workspace_path_does_not_match_repository");
+    const name = repository.workspaceName ?? localName;
+    if (name) existingNames.set(repository.url, name);
+  }
+  return repositoryWorkspaceNames(repositories.map((repository) => repository.url), existingNames);
+}
+
+const repositoryTails = new Map<string, Promise<unknown>>();
 
 export class WorktreeManager {
   private readonly stateRoot: string;
   private readonly repositoriesRoot: string;
   private readonly sharedCheckoutsRoot: string;
   private readonly workspacesRoot: string;
-  private readonly tails = new Map<string, Promise<unknown>>();
 
   constructor(stateRoot: string) {
     this.stateRoot = resolve(stateRoot);
@@ -111,11 +143,10 @@ export class WorktreeManager {
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
-  async assertClean(workspacePath: string): Promise<void> {
+  async assertClean(url: string, workspacePath: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
-    if (!await pathExists(resolvedWorkspace)) throw new Error("workspace_repository_missing");
-    const dirty = await execFileAsync("git", ["-C", resolvedWorkspace, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim());
-    if (dirty) throw new Error("workspace_has_changes");
+    const repositoryKey = repositoryHash(url, 20);
+    await this.serialized(repositoryKey, () => this.assertCleanLocked(resolvedWorkspace));
   }
 
   async remove(url: string, workspacePath: string): Promise<string> {
@@ -123,7 +154,7 @@ export class WorktreeManager {
     const repositoryKey = repositoryHash(url, 20);
     return this.serialized(repositoryKey, async () => {
       const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-      await this.assertClean(resolvedWorkspace);
+      await this.assertCleanLocked(resolvedWorkspace);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
@@ -134,6 +165,12 @@ export class WorktreeManager {
       }
       return commit;
     });
+  }
+
+  private async assertCleanLocked(resolvedWorkspace: string): Promise<void> {
+    if (!await pathExists(resolvedWorkspace)) throw new Error("workspace_repository_missing");
+    const dirty = (await this.git(["-C", resolvedWorkspace, "status", "--porcelain"])).trim();
+    if (dirty) throw new Error("workspace_has_changes");
   }
 
   private validatedWorkspacePath(workspacePath: string): string {
@@ -157,8 +194,43 @@ export class WorktreeManager {
     return this.serialized(repositoryKey, () => this.restoreLocalLocked(input, issueKey, repositoryKey));
   }
 
+  async prepareBatch<T>(input: PrepareWorktreeBatchInput<T>): Promise<T> {
+    const created: Array<{ input: PrepareWorktreeInput; workspacePath: string }> = [];
+    const prepared: PreparedWorktree[] = [];
+    const workspaceRoots = new Map<string, boolean>();
+    for (const worktree of input.worktrees) {
+      const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
+      if (!workspaceRoots.has(issueRoot)) workspaceRoots.set(issueRoot, await pathExists(issueRoot));
+    }
+    try {
+      for (const worktree of input.worktrees) {
+        const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
+        const workspacePath = this.resolveIssueWorkspacePath(issueRoot, worktree.workspaceName, worktree.existingWorkspacePath);
+        if (!await pathExists(workspacePath)) created.push({ input: worktree, workspacePath });
+        prepared.push(await this.prepare(worktree));
+      }
+      return await input.finalize(prepared);
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      for (const createdWorktree of created.reverse()) {
+        try {
+          if (await pathExists(createdWorktree.workspacePath)) await this.remove(createdWorktree.input.url, createdWorktree.workspacePath);
+        } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+      }
+      for (const [workspaceRoot, existed] of workspaceRoots) {
+        if (existed) continue;
+        try { await rmdir(workspaceRoot); }
+        catch (rollbackError) {
+          if (!(rollbackError && typeof rollbackError === "object" && "code" in rollbackError && rollbackError.code === "ENOENT")) rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length) throw new WorktreeRollbackFailure(new AggregateError([error, ...rollbackErrors], "worktree_rollback_failed"));
+      throw error;
+    }
+  }
+
   async removeBatch(input: RemoveWorktreeBatchInput): Promise<void> {
-    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.workspacePath)));
+    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.url, worktree.workspacePath)));
     const removed: Array<{ worktree: RemoveWorktreeBatchInput["worktrees"][number]; commit: string }> = [];
     try {
       for (const worktree of input.worktrees) {
@@ -200,10 +272,11 @@ export class WorktreeManager {
   }
 
   private async serialized<T>(repositoryKey: string, operation: () => Promise<T>): Promise<T> {
-    const preceding = this.tails.get(repositoryKey) ?? Promise.resolve();
+    const lockKey = `${this.stateRoot}:${repositoryKey}`;
+    const preceding = repositoryTails.get(lockKey) ?? Promise.resolve();
     const queuedOperation = preceding.catch(() => undefined).then(operation);
-    this.tails.set(repositoryKey, queuedOperation);
-    try { return await queuedOperation; } finally { if (this.tails.get(repositoryKey) === queuedOperation) this.tails.delete(repositoryKey); }
+    repositoryTails.set(lockKey, queuedOperation);
+    try { return await queuedOperation; } finally { if (repositoryTails.get(lockKey) === queuedOperation) repositoryTails.delete(lockKey); }
   }
 
   private async updateCache(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<string> {

@@ -164,6 +164,8 @@ Repository state 必须通过 `classifyRepositoryState()` 判断。不要在 Age
 
 生成 runtime、manifest 和 wrapper 使用临时路径后原子替换。Durable attachment、Pi JSONL 和 bare repository 不使用“先删除再重建”的策略。
 
+Dev Repository 的 `workspace_name` 是 release 后仍保留的稳定路径事实。活动状态下它必须等于 `local_path` basename；新增同 basename Repository 只能为新增项分配未占用后缀，不能重命名已有 worktree。
+
 Workspace release 必须继续拒绝：
 
 - Dirty 或 untracked Git worktree。
@@ -175,7 +177,7 @@ Workspace release 必须继续拒绝：
 
 只有全部受管 worktree 已删除、但数据库仍是完整 `development_workspace` 的中断窗口可以收敛为 released snapshot；部分目录缺失不能自动修复。
 
-Git tests 使用临时本地 remote 和真实 Git 命令，至少覆盖 success、dirty refusal、missing ref、重复准备和 cold-start reconstruction。`tests/workspace/deployment.test.ts` 单独覆盖 Deployment 仓库顺序、完整性和 Service 归属。
+Git tests 使用临时本地 remote 和真实 Git 命令，至少覆盖 success、dirty refusal、missing ref、重复准备、cold-start reconstruction、跨 manager 串行，以及 Repository 集合 prepare/finalize 失败回滚。生成目录替换测试必须覆盖安装失败时恢复 previous、恢复失败时保留证据和冷启动清理。`tests/workspace/deployment.test.ts` 单独覆盖 Deployment 仓库顺序、完整性和 Service 归属。
 
 ## 新增 capability
 
@@ -287,7 +289,7 @@ git diff --check
 
 - 小型纯函数放回拥有其事实或生命周期的模块，不为单个三五行 helper 新建文件。
 - 只有事务边界、安全边界、独立进程、外部协议 client 或稳定可复用组件才单独成文件。
-- `workspace/state.ts` 统一拥有 state 路径、文件存在性和 Repository 状态分类；`workspace/deployment.ts` 统一拥有执行期 Deployment Repository 解析与完整性校验；`workspace/runtime.ts` 统一拥有 runtime 生成和批量恢复。
+- `workspace/state.ts` 统一拥有 state 路径、文件存在性和 Repository 状态分类；`workspace/deployment.ts` 统一拥有执行期 Deployment Repository 解析与完整性校验；`workspace/git.ts` 统一拥有 worktree 批量准备、删除和回滚；`workspace/runtime.ts` 统一拥有 runtime 生成。
 - `agent/pi-session.ts` 统一拥有 Pi session 文件初始化与 SDK session 生命周期；`http/api.ts` 统一拥有 API 装配和进程关闭处理。
 - 测试按被测职责归类；只有能独立失败、独立演进的行为才新建测试文件。
 
@@ -307,7 +309,7 @@ git diff --check
 - 共享事实只定义一次；调用方复用 domain helper、根配置或 owning manager。能力顺序使用 `CAPABILITY_KEYS`/API catalog，Deployment 仓库使用 `loadDeploymentRepositories()`。
 - 新增可调整默认值时写入 `issue-pilot.config.ts`，不要在调用点、Web 和 Shell 各设 fallback。
 - 错误码稳定、可测试，不用长自然语言作为程序分支。
-- 文件和数据库更新需要说明失败后的状态。
+- 文件和数据库更新需要说明失败后的状态；Repository 集合变化先准备完整目标文件系统，再用一个事务替换关系事实。
 - 只为复杂约束添加注释，不重复代码表面含义。
 - 不加入旧路径、旧状态或旧 key 的自动兼容；异常当前状态明确失败并保留证据。
 

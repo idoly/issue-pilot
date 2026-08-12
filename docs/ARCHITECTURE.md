@@ -44,7 +44,7 @@ Issue Pilot 的核心不是“为每个工单复制一个项目”，而是把�
 | code-server | 查看或编辑工单代码 | 共享 Podman 容器 |
 | Playwright | 单次声明式浏览器任务 | 临时 Podman 容器 |
 
-模块按照事务、安全边界和稳定职责拆分。相关小型 helper 归回拥有它们的模块：共享业务谓词位于 `domain/contracts.ts`，workspace 路径、文件状态和 Repository 分类位于 `workspace/state.ts`，执行期 Deployment 仓库解析位于 `workspace/deployment.ts`，runtime 生成与批量恢复位于 `workspace/runtime.ts`，Pi session 文件与 SDK 生命周期位于 `agent/pi-session.ts`。HTTP route 不直接实现 Git 和 capability 逻辑；Agent 不直接拼 Deployment 关联或读取页面表单；client 不信任上层已经完成授权。
+模块按照事务、安全边界和稳定职责拆分。相关小型 helper 归回拥有它们的模块：共享业务谓词位于 `domain/contracts.ts`，workspace 路径、文件状态和 Repository 分类位于 `workspace/state.ts`，执行期 Deployment 仓库解析位于 `workspace/deployment.ts`，worktree 批量准备/删除/回滚位于 `workspace/git.ts`，runtime 生成位于 `workspace/runtime.ts`，Pi session 文件与 SDK 生命周期位于 `agent/pi-session.ts`。HTTP route 不直接实现 Git 和 capability 逻辑；Agent 不直接拼 Deployment 关联或读取页面表单；client 不信任上层已经完成授权。
 
 ## 业务状态
 
@@ -115,7 +115,7 @@ Prod/test 每轮结束后释放内存 session；下一轮重新获取 Deployment
 
 ## Repository 状态模型
 
-数据库中的 `local_path` 和 `working_branch` 共同决定代码状态。所有调用点使用同一个分类器：
+数据库中的 `local_path` 和 `working_branch` 共同决定代码状态。Dev Repository 的 `workspace_name` 保存稳定目录段：活动状态下必须等于 `local_path` basename，release 清空 `local_path` 时仍保留，后续 reopen 和 Service Repository 集合变化不会重命名已有 worktree。所有调用点使用同一个分类器：
 
 | 状态 | `local_path` | `working_branch` | 说明 |
 | --- | --- | --- | --- |
@@ -173,7 +173,7 @@ Dev workspace 路径由当前模型唯一推导：
 workspaces/<issue-key>/<repository-name>
 ```
 
-Repository basename 冲突时追加 URL hash。数据库中的 `local_path` 必须等于推导结果；不一致时返回 `workspace_path_does_not_match_repository`，不会自动移动旧目录。
+Repository basename 冲突或名称已被现有 Repository 占用时追加 URL hash。首次准备时确定的 `workspace_name` 随 Issue Repository 持久保存；升级前已有 active dev 行从 `local_path` basename 回填，旧 released snapshot 可暂时为 `NULL`，首次成功 reopen 时按其历史 URL 集合确定并持久化。数据库中的 `local_path` 必须与该名称和 Issue 根目录一致，不一致时返回 `workspace_path_does_not_match_repository`，不会自动移动旧目录。
 
 Dev worktree 使用本地 `hotfix-<issue-key>` 或 `feature-<issue-key>` 分支。Git metadata 使用 relative paths，使宿主和 code-server 容器在相同 state tree 下都能解析。
 
@@ -191,7 +191,7 @@ flowchart TD
     Runtime -->|Issue reopened| W
 ```
 
-Released dev 的权威代码来源是本地 bare repository 中的工作分支。重新打开工单会先从这些本地 ref 重建全部可写 worktree 和 runtime，再原子更新 Repository、workspace 和 Issue 状态；恢复失败会清理新 worktree 并还原只读 snapshot。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
+Released dev 的权威代码来源是本地 bare repository 中的工作分支。重新打开工单会先从这些本地 ref 重建全部可写 worktree 和 runtime，再用一个数据库事务更新 Repository、workspace 和 Issue 状态；恢复失败会受管移除本次新建 worktree 并还原只读 snapshot。清理期间出现未知文件时保留现场并明确失败，不递归删除 workspace 根。系统不会 fetch 同名远程 Issue 分支，也不会在本地 ref 缺失时用远程内容兜底。
 
 这一区分很重要：Deployment 中每个 Repository 的 `baseBranch` 表示当前环境配置；`issue_repositories.base_branch` 保存该 dev Repository 首次加入工单时的历史基线；Issue `workingBranch` 表示工单自己的工作结果。已有 dev Repository 后续运行继续使用历史 `base_branch`，Service 新增到该工单的 Repository 才采用当前 Deployment 分支。Prod/test 没有开发历史分支，每轮继续使用当前 Deployment 配置。远程 Issue 分支可以被删除，但用于后续重建的各 Repository base branch 仍应可访问。
 
@@ -338,8 +338,9 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 ## 并发与失败边界
 
 - Agent 按 Issue ID 串行。
-- Git 操作按 Repository URL hash 串行。
-- Workspace inspect、release 和 maintenance 全局串行。
+- Git 操作按 state root 和 Repository URL hash 在进程内跨 manager 串行。
+- Workspace inspect、release、reopen 和 maintenance 全局串行。
+- Agent 切换 Repository 集合时先准备完整目标 worktree/checkout，再用一个事务替换全部 Repository 行；prepare 或 finalize 失败会清理新 worktree 并恢复已移除 worktree。
 - Issue key 生成在 API 实例内串行，并由数据库 unique index 兜底。
 - Service 配置整体在一个数据库事务中替换。
 - API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。

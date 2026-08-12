@@ -239,6 +239,13 @@
       "when": 1786387200000,
       "tag": "0033_repository_deployment_branches",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1786473600000,
+      "tag": "0034_issue_repository_workspace_names",
+      "breakpoints": true
     }
   ]
 }

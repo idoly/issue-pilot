@@ -16,8 +16,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-3).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -3) };
+  assert.deepEqual(journal.entries.slice(-4).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -4) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -36,6 +36,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "insert into service_repositories (id, service_id, url, created_at, updated_at) values ('orders-api', 'service', 'git@example.test:team/orders-api.git', 1, 1), ('orders-web', 'service', 'https://example.test/team/orders-web.git', 1, 1)",
       "insert into service_deployments (id, service_id, environment_id, base_branch, config, created_at, updated_at) values ('test-deployment', 'service', 'environment', 'develop', '{}', 1, 1)",
       `insert into issues (id, key, title, service_id, environment_id, reporter_subject, version, created_at, updated_at) values ('issue', 'ISSUE-20260809-001', 'Preserved', 'service', 'environment', 'reporter', 7, ${now}, ${now})`,
+      "insert into issue_repositories (id, issue_id, url, base_branch, working_branch, local_path, commit_before, created_at, updated_at) values ('issue-repository', 'issue', 'git@example.test:team/orders-api.git', 'develop', 'hotfix-issue-20260809-001', '/state/workspaces/issue-20260809-001/orders-api', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1)",
       "insert into issue_cc_recipients (issue_id, subject, created_at) values ('issue', 'recipient', 2)",
       "insert into issue_history (id, issue_id, actor_subject, action, changes, created_at) values ('history', 'issue', 'reporter', 'created', '{}', 3)",
       "insert into issue_pilot_sessions (issue_id, pi_session_id, session_file, workspace_path, created_at, updated_at) values ('issue', 'pi-session', '/sessions/issue.jsonl', '/workspaces/issue', 4, 4)",
@@ -46,6 +47,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     assert.deepEqual((await client.execute("select key, title from issues")).rows, [{ key: "ISSUE-20260809-001", title: "Preserved" }]);
     assert.deepEqual((await client.execute("select issue_id, subject from issue_cc_recipients")).rows, [{ issue_id: "issue", subject: "recipient" }]);
     assert.deepEqual((await client.execute("select issue_id, session_file, workspace_path from issue_pilot_sessions")).rows, [{ issue_id: "issue", session_file: "/sessions/issue.jsonl", workspace_path: "/workspaces/issue" }]);
+    assert.deepEqual((await client.execute("select id, workspace_name from issue_repositories")).rows, [{ id: "issue-repository", workspace_name: "orders-api" }]);
+    await assert.rejects(client.execute("insert into issue_repositories (id, issue_id, url, base_branch, working_branch, local_path, workspace_name, commit_before, created_at, updated_at) values ('duplicate-workspace', 'issue', 'git@example.test:team/other.git', 'develop', 'hotfix-other', '/state/workspaces/issue-20260809-001/orders-api', 'orders-api', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 1)"));
     assert.equal((await client.execute("select name from sqlite_master where type = 'table' and name = 'issue_history'")).rows.length, 0);
     assert.equal((await client.execute("pragma table_info('issues')")).rows.some((column) => column.name === "version"), false);
     assert.equal((await client.execute("pragma table_info('issue_cc_recipients')")).rows.some((column) => column.name === "created_at"), false);
@@ -125,7 +128,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.deepEqual(deploymentRepositoryColumns.rows.map((column) => column.name), ["deployment_id", "repository_id", "base_branch", "created_at", "updated_at"]);
     const repositoryColumns = await client.execute("pragma table_info('issue_repositories')");
     assert.deepEqual(repositoryColumns.rows.map((column) => column.name), [
-      "id", "issue_id", "url", "base_branch", "working_branch", "local_path", "commit_before", "created_at", "updated_at",
+      "id", "issue_id", "url", "base_branch", "working_branch", "local_path", "commit_before", "created_at", "updated_at", "workspace_name",
     ]);
     const sessionColumns = await client.execute("pragma table_info('issue_pilot_sessions')");
     assert.deepEqual(sessionColumns.rows.map((column) => column.name), ["issue_id", "session_file", "workspace_path", "created_at", "updated_at"]);

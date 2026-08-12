@@ -57,6 +57,9 @@ test("preserves unmanaged issue state before pruning generated resources", async
       mkdir(path.join(root, "workspaces", activeKey, "repository"), { recursive: true }),
       mkdir(path.dirname(unmanagedWorkspaceFile), { recursive: true }),
       mkdir(path.join(root, "issues", activeKey, "runtime"), { recursive: true }),
+      mkdir(path.join(root, "issues", activeKey, ".runtime-12345678-1234-4234-9234-123456789abc"), { recursive: true }),
+      mkdir(path.join(root, "issues", activeKey, ".runtime-previous-12345678-1234-4234-9234-123456789abc"), { recursive: true }),
+      mkdir(path.join(root, "issues", activeKey, ".runtime-operator-evidence"), { recursive: true }),
       mkdir(path.join(root, "issues", activeKey, "agent"), { recursive: true }),
       mkdir(path.join(root, "issues", activeKey, "attachments"), { recursive: true }),
       mkdir(path.dirname(unmanagedAttachment), { recursive: true }),
@@ -84,7 +87,12 @@ test("preserves unmanaged issue state before pruning generated resources", async
     assert.equal((await stat(path.join(root, "workspaces", activeKey, "repository"))).isDirectory(), true);
     assert.equal((await stat(path.join(root, "issues", activeKey, "agent"))).isDirectory(), true);
     assert.equal((await stat(path.join(root, "issues", activeKey, "attachments"))).isDirectory(), true);
-    await assert.rejects(stat(path.join(root, "issues", activeKey, "runtime")));
+    await Promise.all([
+      assert.rejects(stat(path.join(root, "issues", activeKey, "runtime"))),
+      assert.rejects(stat(path.join(root, "issues", activeKey, ".runtime-12345678-1234-4234-9234-123456789abc"))),
+      assert.rejects(stat(path.join(root, "issues", activeKey, ".runtime-previous-12345678-1234-4234-9234-123456789abc"))),
+    ]);
+    assert.equal((await stat(path.join(root, "issues", activeKey, ".runtime-operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).ino, checkoutRootInode);
     assert.deepEqual(await readdir(checkoutRoot), []);
   } finally {

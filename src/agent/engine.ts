@@ -12,7 +12,7 @@ import { CodeServerManager } from "../workspace/code-server.ts";
 import { loadDeploymentRepositories } from "../workspace/deployment.ts";
 import { developmentWorktreeMode } from "../workspace/development.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
-import { classifyRepositoryState, issueAttachmentRoot, issueSessionRoot, issueWorkspaceRoot, pathExists } from "../workspace/state.ts";
+import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueAttachmentRoot, issueSessionRoot, issueWorkspaceRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import {
   agentSessions,
@@ -23,7 +23,7 @@ import {
   services,
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
-import { repositoryWorkspaceNames, WorktreeManager } from "../workspace/git.ts";
+import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager } from "../workspace/git.ts";
 import { prepareIssueRuntime } from "../workspace/runtime.ts";
 import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
@@ -140,7 +140,7 @@ export class AgentEngine implements AgentController {
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
     const currentMessage = latestMessage?.trim() || undefined;
-    await this.database.update(issueWorkspaces).set({ status: "preparing", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.database.update(issueWorkspaces).set({ status: "preparing", codeServerReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
 
     const [service] = await this.database.select({
       id: services.id,
@@ -171,52 +171,75 @@ export class AgentEngine implements AgentController {
     if (!sharedRepositories && existingRepositoryState && existingRepositoryState !== "development_workspace") throw new Error("development_repository_state_invalid");
 
     const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
-    const existingWorkspaceNames = repositoryWorkspaceNames(existingRepositoryRows.map((repository) => repository.url));
-    if (removedRepositories.some((repository) => repository.localPath)) {
-      await this.worktreeManager.removeBatch({
-        issueKey: issue.key,
-        mode: preparationMode === "shared" ? developmentWorktreeMode(issue.type) : preparationMode,
-        worktrees: removedRepositories.map((repository) => ({
-          workspaceName: existingWorkspaceNames.get(repository.url)!,
-          url: repository.url,
-          workingBranch: repository.workingBranch!,
-          workspacePath: repository.localPath!,
-        })),
-        finalize: async () => { await this.database.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls]))); },
-      });
-    } else if (removedRepositories.length) {
-      await this.database.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
+    const existingWorkspaceNames = sharedRepositories ? new Map<string, string>() : issueRepositoryWorkspaceNames(existingRepositoryRows);
+    if (!sharedRepositories && await pathExists(issueWorkspaceRoot(this.stateRoot, issue.key))) {
+      await assertManagedIssueWorkspaceLayout(issueWorkspaceRoot(this.stateRoot, issue.key), existingRepositoryRows.map((repository) => repository.localPath!));
     }
+    const workspaceNames = repositoryWorkspaceNames(repositoryRows.map(({ repository }) => repository.url), existingWorkspaceNames);
+    const saveRepositoryRows = async (workspaces: Awaited<ReturnType<WorktreeManager["prepare"]>>[]) => {
+      await this.database.transaction(async (transaction) => {
+        for (const [index, { repository }] of repositoryRows.entries()) {
+          const workspace = workspaces[index]!;
+          const existingRepository = existingRepositoryByUrl.get(repository.url);
+          const repositoryState = {
+            baseBranch: workspace.baseBranch,
+            workingBranch: workspace.workingBranch,
+            localPath: sharedRepositories ? null : workspace.workspacePath,
+            workspaceName: sharedRepositories ? null : workspaceNames.get(repository.url)!,
+            commitBefore: sharedRepositories ? workspace.baseCommit : existingRepository?.commitBefore ?? workspace.baseCommit,
+          };
+          await transaction.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...repositoryState }).onConflictDoUpdate({
+            target: [issueRepositories.issueId, issueRepositories.url],
+            set: { ...repositoryState, updatedAt: new Date() },
+          });
+        }
+        if (removedRepositories.length) await transaction.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
+      });
+    };
 
-    const workspaceNames = repositoryWorkspaceNames(repositoryRows.map(({ repository }) => repository.url));
     const prepared: Array<{ name: string; workspace: Awaited<ReturnType<WorktreeManager["prepare"]>> }> = [];
-    for (const { repository, baseBranch } of repositoryRows) {
-      const existingRepository = existingRepositoryByUrl.get(repository.url);
-      const preparedBaseBranch = sharedRepositories ? baseBranch : existingRepository?.baseBranch ?? baseBranch;
-      const name = workspaceNames.get(repository.url)!;
-      const workspace = preparationMode === "shared"
-        ? await this.worktreeManager.prepareShared({ url: repository.url, baseBranch: preparedBaseBranch })
-        : await this.worktreeManager.prepare({
+    if (sharedRepositories) {
+      for (const { repository, baseBranch } of repositoryRows) {
+        prepared.push({ name: workspaceNames.get(repository.url)!, workspace: await this.worktreeManager.prepareShared({ url: repository.url, baseBranch }) });
+      }
+      await saveRepositoryRows(prepared.map(({ workspace }) => workspace));
+    } else {
+      const mode = developmentWorktreeMode(issue.type);
+      const worktreeInputs = repositoryRows.map(({ repository, baseBranch }) => {
+        const existingRepository = existingRepositoryByUrl.get(repository.url);
+        return {
           issueKey: issue.key,
-          workspaceName: name,
+          workspaceName: workspaceNames.get(repository.url)!,
           url: repository.url,
-          baseBranch: preparedBaseBranch,
-          mode: preparationMode,
+          baseBranch: existingRepository?.baseBranch ?? baseBranch,
+          mode,
           ...(existingRepository?.workingBranch ? { workingBranch: existingRepository.workingBranch } : {}),
           ...(existingRepository?.localPath ? { existingWorkspacePath: existingRepository.localPath } : {}),
           ...(existingRepository?.commitBefore ? { existingBaseCommit: existingRepository.commitBefore } : {}),
-        });
-      prepared.push({ name, workspace });
-      const repositoryState = {
-        baseBranch: workspace.baseBranch,
-        workingBranch: workspace.workingBranch,
-        localPath: sharedRepositories ? null : workspace.workspacePath,
-        commitBefore: sharedRepositories ? workspace.baseCommit : existingRepository?.commitBefore ?? workspace.baseCommit,
-      };
-      await this.database.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...repositoryState }).onConflictDoUpdate({
-        target: [issueRepositories.issueId, issueRepositories.url],
-        set: { ...repositoryState, updatedAt: new Date() },
+        };
       });
+      const preparedWorktrees = await this.worktreeManager.prepareBatch({
+        worktrees: worktreeInputs,
+        finalize: async (workspaces) => {
+          if (removedRepositories.length) {
+            await this.worktreeManager.removeBatch({
+              issueKey: issue.key,
+              mode,
+              worktrees: removedRepositories.map((repository) => ({
+                workspaceName: existingWorkspaceNames.get(repository.url)!,
+                url: repository.url,
+                workingBranch: repository.workingBranch!,
+                workspacePath: repository.localPath!,
+              })),
+              finalize: () => saveRepositoryRows(workspaces),
+            });
+          } else {
+            await saveRepositoryRows(workspaces);
+          }
+          return workspaces;
+        },
+      });
+      prepared.push(...preparedWorktrees.map((workspace, index) => ({ name: workspaceNames.get(repositoryRows[index]!.repository.url)!, workspace })));
     }
 
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);

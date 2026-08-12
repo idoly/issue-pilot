@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { issueWorkspaces } from "../db/schema.ts";
 import { errorMessage } from "../domain/contracts.ts";
+import { replaceGeneratedDirectory } from "./generated-directory.ts";
 import { issueRoot, issueRuntimeRoot, issueRuntimeWorkspaceFile, issueWorkspaceRoot, sharedCheckoutsRoot } from "./state.ts";
 
 export interface IssueRuntimeRepository {
@@ -60,7 +61,9 @@ export async function prepareIssueRuntime(
 ): Promise<string> {
   const issueDirectory = issueRoot(stateRoot, issueKey);
   const runtimeRoot = issueRuntimeRoot(stateRoot, issueKey);
-  const temporaryRoot = path.join(issueDirectory, `.runtime-${randomUUID()}`);
+  const operationId = randomUUID();
+  const temporaryRoot = path.join(issueDirectory, `.runtime-${operationId}`);
+  const previousRoot = path.join(issueDirectory, `.runtime-previous-${operationId}`);
   const names = new Set<string>();
 
   await mkdir(issueDirectory, { recursive: true, mode: 0o700 });
@@ -81,8 +84,7 @@ export async function prepareIssueRuntime(
     await writeFile(workspaceFile, `${JSON.stringify(workspace, null, 2)}\n`, { mode: 0o400 });
     await chmod(workspaceFile, 0o400);
 
-    await rm(runtimeRoot, { recursive: true, force: true });
-    await rename(temporaryRoot, runtimeRoot);
+    await replaceGeneratedDirectory(runtimeRoot, temporaryRoot, previousRoot);
     return runtimeRoot;
   } catch (error) {
     await rm(temporaryRoot, { recursive: true, force: true });

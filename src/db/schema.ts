@@ -56,8 +56,8 @@ export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
 
 export const issueRepositories = sqliteTable("issue_repositories", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), url: text("url").notNull(), baseBranch: text("base_branch").notNull(),
-  workingBranch: text("working_branch"), localPath: text("local_path"), commitBefore: text("commit_before"), ...timestamps,
-}, (table) => [index("issue_repositories_issue_idx").on(table.issueId), uniqueIndex("issue_repository_url_unique").on(table.issueId, table.url)]);
+  workingBranch: text("working_branch"), localPath: text("local_path"), workspaceName: text("workspace_name"), commitBefore: text("commit_before"), ...timestamps,
+}, (table) => [index("issue_repositories_issue_idx").on(table.issueId), uniqueIndex("issue_repository_url_unique").on(table.issueId, table.url), uniqueIndex("issue_repository_workspace_name_unique").on(table.issueId, table.workspaceName)]);
 
 export const issueAttachments = sqliteTable("issue_attachments", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), fileName: text("file_name").notNull(), mediaType: text("media_type").notNull(), size: integer("size").notNull(),

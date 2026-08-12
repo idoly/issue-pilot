@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { rm, rmdir } from "node:fs/promises";
+import { rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -12,7 +12,7 @@ import { environments, issueRepositories, issues, issueWorkspaces } from "../db/
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { CodeServerManager } from "./code-server.ts";
 import { developmentWorktreeMode, prepareDevelopmentIssueRuntime } from "./development.ts";
-import { repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
+import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
 import { prepareIssueRuntime } from "./runtime.ts";
 import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
@@ -204,6 +204,8 @@ export class WorkspaceLifecycleManager {
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
     if (repositoryState === "development_workspace") {
       if (!await pathExists(workspaceRoot)) throw new WorkspaceRestoreRefusal("workspace_missing");
+      try { issueRepositoryWorkspaceNames(repositories); }
+      catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
       await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
       return this.markReopened(issue);
     }
@@ -213,11 +215,12 @@ export class WorkspaceLifecycleManager {
     let mode: ReturnType<typeof developmentWorktreeMode>;
     try { mode = developmentWorktreeMode(issue.type); }
     catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
-    const names = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
-    const prepared: Array<{ repository: IssueRepository; name: string; workspacePath: string }> = [];
+    let names: Map<string, string>;
+    try { names = issueRepositoryWorkspaceNames(repositories); }
+    catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
     try {
-      for (const repository of repositories) {
-        const restored = await this.worktrees.prepare({
+      return await this.worktrees.prepareBatch({
+        worktrees: repositories.map((repository) => ({
           issueKey: issue.key,
           workspaceName: names.get(repository.url)!,
           url: repository.url,
@@ -225,35 +228,36 @@ export class WorkspaceLifecycleManager {
           mode,
           workingBranch: repository.workingBranch!,
           ...(repository.commitBefore ? { existingBaseCommit: repository.commitBefore } : {}),
-        });
-        prepared.push({ repository, name: names.get(repository.url)!, workspacePath: restored.workspacePath });
-      }
-      await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
-      const runtimeRoot = await prepareIssueRuntime(
-        this.stateRoot,
-        issue.key,
-        prepared.map(({ name, workspacePath }) => ({ name, repositoryPath: workspacePath })),
-        "write",
-      );
-      await prepareProjectWrappers(runtimeRoot);
-      await this.codeServer.ensure(issue.key, runtimeRoot);
-      return await this.database.transaction(async (transaction) => {
-        const now = new Date();
-        for (const restored of prepared) {
-          await transaction.update(issueRepositories).set({ localPath: restored.workspacePath, updatedAt: now }).where(eq(issueRepositories.id, restored.repository.id));
-        }
-        await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
-        const [reopened] = await transaction.update(issues).set({ status: "open", resolvedAt: null, updatedAt: now }).where(and(eq(issues.id, issue.id), eq(issues.status, "resolved"))).returning();
-        if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
-        return reopened;
+        })),
+        finalize: async (prepared) => {
+          await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
+          const runtimeRoot = await prepareIssueRuntime(
+            this.stateRoot,
+            issue.key,
+            prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })),
+            "write",
+          );
+          await prepareProjectWrappers(runtimeRoot);
+          await this.codeServer.ensure(issue.key, runtimeRoot);
+          return this.database.transaction(async (transaction) => {
+            const now = new Date();
+            for (const [index, repository] of repositories.entries()) {
+              await transaction.update(issueRepositories).set({ localPath: prepared[index]!.workspacePath, workspaceName: names.get(repository.url)!, updatedAt: now }).where(eq(issueRepositories.id, repository.id));
+            }
+            await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
+            const [reopened] = await transaction.update(issues).set({ status: "open", resolvedAt: null, updatedAt: now }).where(and(eq(issues.id, issue.id), eq(issues.status, "resolved"))).returning();
+            if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
+            return reopened;
+          });
+        },
       });
     } catch (error) {
-      let cleanupFailed = false;
-      for (const restored of prepared.reverse()) {
-        try { await this.worktrees.remove(restored.repository.url, restored.workspacePath); } catch { cleanupFailed = true; }
+      let cleanupFailed = error instanceof WorktreeRollbackFailure;
+      try { await rmdir(workspaceRoot); }
+      catch (cleanupError) {
+        if (!(cleanupError && typeof cleanupError === "object" && "code" in cleanupError && cleanupError.code === "ENOENT")) cleanupFailed = true;
       }
-      if (!cleanupFailed) await rm(workspaceRoot, { recursive: true, force: true });
-      try { await this.prepareDevelopmentRuntime({ id: issue.id, key: issue.key }); } catch { cleanupFailed = true; }
+      try { await this.restoreDevelopmentRuntime(issue); } catch { cleanupFailed = true; }
       if (cleanupFailed) throw new WorkspaceRestoreRefusal("workspace_restore_cleanup_failed");
       throw error instanceof WorkspaceRestoreRefusal ? error : new WorkspaceRestoreRefusal(errorMessage(error));
     }
@@ -272,6 +276,9 @@ export class WorkspaceLifecycleManager {
     const repositoryState = classifyRepositoryState(repositories);
     const inspection = await this.inspectLocked(issue, workspace, repositories);
     if (["issue_not_resolved", "issue_already_running", "workspace_busy"].includes(inspection.blockedReason ?? "")) throw new WorkspaceReleaseRefusal(inspection.blockedReason!);
+    let names: Map<string, string>;
+    try { names = issueRepositoryWorkspaceNames(repositories); }
+    catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
     if (repositoryState === "development_snapshot") {
       if (inspection.blockedReason !== "workspace_missing") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
       if (!workspace?.codeServerReady) await this.restoreDevelopmentRuntime(issue);
@@ -281,7 +288,7 @@ export class WorkspaceLifecycleManager {
     if (inspection.blockedReason === "workspace_missing") {
       try { assertManagedIssueWorkspacePaths(issueWorkspaceRoot(this.stateRoot, issue.key), repositories.map((repository) => repository.localPath!)); }
       catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
-      await this.markReleased(issue.id);
+      await this.markReleased(issue.id, repositories);
       await this.restoreDevelopmentRuntime(issue);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
     }
@@ -290,7 +297,6 @@ export class WorkspaceLifecycleManager {
     try { mode = developmentWorktreeMode(issue.type); }
     catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
     await this.engine.closeSession(issue.id);
-    const names = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
     try {
       await this.worktrees.removeBatch({
         issueKey: issue.key,
@@ -303,7 +309,7 @@ export class WorkspaceLifecycleManager {
         })),
         finalize: async () => {
           await rmdir(issueWorkspaceRoot(this.stateRoot, issue.key));
-          await this.markReleased(issue.id);
+          await this.markReleased(issue.id, repositories);
         },
       });
     } catch (error) {
@@ -325,10 +331,14 @@ export class WorkspaceLifecycleManager {
     }
   }
 
-  private async markReleased(issueId: string): Promise<void> {
+  private async markReleased(issueId: string, repositories: IssueRepository[]): Promise<void> {
+    const names = issueRepositoryWorkspaceNames(repositories);
     await this.database.transaction(async (transaction) => {
-      await transaction.update(issueRepositories).set({ localPath: null, updatedAt: new Date() }).where(eq(issueRepositories.issueId, issueId));
-      await transaction.update(issueWorkspaces).set({ status: "stopped", codeServerReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
+      const now = new Date();
+      for (const repository of repositories) {
+        await transaction.update(issueRepositories).set({ localPath: null, workspaceName: names.get(repository.url)!, updatedAt: now }).where(eq(issueRepositories.id, repository.id));
+      }
+      await transaction.update(issueWorkspaces).set({ status: "stopped", codeServerReady: false, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));
     });
   }
 
@@ -344,8 +354,9 @@ export class WorkspaceLifecycleManager {
       const repositories = knownRepositories ?? await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
       if (classifyRepositoryState(repositories) !== "development_workspace") blockedReason = "development_repository_state_invalid";
       else try {
+        issueRepositoryWorkspaceNames(repositories);
         await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
-        for (const repository of repositories) await this.worktrees.assertClean(repository.localPath!);
+        for (const repository of repositories) await this.worktrees.assertClean(repository.url, repository.localPath!);
       } catch (error) {
         blockedReason = errorMessage(error);
       }
