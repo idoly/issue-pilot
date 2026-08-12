@@ -80,6 +80,17 @@ export async function removeWrittenAttachments(objectKeys: string[]): Promise<vo
   if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
+export async function finalizeQuarantinedAttachments(
+  quarantined: QuarantinedAttachment[],
+  remove: (candidate: string) => Promise<void> = (candidate) => rm(candidate, { force: true }),
+): Promise<void> {
+  const failures: unknown[] = [];
+  await Promise.all(quarantined.map(async ({ temporaryPath }) => {
+    try { await remove(temporaryPath); } catch (error) { failures.push(error); }
+  }));
+  if (failures.length) throw new Error("attachment_finalize_failed", { cause: new AggregateError(failures, "attachment_finalize_failed") });
+}
+
 export async function writePendingAttachments(
   executor: AttachmentWriter,
   stateRoot: string,
@@ -155,7 +166,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
         catch (rollbackError) { throw new Error("attachment_rollback_failed", { cause: new AggregateError([error, rollbackError], "attachment_rollback_failed") }); }
         throw error;
       }
-      await Promise.all(quarantined.map(({ temporaryPath }) => rm(temporaryPath, { force: true }).catch(() => undefined)));
+      await finalizeQuarantinedAttachments(quarantined);
     });
     return reply.code(204).send();
   });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -71,9 +71,9 @@ test("configuration and issue API preserves relational integrity", async () => {
   try {
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
     assert.equal((await app.inject({ method: "POST", url: "/internal/agent-capabilities/db", payload: {} })).statusCode, 404);
-    const currentUser = await app.inject({ method: "GET", url: "/api/me" });
-    assert.equal(currentUser.statusCode, 200);
-    const currentSubject = (await json(currentUser)).subject;
+    const concurrentCurrentUsers = await Promise.all(Array.from({ length: 4 }, () => app.inject({ method: "GET", url: "/api/me" })));
+    assert.deepEqual(concurrentCurrentUsers.map((response) => response.statusCode), [200, 200, 200, 200]);
+    const currentSubject = (await json(concurrentCurrentUsers[0]!)).subject;
     assert.equal(currentSubject, issuePilotConfig.subject);
     const users = JSON.parse((await app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string; name: string }>;
     assert.deepEqual(users.map((user) => user.subject), issuePilotConfig.users.map((user) => user.subject));
@@ -296,6 +296,27 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(engine.messages.at(-1), "Check the latest evidence");
     assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-messages`, payload: { message: "" } })).statusCode, 400);
     assert.equal((await app.inject({ method: "POST", url: `/api/issues/${created.id}/agent-abort` })).statusCode, 404);
+
+    const unmanagedNextIssueKey = String(created.id).replace(/001$/, "002");
+    const unmanagedNextIssueRoot = join(root, "issues", unmanagedNextIssueKey.toLowerCase());
+    await mkdir(unmanagedNextIssueRoot, { recursive: true });
+    const unmanagedEvidence = join(unmanagedNextIssueRoot, "evidence.txt");
+    await writeFile(unmanagedEvidence, "preserve unmanaged evidence\n", "utf8");
+    const blockedByUnmanagedState = await app.inject({
+      method: "POST",
+      url: "/api/issues",
+      payload: {
+        title: "Must not claim unmanaged state", description: "", priority: "p2", type: "smart_analysis",
+        environmentKey: "test", serviceKey: "alpha", assigneeSubject: null, ccSubjects: [],
+      },
+    });
+    assert.equal(blockedByUnmanagedState.statusCode, 409, blockedByUnmanagedState.body);
+    assert.equal((await json(blockedByUnmanagedState)).error, "unmanaged_issue_state");
+    assert.equal(await readFile(unmanagedEvidence, "utf8"), "preserve unmanaged evidence\n");
+    const unmanagedInspection = openDatabase(join(root, "issues.db"));
+    assert.equal((await unmanagedInspection.db.select().from(issues)).length, 1);
+    await unmanagedInspection.close();
+    await rm(unmanagedNextIssueRoot, { recursive: true });
 
     const concurrentPayload = (title: string) => ({
       title,
@@ -532,6 +553,28 @@ test("configuration and issue API preserves relational integrity", async () => {
       "",
     ].join("\r\n"));
     const enqueueCountBeforeMultipartCreate = engine.enqueued.length;
+    const issueDirectoriesBeforeFailedCreate = await readdir(join(root, "issues")).catch((error: unknown) => {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+      throw error;
+    });
+    const failingCreateDatabase = openDatabase(join(root, "issues.db"));
+    const issueCountBeforeFailedCreate = Number((await failingCreateDatabase.client.execute("SELECT count(*) AS count FROM issues")).rows[0]!.count);
+    await failingCreateDatabase.client.execute("CREATE TRIGGER fail_initial_attachment_insert BEFORE INSERT ON issue_attachments BEGIN SELECT RAISE(ABORT, 'simulated_initial_attachment_failure'); END");
+    const failedCreateWithAttachment = await app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${createBoundary}` },
+      payload: createWithAttachmentBody,
+    });
+    assert.equal(failedCreateWithAttachment.statusCode, 500, failedCreateWithAttachment.body);
+    assert.equal((await json(failedCreateWithAttachment)).error, "internal_error");
+    await failingCreateDatabase.client.execute("DROP TRIGGER fail_initial_attachment_insert");
+    const issueCountAfterFailedCreate = Number((await failingCreateDatabase.client.execute("SELECT count(*) AS count FROM issues")).rows[0]!.count);
+    await failingCreateDatabase.close();
+    assert.equal(issueCountAfterFailedCreate, issueCountBeforeFailedCreate);
+    assert.deepEqual((await readdir(join(root, "issues"))).sort(), issueDirectoriesBeforeFailedCreate.sort());
+    assert.equal(engine.enqueued.length, enqueueCountBeforeMultipartCreate);
+
     const createWithAttachment = await app.inject({
       method: "POST",
       url: "/api/issues",

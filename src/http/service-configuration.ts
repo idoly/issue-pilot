@@ -162,32 +162,27 @@ function storedDeploymentConfiguration(deployment: ReturnType<typeof parseServic
   };
 }
 
-interface ServiceConfigurationOptions {
-  executor: DatabaseExecutor;
-  modelCatalog: AgentModelCatalog;
-  serviceId: string;
-  input: Record<string, unknown>;
-}
+type ParsedServiceConfiguration = ReturnType<typeof parseServiceConfigurationInput>;
 
-async function validatedServiceConfiguration(options: ServiceConfigurationOptions) {
-  const { executor, modelCatalog, serviceId, input } = options;
-  const { repositories: repositoriesInput, deployments: deploymentsInput } = parseServiceConfigurationInput(input);
-
-  const [existingRepositories, existingDeployments, referencedIssues, environmentRows, availableModels] = await Promise.all([
-    executor.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
-    executor.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId)),
-    executor.select({ environmentId: issues.environmentId }).from(issues).where(eq(issues.serviceId, serviceId)),
-    executor.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)),
-    modelCatalog.list(),
-  ]);
-  const environmentsByKey = new Map(environmentRows.map((environment) => [environment.key, environment]));
-  if (deploymentsInput.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new ApiError(400, "invalid_environment");
-  for (const deployment of deploymentsInput) {
+async function validateConfiguredModels(modelCatalog: AgentModelCatalog, deployments: ParsedServiceConfiguration["deployments"]): Promise<void> {
+  const availableModels = await modelCatalog.list();
+  for (const deployment of deployments) {
     const model = availableModels.find((candidate) => candidate.provider === deployment.agent.provider && candidate.id === deployment.agent.model);
     if (!model) throw new ApiError(400, "agent_model_not_available");
     if (!model.thinkingLevels.includes(deployment.agent.thinkingLevel)) throw new ApiError(400, "agent_thinking_level_not_supported");
   }
+}
 
+async function validatedDatabaseConfiguration(executor: DatabaseExecutor, serviceId: string, parsed: ParsedServiceConfiguration) {
+  const { repositories: repositoriesInput, deployments: deploymentsInput } = parsed;
+  const [existingRepositories, existingDeployments, referencedIssues, environmentRows] = await Promise.all([
+    executor.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
+    executor.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId)),
+    executor.select({ environmentId: issues.environmentId }).from(issues).where(eq(issues.serviceId, serviceId)),
+    executor.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)),
+  ]);
+  const environmentsByKey = new Map(environmentRows.map((environment) => [environment.key, environment]));
+  if (deploymentsInput.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new ApiError(400, "invalid_environment");
   const existingById = new Map(existingRepositories.map((repository) => [repository.id, repository]));
   const configuredIds = repositoriesInput.flatMap((repository) => repository.id ? [repository.id] : []);
   if (new Set(configuredIds).size !== configuredIds.length || configuredIds.some((id) => !existingById.has(id))) throw new ApiError(400, "invalid_repository");
@@ -197,13 +192,23 @@ async function validatedServiceConfiguration(options: ServiceConfigurationOption
   return { repositoriesInput, deploymentsInput, existingRepositories, existingDeployments, environmentsByKey, existingById };
 }
 
-export async function validateServiceConfiguration(options: ServiceConfigurationOptions): Promise<void> {
-  await validatedServiceConfiguration(options);
+export async function validateServiceConfigurationInput(modelCatalog: AgentModelCatalog, input: Record<string, unknown>): Promise<void> {
+  const parsed = parseServiceConfigurationInput(input);
+  await validateConfiguredModels(modelCatalog, parsed.deployments);
 }
 
-export async function replaceServiceConfiguration(options: ServiceConfigurationOptions & { serviceUpdate?: { name: string; description: string } }): Promise<void> {
-  const { executor, modelCatalog, serviceId, input, serviceUpdate } = options;
-  const { repositoriesInput, deploymentsInput, existingRepositories, existingDeployments, environmentsByKey, existingById } = await validatedServiceConfiguration({ executor, modelCatalog, serviceId, input });
+export async function validateServiceConfiguration(options: { executor: DatabaseExecutor; modelCatalog: AgentModelCatalog; serviceId: string; input: Record<string, unknown> }): Promise<void> {
+  const parsed = parseServiceConfigurationInput(options.input);
+  await Promise.all([
+    validateConfiguredModels(options.modelCatalog, parsed.deployments),
+    validatedDatabaseConfiguration(options.executor, options.serviceId, parsed),
+  ]);
+}
+
+export async function replaceServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; input: Record<string, unknown>; serviceUpdate?: { name: string; description: string } }): Promise<void> {
+  const { executor, serviceId, input, serviceUpdate } = options;
+  const parsed = parseServiceConfigurationInput(input);
+  const { repositoriesInput, deploymentsInput, existingRepositories, existingDeployments, environmentsByKey, existingById } = await validatedDatabaseConfiguration(executor, serviceId, parsed);
 
   if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
   const retainedRepositoryIds = new Set<string>();

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -28,12 +28,11 @@ export function serializePerson(person: typeof subjects.$inferSelect) {
 }
 
 async function ensureConfiguredSubject(database: ApiRouteContext["database"], user: typeof issuePilotConfig.users[number]): Promise<void> {
-  const [existing] = await database.db.select().from(subjects).where(eq(subjects.subject, user.subject)).limit(1);
-  if (!existing) {
-    await database.db.insert(subjects).values({ subject: user.subject, username: user.subject, displayName: user.name, email: user.email });
-  } else if (existing.username !== user.subject || existing.displayName !== user.name || existing.email !== user.email) {
-    await database.db.update(subjects).set({ username: user.subject, displayName: user.name, email: user.email, updatedAt: new Date() }).where(eq(subjects.subject, user.subject));
-  }
+  await database.db.insert(subjects).values({ subject: user.subject, username: user.subject, displayName: user.name, email: user.email }).onConflictDoUpdate({
+    target: subjects.subject,
+    set: { username: user.subject, displayName: user.name, email: user.email, updatedAt: new Date() },
+    setWhere: sql`${subjects.username} IS NOT ${user.subject} OR ${subjects.displayName} IS NOT ${user.name} OR ${subjects.email} IS NOT ${user.email}`,
+  });
 }
 
 export async function ensureConfiguredSubjects(database: ApiRouteContext["database"]): Promise<void> {

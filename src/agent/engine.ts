@@ -67,6 +67,7 @@ export function repositoryPreparationMode(environmentKind: EnvironmentKind, issu
 
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
+  private readonly steerQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
   private readonly reservations = new Set<string>();
   private readonly idleWaiters = new Set<() => void>();
@@ -144,8 +145,16 @@ export class AgentEngine implements AgentController {
         return;
       }
       if (managed.streaming) {
-        await this.recordUserMessage(issueId, managed, userMessage);
-        await managed.session.steer(promptWithRuntimeTime(userMessage));
+        await this.steerQueue.run(issueId, async () => {
+          if (this.sessions.get(issueId) !== managed || !managed.streaming) throw new Error("agent_session_changed");
+          await managed.session.steer(promptWithRuntimeTime(userMessage));
+          try { await this.recordUserMessage(issueId, managed, userMessage); }
+          catch (error) {
+            try { await this.stopSession(issueId); }
+            catch (stopError) { throw new AggregateError([error, stopError], "agent_message_record_failed"); }
+            throw error;
+          }
+        });
       } else {
         this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage));
       }
@@ -209,11 +218,12 @@ export class AgentEngine implements AgentController {
           const [failedIssue] = await transaction.update(issues).set({ status: "open", updatedAt: new Date() })
             .where(and(eq(issues.id, issueId), ne(issues.status, "resolved"))).returning({ id: issues.id });
           if (!failedIssue) return false;
-          await transaction.update(issueWorkspaces).set({
+          const [failedWorkspace] = await transaction.update(issueWorkspaces).set({
             status: "failed",
             lastError: errorMessage(error),
             updatedAt: new Date(),
-          }).where(eq(issueWorkspaces.issueId, issueId));
+          }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });
+          if (!failedWorkspace) throw new Error("issue_workspace_missing");
           return true;
         });
         if (failed) this.publishStatus(issueId, "error");
@@ -228,7 +238,8 @@ export class AgentEngine implements AgentController {
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
     const currentMessage = latestMessage?.trim() || undefined;
-    await this.database.update(issueWorkspaces).set({ status: "preparing", codeServerReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    const [preparingWorkspace] = await this.database.update(issueWorkspaces).set({ status: "preparing", codeServerReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).returning({ issueId: issueWorkspaces.issueId });
+    if (!preparingWorkspace) throw new Error("issue_workspace_missing");
 
     const [service] = await this.database.select({
       id: services.id,
@@ -420,19 +431,22 @@ export class AgentEngine implements AgentController {
       const [runningIssue] = await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() })
         .where(and(eq(issues.id, issueId), inArray(issues.status, ["open", "pending"]))).returning({ id: issues.id });
       if (!runningIssue) throw new Error("issue_not_runnable");
-      await transaction.update(issueWorkspaces).set({
+      const [runningWorkspace] = await transaction.update(issueWorkspaces).set({
         status: "running",
         ...(codeServerReady !== undefined ? { codeServerReady } : {}),
         lastError: null,
         updatedAt: new Date(),
-      }).where(eq(issueWorkspaces.issueId, issueId));
+      }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });
+      if (!runningWorkspace) throw new Error("issue_workspace_missing");
     });
   }
 
   private async finalizeRun(issueId: string): Promise<void> {
     await this.database.transaction(async (transaction) => {
-      await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
-      await transaction.update(issues).set({ status: "pending", updatedAt: new Date() }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")));
+      const [readyWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });
+      if (!readyWorkspace) throw new Error("issue_workspace_missing");
+      const [completedIssue] = await transaction.update(issues).set({ status: "pending", updatedAt: new Date() }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress"))).returning({ id: issues.id });
+      if (!completedIssue) throw new Error("issue_not_running");
     });
     this.publishStatus(issueId, "complete");
   }

@@ -8,8 +8,27 @@ import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { openDatabase, type DatabaseConnection } from "./client.ts";
 import { environments } from "./schema.ts";
 
+async function assertIssueStructure(database: DatabaseConnection): Promise<void> {
+  const tableRows = await database.client.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('issues', 'issue_workspaces')");
+  const tables = new Set(tableRows.rows.map((row) => row.name));
+  if (!tables.has("issues")) return;
+  if (!tables.has("issue_workspaces")) throw new Error("issue_workspaces_table_missing");
+  const [issueWithoutWorkspace] = (await database.client.execute({
+    sql: "SELECT issues.key FROM issues LEFT JOIN issue_workspaces ON issue_workspaces.issue_id = issues.id WHERE issue_workspaces.issue_id IS NULL LIMIT 1",
+    args: [],
+  })).rows;
+  if (issueWithoutWorkspace) throw new Error(`issue_workspace_missing:${issueWithoutWorkspace.key}`);
+  const [invalidResolution] = (await database.client.execute({
+    sql: "SELECT key FROM issues WHERE (status = 'resolved') <> (resolved_at IS NOT NULL) LIMIT 1",
+    args: [],
+  })).rows;
+  if (invalidResolution) throw new Error(`issue_resolution_state_invalid:${invalidResolution.key}`);
+}
+
 export async function migrateDatabase(database: DatabaseConnection): Promise<void> {
+  await assertIssueStructure(database);
   await migrate(database.db, { migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url)) });
+  await assertIssueStructure(database);
 }
 
 export async function openApplicationDatabase(file?: string, connect: typeof openDatabase = openDatabase): Promise<DatabaseConnection> {

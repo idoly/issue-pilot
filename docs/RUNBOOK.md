@@ -47,7 +47,7 @@ PRAGMA integrity_check;
 PRAGMA foreign_key_check;
 ```
 
-`integrity_check` 应为 `ok`，`foreign_key_check` 应返回 0 行。还应确认每张 Issue 的 `(service_id, environment_id)` 都能关联唯一 Deployment；当前 schema 的 trigger 会拒绝新增无 Deployment scope 的 Issue，也会阻止更新或删除仍被 Issue 引用的 Deployment scope。
+`integrity_check` 应为 `ok`，`foreign_key_check` 应返回 0 行。还应确认每张 Issue 都有一条 workspace 行、`resolved` 与 `resolved_at` 一致，并且 `(service_id, environment_id)` 能关联唯一 Deployment。当前 schema 的 trigger 会拒绝 resolution 状态异常和无 Deployment scope 的 Issue，也会阻止更新或删除仍被 Issue 引用的 Deployment scope。
 
 ### 工单与代码
 
@@ -178,7 +178,11 @@ curl -fsS -X DELETE \
 | `workspace_path_does_not_match_repository` | `workspace_name`、DB path 或当前稳定命名不一致 | 保留现场，核对匹配的数据库与 worktree；不要自动移动或通过 release 改名 |
 | `workspace_not_development` | 对 prod/test 调用了 release | 不需要释放；它们没有 dev workspace |
 | `issue_deployment_required` | Issue 的 Service/Environment 没有匹配 Deployment | 保留 Issue 输入和配置现场，补齐或选择有效 Deployment 后重试；不要绕过 trigger |
-| `attachment_rollback_failed` | 附件写入/删除失败后无法完整恢复文件 | 停止重复编辑，备份 attachment root 和数据库后核对 quarantine、对象路径与记录 |
+| `issue_resolution_state_invalid` | Issue status 与 `resolved_at` 不一致，或升级 preflight 发现旧异常行 | 保留数据库并核对状态历史；由 operator 成对修正 status/timestamp 后再升级，不要禁用 trigger |
+| `issue_workspace_missing` | Issue 缺少权威 workspace 行 | 停止 Agent 和 lifecycle 操作，备份数据库后核对是否来自部分恢复；不要自动补默认状态掩盖现场 |
+| `attachment_finalize_failed` | 附件数据库删除已提交，但 quarantine 文件无法完整删除 | 停止重复编辑，备份 attachment root 和数据库；数据库中已无对应记录，保留并核对 `.deleting` 文件后由 operator 处理 |
+| `attachment_rollback_failed` | 已有 Issue 的附件写入/删除失败后无法完整恢复文件 | 停止重复编辑，备份 attachment root 和数据库后核对 quarantine、对象路径、未知内容与记录 |
+| `issue_state_rollback_failed` | 新建 Issue 的数据库事务失败后无法完整清理本次文件或空 Issue root | 保留 Issue root 和日志，核对数据库中确实无该 Issue，再检查未知内容；不要递归删除现场 |
 | `issue_update_rollback_failed` | 原子工单编辑失败后附件 cleanup/restore 不完整 | 保留 attachment root、Issue 行和日志，逐项核对新增文件与 `.deleting` 文件 |
 
 ## Git 与 runtime 排障

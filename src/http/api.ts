@@ -102,8 +102,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         cause = typeof cause === "object" && "cause" in cause ? (cause as { cause?: unknown }).cause : undefined;
       }
       const errorChain = errorMessages.join("\n");
-      for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues"]) {
+      for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
         if (errorChain.includes(conflict)) return reply.code(409).send({ error: conflict });
+      }
+      for (const operationalError of ["attachment_finalize_failed", "attachment_rollback_failed", "issue_state_rollback_failed", "issue_update_rollback_failed", "issue_workspace_missing"]) {
+        if (errorChain.includes(operationalError)) {
+          app.log.error(error);
+          return reply.code(500).send({ error: operationalError });
+        }
       }
       if (/UNIQUE constraint failed/i.test(errorChain)) return reply.code(409).send({ error: "conflict" });
       if (/FOREIGN KEY constraint failed/i.test(errorChain)) return reply.code(409).send({ error: "resource_in_use" });

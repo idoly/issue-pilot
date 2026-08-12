@@ -148,7 +148,7 @@ export class WorkspaceLifecycleManager {
 
   async reopenIssue(issueId: string): Promise<Issue> {
     return this.exclusive(async () => {
-      try { return await this.engine.runExclusive([issueId], async () => this.reopenLocked(await this.issueRow(issueId))); }
+      try { return await this.engine.runExclusive([issueId], async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation)); }
       catch (error) {
         if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceRestoreRefusal(error.message);
         throw error;
@@ -204,11 +204,14 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  private async reopenLocked(issueRow: IssueRow): Promise<Issue> {
+  private async reopenLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<Issue> {
     const { issue, workspace } = issueRow;
     if (issue.status !== "resolved") throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
     if (this.engine.isRunning(issue.id) || workspace && isWorkspaceBusy(workspace.status)) throw new WorkspaceRestoreRefusal("issue_already_running");
-    if (issueRow.environmentKind !== "dev") return this.markReopened(issue);
+    if (issueRow.environmentKind !== "dev") {
+      await reservation.closeSession(issue.id);
+      return this.markReopened(issue);
+    }
 
     const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
     const repositoryState = classifyRepositoryState(repositories);
@@ -218,6 +221,7 @@ export class WorkspaceLifecycleManager {
       try { issueRepositoryWorkspaceNames(repositories); }
       catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
       await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
+      await reservation.closeSession(issue.id);
       return this.markReopened(issue);
     }
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
@@ -229,6 +233,7 @@ export class WorkspaceLifecycleManager {
     let names: Map<string, string>;
     try { names = issueRepositoryWorkspaceNames(repositories); }
     catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
+    await reservation.closeSession(issue.id);
     try {
       return await this.worktrees.prepareBatch({
         worktrees: repositories.map((repository) => ({
@@ -292,6 +297,7 @@ export class WorkspaceLifecycleManager {
     catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
     if (repositoryState === "development_snapshot") {
       if (inspection.blockedReason !== "workspace_missing") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
+      await reservation.closeSession(issue.id);
       if (!workspace?.codeServerReady) await this.restoreDevelopmentRuntime(issue);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
     }
@@ -299,6 +305,7 @@ export class WorkspaceLifecycleManager {
     if (inspection.blockedReason === "workspace_missing") {
       try { assertManagedIssueWorkspacePaths(issueWorkspaceRoot(this.stateRoot, issue.key), repositories.map((repository) => repository.localPath!)); }
       catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
+      await reservation.closeSession(issue.id);
       await this.markReleased(issue.id, repositories);
       await this.restoreDevelopmentRuntime(issue);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
@@ -389,13 +396,17 @@ export class WorkspaceLifecycleManager {
       .innerJoin(environments, eq(environments.id, issues.environmentId))
       .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id)).where(eq(issues.id, issueId)).limit(1);
     if (!issueRow) throw new Error("issue_not_found");
+    if (!issueRow.workspace) throw new Error(`issue_workspace_missing:${issueRow.issue.key}`);
     return issueRow;
   }
 
-  private issueRows(): Promise<IssueRow[]> {
-    return this.database.select({ issue: issues, workspace: issueWorkspaces, environmentKind: environments.kind }).from(issues)
+  private async issueRows(): Promise<IssueRow[]> {
+    const rows = await this.database.select({ issue: issues, workspace: issueWorkspaces, environmentKind: environments.kind }).from(issues)
       .innerJoin(environments, eq(environments.id, issues.environmentId))
       .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id)).orderBy(asc(issues.updatedAt));
+    const invalid = rows.find((row) => !row.workspace);
+    if (invalid) throw new Error(`issue_workspace_missing:${invalid.issue.key}`);
+    return rows;
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {

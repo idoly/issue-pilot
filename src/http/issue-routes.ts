@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { rename, rm } from "node:fs/promises";
+import { rename } from "node:fs/promises";
 import path from "node:path";
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -10,8 +10,8 @@ import { agentSessions, environments, issueAttachments, issueCcRecipients, issue
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { issueCodeServerUrl } from "../workspace/code-server.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
-import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists } from "../workspace/state.ts";
-import { type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachments.ts";
+import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
+import { finalizeQuarantinedAttachments, type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachments.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import { ensureCurrentSubject, requireIssue, runIssueExclusive, serializePerson, touchIssue, type ApiRouteContext } from "./route-context.ts";
 
@@ -133,6 +133,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         const sequence = Math.max(0, ...existingIssueKeys.flatMap(({ key }) => key.startsWith(prefix) ? [Number(key.slice(prefix.length)) || 0] : [])) + 1;
         const issueKey = `${prefix}${String(sequence).padStart(3, "0")}`;
         const writtenObjectKeys: string[] = [];
+        await claimIssueRoot(stateRoot, issueKey);
         let issue: typeof issues.$inferSelect;
         try {
           issue = await database.db.transaction(async (transaction) => {
@@ -143,8 +144,10 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
             return insertedIssue!;
           });
         } catch (error) {
-          try { await removeWrittenAttachments(writtenObjectKeys); }
-          catch (rollbackError) { throw new Error("attachment_rollback_failed", { cause: new AggregateError([error, rollbackError], "attachment_rollback_failed") }); }
+          const rollbackErrors: unknown[] = [];
+          await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
+          await removeEmptyIssueRoot(stateRoot, issueKey).catch((rollbackError) => rollbackErrors.push(rollbackError));
+          if (rollbackErrors.length) throw new Error("issue_state_rollback_failed", { cause: new AggregateError([error, ...rollbackErrors], "issue_state_rollback_failed") });
           throw error;
         }
         reservation.enqueue(issue.id);
@@ -222,7 +225,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         if (rollbackErrors.length) throw new Error("issue_update_rollback_failed", { cause: new AggregateError([error, ...rollbackErrors], "issue_update_rollback_failed") });
         throw error;
       }
-      await Promise.all(quarantined.map(({ temporaryPath }) => rm(temporaryPath, { force: true }).catch(() => undefined)));
+      await finalizeQuarantinedAttachments(quarantined);
       if (currentIssue.status !== "resolved") {
         reservation.enqueue(issue.id, issueMetadataUpdatePrompt({ issue: { ...currentIssue, ...issueValues }, service: issueValues.service, environmentKey: issueEnvironment.key, attachments: attachmentDtos, attachmentPath: attachmentRoot }), false);
       }

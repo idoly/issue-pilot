@@ -7,7 +7,7 @@ import { configuredCapabilities, CAPABILITY_KEYS, ENVIRONMENT_KINDS } from "../d
 import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
 import { ensureConfiguredSubjects, ensureCurrentSubject, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
-import { replaceServiceConfiguration, validateServiceConfiguration } from "./service-configuration.ts";
+import { replaceServiceConfiguration, validateServiceConfiguration, validateServiceConfigurationInput } from "./service-configuration.ts";
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90).replace(/-+$/g, "");
@@ -102,11 +102,12 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const name = text(input.name, "name", 200);
     const description = optionalText(input.description) ?? "";
     const createdService = await runScopeExclusive(async () => {
+      await validateServiceConfigurationInput(modelCatalog, input);
       const existingKeys = new Set((await database.db.select({ key: services.key }).from(services)).map(({ key }) => key));
       const serviceKey = uniqueServiceKey(name, existingKeys);
       return database.db.transaction(async (transaction) => {
         const [service] = await transaction.insert(services).values({ key: serviceKey, name, description }).returning();
-        await replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service!.id, input });
+        await replaceServiceConfiguration({ executor: transaction, serviceId: service!.id, input });
         return service!;
       });
     });
@@ -124,7 +125,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
           const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
           await validateServiceConfiguration({ executor: database.db, modelCatalog, serviceId: service.id, input });
           for (const issue of affectedIssues) await reservation.closeSession(issue.id);
-          await database.db.transaction((transaction) => replaceServiceConfiguration({ executor: transaction, modelCatalog, serviceId: service.id, input, serviceUpdate }));
+          await database.db.transaction((transaction) => replaceServiceConfiguration({ executor: transaction, serviceId: service.id, input, serviceUpdate }));
           return { ok: true };
         });
       } catch (error) {

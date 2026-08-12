@@ -75,7 +75,8 @@ Routes should coordinate managers and transactions, not reimplement Git, policy,
 
 Any change must continue to satisfy:
 
-- Issue keys use `ISSUE-YYYYMMDD-NNN...`.
+- Issue keys use `ISSUE-YYYYMMDD-NNN...`; creation claims an empty Issue root before insert and never adopts unmanaged state.
+- Every Issue has exactly one workspace row; `resolved` status and `resolved_at` are set or cleared together.
 - Prod/test repositories are always `read_only`.
 - Active dev repositories are `development_workspace`; released dev repositories are `development_snapshot`.
 - Released dev recovery uses local `refs/heads/<workingBranch>`, never a remote Issue-branch fallback.

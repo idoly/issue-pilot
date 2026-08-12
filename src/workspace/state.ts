@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, readdir, rm } from "node:fs/promises";
+import { access, mkdir, readdir, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -62,6 +62,27 @@ export function issueRuntimeWorkspaceFile(stateRoot: string, issueKey: string): 
 
 export function issueAttachmentRoot(stateRoot: string, issueKey: string): string {
   return path.join(issueRoot(stateRoot, issueKey), "attachments");
+}
+
+export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
+  const root = issueRoot(stateRoot, issueKey);
+  await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
+  try { await mkdir(root, { mode: 0o700 }); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:issues/${path.basename(root)}`);
+    throw error;
+  }
+}
+
+export async function removeEmptyIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
+  const failures: unknown[] = [];
+  for (const directory of [issueAttachmentRoot(stateRoot, issueKey), issueRoot(stateRoot, issueKey)]) {
+    try { await rmdir(directory); }
+    catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) failures.push(error);
+    }
+  }
+  if (failures.length) throw new Error("issue_state_rollback_failed", { cause: new AggregateError(failures, "issue_state_rollback_failed") });
 }
 
 function gitRoot(stateRoot: string): string {

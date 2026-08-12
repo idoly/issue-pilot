@@ -17,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-5).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -5) };
+  assert.deepEqual(journal.entries.slice(-6).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -6) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -58,6 +58,9 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     assert.deepEqual((await client.execute("select name from sqlite_master where type = 'trigger' and name like '%deployment%' order by name")).rows.map((row) => row.name), [
       "issues_deployment_required_insert", "issues_deployment_required_update", "service_deployments_issues_restrict_delete", "service_deployments_issues_restrict_update",
     ]);
+    assert.deepEqual((await client.execute("select name from sqlite_master where type = 'trigger' and name like '%resolution_state%' order by name")).rows.map((row) => row.name), [
+      "issues_resolution_state_insert", "issues_resolution_state_update",
+    ]);
     assert.deepEqual((await client.execute("select id, alias from service_repositories order by id")).rows, [
       { id: "orders-api", alias: "orders-api" },
       { id: "orders-web", alias: "orders-web" },
@@ -69,6 +72,42 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     await assert.rejects(client.execute("insert into issue_cc_recipients (issue_id, subject) values ('issue', 'recipient')"));
     await assert.rejects(client.execute("insert into issue_cc_recipients (issue_id, subject) values ('missing', 'recipient')"));
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
+  } finally {
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to install resolution triggers over inconsistent Issue state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-resolution-migration-"));
+  const file = join(root, "issues.db");
+  const migrations = join(root, "migrations");
+  const migrationSource = resolve("drizzle");
+  const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -1) };
+  await mkdir(join(migrations, "meta"), { recursive: true });
+  await Promise.all([
+    writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
+    ...previousJournal.entries.map(({ tag }) => copyFile(join(migrationSource, `${tag}.sql`), join(migrations, `${tag}.sql`))),
+  ]);
+
+  const { db, client, close } = openDatabase(file);
+  try {
+    await migrate(db, { migrationsFolder: migrations });
+    await client.execute("insert into subjects (subject, display_name, created_at, updated_at) values ('reporter', 'Reporter', 1, 1)");
+    await client.execute("insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)");
+    await client.execute("insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)");
+    await client.execute("insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', '{}', 1, 1)");
+    await client.execute("insert into issues (id, key, title, status, service_id, environment_id, reporter_subject, created_at, updated_at) values ('issue', 'ISSUE-20260809-002', 'Invalid resolution', 'resolved', 'service', 'environment', 'reporter', 1, 1)");
+
+    await assert.rejects(migrate(db, { migrationsFolder: migrationSource }), /issue_resolution_state_invalid/);
+    assert.equal((await client.execute("select name from sqlite_master where type = 'trigger' and name like '%resolution_state%'")).rows.length, 0);
+    assert.equal((await client.execute("select name from sqlite_temp_master where name like '_issue_resolution_state_check%'")).rows.length, 0);
+    assert.equal((await client.execute("select count(*) count from __drizzle_migrations")).rows[0]!.count, previousJournal.entries.length);
+
+    await client.execute("update issues set resolved_at = 1 where id = 'issue'");
+    await migrate(db, { migrationsFolder: migrationSource });
+    assert.deepEqual((await client.execute("select name from sqlite_master where type = 'trigger' and name like '%resolution_state%' order by name")).rows.map((row) => row.name), ["issues_resolution_state_insert", "issues_resolution_state_update"]);
   } finally {
     await close();
     await rm(root, { recursive: true, force: true });
@@ -99,6 +138,11 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       sql: "insert into issues (id, key, title, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
       args: ["valid-scope", "ISSUE-20260805-002", "Valid scope", "demo-owner", service!.id, environment!.id, Date.now(), Date.now()],
     });
+    await assert.rejects(client.execute({ sql: "insert into issues (id, key, title, status, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, 'resolved', ?, ?, ?, ?, ?)", args: ["invalid-resolution", "ISSUE-20260805-004", "Invalid resolution", "demo-owner", service!.id, environment!.id, Date.now(), Date.now()] }), /issue_resolution_state_invalid/);
+    await assert.rejects(client.execute({ sql: "update issues set status = 'resolved' where id = ?", args: ["valid-scope"] }), /issue_resolution_state_invalid/);
+    await client.execute({ sql: "update issues set status = 'resolved', resolved_at = ? where id = ?", args: [Date.now(), "valid-scope"] });
+    await assert.rejects(client.execute({ sql: "update issues set status = 'open' where id = ?", args: ["valid-scope"] }), /issue_resolution_state_invalid/);
+    await client.execute({ sql: "update issues set status = 'open', resolved_at = null where id = ?", args: ["valid-scope"] });
     await assert.rejects(client.execute({ sql: "update issues set service_id = null where id = ?", args: ["valid-scope"] }), /issue_scope_required/);
     await assert.rejects(client.execute({
       sql: "insert into issues (id, key, title, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",

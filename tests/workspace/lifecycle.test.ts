@@ -46,13 +46,14 @@ test("uses the central workspace retention and quota configuration", () => {
 const engine = {
   running: new Set<string>(),
   closed: [] as string[],
+  closeError: undefined as Error | undefined,
   enqueue() {},
   async send() {},
   isRunning(issueId: string) { return this.running.has(issueId); },
   async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
     return operation({ enqueue() {}, closeSession: (issueId) => this.closeSession(issueId) });
   },
-  async closeSession(issueId: string) { this.closed.push(issueId); },
+  async closeSession(issueId: string) { this.closed.push(issueId); if (this.closeError) throw this.closeError; },
 };
 
 test("releases clean workspaces while preserving attachments, sessions, and branches", async () => {
@@ -179,7 +180,18 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     }
     const [sessionBinding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(sessionBinding!.sessionFile, sessionFile);
+    engine.closeError = new Error("stop_failed");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), /stop_failed/);
+    assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_snapshot");
+    assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.status, "resolved");
+    engine.closeError = undefined;
     assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, true);
+
+    engine.closeError = new Error("stop_failed");
+    await assert.rejects(lifecycle.reopenIssue(issue!.id), /stop_failed/);
+    assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.status, "resolved");
+    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    engine.closeError = undefined;
 
     const failingRestore = new WorkspaceLifecycleManager(database.db, root, engine as never, {
       retentionMs: Number.POSITIVE_INFINITY,

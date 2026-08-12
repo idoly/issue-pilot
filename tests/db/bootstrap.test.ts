@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, test } from "node:test";
 
+import { eq } from "drizzle-orm";
+
 import { applicationConfig } from "../../src/config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
@@ -62,6 +64,24 @@ test("restores interrupted and ready workspaces when the application database re
   } finally {
     await reopened.close();
   }
+});
+
+test("rejects Issues without their required workspace row", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-bootstrap-invalid-"));
+  directories.push(root);
+  const file = join(root, "issues.db");
+  const initial = await openApplicationDatabase(file);
+  try {
+    const [environment] = await initial.db.select().from(environments).where(eq(environments.key, "test")).limit(1);
+    await initial.db.insert(subjects).values({ subject: "owner", displayName: "Owner" });
+    const [service] = await initial.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
+    await initial.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    await initial.db.insert(issues).values({ key: "ISSUE-20260809-003", title: "Missing workspace", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "owner" });
+  } finally {
+    await initial.close();
+  }
+
+  await assert.rejects(openApplicationDatabase(file), /issue_workspace_missing:ISSUE-20260809-003/);
 });
 
 test("closes the database client when bootstrap initialization fails", async () => {

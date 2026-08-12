@@ -61,7 +61,7 @@ stateDiagram-v2
     resolved --> open: 用户重开
 ```
 
-`resolved` 工单不能运行 Agent。新建工单会自动入队；同一工单严格串行，不同工单可以并行。
+`resolved` 工单不能运行 Agent。只有 `resolved` 状态允许且必须带 `resolved_at`；其他状态的 `resolved_at` 必须为 `NULL`，SQLite trigger 会拒绝不一致 insert/update。新建工单会自动入队；同一工单严格串行，不同工单可以并行。
 
 ### Workspace 状态
 
@@ -109,7 +109,7 @@ sequenceDiagram
 
 执行时先读取 Issue 对应的 Service 和 Environment，再由共享 loader 解析 Deployment 及其完整 Repository 分支集合。Loader 按 Service Repository 定义顺序返回结果，并拒绝缺失、额外或跨 Service 的分支关联。Repository 准备完成后才创建 policy，因此 policy 中的 path、commit 和读写权限来自实际准备结果，而不是页面声明。
 
-Session binding 在第一个可见事件之前写入 SQLite。这样 SSE 客户端不会看到一个无法回放的临时会话。已有非流式 session 的用户消息只有在 `open/pending -> in_progress` 事务成功后才写入 JSONL；若工单已解决，排队消息不会留下未执行的 transcript entry。
+Session binding 在第一个可见事件之前写入 SQLite。这样 SSE 客户端不会看到一个无法回放的临时会话。已有非流式 session 的用户消息只有在 `open/pending -> in_progress` 事务成功后才写入 JSONL；streaming session 的并发 steer 按 Issue 串行，并在 Pi 接受 steer 后才记录可见 user entry。若工单已解决或 Pi 拒绝消息，队列不会留下未执行的 transcript entry。
 
 Prod/test 每轮结束后释放内存 session；下一轮重新获取 Deployment 最新 commit。Dev session 可以留在内存中继续对话，直到配置变化、显式关闭、失败或 API 停止。
 
@@ -323,7 +323,7 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 
 ## 附件原理
 
-上传时先按请求预算读取文件并计算 SHA-256，再以 `0400` 写入 Issue attachment root，最后在数据库事务中创建记录。数据库失败会删除已写文件。
+新建 Issue 在数据库 insert 前先独占声明对应 Issue root，避免新记录接管旧的 unmanaged 目录。上传时先按请求预算读取文件并计算 SHA-256，再以 `0400` 写入 attachment root，最后在数据库事务中创建记录。数据库失败会删除已写文件，并只用 `rmdir` 回收本次创建的空目录。已有未知内容会保留并显式报错，避免形成或误删 unmanaged state。
 
 读取时验证：
 
@@ -333,7 +333,7 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 - 文件大小等于数据库记录且不超过上限。
 - 当前 SHA-256 等于保存值。
 
-删除使用 quarantine：先把目标原子改名，数据库事务成功后删除；事务失败则恢复原文件名。这避免数据库记录和文件删除一半。
+删除使用 quarantine：先把目标原子改名，数据库事务成功后删除；事务失败则恢复原文件名。事务提交后的 quarantine finalize 也是必需步骤，删除失败会返回 `attachment_finalize_failed` 并保留 `.deleting` 文件供调查，不会静默吞掉。
 
 ## 并发与失败边界
 
@@ -342,9 +342,10 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 - Workspace inspect、release、reopen 和 maintenance 全局串行。
 - Agent 切换 Repository 集合时先准备完整目标 worktree/checkout，再用一个事务替换全部 Repository 行；prepare 或 finalize 失败会清理新 worktree 并恢复已移除 worktree。
 - Issue key 生成在 API 实例内串行，并由数据库 unique index 兜底。
-- Service 配置和 Issue scope 变更共享 API 实例内 scope mutex；受影响 Issue 一次性 reservation、成功关闭 session 后，Service 配置才在一个数据库事务中替换。
-- Issue 的 `(service_id, environment_id)` 必须存在对应 Deployment；SQLite trigger 同时阻止无 Deployment 的 Issue insert/update，以及被 Issue 引用的 Deployment scope update/delete。
-- Issue 编辑将 metadata、CC、附件增删和一次 Agent metadata sync 合并为一个 reservation。附件文件先 quarantine/写入，数据库事务失败时恢复；rollback 无法完成会保留现场并显式失败。
+- Service 配置和 Issue scope 变更共享 API 实例内 scope mutex；受影响 Issue 一次性 reservation、成功关闭 session 后，Service 配置才在一个数据库事务中替换。Model catalog 校验和 session stop 位于事务外，事务内再次验证 Repository、Environment 和 Deployment 引用事实。
+- 每个 Issue 必须有一条 `issue_workspaces` 行；启动和 Agent 状态提交会拒绝缺失行，不能把结构异常投影为 `not_created` 后继续执行。
+- Issue 的 `(service_id, environment_id)` 必须存在对应 Deployment，且 `status/resolved_at` 必须一致；SQLite trigger 阻止无 Deployment scope、被引用 Deployment 变更和 resolution 状态异常。
+- Issue 编辑将 metadata、CC、附件增删和一次 Agent metadata sync 合并为一个 reservation。附件文件先 quarantine/写入，数据库事务失败时恢复；rollback 或提交后 finalize 无法完成会保留现场并显式失败。
 - API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。Agent shutdown 先拒绝新 activity，等待已开始的队列任务和 reservation 完成，再尝试停止全部内存 session；即使 session stop 失败也会关闭数据库。
 
 ## 从原理进入代码

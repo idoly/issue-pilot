@@ -121,6 +121,62 @@ test("does not record queued user messages after an issue becomes resolved", asy
   assert.equal(published.length, 0);
 });
 
+test("serializes streaming messages and records only accepted steering", async () => {
+  const records: string[] = [];
+  const steers: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
+  const engine = new AgentEngine(database as never);
+  const internal = engine as unknown as { sessions: Map<string, unknown> };
+  let call = 0;
+  internal.sessions.set("issue-1", {
+    streaming: true,
+    session: {
+      sessionManager: { appendCustomEntry(_type: string, value: { message: string }) { records.push(value.message); } },
+      async steer(message: string) {
+        steers.push(message);
+        call += 1;
+        if (call === 1) await firstGate;
+        if (call === 2) throw new Error("steer_failed");
+      },
+    },
+    async stop() {},
+  });
+
+  const first = engine.send("issue-1", "first");
+  const second = engine.send("issue-1", "second");
+  await waitFor(() => steers.length === 1);
+  assert.equal(steers[0]?.includes("first"), true);
+  assert.equal(records.length, 0);
+  releaseFirst();
+  await first;
+  await assert.rejects(second, /steer_failed/);
+  assert.equal(steers[1]?.includes("second"), true);
+  assert.deepEqual(records, ["first"]);
+  assert.equal(engine.isRunning("issue-1"), false);
+});
+
+test("closes a streaming session when an accepted steer cannot be recorded", async () => {
+  let stopped = false;
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
+  const engine = new AgentEngine(database as never);
+  const internal = engine as unknown as { sessions: Map<string, unknown> };
+  internal.sessions.set("issue-1", {
+    streaming: true,
+    session: {
+      sessionManager: { appendCustomEntry() { throw new Error("record_failed"); } },
+      async steer() {},
+    },
+    async stop() { stopped = true; },
+  });
+
+  await assert.rejects(engine.send("issue-1", "accepted but not recorded"), /record_failed/);
+  assert.equal(stopped, true);
+  assert.equal(internal.sessions.has("issue-1"), false);
+  assert.equal(engine.isRunning("issue-1"), false);
+});
+
 test("a failed Agent operation disposes and revokes its SDK session", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-"));
   let stopped = false;
