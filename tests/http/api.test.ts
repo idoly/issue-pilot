@@ -56,14 +56,14 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(currentSubject, issuePilotConfig.subject);
     const users = JSON.parse((await app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string; name: string }>;
     assert.deepEqual(users.map((user) => user.subject), issuePilotConfig.users.map((user) => user.subject));
-    const switchedUser = await app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" } });
-    assert.deepEqual(await json(switchedUser), { subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" });
+    const switchedUser = await app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "hjx4403@xianhengguoji.com" } });
+    assert.deepEqual(await json(switchedUser), { subject: "hjx4403@xianhengguoji.com", name: "黄佳鑫", email: "hjx4403@xianhengguoji.com" });
     const invalidUser = await app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } });
     assert.equal(invalidUser.statusCode, 400);
     assert.equal((await json(invalidUser)).error, "invalid_current_subject");
     const people = JSON.parse((await app.inject({ method: "GET", url: "/api/people" })).body) as Array<{ subject: string }>;
     assert.ok(people.some((person) => person.subject === currentSubject));
-    assert.ok(people.some((person) => person.subject === "lyz5613@xianhengguoji.com"));
+    assert.ok(people.some((person) => person.subject === "hjx4403@xianhengguoji.com"));
 
     const configurationResponse = await app.inject({ method: "GET", url: "/api/config" });
     assert.equal(configurationResponse.statusCode, 200);

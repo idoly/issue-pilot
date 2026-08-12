@@ -4,6 +4,7 @@ const users = Object.freeze([
   Object.freeze({ subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
   Object.freeze({ subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" }),
   Object.freeze({ subject: "yx4821@xianhengguoji.com", name: "严欣", email: "yx4821@xianhengguoji.com" }),
+  Object.freeze({ subject: "hjx4403@xianhengguoji.com", name: "黄佳鑫", email: "hjx4403@xianhengguoji.com" }),
 ]);
 
 export const issuePilotConfig = Object.freeze({
