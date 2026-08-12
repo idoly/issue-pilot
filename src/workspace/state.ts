@@ -97,16 +97,26 @@ async function clearDirectory(directory: string): Promise<void> {
   }
 }
 
-export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, localPaths: string[]): Promise<void> {
-  const allowedEntries = new Set<string>();
+function managedIssueWorkspaceEntries(workspaceRoot: string, localPaths: string[]): Set<string> {
+  const expectedEntries = new Set<string>();
   for (const localPath of localPaths) {
     const resolved = path.resolve(localPath);
     if (path.dirname(resolved) !== workspaceRoot) throw new Error("workspace_path_outside_issue_root");
-    allowedEntries.add(path.basename(resolved));
+    expectedEntries.add(path.basename(resolved));
   }
-  for (const entry of await readdir(workspaceRoot, { withFileTypes: true })) {
-    if (!allowedEntries.has(entry.name)) throw new Error("workspace_has_untracked_files");
-  }
+  if (expectedEntries.size !== localPaths.length) throw new Error("workspace_repository_missing");
+  return expectedEntries;
+}
+
+export function assertManagedIssueWorkspacePaths(workspaceRoot: string, localPaths: string[]): void {
+  managedIssueWorkspaceEntries(workspaceRoot, localPaths);
+}
+
+export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, localPaths: string[]): Promise<void> {
+  const expectedEntries = managedIssueWorkspaceEntries(workspaceRoot, localPaths);
+  const entries = await readdir(workspaceRoot, { withFileTypes: true });
+  if (entries.some((entry) => !expectedEntries.has(entry.name))) throw new Error("workspace_has_untracked_files");
+  if (entries.some((entry) => !entry.isDirectory()) || entries.length !== expectedEntries.size) throw new Error("workspace_repository_missing");
 }
 
 export async function pruneState(stateRoot: string, issueKeys: string[]): Promise<void> {

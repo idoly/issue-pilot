@@ -57,7 +57,7 @@ Web 负责过滤选项，API 再次验证。直接调用 API 也不能给 prod/t
 - Prod/test 下一轮使用最新列表和当前 Deployment 分支。
 - 活动 dev 下一轮补入新增 Repository；新增仓库使用当前 Deployment 分支，已有仓库继续保留该 Issue 的历史 `base_branch`。
 - 被删除 Repository 的 clean dev worktree 可以在下一次准备时移除。
-- 删除前会先检查全部待移除 worktree；任意一个 dirty 时准备失败，并完整保留所有待移除 worktree 和数据库记录。
+- 删除前会先检查全部待移除 worktree；任意一个 dirty 时准备失败。Git 删除或数据库行更新中途失败时，已删除项会从原本地 branch commit 回滚，保留全部待移除 worktree 和数据库记录。
 - Released dev 在重新打开前保留其历史 Repository 集合；不要仅因当前 Service 仓库更多就直接回填数据库。
 - 数据库 `local_path` 与当前推导路径不一致时明确失败，不自动移动目录。
 

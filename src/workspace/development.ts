@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { environments, issueRepositories, issueWorkspaces, issues } from "../db/schema.ts";
+import type { IssueType } from "../domain/contracts.ts";
 import { CodeServerManager } from "./code-server.ts";
 import { repositoryWorkspaceNames, WorktreeManager } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
@@ -9,6 +10,12 @@ import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RuntimePreparationR
 import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
 type CodeServer = Pick<CodeServerManager, "ensure">;
+
+export function developmentWorktreeMode(issueType: IssueType): "hotfix" | "feature" {
+  if (issueType === "defect_fix") return "hotfix";
+  if (issueType === "feature_development") return "feature";
+  throw new Error("unsupported_dev_issue_type");
+}
 
 export async function prepareDevelopmentIssueRuntime(
   database: Database,

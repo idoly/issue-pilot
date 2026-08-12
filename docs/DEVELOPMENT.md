@@ -167,10 +167,13 @@ Repository state 必须通过 `classifyRepositoryState()` 判断。不要在 Age
 Workspace release 必须继续拒绝：
 
 - Dirty 或 untracked Git worktree。
-- Agent running/busy。
-- 数据库外的根目录项。
+- Issue 尚未 resolved，或 Agent running/busy。
+- 数据库外的根目录项，或数据库登记但实际缺失的 Repository 目录。
+- 空、mixed 或其他无效 Repository state。
 - 路径不符合当前推导规则。
 - 非 dev Issue。
+
+只有全部受管 worktree 已删除、但数据库仍是完整 `development_workspace` 的中断窗口可以收敛为 released snapshot；部分目录缺失不能自动修复。
 
 Git tests 使用临时本地 remote 和真实 Git 命令，至少覆盖 success、dirty refusal、missing ref、重复准备和 cold-start reconstruction。`tests/workspace/deployment.test.ts` 单独覆盖 Deployment 仓库顺序、完整性和 Service 归属。
 

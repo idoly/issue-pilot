@@ -15,7 +15,7 @@ import { agentSessions, environments, issueAttachments, issueRepositories, issue
 import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal } from "../../src/workspace/lifecycle.ts";
-import { issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
+import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -203,24 +203,120 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const [restoredWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(restoredWorkspace!.status, "ready");
     assert.equal(restoredWorkspace!.codeServerReady, true);
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "issue_not_resolved");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_not_resolved");
+    await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
+
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    const lifecycleWorktrees = (lifecycle as unknown as { worktrees: WorktreeManager }).worktrees;
+    const removeWorktree = lifecycleWorktrees.remove.bind(lifecycleWorktrees);
+    let removalCount = 0;
+    lifecycleWorktrees.remove = async (url, workspacePath) => {
+      removalCount += 1;
+      if (removalCount === 2) await writeFile(path.join(workspacePath, "concurrent-change.txt"), "preserve\n", "utf8");
+      return removeWorktree(url, workspacePath);
+    };
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
+    lifecycleWorktrees.remove = removeWorktree;
+    for (const repository of restoredRows) {
+      await access(repository.localPath!);
+      assert.equal(await git(["-C", repository.localPath!, "branch", "--show-current"]), repository.workingBranch);
+    }
+    const concurrentChange = path.join(restoredRows[1]!.localPath!, "concurrent-change.txt");
+    assert.equal(await readFile(concurrentChange, "utf8"), "preserve\n");
+    await unlink(concurrentChange);
+    const rowsAfterRollback = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(rowsAfterRollback.map((repository) => repository.localPath).sort(), restoredRows.map((repository) => repository.localPath).sort());
+
+    removalCount = 0;
+    const concurrentRootEntry = path.join(issueWorkspaceRoot(root, issue!.key), "concurrent-root.txt");
+    lifecycleWorktrees.remove = async (url, workspacePath) => {
+      removalCount += 1;
+      const commit = await removeWorktree(url, workspacePath);
+      if (removalCount === restoredRows.length) await writeFile(concurrentRootEntry, "preserve root entry\n", "utf8");
+      return commit;
+    };
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_untracked_files");
+    lifecycleWorktrees.remove = removeWorktree;
+    assert.equal(await readFile(concurrentRootEntry, "utf8"), "preserve root entry\n");
+    await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
+    await unlink(concurrentRootEntry);
+
+    const lifecycleInternal = lifecycle as unknown as { markReleased(issueId: string): Promise<void> };
+    const markReleased = lifecycleInternal.markReleased.bind(lifecycle);
+    lifecycleInternal.markReleased = async () => { throw new Error("simulated_release_transaction_failure"); };
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), /simulated_release_transaction_failure/);
+    lifecycleInternal.markReleased = markReleased;
+    for (const repository of restoredRows) {
+      await access(repository.localPath!);
+      assert.equal(await git(["-C", repository.localPath!, "branch", "--show-current"]), repository.workingBranch);
+    }
+    const rowsAfterTransactionRollback = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(rowsAfterTransactionRollback.map((repository) => repository.localPath).sort(), restoredRows.map((repository) => repository.localPath).sort());
+
+    const restoredByUrl = new Map(restoredRows.map((repository) => [repository.url, repository]));
+    const missingRepository = restoredByUrl.get(remotes[1]!)!;
+    await worktrees.remove(missingRepository.url, missingRepository.localPath!);
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_repository_missing");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_repository_missing");
+    await access(restoredByUrl.get(remotes[0]!)!.localPath!);
+    const repairedRepository = await worktrees.prepare({
+      issueKey: issue!.key,
+      workspaceName: "beta",
+      url: missingRepository.url,
+      baseBranch: missingRepository.baseBranch,
+      mode: "hotfix",
+      workingBranch: missingRepository.workingBranch!,
+      existingBaseCommit: missingRepository.commitBefore!,
+    });
+    assert.equal(repairedRepository.workspacePath, missingRepository.localPath);
+
+    await database.db.update(issueRepositories).set({ localPath: null }).where(eq(issueRepositories.id, missingRepository.id));
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "development_repository_state_invalid");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "development_repository_state_invalid");
+    await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
+    await database.db.update(issueRepositories).set({ localPath: missingRepository.localPath }).where(eq(issueRepositories.id, missingRepository.id));
+
+    await database.db.delete(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "development_repository_state_invalid");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "development_repository_state_invalid");
+    await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
+    await database.db.insert(issueRepositories).values(restoredRows);
+
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    for (const repository of restoredRows) await worktrees.remove(repository.url, repository.localPath!);
+    await rm(issueWorkspaceRoot(root, issue!.key), { recursive: true, force: true });
+    await database.db.update(issueWorkspaces).set({ status: "running" }).where(eq(issueWorkspaces.issueId, issue!.id));
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_busy");
+    assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
+    await database.db.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, issue!.id));
+    assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, true);
+    const interruptedRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.equal(classifyRepositoryState(interruptedRows), "development_snapshot");
+    assert.equal((await lifecycle.reopenIssue(issue!.id)).status, "open");
 
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
     assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, false);
 
     const reconstruct = async () => {
-      const repository = (await database.db.select().from(issueRepositories).where(eq(issueRepositories.url, remotes[0]!)).limit(1))[0]!;
-      const restored = await worktrees.prepare({
-        issueKey: issue!.key,
-        workspaceName: "alpha",
-        url: repository.url,
-        baseBranch: repository.baseBranch,
-        mode: "hotfix",
-        workingBranch: repository.workingBranch!,
-        existingBaseCommit: repository.commitBefore!,
-      });
-      await database.db.update(issueRepositories).set({ localPath: restored.workspacePath }).where(eq(issueRepositories.id, repository.id));
-      assert.equal(await git(["-C", restored.workspacePath, "branch", "--show-current"]), repository.workingBranch);
-      return restored;
+      const repositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+      const reconstructed = [];
+      for (const repository of repositories) {
+        const workspaceName = repository.url === remotes[0] ? "alpha" : "beta";
+        const restored = await worktrees.prepare({
+          issueKey: issue!.key,
+          workspaceName,
+          url: repository.url,
+          baseBranch: repository.baseBranch,
+          mode: "hotfix",
+          workingBranch: repository.workingBranch!,
+          existingBaseCommit: repository.commitBefore!,
+        });
+        await database.db.update(issueRepositories).set({ localPath: restored.workspacePath }).where(eq(issueRepositories.id, repository.id));
+        assert.equal(await git(["-C", restored.workspacePath, "branch", "--show-current"]), repository.workingBranch);
+        reconstructed.push(restored);
+      }
+      return reconstructed;
     };
 
     await reconstruct();

@@ -129,12 +129,12 @@ Workspace policy 集中在根目录 `issue-pilot.config.ts`：
 
 - Agent 没有运行。
 - Workspace 状态不是 `preparing` 或 `running`。
-- Workspace 根目录只包含数据库登记的 Repository。
-- 每个 Git worktree 都没有 modified 或 untracked 文件。
+- Workspace 根目录与数据库登记的 Repository 精确对应：没有额外项，也不缺少任何目录。
+- Repository state 必须是完整的 `development_workspace`，每个 Git worktree 都没有 modified 或 untracked 文件。
 
 Retention 先处理超过保留时间的工单。总量仍高于 high-water 时，再按 workspace 最近活动时间从旧到新释放，直到 target。
 
-Release 成功后，依赖和构建输出随 worktree 删除；本地工作分支、附件、Pi JSONL 和 session binding 保留，并立即生成只读 branch runtime。
+Release 会先预检全部 Repository，再逐个删除 worktree。删除中途失败时，已删除项会从本地 Issue branch 的原 commit 回滚；全部删除成功后才更新数据库。Release 成功后，依赖和构建输出随 worktree 删除；本地工作分支、附件、Pi JSONL 和 session binding 保留，并立即生成只读 branch runtime。
 
 ### 查看空间
 
@@ -160,16 +160,20 @@ curl -fsS -X DELETE \
   http://127.0.0.1:3000/api/issues/ISSUE-20260807-002/workspace
 ```
 
-该 API 只接受 dev Issue。它与自动回收使用完全相同的预检，不会强制删除 dirty workspace。
+该 API 只接受 resolved dev Issue。它与自动回收使用完全相同的预检，不会强制删除 dirty workspace。
 
 ### 常见拒绝原因
 
 | 原因 | 含义 | 处理 |
 | --- | --- | --- |
+| `issue_not_resolved` | 工单尚未解决 | 先完成处理并确认解决；未解决工单不能释放 workspace |
 | `issue_already_running` | Agent 仍在执行 | 等待完成或正常停止 Agent |
 | `workspace_busy` | Workspace 状态 busy | 检查 API 日志和 Issue 状态 |
 | `workspace_has_changes` | Git modified/untracked | 检查、提交或人工归档 |
 | `workspace_has_untracked_files` | Issue workspace 根目录有未知项 | 核对目录所有权 |
+| `workspace_repository_missing` | 数据库登记的 Repository 目录缺失或不是目录 | 保留数据库、剩余目录和 bare ref，检查是否发生了人工或部分删除 |
+| `development_repository_state_invalid` | Repository 行为空、mixed 或不符合完整 dev state | 保留现场，核对 `local_path`、`working_branch` 和目录 |
+| `workspace_release_rollback_failed` | Release 中途失败，且已删除 worktree 无法从原本地 branch commit 完整恢复 | 停止自动操作，备份数据库、workspace 和 bare store 后逐项核对 |
 | `workspace_path_does_not_match_repository` | DB path 不符合当前命名 | 保留现场，释放后按当前名称重建 |
 | `workspace_not_development` | 对 prod/test 调用了 release | 不需要释放；它们没有 dev workspace |
 

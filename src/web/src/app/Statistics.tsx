@@ -75,6 +75,8 @@ export function Statistics() {
       workspace_busy: "Agent 运行中",
       workspace_has_changes: "存在未提交改动",
       workspace_has_untracked_files: "存在未知文件",
+      workspace_repository_missing: "仓库目录缺失",
+      development_repository_state_invalid: "仓库状态异常",
       workspace_path_outside_issue_root: "路径异常",
     };
     return workspace.blockedReason ? (labels[workspace.blockedReason] ?? "安全检查未通过") : "安全检查未通过";

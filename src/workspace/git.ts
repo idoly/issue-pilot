@@ -38,6 +38,38 @@ export interface PreparedWorktree {
   baseCommit: string;
 }
 
+export interface RestoreWorktreeInput {
+  issueKey: string;
+  workspaceName: string;
+  url: string;
+  mode: "hotfix" | "feature";
+  workingBranch: string;
+  expectedCommit: string;
+  workspacePath: string;
+}
+
+export interface RemoveWorktreeBatchInput {
+  issueKey: string;
+  mode: "hotfix" | "feature";
+  worktrees: Array<Omit<RestoreWorktreeInput, "issueKey" | "mode" | "expectedCommit">>;
+  finalize?: () => Promise<void>;
+}
+
+export class WorktreeRemovalFailure extends Error {
+  readonly commit: string;
+
+  constructor(commit: string, cause: unknown) {
+    super("worktree_remove_failed", { cause });
+    this.commit = commit;
+  }
+}
+
+export class WorktreeRollbackFailure extends Error {
+  constructor(cause: unknown) {
+    super("worktree_rollback_failed", { cause });
+  }
+}
+
 function safePathSegment(value: string): string {
   const safe = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!safe) throw new Error("invalid_workspace_segment");
@@ -79,24 +111,28 @@ export class WorktreeManager {
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
-  async assertClean(workspacePath: string): Promise<boolean> {
+  async assertClean(workspacePath: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
-    if (!await pathExists(resolvedWorkspace)) return false;
+    if (!await pathExists(resolvedWorkspace)) throw new Error("workspace_repository_missing");
     const dirty = await execFileAsync("git", ["-C", resolvedWorkspace, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim());
     if (dirty) throw new Error("workspace_has_changes");
-    return true;
   }
 
-  async remove(url: string, workspacePath: string): Promise<void> {
+  async remove(url: string, workspacePath: string): Promise<string> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
-    await this.serialized(repositoryKey, async () => {
+    return this.serialized(repositoryKey, async () => {
       const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-      if (!await this.assertClean(resolvedWorkspace)) {
-        if (await pathExists(cachePath)) await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
-        return;
+      await this.assertClean(resolvedWorkspace);
+      const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
+      try {
+        await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
+      } catch (error) {
+        if (await pathExists(resolvedWorkspace)) throw error;
+        try { await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]); }
+        catch (pruneError) { throw new WorktreeRemovalFailure(commit, new AggregateError([error, pruneError], "worktree_remove_failed")); }
       }
-      await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
+      return commit;
     });
   }
 
@@ -112,6 +148,38 @@ export class WorktreeManager {
     this.validateRepositoryInput(input);
     const repositoryKey = repositoryHash(input.url, 20);
     return this.serialized(repositoryKey, () => this.prepareLocked(input, issueKey, repositoryKey));
+  }
+
+  async restoreLocal(input: RestoreWorktreeInput): Promise<void> {
+    const issueKey = normalizeIssueKey(input.issueKey);
+    if (input.url.startsWith("-")) throw new Error("invalid_repository_configuration");
+    const repositoryKey = repositoryHash(input.url, 20);
+    return this.serialized(repositoryKey, () => this.restoreLocalLocked(input, issueKey, repositoryKey));
+  }
+
+  async removeBatch(input: RemoveWorktreeBatchInput): Promise<void> {
+    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.workspacePath)));
+    const removed: Array<{ worktree: RemoveWorktreeBatchInput["worktrees"][number]; commit: string }> = [];
+    try {
+      for (const worktree of input.worktrees) {
+        try {
+          const commit = await this.remove(worktree.url, worktree.workspacePath);
+          removed.push({ worktree, commit });
+        } catch (error) {
+          if (error instanceof WorktreeRemovalFailure) removed.push({ worktree, commit: error.commit });
+          throw error;
+        }
+      }
+      await input.finalize?.();
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      for (const { worktree, commit } of removed.reverse()) {
+        try { await this.restoreLocal({ issueKey: input.issueKey, mode: input.mode, expectedCommit: commit, ...worktree }); }
+        catch (rollbackError) { rollbackErrors.push(rollbackError); }
+      }
+      if (rollbackErrors.length) throw new WorktreeRollbackFailure(new AggregateError([error, ...rollbackErrors], "worktree_rollback_failed"));
+      throw error;
+    }
   }
 
   async prepareShared(input: PrepareSharedCheckoutInput): Promise<PreparedWorktree> {
@@ -185,6 +253,21 @@ export class WorktreeManager {
       await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
     }
     return workspacePath;
+  }
+
+  private async restoreLocalLocked(input: RestoreWorktreeInput, issueKey: string, repositoryKey: string): Promise<void> {
+    const cachePath = resolve(this.repositoriesRoot, repositoryKey);
+    if (!await pathExists(cachePath)) throw new Error("repository_cache_not_found");
+    const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
+    const workspacePath = this.resolveIssueWorkspacePath(issueRoot, input.workspaceName, input.workspacePath);
+    if (await pathExists(workspacePath)) throw new Error("workspace_path_already_exists");
+    await this.git(["check-ref-format", "--branch", input.workingBranch]);
+    if (!input.workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
+    const commit = (await this.git(["-C", cachePath, "rev-parse", `refs/heads/${input.workingBranch}`])).trim();
+    if (commit !== input.expectedCommit) throw new Error("working_branch_changed_during_release");
+    await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
+    await mkdir(dirname(workspacePath), { recursive: true });
+    await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", workspacePath, input.workingBranch]);
   }
 
   private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {

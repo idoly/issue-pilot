@@ -34,7 +34,7 @@ async function createRemote(root: string): Promise<{ source: string; remotes: [s
   return { source, remotes };
 }
 
-test("preflights every removed development repository before deleting worktrees", async () => {
+test("preserves removed development repositories when preflight or finalization fails", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-removal-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
@@ -79,6 +79,27 @@ test("preflights every removed development repository before deleting worktrees"
     await access(dirtyRemovedPath);
     const retained = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.deepEqual(retained.map((repository) => repository.url).sort(), [...remotes].sort());
+
+    await rm(path.join(dirtyRemovedPath, "untracked.txt"));
+    const engineDatabase = (engine as unknown as { database: { delete(table: unknown): unknown } }).database;
+    const deleteRows = engineDatabase.delete.bind(engineDatabase);
+    let failRepositoryDelete = true;
+    engineDatabase.delete = ((table: unknown) => {
+      if (failRepositoryDelete && table === issueRepositories) {
+        failRepositoryDelete = false;
+        throw new Error("simulated_repository_delete_failure");
+      }
+      return deleteRows(table);
+    }) as typeof engineDatabase.delete;
+    await assert.rejects(internal.run(issue!.id), /simulated_repository_delete_failure/);
+    await Promise.all([access(firstRemovedPath), access(dirtyRemovedPath)]);
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map((repository) => repository.url).sort(), [...remotes].sort());
+
+    engineDatabase.delete = deleteRows;
+    await internal.run(issue!.id);
+    await assert.rejects(access(firstRemovedPath));
+    await assert.rejects(access(dirtyRemovedPath));
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map((repository) => repository.url), [remotes[0]]);
     await engine.close();
   } finally {
     await database.close();

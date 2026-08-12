@@ -10,6 +10,7 @@ import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
 import { CodeServerManager } from "../workspace/code-server.ts";
 import { loadDeploymentRepositories } from "../workspace/deployment.ts";
+import { developmentWorktreeMode } from "../workspace/development.ts";
 import { prepareProjectWrappers } from "../workspace/project-wrappers.ts";
 import { classifyRepositoryState, issueAttachmentRoot, issueSessionRoot, issueWorkspaceRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
@@ -56,10 +57,7 @@ class KeyedSerialQueue {
 }
 
 export function repositoryPreparationMode(environmentKind: EnvironmentKind, issueType: IssueType): "shared" | "hotfix" | "feature" {
-  if (environmentKind !== "dev") return "shared";
-  if (issueType === "defect_fix") return "hotfix";
-  if (issueType === "feature_development") return "feature";
-  throw new Error("unsupported_dev_issue_type");
+  return environmentKind === "dev" ? developmentWorktreeMode(issueType) : "shared";
 }
 
 export class AgentEngine implements AgentController {
@@ -168,16 +166,28 @@ export class AgentEngine implements AgentController {
     const sharedRepositories = preparationMode === "shared";
     const repositoryUrls = new Set(repositoryRows.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
-    if (sharedRepositories && existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
-    await Promise.all(removedRepositories.flatMap((repository) => repository.localPath ? [this.worktreeManager.assertClean(repository.localPath)] : []));
-    for (const repository of removedRepositories) {
-      if (repository.localPath) await this.worktreeManager.remove(repository.url, repository.localPath);
-    }
-    if (removedRepositories.length) {
+    const existingRepositoryState = existingRepositoryRows.length ? classifyRepositoryState(existingRepositoryRows) : undefined;
+    if (sharedRepositories && existingRepositoryState && existingRepositoryState !== "read_only") throw new Error("readonly_repository_state_invalid");
+    if (!sharedRepositories && existingRepositoryState && existingRepositoryState !== "development_workspace") throw new Error("development_repository_state_invalid");
+
+    const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
+    const existingWorkspaceNames = repositoryWorkspaceNames(existingRepositoryRows.map((repository) => repository.url));
+    if (removedRepositories.some((repository) => repository.localPath)) {
+      await this.worktreeManager.removeBatch({
+        issueKey: issue.key,
+        mode: preparationMode === "shared" ? developmentWorktreeMode(issue.type) : preparationMode,
+        worktrees: removedRepositories.map((repository) => ({
+          workspaceName: existingWorkspaceNames.get(repository.url)!,
+          url: repository.url,
+          workingBranch: repository.workingBranch!,
+          workspacePath: repository.localPath!,
+        })),
+        finalize: async () => { await this.database.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls]))); },
+      });
+    } else if (removedRepositories.length) {
       await this.database.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, [...repositoryUrls])));
     }
 
-    const existingRepositoryByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
     const workspaceNames = repositoryWorkspaceNames(repositoryRows.map(({ repository }) => repository.url));
     const prepared: Array<{ name: string; workspace: Awaited<ReturnType<WorktreeManager["prepare"]>> }> = [];
     for (const { repository, baseBranch } of repositoryRows) {

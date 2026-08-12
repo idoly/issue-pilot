@@ -6,7 +6,7 @@ import { basename, join, relative } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { repositoryWorkspaceNames, WorktreeManager } from "../../src/workspace/git.ts";
+import { repositoryWorkspaceNames, WorktreeManager, WorktreeRemovalFailure } from "../../src/workspace/git.ts";
 import { sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -90,8 +90,76 @@ test("shares immutable latest baselines for read-only environments and creates p
     assert.equal(await git(["-C", unexpected.workspacePath, "branch", "--show-current"]), "hotfix-issue-20260805-013");
     await assert.rejects(worktreeManager.remove(remote, unexpected.workspacePath), /workspace_has_changes/);
     await unlink(join(unexpected.workspacePath, "uncommitted.txt"));
-    await worktreeManager.remove(remote, unexpected.workspacePath);
+    const unexpectedCommit = await git(["-C", unexpected.workspacePath, "rev-parse", "HEAD"]);
+    assert.equal(await worktreeManager.remove(remote, unexpected.workspacePath), unexpectedCommit);
     await assert.rejects(access(unexpected.workspacePath));
+    await assert.rejects(worktreeManager.restoreLocal({
+      issueKey: "ISSUE-20260805-013",
+      workspaceName: "unexpected-name",
+      url: remote,
+      mode: "hotfix",
+      workingBranch: unexpected.workingBranch!,
+      expectedCommit: "0".repeat(40),
+      workspacePath: unexpected.workspacePath,
+    }), /working_branch_changed_during_release/);
+    await worktreeManager.restoreLocal({
+      issueKey: "ISSUE-20260805-013",
+      workspaceName: "unexpected-name",
+      url: remote,
+      mode: "hotfix",
+      workingBranch: unexpected.workingBranch!,
+      expectedCommit: unexpectedCommit,
+      workspacePath: unexpected.workspacePath,
+    });
+    assert.equal(await git(["-C", unexpected.workspacePath, "branch", "--show-current"]), unexpected.workingBranch);
+
+    const internal = worktreeManager as unknown as { git(args: string[]): Promise<string> };
+    const runGit = internal.git.bind(worktreeManager);
+    let simulatedRemoveFailure = false;
+    internal.git = async (args) => {
+      if (!simulatedRemoveFailure && args.includes("worktree") && args.includes("remove")) {
+        simulatedRemoveFailure = true;
+        await rm(unexpected.workspacePath, { recursive: true, force: true });
+        throw new Error("simulated_remove_failure");
+      }
+      return runGit(args);
+    };
+    assert.equal(await worktreeManager.remove(remote, unexpected.workspacePath), unexpectedCommit);
+    internal.git = runGit;
+    await assert.rejects(access(unexpected.workspacePath));
+    await worktreeManager.restoreLocal({
+      issueKey: "ISSUE-20260805-013",
+      workspaceName: "unexpected-name",
+      url: remote,
+      mode: "hotfix",
+      workingBranch: unexpected.workingBranch!,
+      expectedCommit: unexpectedCommit,
+      workspacePath: unexpected.workspacePath,
+    });
+    assert.equal(await git(["-C", unexpected.workspacePath, "rev-parse", "HEAD"]), unexpectedCommit);
+
+    let failPrune = false;
+    internal.git = async (args) => {
+      if (args.includes("worktree") && args.includes("remove")) {
+        await rm(unexpected.workspacePath, { recursive: true, force: true });
+        failPrune = true;
+        throw new Error("simulated_remove_failure");
+      }
+      if (failPrune && args.includes("worktree") && args.includes("prune")) throw new Error("simulated_prune_failure");
+      return runGit(args);
+    };
+    await assert.rejects(worktreeManager.remove(remote, unexpected.workspacePath), (error: unknown) => error instanceof WorktreeRemovalFailure && error.commit === unexpectedCommit);
+    internal.git = runGit;
+    await worktreeManager.restoreLocal({
+      issueKey: "ISSUE-20260805-013",
+      workspaceName: "unexpected-name",
+      url: remote,
+      mode: "hotfix",
+      workingBranch: unexpected.workingBranch!,
+      expectedCommit: unexpectedCommit,
+      workspacePath: unexpected.workspacePath,
+    });
+    assert.equal(await git(["-C", unexpected.workspacePath, "rev-parse", "HEAD"]), unexpectedCommit);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

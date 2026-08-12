@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -11,11 +11,11 @@ import type { Database } from "../db/client.ts";
 import { environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { CodeServerManager } from "./code-server.ts";
-import { prepareDevelopmentIssueRuntime } from "./development.ts";
-import { repositoryWorkspaceNames, WorktreeManager } from "./git.ts";
+import { developmentWorktreeMode, prepareDevelopmentIssueRuntime } from "./development.ts";
+import { repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
 import { prepareIssueRuntime } from "./runtime.ts";
-import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
+import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -210,8 +210,9 @@ export class WorkspaceLifecycleManager {
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
     if (await pathExists(workspaceRoot)) throw new WorkspaceRestoreRefusal("workspace_path_already_exists");
 
-    const mode = issue.type === "defect_fix" ? "hotfix" : issue.type === "feature_development" ? "feature" : null;
-    if (!mode) throw new WorkspaceRestoreRefusal("unsupported_dev_issue_type");
+    let mode: ReturnType<typeof developmentWorktreeMode>;
+    try { mode = developmentWorktreeMode(issue.type); }
+    catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
     const names = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
     const prepared: Array<{ repository: IssueRepository; name: string; workspacePath: string }> = [];
     try {
@@ -268,28 +269,49 @@ export class WorkspaceLifecycleManager {
     const { issue, workspace } = issueRow;
     if (issueRow.environmentKind !== "dev") throw new WorkspaceReleaseRefusal("workspace_not_development");
     const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+    const repositoryState = classifyRepositoryState(repositories);
     const inspection = await this.inspectLocked(issue, workspace, repositories);
+    if (["issue_not_resolved", "issue_already_running", "workspace_busy"].includes(inspection.blockedReason ?? "")) throw new WorkspaceReleaseRefusal(inspection.blockedReason!);
+    if (repositoryState === "development_snapshot") {
+      if (inspection.blockedReason !== "workspace_missing") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
+      if (!workspace?.codeServerReady) await this.restoreDevelopmentRuntime(issue);
+      return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
+    }
+    if (repositoryState !== "development_workspace") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
     if (inspection.blockedReason === "workspace_missing") {
-      if (!repositories.length || (workspace?.codeServerReady && classifyRepositoryState(repositories) === "development_snapshot")) {
-        return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
-      }
+      try { assertManagedIssueWorkspacePaths(issueWorkspaceRoot(this.stateRoot, issue.key), repositories.map((repository) => repository.localPath!)); }
+      catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
       await this.markReleased(issue.id);
       await this.restoreDevelopmentRuntime(issue);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
     }
     if (!inspection.releasable) throw new WorkspaceReleaseRefusal(inspection.blockedReason ?? "workspace_not_releasable");
+    let mode: ReturnType<typeof developmentWorktreeMode>;
+    try { mode = developmentWorktreeMode(issue.type); }
+    catch (error) { throw new WorkspaceReleaseRefusal(errorMessage(error)); }
     await this.engine.closeSession(issue.id);
-    for (const repository of repositories) {
-      if (!repository.localPath) continue;
-      try {
-        await this.worktrees.remove(repository.url, repository.localPath);
-      } catch (error) {
-        if (error instanceof Error && error.message === "workspace_has_changes") throw new WorkspaceReleaseRefusal(error.message);
-        throw error;
-      }
+    const names = repositoryWorkspaceNames(repositories.map((repository) => repository.url));
+    try {
+      await this.worktrees.removeBatch({
+        issueKey: issue.key,
+        mode,
+        worktrees: repositories.map((repository) => ({
+          workspaceName: names.get(repository.url)!,
+          url: repository.url,
+          workingBranch: repository.workingBranch!,
+          workspacePath: repository.localPath!,
+        })),
+        finalize: async () => {
+          await rmdir(issueWorkspaceRoot(this.stateRoot, issue.key));
+          await this.markReleased(issue.id);
+        },
+      });
+    } catch (error) {
+      if (error instanceof WorktreeRollbackFailure) throw new WorkspaceReleaseRefusal("workspace_release_rollback_failed");
+      if (error instanceof Error && ["workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new WorkspaceReleaseRefusal(error.message);
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOTEMPTY") throw new WorkspaceReleaseRefusal("workspace_has_untracked_files");
+      throw error;
     }
-    await rm(issueWorkspaceRoot(this.stateRoot, issue.key), { recursive: true, force: true });
-    await this.markReleased(issue.id);
     await this.restoreDevelopmentRuntime(issue);
     return { issueKey: issue.key, releasedBytes: inspection.bytes, alreadyReleased: false };
   }
@@ -314,16 +336,16 @@ export class WorkspaceLifecycleManager {
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
     const bytes = await directoryBytes(workspaceRoot);
     let blockedReason: string | null = null;
-    if (!await pathExists(workspaceRoot)) blockedReason = "workspace_missing";
+    if (issue.status !== "resolved") blockedReason = "issue_not_resolved";
     else if (this.engine.isRunning(issue.id)) blockedReason = "issue_already_running";
     else if (workspace && isWorkspaceBusy(workspace.status)) blockedReason = "workspace_busy";
+    else if (!await pathExists(workspaceRoot)) blockedReason = "workspace_missing";
     else {
       const repositories = knownRepositories ?? await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
-      try {
-        await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.flatMap((repository) => repository.localPath ? [repository.localPath] : []));
-        for (const repository of repositories) {
-          if (repository.localPath) await this.worktrees.assertClean(repository.localPath);
-        }
+      if (classifyRepositoryState(repositories) !== "development_workspace") blockedReason = "development_repository_state_invalid";
+      else try {
+        await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
+        for (const repository of repositories) await this.worktrees.assertClean(repository.localPath!);
       } catch (error) {
         blockedReason = errorMessage(error);
       }

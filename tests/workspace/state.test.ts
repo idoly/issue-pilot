@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { classifyRepositoryState, pruneState, repositoriesRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, pruneState, repositoriesRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const exec = promisify(execFile);
 
@@ -20,6 +20,29 @@ test("classifies repository persistence states without mixed-mode fallbacks", ()
     { localPath: "/workspace/other", workingBranch: "hotfix-issue-20260810-001" },
   ]), "invalid");
   assert.equal(classifyRepositoryState([{ localPath: null, workingBranch: "" }]), "invalid");
+});
+
+test("requires workspace layouts to exactly match registered repository directories", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-workspace-layout-"));
+  const workspaceRoot = path.join(root, "workspaces", "issue-20260810-001");
+  const alpha = path.join(workspaceRoot, "alpha");
+  const beta = path.join(workspaceRoot, "beta");
+  try {
+    await Promise.all([mkdir(alpha, { recursive: true }), mkdir(beta, { recursive: true })]);
+    await assertManagedIssueWorkspaceLayout(workspaceRoot, [alpha, beta]);
+
+    await rm(beta, { recursive: true });
+    await assert.rejects(assertManagedIssueWorkspaceLayout(workspaceRoot, [alpha, beta]), /workspace_repository_missing/);
+    await writeFile(beta, "not a repository directory\n", "utf8");
+    await assert.rejects(assertManagedIssueWorkspaceLayout(workspaceRoot, [alpha, beta]), /workspace_repository_missing/);
+    await rm(beta);
+
+    const extra = path.join(workspaceRoot, "extra");
+    await mkdir(extra);
+    await assert.rejects(assertManagedIssueWorkspaceLayout(workspaceRoot, [alpha]), /workspace_has_untracked_files/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("preserves unmanaged issue state before pruning generated resources", async () => {

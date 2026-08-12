@@ -55,9 +55,13 @@ vi.mock("../data/client", async (importOriginal) => {
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: async () => structuredClone(issues),
     loadWorkspaceStats: async () => ({
-      totalBytes: 4 * 1024 ** 3,
+      totalBytes: 4 * 1024 ** 3 + 2048,
       policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
-      workspaces: [{ issueKey: "ISSUE-20260810-041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null }],
+      workspaces: [
+        { issueKey: "ISSUE-20260810-041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null },
+        { issueKey: "ISSUE-20260810-090", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "workspace_repository_missing" },
+        { issueKey: "ISSUE-20260810-091", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "development_repository_state_invalid" },
+      ],
     }),
     getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
     addIssueComment: async (id: string, body: string) => {
@@ -200,6 +204,8 @@ describe("issue pilot workspace", () => {
     expect(screen.getByText("每 15 分钟自动检查 · 已解决保留 7 天")).toBeTruthy();
     expect(screen.getByText("20.0 GB")).toBeTruthy();
     expect(screen.getByText("解决后纳入")).toBeTruthy();
+    expect(screen.getByText("仓库目录缺失")).toBeTruthy();
+    expect(screen.getByText("仓库状态异常")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "个人处理情况" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
