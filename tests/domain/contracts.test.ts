@@ -15,7 +15,7 @@ test("accepts only current date-sequence issue keys", () => {
 });
 
 test("keeps the capability catalog in its shared display order", () => {
-  assert.deepEqual(CAPABILITY_KEYS, ["playwright", "nacos", "db", "dms", "redis", "mq", "es", "sls"]);
+  assert.deepEqual(CAPABILITY_KEYS, ["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"]);
 });
 
 test("keeps the busy workspace predicate in the shared domain contract", () => {

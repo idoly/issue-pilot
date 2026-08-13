@@ -30,10 +30,10 @@ vi.mock("../data/client", async (importOriginal) => {
       { key: "playwright" },
       { key: "nacos" },
       { key: "db" },
-      { key: "dms" },
       { key: "redis" },
       { key: "mq" },
       { key: "es" },
+      { key: "dms" },
       { key: "sls" },
     ],
     services: [{
@@ -251,6 +251,11 @@ describe("issue pilot workspace", () => {
     const modelButton = within(serviceDialog).getByRole("button", { name: "model" }) as HTMLButtonElement;
     expect(modelButton.disabled).toBe(true);
     expect(modelButton.getAttribute("aria-pressed")).toBe("true");
+    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
+    await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent).slice(-2)).toEqual(["dms", "sls"]));
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
+    await waitFor(() => expect(screen.queryByLabelText("sls accessKeyId 1")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "playwright" }));
     await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "model", "playwright", "nacos", "db", "dms"]));
     expect(screen.getByLabelText("playwright baseUrl 1")).toBeTruthy();

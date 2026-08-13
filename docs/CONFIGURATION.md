@@ -113,7 +113,7 @@ off, minimal, low, medium, high, xhigh, max
 固定 capability key 及顺序由 `CAPABILITY_KEYS` 唯一定义：
 
 ```text
-playwright, nacos, db, dms, redis, mq, es, sls
+playwright, nacos, db, redis, mq, es, dms, sls
 ```
 
 API 的 `capabilityCatalog`、配置页按钮、详情标签和编辑表单都按这一顺序投影。只有被选择且配置完整的 capability 才会写入 Deployment。每次 Agent session 会从保存配置创建冻结 policy；credential 留在 session 持有的配置副本中，不进入 policy 或 prompt。

@@ -13,7 +13,7 @@ const policy = createIssuePolicy({
     serviceKey: "orders",
     environmentKey: "prod",
     environmentKind: "prod",
-    capabilities: ["db", "dms", "redis"],
+    capabilities: ["db", "redis", "dms"],
     db: { deploymentId: "deployment-1" },
     dms: { deploymentId: "deployment-1", region: "cn-hangzhou", dbId: "123456", logic: false },
     redis: { deploymentId: "deployment-1" },
@@ -23,10 +23,10 @@ const policy = createIssuePolicy({
 
 test("creates only policy-selected SDK capability tools", () => {
   const tools = createCapabilityTools(policy, { db: {}, dms: {}, redis: {} });
-  assert.deepEqual(tools.map((tool) => tool.name), ["db", "dms", "redis"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["db", "redis", "dms"]);
   assert.match(tools[0]?.promptSnippet ?? "", /read-only MySQL/);
-  assert.match(tools[1]?.promptSnippet ?? "", /Alibaba Cloud DMS/);
-  assert.match(tools[2]?.promptGuidelines?.[0] ?? "", /allowlisted read operations/);
+  assert.match(tools[1]?.promptGuidelines?.[0] ?? "", /allowlisted read operations/);
+  assert.match(tools[2]?.promptSnippet ?? "", /Alibaba Cloud DMS/);
 });
 
 test("SDK capability tools call the authoritative broker function directly", async () => {

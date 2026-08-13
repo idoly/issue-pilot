@@ -19,7 +19,7 @@ export function normalizeIssueKey(value: string): string {
   return normalized;
 }
 
-export const CAPABILITY_KEYS = ["playwright", "nacos", "db", "dms", "redis", "mq", "es", "sls"] as const;
+export const CAPABILITY_KEYS = ["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;

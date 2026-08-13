@@ -13,7 +13,7 @@ const policy = createIssuePolicy({
     serviceKey: "service",
     environmentKey: "test",
     environmentKind: "test",
-    capabilities: ["playwright", "nacos", "db", "dms", "redis", "mq", "es", "sls"],
+    capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"],
     playwright: { deploymentId: "deployment", baseUrl: "https://app.example.test" },
     nacos: { deploymentId: "deployment", serverUrl: "https://nacos.example.test:443", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["app.yaml"] },
     db: { deploymentId: "deployment" },
