@@ -69,6 +69,7 @@ export const issuePilotConfig = Object.freeze({
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
     containerUser: Object.freeze({ uid: 1000, gid: 1000 }),
     aliyunCli: "/usr/local/sbin/aliyun",
+    dms: Object.freeze({ endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" }),
   }),
   limits: Object.freeze({
     agentMessageChars: 50_000,

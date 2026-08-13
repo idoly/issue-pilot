@@ -4,7 +4,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { isNacosTarget, isSlsLogstore } from "../capabilities/contracts.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, isDmsDatabaseId, isDmsTenantId, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 
@@ -68,19 +68,15 @@ export function parseDatabaseConfiguration(value: unknown, required: boolean) {
   return { url, username: text(input.username, "db_username", 500), password: text(input.password, "db_password") };
 }
 
-const isDmsIdentifier = (value: string): boolean => /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n;
-
 export function parseDmsConfiguration(value: unknown, required: boolean) {
   const input = configurationInput(value, required);
   if (!input) return undefined;
-  const region = text(input.region, "dms_region", 63);
-  const dbId = text(input.dbId, "dms_db_id", 19);
-  const tid = optionalText(input.tid, 19) ?? undefined;
-  if (!SLS_REGION.test(region) || !isDmsIdentifier(dbId) || typeof input.logic !== "boolean" || (tid !== undefined && !isDmsIdentifier(tid))) throw new ApiError(400, "invalid_dms_scope");
+  const dbId = text(input.dbId, "dms_db_id", 10);
+  const tid = optionalText(input.tid, 16) ?? undefined;
+  if (!isDmsDatabaseId(dbId) || typeof input.logic !== "boolean" || (tid !== undefined && !isDmsTenantId(tid))) throw new ApiError(400, "invalid_dms_scope");
   return {
     accessKeyId: text(input.accessKeyId, "dms_access_key_id", 500),
     accessKeySecret: text(input.accessKeySecret, "dms_access_key_secret"),
-    region,
     dbId,
     logic: input.logic,
     ...(tid === undefined ? {} : { tid }),

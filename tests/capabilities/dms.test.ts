@@ -9,9 +9,9 @@ import { queryDms, validateDmsQuery } from "../../src/capabilities/dms.ts";
 import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
-const response = (rows: Array<Record<string, unknown>> = [{ order_id: "4300005076", status: "ready" }]) => ({
+const response = (rows: Array<Record<string, unknown>> = [{ order_id: "4300005076", status: "ready" }], wrapped = false) => ({
   RequestId: "request-1",
-  Results: [{ ColumnNames: ["order_id", "status"], Rows: rows, Success: true, RowCount: rows.length }],
+  Results: [{ ColumnNames: ["order_id", "status"], Rows: wrapped ? [rows] : rows, Success: true, RowCount: rows.length }],
   Success: true,
 });
 
@@ -63,13 +63,14 @@ test("queries the exact frozen DMS database through a private Aliyun CLI profile
         return { code: 0, stdout: JSON.stringify(output), stderr: "", killed };
       },
     };
-    const policy = { service: { dms: { deploymentId: "deployment-prod", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" } } } as IssuePolicy;
-    const configured = { accessKeyId: "fixture-key", accessKeySecret: "fixture-secret", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" };
-    const query = (statement = "SELECT order_id, status FROM orders LIMIT 20") => queryDms(executor, policy, { statement }, configured, undefined, { cliPath: cli });
+    const policy = { service: { dms: { deploymentId: "deployment-prod", dbId: "123456", logic: false, tid: "987654" } } } as IssuePolicy;
+    const configured = { accessKeyId: "fixture-key", accessKeySecret: "fixture-secret", dbId: "123456", logic: false, tid: "987654" };
+    const runtime = { cliPath: cli, endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" };
+    const query = (statement = "SELECT order_id, status FROM orders LIMIT 20") => queryDms(executor, policy, { statement }, configured, undefined, runtime);
 
     const result = await query();
     assert.equal(calls[0]!.command, cli);
-    assert.deepEqual(calls[0]!.args, ["dms-enterprise", "ExecuteScript", "--DbId", "123456", "--Logic", "false", "--Script", "SELECT order_id, status FROM orders LIMIT 20", "--Tid", "987654"]);
+    assert.deepEqual(calls[0]!.args, ["dms-enterprise", "ExecuteScript", "--DbId", "123456", "--Logic", "false", "--Script", "SELECT order_id, status FROM orders LIMIT 20", "--Tid", "987654", "--endpoint", "dms-enterprise.aliyuncs.com", "--secure"]);
     assert.deepEqual(calls[0]!.options.environment, { HOME: calls[0]!.options.environment?.HOME, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" });
     assert.equal(calls[0]!.options.timeout, issuePilotConfig.limits.capability.dms.executionMs);
     assert.equal(calls[0]!.profileMode, 0o600);
@@ -81,13 +82,24 @@ test("queries the exact frozen DMS database through a private Aliyun CLI profile
     assert.doesNotMatch(JSON.stringify(result.details), /fixture-key|fixture-secret/);
     assert.equal(result.details.requestId, "request-1");
 
-    await assert.rejects(queryDms(executor, policy, { statement: "SELECT 1 LIMIT 1" }, { ...configured, dbId: "654321" }, undefined, { cliPath: cli }), /dms_configuration_changed/);
+    output = response([{ order_id: "4300005077", status: "wrapped" }], true);
+    const wrappedBody = JSON.parse((await query()).content[0]!.text);
+    assert.deepEqual(wrappedBody.rows, [{ order_id: "4300005077", status: "wrapped" }]);
+
+    const logicalPolicy = { service: { dms: { ...policy.service.dms!, logic: true } } } as IssuePolicy;
+    await queryDms(executor, logicalPolicy, { statement: "SELECT 1 LIMIT 1" }, { ...configured, logic: true }, undefined, runtime);
+    assert.deepEqual(calls.at(-1)!.args.slice(2, 6), ["--DbId", "123456", "--Logic", "true"]);
+
+    await assert.rejects(queryDms(executor, policy, { statement: "SELECT 1 LIMIT 1" }, { ...configured, dbId: "654321" }, undefined, runtime), /dms_configuration_changed/);
+    await assert.rejects(queryDms(executor, policy, { statement: "SELECT 1 LIMIT 1" }, configured, undefined, { ...runtime, endpoint: "dms-enterprise.cn-hangzhou.aliyuncs.com" }), /invalid_dms_runtime/);
     killed = true;
     await assert.rejects(query(), /dms_query_failed/);
     killed = false;
     output = { ...response(), Success: false, ErrorCode: "Forbidden" };
     await assert.rejects(query(), /dms_query_failed/);
     output = { ...response(), Results: [] };
+    await assert.rejects(query(), /dms_query_invalid_response/);
+    output = { ...response(), Results: [{ ColumnNames: ["id"], Rows: [[{ id: 1 }], [{ id: 2 }]], Success: true, RowCount: 2 }] };
     await assert.rejects(query(), /dms_query_invalid_response/);
     output = response(Array.from({ length: issuePilotConfig.limits.capability.dms.rows + 1 }, (_, id) => ({ id })));
     await assert.rejects(query("SHOW TABLES"), /capability_result_too_large/);

@@ -50,10 +50,21 @@ export interface AgentFooterStats {
   autoCompact: boolean;
 }
 
+export const DMS_DATABASE_ID_MAX = 2_147_483_647;
+export const DMS_TENANT_ID_MAX = Number.MAX_SAFE_INTEGER;
+
+export function isDmsDatabaseId(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9][0-9]{0,9}$/.test(value) && Number(value) <= DMS_DATABASE_ID_MAX;
+}
+
+export function isDmsTenantId(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9][0-9]{0,15}$/.test(value) && Number(value) <= DMS_TENANT_ID_MAX;
+}
+
 export interface CapabilityConfiguration {
   nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string };
   db?: { url: string; username: string; password: string };
-  dms?: { accessKeyId: string; accessKeySecret: string; region: string; dbId: string; logic: boolean; tid?: string };
+  dms?: { accessKeyId: string; accessKeySecret: string; dbId: string; logic: boolean; tid?: string };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   playwright?: { baseUrl: string; username: string; password?: string };
   redis?: { host: string; port: number; username: string; password?: string; database: number };

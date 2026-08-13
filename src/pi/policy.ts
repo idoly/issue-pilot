@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ISSUE_TYPES_BY_ENVIRONMENT, configuredCapabilities, normalizeIssueKey, type AgentThinkingLevel, type CapabilityName, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ISSUE_TYPES_BY_ENVIRONMENT, configuredCapabilities, isDmsDatabaseId, isDmsTenantId, normalizeIssueKey, type AgentThinkingLevel, type CapabilityName, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 
 export interface RepositoryGrant {
   codeAccess: "read" | "write";
@@ -15,7 +15,7 @@ export interface ServiceGrant {
   capabilities: CapabilityName[];
   nacos?: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
   db?: { deploymentId: string };
-  dms?: { deploymentId: string; region: string; dbId: string; logic: boolean; tid?: string };
+  dms?: { deploymentId: string; dbId: string; logic: boolean; tid?: string };
   sls?: { deploymentId: string; region: string; project: string; logstores: string[] };
   playwright?: { deploymentId: string; baseUrl: string };
   redis?: { deploymentId: string };
@@ -49,10 +49,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function isDmsIdentifier(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n;
-}
-
 export function createIssuePolicy(input: {
   issueKey: string;
   issueType: IssueType;
@@ -76,7 +72,7 @@ export function createIssuePolicy(input: {
     const scope = scopes[capability];
     if (capabilities.has(capability) !== Boolean(scope) || (scope && !isNonEmptyString(scope.deploymentId))) throw new Error(`invalid_${label}_service_scope`);
   }
-  if (input.service.dms && (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(input.service.dms.region) || !isDmsIdentifier(input.service.dms.dbId) || typeof input.service.dms.logic !== "boolean" || (input.service.dms.tid !== undefined && !isDmsIdentifier(input.service.dms.tid)))) throw new Error("invalid_dms_service_scope");
+  if (input.service.dms && (!isDmsDatabaseId(input.service.dms.dbId) || typeof input.service.dms.logic !== "boolean" || (input.service.dms.tid !== undefined && !isDmsTenantId(input.service.dms.tid)))) throw new Error("invalid_dms_service_scope");
   if (input.service.mq && !isNonEmptyString(input.service.mq.virtualHost)) throw new Error("invalid_mq_service_scope");
   if (input.service.playwright) {
     let parsedUrl: URL;
@@ -151,8 +147,8 @@ function parseCapabilityScopes(config: Record<string, unknown>, deploymentId: st
   if (configObject(config, "db")) scopes.db = { deploymentId };
 
   const dms = configObject(config, "dms");
-  if (dms && isNonEmptyString(dms.region) && isNonEmptyString(dms.dbId) && typeof dms.logic === "boolean" && (dms.tid === undefined || isNonEmptyString(dms.tid))) scopes.dms = {
-    deploymentId, region: dms.region, dbId: dms.dbId, logic: dms.logic, ...(isNonEmptyString(dms.tid) ? { tid: dms.tid } : {}),
+  if (dms && isNonEmptyString(dms.dbId) && typeof dms.logic === "boolean" && (dms.tid === undefined || isNonEmptyString(dms.tid))) scopes.dms = {
+    deploymentId, dbId: dms.dbId, logic: dms.logic, ...(isNonEmptyString(dms.tid) ? { tid: dms.tid } : {}),
   };
 
   if (configObject(config, "redis")) scopes.redis = { deploymentId };

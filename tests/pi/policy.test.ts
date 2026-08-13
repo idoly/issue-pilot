@@ -43,7 +43,7 @@ test("derives credential-free capability scopes from deployment configuration", 
       agent: { provider: "provider", model: "model", thinkingLevel: "high" },
       nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders-test.yaml"], username: "reader", password: "nacos-secret" },
       db: { url: "mysql://db.example.test:3306/app", username: "reader", password: "db-secret" },
-      dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" },
+      dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: false, tid: "987654" },
     },
     serviceKey: "orders",
     environmentKey: "test",
@@ -51,7 +51,7 @@ test("derives credential-free capability scopes from deployment configuration", 
     repositories: service("test").repositories,
   });
   assert.deepEqual(policy.service.capabilities, ["nacos", "db", "dms"]);
-  assert.deepEqual(policy.service.dms, { deploymentId: "deployment-1", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" });
+  assert.deepEqual(policy.service.dms, { deploymentId: "deployment-1", dbId: "123456", logic: false, tid: "987654" });
   assert.equal(policy.model.thinkingLevel, "high");
   assert.doesNotMatch(JSON.stringify(policy), /nacos-secret|db-secret|dms-key|dms-secret|username/);
 });

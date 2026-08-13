@@ -38,7 +38,7 @@ vi.mock("../data/client", async (importOriginal) => {
     ],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" }, dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" } }],
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" }, dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: false, tid: "987654" } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }],
   };
@@ -266,11 +266,14 @@ describe("issue pilot workspace", () => {
     expect(databaseUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
     expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).value).toBe("dms-key");
     expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).value).toBe("dms-secret");
-    expect((screen.getByLabelText("dms region 1") as HTMLInputElement).value).toBe("cn-hangzhou");
+    expect(screen.queryByLabelText("dms region 1")).toBeNull();
     expect((screen.getByLabelText("dms dbId 1") as HTMLInputElement).value).toBe("123456");
     expect((screen.getByLabelText("dms tid 1") as HTMLInputElement).value).toBe("987654");
+    const databaseKind = screen.getByLabelText("dms 库类型 1");
+    expect(within(databaseKind).getByRole("radio", { name: "物理库" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.input(screen.getByLabelText("dms accessKeyId 1"), { target: { value: "dms-key-updated" } });
-    fireEvent.click(screen.getByLabelText("dms logic 1"));
+    fireEvent.click(within(databaseKind).getByRole("radio", { name: "逻辑库" }));
+    await waitFor(() => expect(within(databaseKind).getByRole("radio", { name: "逻辑库" }).getAttribute("aria-checked")).toBe("true"));
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
     const esUrl = await waitFor(() => screen.getByLabelText("es url 1"));
     expect(esUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
@@ -297,7 +300,7 @@ describe("issue pilot workspace", () => {
     expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
     expect(savedService?.deployments[0]?.db?.password).toBe("db-secret");
-    expect(savedService?.deployments[0]?.dms).toEqual({ accessKeyId: "dms-key-updated", accessKeySecret: "dms-secret", region: "cn-hangzhou", dbId: "123456", logic: true, tid: "987654" });
+    expect(savedService?.deployments[0]?.dms).toEqual({ accessKeyId: "dms-key-updated", accessKeySecret: "dms-secret", dbId: "123456", logic: true, tid: "987654" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
     expect(client.loadUsers).toHaveBeenCalledTimes(1);

@@ -132,7 +132,7 @@ API 的 `capabilityCatalog`、配置页按钮、详情标签和编辑表单都�
 | Playwright | 固定 origin 的声明式浏览器动作 | 不执行任意脚本，不跨 origin |
 | Nacos | 读取 exact Data IDs | 不模糊扫描，不写配置 |
 | MySQL | 一条只读 SQL | Read-only transaction，不接受多语句 |
-| DMS | 通过阿里云 DMS 查询一条只读 SQL | 固定 `DbId/Logic/Tid`，`SELECT` 必须显式 bounded `LIMIT` |
+| DMS | 通过阿里云 DMS 查询一条只读 SQL | 固定 `DbId/Logic/Tid`，central endpoint，`SELECT` 必须显式 bounded `LIMIT` |
 | Redis | Allowlisted read action | 不接受 arbitrary command |
 | RabbitMQ | Management metadata | 不发布或消费消息 |
 | Elasticsearch | Search、count、mapping | 不写入，不跟随 redirect |
@@ -182,23 +182,24 @@ URL 必须包含显式 port 和单段 database path，不能嵌入 credential、
 
 ## DMS
 
-DMS capability 固定使用宿主 `aliyun dms-enterprise ExecuteScript`，不是 `aliyun dms`。内置 Aliyun CLI 的 OpenAPI 操作名区分大小写，必须是 `ExecuteScript`；无需安装 `aliyun-cli-dms-enterprise` plugin。
+DMS capability 固定使用宿主 `aliyun dms-enterprise ExecuteScript`，不是 `aliyun dms`。内置 Aliyun CLI 的 OpenAPI 操作名区分大小写，必须是 `ExecuteScript`；无需安装 `aliyun-cli-dms-enterprise` plugin。DMS OpenAPI 使用 central endpoint，Issue Pilot 固定传入根配置的 `runtime.dms.endpoint`，不把 database region 当作 `ExecuteScript` 参数。
 
 | 字段 | 规则 |
 | --- | --- |
 | `accessKeyId`, `accessKeySecret` | 专用 RAM 用户的 AK，必填 |
-| `region` | DMS OpenAPI region，例如 `cn-hangzhou` |
-| `dbId` | DMS `DatabaseId`，正整数；不是 RDS instance ID 或 database name |
-| `logic` | 是否为 DMS 逻辑库；普通物理库关闭 |
-| `tid` | DMS tenant ID，正整数；单 tenant 场景可留空 |
+| `dbId` | DMS `DatabaseId`，`int32` 正整数，最大 `2147483647`；不是 RDS instance ID 或 database name |
+| `库类型` | 必填二选一；物理库发送 `Logic=false`，逻辑库发送 `Logic=true` |
+| `tid` | DMS tenant ID，可为空；填写时最大 `9007199254740991`，避免JavaScript `int64`精度丢失 |
 
-`ExecuteScript` 只适用于启用安全协同的 DMS 实例，不支持 NoSQL。阿里云侧需要同时配置：
+`ExecuteScript` 只适用于启用安全托管的 DMS 实例，不支持 NoSQL。阿里云侧需要同时配置：
 
 1. 创建专用 RAM 用户，禁用控制台密码，只创建供 Issue Pilot 使用的 AccessKey。
 2. 只授予 RAM action `dms:ExecuteScript`。该 action 的官方 RAM resource 只能是 `*`，不能靠 RAM policy 限制到单个 `DbId`。
 3. 把该 RAM 用户加入对应 DMS tenant，保持普通用户角色，不授予 DMS admin、DBA、Owner、export 或 change 权限。
 4. 在 DMS 内只授予目标生产数据库的 query 权限；敏感列继续使用 DMS 的列权限、行权限和脱敏规则。
 5. Deployment 再固定 exact `dbId`、`logic` 和 `tid`。Policy 和 client 每次调用都会重新对账，Agent 不能改目标库。
+
+官方API还有可选`RealLoginUserUid`，用于共享AK时通过DMS `AssumeUser`能力代理成另一个实际调用者。Issue Pilot不发送该参数：专用AK所属RAM用户就是DMS审计主体，避免为运行账号提升DMS管理员/AssumeUser权限，也避免把所有工单静态归因到同一个被代理用户。
 
 最小 RAM policy 结构：
 
@@ -218,10 +219,11 @@ DMS capability 固定使用宿主 `aliyun dms-enterprise ExecuteScript`，不是
 配置前可由管理员查询 tenant 和已授权数据库。所需RAM actions分别是`dms:GetUserActiveTenant`和`dms:SearchDatabase`；它们不属于Agent capability，也不应加入上述运行时最小policy。优先用管理员自己的受控身份执行；若临时授予Issue Pilot专用RAM用户，确认`Tid/DatabaseId`后立即撤回：
 
 ```bash
-aliyun dms-enterprise GetUserActiveTenant --region cn-hangzhou
+aliyun dms-enterprise GetUserActiveTenant \
+  --endpoint dms-enterprise.aliyuncs.com --secure
 
 aliyun dms-enterprise SearchDatabase \
-  --region cn-hangzhou \
+  --endpoint dms-enterprise.aliyuncs.com --secure \
   --SearchRange HAS_PERMSSION \
   --SearchTarget SINGLE_DB \
   --SearchKey orders_prod \
@@ -232,7 +234,9 @@ aliyun dms-enterprise SearchDatabase \
 
 `SELECT` 必须是单条、无 comment、以显式末尾 `LIMIT n` 结束，且 limit 不超过根配置的 500 行；不接受 `OFFSET`，未写 limit 会失败，也不会自动改写 SQL。`SHOW`、`DESCRIBE` 和普通 `EXPLAIN`可执行，但所有响应仍受 500 行、1 MiB 和 timeout 限制。DDL、DML、多语句、锁、文件/变量输出、副作用函数和 `EXPLAIN ANALYZE`都会在调用 CLI 前被拒绝。
 
-每次调用创建私有临时 Aliyun CLI profile，credential 不进入 policy、prompt 或 CLI参数。由于 Aliyun CLI 的 RPC 命令不支持从文件读取 `Script` 参数，SQL 会在命令执行期间短暂出现在宿主进程参数中；如果合规要求 SQL 也不能被本机 `ps` 观察，应改用阿里云 SDK/签名 HTTP client，而不是启用这个 CLI capability。
+每次调用创建私有临时 Aliyun CLI profile，credential 不进入 policy、prompt 或 CLI参数。当前CLI无法从location服务解析DMS regional endpoint，因此调用显式使用central `dms-enterprise.aliyuncs.com`；`runtime.dms.cliRegion`只用于临时CLI profile，不是数据库scope。由于 Aliyun CLI 的 RPC 命令不支持从文件读取 `Script` 参数，SQL 会在命令执行期间短暂出现在宿主进程参数中；如果合规要求 SQL 也不能被本机`ps`观察，应改用阿里云SDK/签名HTTP client，而不是启用这个CLI capability。
+
+官方OpenAPI schema把`Rows`定义为对象数组，但同页JSON示例额外包含一层数组包装。Client只兼容这两种明确形态，归一化后再核对`RowCount`、500行和1 MiB预算；其他嵌套结构会失败。
 
 DMS返回的生产数据和Agent对它的分析会进入该Issue的Pi JSONL，并可通过Web replay显示。Issue Pilot的SQLite、Issue目录、backup、Web入口和日志留存策略必须按生产数据敏感级别保护；不要查询不需要的列，也不要在工单中复制AccessKey或数据库credential。
 

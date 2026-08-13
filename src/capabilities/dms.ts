@@ -1,4 +1,5 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { isDmsDatabaseId, isDmsTenantId } from "../domain/contracts.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
 import { withAliyunCliProfile } from "./aliyun.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
@@ -9,6 +10,8 @@ const limits = issuePilotConfig.limits.capability.dms;
 
 interface DmsRuntime {
   cliPath: string;
+  endpoint: string;
+  cliRegion: string;
 }
 
 interface DmsScriptResult {
@@ -17,10 +20,6 @@ interface DmsScriptResult {
   Success: boolean;
   Message?: string;
   RowCount: number;
-}
-
-function positiveIdentifier(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n;
 }
 
 interface SqlToken {
@@ -87,14 +86,16 @@ function parseDmsResponse(stdout: string): { requestId: string; result: DmsScrip
   const result = rawResult as Record<string, unknown>;
   if (result.Success !== true) throw new Error("dms_query_failed");
   if (!Array.isArray(result.ColumnNames) || !result.ColumnNames.every((column) => typeof column === "string")) throw new Error("dms_query_invalid_response");
-  if (!Array.isArray(result.Rows) || !result.Rows.every((row) => row && typeof row === "object" && !Array.isArray(row))) throw new Error("dms_query_invalid_response");
-  if (!Number.isInteger(result.RowCount) || result.RowCount !== result.Rows.length) throw new Error("dms_query_invalid_response");
-  if (result.Rows.length > limits.rows) throw new Error("capability_result_too_large");
+  if (!Array.isArray(result.Rows)) throw new Error("dms_query_invalid_response");
+  const rawRows = result.Rows.length === 1 && Array.isArray(result.Rows[0]) ? result.Rows[0] : result.Rows;
+  if (!rawRows.every((row) => row && typeof row === "object" && !Array.isArray(row))) throw new Error("dms_query_invalid_response");
+  if (!Number.isSafeInteger(result.RowCount) || result.RowCount !== rawRows.length) throw new Error("dms_query_invalid_response");
+  if (rawRows.length > limits.rows) throw new Error("capability_result_too_large");
   return {
     requestId: typeof body.RequestId === "string" ? body.RequestId : "",
     result: {
       ColumnNames: result.ColumnNames,
-      Rows: result.Rows as Array<Record<string, unknown>>,
+      Rows: rawRows as Array<Record<string, unknown>>,
       Success: true,
       ...(typeof result.Message === "string" ? { Message: result.Message } : {}),
       RowCount: result.RowCount as number,
@@ -108,18 +109,19 @@ export async function queryDms(
   input: { statement: string },
   configured: Record<string, unknown>,
   signal?: AbortSignal,
-  runtime: DmsRuntime = { cliPath: issuePilotConfig.runtime.aliyunCli },
+  runtime: DmsRuntime = { cliPath: issuePilotConfig.runtime.aliyunCli, ...issuePilotConfig.runtime.dms },
 ) {
   const statement = validateDmsQuery(input.statement);
   const scope = policy.service.dms;
   if (!scope) throw new Error("dms_scope_not_granted_for_service");
-  if (configured.region !== scope.region || configured.dbId !== scope.dbId || configured.logic !== scope.logic || configured.tid !== scope.tid || typeof configured.accessKeyId !== "string" || !configured.accessKeyId || typeof configured.accessKeySecret !== "string" || !configured.accessKeySecret) throw new Error("dms_configuration_changed");
-  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(scope.region) || !positiveIdentifier(scope.dbId) || (scope.tid !== undefined && !positiveIdentifier(scope.tid))) throw new Error("invalid_dms_service_scope");
+  if (configured.dbId !== scope.dbId || configured.logic !== scope.logic || configured.tid !== scope.tid || typeof configured.accessKeyId !== "string" || !configured.accessKeyId || typeof configured.accessKeySecret !== "string" || !configured.accessKeySecret) throw new Error("dms_configuration_changed");
+  if (!isDmsDatabaseId(scope.dbId) || (scope.tid !== undefined && !isDmsTenantId(scope.tid))) throw new Error("invalid_dms_service_scope");
+  if (runtime.endpoint !== issuePilotConfig.runtime.dms.endpoint || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(runtime.cliRegion)) throw new Error("invalid_dms_runtime");
 
   return withAliyunCliProfile(runtime.cliPath, {
     accessKeyId: configured.accessKeyId,
     accessKeySecret: configured.accessKeySecret,
-    region: scope.region,
+    region: runtime.cliRegion,
   }, async (profileRoot) => {
     const args = [
       "dms-enterprise", "ExecuteScript",
@@ -127,6 +129,8 @@ export async function queryDms(
       "--Logic", String(scope.logic),
       "--Script", statement,
       ...(scope.tid === undefined ? [] : ["--Tid", scope.tid]),
+      "--endpoint", runtime.endpoint,
+      "--secure",
     ];
     const execution = await executor.execute(runtime.cliPath, args, {
       timeout: limits.executionMs,

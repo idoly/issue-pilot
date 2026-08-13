@@ -15,7 +15,7 @@ const policy = createIssuePolicy({
     environmentKind: "prod",
     capabilities: ["db", "redis", "dms"],
     db: { deploymentId: "deployment-1" },
-    dms: { deploymentId: "deployment-1", region: "cn-hangzhou", dbId: "123456", logic: false },
+    dms: { deploymentId: "deployment-1", dbId: "123456", logic: false },
     redis: { deploymentId: "deployment-1" },
     repositories: [{ codeAccess: "read", repositoryPath: "/tmp/issue-workspace/orders", baseCommit: "abc123" }],
   },

@@ -491,7 +491,7 @@ button, input, textarea { font: inherit; }
 .deployment-capability-option.selected { border-color: #176b5b; background: #eaf4f0; color: #176b5b; font-weight: 700; }
 .deployment-capabilities .deployment-capability-option { padding-inline: 6px; }
 .deployment-capability-settings, .deployment-repositories { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px 12px 12px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
-.deployment-capability-settings label, .deployment-repositories label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
+.deployment-capability-settings label, .deployment-capability-field, .deployment-repositories label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .required-field::after { content: " *"; color: #c43832; font-weight: 700; }
 .service-deployment-row > .deployment-capability-settings, .service-deployment-row > .deployment-repositories { grid-column: 1 / -1; }
 .deployment-repositories { grid-template-columns: repeat(2, minmax(0, 1fr)); }

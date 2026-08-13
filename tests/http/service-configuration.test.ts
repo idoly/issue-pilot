@@ -28,10 +28,11 @@ test("validates capability connection settings when saving page configuration", 
   assert.throws(() => parseRedisConfiguration({ host: "redis.example.test", port: 70_000, username: "", database: 0 }, true), /invalid_redis_port/);
   assert.throws(() => parseRedisConfiguration({ host: "redis.example.test", port: 6379, username: "", database: -1 }, true), /invalid_redis_database/);
   assert.throws(() => parseRabbitMqConfiguration({ host: "mq.example.test", port: 5672, managementPort: 0, username: "reader", password: "secret", virtualHost: "/" }, true), /invalid_mq_management_port/);
-  assert.deepEqual(parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" }, true), { accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "123456", logic: false, tid: "987654" });
-  assert.deepEqual(parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "123456", logic: true, tid: "" }, true), { accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "123456", logic: true });
-  assert.throws(() => parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "orders", logic: false }, true), /invalid_dms_scope/);
-  assert.throws(() => parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "123456", logic: "false" }, true), /invalid_dms_scope/);
+  assert.deepEqual(parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false, tid: "987654" }, true), { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false, tid: "987654" });
+  assert.deepEqual(parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: true, tid: "" }, true), { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: true });
+  for (const dbId of ["orders", "0", "2147483648"]) assert.throws(() => parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", dbId, logic: false }, true), /invalid_dms_scope/);
+  assert.throws(() => parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: "false" }, true), /invalid_dms_scope/);
+  assert.throws(() => parseDmsConfiguration({ accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false, tid: "9007199254740992" }, true), /invalid_dms_scope/);
 });
 
 test("requires explicit Nacos and SLS page scopes", () => {
