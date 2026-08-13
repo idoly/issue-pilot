@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
@@ -162,7 +162,8 @@ describe("Agent conversation state", () => {
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "running", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_busy" },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const onRefresh = vi.fn(async () => issue);
+    const view = render(() => AgentPanel({ issue, onRefresh }));
     const source = EventSourceMock.instances[0]!;
     expect(source.url).toBe("/api/issues/ISSUE-20260810-001/agent-stream");
     source.emit("open");
@@ -171,8 +172,13 @@ describe("Agent conversation state", () => {
       agent: { provider: "test", model: "model", thinkingLevel: "medium" },
       footer: { input: 11_000_000, output: 1_300_000, cacheRead: 498_000_000, cacheWrite: 0, cost: 385.206, latestCacheHitRate: 95, contextPercent: 32.9, contextWindow: 272_000, autoCompact: true },
       running: false,
+      issueStatus: "in_progress",
     });
     await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(EventSourceMock.instances).toHaveLength(1);
+    source.emit("message", event({ type: "issue_status", status: "complete" }, "status-live"));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
     const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
     Object.defineProperties(panel, {
       scrollHeight: { configurable: true, value: 1_000 },
@@ -198,5 +204,54 @@ describe("Agent conversation state", () => {
     const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, onRefresh: async () => issue }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
     resolvedView.unmount();
+  });
+
+  it("ignores a stale Issue refresh failure after a newer refresh succeeds", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
+      workspace: { status: "ready", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" },
+    } satisfies IssueDetail;
+    let rejectFirst!: (error: unknown) => void;
+    const firstRefresh = new Promise<IssueDetail>((_resolve, reject) => { rejectFirst = reject; });
+    const onRefresh = vi.fn<() => Promise<IssueDetail>>()
+      .mockReturnValueOnce(firstRefresh)
+      .mockResolvedValue(issue);
+    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("ready", { running: false, issueStatus: "pending" });
+    source.emit("message", event({ type: "issue_status", status: "complete" }, "status-old"));
+    source.emit("message", event({ type: "issue_status", status: "complete" }, "status-new"));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
+    rejectFirst(new Error("stale_network_failure"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("alert")).toBeNull();
+    view.unmount();
+  });
+
+  it("contains Issue refresh failures and retries on the next ready event", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
+      workspace: { status: "ready", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" },
+    } satisfies IssueDetail;
+    const onRefresh = vi.fn<() => Promise<IssueDetail>>()
+      .mockRejectedValueOnce(new Error("network_failed"))
+      .mockResolvedValue(issue);
+    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("ready", { running: false, issueStatus: "pending" });
+    source.emit("message", event({ type: "issue_status", status: "complete" }, "status-failed"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("工单状态刷新失败"));
+    source.emit("message", event({ type: "issue_status", status: "complete" }, "status-retry"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    view.unmount();
   });
 });

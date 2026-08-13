@@ -10,6 +10,26 @@ import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, pruneState,
 
 const exec = promisify(execFile);
 
+async function createSharedCheckout(root: string): Promise<string> {
+  const source = path.join(root, "checkout-source");
+  await mkdir(source, { recursive: true });
+  await exec("git", ["init", "-b", "main", source]);
+  await Promise.all([
+    writeFile(path.join(source, "README.md"), "shared checkout\n", "utf8"),
+    writeFile(path.join(source, ".gitignore"), "ignored-evidence.txt\n", "utf8"),
+  ]);
+  await exec("git", ["-C", source, "add", "."]);
+  await exec("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
+  const commit = (await exec("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
+  const repositoryKey = "a".repeat(20);
+  const repository = path.join(repositoriesRoot(root), repositoryKey);
+  const checkout = path.join(sharedCheckoutsRoot(root), repositoryKey, commit);
+  await Promise.all([mkdir(path.dirname(checkout), { recursive: true }), mkdir(path.dirname(repository), { recursive: true })]);
+  await exec("git", ["clone", "--bare", "--quiet", source, repository]);
+  await exec("git", ["-C", repository, "worktree", "add", "--detach", checkout, commit]);
+  return checkout;
+}
+
 test("classifies repository persistence states without mixed-mode fallbacks", () => {
   assert.equal(classifyRepositoryState([]), "invalid");
   assert.equal(classifyRepositoryState([{ localPath: null, workingBranch: null }]), "read_only");
@@ -64,13 +84,13 @@ test("preserves unmanaged issue state before pruning generated resources", async
       mkdir(path.join(root, "issues", activeKey, "attachments"), { recursive: true }),
       mkdir(path.dirname(unmanagedAttachment), { recursive: true }),
       mkdir(repositoriesRoot(root), { recursive: true }),
-      mkdir(path.join(checkoutRoot, "repository", "commit"), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(unmanagedWorkspaceFile, "preserve workspace\n", "utf8"),
       writeFile(unmanagedAttachment, "preserve attachment\n", "utf8"),
       exec("git", ["init", "--bare", path.join(repositoriesRoot(root), "repository")]),
     ]);
+    await createSharedCheckout(root);
 
     const checkoutRootInode = (await stat(checkoutRoot)).ino;
     await assert.rejects(pruneState(root, ["ISSUE-20260807-001"]), /unmanaged_issue_state:issues\/issue-20260807-002,workspaces\/issue-20260807-002/);
@@ -95,6 +115,50 @@ test("preserves unmanaged issue state before pruning generated resources", async
     assert.equal((await stat(path.join(root, "issues", activeKey, ".runtime-operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).ino, checkoutRootInode);
     assert.deepEqual(await readdir(checkoutRoot), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preserves unowned repositories disguised as shared checkouts", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-unowned-checkout-state-"));
+  const issueRuntime = path.join(root, "issues", "issue-20260807-001", "runtime");
+  try {
+    await Promise.all([mkdir(issueRuntime, { recursive: true }), mkdir(path.join(root, "workspaces"), { recursive: true })]);
+    const managedCheckout = await createSharedCheckout(root);
+    const repositoryKey = path.basename(path.dirname(managedCheckout));
+    const commit = path.basename(managedCheckout);
+    const repository = path.join(repositoriesRoot(root), repositoryKey);
+    await exec("git", ["-C", repository, "worktree", "remove", managedCheckout]);
+    await exec("git", ["clone", "--quiet", repository, managedCheckout]);
+    await exec("git", ["-C", managedCheckout, "checkout", "--detach", commit]);
+    await writeFile(path.join(issueRuntime, "manifest.json"), "preserve runtime evidence\n", "utf8");
+
+    await assert.rejects(pruneState(root, ["ISSUE-20260807-001"]), /shared_checkout_changed/);
+    assert.equal(await readFile(path.join(managedCheckout, "README.md"), "utf8"), "shared checkout\n");
+    assert.equal(await readFile(path.join(issueRuntime, "manifest.json"), "utf8"), "preserve runtime evidence\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preserves changed shared checkouts and generated runtimes as evidence", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-shared-checkout-state-"));
+  const issueRuntime = path.join(root, "issues", "issue-20260807-001", "runtime");
+  try {
+    await Promise.all([
+      mkdir(issueRuntime, { recursive: true }),
+      mkdir(repositoriesRoot(root), { recursive: true }),
+      mkdir(path.join(root, "workspaces"), { recursive: true }),
+    ]);
+    const checkout = await createSharedCheckout(root);
+    const evidence = path.join(checkout, "ignored-evidence.txt");
+    await writeFile(evidence, "preserve checkout evidence\n", "utf8");
+    await writeFile(path.join(issueRuntime, "manifest.json"), "preserve runtime evidence\n", "utf8");
+
+    await assert.rejects(pruneState(root, ["ISSUE-20260807-001"]), /shared_checkout_changed/);
+    assert.equal(await readFile(evidence, "utf8"), "preserve checkout evidence\n");
+    assert.equal(await readFile(path.join(issueRuntime, "manifest.json"), "utf8"), "preserve runtime evidence\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

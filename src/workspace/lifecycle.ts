@@ -85,6 +85,8 @@ export class WorkspaceLifecycleManager {
   private readonly prepareDevelopmentRuntime: (issue: { id: string; key: string }) => Promise<unknown>;
   readonly policy: WorkspaceRetentionPolicy;
   private tail = Promise.resolve();
+  private stopping = false;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(
     database: Database,
@@ -104,11 +106,25 @@ export class WorkspaceLifecycleManager {
     this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => prepareDevelopmentIssueRuntime(this.database, this.stateRoot, issue, this.codeServer, this.worktrees));
   }
 
-  start(onError: (error: unknown) => void = () => undefined): () => void {
-    if (this.policy.maintenanceIntervalMs === 0) return () => undefined;
-    const timer = setInterval(() => { void this.maintain().catch(onError); }, this.policy.maintenanceIntervalMs);
-    timer.unref();
-    return () => clearInterval(timer);
+  start(onError: (error: unknown) => void = () => undefined): () => Promise<void> {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    if (this.policy.maintenanceIntervalMs > 0) {
+      timer = setInterval(() => {
+        void this.maintain().catch((error) => {
+          try { onError(error); } catch {
+            // A maintenance reporter cannot create an unhandled timer rejection.
+          }
+        });
+      }, this.policy.maintenanceIntervalMs);
+      timer.unref();
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+      this.stopping = true;
+      this.stopPromise ??= this.tail;
+      return this.stopPromise;
+    };
   }
 
   async inspectIssue(issueId: string): Promise<WorkspaceInspection> {
@@ -410,6 +426,7 @@ export class WorkspaceLifecycleManager {
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.stopping) throw new Error("workspace_lifecycle_closing");
     const preceding = this.tail;
     let complete!: () => void;
     const queued = new Promise<void>((resolve) => { complete = resolve; });

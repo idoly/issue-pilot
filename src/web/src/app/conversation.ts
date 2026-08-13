@@ -127,6 +127,7 @@ export function panelError(error: string): string {
     agent_event_protocol_error: "收到无法识别的 Agent 事件",
     agent_message_failed: "消息发送失败，请重试",
     agent_abort_failed: "无法中止当前处理",
+    issue_refresh_failed: "工单状态刷新失败，等待下次连接重试",
   };
   return messages[error] ?? error;
 }

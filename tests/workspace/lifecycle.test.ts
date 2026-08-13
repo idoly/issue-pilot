@@ -56,6 +56,54 @@ const engine = {
   async closeSession(issueId: string) { this.closed.push(issueId); if (this.closeError) throw this.closeError; },
 };
 
+test("stops maintenance only after the active exclusive operation drains", async () => {
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
+    retentionMs: Number.POSITIVE_INFINITY,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+  });
+  const internal = manager as unknown as { exclusive<T>(operation: () => Promise<T>): Promise<T> };
+  let operationStarted!: () => void;
+  let releaseOperation!: () => void;
+  const started = new Promise<void>((resolve) => { operationStarted = resolve; });
+  const gate = new Promise<void>((resolve) => { releaseOperation = resolve; });
+  const operation = internal.exclusive(async () => {
+    operationStarted();
+    await gate;
+  });
+  await started;
+
+  let stopped = false;
+  const stop = manager.start();
+  const firstStop = stop();
+  assert.equal(stop(), firstStop);
+  const stopping = firstStop.then(() => { stopped = true; });
+  await assert.rejects(internal.exclusive(async () => undefined), /workspace_lifecycle_closing/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  releaseOperation();
+  await Promise.all([operation, stopping]);
+  assert.equal(stopped, true);
+});
+
+test("isolates maintenance reporter failures", async () => {
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
+    retentionMs: Number.POSITIVE_INFINITY,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 1,
+  });
+  let reports = 0;
+  const stop = manager.start(() => {
+    reports += 1;
+    throw new Error("logger_failed");
+  });
+  while (!reports) await new Promise((resolve) => setTimeout(resolve, 1));
+  await stop();
+  assert.ok(reports >= 1);
+});
+
 test("releases clean workspaces while preserving attachments, sessions, and branches", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-lifecycle-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));

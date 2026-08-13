@@ -5,7 +5,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, environments, issueAttachments, serviceDeployments, services } from "../db/schema.ts";
+import { agentSessions, environments, issueAttachments, issues, serviceDeployments, services } from "../db/schema.ts";
 import { AGENT_THINKING_LEVELS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
 import { issueAttachmentRoot, pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
@@ -69,6 +69,8 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       liveEvents.unsubscribe();
     };
     try {
+      const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
+      if (!currentIssue) throw new ApiError(404, "issue_not_found");
       const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];
       const footer: AgentFooterStats = manager ? sessionFooterStats(manager, contextWindow) : {
@@ -88,7 +90,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       });
       const send = (event: RunEvent) => writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
       for (const event of transcript) send(event);
-      writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id) })}\n\n`);
+      writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
       liveEvents.activate(send);

@@ -65,7 +65,7 @@ vi.mock("../data/client", async (importOriginal) => {
         { issueKey: "ISSUE-20260810-093", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "repository_workspace_name_conflict" },
       ],
     }),
-    getIssue: async (id: string) => structuredClone(issues.find((item) => item.id === id)),
+    getIssue: vi.fn(async (id: string) => structuredClone(issues.find((item) => item.id === id))),
     addIssueComment: async (id: string, body: string) => {
       const selected = issues.find((item) => item.id === id)!;
       const comment = { id: `comment-${selected.comments.length + 1}`, author: "fixture-user", body, createdAt: now };
@@ -79,6 +79,7 @@ vi.mock("../data/client", async (importOriginal) => {
   };
 });
 
+import { EventSourceMock } from "../test-setup";
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
@@ -289,5 +290,38 @@ describe("issue pilot workspace", () => {
     expect(client.loadPeople).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
+  });
+
+  test("keeps the newest Issue detail when SSE refreshes finish out of order", async () => {
+    EventSourceMock.instances.length = 0;
+    const client = await import("../data/client");
+    const getIssue = vi.mocked(client.getIssue);
+    render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    const current = await getIssue("ISSUE-20260810-042");
+    let resolveOld!: (issue: typeof current) => void;
+    let resolveNew!: (issue: typeof current) => void;
+    const oldRefresh = new Promise<typeof current>((resolve) => { resolveOld = resolve; });
+    const newRefresh = new Promise<typeof current>((resolve) => { resolveNew = resolve; });
+    getIssue.mockImplementationOnce(async () => oldRefresh).mockImplementationOnce(async () => newRefresh);
+    const source = EventSourceMock.instances.at(-1)!;
+
+    source.emit("ready", { running: false, issueStatus: "in_progress" });
+    source.emit("message", { id: "status-old", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
+    source.emit("message", { id: "status-new", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
+    resolveNew({ ...current, status: "resolved", workspace: { ...current.workspace, status: "ready" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy());
+    const currentSource = EventSourceMock.instances.at(-1)!;
+    const connectionCount = EventSourceMock.instances.length;
+    const requestCount = getIssue.mock.calls.length;
+    currentSource.emit("ready", { running: false, issueStatus: "resolved" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(EventSourceMock.instances).toHaveLength(connectionCount);
+    expect(getIssue).toHaveBeenCalledTimes(requestCount);
+    resolveOld({ ...current, status: "in_progress", workspace: { ...current.workspace, status: "running" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

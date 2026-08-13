@@ -245,7 +245,7 @@ Released dev 的权威代码来源是本地 bare repository 中的工作分支�
 3. 把进程中断的运行状态转为可重试状态。
 4. 确保 `prod`、`test`、`dev` 环境存在。
 5. 验证 state root 中没有 unmanaged Issue 目录。
-6. 清空可生成 runtime/checkouts，保留已挂载的 checkout 根目录 inode，并 prune worktree metadata。
+6. 验证 shared checkout 目录只包含按 URL hash/commit 命名、且属于同 hash 受管 bare store 的 Git worktree；每个 HEAD 必须与目录 commit 一致，并且没有 modified、untracked 或 ignored 内容。通过后用 `git worktree remove` 清理 checkout，保留已挂载的 checkout 根目录 inode，再 prune worktree metadata。异常 checkout 返回 `shared_checkout_changed`，且不会先删除 Issue runtime。
 7. 重建活动和已释放 dev runtime。
 8. 为有 session 的 prod/test 工单 fetch 最新 Deployment commit 并重建 runtime。
 9. 执行一次 workspace maintenance，然后注册路由。
@@ -292,7 +292,7 @@ Session resource loader 明确关闭 extension、skill、prompt template、theme
 - `buildContextEntries()` 生成当前有效上下文。
 - User custom entry、assistant message、tool result、summary 和 bash execution 投影为 Web 事件。
 - Model change、label 等内部 entry 不伪装成聊天消息。
-- SSE 在全部异步准备完成后先订阅 live bus，再同步读取 JSONL snapshot；snapshot 后事件先缓冲，按 replay、ready、live 顺序发送，避免 replay/live 间隙。Write 遇到 backpressure 时等待 `drain`，待发送 payload 超过根配置预算时关闭慢连接；连接关闭后释放 listener 和 heartbeat。Listener 或 socket write 故障只终止该观察路径，不能反向打断 Agent 或其他订阅者。
+- SSE 在全部异步准备完成后先订阅 live bus，再同步读取 JSONL snapshot；snapshot 后事件先缓冲，按 replay、ready、live 顺序发送，避免 replay/live 间隙。Write 遇到 backpressure 时等待 `drain`，待发送 payload 超过根配置预算时关闭慢连接；连接全生命周期捕获 transport close/error，并释放 listener 和 heartbeat。Listener 或 socket write 故障只终止该观察路径，不能反向打断 Agent 或其他订阅者。`ready` 是每次连接的状态对账点，直接携带 SQLite 中的权威 Issue 状态；Web 在面板本地对账，补齐断线期间未持久化到 JSONL 的完成/失败事件。只有 live `issue_status` 才触发父级 Issue DTO 刷新，避免 replay ready 形成重连循环。
 
 Web 只负责 presentation，不维护第二份对话事实源。
 
@@ -345,7 +345,7 @@ Capability 的字段和限制集中在 [配置说明](CONFIGURATION.md#capabilit
 - 每个 Issue 必须有一条 `issue_workspaces` 行；启动和 Agent 状态提交会拒绝缺失行，不能把结构异常投影为 `not_created` 后继续执行。
 - Issue 的 `(service_id, environment_id)` 必须存在对应 Deployment，且 `status/resolved_at` 必须一致；SQLite trigger 阻止无 Deployment scope、被引用 Deployment 变更和 resolution 状态异常。
 - Issue 编辑将 metadata、CC、附件增删和一次 Agent metadata sync 合并为一个 reservation。附件文件先 quarantine/写入，数据库事务失败时恢复；rollback 或提交后 finalize 无法完成会保留现场并显式失败。
-- API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。Agent shutdown 先拒绝新 activity，等待已开始的队列任务和 reservation 完成，再尝试停止全部内存 session；即使 session stop 失败也会关闭数据库。后台 Agent 失败若无法关闭 session 或写回 `open/failed`，会记录包含原始失败和 cleanup failure 的聚合错误；logger 自身不能形成未处理 rejection。
+- API 装配失败和正常关闭都停止维护、关闭 Agent、Fastify 和数据库。正常关闭先停止 maintenance 调度并等待已进入 lifecycle exclusive 的操作完成，再关闭 Agent 和 SQLite；任一步失败仍继续后续清理，并聚合多个失败。Agent shutdown 先拒绝新 activity，等待已开始的队列任务和 reservation 完成，再尝试停止全部内存 session；即使 session stop 失败也会关闭数据库。后台 Agent 失败若无法关闭 session 或写回 `open/failed`，会记录包含原始失败和 cleanup failure 的聚合错误；logger 自身不能形成未处理 rejection。
 
 ## 从原理进入代码
 

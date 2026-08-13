@@ -42,7 +42,11 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
   const shutdown = () => {
     if (closing) return;
     closing = true;
-    void app.close().catch((error) => app.log.error(error));
+    void app.close().catch((error) => {
+      try { app.log.error(error); } catch {
+        // A logger failure cannot turn graceful shutdown into an unhandled rejection.
+      }
+    });
   };
   target.once("SIGINT", shutdown);
   target.once("SIGTERM", shutdown);
@@ -58,7 +62,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const database = await openApplicationDatabase(databaseFile);
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: true });
   let engine: AgentController | undefined;
-  let stopWorkspaceMaintenance: (() => void) | undefined;
+  let stopWorkspaceMaintenance: (() => Promise<void>) | undefined;
 
   try {
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
@@ -125,13 +129,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerAgentRoutes(routeContext);
     registerWorkspaceRoutes(routeContext);
     app.addHook("onClose", async () => {
-      stopWorkspaceMaintenance?.();
-      try { await engine?.close?.(); }
-      finally { await database.close(); }
+      const failures: unknown[] = [];
+      try { await stopWorkspaceMaintenance?.(); } catch (error) { failures.push(error); }
+      try { await engine?.close?.(); } catch (error) { failures.push(error); }
+      try { await database.close(); } catch (error) { failures.push(error); }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "api_close_failed");
     });
     return app;
   } catch (error) {
-    stopWorkspaceMaintenance?.();
+    if (stopWorkspaceMaintenance) await stopWorkspaceMaintenance().catch(() => undefined);
     if (engine?.close) await engine.close().catch(() => undefined);
     await app.close().catch(() => undefined);
     try { await database.close(); } catch {

@@ -39,6 +39,20 @@ test("closes Fastify exactly once when the process receives a shutdown signal", 
   assert.equal(target.listenerCount("SIGINT"), 0);
 });
 
+test("isolates shutdown reporting failures", async () => {
+  const target = new EventEmitter();
+  const app = {
+    async close() { throw new Error("close_failed"); },
+    log: { error() { throw new Error("logger_failed"); } },
+  } as unknown as FastifyInstance;
+  const removeHandlers = installShutdownHandlers(app, target as never);
+  target.emit("SIGTERM");
+  await new Promise((resolve) => setImmediate(resolve));
+  removeHandlers();
+  assert.equal(target.listenerCount("SIGTERM"), 0);
+  assert.equal(target.listenerCount("SIGINT"), 0);
+});
+
 test("closes the database when Agent shutdown fails", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-close-"));
   const databaseFile = path.join(root, "issues.db");

@@ -77,7 +77,7 @@ Git 验收使用只读命令，并设置 `GIT_OPTIONAL_LOCKS=0`，避免健康�
 
 ## 启动与关闭
 
-API 启动会执行 migration、恢复中断状态、验证 state tree、清理 UUID 命名的中断 runtime 临时/previous 目录、重建 runtime/checkouts，再执行一次 workspace maintenance。其他未知目录仍保留并按异常处理。
+API 启动会执行 migration、恢复中断状态、验证 state tree 和 shared checkout，再清理 UUID 命名的中断 runtime 临时/previous 目录并重建 runtime/checkouts，最后执行一次 workspace maintenance。Shared checkout 必须按 URL hash/commit 命名、属于同 hash 的受管 bare store，且没有 modified、untracked 或 ignored 内容；所有权、HEAD、cleanliness 或目录结构不匹配时返回 `shared_checkout_changed`，并在删除 Issue runtime 前停止。通过验证的 checkout 也只用非 force 的 `git worktree remove` 清理。其他未知目录同样保留并按异常处理。
 
 正常停止：
 
@@ -85,7 +85,7 @@ API 启动会执行 migration、恢复中断状态、验证 state tree、清理 
 systemctl stop issue-pilot-api
 ```
 
-`SIGINT`/`SIGTERM` 会停止 maintenance、abort/dispose Pi session、关闭 Fastify 和 SQLite。等待进程完全退出后再复制数据库或移动 release directory。
+`SIGINT`/`SIGTERM` 会先停止 maintenance 调度并等待已进入 lifecycle exclusive 的操作完成，再 abort/dispose Pi session、关闭 Fastify 和 SQLite。等待进程完全退出后再复制数据库或移动 release directory。
 
 ### `unmanaged_issue_state`
 

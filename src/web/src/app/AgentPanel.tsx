@@ -1,9 +1,9 @@
 import { Button } from "@idoly/ant-design-solid";
-import { createEffect, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { agentStreamUrl, isWorkspaceBusy, sendAgentMessage, type AgentFooterStats, type IssueDetail, type RunEvent } from "../data/client";
+import { ISSUE_STATUSES, agentStreamUrl, sendAgentMessage, type AgentFooterStats, type IssueDetail, type IssueStatus, type RunEvent } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
 import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
@@ -125,6 +125,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [connected, setConnected] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [processing, setProcessing] = createSignal(false, { ownedWrite: true });
+  const [issueStatus, setIssueStatus] = createSignal<IssueStatus>(untrack(() => props.issue.status), { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [draft, setDraft] = createSignal("", { ownedWrite: true });
   const [entries, setEntries] = createSignal<ConversationEntry[]>([], { ownedWrite: true });
@@ -139,12 +140,13 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let connectionId = 0;
   let issueGeneration = 0;
+  let issueRefreshId = 0;
   let replayComplete = false;
   let followLatest = true;
   const pasteEditor = new PasteEditorModel();
 
-  const running = () => processing() || isWorkspaceBusy(props.issue.workspace.status);
-  const canSend = () => props.issue.status !== "resolved";
+  const running = () => processing();
+  const canSend = () => issueStatus() !== "resolved";
   const usageText = () => footerText(footer());
   const executionRoot = () => props.issue.environmentKey === "dev"
     ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
@@ -172,9 +174,18 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const nextActivity = activityForEvent(event.event);
     if (nextActivity !== undefined) setActivity(nextActivity);
     if (type === "queue_update") setQueue({ steering: [...event.event.steering], followUp: [...event.event.followUp] });
+    if (type === "issue_status") setIssueStatus(event.event.status === "complete" ? "pending" : "open");
     queueMicrotask(() => {
       if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
       else if (replayComplete) setUnread((value) => value + 1);
+    });
+  };
+  const refreshIssue = (issueId: string, currentConnection: number) => {
+    const currentRefresh = ++issueRefreshId;
+    void Promise.resolve().then(() => props.onRefresh(issueId)).then(() => {
+      if (currentConnection === connectionId && currentRefresh === issueRefreshId && error() === "issue_refresh_failed") setError("");
+    }).catch(() => {
+      if (currentConnection === connectionId && currentRefresh === issueRefreshId) setError("issue_refresh_failed");
     });
   };
   const connect = (issueId: string, resetEditor = false) => {
@@ -190,9 +201,10 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     eventSource.addEventListener("ready", (event) => {
       if (currentConnection !== connectionId) return;
       try {
-        const payload = JSON.parse(event.data) as { agent?: { provider: string; model: string; thinkingLevel: string }; footer?: AgentFooterStats; running?: boolean };
+        const payload = JSON.parse(event.data) as { agent?: { provider: string; model: string; thinkingLevel: string }; footer?: AgentFooterStats; running?: boolean; issueStatus?: IssueStatus };
         if (payload.agent) setAgent(payload.agent);
         if (payload.footer) setFooter(payload.footer);
+        if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
         setProcessing(payload.running === true); replayComplete = true; queueMicrotask(scrollLatest);
       } catch { setError("agent_event_protocol_error"); }
     });
@@ -207,11 +219,12 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
           queueMicrotask(() => connect(issueId));
           return;
         }
-        if (replayComplete && envelope.event.type === "issue_status") void props.onRefresh(issueId);
+        if (replayComplete && envelope.event.type === "issue_status") refreshIssue(issueId, currentConnection);
       } catch { setError("agent_event_protocol_error"); }
     });
     eventSource.addEventListener("error", () => {
       if (currentConnection !== connectionId) return;
+      connectionId += 1;
       eventSource.close(); setConnected(false); setError("agent_event_connection_failed");
       reconnectTimer = setTimeout(() => connect(issueId), issuePilotConfig.web.agentStreamReconnectMs);
     });
@@ -291,9 +304,11 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       event.preventDefault(); void submit();
     }
   };
-  createEffect(() => props.issue.id, (issueId) => {
+  createEffect(() => ({ id: props.issue.id, status: props.issue.status }), ({ id, status }, previous) => {
+    setIssueStatus(status);
+    if (previous?.id === id) return;
     issueGeneration += 1;
-    connect(issueId, true);
+    connect(id, true);
   });
   onCleanup(() => { connectionId += 1; issueGeneration += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
 

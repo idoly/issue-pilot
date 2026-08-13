@@ -78,11 +78,12 @@ export function App() {
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
   const [codeExpanded, setCodeExpanded] = createSignal(false, { ownedWrite: true });
   const [codeServerTarget, setCodeServerTarget] = createSignal<string | null>(null, { ownedWrite: true });
-  let request = 0;
+  let selectionGeneration = 0;
+  const issueRefreshes = new Map<string, number>();
   createEffect(
     () => selectedId(),
     (id) => {
-      const currentRequest = ++request;
+      const currentGeneration = ++selectionGeneration;
       setCodeExpanded(false);
       setCodeServerTarget(null);
       if (!id) {
@@ -93,19 +94,22 @@ export function App() {
       setLoading(true);
       setIssueError("");
       void getIssue(id).then((value) => {
-        if (currentRequest === request) setIssue(value);
+        if (currentGeneration === selectionGeneration) setIssue(value);
       }).catch((error) => {
-        if (currentRequest !== request) return;
+        if (currentGeneration !== selectionGeneration) return;
         setIssue(null);
         setIssueError(error instanceof Error ? error.message : "工单加载失败");
       }).finally(() => {
-        if (currentRequest === request) setLoading(false);
+        if (currentGeneration === selectionGeneration) setLoading(false);
       });
     },
   );
   const refreshIssue = async (issueId: string) => {
+    const currentGeneration = selectionGeneration;
+    const currentRefresh = (issueRefreshes.get(issueId) ?? 0) + 1;
+    issueRefreshes.set(issueId, currentRefresh);
     const refreshed = await getIssue(issueId);
-    if (selectedId() === issueId) setIssue(refreshed);
+    if (currentGeneration === selectionGeneration && issueRefreshes.get(issueId) === currentRefresh && selectedId() === issueId) setIssue(refreshed);
     return refreshed;
   };
   const appTheme = createMemo(() => ({

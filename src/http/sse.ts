@@ -21,18 +21,26 @@ export function createOrderedSseWriter(
   let pendingBytes = 0;
   let pumping = false;
   let closed = false;
-  let removeBlockedListeners: (() => void) | undefined;
+  let removeDrainListener: (() => void) | undefined;
+  let transportListenersAttached = true;
 
   const notifyIdle = () => {
-    if (pumping || removeBlockedListeners || queue.length) return;
+    if (pumping || removeDrainListener || queue.length) return;
     for (const resolve of idleWaiters) resolve();
     idleWaiters.clear();
+  };
+  const removeTransportListeners = () => {
+    if (!transportListenersAttached) return;
+    transportListenersAttached = false;
+    target.off("close", onTransportClose);
+    target.off("error", onTransportError);
   };
   const close = () => {
     if (closed) return;
     closed = true;
-    removeBlockedListeners?.();
-    removeBlockedListeners = undefined;
+    removeDrainListener?.();
+    removeDrainListener = undefined;
+    removeTransportListeners();
     queue.length = 0;
     pendingBytes = 0;
     notifyIdle();
@@ -44,11 +52,15 @@ export function createOrderedSseWriter(
       // A transport cleanup failure cannot reject the ordered writer queue.
     }
   };
+  const onTransportClose = () => close();
+  const onTransportError = (error?: unknown) => fail(error ?? new Error("sse_transport_error"));
+  target.once("close", onTransportClose);
+  target.once("error", onTransportError);
   const pump = () => {
-    if (pumping || closed || removeBlockedListeners) return;
+    if (pumping || closed || removeDrainListener) return;
     pumping = true;
     try {
-      while (!closed && !removeBlockedListeners && queue.length) {
+      while (!closed && !removeDrainListener && queue.length) {
         if (target.destroyed || target.writableEnded) { close(); break; }
         const next = queue.shift()!;
         let accepted: boolean;
@@ -62,23 +74,15 @@ export function createOrderedSseWriter(
           fail(new Error("sse_backpressure_limit_exceeded"));
           break;
         }
-        const removeListeners = () => {
-          target.off("drain", onDrain);
-          target.off("close", onClose);
-          target.off("error", onError);
-        };
+        const removeListener = () => target.off("drain", onDrain);
         const onDrain = () => {
-          removeBlockedListeners = undefined;
-          removeListeners();
+          removeDrainListener = undefined;
+          removeListener();
           pendingBytes -= next.bytes;
           pump();
         };
-        const onClose = () => close();
-        const onError = (error?: unknown) => fail(error ?? new Error("sse_transport_error"));
-        removeBlockedListeners = removeListeners;
+        removeDrainListener = removeListener;
         target.once("drain", onDrain);
-        target.once("close", onClose);
-        target.once("error", onError);
       }
     } finally {
       pumping = false;
@@ -96,7 +100,7 @@ export function createOrderedSseWriter(
     queue.push({ payload, bytes });
     pump();
   };
-  const idle = () => pumping || removeBlockedListeners || queue.length
+  const idle = () => pumping || removeDrainListener || queue.length
     ? new Promise<void>((resolve) => idleWaiters.add(resolve))
     : Promise.resolve();
   return { write, idle };

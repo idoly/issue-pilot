@@ -59,6 +59,22 @@ test("treats synchronous socket write failures as a closed stream", async () => 
   assert.equal(failures.length, 1);
 });
 
+test("captures transport errors while the stream is idle", async () => {
+  const response = new FakeResponse();
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, Number.POSITIVE_INFINITY, (error) => failures.push(error));
+
+  response.emit("error", new Error("idle_transport_failed"));
+  await writer.idle();
+  writer.write("data: must-not-write\n\n");
+
+  assert.deepEqual(response.payloads, []);
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /idle_transport_failed/);
+  assert.equal(response.listenerCount("error"), 0);
+  assert.equal(response.listenerCount("close"), 0);
+});
+
 test("stops a backpressured stream on transport error before socket flags update", async () => {
   const response = new FakeResponse();
   response.blockNextWrite = true;
