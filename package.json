@@ -27,6 +27,7 @@
     "dompurify": "^3.4.13",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.11.2",
+    "github-markdown-css": "5.9.0",
     "lucide": "^1.29.0",
     "marked": "^18.0.9",
     "mysql2": "^3.23.2",

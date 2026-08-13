@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 
+import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel } from "./AgentPanel";
@@ -210,6 +211,50 @@ describe("Agent conversation state", () => {
     const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, onRefresh: async () => issue }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
     resolvedView.unmount();
+  });
+
+  it("reconnects with one close and atomically replaces the replayed transcript", async () => {
+    vi.useFakeTimers();
+    try {
+      EventSourceMock.instances.length = 0;
+      const issue = {
+        id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
+        assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+        updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
+        workspace: { status: "ready", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" },
+      } satisfies IssueDetail;
+      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const first = EventSourceMock.instances[0]!;
+      first.emit("open");
+      first.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Stable before disconnect" }], "stop") }, "message-before"));
+      first.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText("Stable before disconnect")).toBeTruthy();
+
+      first.emit("error");
+      first.emit("error");
+      expect(first.closeCalls).toBe(1);
+      expect(screen.getByText("Stable before disconnect")).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(issuePilotConfig.web.agentStreamReconnectMs);
+      expect(EventSourceMock.instances).toHaveLength(2);
+      expect(first.closeCalls).toBe(1);
+
+      const second = EventSourceMock.instances[1]!;
+      second.emit("open");
+      second.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Replayed after reconnect" }], "stop") }, "message-after"));
+      expect(screen.getByText("Stable before disconnect")).toBeTruthy();
+      expect(screen.queryByText("Replayed after reconnect")).toBeNull();
+      second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.queryByText("Stable before disconnect")).toBeNull();
+      expect(screen.getByText("Replayed after reconnect")).toBeTruthy();
+
+      view.unmount();
+      expect(first.closeCalls).toBe(1);
+      expect(second.closeCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores a stale Issue refresh failure after a newer refresh succeeds", async () => {

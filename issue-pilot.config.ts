@@ -30,6 +30,8 @@ export const issuePilotConfig = Object.freeze({
     host: "0.0.0.0",
     port: 4173,
     agentStreamReconnectMs: 1_000,
+    markdownCacheEntries: 512,
+    markdownCacheCharacters: 4 * 1024 * 1024,
   }),
   workspace: Object.freeze({
     retentionMs: 7 * 24 * 60 * 60 * 1000,

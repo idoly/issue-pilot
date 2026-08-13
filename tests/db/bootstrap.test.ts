@@ -25,6 +25,8 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.http.ssePendingBytes, 4 * 1024 * 1024);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
   assert.equal(applicationConfig.web.host, "0.0.0.0");
+  assert.equal(applicationConfig.web.markdownCacheEntries, 512);
+  assert.equal(applicationConfig.web.markdownCacheCharacters, 4 * 1024 * 1024);
 });
 
 test("restores interrupted and ready workspaces when the application database reopens", async () => {

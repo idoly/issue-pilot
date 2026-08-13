@@ -188,12 +188,28 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (currentConnection === connectionId && currentRefresh === issueRefreshId) setError("issue_refresh_failed");
     });
   };
-  const connect = (issueId: string, resetEditor = false) => {
-    stream?.close();
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
-    setConnected(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" }); replayComplete = false;
-    if (resetEditor) { pasteEditor.reset(); setEditorDraft(""); setSending(false); }
+  const closeStream = (target = stream) => {
+    if (!target) return;
+    if (stream === target) stream = undefined;
+    target.close();
+  };
+  const clearReconnectTimer = () => {
+    if (!reconnectTimer) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  };
+  const connect = (issueId: string, resetForIssue = false) => {
+    closeStream();
+    clearReconnectTimer();
+    replayComplete = false;
+    if (resetForIssue) {
+      setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
+      setConnected(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" });
+      pasteEditor.reset(); setEditorDraft(""); setSending(false);
+    } else setConnected(false);
+    let replayEntries: ConversationEntry[] = [];
+    let replayActivity: AgentActivity | null = null;
+    let replayQueue = { steering: [] as string[], followUp: [] as string[] };
     const currentConnection = ++connectionId;
     const eventSource = new EventSource(agentStreamUrl(issueId));
     stream = eventSource;
@@ -202,10 +218,12 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (currentConnection !== connectionId) return;
       try {
         const payload = JSON.parse(event.data) as { agent?: { provider: string; model: string; thinkingLevel: string }; footer?: AgentFooterStats; running?: boolean; issueStatus?: IssueStatus };
-        if (payload.agent) setAgent(payload.agent);
-        if (payload.footer) setFooter(payload.footer);
+        setEntries(replayEntries); setFooter(payload.footer ?? emptyFooter()); setUnread(0);
+        setActivity(replayActivity); setQueue(replayQueue); setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
         if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
-        setProcessing(payload.running === true); replayComplete = true; queueMicrotask(scrollLatest);
+        setProcessing(payload.running === true);
+        replayComplete = true;
+        queueMicrotask(scrollLatest);
       } catch { setError("agent_event_protocol_error"); }
     });
     eventSource.addEventListener("message", (event) => {
@@ -214,19 +232,29 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         const parsed = JSON.parse(event.data) as Partial<RunEvent>;
         if (!parsed.event || typeof parsed.event.type !== "string") throw new Error("agent_event_protocol_error");
         const envelope = parsed as RunEvent;
-        append(envelope);
-        if (envelope.event.type === "compaction_end" && !envelope.event.aborted && !envelope.event.willRetry) {
-          queueMicrotask(() => connect(issueId));
+        if (!replayComplete) {
+          replayEntries = applyAgentEvent(replayEntries, envelope);
+          const nextActivity = activityForEvent(envelope.event);
+          if (nextActivity !== undefined) replayActivity = nextActivity;
+          if (envelope.event.type === "queue_update") replayQueue = { steering: [...envelope.event.steering], followUp: [...envelope.event.followUp] };
           return;
         }
-        if (replayComplete && envelope.event.type === "issue_status") refreshIssue(issueId, currentConnection);
+        append(envelope);
+        if (envelope.event.type === "compaction_end" && !envelope.event.aborted && !envelope.event.willRetry) {
+          queueMicrotask(() => { if (currentConnection === connectionId) connect(issueId); });
+          return;
+        }
+        if (envelope.event.type === "issue_status") refreshIssue(issueId, currentConnection);
       } catch { setError("agent_event_protocol_error"); }
     });
     eventSource.addEventListener("error", () => {
       if (currentConnection !== connectionId) return;
       connectionId += 1;
-      eventSource.close(); setConnected(false); setError("agent_event_connection_failed");
-      reconnectTimer = setTimeout(() => connect(issueId), issuePilotConfig.web.agentStreamReconnectMs);
+      closeStream(eventSource); setConnected(false); setError("agent_event_connection_failed");
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = undefined;
+        connect(issueId);
+      }, issuePilotConfig.web.agentStreamReconnectMs);
     });
   };
   const submit = async () => {
@@ -310,7 +338,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     issueGeneration += 1;
     connect(id, true);
   });
-  onCleanup(() => { connectionId += 1; issueGeneration += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
+  onCleanup(() => { connectionId += 1; issueGeneration += 1; closeStream(); clearReconnectTimer(); });
 
   return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
     <div class="agent-conversation" role="log" aria-live="polite">

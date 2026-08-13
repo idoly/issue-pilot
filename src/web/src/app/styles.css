@@ -246,18 +246,37 @@ button, input, textarea { font: inherit; }
 .agent-message { min-width: 0; overflow-wrap: anywhere; }
 .agent-message.user { margin: 18px 0 0; padding: 14px; background: var(--pi-user-bg); color: var(--pi-user-message-text); }
 .agent-message.assistant { display: grid; gap: 18px; margin-top: 18px; padding: 0 14px; color: #e4e6e5; font-weight: 350; }
-.agent-message .markdown, .agent-summary .markdown, .agent-custom-message .markdown { max-width: none; color: inherit; font-size: var(--pi-font-size); line-height: 1.5; }
-.agent-message.assistant .markdown { line-height: 22px; }
-.agent-message .markdown code, .agent-summary .markdown code, .agent-custom-message .markdown code { background: transparent; color: var(--pi-md-code); font-family: var(--pi-code-font); font-size: inherit; }
-.agent-message .markdown pre, .agent-summary .markdown pre, .agent-custom-message .markdown pre { overflow-x: auto; padding: 10px 12px; border-left: 2px solid var(--pi-md-code-block-border); background: var(--pi-export-card-bg, #1e1e24); }
-.agent-message .markdown pre code, .agent-summary .markdown pre code, .agent-custom-message .markdown pre code { padding: 0; background: transparent; color: var(--pi-md-code-block); }
-.agent-message .markdown a, .agent-summary .markdown a, .agent-custom-message .markdown a { color: var(--pi-md-link); }
-.agent-message .markdown h1, .agent-message .markdown h2, .agent-message .markdown h3, .agent-summary .markdown h1, .agent-summary .markdown h2, .agent-summary .markdown h3 { margin: 18px 0 8px; color: var(--pi-md-heading); font-weight: 650; letter-spacing: 0; }
-.agent-message .markdown h1, .agent-message .markdown h2, .agent-message .markdown h3 { font-size: var(--pi-font-size); }
+.agent-panel .markdown-body {
+  --bgColor-attention-muted: #bb800926;
+  --bgColor-default: #0d1117;
+  --bgColor-muted: #151b23;
+  --bgColor-neutral-muted: #656c7633;
+  --borderColor-accent-emphasis: #1f6feb;
+  --borderColor-attention-emphasis: #9e6a03;
+  --borderColor-danger-emphasis: #da3633;
+  --borderColor-default: #3d444d;
+  --borderColor-done-emphasis: #8957e5;
+  --borderColor-muted: #3d444db3;
+  --borderColor-neutral-muted: #3d444db3;
+  --borderColor-success-emphasis: #238636;
+  --fgColor-accent: #4493f8;
+  --fgColor-attention: #d29922;
+  --fgColor-danger: #f85149;
+  --fgColor-default: #f0f6fc;
+  --fgColor-done: #ab7df8;
+  --fgColor-muted: #9198a1;
+  --fgColor-success: #3fb950;
+  --focus-outlineColor: #1f6feb;
+  color-scheme: dark;
+  max-width: none;
+  background-color: transparent;
+  font-family: var(--pi-font);
+  font-size: var(--pi-font-size);
+}
 .agent-thinking { margin: 0; color: var(--pi-thinking-text); font-family: var(--pi-code-font); font-style: italic; font-weight: 400; font-synthesis: style; }
-.agent-thinking .markdown { color: inherit; font-size: var(--pi-font-size); line-height: 1.5; }
-.agent-thinking .markdown > :first-child { margin-top: 0; }
-.agent-thinking .markdown > :last-child { margin-bottom: 0; }
+.agent-thinking .markdown-body { color: inherit; font-family: inherit; }
+.agent-thinking .markdown-body > :first-child { margin-top: 0; }
+.agent-thinking .markdown-body > :last-child { margin-bottom: 0; }
 .agent-message-notice { margin-top: 14px; color: var(--pi-error); font: var(--pi-font-size)/1.5 var(--pi-font); overflow-wrap: anywhere; }
 .agent-inline-image { display: block; width: min(100%, 720px); max-height: 520px; object-fit: contain; object-position: left center; }
 .agent-tool { margin: 18px 0 0; padding: 14px; background: var(--pi-surface); }
@@ -415,13 +434,37 @@ button, input, textarea { font: inherit; }
 .deployment-detail-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .capability-empty { color: #88928e; font-size: 11px; }
 .service-detail-empty { padding: 13px 2px; border-top: 1px solid #e7ebe9; color: #828d88; font-size: 12px; }
-.markdown { max-width: 900px; color: #3f4a45; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
-.markdown > :first-child { margin-top: 0; }
-.markdown > :last-child { margin-bottom: 0; }
-.markdown h1 { font-size: 18px; }
-.markdown h2 { font-size: 16px; }
-.markdown h3 { font-size: 14px; }
-.markdown code { padding: 1px 4px; border-radius: 3px; background: #eef2f0; font-family: var(--mono-font); font-size: 0.92em; }
+.markdown-body {
+  --bgColor-attention-muted: #fff8c5;
+  --bgColor-default: #ffffff;
+  --bgColor-muted: #f6f8fa;
+  --bgColor-neutral-muted: #818b981f;
+  --borderColor-accent-emphasis: #0969da;
+  --borderColor-attention-emphasis: #9a6700;
+  --borderColor-danger-emphasis: #cf222e;
+  --borderColor-default: #d1d9e0;
+  --borderColor-done-emphasis: #8250df;
+  --borderColor-muted: #d1d9e0b3;
+  --borderColor-neutral-muted: #d1d9e0b3;
+  --borderColor-success-emphasis: #1a7f37;
+  --fgColor-accent: #0969da;
+  --fgColor-attention: #9a6700;
+  --fgColor-danger: #d1242f;
+  --fgColor-default: #1f2328;
+  --fgColor-done: #8250df;
+  --fgColor-muted: #59636e;
+  --fgColor-success: #1a7f37;
+  --focus-outlineColor: #0969da;
+  color-scheme: light;
+  max-width: 900px;
+  background-color: transparent;
+  font-family: var(--app-font);
+  font-size: 13px;
+}
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body ul { list-style-type: disc; }
+.markdown-body ol { list-style-type: decimal; }
 .service-form { display: grid; gap: 18px; }
 .service-form-field { display: grid; gap: 6px; color: #56615c; font-size: 12px; }
 .service-form-section { display: grid; gap: 10px; padding-top: 2px; }

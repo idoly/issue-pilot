@@ -97,7 +97,7 @@ npm run build
 | `subject` | 配置文件中的账号 | 页面首次打开时的默认操作人 |
 | `users` | 见配置文件 | 页面允许切换的操作人名单；启动时同步到人员目录 |
 | `http.*` | `127.0.0.1:3000` | API、logger、SSE heartbeat 和单连接待发送字节预算 |
-| `web.*` | `0.0.0.0:4173` | Vite dev server 监听地址、端口和 Agent stream 重连间隔 |
+| `web.*` | `0.0.0.0:4173` | Vite dev server 监听地址、端口、Agent stream 重连间隔和 Markdown HTML cache 预算 |
 | `defaults.*` | 见配置文件 | Environment、Deployment 和 capability 表单/API 共用默认值 |
 | `workspace.*` | 见 [运维手册](RUNBOOK.md#项目配置) | Retention、quota 和 maintenance policy |
 | `limits.*` | 见配置文件 | Agent、附件、进程和 capability 的 timeout/size/count 上限 |

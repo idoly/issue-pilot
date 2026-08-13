@@ -8,6 +8,7 @@ export class EventSourceMock extends EventTarget {
   static instances: EventSourceMock[] = [];
   readonly url: string;
   closed = false;
+  closeCalls = 0;
 
   constructor(url: string | URL) {
     super();
@@ -20,6 +21,7 @@ export class EventSourceMock extends EventTarget {
   }
 
   close(): void {
+    this.closeCalls += 1;
     this.closed = true;
   }
 }
