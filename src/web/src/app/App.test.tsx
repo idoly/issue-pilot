@@ -292,6 +292,24 @@ describe("issue pilot workspace", () => {
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
   });
 
+  test("waits for the current user before selecting an Issue", async () => {
+    const client = await import("../data/client");
+    const getIssue = vi.mocked(client.getIssue);
+    getIssue.mockClear();
+    let resolveCurrentUser!: (user: Awaited<ReturnType<typeof client.loadCurrentUser>>) => void;
+    const currentUser = new Promise<Awaited<ReturnType<typeof client.loadCurrentUser>>>((resolve) => { resolveCurrentUser = resolve; });
+    vi.mocked(client.loadCurrentUser).mockImplementationOnce(() => currentUser);
+
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByText("没有匹配的工单")).toBeTruthy());
+    expect(getIssue).not.toHaveBeenCalled();
+    resolveCurrentUser({ subject: "fixture-user", name: "严欣", email: "owner@example.test" });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    expect(getIssue).toHaveBeenCalledTimes(1);
+    expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042");
+  });
+
   test("keeps the newest Issue detail when SSE refreshes finish out of order", async () => {
     EventSourceMock.instances.length = 0;
     const client = await import("../data/client");

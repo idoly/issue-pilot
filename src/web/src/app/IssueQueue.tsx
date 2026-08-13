@@ -21,9 +21,11 @@ export function IssueQueue(props: {
   const [query, setQuery] = createSignal("", { ownedWrite: true });
   const [status, setStatus] = createSignal<string>("active", { ownedWrite: true });
   const filtered = createMemo(() => {
+    const subject = props.userSubject;
+    if (!subject) return [];
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
-      const assigneeMatch = !props.userSubject || issue.assigneeSubject === props.userSubject;
+      const assigneeMatch = issue.assigneeSubject === subject;
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
       return assigneeMatch && statusMatch && (!term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name}`.toLowerCase().includes(term));
     });
