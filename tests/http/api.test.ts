@@ -809,6 +809,25 @@ test("configuration and issue API preserves relational integrity", async () => {
     assert.equal(invalidDevUpdate.statusCode, 400);
     assert.equal((await json(invalidDevUpdate)).error, "invalid_issue_type_for_environment");
 
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const streamResponse = await fetch(`${address}/api/issues/${devIssueKey}/agent-stream`);
+    assert.equal(streamResponse.status, 200);
+    const streamReader = streamResponse.body!.getReader();
+    const streamDecoder = new TextDecoder();
+    let streamBuffer = "";
+    let handshake = "";
+    while (!handshake) {
+      const { done, value } = await streamReader.read();
+      assert.equal(done, false);
+      streamBuffer += streamDecoder.decode(value, { stream: true });
+      const blocks = streamBuffer.split("\n\n");
+      streamBuffer = blocks.pop() ?? "";
+      handshake = blocks.find((block) => block.startsWith("event: snapshot_ready\n")) ?? "";
+    }
+    await streamReader.cancel();
+    assert.match(handshake, /^event: snapshot_ready\n/);
+    assert.doesNotMatch(handshake, /^event: ready\n/);
+
     const interrupted = openDatabase(join(root, "issues.db"));
     await interrupted.db.transaction(async (transaction) => {
       await transaction.update(issues).set({ status: "in_progress" }).where(eq(issues.id, createdInternalId));

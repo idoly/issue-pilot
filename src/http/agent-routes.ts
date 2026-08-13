@@ -90,7 +90,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       });
       const send = (event: RunEvent) => writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
       for (const event of transcript) send(event);
-      writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
+      writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
       liveEvents.activate(send);

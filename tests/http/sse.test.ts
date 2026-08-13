@@ -27,14 +27,14 @@ test("queues SSE payloads in order until a blocked response drains", async () =>
   const replay = `data: ${"x".repeat(1024 * 1024)}\n\n`;
 
   writer.write(replay);
-  writer.write("event: ready\ndata: {}\n\n");
+  writer.write("event: snapshot_ready\ndata: {}\n\n");
   writer.write("data: live\n\n");
   await nextTurn();
   assert.deepEqual(response.payloads, [replay]);
 
   response.emit("drain");
   await writer.idle();
-  assert.deepEqual(response.payloads, [replay, "event: ready\ndata: {}\n\n", "data: live\n\n"]);
+  assert.deepEqual(response.payloads, [replay, "event: snapshot_ready\ndata: {}\n\n", "data: live\n\n"]);
 });
 
 test("treats synchronous socket write failures as a closed stream", async () => {

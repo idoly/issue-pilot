@@ -292,7 +292,7 @@ Session resource loader 明确关闭 extension、skill、prompt template、theme
 - `buildContextEntries()` 生成当前有效上下文。
 - User custom entry、assistant message、tool result、summary 和 bash execution 投影为 Web 事件。
 - Model change、label 等内部 entry 不伪装成聊天消息。
-- SSE 在全部异步准备完成后先订阅 live bus，再同步读取 JSONL snapshot；snapshot 后事件先缓冲，按 replay、ready、live 顺序发送，避免 replay/live 间隙。Write 遇到 backpressure 时等待 `drain`，待发送 payload 超过根配置预算时关闭慢连接；连接全生命周期捕获 transport close/error，并释放 listener 和 heartbeat。Listener 或 socket write 故障只终止该观察路径，不能反向打断 Agent 或其他订阅者。`ready` 是每次连接的状态对账点，直接携带 SQLite 中的权威 Issue 状态；Web 在面板本地对账，补齐断线期间未持久化到 JSONL 的完成/失败事件。只有 live `issue_status` 才触发父级 Issue DTO 刷新，避免 replay ready 形成重连循环。
+- SSE 在全部异步准备完成后先订阅 live bus，再同步读取 JSONL snapshot；snapshot 后事件先缓冲，按 replay、`snapshot_ready`、live 顺序发送，避免 replay/live 间隙。Write 遇到 backpressure 时等待 `drain`，待发送 payload 超过根配置预算时关闭慢连接；连接全生命周期捕获 transport close/error，并释放 listener 和 heartbeat。Listener 或 socket write 故障只终止该观察路径，不能反向打断 Agent 或其他订阅者。`snapshot_ready` 是每次连接的状态对账点，直接携带 SQLite 中的权威 Issue 状态；Web 在面板本地对账，补齐断线期间未持久化到 JSONL 的完成/失败事件。只有 live `issue_status` 才触发父级 Issue DTO 刷新。握手事件使用版本化名称，使缓存中的旧前端恢复时收不到旧 `ready` 事件，避免重新触发已移除的 ready-refresh 重连循环。
 
 Web 只负责 presentation，不维护第二份对话事实源。
 

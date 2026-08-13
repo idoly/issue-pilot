@@ -198,7 +198,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const eventSource = new EventSource(agentStreamUrl(issueId));
     stream = eventSource;
     eventSource.addEventListener("open", () => { if (currentConnection === connectionId) { setConnected(true); setError(""); } });
-    eventSource.addEventListener("ready", (event) => {
+    eventSource.addEventListener("snapshot_ready", (event) => {
       if (currentConnection !== connectionId) return;
       try {
         const payload = JSON.parse(event.data) as { agent?: { provider: string; model: string; thinkingLevel: string }; footer?: AgentFooterStats; running?: boolean; issueStatus?: IssueStatus };

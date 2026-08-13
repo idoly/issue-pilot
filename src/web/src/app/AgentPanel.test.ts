@@ -168,7 +168,13 @@ describe("Agent conversation state", () => {
     expect(source.url).toBe("/api/issues/ISSUE-20260810-001/agent-stream");
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
-    source.emit("ready", {
+    source.emit("ready", { agent: { provider: "stale", model: "stale-model", thinkingLevel: "high" }, running: false, issueStatus: "resolved" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByText("no-model")).toBeTruthy();
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(EventSourceMock.instances).toHaveLength(1);
+    source.emit("snapshot_ready", {
       agent: { provider: "test", model: "model", thinkingLevel: "medium" },
       footer: { input: 11_000_000, output: 1_300_000, cacheRead: 498_000_000, cacheWrite: 0, cost: 385.206, latestCacheHitRate: 95, contextPercent: 32.9, contextWindow: 272_000, autoCompact: true },
       running: false,
@@ -222,7 +228,7 @@ describe("Agent conversation state", () => {
     const view = render(() => AgentPanel({ issue, onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("ready", { running: false, issueStatus: "pending" });
+    source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-old"));
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-new"));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
@@ -232,7 +238,7 @@ describe("Agent conversation state", () => {
     view.unmount();
   });
 
-  it("contains Issue refresh failures and retries on the next ready event", async () => {
+  it("contains Issue refresh failures and retries on the next Issue status event", async () => {
     EventSourceMock.instances.length = 0;
     const issue = {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
@@ -246,7 +252,7 @@ describe("Agent conversation state", () => {
     const view = render(() => AgentPanel({ issue, onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("ready", { running: false, issueStatus: "pending" });
+    source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-failed"));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("工单状态刷新失败"));
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-retry"));
