@@ -76,18 +76,20 @@ export class AgentEngine implements AgentController {
   private readonly stateRoot: string;
   private readonly database: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
+  private readonly onError: (error: unknown) => void;
   private readonly sessions = new Map<string, ManagedPiSession>();
   private readonly sharedReadOnlySessions = new Set<string>();
   private readonly piRuntime = new PiSessionRuntime();
   private closePromise: Promise<void> | undefined;
   private closing = false;
 
-  constructor(database: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void) {
+  constructor(database: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void, onError: (error: unknown) => void = () => undefined) {
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.worktreeManager = new WorktreeManager(this.stateRoot);
     this.codeServerManager = new CodeServerManager(this.stateRoot);
     this.publish = publish;
+    this.onError = onError;
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
@@ -212,7 +214,8 @@ export class AgentEngine implements AgentController {
   private schedule(issueId: string, operation: () => Promise<void>): void {
     this.beginActivity(issueId);
     void this.issueQueue.run(issueId, operation).catch(async (error) => {
-      await this.stopSession(issueId).catch(() => undefined);
+      const cleanupFailures: unknown[] = [];
+      try { await this.stopSession(issueId); } catch (cleanupError) { cleanupFailures.push(cleanupError); }
       try {
         const failed = await this.database.transaction(async (transaction) => {
           const [failedIssue] = await transaction.update(issues).set({ status: "open", updatedAt: new Date() })
@@ -227,9 +230,10 @@ export class AgentEngine implements AgentController {
           return true;
         });
         if (failed) this.publishStatus(issueId, "error");
-      } catch {
-        // A reporting write must not turn a handled background failure into an unhandled rejection.
+      } catch (reportingError) {
+        cleanupFailures.push(reportingError);
       }
+      if (cleanupFailures.length) this.reportError(new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed"));
     }).finally(() => this.endActivity(issueId));
   }
 
@@ -410,13 +414,23 @@ export class AgentEngine implements AgentController {
 
   }
 
+  private reportError(error: unknown): void {
+    try { this.onError(error); } catch {
+      // Logging failures cannot create an unhandled background rejection.
+    }
+  }
+
+  private publishEvent(event: RunEvent): void {
+    try { this.publish?.(event); } catch (error) { this.reportError(error); }
+  }
+
   private publishPiEvent(issueId: string, event: JsonAgentSessionEvent): void {
-    this.publish?.({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event });
+    this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event });
   }
 
   private async recordUserMessage(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
     managed.session.sessionManager.appendCustomEntry("issue-pilot-user", { message });
-    this.publish?.({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message } });
+    this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message } });
   }
 
   private async promptExisting(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
@@ -460,7 +474,7 @@ export class AgentEngine implements AgentController {
   }
 
   private publishStatus(issueId: string, status: "complete" | "error"): void {
-    this.publish?.({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_status", status } });
+    this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_status", status } });
   }
 
 }

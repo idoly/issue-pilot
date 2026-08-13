@@ -184,6 +184,12 @@ describe("Agent conversation state", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
     expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 32.9%/272k (auto)")).toBeTruthy();
     expect(screen.getByText("model")).toBeTruthy();
+    const composer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    fireEvent.input(composer, { target: { value: "draft survives replay" } });
+    source.emit("message", event({ type: "compaction_end", reason: "manual", aborted: false, willRetry: false, result: undefined }, "compaction-reconnect"));
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(2));
+    expect(source.closed).toBe(true);
+    expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).value).toBe("draft survives replay");
     expect(screen.queryByLabelText("中止处理")).toBeNull();
     expect(screen.queryByLabelText("放大 Agent")).toBeNull();
     view.unmount();

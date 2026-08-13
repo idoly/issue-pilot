@@ -24,6 +24,7 @@ export const issuePilotConfig = Object.freeze({
     port: 3000,
     logger: true,
     sseHeartbeatMs: 15_000,
+    ssePendingBytes: 4 * 1024 * 1024,
   }),
   web: Object.freeze({
     host: "0.0.0.0",

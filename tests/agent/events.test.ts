@@ -38,8 +38,22 @@ test("uses a listener snapshot for each event publication", () => {
   assert.deepEqual(received, ["first", "second"]);
 });
 
+test("isolates listener and error-handler failures from other observers", () => {
+  const errors: unknown[] = [];
+  const bus = new AgentEventBus((error) => { errors.push(error); throw new Error("logger_failed"); });
+  const received: string[] = [];
+  bus.subscribe("issue-1", () => { throw new Error("listener_failed"); });
+  bus.subscribe("issue-1", ({ id }) => received.push(id));
+  assert.doesNotThrow(() => bus.publish({ id: "event", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } }));
+  bus.publish({ id: "next", issueId: "issue-1", createdAt: "2026-08-08T00:00:01.000Z", event: { type: "agent_start" } });
+  assert.deepEqual(received, ["event", "next"]);
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0]), /listener_failed/);
+});
+
 test("buffers live events until session replay is ready", () => {
-  const bus = new AgentEventBus();
+  const errors: unknown[] = [];
+  const bus = new AgentEventBus((error) => errors.push(error));
   const received: string[] = [];
   const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
   const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
@@ -52,6 +66,13 @@ test("buffers live events until session replay is ready", () => {
   bus.publish(event("after-close"));
   assert.deepEqual(received, ["during-replay-1", "during-replay-2", "live"]);
   assert.throws(() => subscription.activate(() => undefined), /agent_event_subscription_already_active/);
+
+  const failing = subscribeBufferedAgentEvents(bus, "issue-2");
+  bus.publish({ ...event("buffered-failure"), issueId: "issue-2" });
+  assert.doesNotThrow(() => failing.activate(() => { throw new Error("sink_failed"); }));
+  bus.publish({ ...event("live-failure"), issueId: "issue-2" });
+  failing.unsubscribe();
+  assert.equal(errors.length, 1);
 });
 
 test("replays the visible transcript from the active Pi session branch", () => {

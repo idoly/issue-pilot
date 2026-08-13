@@ -138,9 +138,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   let stream: EventSource | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let connectionId = 0;
+  let issueGeneration = 0;
   let replayComplete = false;
   let followLatest = true;
-  const eventIds = new Set<string>();
   const pasteEditor = new PasteEditorModel();
 
   const running = () => processing() || isWorkspaceBusy(props.issue.workspace.status);
@@ -165,8 +165,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     queueMicrotask(() => resizeEditor());
   };
   const append = (event: RunEvent) => {
-    if (eventIds.has(event.id)) return;
-    eventIds.add(event.id);
     setEntries((current) => applyAgentEvent(current, event));
     if (replayComplete) setFooter((current) => footerAfterEvent(current, event.event));
     const type = event.event.type;
@@ -179,11 +177,12 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       else if (replayComplete) setUnread((value) => value + 1);
     });
   };
-  const connect = (issueId: string) => {
+  const connect = (issueId: string, resetEditor = false) => {
     stream?.close();
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    eventIds.clear(); pasteEditor.reset(); setEditorDraft(""); setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
-    setConnected(false); setSending(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" }); replayComplete = false;
+    setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
+    setConnected(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" }); replayComplete = false;
+    if (resetEditor) { pasteEditor.reset(); setEditorDraft(""); setSending(false); }
     const currentConnection = ++connectionId;
     const eventSource = new EventSource(agentStreamUrl(issueId));
     stream = eventSource;
@@ -222,16 +221,16 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const message = pasteEditor.expand(editorText).trim();
     if (!message || sending() || !canSend()) return;
     const issueId = props.issue.id;
-    const submitConnection = connectionId;
+    const submitGeneration = issueGeneration;
     setEditorDraft(""); setSending(true); setError(""); scrollLatest();
     try {
       await sendAgentMessage(issueId, message);
-      if (submitConnection !== connectionId) return;
+      if (submitGeneration !== issueGeneration) return;
       pasteEditor.reset(); setProcessing(true);
     } catch (cause) {
-      if (submitConnection !== connectionId) return;
+      if (submitGeneration !== issueGeneration) return;
       setEditorDraft(editorText); setError(cause instanceof Error ? cause.message : "agent_message_failed");
-    } finally { if (submitConnection === connectionId) setSending(false); }
+    } finally { if (submitGeneration === issueGeneration) setSending(false); }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {
     setEditorDraft(edit.value);
@@ -292,8 +291,11 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       event.preventDefault(); void submit();
     }
   };
-  createEffect(() => props.issue.id, (issueId) => connect(issueId));
-  onCleanup(() => { connectionId += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
+  createEffect(() => props.issue.id, (issueId) => {
+    issueGeneration += 1;
+    connect(issueId, true);
+  });
+  onCleanup(() => { connectionId += 1; issueGeneration += 1; stream?.close(); if (reconnectTimer) clearTimeout(reconnectTimer); });
 
   return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
     <div class="agent-conversation" role="log" aria-live="polite">

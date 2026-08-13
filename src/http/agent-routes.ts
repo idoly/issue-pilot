@@ -56,22 +56,47 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const configuredModel = (await modelCatalog.list()).find((candidate) => candidate.provider === provider && candidate.id === model);
     const contextWindow = configuredModel?.contextWindow ?? 0;
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    const manager = binding && await pathExists(binding.sessionFile) ? SessionManager.open(binding.sessionFile) : undefined;
-    const transcript = manager ? sessionTranscript(manager, issue.id) : [];
-    const footer: AgentFooterStats = manager ? sessionFooterStats(manager, contextWindow) : {
-      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
-      latestCacheHitRate: null, contextPercent: 0, contextWindow, autoCompact: true,
-    };
+    const sessionReady = Boolean(binding && await pathExists(binding.sessionFile));
     const liveEvents = subscribeBufferedAgentEvents(events, issue.id);
-    reply.hijack();
-    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
-    const writer = createOrderedSseWriter(reply.raw);
-    const send = (event: RunEvent) => writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
-    for (const event of transcript) send(event);
-    writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id) })}\n\n`);
-    liveEvents.activate(send);
-    const heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
-    request.raw.once("close", () => { clearInterval(heartbeat); liveEvents.unsubscribe(); });
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let hijacked = false;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      reply.raw.off("close", cleanup);
+      if (heartbeat) clearInterval(heartbeat);
+      liveEvents.unsubscribe();
+    };
+    try {
+      const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
+      const transcript = manager ? sessionTranscript(manager, issue.id) : [];
+      const footer: AgentFooterStats = manager ? sessionFooterStats(manager, contextWindow) : {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+        latestCacheHitRate: null, contextPercent: 0, contextWindow, autoCompact: true,
+      };
+      reply.raw.once("close", cleanup);
+      reply.hijack();
+      hijacked = true;
+      reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+      const writer = createOrderedSseWriter(reply.raw, issuePilotConfig.http.ssePendingBytes, (error) => {
+        try { app.log.error(error); }
+        finally {
+          cleanup();
+          reply.raw.destroy();
+        }
+      });
+      const send = (event: RunEvent) => writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+      for (const event of transcript) send(event);
+      writer.write(`event: ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id) })}\n\n`);
+      if (cleaned) return;
+      heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
+      liveEvents.activate(send);
+    } catch (error) {
+      cleanup();
+      if (hijacked && !reply.raw.destroyed) reply.raw.destroy();
+      throw error;
+    }
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {

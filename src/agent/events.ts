@@ -15,9 +15,29 @@ type RunEventListener = (event: RunEvent) => void;
 
 export class AgentEventBus {
   private readonly listeners = new Map<string, Set<RunEventListener>>();
+  private readonly onListenerError: (error: unknown) => void;
+
+  constructor(onListenerError: (error: unknown) => void = () => undefined) {
+    this.onListenerError = onListenerError;
+  }
 
   publish(event: RunEvent): void {
-    for (const listener of [...(this.listeners.get(event.issueId) ?? [])]) listener(event);
+    const issueListeners = this.listeners.get(event.issueId);
+    if (!issueListeners) return;
+    for (const listener of [...issueListeners]) if (!this.deliver(listener, event)) issueListeners.delete(listener);
+    if (!issueListeners.size) this.listeners.delete(event.issueId);
+  }
+
+  deliver(listener: RunEventListener, event: RunEvent): boolean {
+    try {
+      listener(event);
+      return true;
+    } catch (error) {
+      try { this.onListenerError(error); } catch {
+        // Event observers cannot affect Agent execution or other observers.
+      }
+      return false;
+    }
   }
 
   subscribe(issueId: string, listener: RunEventListener): () => void {
@@ -45,7 +65,11 @@ export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string
       sink = nextSink;
       const buffered = pending;
       pending = [];
-      for (const event of buffered) nextSink(event);
+      for (const event of buffered) {
+        if (bus.deliver(nextSink, event)) continue;
+        unsubscribe();
+        break;
+      }
     },
     unsubscribe,
   };

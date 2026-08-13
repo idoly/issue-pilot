@@ -74,8 +74,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog();
     const attachmentLimits = applicationConfig.limits.attachment;
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
-    const events = new AgentEventBus();
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event));
+    const events = new AgentEventBus((error) => app.log.error(error));
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error));
     let scopeTail = Promise.resolve();
     const runScopeExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
       const preceding = scopeTail;

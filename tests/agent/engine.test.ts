@@ -157,6 +157,27 @@ test("serializes streaming messages and records only accepted steering", async (
   assert.equal(engine.isRunning("issue-1"), false);
 });
 
+test("isolates publisher failures after recording a streaming message", async () => {
+  const reported: unknown[] = [];
+  let recorded = 0;
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
+  const engine = new AgentEngine(database as never, ".issue-pilot", () => { throw new Error("publisher_failed"); }, (error) => reported.push(error));
+  const internal = engine as unknown as { sessions: Map<string, unknown> };
+  internal.sessions.set("issue-1", {
+    streaming: true,
+    session: {
+      sessionManager: { appendCustomEntry() { recorded += 1; } },
+      async steer() {},
+    },
+    async stop() {},
+  });
+
+  await engine.send("issue-1", "record despite observer failure");
+  assert.equal(recorded, 1);
+  assert.match(String(reported[0]), /publisher_failed/);
+  assert.equal(internal.sessions.has("issue-1"), true);
+});
+
 test("closes a streaming session when an accepted steer cannot be recorded", async () => {
   let stopped = false;
   const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
@@ -175,6 +196,26 @@ test("closes a streaming session when an accepted steer cannot be recorded", asy
   assert.equal(stopped, true);
   assert.equal(internal.sessions.has("issue-1"), false);
   assert.equal(engine.isRunning("issue-1"), false);
+});
+
+test("reports background cleanup failures without leaking logger errors", async () => {
+  const reported: unknown[] = [];
+  const database = { async transaction() { throw new Error("reporting_failed"); } };
+  const engine = new AgentEngine(database as never, ".issue-pilot", undefined, (error) => {
+    reported.push(error);
+    throw new Error("logger_failed");
+  });
+  const internal = engine as unknown as {
+    sessions: Map<string, unknown>;
+    schedule(issueId: string, operation: () => Promise<void>): void;
+  };
+  internal.sessions.set("issue-1", { async stop() { throw new Error("stop_failed"); } });
+  internal.schedule("issue-1", async () => { throw new Error("agent_failed"); });
+  await waitFor(() => reported.length === 1 && !engine.isRunning("issue-1"));
+  const failure = reported[0];
+  assert.ok(failure instanceof AggregateError);
+  assert.equal(failure.message, "agent_failure_cleanup_failed");
+  assert.deepEqual(failure.errors.map(String), ["Error: agent_failed", "Error: stop_failed", "Error: reporting_failed"]);
 });
 
 test("a failed Agent operation disposes and revokes its SDK session", async () => {

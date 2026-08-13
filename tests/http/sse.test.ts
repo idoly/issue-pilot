@@ -37,6 +37,58 @@ test("queues SSE payloads in order until a blocked response drains", async () =>
   assert.deepEqual(response.payloads, [replay, "event: ready\ndata: {}\n\n", "data: live\n\n"]);
 });
 
+test("treats synchronous socket write failures as a closed stream", async () => {
+  const response = new FakeResponse();
+  let attempts = 0;
+  response.write = () => {
+    attempts += 1;
+    throw new Error("socket_closed");
+  };
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, Number.POSITIVE_INFINITY, (error) => {
+    failures.push(error);
+    throw new Error("cleanup_failed");
+  });
+  writer.write("data: first\n\n");
+  await writer.idle();
+  assert.equal(attempts, 1);
+  assert.match(String(failures[0]), /socket_closed/);
+  writer.write("data: must-not-write\n\n");
+  await writer.idle();
+  assert.equal(attempts, 1);
+  assert.equal(failures.length, 1);
+});
+
+test("stops a backpressured stream on transport error before socket flags update", async () => {
+  const response = new FakeResponse();
+  response.blockNextWrite = true;
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, Number.POSITIVE_INFINITY, (error) => failures.push(error));
+  writer.write("data: first\n\n");
+  writer.write("data: must-not-write\n\n");
+  await nextTurn();
+  response.emit("error", new Error("transport_failed"));
+  await writer.idle();
+  assert.deepEqual(response.payloads, ["data: first\n\n"]);
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /transport_failed/);
+});
+
+test("closes a slow stream before its pending payload budget is exceeded", async () => {
+  const response = new FakeResponse();
+  response.blockNextWrite = true;
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, 10, (error) => failures.push(error));
+  writer.write("12345678");
+  await nextTurn();
+  writer.write("abc");
+  writer.write("must-not-write");
+  await writer.idle();
+  assert.deepEqual(response.payloads, ["12345678"]);
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /sse_backpressure_limit_exceeded/);
+});
+
 test("releases SSE backpressure waits when the client disconnects", async () => {
   const response = new FakeResponse();
   response.blockNextWrite = true;
