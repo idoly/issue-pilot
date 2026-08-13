@@ -217,6 +217,7 @@ test("uses unified code-server runtimes while preserving read-only and writable 
     assert.equal(prodSession!.workspacePath, issueRuntimeRoot(stateRoot, prodIssue!.key));
     assert.equal(policies[0]!.service.repositories[0]!.codeAccess, "read");
     assert.equal(sessionStops, 1);
+    assert.equal(path.dirname(policies[0]!.service.repositories[0]!.repositoryPath), issueRuntimeRoot(stateRoot, prodIssue!.key));
     assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", policies[0]!.service.repositories[0]!.repositoryPath, "rev-parse", "--show-toplevel"])).startsWith(".."), false);
     await assert.rejects(access(issueWorkspaceRoot(stateRoot, prodIssue!.key)));
 

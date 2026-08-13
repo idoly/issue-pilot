@@ -3,17 +3,16 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
-import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, environments, issueAttachments, issues, serviceDeployments, services } from "../db/schema.ts";
+import { agentSessions, issues, serviceDeployments } from "../db/schema.ts";
 import { AGENT_THINKING_LEVELS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
-import { issueAttachmentRoot, pathExists } from "../workspace/state.ts";
+import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
 import { assertIssueRunnable, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
-  const { app, database, engine, events, modelCatalog, stateRoot } = context;
+  const { app, database, engine, events, modelCatalog } = context;
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
@@ -21,24 +20,6 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       const currentIssue = await requireIssue(database, issue.key);
       if (currentIssue.status !== "open") throw new ApiError(409, "issue_not_retryable");
       reservation.enqueue(issue.id);
-    });
-    return reply.code(202).send({ ok: true });
-  });
-
-  app.post<{ Params: { key: string } }>("/api/issues/:key/sync", async (request, reply) => {
-    const issue = await requireIssue(database, request.params.key);
-    assertIssueRunnable(issue);
-    await runIssueExclusive(engine, [issue.id], async (reservation) => {
-      const currentIssue = await requireIssue(database, issue.key);
-      assertIssueRunnable(currentIssue);
-      const [service, environment, attachments] = await Promise.all([
-        database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, currentIssue.serviceId)).limit(1).then((rows) => rows[0]),
-        database.db.select({ key: environments.key }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1).then((rows) => rows[0]),
-        database.db.select({ id: issueAttachments.id, fileName: issueAttachments.fileName, mediaType: issueAttachments.mediaType, size: issueAttachments.size, sha256: issueAttachments.sha256 }).from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
-      ]);
-      if (!service || !environment) throw new ApiError(409, "issue_scope_not_found");
-      const message = issueMetadataUpdatePrompt({ issue: currentIssue, service, environmentKey: environment.key, attachments, attachmentPath: issueAttachmentRoot(stateRoot, currentIssue.key) });
-      reservation.enqueue(issue.id, message, false);
     });
     return reply.code(202).send({ ok: true });
   });

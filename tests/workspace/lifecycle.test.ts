@@ -14,7 +14,7 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal } from "../../src/workspace/lifecycle.ts";
+import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
 import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -84,6 +84,42 @@ test("stops maintenance only after the active exclusive operation drains", async
   assert.equal(stopped, false);
   releaseOperation();
   await Promise.all([operation, stopping]);
+  assert.equal(stopped, true);
+});
+
+test("serializes deep inspection per Issue without blocking other Issues", async () => {
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
+    retentionMs: Number.POSITIVE_INFINITY,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+  });
+  const internal = manager as unknown as {
+    issueRow(issueId: string): Promise<{ issue: { id: string; key: string }; workspace: null }>;
+    inspectLocked(issue: { id: string; key: string }, workspace: null): Promise<WorkspaceInspection>;
+  };
+  internal.issueRow = async (issueId) => ({ issue: { id: issueId, key: issueId }, workspace: null });
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const inspected: string[] = [];
+  internal.inspectLocked = async (issue) => {
+    inspected.push(issue.id);
+    if (issue.id === "issue-a" && inspected.filter((id) => id === "issue-a").length === 1) await firstGate;
+    return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
+  };
+
+  const first = manager.inspectIssue("issue-a");
+  const sameIssue = manager.inspectIssue("issue-a");
+  const otherIssue = manager.inspectIssue("issue-b");
+  await otherIssue;
+  assert.deepEqual(inspected, ["issue-a", "issue-b"]);
+  let stopped = false;
+  const stopping = manager.start()().then(() => { stopped = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  releaseFirst();
+  await Promise.all([first, sameIssue, stopping]);
+  assert.deepEqual(inspected, ["issue-a", "issue-b", "issue-a"]);
   assert.equal(stopped, true);
 });
 

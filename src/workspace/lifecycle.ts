@@ -10,11 +10,11 @@ import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
+import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { CodeServerManager } from "./code-server.ts";
-import { developmentWorktreeMode, prepareDevelopmentIssueRuntime } from "./development.ts";
+import { prepareDevelopmentIssueRuntime } from "./development.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
-import { prepareProjectWrappers } from "./project-wrappers.ts";
-import { prepareIssueRuntime } from "./runtime.ts";
+import { developmentWorktreeMode, IssueProjectManager } from "./project.ts";
 import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -81,10 +81,12 @@ export class WorkspaceLifecycleManager {
   private readonly stateRoot: string;
   private readonly engine: AgentController;
   private readonly worktrees: WorktreeManager;
+  private readonly projects: IssueProjectManager;
   private readonly codeServer: CodeServer;
   private readonly prepareDevelopmentRuntime: (issue: { id: string; key: string }) => Promise<unknown>;
   readonly policy: WorkspaceRetentionPolicy;
-  private tail = Promise.resolve();
+  private readonly queue = new SerialQueue();
+  private readonly issueQueue = new KeyedSerialQueue();
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
 
@@ -102,6 +104,7 @@ export class WorkspaceLifecycleManager {
     this.engine = engine;
     this.policy = policy;
     this.worktrees = new WorktreeManager(this.stateRoot);
+    this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
     this.codeServer = codeServer;
     this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => prepareDevelopmentIssueRuntime(this.database, this.stateRoot, issue, this.codeServer, this.worktrees));
   }
@@ -122,13 +125,14 @@ export class WorkspaceLifecycleManager {
       if (timer) clearInterval(timer);
       timer = undefined;
       this.stopping = true;
-      this.stopPromise ??= this.tail;
+      this.stopPromise ??= Promise.all([this.queue.idle(), this.issueQueue.idle()]).then(() => undefined);
       return this.stopPromise;
     };
   }
 
   async inspectIssue(issueId: string): Promise<WorkspaceInspection> {
-    return this.exclusive(async () => {
+    if (this.stopping) throw new Error("workspace_lifecycle_closing");
+    return this.issueQueue.run(issueId, async () => {
       const issueRow = await this.issueRow(issueId);
       return this.inspectLocked(issueRow.issue, issueRow.workspace);
     });
@@ -138,7 +142,7 @@ export class WorkspaceLifecycleManager {
     return this.exclusive(async () => {
       const issueRows = await this.issueRows();
       const inspections: WorkspaceInspection[] = [];
-      for (const issueRow of issueRows) inspections.push(await this.inspectLocked(issueRow.issue, issueRow.workspace));
+      for (const issueRow of issueRows) inspections.push(await this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace)));
       return {
         totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
         policy: {
@@ -153,23 +157,23 @@ export class WorkspaceLifecycleManager {
   }
 
   async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {
-    return this.exclusive(async () => {
+    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
       try { return await this.engine.runExclusive([issueId], async (reservation) => this.releaseLocked(await this.issueRow(issueId), reservation)); }
       catch (error) {
         if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceReleaseRefusal(error.message);
         throw error;
       }
-    });
+    }));
   }
 
   async reopenIssue(issueId: string): Promise<Issue> {
-    return this.exclusive(async () => {
+    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
       try { return await this.engine.runExclusive([issueId], async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation)); }
       catch (error) {
         if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceRestoreRefusal(error.message);
         throw error;
       }
-    });
+    }));
   }
 
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }> }> {
@@ -190,7 +194,7 @@ export class WorkspaceLifecycleManager {
       const releaseCandidate = async (candidate: IssueRow) => {
         attemptedIssues.add(candidate.issue.id);
         try {
-          const release = await this.engine.runExclusive([candidate.issue.id], (reservation) => this.releaseLocked(candidate, reservation));
+          const release = await this.issueQueue.run(candidate.issue.id, () => this.engine.runExclusive([candidate.issue.id], (reservation) => this.releaseLocked(candidate, reservation)));
           if (!release.alreadyReleased) {
             released.push(release);
             totalBytes = Math.max(0, totalBytes - (workspaceBytes.get(candidate.issue.id) ?? release.releasedBytes));
@@ -243,54 +247,28 @@ export class WorkspaceLifecycleManager {
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
     if (await pathExists(workspaceRoot)) throw new WorkspaceRestoreRefusal("workspace_path_already_exists");
 
-    let mode: ReturnType<typeof developmentWorktreeMode>;
-    try { mode = developmentWorktreeMode(issue.type); }
-    catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
-    let names: Map<string, string>;
-    try { names = issueRepositoryWorkspaceNames(repositories); }
+    try { developmentWorktreeMode(issue.type); issueRepositoryWorkspaceNames(repositories); }
     catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
     await reservation.closeSession(issue.id);
     try {
-      return await this.worktrees.prepareBatch({
-        worktrees: repositories.map((repository) => ({
-          issueKey: issue.key,
-          workspaceName: names.get(repository.url)!,
-          url: repository.url,
-          baseBranch: repository.baseBranch,
-          mode,
-          workingBranch: repository.workingBranch!,
-          ...(repository.commitBefore ? { existingBaseCommit: repository.commitBefore } : {}),
-        })),
-        finalize: async (prepared) => {
-          await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
-          const runtimeRoot = await prepareIssueRuntime(
-            this.stateRoot,
-            issue.key,
-            prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })),
-            "write",
-          );
-          await prepareProjectWrappers(runtimeRoot);
-          await this.codeServer.ensure(issue.key, runtimeRoot);
-          return this.database.transaction(async (transaction) => {
-            const now = new Date();
-            for (const [index, repository] of repositories.entries()) {
-              await transaction.update(issueRepositories).set({ localPath: prepared[index]!.workspacePath, workspaceName: names.get(repository.url)!, updatedAt: now }).where(eq(issueRepositories.id, repository.id));
-            }
-            await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
-            const [reopened] = await transaction.update(issues).set({ status: "open", resolvedAt: null, updatedAt: now }).where(and(eq(issues.id, issue.id), eq(issues.status, "resolved"))).returning();
-            if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
-            return reopened;
-          });
-        },
-      });
+      return await this.projects.restoreDevelopmentWorkspace(
+        issue,
+        repositories,
+        this.codeServer,
+        () => this.restoreDevelopmentRuntime(issue),
+        (prepared, names) => this.database.transaction(async (transaction) => {
+          const now = new Date();
+          for (const [index, repository] of repositories.entries()) {
+            await transaction.update(issueRepositories).set({ localPath: prepared[index]!.workspacePath, workspaceName: names.get(repository.url)!, updatedAt: now }).where(eq(issueRepositories.id, repository.id));
+          }
+          await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
+          const [reopened] = await transaction.update(issues).set({ status: "open", resolvedAt: null, updatedAt: now }).where(and(eq(issues.id, issue.id), eq(issues.status, "resolved"))).returning();
+          if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
+          return reopened;
+        }),
+      );
     } catch (error) {
-      let cleanupFailed = error instanceof WorktreeRollbackFailure;
-      try { await rmdir(workspaceRoot); }
-      catch (cleanupError) {
-        if (!(cleanupError && typeof cleanupError === "object" && "code" in cleanupError && cleanupError.code === "ENOENT")) cleanupFailed = true;
-      }
-      try { await this.restoreDevelopmentRuntime(issue); } catch { cleanupFailed = true; }
-      if (cleanupFailed) throw new WorkspaceRestoreRefusal("workspace_restore_cleanup_failed");
+      if (error instanceof Error && error.message === "workspace_restore_cleanup_failed") throw new WorkspaceRestoreRefusal(error.message);
       throw error instanceof WorkspaceRestoreRefusal ? error : new WorkspaceRestoreRefusal(errorMessage(error));
     }
   }
@@ -427,15 +405,6 @@ export class WorkspaceLifecycleManager {
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     if (this.stopping) throw new Error("workspace_lifecycle_closing");
-    const preceding = this.tail;
-    let complete!: () => void;
-    const queued = new Promise<void>((resolve) => { complete = resolve; });
-    this.tail = preceding.catch(() => undefined).then(() => queued);
-    await preceding.catch(() => undefined);
-    try {
-      return await operation();
-    } finally {
-      complete();
-    }
+    return this.queue.run(operation);
   }
 }

@@ -1,40 +1,21 @@
 import { and, eq, inArray } from "drizzle-orm";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { isNacosTarget, isSlsLogstore } from "../capabilities/contracts.ts";
+import { CapabilityConfigurationError, configuredCapabilitySections, parseCapabilityConfiguration, storedCapabilitySections } from "../capabilities/registry.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, isDmsDatabaseId, isDmsTenantId, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, type AgentConfiguration, type CapabilityName } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 
-const defaults = issuePilotConfig.defaults;
-const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
 
-const configurationInput = (value: unknown, required: boolean) => required ? record(value) : undefined;
-const optionalString = (value: unknown, maximum = 10_000) => optionalText(value, maximum) ?? "";
-
-function optionalCredentials(input: Record<string, unknown>, name: string) {
-  const username = optionalString(input.username, 500);
-  const password = optionalString(input.password);
-  if (Boolean(username) !== Boolean(password)) throw new ApiError(400, `invalid_${name}_credentials`);
-  return { username, ...(password ? { password } : {}) };
-}
-
-function boundedInteger(value: unknown, name: string, minimum: number, maximum: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) throw new ApiError(400, `invalid_${name}`);
-  return parsed;
-}
-
-function parseConnectionUrl(value: unknown, name: string, protocols: string[], options: { rootOnly?: boolean } = {}): string {
-  const configuredUrl = text(value, name, 4096);
-  let url: URL;
-  try { url = new URL(configuredUrl); } catch { throw new ApiError(400, `invalid_${name}`); }
-  if (!protocols.includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash || (options.rootOnly && url.pathname !== "/")) throw new ApiError(400, `invalid_${name}`);
-  return configuredUrl;
+function capabilityConfiguration<Key extends CapabilityName>(key: Key, value: unknown, required: boolean) {
+  if (!required) return undefined;
+  try { return parseCapabilityConfiguration(key, value); }
+  catch (error) {
+    if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
+    throw error;
+  }
 }
 
 export function parseCapabilities(value: unknown): CapabilityName[] {
@@ -43,80 +24,14 @@ export function parseCapabilities(value: unknown): CapabilityName[] {
   return CAPABILITY_KEYS.filter((key) => capabilities.includes(key));
 }
 
-export function parseNacosConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  const credentials = optionalCredentials(input, "nacos");
-  const dataIds = [...new Set(strings(input.dataIds, "nacos_data_ids").map((value) => text(value, "nacos_data_id", 255)))];
-  if (!dataIds.length || dataIds.length > issuePilotConfig.limits.capability.nacos.dataIds || dataIds.some((dataId) => !isNacosTarget(dataId))) throw new ApiError(400, "invalid_nacos_data_ids");
-  const group = text(input.group, "nacos_group", 255);
-  if (!isNacosTarget(group)) throw new ApiError(400, "invalid_nacos_group");
-  return {
-    serverUrl: parseConnectionUrl(input.serverUrl, "nacos_server_url", ["http:", "https:"], { rootOnly: true }),
-    namespace: optionalString(input.namespace, 255), group, dataIds, ...credentials,
-  };
-}
-
-export function parseDatabaseConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  const url = parseConnectionUrl(input.url, "db_url", ["mysql:"]);
-  const parsed = new URL(url);
-  let database = "";
-  try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { throw new ApiError(400, "invalid_db_url"); }
-  if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) throw new ApiError(400, "invalid_db_url");
-  return { url, username: text(input.username, "db_username", 500), password: text(input.password, "db_password") };
-}
-
-export function parseDmsConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  const dbId = text(input.dbId, "dms_db_id", 10);
-  const tid = optionalText(input.tid, 16) ?? undefined;
-  if (!isDmsDatabaseId(dbId) || typeof input.logic !== "boolean" || (tid !== undefined && !isDmsTenantId(tid))) throw new ApiError(400, "invalid_dms_scope");
-  return {
-    accessKeyId: text(input.accessKeyId, "dms_access_key_id", 500),
-    accessKeySecret: text(input.accessKeySecret, "dms_access_key_secret"),
-    dbId,
-    logic: input.logic,
-    ...(tid === undefined ? {} : { tid }),
-  };
-}
-
-export function parseSlsConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  const region = text(input.region, "sls_region", 63);
-  const project = text(input.project, "sls_project", 63);
-  const logstores = [...new Set(strings(input.logstores, "sls_logstores").map((value) => text(value, "sls_logstore", 63)))];
-  if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some((logstore) => !isSlsLogstore(logstore))) throw new ApiError(400, "invalid_sls_scope");
-  return { accessKeyId: text(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: text(input.accessKeySecret, "sls_access_key_secret"), region, project, logstores };
-}
-
-export function parseRedisConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  const password = optionalString(input.password);
-  return { host: text(input.host, "redis_host", 255), port: boundedInteger(input.port ?? defaults.redis.port, "redis_port", 1, 65_535), username: optionalString(input.username, 500), ...(password ? { password } : {}), database: boundedInteger(input.database ?? defaults.redis.database, "redis_database", 0, 1_000_000) };
-}
-
-export function parseElasticsearchConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  return { url: parseConnectionUrl(input.url, "es_url", ["http:", "https:"]), ...optionalCredentials(input, "es") };
-}
-
-export function parseRabbitMqConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  return { host: text(input.host, "mq_host", 255), port: boundedInteger(input.port ?? defaults.rabbitmq.port, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: text(input.username, "mq_username", 500), password: text(input.password, "mq_password"), virtualHost: text(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
-}
-
-export function parsePlaywrightConfiguration(value: unknown, required: boolean) {
-  const input = configurationInput(value, required);
-  if (!input) return undefined;
-  return { baseUrl: parseConnectionUrl(input.baseUrl, "browser_base_url", ["http:", "https:"]), ...optionalCredentials(input, "browser") };
-}
+export const parseNacosConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("nacos", value, required);
+export const parseDatabaseConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("db", value, required);
+export const parseDmsConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("dms", value, required);
+export const parseSlsConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("sls", value, required);
+export const parseRedisConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("redis", value, required);
+export const parseElasticsearchConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("es", value, required);
+export const parseRabbitMqConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("mq", value, required);
+export const parsePlaywrightConfiguration = (value: unknown, required: boolean) => capabilityConfiguration("playwright", value, required);
 
 function parseAgentConfiguration(value: unknown): AgentConfiguration {
   if (value === undefined || value === null) throw new ApiError(400, "agent_configuration_required");
@@ -146,19 +61,18 @@ function parseServiceConfigurationInput(input: Record<string, unknown>) {
       baseBranch: text(branch.baseBranch, "base_branch", 255),
     })) : [];
     if (repositoryBranches.length !== repositories.length || new Set(repositoryBranches.map((branch) => branch.repositoryAlias)).size !== repositoryBranches.length || repositoryBranches.some((branch) => !repositoryAliases.has(branch.repositoryAlias))) throw new ApiError(400, "invalid_deployment_repository_branches");
+    let capabilityConfiguration;
+    try { capabilityConfiguration = configuredCapabilitySections(deployment, capabilities); }
+    catch (error) {
+      if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
+      throw error;
+    }
     return {
       environmentKey: text(deployment.environmentKey, "environment_key", 100),
       repositoryBranches,
       capabilities,
       agent: parseAgentConfiguration(deployment.agent),
-      nacos: parseNacosConfiguration(deployment.nacos, capabilities.includes("nacos")),
-      db: parseDatabaseConfiguration(deployment.db, capabilities.includes("db")),
-      dms: parseDmsConfiguration(deployment.dms, capabilities.includes("dms")),
-      sls: parseSlsConfiguration(deployment.sls, capabilities.includes("sls")),
-      playwright: parsePlaywrightConfiguration(deployment.playwright, capabilities.includes("playwright")),
-      redis: parseRedisConfiguration(deployment.redis, capabilities.includes("redis")),
-      es: parseElasticsearchConfiguration(deployment.es, capabilities.includes("es")),
-      mq: parseRabbitMqConfiguration(deployment.mq, capabilities.includes("mq")),
+      ...capabilityConfiguration,
     };
   }) : [];
   if (new Set(deployments.map((deployment) => deployment.environmentKey)).size !== deployments.length) throw new ApiError(400, "duplicate_deployment_environment");
@@ -166,17 +80,7 @@ function parseServiceConfigurationInput(input: Record<string, unknown>) {
 }
 
 function storedDeploymentConfiguration(deployment: ReturnType<typeof parseServiceConfigurationInput>["deployments"][number]) {
-  return {
-    agent: deployment.agent,
-    ...(deployment.playwright ? { playwright: deployment.playwright } : {}),
-    ...(deployment.nacos ? { nacos: deployment.nacos } : {}),
-    ...(deployment.db ? { db: deployment.db } : {}),
-    ...(deployment.dms ? { dms: deployment.dms } : {}),
-    ...(deployment.redis ? { redis: deployment.redis } : {}),
-    ...(deployment.mq ? { mq: deployment.mq } : {}),
-    ...(deployment.es ? { es: deployment.es } : {}),
-    ...(deployment.sls ? { sls: deployment.sls } : {}),
-  };
+  return { agent: deployment.agent, ...storedCapabilitySections(deployment) };
 }
 
 type ParsedServiceConfiguration = ReturnType<typeof parseServiceConfigurationInput>;

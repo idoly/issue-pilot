@@ -30,7 +30,7 @@ export interface IssueComment {
 export interface IssueDetail extends IssueListItem {
   description: string;
   repositories: Array<{ url: string; baseBranch: string; workingBranch: string | null }>;
-  workspace: { status: WorkspaceStatus; url: string | null; lastError?: string | null; retryable?: boolean; bytes: number; releasable: boolean; releaseBlockedReason: string | null };
+  workspace: { status: WorkspaceStatus; url: string | null; lastError?: string | null; retryable?: boolean };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;

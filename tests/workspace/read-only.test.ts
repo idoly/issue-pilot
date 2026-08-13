@@ -80,6 +80,9 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     assert.equal(failedSwitch.blocked[0]?.issueKey, issue!.key);
     assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
     await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "main" }).where(eq(serviceDeploymentRepositories.repositoryId, extraRepository!.id));
+    const failedEditor = await prepareReadOnlyIssueRuntimes(database.db, root, { async ensure() { throw new Error("code_server_unavailable"); } });
+    assert.deepEqual(failedEditor, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "code_server_unavailable" }] });
+    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
     const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
     const runTransaction = runtimeDatabase.transaction.bind(runtimeDatabase);
     let failRepositoryTransaction = true;

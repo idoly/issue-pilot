@@ -161,7 +161,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
-      workspace: { status: "running", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_busy" },
+      workspace: { status: "running", url: null },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
     const view = render(() => AgentPanel({ issue, onRefresh }));
@@ -221,7 +221,7 @@ describe("Agent conversation state", () => {
         id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
         assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
         updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-        workspace: { status: "ready", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" },
+        workspace: { status: "ready", url: null },
       } satisfies IssueDetail;
       const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
       const first = EventSourceMock.instances[0]!;
@@ -263,7 +263,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-      workspace: { status: "ready", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" },
+      workspace: { status: "ready", url: null },
     } satisfies IssueDetail;
     let rejectFirst!: (error: unknown) => void;
     const firstRefresh = new Promise<IssueDetail>((_resolve, reject) => { rejectFirst = reject; });
@@ -289,7 +289,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-      workspace: { status: "ready", url: null, bytes: 0, releasable: false, releaseBlockedReason: "workspace_missing" },
+      workspace: { status: "ready", url: null },
     } satisfies IssueDetail;
     const onRefresh = vi.fn<() => Promise<IssueDetail>>()
       .mockRejectedValueOnce(new Error("network_failed"))

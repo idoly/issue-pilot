@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { capabilityScopesFromConfiguration, type CapabilityScopes } from "../capabilities/registry.ts";
 import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ISSUE_TYPES_BY_ENVIRONMENT, configuredCapabilities, isDmsDatabaseId, isDmsTenantId, normalizeIssueKey, type AgentThinkingLevel, type CapabilityName, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 
 export interface RepositoryGrant {
@@ -8,19 +9,11 @@ export interface RepositoryGrant {
   baseCommit: string;
 }
 
-export interface ServiceGrant {
+export interface ServiceGrant extends CapabilityScopes {
   serviceKey: string;
   environmentKey: string;
   environmentKind: EnvironmentKind;
   capabilities: CapabilityName[];
-  nacos?: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
-  db?: { deploymentId: string };
-  dms?: { deploymentId: string; dbId: string; logic: boolean; tid?: string };
-  sls?: { deploymentId: string; region: string; project: string; logstores: string[] };
-  playwright?: { deploymentId: string; baseUrl: string };
-  redis?: { deploymentId: string };
-  es?: { deploymentId: string };
-  mq?: { deploymentId: string; virtualHost: string };
   repositories: RepositoryGrant[];
 }
 
@@ -121,10 +114,6 @@ function configObject(config: Record<string, unknown>, key: string): Record<stri
   return section && typeof section === "object" && !Array.isArray(section) ? section as Record<string, unknown> : undefined;
 }
 
-function readStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every(isNonEmptyString) ? value : undefined;
-}
-
 function parseModelGrant(config: Record<string, unknown>): ModelGrant {
   const agentConfig = configObject(config, "agent");
   const provider = agentConfig && isNonEmptyString(agentConfig.provider) ? agentConfig.provider : undefined;
@@ -134,36 +123,6 @@ function parseModelGrant(config: Record<string, unknown>): ModelGrant {
     : undefined;
   if (!provider || !modelId || !thinkingLevel) throw new Error("issue_pilot_model_not_configured");
   return { provider, modelId, thinkingLevel };
-}
-
-function parseCapabilityScopes(config: Record<string, unknown>, deploymentId: string): Partial<ServiceGrant> {
-  const scopes: Partial<ServiceGrant> = {};
-  const nacos = configObject(config, "nacos");
-  const dataIds = readStringArray(nacos?.dataIds);
-  if (nacos && isNonEmptyString(nacos.serverUrl) && typeof nacos.namespace === "string" && isNonEmptyString(nacos.group) && dataIds?.length) {
-    scopes.nacos = { deploymentId, serverUrl: nacos.serverUrl, namespace: nacos.namespace, group: nacos.group, dataIds: [...new Set(dataIds)] };
-  }
-
-  if (configObject(config, "db")) scopes.db = { deploymentId };
-
-  const dms = configObject(config, "dms");
-  if (dms && isNonEmptyString(dms.dbId) && typeof dms.logic === "boolean" && (dms.tid === undefined || isNonEmptyString(dms.tid))) scopes.dms = {
-    deploymentId, dbId: dms.dbId, logic: dms.logic, ...(isNonEmptyString(dms.tid) ? { tid: dms.tid } : {}),
-  };
-
-  if (configObject(config, "redis")) scopes.redis = { deploymentId };
-  if (configObject(config, "es")) scopes.es = { deploymentId };
-
-  const sls = configObject(config, "sls");
-  const logstores = readStringArray(sls?.logstores);
-  if (sls && isNonEmptyString(sls.region) && isNonEmptyString(sls.project) && logstores) scopes.sls = { deploymentId, region: sls.region, project: sls.project, logstores };
-
-  const playwright = configObject(config, "playwright");
-  if (playwright && isNonEmptyString(playwright.baseUrl)) scopes.playwright = { deploymentId, baseUrl: playwright.baseUrl };
-
-  const mq = configObject(config, "mq");
-  if (mq && isNonEmptyString(mq.virtualHost)) scopes.mq = { deploymentId, virtualHost: mq.virtualHost };
-  return scopes;
 }
 
 export function createDeploymentPolicy(input: {
@@ -187,7 +146,7 @@ export function createDeploymentPolicy(input: {
       environmentKey: input.environmentKey,
       environmentKind: input.environmentKind,
       capabilities: configuredCapabilities(input.deploymentConfig),
-      ...parseCapabilityScopes(input.deploymentConfig, input.deploymentId),
+      ...capabilityScopesFromConfiguration(input.deploymentConfig, input.deploymentId),
       repositories: input.repositories,
     },
   });

@@ -16,7 +16,7 @@ vi.mock("../data/client", async (importOriginal) => {
     assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
     service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: codeServerUrl(id), retryable, bytes: id === "ISSUE-20260810-041" ? 4 * 1024 ** 3 : 0, releasable: id === "ISSUE-20260810-041", releaseBlockedReason: id === "ISSUE-20260810-041" ? null : "workspace_missing" },
+    workspace: { status: retryable ? "failed" : "ready", url: codeServerUrl(id), retryable },
   });
   const issues = [
     issue("ISSUE-20260810-042", "结算页提交后订单状态未刷新", "in_progress"),

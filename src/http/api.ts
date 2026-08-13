@@ -10,12 +10,13 @@ import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
 import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
+import { SerialQueue } from "../serial.ts";
 import { prepareDevelopmentIssueRuntimes } from "../workspace/development.ts";
 import { WorkspaceLifecycleManager, type WorkspaceRetentionPolicy } from "../workspace/lifecycle.ts";
 import { prepareReadOnlyIssueRuntimes } from "../workspace/read-only.ts";
 import { pruneState } from "../workspace/state.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
-import { registerAttachmentRoutes } from "./attachments.ts";
+import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
 import { ApiError } from "./input.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
@@ -80,15 +81,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
     const events = new AgentEventBus((error) => app.log.error(error));
     engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error));
-    let scopeTail = Promise.resolve();
-    const runScopeExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
-      const preceding = scopeTail;
-      let complete!: () => void;
-      const queued = new Promise<void>((resolve) => { complete = resolve; });
-      scopeTail = preceding.catch(() => undefined).then(() => queued);
-      await preceding.catch(() => undefined);
-      try { return await operation(); } finally { complete(); }
-    };
+    const scopeQueue = new SerialQueue();
+    const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
     await workspaces.maintain();
     stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(error));

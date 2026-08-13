@@ -5,6 +5,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { GitBranch, Pencil, Plus, Trash2 } from "../ui/icons";
 import { createService, deleteService, errorMessage, updateService, type AgentConfiguration, type AgentModelOption, type CapabilityConfiguration, type CapabilityName, type Config, type Service } from "../data/client";
 import { Markdown } from "../ui/Markdown";
+import { serializeCapabilityDraft } from "./configuration-model";
 import { useApplicationResources } from "./ApplicationResources";
 import { selectedChoice } from "./IssueForm";
 
@@ -278,7 +279,13 @@ export function ConfigurationView() {
       const definition = {
         name: serviceName().trim(), description: description().trim(),
         repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), alias: repository.alias.trim(), url: repository.url.trim() })),
-        deployments: serviceDeployments.map((deployment) => ({ environmentKey: deployment.environmentKey, repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryAlias: serviceRepositories().find((repository) => repository.key === branch.repositoryKey)!.alias.trim(), baseBranch: branch.baseBranch.trim() })), capabilities: deployment.capabilities, agent: { provider: deployment.agent.provider.trim(), model: deployment.agent.model.trim(), thinkingLevel: deployment.agent.thinkingLevel }, ...(deployment.capabilities.includes("nacos") && deployment.nacos ? { nacos: { serverUrl: deployment.nacos.serverUrl.trim(), namespace: deployment.nacos.namespace.trim(), group: deployment.nacos.group.trim(), dataIds: deployment.nacos.dataIds, username: deployment.nacos.username.trim(), password: deployment.nacos.password } } : {}), ...(deployment.capabilities.includes("db") && deployment.db ? { db: { url: deployment.db.url.trim(), username: deployment.db.username.trim(), password: deployment.db.password } } : {}), ...(deployment.capabilities.includes("dms") && deployment.dms ? { dms: { accessKeyId: deployment.dms.accessKeyId.trim(), accessKeySecret: deployment.dms.accessKeySecret, dbId: deployment.dms.dbId.trim(), logic: deployment.dms.logic, ...(deployment.dms.tid?.trim() ? { tid: deployment.dms.tid.trim() } : {}) } } : {}), ...(deployment.capabilities.includes("sls") && deployment.sls ? { sls: { accessKeyId: deployment.sls.accessKeyId.trim(), accessKeySecret: deployment.sls.accessKeySecret, region: deployment.sls.region.trim(), project: deployment.sls.project.trim(), logstores: deployment.sls.logstores } } : {}), ...(deployment.capabilities.includes("playwright") && deployment.playwright ? { playwright: { baseUrl: deployment.playwright.baseUrl.trim(), username: deployment.playwright.username.trim(), password: deployment.playwright.password } } : {}), ...(deployment.capabilities.includes("redis") && deployment.redis ? { redis: { host: deployment.redis.host.trim(), port: deployment.redis.port, username: deployment.redis.username.trim(), password: deployment.redis.password, database: deployment.redis.database } } : {}), ...(deployment.capabilities.includes("mq") && deployment.mq ? { mq: { host: deployment.mq.host.trim(), port: deployment.mq.port, managementPort: deployment.mq.managementPort, username: deployment.mq.username.trim(), password: deployment.mq.password, virtualHost: deployment.mq.virtualHost.trim() } } : {}), ...(deployment.capabilities.includes("es") && deployment.es ? { es: { url: deployment.es.url.trim(), username: deployment.es.username.trim(), password: deployment.es.password } } : {}) })),
+        deployments: serviceDeployments.map((deployment) => ({
+          environmentKey: deployment.environmentKey,
+          repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryAlias: serviceRepositories().find((repository) => repository.key === branch.repositoryKey)!.alias.trim(), baseBranch: branch.baseBranch.trim() })),
+          capabilities: deployment.capabilities,
+          agent: { provider: deployment.agent.provider.trim(), model: deployment.agent.model.trim(), thinkingLevel: deployment.agent.thinkingLevel },
+          ...serializeCapabilityDraft(deployment),
+        })),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);

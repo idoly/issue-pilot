@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
+import { KeyedSerialQueue } from "../serial.ts";
 import { issueWorkspaceRoot, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -128,7 +129,7 @@ export function issueRepositoryWorkspaceNames(repositories: Array<{ url: string;
   return repositoryWorkspaceNames(repositories.map((repository) => repository.url), existingNames);
 }
 
-const repositoryTails = new Map<string, Promise<unknown>>();
+const repositoryQueue = new KeyedSerialQueue();
 
 export class WorktreeManager {
   private readonly stateRoot: string;
@@ -271,12 +272,8 @@ export class WorktreeManager {
     if (input.url.startsWith("-") || !input.baseBranch.trim() || input.baseBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
   }
 
-  private async serialized<T>(repositoryKey: string, operation: () => Promise<T>): Promise<T> {
-    const lockKey = `${this.stateRoot}:${repositoryKey}`;
-    const preceding = repositoryTails.get(lockKey) ?? Promise.resolve();
-    const queuedOperation = preceding.catch(() => undefined).then(operation);
-    repositoryTails.set(lockKey, queuedOperation);
-    try { return await queuedOperation; } finally { if (repositoryTails.get(lockKey) === queuedOperation) repositoryTails.delete(lockKey); }
+  private serialized<T>(repositoryKey: string, operation: () => Promise<T>): Promise<T> {
+    return repositoryQueue.run(`${this.stateRoot}:${repositoryKey}`, operation);
   }
 
   private async updateCache(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<string> {

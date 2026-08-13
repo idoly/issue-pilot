@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { finalizeQuarantinedAttachments, removeWrittenAttachments } from "../../src/http/attachments.ts";
+import { finalizeQuarantinedAttachments, removeWrittenAttachments } from "../../src/http/attachment-store.ts";
 import { claimIssueRoot, issueAttachmentRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
 
 test("rolls back only empty state claimed for a failed Issue creation", async () => {
