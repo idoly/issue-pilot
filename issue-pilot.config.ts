@@ -95,6 +95,7 @@ export const issuePilotConfig = Object.freeze({
       connectionMs: 10_000,
       browser: Object.freeze({ actions: 50, pathChars: 2048, selectorChars: 500, valueChars: 10_000, executionMs: 90_000 }),
       database: Object.freeze({ queryChars: 20_000, rows: 500 }),
+      dms: Object.freeze({ queryChars: 20_000, rows: 500, executionMs: 30_000 }),
       elasticsearch: Object.freeze({ results: 200 }),
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
       redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),

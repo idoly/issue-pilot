@@ -17,7 +17,7 @@
 | Runtime | `issues/<key>/runtime` 下供 code-server 使用的生成资源，不保存持久业务数据 |
 | Session | 一个 Issue 对应的持久 Pi JSONL 对话分支 |
 | Policy | 某次 Agent session 冻结后的代码和 capability 授权 |
-| Capability | Nacos、数据库、Redis、SLS、Playwright 等受限外部读取工具 |
+| Capability | Nacos、数据库、DMS、Redis、SLS、Playwright 等受限外部读取工具 |
 
 ## 设计原则
 

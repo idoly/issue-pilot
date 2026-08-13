@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isIssueKey, isWorkspaceBusy, normalizeIssueKey, parseIssueKey } from "../../src/domain/contracts.ts";
+import { CAPABILITY_KEYS, isIssueKey, isWorkspaceBusy, normalizeIssueKey, parseIssueKey } from "../../src/domain/contracts.ts";
 
 test("accepts only current date-sequence issue keys", () => {
   assert.equal(normalizeIssueKey("issue-20260810-001"), "ISSUE-20260810-001");
@@ -12,6 +12,10 @@ test("accepts only current date-sequence issue keys", () => {
     assert.equal(isIssueKey(invalidKey), false);
     assert.throws(() => normalizeIssueKey(invalidKey), /invalid_issue_key/);
   }
+});
+
+test("keeps the capability catalog in its shared display order", () => {
+  assert.deepEqual(CAPABILITY_KEYS, ["playwright", "nacos", "db", "dms", "redis", "mq", "es", "sls"]);
 });
 
 test("keeps the busy workspace predicate in the shared domain contract", () => {

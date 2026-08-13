@@ -13,10 +13,11 @@ const policy = createIssuePolicy({
     serviceKey: "service",
     environmentKey: "test",
     environmentKind: "test",
-    capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "sls"],
+    capabilities: ["playwright", "nacos", "db", "dms", "redis", "mq", "es", "sls"],
     playwright: { deploymentId: "deployment", baseUrl: "https://app.example.test" },
     nacos: { deploymentId: "deployment", serverUrl: "https://nacos.example.test:443", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["app.yaml"] },
     db: { deploymentId: "deployment" },
+    dms: { deploymentId: "deployment", region: "cn-hangzhou", dbId: "123456", logic: false },
     redis: { deploymentId: "deployment" },
     mq: { deploymentId: "deployment", virtualHost: "/" },
     es: { deploymentId: "deployment" },
@@ -30,6 +31,7 @@ test("validates capability input at the broker execution boundary", async () => 
     playwright: { baseUrl: "https://app.example.test", username: "", password: "" },
     nacos: { serverUrl: "https://nacos.example.test", username: "" },
     db: { url: "mysql://db.example.test:3306/app", username: "reader", password: "secret" },
+    dms: { accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", dbId: "123456", logic: false },
     redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
     mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", password: "secret", virtualHost: "/" },
     es: { url: "http://es.example.test", username: "" },
@@ -41,6 +43,7 @@ test("validates capability input at the broker execution boundary", async () => 
     ["redis", { action: "del", key: "key" }, "invalid_redis_input"],
     ["mq", { action: "delete", queue: "queue" }, "invalid_mq_input"],
     ["db", { statement: "SELECT 1", extra: true }, "invalid_db_input"],
+    ["dms", { statement: "SELECT 1 LIMIT 1", extra: true }, "invalid_dms_input"],
     ["playwright", { actions: [{ type: "login", username_selector: "#user" }] }, "invalid_playwright_input"],
   ] as const) {
     await assert.rejects(executeCapability(policy, config, capability, input), new RegExp(error));

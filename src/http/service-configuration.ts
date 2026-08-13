@@ -68,6 +68,25 @@ export function parseDatabaseConfiguration(value: unknown, required: boolean) {
   return { url, username: text(input.username, "db_username", 500), password: text(input.password, "db_password") };
 }
 
+const isDmsIdentifier = (value: string): boolean => /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n;
+
+export function parseDmsConfiguration(value: unknown, required: boolean) {
+  const input = configurationInput(value, required);
+  if (!input) return undefined;
+  const region = text(input.region, "dms_region", 63);
+  const dbId = text(input.dbId, "dms_db_id", 19);
+  const tid = optionalText(input.tid, 19) ?? undefined;
+  if (!SLS_REGION.test(region) || !isDmsIdentifier(dbId) || typeof input.logic !== "boolean" || (tid !== undefined && !isDmsIdentifier(tid))) throw new ApiError(400, "invalid_dms_scope");
+  return {
+    accessKeyId: text(input.accessKeyId, "dms_access_key_id", 500),
+    accessKeySecret: text(input.accessKeySecret, "dms_access_key_secret"),
+    region,
+    dbId,
+    logic: input.logic,
+    ...(tid === undefined ? {} : { tid }),
+  };
+}
+
 export function parseSlsConfiguration(value: unknown, required: boolean) {
   const input = configurationInput(value, required);
   if (!input) return undefined;
@@ -138,6 +157,7 @@ function parseServiceConfigurationInput(input: Record<string, unknown>) {
       agent: parseAgentConfiguration(deployment.agent),
       nacos: parseNacosConfiguration(deployment.nacos, capabilities.includes("nacos")),
       db: parseDatabaseConfiguration(deployment.db, capabilities.includes("db")),
+      dms: parseDmsConfiguration(deployment.dms, capabilities.includes("dms")),
       sls: parseSlsConfiguration(deployment.sls, capabilities.includes("sls")),
       playwright: parsePlaywrightConfiguration(deployment.playwright, capabilities.includes("playwright")),
       redis: parseRedisConfiguration(deployment.redis, capabilities.includes("redis")),
@@ -155,6 +175,7 @@ function storedDeploymentConfiguration(deployment: ReturnType<typeof parseServic
     ...(deployment.playwright ? { playwright: deployment.playwright } : {}),
     ...(deployment.nacos ? { nacos: deployment.nacos } : {}),
     ...(deployment.db ? { db: deployment.db } : {}),
+    ...(deployment.dms ? { dms: deployment.dms } : {}),
     ...(deployment.redis ? { redis: deployment.redis } : {}),
     ...(deployment.mq ? { mq: deployment.mq } : {}),
     ...(deployment.es ? { es: deployment.es } : {}),

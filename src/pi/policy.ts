@@ -15,6 +15,7 @@ export interface ServiceGrant {
   capabilities: CapabilityName[];
   nacos?: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
   db?: { deploymentId: string };
+  dms?: { deploymentId: string; region: string; dbId: string; logic: boolean; tid?: string };
   sls?: { deploymentId: string; region: string; project: string; logstores: string[] };
   playwright?: { deploymentId: string; baseUrl: string };
   redis?: { deploymentId: string };
@@ -48,6 +49,10 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isDmsIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n;
+}
+
 export function createIssuePolicy(input: {
   issueKey: string;
   issueType: IssueType;
@@ -59,6 +64,7 @@ export function createIssuePolicy(input: {
   const scopes: Record<CapabilityName, { deploymentId: string } | undefined> = {
     nacos: input.service.nacos,
     db: input.service.db,
+    dms: input.service.dms,
     sls: input.service.sls,
     playwright: input.service.playwright,
     redis: input.service.redis,
@@ -70,6 +76,7 @@ export function createIssuePolicy(input: {
     const scope = scopes[capability];
     if (capabilities.has(capability) !== Boolean(scope) || (scope && !isNonEmptyString(scope.deploymentId))) throw new Error(`invalid_${label}_service_scope`);
   }
+  if (input.service.dms && (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(input.service.dms.region) || !isDmsIdentifier(input.service.dms.dbId) || typeof input.service.dms.logic !== "boolean" || (input.service.dms.tid !== undefined && !isDmsIdentifier(input.service.dms.tid)))) throw new Error("invalid_dms_service_scope");
   if (input.service.mq && !isNonEmptyString(input.service.mq.virtualHost)) throw new Error("invalid_mq_service_scope");
   if (input.service.playwright) {
     let parsedUrl: URL;
@@ -90,6 +97,7 @@ export function createIssuePolicy(input: {
       ...(input.service.sls ? { sls: { ...input.service.sls, logstores: [...new Set(input.service.sls.logstores)].sort() } } : {}),
       ...(input.service.playwright ? { playwright: { ...input.service.playwright } } : {}),
       ...(input.service.db ? { db: { ...input.service.db } } : {}),
+      ...(input.service.dms ? { dms: { ...input.service.dms } } : {}),
       ...(input.service.redis ? { redis: { ...input.service.redis } } : {}),
       ...(input.service.es ? { es: { ...input.service.es } } : {}),
       ...(input.service.mq ? { mq: { ...input.service.mq } } : {}),
@@ -105,7 +113,7 @@ export function createIssuePolicy(input: {
   Object.freeze(policy.service.repositories);
   if (policy.service.nacos) Object.freeze(policy.service.nacos.dataIds);
   if (policy.service.sls) Object.freeze(policy.service.sls.logstores);
-  for (const scope of [policy.service.nacos, policy.service.db, policy.service.sls, policy.service.playwright, policy.service.redis, policy.service.es, policy.service.mq]) {
+  for (const scope of [policy.service.nacos, policy.service.db, policy.service.dms, policy.service.sls, policy.service.playwright, policy.service.redis, policy.service.es, policy.service.mq]) {
     if (scope) Object.freeze(scope);
   }
   Object.freeze(policy.service);
@@ -141,6 +149,12 @@ function parseCapabilityScopes(config: Record<string, unknown>, deploymentId: st
   }
 
   if (configObject(config, "db")) scopes.db = { deploymentId };
+
+  const dms = configObject(config, "dms");
+  if (dms && isNonEmptyString(dms.region) && isNonEmptyString(dms.dbId) && typeof dms.logic === "boolean" && (dms.tid === undefined || isNonEmptyString(dms.tid))) scopes.dms = {
+    deploymentId, region: dms.region, dbId: dms.dbId, logic: dms.logic, ...(isNonEmptyString(dms.tid) ? { tid: dms.tid } : {}),
+  };
+
   if (configObject(config, "redis")) scopes.redis = { deploymentId };
   if (configObject(config, "es")) scopes.es = { deploymentId };
 

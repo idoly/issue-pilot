@@ -25,6 +25,12 @@ const metadata: Record<CapabilityName, ToolMetadata> = {
     promptSnippet: "Run one bounded read-only MySQL statement",
     promptGuidelines: ["Use db only for read-only SQL evidence and request the complete bounded result."],
   },
+  dms: {
+    label: "Query DMS Database",
+    description: "Run one bounded read-only SQL statement against the deployment's authorized Alibaba Cloud DMS database.",
+    promptSnippet: "Run one bounded read-only SQL statement through Alibaba Cloud DMS",
+    promptGuidelines: ["Use dms only for read-only production evidence. SELECT statements must end with an explicit LIMIT no greater than the configured row budget."],
+  },
   sls: {
     label: "Read SLS Logs",
     description: "Query the selected deployment's Simple Log Service.",
@@ -65,6 +71,7 @@ export function createCapabilityTools(policy: IssuePolicy, deploymentConfig: Rec
   const tools: Record<CapabilityName, ToolDefinition<any, any, any>> = {
     nacos: defineTool({ ...toolMetadata("nacos"), parameters: capabilityInputSchemas.nacos, execute: (_id, input, signal) => executeTool("nacos", input, signal) }),
     db: defineTool({ ...toolMetadata("db"), parameters: capabilityInputSchemas.db, execute: (_id, input, signal) => executeTool("db", input, signal) }),
+    dms: defineTool({ ...toolMetadata("dms"), parameters: capabilityInputSchemas.dms, execute: (_id, input, signal) => executeTool("dms", input, signal) }),
     sls: defineTool({ ...toolMetadata("sls"), parameters: capabilityInputSchemas.sls, execute: (_id, input, signal) => executeTool("sls", input, signal) }),
     redis: defineTool({ ...toolMetadata("redis"), parameters: capabilityInputSchemas.redis, execute: (_id, input, signal) => executeTool("redis", input, signal) }),
     es: defineTool({ ...toolMetadata("es"), parameters: capabilityInputSchemas.es, execute: (_id, input, signal) => executeTool("es", input, signal) }),

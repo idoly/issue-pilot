@@ -26,6 +26,7 @@ export const isSlsLogstore = (value: string): boolean => /^[a-zA-Z0-9][a-zA-Z0-9
 export const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
   db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
+  dms: Type.Object({ statement: Type.String({ maxLength: limits.dms.queryChars }) }, { additionalProperties: false }),
   sls: Type.Object({
     logstore: Type.String({ maxLength: 63 }),
     from: Type.Optional(Type.Integer({ minimum: 0 })),

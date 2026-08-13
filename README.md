@@ -9,7 +9,7 @@ Issue Pilot 是一个本地优先的 AI 工单处理系统。它把工单、代�
 - Prod/test 始终使用最新 Deployment commit 的只读代码。
 - Dev 使用工单专属分支和 worktree，支持编辑、测试和构建。
 - 通过统一 multi-root code-server workspace 查看代码、Source Control 和 Git 历史。
-- 按冻结授权调用 Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、SLS 和 Playwright。
+- 按冻结授权调用 Nacos、MySQL、阿里云 DMS、Redis、RabbitMQ、Elasticsearch、SLS 和 Playwright。
 - 持久保存附件、会话、本地 Issue branch 和审计所需状态。
 - 在严格检查 clean、idle 和目录布局后回收大型 dev workspace。
 

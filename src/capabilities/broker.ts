@@ -6,6 +6,7 @@ import { runBrowserActions, type BrowserAction } from "./playwright.ts";
 import { readElasticsearch, readNacosConfigurations, readRabbitMq, readRedis, type NacosConnection } from "./external-data.ts";
 import { localCommandExecutor } from "./local-exec.ts";
 import { capabilityInputSchemas, capabilityResultText, capabilityTextResult, type CapabilityInputs } from "./contracts.ts";
+import { queryDms } from "./dms.ts";
 import { queryMysql, validateReadOnlyQuery } from "./mysql.ts";
 import { readSlsLogs } from "./sls.ts";
 
@@ -58,6 +59,7 @@ export async function executeCapability(policy: IssuePolicy, deploymentConfig: R
     }, signal);
   }
   if (capability === "db") return readDatabase(policy, capabilityConfig, parseCapabilityInput("db", input), signal);
+  if (capability === "dms") return queryDms(localCommandExecutor, policy, parseCapabilityInput("dms", input), capabilityConfig, signal);
   if (capability === "sls") return readSlsLogs(localCommandExecutor, policy, parseCapabilityInput("sls", input), capabilityConfig, signal);
   if (capability === "redis") return readRedis(policy, capabilityConfig, parseCapabilityInput("redis", input), signal);
   if (capability === "es") return readElasticsearch(policy, capabilityConfig, parseCapabilityInput("es", input), signal);

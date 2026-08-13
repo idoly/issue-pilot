@@ -19,7 +19,7 @@ export function normalizeIssueKey(value: string): string {
   return normalized;
 }
 
-export const CAPABILITY_KEYS = ["playwright", "nacos", "db", "redis", "mq", "es", "sls"] as const;
+export const CAPABILITY_KEYS = ["playwright", "nacos", "db", "dms", "redis", "mq", "es", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -53,6 +53,7 @@ export interface AgentFooterStats {
 export interface CapabilityConfiguration {
   nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string };
   db?: { url: string; username: string; password: string };
+  dms?: { accessKeyId: string; accessKeySecret: string; region: string; dbId: string; logic: boolean; tid?: string };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   playwright?: { baseUrl: string; username: string; password?: string };
   redis?: { host: string; port: number; username: string; password?: string; database: number };

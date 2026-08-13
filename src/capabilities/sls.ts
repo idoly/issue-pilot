@@ -1,9 +1,6 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import type { IssuePolicy } from "../pi/policy.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { withAliyunCliProfile } from "./aliyun.ts";
 import { capabilityResultText, capabilityTextResult, isSlsLogstore } from "./contracts.ts";
 import type { CommandExecutor } from "./local-exec.ts";
 
@@ -12,11 +9,6 @@ const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 
 interface SlsRuntime {
   cliPath: string;
-}
-
-async function secureFile(file: string): Promise<void> {
-  const metadata = await stat(file);
-  if (!metadata.isFile() || (metadata.mode & 0o022) !== 0) throw new Error("insecure_aliyun_cli_file");
 }
 
 export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy, input: {
@@ -45,13 +37,11 @@ export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy
   const scope = policy.service.sls;
   if (!scope) throw new Error("sls_scope_not_granted_for_service");
   if (configured.region !== scope.region || configured.project !== scope.project || !Array.isArray(configured.logstores) || !configured.logstores.includes(input.logstore) || !scope.logstores.includes(input.logstore) || typeof configured.accessKeyId !== "string" || typeof configured.accessKeySecret !== "string") throw new Error("sls_configuration_changed");
-  await secureFile(runtime.cliPath);
-  // Isolate each credential profile from the operator's persistent Aliyun CLI state.
-  const profileRoot = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-aliyun-"));
-  const aliyunRoot = path.join(profileRoot, ".aliyun");
-  await mkdir(aliyunRoot, { mode: 0o700 });
-  await writeFile(path.join(aliyunRoot, "config.json"), JSON.stringify({ current: "issue-pilot", profiles: [{ name: "issue-pilot", mode: "AK", region_id: scope.region, output_format: "json", language: "en", site: "China", access_key_id: configured.accessKeyId, access_key_secret: configured.accessKeySecret }] }), { mode: 0o600 });
-  try {
+  return withAliyunCliProfile(runtime.cliPath, {
+    accessKeyId: configured.accessKeyId,
+    accessKeySecret: configured.accessKeySecret,
+    region: scope.region,
+  }, async (profileRoot) => {
     const fetchRecords = async (line: number, offset: number): Promise<unknown[]> => {
       const execution = await executor.execute(runtime.cliPath, [
         "sls", "GetLogs",
@@ -98,7 +88,5 @@ export async function readSlsLogs(executor: CommandExecutor, policy: IssuePolicy
     };
     const text = capabilityResultText({ query: queryMetadata, records });
     return capabilityTextResult(text, { provider: "aliyun-sls", ...queryMetadata, runtime: "local-cli" });
-  } finally {
-    await rm(profileRoot, { recursive: true, force: true });
-  }
+  });
 }

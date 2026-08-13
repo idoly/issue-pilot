@@ -104,7 +104,7 @@ npm run build
 | `runtime.codeServer.*` | `127.0.0.1:18080` | Public URL、监听地址、镜像、runtime label 和编辑器默认设置 |
 | `runtime.playwright.*` | 见配置文件 | Tool/image 版本、浏览器 timeout、viewport 和容器资源 |
 | `runtime.redisWorker.*` | 见配置文件 | Redis 隔离 worker heap |
-| `runtime.containerUser`, `runtime.aliyunCli` | 见配置文件 | 临时容器用户 fallback 和 SLS CLI 路径 |
+| `runtime.containerUser`, `runtime.aliyunCli` | 见配置文件 | 临时容器用户 fallback 和 SLS/DMS CLI 路径 |
 
 `src/config.ts` 只负责把 state 相对路径解析为绝对 `stateRoot` 和 `databaseFile`。`infra/config-value.mjs` 只让 Shell 脚本读取同一个根配置，不定义默认值。修改配置后需要重启 API；runtime image、port 或 version 改变时还要重新执行对应 `infra/*.sh prepare/ensure`。API、migration、Git 和 code-server 始终使用同一个 state root。
 
@@ -264,7 +264,7 @@ Repository cache 需要 read-write，因为 dev worktree 的 Git index 和 metad
 
 Host Git 与容器内 Git 必须是同一版本；只挂载 binary 不足以支持 relative worktree metadata，所以 exec path、templates 和动态库也固定挂载。
 
-## Playwright 与 SLS runtime
+## Playwright 与 Aliyun CLI runtime
 
 Playwright 管理命令：
 
@@ -276,7 +276,7 @@ infra/playwright.sh clean
 
 每次 Playwright capability 调用都会创建私有 request/credential files，启动 `--rm` Chromium 容器，限制访问到 Deployment origin，返回 bounded 结果后删除临时目录。不会创建持久 browser container。
 
-SLS 固定调用宿主 `/usr/local/sbin/aliyun`。每次查询创建临时 HOME 和 `0600` profile，不读取或修改 operator 的持久 Aliyun profile。
+SLS 和 DMS 固定调用宿主 `/usr/local/sbin/aliyun`。每次查询创建临时 HOME 和 `0600` profile，不读取或修改 operator 的持久 Aliyun profile。DMS 使用内置 `dms-enterprise ExecuteScript` OpenAPI 命令，不依赖 CLI plugin。AccessKey、DMS用户、目标数据库query权限和安全协同的准备步骤见 [DMS 配置](CONFIGURATION.md#dms)。
 
 ## 安全边界
 

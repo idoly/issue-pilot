@@ -21,6 +21,7 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.workspace.targetBytes, 16 * 1024 ** 3);
   assert.equal(applicationConfig.runtime.codeServer.publicUrl, `http://${applicationConfig.runtime.codeServer.listenHost}:${applicationConfig.runtime.codeServer.listenPort}/`);
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
+  assert.deepEqual(applicationConfig.limits.capability.dms, { queryChars: 20_000, rows: 500, executionMs: 30_000 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
   assert.equal(applicationConfig.http.ssePendingBytes, 4 * 1024 * 1024);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
