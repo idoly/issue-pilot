@@ -75,6 +75,26 @@ test("serializes retries, status transitions, messages, and comments with one Is
   }
 });
 
+test("lists newer Issues first without letting later updates reorder them", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha");
+    const older = await createIssue(fixture.app, "alpha", "test", "Older");
+    const newer = await createIssue(fixture.app, "alpha", "test", "Newer");
+    fixture.engine.running.clear();
+
+    const database = openDatabase(fixture.databaseFile);
+    await database.db.update(issues).set({ createdAt: new Date("2026-08-14T00:00:00.000Z"), updatedAt: new Date("2026-08-14T02:00:00.000Z") }).where(eq(issues.key, String(older.id)));
+    await database.db.update(issues).set({ createdAt: new Date("2026-08-14T01:00:00.000Z"), updatedAt: new Date("2026-08-14T01:00:00.000Z") }).where(eq(issues.key, String(newer.id)));
+    await database.close();
+
+    const listed = await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string }>;
+    assert.deepEqual(listed.map(({ id }) => id), [newer.id, older.id]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("generates concurrent Issue keys and refuses unmanaged state", async () => {
   const fixture = await createApiFixture();
   try {

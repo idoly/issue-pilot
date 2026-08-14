@@ -95,7 +95,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     });
   };
   const serializeIssueSummary = async (issue: typeof issues.$inferSelect) => (await serializeIssueSummaries([issue]))[0]!;
-  app.get("/api/issues", async () => serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.updatedAt))));
+  app.get("/api/issues", async () => serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.createdAt), desc(issues.key))));
 
   app.post("/api/issues", async (request, reply) => {
     const initialAttachments: PendingAttachment[] = [];
