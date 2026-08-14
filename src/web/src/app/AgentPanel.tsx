@@ -155,6 +155,17 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     followLatest = true;
     setUnread(0);
   };
+  const focusConversation = (event: MouseEvent & { currentTarget: HTMLDivElement }) => {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest("a, button, input, textarea, select, [contenteditable='true']")) return;
+    if (window.getSelection() && !window.getSelection()!.isCollapsed) return;
+    transcript?.focus({ preventScroll: true });
+  };
+  const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
+    if (event.key !== " " || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    scrollLatest();
+  };
   const resizeEditor = (textarea = editor) => {
     if (!textarea) return;
     textarea.style.height = "0px";
@@ -326,8 +337,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   });
   onCleanup(() => { issueGeneration += 1; discardMessageUpdates(); streamController.dispose(); });
 
-  return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
-    <div class="agent-conversation" role="log" aria-live="polite">
+  return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
+    <div class="agent-conversation" role="log" aria-live="polite" onClick={focusConversation}>
       <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
       <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>
     </div>

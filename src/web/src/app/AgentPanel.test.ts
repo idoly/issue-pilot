@@ -213,6 +213,32 @@ describe("Agent conversation state", () => {
     resolvedView.unmount();
   });
 
+  it("focuses the conversation and uses Space to scroll to the latest message", () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
+      workspace: { status: "ready", url: null },
+    } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
+    const conversation = panel.querySelector(".agent-conversation") as HTMLDivElement;
+    const scrollTo = vi.spyOn(panel, "scrollTo");
+    Object.defineProperty(panel, "scrollHeight", { configurable: true, value: 900 });
+
+    fireEvent.click(conversation);
+    expect(document.activeElement).toBe(panel);
+    fireEvent.keyDown(panel, { key: " ", code: "Space" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: "smooth" });
+
+    const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    editor.focus();
+    fireEvent.keyDown(editor, { key: " ", code: "Space" });
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
   it("batches streaming deltas per frame and flushes them before the final message", async () => {
     EventSourceMock.instances.length = 0;
     const frames = new Map<number, FrameRequestCallback>();
