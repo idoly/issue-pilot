@@ -213,6 +213,49 @@ describe("Agent conversation state", () => {
     resolvedView.unmount();
   });
 
+  it("batches streaming deltas per frame and flushes them before the final message", async () => {
+    EventSourceMock.instances.length = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frameId += 1;
+      frames.set(frameId, callback);
+      return frameId;
+    });
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "running", url: null },
+    } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("message", event({ type: "message_start", message: assistant([], "pending") }, "stream-start"));
+    source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "First " } }, "stream-first"));
+    source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "second" } }, "stream-second"));
+
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("First second")).toBeNull();
+    const scheduled = frames.get(frameId)!;
+    frames.delete(frameId);
+    scheduled(performance.now());
+    await waitFor(() => expect(screen.getByText("First second")).toBeTruthy());
+
+    source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " queued" } }, "stream-queued"));
+    expect(requestFrame).toHaveBeenCalledTimes(2);
+    source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Final response" }], "stop") }, "stream-final"));
+    await waitFor(() => expect(screen.getByText("Final response")).toBeTruthy());
+    expect(cancelFrame).toHaveBeenCalledWith(frameId);
+    expect(screen.queryByText("First second queued")).toBeNull();
+
+    view.unmount();
+    requestFrame.mockRestore();
+    cancelFrame.mockRestore();
+  });
+
   it("reconnects with one close and atomically replaces the replayed transcript", async () => {
     vi.useFakeTimers();
     try {

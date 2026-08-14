@@ -140,6 +140,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   let issueGeneration = 0;
   let issueRefreshId = 0;
   let followLatest = true;
+  let messageUpdateFrame: number | undefined;
+  let pendingMessageUpdates: RunEvent[] = [];
   const pasteEditor = new PasteEditorModel();
 
   const running = () => processing();
@@ -163,7 +165,39 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setDraft(value);
     queueMicrotask(() => resizeEditor());
   };
+  const afterConversationUpdate = () => {
+    queueMicrotask(() => {
+      if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
+      else setUnread((value) => value + 1);
+    });
+  };
+  const applyPendingMessageUpdates = () => {
+    const updates = pendingMessageUpdates;
+    pendingMessageUpdates = [];
+    if (!updates.length) return;
+    setEntries((current) => updates.reduce((next, event) => applyAgentEvent(next, event), current));
+    afterConversationUpdate();
+  };
+  const flushMessageUpdates = () => {
+    if (messageUpdateFrame !== undefined) window.cancelAnimationFrame(messageUpdateFrame);
+    messageUpdateFrame = undefined;
+    applyPendingMessageUpdates();
+  };
+  const discardMessageUpdates = () => {
+    if (messageUpdateFrame !== undefined) window.cancelAnimationFrame(messageUpdateFrame);
+    messageUpdateFrame = undefined;
+    pendingMessageUpdates = [];
+  };
   const append = (event: RunEvent) => {
+    if (event.event.type === "message_update") {
+      pendingMessageUpdates.push(event);
+      if (messageUpdateFrame === undefined) messageUpdateFrame = window.requestAnimationFrame(() => {
+        messageUpdateFrame = undefined;
+        applyPendingMessageUpdates();
+      });
+      return;
+    }
+    flushMessageUpdates();
     setEntries((current) => applyAgentEvent(current, event));
     setFooter((current) => footerAfterEvent(current, event.event));
     const type = event.event.type;
@@ -172,10 +206,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     if (nextActivity !== undefined) setActivity(nextActivity);
     if (type === "queue_update") setQueue({ steering: [...event.event.steering], followUp: [...event.event.followUp] });
     if (type === "issue_status") setIssueStatus(event.event.status === "complete" ? "pending" : "open");
-    queueMicrotask(() => {
-      if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
-      else setUnread((value) => value + 1);
-    });
+    afterConversationUpdate();
   };
   const refreshIssue = (issueKey: string, connectionGeneration: number) => {
     const currentRefresh = ++issueRefreshId;
@@ -205,6 +236,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   });
   const connect = (issueId: string, resetForIssue = false) => {
     if (resetForIssue) {
+      discardMessageUpdates();
       setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
       setConnected(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" });
       pasteEditor.reset(); setEditorDraft(""); setSending(false);
@@ -292,7 +324,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     issueGeneration += 1;
     connect(id, true);
   });
-  onCleanup(() => { issueGeneration += 1; streamController.dispose(); });
+  onCleanup(() => { issueGeneration += 1; discardMessageUpdates(); streamController.dispose(); });
 
   return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} hidden={props.hidden} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
     <div class="agent-conversation" role="log" aria-live="polite">
