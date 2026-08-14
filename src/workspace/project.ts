@@ -32,6 +32,16 @@ export interface PreparedIssueProject {
 
 type CodeServer = Pick<CodeServerManager, "ensure">;
 type ProjectIssue = { id: string; key: string; type: IssueType; serviceId: string; environmentId: string };
+type IssueRepository = typeof issueRepositories.$inferSelect;
+type DeploymentRepository = Awaited<ReturnType<typeof loadDeploymentRepositories>>["repositories"][number];
+
+export interface PreparedDevelopmentConversion {
+  prepared: PreparedWorktree[];
+  repositories: DeploymentRepository[];
+  existingRepositories: IssueRepository[];
+  names: Map<string, string>;
+  runtimeRoot: string;
+}
 
 export function developmentWorktreeMode(issueType: IssueType): "hotfix" | "feature" {
   if (issueType === "defect_fix") return "hotfix";
@@ -150,6 +160,51 @@ export class IssueProjectManager {
       await transaction.update(issueWorkspaces).set({ codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
     });
     return runtimeRoot;
+  }
+
+  async convertReadOnlyToDevelopment<T>(
+    issue: ProjectIssue,
+    environmentKind: Exclude<EnvironmentKind, "dev">,
+    developmentEnvironmentId: string,
+    codeServer: CodeServer,
+    finalize: (conversion: PreparedDevelopmentConversion) => Promise<T>,
+  ): Promise<T> {
+    const [{ repositories }, existingRepositories] = await Promise.all([
+      loadDeploymentRepositories(this.database, { serviceId: issue.serviceId, environmentId: developmentEnvironmentId }),
+      this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
+    ]);
+    if (classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
+    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
+    if (await pathExists(workspaceRoot)) throw new Error("workspace_path_already_exists");
+    const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url));
+    try {
+      return await this.worktrees.prepareBatch({
+        worktrees: repositories.map(({ repository, baseBranch }) => ({
+          issueKey: issue.key,
+          workspaceName: names.get(repository.url)!,
+          url: repository.url,
+          baseBranch,
+          mode: "hotfix",
+        })),
+        finalize: async (prepared) => {
+          await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
+          const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({
+            name: names.get(repositories[index]!.repository.url)!,
+            repositoryPath: worktree.workspacePath,
+          })), "write");
+          await prepareProjectWrappers(runtimeRoot);
+          await codeServer.ensure(issue.key, runtimeRoot);
+          return finalize({ prepared, repositories, existingRepositories, names, runtimeRoot });
+        },
+      });
+    } catch (error) {
+      let cleanupFailed = error instanceof WorktreeRollbackFailure;
+      let recoveryError: unknown;
+      try { await this.hydrateReadOnlyRuntime(issue, environmentKind, codeServer); }
+      catch (caught) { cleanupFailed = true; recoveryError = caught; }
+      if (cleanupFailed) throw new Error("workspace_conversion_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_conversion_cleanup_failed") });
+      throw error;
+    }
   }
 
   async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, codeServer: CodeServer, editorRequired = false): Promise<PreparedIssueProject> {

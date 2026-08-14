@@ -111,7 +111,7 @@ Issue Pilot 没有内置认证。右上角用户切换和 `X-Issue-Pilot-Subject
 - API 和 code-server 只监听 loopback。
 - Web、API 和 code-server 由同机 TLS + authentication/authorization proxy 保护。
 - API/Pi 使用专用低权限宿主账号，不能以 root 运行。
-- `/api/config` 返回页面回写所需的真实 Deployment credential，必须严格限制和禁止记录 body。
+- `/api/config` 不返回已存 credential，但仍包含内部 Repository、model 和 capability scope；Service 写请求可能携带新 credential，配置路由必须严格授权且不得记录 body。
 - Credential 不进入 IssuePolicy、Agent prompt 或 tool input；完整 Deployment config 只保留在 API session 闭包中。
 - Capability 查询结果会发送给 Agent，并写入该 Issue 的 Pi JSONL；结果本身可能包含敏感业务数据。
 
@@ -121,7 +121,7 @@ Issue Pilot 没有内置认证。右上角用户切换和 `X-Issue-Pilot-Subject
 
 当前 Web 使用以下公开路由：
 
-- 配置与人员：`/api/users`、`/api/me`、`/api/people`、`/api/config`、`/api/services/*`
+- 配置与人员：`/api/users`、`/api/me`、`/api/people`、`/api/catalog`、`/api/config`、`/api/services/*`
 - Issue：`/api/issues`、`/api/issues/:key`、`/status`、`/comments`
 - Agent：`/retry`、`/agent-messages`、`/agent-stream`
 - Attachment：只读 `GET /api/issues/:key/attachments/:attachmentId`

@@ -14,7 +14,13 @@ Issue Pilot 只有三类配置来源：
 
 应用不接受环境变量覆盖。Node 和 Web 直接导入根配置；Shell 通过 `infra/config-value.mjs` 读取同一对象的标量字段。页面不定义第二套后端默认值。
 
-保存 Service 后，受影响 Issue 会被一次性 reservation，相关内存 Pi session 必须先成功关闭，然后配置才在一个 SQLite transaction 中替换。已存在的 Pi JSONL 不会改写；下一轮执行使用新配置。
+普通工单工作台只读取 `/api/catalog`，其中只有 Environment key/name 和 Service key/name/可用 Environment，不包含 Repository URL、model、capability 或 credential。配置视图才按需读取 `/api/config`；该响应包含 Repository、model、capability scope 和每组 `credentialConfigured` 状态，但不包含已存 password、AccessKeyId 或 AccessKeySecret。两种响应共用 `src/configuration/contracts.ts`，分别由 `src/configuration/read.ts` 投影。
+
+`/api/catalog` 和 `/api/config` 通过 scope queue 串行进入 SQLite snapshot transaction，避免单连接并发 transaction 的 `SQLITE_BUSY`，也不会跨过正在提交的 Service 配置读取混合版本。每个 Service 带一个 64 字符 opaque revision，它是 Service 字段、Repository、Deployment 完整 config（包括 credential）和 branch 关系的规范化 HMAC-SHA-256。HMAC key 在 API 启动时随机生成且不落盘，避免 revision 成为 credential 猜测 oracle；API 重启会使已打开表单的旧 revision失效。时间戳不参与，因此同一秒连续保存也能区分，字段顺序或查询顺序不会制造伪变化。
+
+Web 的 catalog/config resource 使用递增 generation，只允许最新请求提交 state 或 error；旧响应不能覆盖较新的 revision。首次配置读取失败时页面保留原地重试，不要求切换视图或刷新整个应用。
+
+保存或删除 Service 必须通过 `If-Match` 提交当前 revision。缺失返回 `428 service_revision_required`；当前内容已变化返回 `409 service_configuration_changed`，且不会关闭 Issue session或进入写事务。每个已选 capability 还必须显式提交一种 credential 更新：`preserve` 保留目标 Environment 当前值，`replace` 提交一组完整新值，`clear` 只允许可选 credential。API 在内存中合并当前 SQLite 配置并重新执行 registry 校验，然后把请求、model 和关系状态固化为 prepared configuration，再 reservation 全部受影响 Issue并关闭内存 Pi session，最后在一个 SQLite transaction 中 apply；事务阶段不会重新解析请求或重新读取配置关系。已存在的 Pi JSONL 不会改写；下一轮执行使用新配置。
 
 ## 根配置
 
@@ -227,7 +233,7 @@ Wrapper 只接受当前 Issue workspace 内的真实 project path。
 playwright, nacos, db, redis, mq, es, dms, sls
 ```
 
-`src/capabilities/registry.ts` 是 capability 保存解析、credential-free scope、tool schema 和 metadata 的共同定义。Web 仍为每种能力保留显式表单，`configuration-model.ts` 只序列化已选择 capability；未选择 section 不进入 payload 或 SQLite。
+`src/capabilities/registry.ts` 是 capability 保存解析、credential-free scope、tool schema 和 metadata 的共同定义。`src/configuration/contracts.ts` 统一声明每种 capability 的 credential 字段、是否必需及配置中心读写 DTO；`credentials.ts` 负责脱敏和 preserve/replace/clear 合并。Web 仍为每种能力保留显式表单，`configuration-model.ts` 只序列化已选择 capability；未选择 section 不进入 payload 或 SQLite。
 
 一次执行经过：
 
@@ -440,15 +446,19 @@ Capability 超限时整次失败，不返回静默截断的部分成功。调用
 
 ## Secret 数据流
 
-- Deployment credential 以 JSON 存在 SQLite。
-- `GET /api/config` 返回真实 password 和 AccessKey，供页面读取并完整回写；不是 masked placeholder。
+- Deployment credential 以 JSON 存在 SQLite，仍是唯一事实源；没有第二套 secret 文件或环境变量来源。
+- `GET /api/catalog` 不读取 Deployment config JSON；普通工作台不接触 credential。
+- `GET /api/config` 只由配置视图按需调用。Projection 先用 registry 规范化已存 section，再移除 password、AccessKeyId 和 AccessKeySecret，只返回 `credentialConfigured`。
+- 配置表单中的 secret input 始终为空。已有值显示“已配置”；留空保存发送 `preserve`，填写完整新值发送 `replace`，可选认证关闭后发送 `clear`。
+- `preserve` 只从同一 Service、同一 Environment 的当前 Deployment 取值。目标不存在或没有已配置值时失败，不从其他 Environment 猜测或复制。
+- Service prepare 在 API 内存中合并 credential 更新，再调用 registry 完整解析；SQLite transaction 保存的是规范化完整配置。
 - `IssuePolicy`、system prompt、tool schema 和 Agent tool input不含这些 credential。
 - `createCapabilityTools()` 对 Deployment config 做 session-local clone；完整配置只在 API 进程闭包内传给 broker/client。
 - Playwright credential 进入临时 `0600` file。
 - DMS/SLS AccessKey 进入调用级临时 `0600` Aliyun profile。
 - MySQL、Redis、RabbitMQ、Elasticsearch 和 Nacos credential 只传给对应 API 进程 client。
 
-禁止记录 `/api/config` request/response body、Authorization、Cookie、临时 credential file 或完整敏感 capability result。
+禁止记录配置写请求 body、Authorization、Cookie、临时 credential file 或完整敏感 capability result。配置 GET 已脱敏，但仍含内部 Repository URL、model 和 capability scope，不应写入普通访问日志。
 
 ## 保存示例
 
@@ -478,7 +488,10 @@ Capability 超限时整次失败，不返回静默截断的部分成功。调用
       "db": {
         "url": "mysql://db.example.internal:3306/orders",
         "username": "reader",
-        "password": "<configured-in-ui>"
+        "credentialUpdate": {
+          "mode": "replace",
+          "values": { "password": "<configured-in-ui>" }
+        }
       }
     }
   ]

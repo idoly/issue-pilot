@@ -6,7 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { readElasticsearch, readRabbitMq, readRedis } from "../../src/capabilities/external-data.ts";
+import { readElasticsearch } from "../../src/capabilities/elasticsearch.ts";
+import { readRabbitMq } from "../../src/capabilities/rabbitmq.ts";
+import { readRedis } from "../../src/capabilities/redis.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 

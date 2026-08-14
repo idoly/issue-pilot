@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createIssue, listIssues, loadCurrentUser, sendAgentMessage, setCurrentUserSubject, updateIssue } from "./client";
+import { convertIssueToDevelopment, createIssue, deleteService, listIssues, loadCatalog, loadCurrentUser, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -58,6 +58,29 @@ describe("API client", () => {
     expect((init.headers as Headers).get("X-Issue-Pilot-Subject")).toBe("lyz5613@xianhengguoji.com");
   });
 
+  it("loads the non-secret configuration catalog independently", async () => {
+    const catalog = { environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }] };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(loadCatalog()).resolves.toEqual(catalog);
+    expect(fetch).toHaveBeenCalledWith("/api/catalog", expect.any(Object));
+  });
+
+  it("sends the selected Service revision with configuration writes", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const revision = "a".repeat(64);
+
+    await updateService("orders", revision, { name: "Orders", description: "", repositories: [], deployments: [] });
+    await deleteService("orders", revision);
+
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("If-Match")).toBe(revision);
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ method: "PATCH" });
+    expect((fetch.mock.calls[1]![1].headers as Headers).get("If-Match")).toBe(revision);
+    expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "DELETE" });
+  });
+
   it("passes cancellation to read-only list requests", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response("[]", { status: 200 }));
     vi.stubGlobal("fetch", fetch);
@@ -66,6 +89,14 @@ describe("API client", () => {
     await listIssues(controller.signal);
 
     expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
+  });
+
+  it("uses the dedicated development conversion endpoint", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ issueKey: "ISSUE-20260810-001" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(convertIssueToDevelopment("ISSUE-20260810-001")).resolves.toEqual({ issueKey: "ISSUE-20260810-001" });
+    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-20260810-001/development", expect.objectContaining({ method: "POST" }));
   });
 
   it("accepts a user message for Pi session delivery", async () => {

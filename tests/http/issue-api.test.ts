@@ -125,6 +125,41 @@ test("generates concurrent Issue keys and refuses unmanaged state", async () => 
   }
 });
 
+test("exposes production analysis conversion as a guarded dedicated action", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "ProductionOnly", ["prod"]);
+    const productionIssue = await createIssue(fixture.app, "productiononly", "prod", "Convert me");
+    const productionIssueId = fixture.engine.enqueued.at(-1)!;
+    const running = await fixture.app.inject({ method: "POST", url: `/api/issues/${productionIssue.id}/development` });
+    assert.equal(running.statusCode, 409);
+    assert.equal((await json(running)).error, "issue_already_running");
+
+    fixture.engine.running.clear();
+    const database = openDatabase(fixture.databaseFile);
+    await database.db.update(issues).set({ status: "pending" }).where(eq(issues.id, productionIssueId));
+    await database.db.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, productionIssueId));
+    await database.close();
+    const missingDevelopmentDeployment = await fixture.app.inject({ method: "POST", url: `/api/issues/${productionIssue.id}/development` });
+    assert.equal(missingDevelopmentDeployment.statusCode, 409);
+    assert.equal((await json(missingDevelopmentDeployment)).error, "issue_service_deployment_not_found");
+
+    await createService(fixture.app, "TestOnly", ["test"]);
+    const testIssue = await createIssue(fixture.app, "testonly", "test", "Not production");
+    const testIssueId = fixture.engine.enqueued.at(-1)!;
+    fixture.engine.running.clear();
+    const pending = openDatabase(fixture.databaseFile);
+    await pending.db.update(issues).set({ status: "pending" }).where(eq(issues.id, testIssueId));
+    await pending.db.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, testIssueId));
+    await pending.close();
+    const notProduction = await fixture.app.inject({ method: "POST", url: `/api/issues/${testIssue.id}/development` });
+    assert.equal(notProduction.statusCode, 409);
+    assert.equal((await json(notProduction)).error, "issue_not_convertible_to_development");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("keeps Issue detail shallow and workspace statistics explicit", async () => {
   const fixture = await createApiFixture();
   try {

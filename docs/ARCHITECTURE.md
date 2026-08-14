@@ -33,6 +33,7 @@ Issue Pilot 不把所有状态放在同一个介质中。每个事实只有一�
 | Attachment 内容 | Durable file；数据库保存 object path、size 和 SHA-256 |
 | Runtime、manifest、wrapper | `src/workspace` 的生成器 |
 | Capability 保存 contract 和无 credential scope | `src/capabilities/registry.ts` |
+| 配置中心脱敏 DTO 和 credential 更新状态 | `src/configuration/contracts.ts` |
 
 生成物不能反向成为业务事实源。Runtime link、checkout 或页面状态都不能覆盖 SQLite、JSONL 或本地 Git ref。
 
@@ -54,7 +55,8 @@ code-server / Podman Playwright / local Aliyun CLI
 
 | 模块 | 责任 |
 | --- | --- |
-| `src/http` | HTTP 边界、DTO、reservation、数据库事务和 SSE |
+| `src/http` | HTTP 边界、reservation、数据库事务和 SSE |
+| `src/configuration` | 配置中心共享 DTO、credential 脱敏/合并、内容 revision，以及 snapshot projection |
 | `src/agent` | 每 Issue Agent 队列、Pi session 生命周期、事件与 prompt |
 | `src/pi` | Model catalog、冻结 policy、built-in/custom tool 授权 |
 | `src/workspace/project.ts` | Issue 项目的 prepare、dev restore、read-only/dev runtime hydration |
@@ -165,6 +167,8 @@ Dev `defect_fix` 使用 `hotfix-<issue-key>`，`feature_development` 使用 `fea
 
 Writable dependencies 和构建输出都位于该 Issue worktree，不与其他 Issue 共享。
 
+已完成的 prod `smart_analysis` 可以通过专用动作转为 dev `defect_fix`。转换要求 Issue 为 `pending`、Workspace 为 `ready` 且 Repository 为完整 `read_only` 状态；系统关闭内存 session，按 dev Deployment 创建 hotfix worktree和可写 runtime，再在一个数据库事务中切换 Environment、Issue type、Repository 和 Workspace rows，成功后基于原 Pi session 自动入队继续处理。失败会移除本次 worktree并恢复只读 runtime，且不会启动 Agent；Attachment、Comment 和 Pi JSONL始终沿用原 Issue。
+
 ### Released dev
 
 只有 resolved、idle、完整布局且所有 Repository clean 的 dev workspace 可以 release：
@@ -246,7 +250,7 @@ IssuePolicy 只包含：
 - Repository path、base commit 和实际 read/write access。
 - Capability 名称和 credential-free frozen scope。
 
-Deployment password、AccessKey 和 bearer token 不进入 policy、system prompt 或 tool input。Pi custom tool 闭包持有 Deployment config 的 session 副本，并把调用交给 broker。
+Deployment password、AccessKey 和 bearer token 不进入配置读取响应、policy、system prompt 或 tool input。Pi custom tool 闭包持有从 SQLite 读取的 Deployment config session 副本，并把调用交给 broker。
 
 授权链如下：
 
@@ -329,14 +333,16 @@ Controller 使用递增 generation 忽略旧 EventSource、旧 refresh 和旧 ti
 | --- | --- | --- |
 | Agent run/steer | Issue ID | Pi 轮次与 streaming message |
 | Issue reservation | 一组 Issue ID | 状态、scope、附件、session 和 lifecycle 破坏性操作 |
-| Scope queue | API 实例 | Service 配置、Issue key/scope 变化 |
+| Scope queue | API 实例 | 配置 snapshot 读取、Service 配置写入、Issue key/scope 变化 |
 | Lifecycle queue | API 实例 | Stats、release、reopen、maintenance 协调 |
 | Inspection queue | Issue ID | `du`、布局和 Git clean 深检 |
 | Repository queue | State root + Repository URL hash | Fetch 和 worktree metadata 操作 |
 
 固定顺序：
 
+- 配置读取：`scope queue -> SQLite snapshot transaction`
 - Service/Issue scope：`scope queue -> Issue reservation`
+- Service PATCH/DELETE 在 reservation 前核对完整配置内容 revision；陈旧表单不关闭 session、不进入事务。
 - Release/reopen：`lifecycle queue -> inspection queue -> Issue reservation`
 
 不能反向获取，也不能把所有锁合并成一个全局 mutex。
@@ -394,7 +400,10 @@ API 启动顺序：
 - 应用运行在可信单机，没有内置认证。
 - code-server `--auth none` 且提供终端；访问它等同于获得运行账号的开发能力。
 - API、code-server 必须只监听 loopback，外部入口由认证、授权和 TLS proxy 保护。
-- `/api/config` 返回真实 Deployment credential。
+- 普通工作台只读取不含 Repository URL、model 和 credential 的 `/api/catalog`；配置视图按需读取 `/api/config`，其中包含可编辑 scope 和 `credentialConfigured`，但不返回已存 password、AccessKeyId 或 AccessKeySecret。
+- `/api/config` 在一个 SQLite snapshot transaction 中读取 Service、Repository、Deployment 和 branch 关系，并为每个 Service 返回完整配置内容的 HMAC-SHA-256 opaque revision。HMAC key 每次 API 启动随机生成、不落盘；响应不能作为 credential 猜测 oracle，重启后旧表单会安全失效。
+- Service PATCH/DELETE 必须用 `If-Match` 提交该 revision。缺失返回 428，内容已变化返回 409，防止多个已打开表单按最后写入静默覆盖。
+- Service 保存对每个已选 capability 显式要求 `preserve`、`replace` 或 `clear`；API 只在内存中把该意图与当前 SQLite credential 合并，再走完整 registry 校验和事务提交。
 - Pi built-in tools 不是 OS sandbox；API/Pi 必须使用专用低权限账号。
 - Aliyun capability 每次创建临时 `0600` profile，不使用 operator 持久 profile。
 - Playwright credential 只写入单次 `0600` 文件并挂载给临时容器。
@@ -416,3 +425,5 @@ API 启动顺序：
 12. Capability client 自己验证 scope、当前 config、协议和结果预算。
 13. API、migration、Git、runtime 和 code-server 使用同一个 state root。
 14. Published migration 和 journal 不修改、不重排、不删除。
+15. 已存 Deployment credential 不进入配置读取响应；未轮换的保存请求只携带 `preserve` 意图，不回传 secret 值。
+16. Service 配置写入必须匹配基于完整内容生成的 revision；陈旧编辑不能静默覆盖当前配置。

@@ -1,9 +1,14 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentConfiguration, type AgentFooterStats, type AgentModelDefinition, type AgentThinkingLevel, type CapabilityConfiguration, type CapabilityName, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentFooterStats, type AgentThinkingLevel, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
+import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy };
-export type { AgentConfiguration, AgentFooterStats, AgentThinkingLevel, CapabilityConfiguration, CapabilityName, IssuePriority, IssueStatus, IssueType, WorkspaceStatus };
-export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;
+export type { AgentConfiguration, CapabilityConfiguration, CapabilityName } from "../../../domain/contracts";
+export type { AgentFooterStats, AgentModelOption, AgentThinkingLevel, IssuePriority, IssueStatus, IssueType, WorkspaceStatus };
+export type Config = Configuration;
+export type ConfigCatalog = ConfigurationCatalog;
+export type Service = ServiceConfiguration;
+export type ServiceInput = ServiceConfigurationInput;
 
 export interface Person { subject: string; name: string; email: string }
 
@@ -42,40 +47,6 @@ export interface WorkspaceStats {
   totalBytes: number;
   policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
   workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
-}
-
-export interface Environment {
-  key: string;
-  name: string;
-}
-
-export interface ServiceDeployment extends CapabilityConfiguration {
-  environmentKey: string;
-  repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
-  capabilities: CapabilityName[];
-  agent: AgentConfiguration | null;
-}
-
-export interface Service {
-  key: string;
-  name: string;
-  description: string;
-  deployments: ServiceDeployment[];
-  repositories: Array<{ id: string; alias: string; url: string }>;
-}
-
-export interface Config {
-  agentModels: AgentModelOption[];
-  environments: Environment[];
-  capabilityCatalog: Array<{ key: CapabilityName }>;
-  services: Service[];
-}
-
-export interface ServiceInput {
-  name: string;
-  description: string;
-  repositories: Array<{ id?: string; alias: string; url: string }>;
-  deployments: Array<CapabilityConfiguration & { environmentKey: string; repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>; capabilities: CapabilityName[]; agent: AgentConfiguration }>;
 }
 
 export interface IssueInput {
@@ -123,6 +94,7 @@ const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
 export const loadUsers = () => request<Person[]>("/api/users");
 export const loadPeople = () => request<Person[]>("/api/people");
 export const loadCurrentUser = () => request<Person>("/api/me");
+export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
 export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/api/issues", signal ? { signal } : undefined);
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
@@ -135,8 +107,8 @@ function appendFiles(form: FormData, files: File[]): void {
 }
 
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
-export const updateService = (key: string, input: ServiceInput) => jsonRequest<void>(servicePath(key), "PATCH", input);
-export const deleteService = (key: string) => request<void>(servicePath(key), { method: "DELETE" });
+export const updateService = (key: string, revision: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", headers: { "If-Match": revision }, body: JSON.stringify(input) });
+export const deleteService = (key: string, revision: string) => request<void>(servicePath(key), { method: "DELETE", headers: { "If-Match": revision } });
 
 export function attachmentUrl(key: string, attachmentId: string): string {
   return issuePath(key, `/attachments/${encodeURIComponent(attachmentId)}`);
@@ -163,6 +135,7 @@ export function updateIssue(key: string, input: IssueInput, removedAttachmentIds
   return request(issuePath(key), { method: "PATCH", body: form });
 }
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueListItem>(issuePath(key, "/status"), "PATCH", { status });
+export const convertIssueToDevelopment = (key: string) => request<{ issueKey: string }>(issuePath(key, "/development"), { method: "POST" });
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });

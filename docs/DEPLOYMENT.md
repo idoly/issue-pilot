@@ -372,7 +372,7 @@ DMS 使用 `dms-enterprise ExecuteScript`、固定 central endpoint 和 `--secur
 - code-server `--auth none` 并提供终端。
 - API 与 code-server必须监听 `127.0.0.1`。
 - 外部入口必须由可信代理执行 authentication、authorization 和 TLS。
-- `/api/config` 应单独限制和审计，因为它返回真实 Deployment credential。
+- `/api/config` 虽已脱敏，仍包含内部 Repository、model 和 capability scope；`/api/services/*` 写请求还可能携带新 credential，配置路由必须单独授权和审计。
 - 不要直接暴露 Vite dev server 到不受信任网络。
 
 ### 宿主权限
@@ -383,9 +383,9 @@ Pi built-in tools 和 code-server terminal 不是 OS sandbox。API/Pi/code-serve
 
 ### Secret 与敏感数据
 
-Deployment credential存储在 SQLite。`GET /api/config` 返回真实值以支持页面回写。禁止记录：
+Deployment credential存储在 SQLite。`GET /api/config` 只返回 `credentialConfigured`，不会回传 password、AccessKeyId 或 AccessKeySecret；配置表单以 preserve/replace/clear 更新，只有 replace 写请求携带新值。禁止记录：
 
-- Config request/response body。
+- Config write request body和未经审查的配置 response body。
 - Authorization、Cookie 或代理 identity token。
 - Deployment password、AccessKey 或临时 profile。
 - Playwright credential file。

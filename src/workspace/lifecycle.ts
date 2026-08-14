@@ -3,12 +3,12 @@ import { rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, notInArray } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { Database } from "../db/client.ts";
-import { environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
+import { agentSessions, environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { CodeServerManager } from "./code-server.ts";
@@ -59,6 +59,15 @@ export class WorkspaceReleaseRefusal extends Error {
 }
 
 export class WorkspaceRestoreRefusal extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+
+export class WorkspaceConversionRefusal extends Error {
   readonly reason: string;
 
   constructor(reason: string) {
@@ -188,6 +197,16 @@ export class WorkspaceLifecycleManager {
     }));
   }
 
+  async convertIssueToDevelopment(issueId: string): Promise<Issue> {
+    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
+      try { return await this.engine.runExclusive([issueId], async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation)); }
+      catch (error) {
+        if (error instanceof WorkspaceConversionRefusal) throw error;
+        throw new WorkspaceConversionRefusal(errorMessage(error));
+      }
+    }));
+  }
+
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }> }> {
     return this.exclusive(async () => {
       const issueRows = await this.issueRows();
@@ -234,6 +253,57 @@ export class WorkspaceLifecycleManager {
       }
       return { totalBytes, released, blocked };
     });
+  }
+
+  private async convertLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<Issue> {
+    const { issue, workspace } = issueRow;
+    if (issueRow.environmentKind !== "prod" || issue.type !== "smart_analysis" || issue.status !== "pending" || workspace?.status !== "ready") {
+      throw new WorkspaceConversionRefusal("issue_not_convertible_to_development");
+    }
+    const [developmentEnvironment] = await this.database.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    if (!developmentEnvironment) throw new WorkspaceConversionRefusal("development_environment_not_found");
+    await reservation.closeSession(issue.id);
+    try {
+      const converted = await this.projects.convertReadOnlyToDevelopment(issue, "prod", developmentEnvironment.id, this.codeServer, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+        return this.database.transaction(async (transaction) => {
+          const now = new Date();
+          const targetUrls = repositories.map(({ repository }) => repository.url);
+          for (const [index, { repository }] of repositories.entries()) {
+            const worktree = prepared[index]!;
+            const state = {
+              baseBranch: worktree.baseBranch,
+              workingBranch: worktree.workingBranch,
+              localPath: worktree.workspacePath,
+              workspaceName: names.get(repository.url)!,
+              commitBefore: worktree.baseCommit,
+            };
+            await transaction.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...state }).onConflictDoUpdate({
+              target: [issueRepositories.issueId, issueRepositories.url],
+              set: { ...state, updatedAt: now },
+            });
+          }
+          if (existingRepositories.some(({ url }) => !targetUrls.includes(url))) {
+            await transaction.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, targetUrls)));
+          }
+          await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
+          const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now })
+            .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
+          const [converted] = await transaction.update(issues).set({ environmentId: developmentEnvironment.id, type: "defect_fix", updatedAt: now }).where(and(
+            eq(issues.id, issue.id),
+            eq(issues.environmentId, issue.environmentId),
+            eq(issues.type, "smart_analysis"),
+            eq(issues.status, "pending"),
+          )).returning();
+          if (!updatedWorkspace || !converted) throw new WorkspaceConversionRefusal("issue_changed_during_conversion");
+          return converted;
+        });
+      });
+      reservation.enqueue(issue.id);
+      return converted;
+    } catch (error) {
+      if (error instanceof WorkspaceConversionRefusal) throw error;
+      throw new WorkspaceConversionRefusal(errorMessage(error));
+    }
   }
 
   private async reopenLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<Issue> {

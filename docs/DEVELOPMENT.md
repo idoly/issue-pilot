@@ -48,11 +48,15 @@ npm run dev:web
 | `issue-pilot.config.ts` | State、用户、端口、默认值、retention、runtime 和上限 |
 | `src/config.ts` | 把相对 state 配置解析成绝对路径 |
 | `src/domain/contracts.ts` | 前后端共享的 key、enum、type 和共享 predicate |
+| `src/configuration/contracts.ts` | 配置中心 catalog、脱敏 editable configuration 和 credential update 共享 DTO |
+| `src/configuration/read.ts` | Catalog 和脱敏 editable configuration projection |
+| `src/configuration/credentials.ts` | 已存 credential 脱敏及 preserve/replace/clear 合并 |
+| `src/configuration/revision.ts` | Service 完整配置内容 revision 和一致性读取 |
 | `src/db/schema.ts` | 当前 Drizzle schema |
 | `src/db/bootstrap.ts` | Migration、启动状态恢复和 Environment同步 |
 | `src/http/api.ts` | API 装配、error mapping、启动/关闭资源生命周期 |
 | `src/http/*-routes.ts` | 配置、Issue、Agent、Attachment GET 和 Workspace routes |
-| `src/http/service-configuration.ts` | Service/Deployment input、model 和 relational validation |
+| `src/http/service-configuration.ts` | Service/Deployment request prepare 和 transaction apply |
 | `src/http/attachment-store.ts` | Attachment multipart、write、quarantine、rollback/finalize 和安全读取路径 |
 | `src/agent/engine.ts` | Issue Agent queue、reservation、状态转换和 Pi session 协调 |
 | `src/agent/pi-session.ts` | Private JSONL、Pi SDK session、resource loader 和 tool核对 |
@@ -69,7 +73,7 @@ npm run dev:web
 | `src/workspace/state.ts` | State path、Repository分类、布局、unmanaged/shared checkout检查 |
 | `src/workspace/runtime.ts` | Multi-root runtime原子生成 |
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
-| `src/web/src/data/client.ts` | Web DTO、request和 current-user header |
+| `src/web/src/data/client.ts` | Web request、共享 DTO re-export和 current-user header |
 | `src/web/src/app/agent-stream.ts` | EventSource transport state machine |
 | `src/web/src/app/conversation.ts` | Agent event纯投影 |
 | `src/web/src/app/configuration-model.ts` | Selected capability draft serializer |
@@ -126,6 +130,7 @@ Deployment save
 - Issue/Environment/Workspace状态、priority、type、thinking level、capability key：`src/domain/contracts.ts`
 - 可调 path、port、default、timeout、bytes、rows、image：`issue-pilot.config.ts`
 - Capability配置字段、scope、input schema和 metadata：`src/capabilities/registry.ts`
+- 配置中心 credential 字段、必需性和更新状态：`src/configuration/contracts.ts`
 - Deployment Repository完整性：`loadDeploymentRepositories()`
 - Repository state：`classifyRepositoryState()`
 
@@ -167,12 +172,13 @@ Route应完成：
 2. 使用 `ApiRouteContext`取得 database、engine、events和 managers。
 3. 使用 `requireIssue()`、`ensureCurrentSubject()` 等 guard。
 4. 影响 Issue code、scope、Attachment、session或 lifecycle时使用 Issue reservation。
-5. Service配置或 Issue scope变化先进入 scope queue；顺序固定为 `scope -> reservation`。
+5. 配置 snapshot读取、Service配置或 Issue scope变化先进入 scope queue；读取顺序为 `scope -> snapshot transaction`，Service写入顺序为 `scope -> revision check -> reservation`。
 6. 多表更新放在一个 transaction。
 7. 文件系统事务明确 prepare/commit/rollback/finalize。
-8. 返回 Web实际需要的 DTO，不暴露 raw row。
-9. 在 `src/web/src/data/client.ts`同步 contract/helper。
-10. 在职责对应的 HTTP test文件添加成功和失败场景。
+8. Service PATCH/DELETE 使用 `/api/config` 返回的 revision 和 `If-Match`；冲突必须在 session close和 transaction之前失败。
+9. 返回 Web实际需要的 DTO，不暴露 raw row。
+10. 在 `src/web/src/data/client.ts`同步 contract/helper。
+11. 在职责对应的 HTTP test文件添加成功和失败场景。
 
 当前 route tests按域拆分：
 
@@ -386,7 +392,8 @@ node --experimental-strip-types --test \
 必须回答：
 
 - Exact target如何冻结？
-- Credential在哪里读取、传递和销毁？
+- Credential在哪里读取、传递和销毁，配置 GET 是否仍保持脱敏？
+- 新 credential 字段是否加入共享 `CAPABILITY_CREDENTIALS`，并覆盖 preserve/replace/clear 测试？
 - 哪些 action明确允许？
 - Redirect、subprocess和 temp file如何处理？
 - Timeout、rows/items/bytes预算是什么？
@@ -411,7 +418,7 @@ http-client.ts
 local-exec.ts
 ```
 
-`external-data.ts`只是兼容 barrel；新代码优先直接导入 owning client。
+协议模块必须直接导入 owning client；不保留聚合兼容 barrel。
 
 ## Web 开发
 
@@ -424,7 +431,8 @@ Web使用 SolidJS和 `@idoly/ant-design-solid`。
 - `App.tsx`负责顶层资源、用户和页面选择。
 - 页面组件负责具体 interaction，不复制 transport或 serializer。
 - Capability页面保留每种能力的显式 UI，不构建万能 schema form。
-- `configuration-model.ts`只序列化 selected capability，并测试未选 section不进入 payload。
+- `configuration-model.ts`只序列化 selected capability 和 credential update 意图；已存 secret 不能进入 draft 或请求 payload。
+- `ApplicationResources` 的 catalog/config refresh 使用 latest-wins generation；必须测试旧 success、旧 failure、首次失败和原地 retry。
 - Markdown使用 `marked + DOMPurify + github-markdown-css`和 bounded LRU cache。
 - Desktop/mobile都验证长文本、dialog、Repository list和 Agent composer。
 - 不提供绕过后端检查的 force delete/ignore error按钮。
@@ -526,9 +534,10 @@ SQLite只读检查使用 `src/config.ts`解析的实际 database path。直接�
 - Attachment、Pi JSONL、本地 Issue branch和 migration history是否保留？
 - File/database跨介质更新是否有 rollback/finalize test？
 - 锁顺序是否保持，没有 global mutex或反向 acquisition？
-- Credential是否未进入 policy、prompt、tool input、日志或不必要 argv？
+- 已存 Credential 是否未进入配置 GET、未轮换的 PATCH、policy、prompt、tool input、日志或不必要 argv？
 - Capability result的敏感留存是否明确？
 - DTO、Web interaction和 removed route是否一致？
+- Service 配置读取是否来自同一 SQLite snapshot，写入是否拒绝缺失或陈旧 revision？
 - Startup、shutdown、retry、abort和 repeated call是否有确定行为？
 - 文档是否更新到唯一 owning文档？
 - Typecheck、tests、build、audit和 diff check是否按风险通过？

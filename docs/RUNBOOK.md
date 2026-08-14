@@ -42,7 +42,7 @@ ss -ltnp | rg ':3000|:18080'
 - code-server为 running，image和 runtime label与根配置一致。
 - Workspace stats能在深检完成后返回。
 
-不要把 `/api/config` 加入普通监控日志；它返回真实 credential。
+不要把 `/api/config` 加入普通监控日志；响应虽已脱敏，仍包含内部 Repository、model 和 capability scope。任何 `/api/services/*` 写请求 body 都不得记录，因为 credential replace 会携带新值。
 
 ### API 日志
 

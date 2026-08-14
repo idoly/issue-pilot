@@ -11,10 +11,11 @@ import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueAttachments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, issueAttachments, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
+import { WorkspaceConversionRefusal, WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
+import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -542,6 +543,128 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_not_development");
     const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
     assert.equal(readOnlyWorkspace!.codeServerReady, true);
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("converts a completed production analysis to a development defect while preserving Issue evidence", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-conversion-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
+    const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    assert.ok(prodEnvironment && devEnvironment);
+    await database.db.insert(subjects).values({ subject: "conversion-tester", username: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
+    const [service] = await database.db.insert(services).values({ key: "conversion-service", name: "Conversion Service" }).returning();
+    const remote = await createRemote(root, "conversion");
+    const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "conversion", url: remote }).returning();
+    const [prodDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment.id, config: {} }).returning();
+    const [devDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: devEnvironment.id, config: {} }).returning();
+    await database.db.insert(serviceDeploymentRepositories).values([
+      { deploymentId: prodDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
+      { deploymentId: devDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
+    ]);
+    const [issue] = await database.db.insert(issues).values({
+      key: "ISSUE-20260814-101",
+      title: "Production analysis found a code defect",
+      description: "Preserve this analysis",
+      status: "pending",
+      priority: "p1",
+      type: "smart_analysis",
+      serviceId: service!.id,
+      environmentId: prodEnvironment.id,
+      reporterSubject: "conversion-tester",
+    }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", codeServerReady: true });
+
+    const codeServer = { async ensure() { return "http://127.0.0.1:18080"; } };
+    const worktrees = new WorktreeManager(root);
+    const projects = new IssueProjectManager(database.db, root, worktrees);
+    const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!, "prod", codeServer);
+    const sessionRoot = issueSessionRoot(root, issue!.key);
+    const sessionFile = path.join(sessionRoot, "analysis.jsonl");
+    await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
+    await writeFile(sessionFile, "{\"type\":\"session\"}\n", { mode: 0o600 });
+    await database.db.insert(agentSessions).values({ issueId: issue!.id, sessionFile, workspacePath: runtimeRoot });
+    const attachmentRoot = issueAttachmentRoot(root, issue!.key);
+    const attachmentFile = path.join(attachmentRoot, "evidence.txt");
+    const attachmentContent = "production evidence\n";
+    await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
+    await writeFile(attachmentFile, attachmentContent, { mode: 0o400 });
+    await database.db.insert(issueAttachments).values({
+      issueId: issue!.id,
+      fileName: "evidence.txt",
+      mediaType: "text/plain",
+      size: Buffer.byteLength(attachmentContent),
+      objectKey: attachmentFile,
+      sha256: createHash("sha256").update(attachmentContent).digest("hex"),
+      uploadedBy: "conversion-tester",
+    });
+    await database.db.insert(issueComments).values({ issueId: issue!.id, authorSubject: "conversion-tester", body: "Keep this comment" });
+
+    const conversionEngine = {
+      closed: [] as string[],
+      enqueued: [] as string[],
+      enqueue(issueId: string) { this.enqueued.push(issueId); }, async send() {}, isRunning() { return false; },
+      async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(issueId: string): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
+        return operation({ enqueue: (issueId) => { this.enqueue(issueId); }, closeSession: async (issueId) => { this.closed.push(issueId); } });
+      },
+    };
+    const lifecycle = new WorkspaceLifecycleManager(database.db, root, conversionEngine as never, {
+      retentionMs: Number.POSITIVE_INFINITY,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+    }, undefined, codeServer);
+
+    const mutableDatabase = database.db as typeof database.db & { transaction: typeof database.db.transaction };
+    const transaction = mutableDatabase.transaction.bind(mutableDatabase);
+    let failFinalize = true;
+    mutableDatabase.transaction = (async (operation: Parameters<typeof database.db.transaction>[0]) => {
+      if (failFinalize) {
+        failFinalize = false;
+        throw new Error("simulated_conversion_transaction_failure");
+      }
+      return transaction(operation);
+    }) as typeof database.db.transaction;
+    await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "simulated_conversion_transaction_failure");
+    mutableDatabase.transaction = transaction;
+
+    const [rolledBackIssue] = await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1);
+    const rolledBackRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.equal(rolledBackIssue!.environmentId, prodEnvironment.id);
+    assert.equal(rolledBackIssue!.type, "smart_analysis");
+    assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
+    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    const rolledBackManifest = JSON.parse(await readFile(path.join(runtimeRoot, "issue-20260814-101.code-workspace"), "utf8")) as { settings?: unknown };
+    assert.ok(rolledBackManifest.settings);
+    assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
+    assert.deepEqual(conversionEngine.enqueued, []);
+
+    const converted = await lifecycle.convertIssueToDevelopment(issue!.id);
+    assert.equal(converted.environmentId, devEnvironment.id);
+    assert.equal(converted.type, "defect_fix");
+    assert.equal(converted.status, "pending");
+    const convertedRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.equal(classifyRepositoryState(convertedRepositories), "development_workspace");
+    assert.equal(convertedRepositories[0]!.workingBranch, "hotfix-issue-20260814-101");
+    assert.equal(await git(["-C", convertedRepositories[0]!.localPath!, "branch", "--show-current"]), "hotfix-issue-20260814-101");
+    assert.equal(await git(["-C", convertedRepositories[0]!.localPath!, "status", "--porcelain"]), "");
+    assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))), convertedRepositories[0]!.localPath);
+    assert.equal((await stat(path.join(runtimeRoot, "bin", "node-project"))).mode & 0o777, 0o700);
+    const [session] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
+    assert.equal(session!.sessionFile, sessionFile);
+    assert.equal(session!.workspacePath, runtimeRoot);
+    assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
+    assert.equal((await stat(attachmentFile)).mode & 0o777, 0o400);
+    assert.equal((await database.db.select().from(issueComments).where(eq(issueComments.issueId, issue!.id))).length, 1);
+    assert.deepEqual(conversionEngine.closed, [issue!.id, issue!.id]);
+    assert.deepEqual(conversionEngine.enqueued, [issue!.id]);
+    await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "issue_not_convertible_to_development");
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

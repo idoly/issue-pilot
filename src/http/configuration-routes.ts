@@ -1,13 +1,19 @@
 import { randomUUID } from "node:crypto";
 
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { configuredCapabilities, CAPABILITY_KEYS, ENVIRONMENT_KINDS } from "../domain/contracts.ts";
-import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../db/schema.ts";
+import { loadConfiguration, loadConfigurationCatalog } from "../configuration/read.ts";
+import { loadServiceConfigurationRevision } from "../configuration/revision.ts";
+import { issues, services, subjects } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
 import { ensureConfiguredSubjects, ensureCurrentSubject, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
-import { replaceServiceConfiguration, validateServiceConfiguration, validateServiceConfigurationInput } from "./service-configuration.ts";
+import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
+
+function requiredServiceRevision(value: string | string[] | undefined): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new ApiError(428, "service_revision_required");
+  return value;
+}
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90).replace(/-+$/g, "");
@@ -39,62 +45,15 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     return (await database.db.select().from(subjects).orderBy(asc(subjects.displayName))).map(serializePerson);
   });
 
+  app.get("/api/catalog", async (_request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    return runScopeExclusive(() => loadConfigurationCatalog(database.db));
+  });
+
   app.get("/api/config", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     reply.header("Pragma", "no-cache");
-    const [environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows, agentModels] = await Promise.all([
-      database.db.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
-      database.db.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
-      database.db.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
-      database.db.select().from(serviceRepositories).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
-      database.db.select().from(serviceDeploymentRepositories), modelCatalog.list(),
-    ]);
-    const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
-    const deploymentsByServiceId = new Map<string, typeof deploymentRows>();
-    const repositoriesByServiceId = new Map<string, typeof repositoryRows>();
-    const branchesByDeploymentId = new Map<string, Map<string, string>>();
-    for (const deployment of deploymentRows) {
-      const grouped = deploymentsByServiceId.get(deployment.serviceId) ?? [];
-      grouped.push(deployment);
-      deploymentsByServiceId.set(deployment.serviceId, grouped);
-    }
-    for (const repository of repositoryRows) {
-      const grouped = repositoriesByServiceId.get(repository.serviceId) ?? [];
-      grouped.push(repository);
-      repositoriesByServiceId.set(repository.serviceId, grouped);
-    }
-    for (const branch of deploymentRepositoryRows) {
-      const grouped = branchesByDeploymentId.get(branch.deploymentId) ?? new Map<string, string>();
-      grouped.set(branch.repositoryId, branch.baseBranch);
-      branchesByDeploymentId.set(branch.deploymentId, grouped);
-    }
-    return {
-      agentModels: agentModels.map((model) => ({ provider: model.provider, id: model.id, thinkingLevels: model.thinkingLevels })),
-      environments: environmentRows.map((environment) => ({ key: environment.key, name: environment.name })),
-      capabilityCatalog: CAPABILITY_KEYS.map((key) => ({ key })),
-      services: serviceRows.map((service) => {
-        const deployments = deploymentsByServiceId.get(service.id) ?? [];
-        const repositories = repositoriesByServiceId.get(service.id) ?? [];
-        return {
-          key: service.key, name: service.name, description: service.description,
-          deployments: deployments.map((deployment) => {
-            const deploymentConfig = record(deployment.config);
-            const environmentKey = environmentKeyById.get(deployment.environmentId);
-            if (!environmentKey) throw new Error("deployment_environment_not_found");
-            const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();
-            if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
-            return {
-              ...structuredClone(deploymentConfig),
-              environmentKey,
-              repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
-              capabilities: configuredCapabilities(deploymentConfig),
-              agent: deploymentConfig.agent ?? null,
-            };
-          }),
-          repositories: repositories.map((repository) => ({ id: repository.id, alias: repository.alias, url: repository.url })),
-        };
-      }),
-    };
+    return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog));
   });
 
   app.post("/api/services", async (request, reply) => {
@@ -102,12 +61,15 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const name = text(input.name, "name", 200);
     const description = optionalText(input.description) ?? "";
     const createdService = await runScopeExclusive(async () => {
-      await validateServiceConfigurationInput(modelCatalog, input);
-      const existingKeys = new Set((await database.db.select({ key: services.key }).from(services)).map(({ key }) => key));
+      const serviceId = randomUUID();
+      const [existingKeys, prepared] = await Promise.all([
+        database.db.select({ key: services.key }).from(services).then((rows) => new Set(rows.map(({ key }) => key))),
+        prepareServiceConfiguration({ executor: database.db, modelCatalog, serviceId, input }),
+      ]);
       const serviceKey = uniqueServiceKey(name, existingKeys);
       return database.db.transaction(async (transaction) => {
-        const [service] = await transaction.insert(services).values({ key: serviceKey, name, description }).returning();
-        await replaceServiceConfiguration({ executor: transaction, serviceId: service!.id, input });
+        const [service] = await transaction.insert(services).values({ id: serviceId, key: serviceKey, name, description }).returning();
+        await applyServiceConfiguration({ executor: transaction, serviceId, prepared });
         return service!;
       });
     });
@@ -118,14 +80,15 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     return runScopeExclusive(async () => {
       const service = await findServiceByKey(request.params.key);
       if (!service) throw new ApiError(404, "service_not_found");
+      const expectedRevision = requiredServiceRevision(request.headers["if-match"]);
       const affectedIssues = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id));
       try {
         return await runIssueExclusive(engine, affectedIssues.map((issue) => issue.id), async (reservation) => {
           const input = record(request.body);
           const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
-          await validateServiceConfiguration({ executor: database.db, modelCatalog, serviceId: service.id, input });
+          const prepared = await prepareServiceConfiguration({ executor: database.db, modelCatalog, serviceId: service.id, input, existingService: service, expectedRevision });
           for (const issue of affectedIssues) await reservation.closeSession(issue.id);
-          await database.db.transaction((transaction) => replaceServiceConfiguration({ executor: transaction, serviceId: service.id, input, serviceUpdate }));
+          await database.db.transaction((transaction) => applyServiceConfiguration({ executor: transaction, serviceId: service.id, prepared, serviceUpdate }));
           return { ok: true };
         });
       } catch (error) {
@@ -139,6 +102,8 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     await runScopeExclusive(async () => {
       const service = await findServiceByKey(request.params.key);
       if (!service) throw new ApiError(404, "service_not_found");
+      const expectedRevision = requiredServiceRevision(request.headers["if-match"]);
+      if (await loadServiceConfigurationRevision(database.db, service) !== expectedRevision) throw new ApiError(409, "service_configuration_changed");
       if ((await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id)).limit(1))[0]) throw new ApiError(409, "service_is_used_by_issues");
       await database.db.delete(services).where(eq(services.id, service.id));
     });

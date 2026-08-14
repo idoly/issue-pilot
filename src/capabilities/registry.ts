@@ -306,11 +306,6 @@ export function parseCapabilityConfiguration<Key extends CapabilityName>(key: Ke
   return capabilityDefinitions[key].parseConfiguration(value);
 }
 
-export function configuredCapabilitySections(input: Record<string, unknown>, capabilities: CapabilityName[]): CapabilityConfiguration {
-  const selected = new Set(capabilities);
-  return Object.fromEntries(CAPABILITY_KEYS.flatMap((key) => selected.has(key) ? [[key, parseCapabilityConfiguration(key, input[key])]] : [])) as CapabilityConfiguration;
-}
-
 export function storedCapabilitySections(input: CapabilityConfiguration): CapabilityConfiguration {
   return Object.fromEntries(CAPABILITY_KEYS.flatMap((key) => input[key] ? [[key, input[key]]] : [])) as CapabilityConfiguration;
 }

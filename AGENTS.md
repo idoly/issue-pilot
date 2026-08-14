@@ -53,7 +53,9 @@ Never automatically delete or rewrite evidence when state is dirty, untracked, r
 | Prod/test code | Latest fetched commit of the current Deployment base branch |
 | Conversation history | Per-Issue Pi JSONL active branch |
 | Attachment integrity | Durable file plus database path, size, and SHA-256 |
-| Capability configuration, credential-free scope, schema, and metadata | `src/capabilities/registry.ts` |
+| Capability parsing, credential-free scope, schema, and metadata | `src/capabilities/registry.ts` |
+| Configuration credential fields, requiredness, and update states | `src/configuration/contracts.ts` |
+| Service configuration content revision | `src/configuration/revision.ts` |
 | Capability execution dispatch | `src/capabilities/broker.ts` |
 | Generated code-server resources | `src/workspace/runtime.ts` and `src/workspace/project-wrappers.ts` |
 
@@ -66,10 +68,13 @@ Do not create a second source for any of these facts.
 | Business enum, state, or shared predicate | `src/domain/contracts.ts` |
 | Table, column, index, trigger, or constraint | `src/db/schema.ts` plus a new migration |
 | HTTP behavior | `src/http/*-routes.ts` and focused route tests |
+| Configuration DTO, credential projection/merge, revision, and snapshot projection | `src/configuration` |
+| Service configuration command prepare/apply | `src/http/service-configuration.ts` |
 | Attachment transaction/store behavior | `src/http/attachment-store.ts` |
 | Agent queue, state transition, or session lifecycle | `src/agent` |
 | Model and tool authorization | `src/pi` |
-| Capability save contract | `src/capabilities/registry.ts` |
+| Capability value parser | `src/capabilities/registry.ts` |
+| Configuration credential update contract | `src/configuration/contracts.ts` and `src/configuration/credentials.ts` |
 | Capability execution/client | `src/capabilities/broker.ts` and the protocol client |
 | Git, checkout, worktree, runtime, prepare, release, or reopen | `src/workspace` |
 | Shared serial primitive | `src/serial.ts` |
@@ -77,6 +82,7 @@ Do not create a second source for any of these facts.
 | Agent stream transport state | `src/web/src/app/agent-stream.ts` |
 | Agent event projection | `src/web/src/app/conversation.ts` |
 | Capability form serialization | `src/web/src/app/configuration-model.ts` |
+| Catalog/config request generation and shared state | `src/web/src/app/ApplicationResources.tsx` |
 | Web interaction | `src/web/src/app` |
 | Container/runtime integration | `infra` |
 
@@ -101,7 +107,8 @@ Every change must preserve these rules:
 - Attachment writes happen only in Issue create/edit transactions. Attachment GET remains read-only.
 - Dirty, untracked, running, invalid-layout, changed-checkout, and unmanaged state is preserved and fails explicitly.
 - Runtime, manifests, wrappers, and immutable checkouts are generated atomically and remain rebuildable.
-- Policy, system prompt, tool schema, and tool input do not contain Deployment passwords or AccessKeys.
+- Stored Deployment passwords and AccessKeys do not enter configuration GET responses, unchanged PATCH requests, policy, system prompt, tool schema, or tool input.
+- Service PATCH/DELETE requires the full-content revision from the same configuration snapshot; stale edits fail before session close and transaction apply.
 - Capability results are Agent evidence and may enter Pi JSONL; do not confuse this with direct Deployment credential exposure.
 - Capability clients validate frozen scope, current configuration, input, timeout, and result bounds even if an earlier layer already validated them.
 - API, migration, Git, runtime, and code-server resolve the same state root.
@@ -114,7 +121,7 @@ Do not merge all synchronization into one global mutex.
 
 - `AgentEngine` serializes runs and steering per Issue.
 - Issue reservations exclude Agent enqueue/send and other destructive Issue operations.
-- Service configuration and Issue scope changes use `scope queue -> Issue reservation` in that order.
+- Configuration reads use `scope queue -> SQLite snapshot transaction`; Service changes use `scope queue -> revision check -> Issue reservation`; Issue scope changes use `scope queue -> Issue reservation`.
 - Lifecycle release/reopen/maintenance use `lifecycle queue -> per-Issue inspection queue -> Issue reservation`.
 - Deep inspection is serialized per Issue; different Issues may inspect concurrently.
 - Git operations are serialized by resolved state root plus Repository URL hash.

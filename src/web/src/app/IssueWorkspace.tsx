@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
-import { addIssueComment, attachmentUrl, errorMessage, isWorkspaceBusy, retryIssue, updateIssue, updateIssueStatus, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
+import { addIssueComment, attachmentUrl, convertIssueToDevelopment, errorMessage, isWorkspaceBusy, retryIssue, updateIssue, updateIssueStatus, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
@@ -27,7 +27,7 @@ function localDateTime(value: string, includeYear = true): string {
 }
 
 export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
-  const { configuration, people, peopleError } = useApplicationResources();
+  const { catalog, people, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
   const [editDescription, setEditDescription] = createSignal("", { ownedWrite: true });
@@ -45,6 +45,9 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
   const [statusSaving, setStatusSaving] = createSignal(false, { ownedWrite: true });
   const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
+  const [conversionOpen, setConversionOpen] = createSignal(false, { ownedWrite: true });
+  const [converting, setConverting] = createSignal(false, { ownedWrite: true });
+  const [conversionError, setConversionError] = createSignal("", { ownedWrite: true });
   const [commentBody, setCommentBody] = createSignal("", { ownedWrite: true });
   const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
   const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
@@ -55,7 +58,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
     if (previousIssueId === undefined || issueId === previousIssueId) return;
     issueGeneration += 1;
     setEditOpen(false); setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
-    setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError("");
+    setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setConversionOpen(false); setConverting(false); setConversionError("");
     setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null);
   });
   const openEditor = () => {
@@ -119,8 +122,22 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
     catch (error) { if (issueGeneration === generation) setStatusError(errorMessage(error)); }
     finally { if (issueGeneration === generation) setStatusSaving(false); }
   };
+  const convertToDevelopment = async () => {
+    const issueId = props.issue.id;
+    const generation = issueGeneration;
+    setConverting(true); setConversionError("");
+    try {
+      await convertIssueToDevelopment(issueId);
+      if (issueGeneration !== generation) return;
+      await props.onUpdated();
+      if (issueGeneration === generation) setConversionOpen(false);
+    } catch (error) {
+      if (issueGeneration === generation) setConversionError(errorMessage(error));
+    } finally { if (issueGeneration === generation) setConverting(false); }
+  };
+  const canConvertToDevelopment = () => props.issue.environmentKey === "prod" && props.issue.type === "smart_analysis" && props.issue.status === "pending" && props.issue.workspace.status === "ready";
   const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
-  const environmentName = () => configuration().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
+  const environmentName = () => catalog().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
   const availableIssueTypes = createMemo(() => issueTypesForEnvironment(props.issue.environmentKey));
   return (
     <section class="issue-workspace" hidden={props.hidden}>
@@ -136,6 +153,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
           <Show when={props.issue.description.trim()}><div class="issue-description"><Markdown source={props.issue.description} /></div></Show>
         </div>
         <div class="issue-actions">
+          <Show when={canConvertToDevelopment()}><Button icon={<GitBranch size={15} />} loading={converting()} onClick={() => { setConversionError(""); setConversionOpen(true); }}>转开发修复</Button></Show>
           <Show when={props.issue.workspace.retryable}>
             <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
           </Show>
@@ -191,10 +209,14 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
         </div>
       </section>
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
+      <Modal open={conversionOpen()} title="转开发修复" okText="确认转换" cancelText="取消" confirmLoading={converting()} cancelButtonProps={{ disabled: converting() }} onOk={() => { void convertToDevelopment(); }} onCancel={() => { if (!converting()) { setConversionError(""); setConversionOpen(false); } }}>
+        <p>当前工单将转到开发环境并改为缺陷修复，已有分析对话、附件和评论保持不变，转换后 Agent 将继续处理。</p>
+        <Show when={conversionError()}><div class="create-error modal-form-error" role="alert">{conversionError()}</div></Show>
+      </Modal>
       <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
         <div class="create-issue-form compact-issue-form edit-issue-form">
           <Show when={editError() || peopleError()}><div class="create-error modal-form-error" role="alert">{editError() || peopleError()}</div></Show>
-          <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, configuration().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={configuration().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === props.issue.environmentKey)).map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, catalog().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === props.issue.environmentKey)).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setEditPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, availableIssueTypes()); if (selected) setEditType(selected); }} options={availableIssueTypes().map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>

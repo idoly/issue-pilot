@@ -14,7 +14,7 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
     assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
-    service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", url: codeServerUrl(id), retryable },
   });
@@ -23,22 +23,15 @@ vi.mock("../data/client", async (importOriginal) => {
     issue("ISSUE-20260810-041", "客户导出的 CSV 缺少时区信息", "pending"),
     issue("ISSUE-20260810-038", "批量审批偶发超时", "open", true),
   ];
+  issues[1]!.type = "smart_analysis";
+  issues[1]!.environmentKey = "prod";
+  issues[1]!.repositories[0]!.workingBranch = null;
   const configuration = {
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ key: "test", name: "测试" }],
-    capabilityCatalog: [
-      { key: "playwright" },
-      { key: "nacos" },
-      { key: "db" },
-      { key: "redis" },
-      { key: "mq" },
-      { key: "es" },
-      { key: "dms" },
-      { key: "sls" },
-    ],
     services: [{
-      key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret" }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret" }, dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: false, tid: "987654" } }],
+      key: "srm", revision: "a".repeat(64), name: "SRM", description: "供应商关系管理服务。",
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", credentialConfigured: true }, dms: { dbId: "123456", logic: false, tid: "987654", credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }],
   };
@@ -53,6 +46,10 @@ vi.mock("../data/client", async (importOriginal) => {
       { subject: "second-user", name: "刘宜展", email: "lyz@example.test" },
     ]),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
+    loadCatalog: vi.fn(async () => ({
+      environments: structuredClone(configuration.environments),
+      services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
+    })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
     loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
@@ -74,6 +71,13 @@ vi.mock("../data/client", async (importOriginal) => {
       return structuredClone(comment);
     },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
+    convertIssueToDevelopment: vi.fn(async (id: string) => {
+      const selected = issues.find((item) => item.id === id)!;
+      selected.environmentKey = "dev";
+      selected.type = "defect_fix";
+      selected.repositories[0]!.workingBranch = `hotfix-${id.toLowerCase()}`;
+      return { issueKey: id };
+    }),
     fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
     sendAgentMessage: vi.fn(async () => undefined),
     updateService: vi.fn(async () => undefined),
@@ -91,6 +95,9 @@ describe("issue pilot workspace", () => {
     render(() => <App />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    const initialClient = await import("../data/client");
+    expect(initialClient.loadCatalog).toHaveBeenCalledTimes(1);
+    expect(initialClient.loadConfig).not.toHaveBeenCalled();
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
     const currentUserSelect = screen.getByLabelText("当前用户");
     expect(currentUserSelect.closest(".ads-select")?.textContent).toContain("owner@example.test");
@@ -187,6 +194,15 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     const issueActions = document.querySelector(".issue-actions");
     expect(issueActions).toBeTruthy();
+    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["转开发修复", "确认解决", "编辑工单"]);
+    fireEvent.click(screen.getByRole("button", { name: "转开发修复" }));
+    const conversionDialog = await waitFor(() => screen.getByRole("dialog", { name: "转开发修复" }));
+    expect(within(conversionDialog).getByText(/已有分析对话、附件和评论保持不变，转换后 Agent 将继续处理/)).toBeTruthy();
+    fireEvent.click(within(conversionDialog).getByRole("button", { name: "确认转换" }));
+    const clientAfterConversion = await import("../data/client");
+    await waitFor(() => expect(clientAfterConversion.convertIssueToDevelopment).toHaveBeenCalledWith("ISSUE-20260810-041"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "转开发修复" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "转开发修复" })).toBeNull();
     expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
@@ -264,20 +280,29 @@ describe("issue pilot workspace", () => {
     const databaseUrl = screen.getByLabelText("db url 1");
     expect(nacosServerUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("serverUrl");
     expect(databaseUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
-    expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).value).toBe("dms-key");
-    expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).value).toBe("dms-secret");
+    expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).placeholder).toBe("已配置");
+    expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).placeholder).toBe("已配置");
+    expect((screen.getByLabelText("db password 1") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("db password 1") as HTMLInputElement).placeholder).toBe("已配置");
     expect(screen.queryByLabelText("dms region 1")).toBeNull();
     expect((screen.getByLabelText("dms dbId 1") as HTMLInputElement).value).toBe("123456");
     expect((screen.getByLabelText("dms tid 1") as HTMLInputElement).value).toBe("987654");
     const databaseKind = screen.getByLabelText("dms 库类型 1");
     expect(within(databaseKind).getByRole("radio", { name: "物理库" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.input(screen.getByLabelText("dms accessKeyId 1"), { target: { value: "dms-key-updated" } });
+    fireEvent.input(screen.getByLabelText("dms accessKeySecret 1"), { target: { value: "dms-secret-updated" } });
     fireEvent.click(within(databaseKind).getByRole("radio", { name: "逻辑库" }));
     await waitFor(() => expect(within(databaseKind).getByRole("radio", { name: "逻辑库" }).getAttribute("aria-checked")).toBe("true"));
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
     const esUrl = await waitFor(() => screen.getByLabelText("es url 1"));
     expect(esUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
-    expect(screen.getByLabelText("es username 1")).toBeTruthy();
+    const esAuthentication = screen.getByLabelText("es 认证 1");
+    expect(esAuthentication.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByLabelText("es username 1")).toBeNull();
+    fireEvent.click(esAuthentication);
+    await waitFor(() => expect(screen.getByLabelText("es username 1")).toBeTruthy());
     expect(screen.getByLabelText("es password 1")).toBeTruthy();
     expect(screen.queryByLabelText(/es clusterNodes/i)).toBeNull();
     expect(screen.queryByLabelText(/es indexes/i)).toBeNull();
@@ -295,18 +320,60 @@ describe("issue pilot workspace", () => {
       if (alert) throw new Error(alert.textContent ?? "service save failed");
       expect(client.updateService).toHaveBeenCalled();
     });
-    const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
+    expect(vi.mocked(client.updateService).mock.calls.at(-1)?.slice(0, 2)).toEqual(["srm", "a".repeat(64)]);
+    const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[2];
     expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
-    expect(savedService?.deployments[0]?.db?.password).toBe("db-secret");
-    expect(savedService?.deployments[0]?.dms).toEqual({ accessKeyId: "dms-key-updated", accessKeySecret: "dms-secret", dbId: "123456", logic: true, tid: "987654" });
+    expect(savedService?.deployments[0]?.db).toEqual({ url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "preserve" } });
+    expect(savedService?.deployments[0]?.dms).toEqual({ dbId: "123456", logic: true, tid: "987654", credentialUpdate: { mode: "replace", values: { accessKeyId: "dms-key-updated", accessKeySecret: "dms-secret-updated" } } });
+    expect(JSON.stringify(savedService)).not.toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
+    expect(client.loadCatalog).toHaveBeenCalledTimes(2);
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
     expect(client.loadUsers).toHaveBeenCalledTimes(1);
     expect(client.loadPeople).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
+  });
+
+  test("keeps a stale Service editor open and refreshes configuration after a revision conflict", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadCatalog).mockClear();
+    vi.mocked(client.loadConfig).mockClear();
+    vi.mocked(client.updateService).mockRejectedValueOnce(new Error("service_configuration_changed"));
+    const view = render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("radio", { name: "配置" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "配置" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "编辑服务" }));
+    const dialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑服务" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("配置已被其他用户更新"));
+    expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(dialog);
+    expect(client.loadConfig).toHaveBeenCalledTimes(2);
+    expect(client.loadCatalog).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(client.updateService).mock.calls[0]?.slice(0, 2)).toEqual(["srm", "a".repeat(64)]);
+    view.unmount();
+  });
+
+  test("retries the initial configuration request in place", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadConfig).mockClear();
+    vi.mocked(client.loadConfig).mockRejectedValueOnce(new Error("configuration_unavailable"));
+    const view = render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("radio", { name: "配置" }));
+    const alert = await waitFor(() => screen.getByRole("alert"));
+    expect(alert.textContent).toContain("configuration_unavailable");
+    fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "配置" })).toBeTruthy());
+    expect(client.loadConfig).toHaveBeenCalledTimes(2);
+    view.unmount();
   });
 
   test("renders Issue statistics while Workspace inspection is pending and aborts it on navigation", async () => {

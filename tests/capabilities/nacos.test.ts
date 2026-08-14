@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { readNacosCapability } from "../../src/capabilities/broker.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/external-data.ts";
+import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/nacos.ts";
 
 async function nacosServer(): Promise<{
   origin: string;
