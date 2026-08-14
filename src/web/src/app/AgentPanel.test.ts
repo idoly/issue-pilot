@@ -230,7 +230,7 @@ describe("Agent conversation state", () => {
     fireEvent.click(conversation);
     expect(document.activeElement).toBe(panel);
     fireEvent.keyDown(panel, { key: " ", code: "Space" });
-    expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: "smooth" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: "auto" });
 
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     editor.focus();
@@ -269,11 +269,15 @@ describe("Agent conversation state", () => {
     frames.delete(frameId);
     scheduled(performance.now());
     await waitFor(() => expect(screen.getByText("First second")).toBeTruthy());
+    expect(view.container.querySelector(".agent-message.assistant .agent-streaming-block")?.textContent).toBe("First second");
+    expect(view.container.querySelector(".agent-message.assistant .markdown-body")).toBeNull();
 
     source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " queued" } }, "stream-queued"));
     expect(requestFrame).toHaveBeenCalledTimes(2);
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Final response" }], "stop") }, "stream-final"));
     await waitFor(() => expect(screen.getByText("Final response")).toBeTruthy());
+    expect(view.container.querySelector(".agent-message.assistant .agent-streaming-block")).toBeNull();
+    expect(view.container.querySelector(".agent-message.assistant .markdown-body")?.textContent).toContain("Final response");
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
     expect(screen.queryByText("First second queued")).toBeNull();
 

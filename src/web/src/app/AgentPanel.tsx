@@ -59,10 +59,18 @@ function BashMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "ba
   return <section class={`agent-tool ${failed() ? "error" : "complete"}`}><strong class="agent-bash-command">$ {props.entry.command}</strong><Show when={props.entry.output}><pre class="agent-tool-output">{props.entry.output}</pre></Show><Show when={props.entry.truncated}><div class="agent-tool-timing">Output truncated</div></Show></section>;
 }
 
+function AssistantBlock(props: { block: Extract<ConversationEntry, { kind: "assistant" }>["blocks"][number]; streaming: boolean }) {
+  const content = () => props.streaming ? <div class="agent-streaming-block">{props.block.value}</div> : <Markdown source={props.block.value} />;
+  return <Show when={props.block.type === "thinking"} fallback={content()}><div class="agent-thinking">{content()}</div></Show>;
+}
+
 function ConversationItem(props: { entry: ConversationEntry }) {
   return <Switch>
     <Match when={props.entry.kind === "user"}><div class="agent-message user"><Markdown source={(props.entry as Extract<ConversationEntry, { kind: "user" }>).text} /></div></Match>
-    <Match when={props.entry.kind === "assistant"}><div class="agent-message assistant"><For each={(props.entry as Extract<ConversationEntry, { kind: "assistant" }>).blocks}>{(block) => block.type === "text" ? <Markdown source={block.value} /> : <div class="agent-thinking"><Markdown source={block.value} /></div>}</For><Show when={assistantNotice(props.entry as Extract<ConversationEntry, { kind: "assistant" }>)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div></Match>
+    <Match when={props.entry.kind === "assistant"}>{() => {
+      const entry = props.entry as Extract<ConversationEntry, { kind: "assistant" }>;
+      return <div class="agent-message assistant"><For each={entry.blocks}>{(block) => <AssistantBlock block={block} streaming={entry.streaming === true} />}</For><Show when={assistantNotice(entry)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div>;
+    }}</Match>
     <Match when={props.entry.kind === "tool"}><ToolEntry entry={props.entry as Extract<ConversationEntry, { kind: "tool" }>} /></Match>
     <Match when={props.entry.kind === "summary"}><SessionSummaryEntry entry={props.entry as Extract<ConversationEntry, { kind: "summary" }>} /></Match>
     <Match when={props.entry.kind === "custom"}><CustomMessageEntry entry={props.entry as Extract<ConversationEntry, { kind: "custom" }>} /></Match>
@@ -141,7 +149,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   let issueRefreshId = 0;
   let followLatest = true;
   let messageUpdateFrame: number | undefined;
-  let pendingMessageUpdates: RunEvent[] = [];
+  let pendingMessageUpdates: Array<{ envelope: RunEvent; deltas: string[] | null }> = [];
   const pasteEditor = new PasteEditorModel();
 
   const running = () => processing();
@@ -151,7 +159,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
     : `~/.issue-pilot/issues/${props.issue.id.toLowerCase()}/runtime`;
   const scrollLatest = () => {
-    transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+    transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
     followLatest = true;
     setUnread(0);
   };
@@ -183,9 +191,15 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     });
   };
   const applyPendingMessageUpdates = () => {
-    const updates = pendingMessageUpdates;
+    const pending = pendingMessageUpdates;
     pendingMessageUpdates = [];
-    if (!updates.length) return;
+    if (!pending.length) return;
+    const updates = pending.map(({ envelope, deltas }) => {
+      if (!deltas || envelope.event.type !== "message_update") return envelope;
+      const update = envelope.event.assistantMessageEvent;
+      if (!update || !("delta" in update) || typeof update.delta !== "string") return envelope;
+      return { ...envelope, event: { ...envelope.event, assistantMessageEvent: { ...update, delta: deltas.join("") } } } as RunEvent;
+    });
     setEntries((current) => updates.reduce((next, event) => applyAgentEvent(next, event), current));
     afterConversationUpdate();
   };
@@ -199,9 +213,27 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     messageUpdateFrame = undefined;
     pendingMessageUpdates = [];
   };
+  const queueMessageUpdate = (envelope: RunEvent) => {
+    if (envelope.event.type !== "message_update") {
+      pendingMessageUpdates.push({ envelope, deltas: null });
+      return;
+    }
+    const update = envelope.event.assistantMessageEvent;
+    const isDelta = update && "delta" in update && typeof update.delta === "string";
+    const previousPending = pendingMessageUpdates[pendingMessageUpdates.length - 1];
+    const previousEvent = previousPending?.envelope.event;
+    const previous = previousEvent?.type === "message_update" ? previousEvent.assistantMessageEvent : undefined;
+    if (isDelta && previousPending?.deltas && previous && "delta" in previous
+      && update.type === previous.type && update.contentIndex === previous.contentIndex) {
+      previousPending.envelope = envelope;
+      previousPending.deltas.push(update.delta);
+      return;
+    }
+    pendingMessageUpdates.push({ envelope, deltas: isDelta ? [update.delta] : null });
+  };
   const append = (event: RunEvent) => {
     if (event.event.type === "message_update") {
-      pendingMessageUpdates.push(event);
+      queueMessageUpdate(event);
       if (messageUpdateFrame === undefined) messageUpdateFrame = window.requestAnimationFrame(() => {
         messageUpdateFrame = undefined;
         applyPendingMessageUpdates();

@@ -275,6 +275,7 @@ button, input, textarea { font: inherit; }
   font-family: var(--pi-font);
   font-size: var(--pi-font-size);
 }
+.agent-streaming-block { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .agent-thinking { margin: 0; color: var(--pi-thinking-text); font-family: var(--pi-code-font); font-style: italic; font-weight: 400; font-synthesis: style; }
 .agent-thinking .markdown-body { color: inherit; font-family: inherit; }
 .agent-thinking .markdown-body > :first-child { margin-top: 0; }
