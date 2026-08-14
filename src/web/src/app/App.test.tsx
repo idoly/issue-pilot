@@ -54,8 +54,8 @@ vi.mock("../data/client", async (importOriginal) => {
     ]),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
-    listIssues: async () => structuredClone(issues),
-    loadWorkspaceStats: async () => ({
+    listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
+    loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
       totalBytes: 4 * 1024 ** 3 + 2048,
       policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
       workspaces: [
@@ -65,7 +65,7 @@ vi.mock("../data/client", async (importOriginal) => {
         { issueKey: "ISSUE-20260810-092", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "workspace_path_does_not_match_repository" },
         { issueKey: "ISSUE-20260810-093", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "repository_workspace_name_conflict" },
       ],
-    }),
+    })),
     getIssue: vi.fn(async (id: string) => structuredClone(issues.find((item) => item.id === id))),
     addIssueComment: async (id: string, body: string) => {
       const selected = issues.find((item) => item.id === id)!;
@@ -307,6 +307,27 @@ describe("issue pilot workspace", () => {
     expect(client.loadPeople).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
+  });
+
+  test("renders Issue statistics while Workspace inspection is pending and aborts it on navigation", async () => {
+    const { loadWorkspaceStats } = await import("../data/client");
+    let workspaceSignal: AbortSignal | undefined;
+    vi.mocked(loadWorkspaceStats).mockImplementationOnce((signal) => new Promise((_resolve, reject) => {
+      workspaceSignal = signal;
+      signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+    const view = render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("radio", { name: "统计" }));
+    const submitted = await waitFor(() => screen.getByText("提出工单"));
+    expect(submitted.parentElement?.textContent).toContain("3");
+    const workspaceSection = screen.getByRole("heading", { name: "Workspace 存储" }).closest("section");
+    expect(workspaceSection?.getAttribute("aria-busy")).toBe("true");
+
+    fireEvent.click(screen.getByRole("radio", { name: "工单" }));
+    await waitFor(() => expect(workspaceSignal?.aborted).toBe(true));
+    view.unmount();
   });
 
   test("waits for the current user before selecting an Issue", async () => {

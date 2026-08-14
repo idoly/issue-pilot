@@ -43,6 +43,12 @@ export interface WorkspaceReleaseResult {
   alreadyReleased: boolean;
 }
 
+type WorkspaceStatistics = {
+  totalBytes: number;
+  policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
+  workspaces: WorkspaceInspection[];
+};
+
 export class WorkspaceReleaseRefusal extends Error {
   readonly reason: string;
 
@@ -87,6 +93,7 @@ export class WorkspaceLifecycleManager {
   readonly policy: WorkspaceRetentionPolicy;
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
+  private statsPromise: Promise<WorkspaceStatistics> | undefined;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
 
@@ -138,8 +145,10 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  async stats(): Promise<{ totalBytes: number; policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number }; workspaces: WorkspaceInspection[] }> {
-    return this.exclusive(async () => {
+  async stats(): Promise<WorkspaceStatistics> {
+    if (this.stopping) throw new Error("workspace_lifecycle_closing");
+    if (this.statsPromise) return this.statsPromise;
+    const request = this.exclusive(async () => {
       const issueRows = await this.issueRows();
       const inspections: WorkspaceInspection[] = [];
       for (const issueRow of issueRows) inspections.push(await this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace)));
@@ -154,6 +163,9 @@ export class WorkspaceLifecycleManager {
         workspaces: inspections,
       };
     });
+    this.statsPromise = request;
+    try { return await request; }
+    finally { if (this.statsPromise === request) this.statsPromise = undefined; }
   }
 
   async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {

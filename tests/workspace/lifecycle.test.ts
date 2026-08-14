@@ -123,6 +123,45 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   assert.equal(stopped, true);
 });
 
+test("shares one active Workspace statistics scan across concurrent callers", async () => {
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
+    retentionMs: Number.POSITIVE_INFINITY,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+  });
+  const internal = manager as unknown as {
+    issueRows(): Promise<Array<{ issue: { id: string; key: string }; workspace: null }>>;
+    inspectLocked(issue: { id: string; key: string }, workspace: null): Promise<WorkspaceInspection>;
+  };
+  internal.issueRows = async () => [{ issue: { id: "issue-a", key: "ISSUE-20260814-001" }, workspace: null }];
+  let releaseFirst!: () => void;
+  let markStarted!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  let inspections = 0;
+  internal.inspectLocked = async (issue) => {
+    inspections += 1;
+    if (inspections === 1) {
+      markStarted();
+      await firstGate;
+    }
+    return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
+  };
+
+  const first = manager.stats();
+  const second = manager.stats();
+  await started;
+  assert.equal(inspections, 1);
+  releaseFirst();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.deepEqual(secondResult, firstResult);
+  assert.equal(inspections, 1);
+
+  await manager.stats();
+  assert.equal(inspections, 2);
+});
+
 test("isolates maintenance reporter failures", async () => {
   const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,

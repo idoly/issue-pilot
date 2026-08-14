@@ -124,9 +124,9 @@ export const loadUsers = () => request<Person[]>("/api/users");
 export const loadPeople = () => request<Person[]>("/api/people");
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadConfig = () => request<Config>("/api/config");
-export const listIssues = () => request<IssueListItem[]>("/api/issues");
+export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/api/issues", signal ? { signal } : undefined);
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
-export const loadWorkspaceStats = () => request<WorkspaceStats>("/api/workspaces/stats");
+export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 
 const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
 

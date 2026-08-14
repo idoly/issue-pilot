@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createIssue, loadCurrentUser, sendAgentMessage, setCurrentUserSubject, updateIssue } from "./client";
+import { createIssue, listIssues, loadCurrentUser, sendAgentMessage, setCurrentUserSubject, updateIssue } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -56,6 +56,16 @@ describe("API client", () => {
 
     const [, init] = fetch.mock.calls[0]!;
     expect((init.headers as Headers).get("X-Issue-Pilot-Subject")).toBe("lyz5613@xianhengguoji.com");
+  });
+
+  it("passes cancellation to read-only list requests", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+
+    await listIssues(controller.signal);
+
+    expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
   });
 
   it("accepts a user message for Pi session delivery", async () => {

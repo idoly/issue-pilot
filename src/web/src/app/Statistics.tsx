@@ -1,5 +1,5 @@
 import { Select, Skeleton } from "@idoly/ant-design-solid";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { listIssues, loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { fileSize, statusLabel, typeLabel } from "./model";
@@ -8,15 +8,19 @@ export function Statistics() {
   const [issues, setIssues] = createSignal<IssueListItem[]>([], { ownedWrite: true });
   const [workspaceStats, setWorkspaceStats] = createSignal<WorkspaceStats | null>(null, { ownedWrite: true });
   const [period, setPeriod] = createSignal("30d", { ownedWrite: true });
-  const [loading, setLoading] = createSignal(true, { ownedWrite: true });
-  const [error, setError] = createSignal("", { ownedWrite: true });
+  const [issuesLoading, setIssuesLoading] = createSignal(true, { ownedWrite: true });
+  const [workspaceLoading, setWorkspaceLoading] = createSignal(true, { ownedWrite: true });
+  const [issuesError, setIssuesError] = createSignal("", { ownedWrite: true });
+  const [workspaceError, setWorkspaceError] = createSignal("", { ownedWrite: true });
+  const controller = new AbortController();
 
-  void Promise.all([listIssues(), loadWorkspaceStats()]).then(([loadedIssues, loadedWorkspaceStats]) => {
-    setIssues(loadedIssues);
-    setWorkspaceStats(loadedWorkspaceStats);
-  }).catch((reason) => {
-    setError(reason instanceof Error ? reason.message : "统计数据加载失败");
-  }).finally(() => setLoading(false));
+  void listIssues(controller.signal).then(setIssues).catch((reason) => {
+    if (!controller.signal.aborted) setIssuesError(reason instanceof Error ? reason.message : "统计数据加载失败");
+  }).finally(() => { if (!controller.signal.aborted) setIssuesLoading(false); });
+  void loadWorkspaceStats(controller.signal).then(setWorkspaceStats).catch((reason) => {
+    if (!controller.signal.aborted) setWorkspaceError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
+  }).finally(() => { if (!controller.signal.aborted) setWorkspaceLoading(false); });
+  onCleanup(() => controller.abort());
 
   const filteredIssues = createMemo(() => {
     const days = Number.parseInt(period(), 10);
@@ -90,8 +94,8 @@ export function Statistics() {
         <div><span>最近 {period().replace("d", "")} 天</span><h1>工单处理统计</h1></div>
         <Select aria-label="统计周期" value={period()} onChange={(value) => { if (value === "7d" || value === "30d" || value === "90d") setPeriod(value); }} options={[{ value: "7d", label: "最近 7 天" }, { value: "30d", label: "最近 30 天" }, { value: "90d", label: "最近 90 天" }]} />
       </header>
-      <Show when={!loading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
-        <Show when={!error()} fallback={<div class="queue-error" role="alert">{error()}</div>}>
+      <Show when={!issuesLoading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
+        <Show when={!issuesError()} fallback={<div class="queue-error" role="alert">{issuesError()}</div>}>
           <section class="metric-strip" aria-label="核心指标">
             <div><span>提出工单</span><strong>{filteredIssues().length}</strong><small>所选周期内创建</small></div>
             <div><span>已完成</span><strong>{completed()}</strong><small>完成率 {completionRate()}%</small></div>
@@ -99,32 +103,36 @@ export function Statistics() {
             <div><span>高优先级</span><strong>{urgent()}</strong><small>活动 P0 / P1</small></div>
             <div><span>当前未分配</span><strong>{unassigned()}</strong><small>未解决工单</small></div>
           </section>
-          <Show when={workspaceStats()}>{(stats) =>
-            <section class="statistics-section workspace-capacity-section" aria-labelledby="workspace-capacity-title">
-              <div class="statistics-title workspace-capacity-title">
-                <div><h2 id="workspace-capacity-title">Workspace 存储</h2><span>{stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}</span></div>
-                <span>{storedWorkspaces().length} 个占用空间</span>
-              </div>
-              <div class="workspace-capacity-metrics">
-                <div><span>当前占用</span><strong>{fileSize(stats().totalBytes)}</strong></div>
-                <div><span>容量上限</span><strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong></div>
-                <div><span>回收目标</span><strong>{stats().policy.targetBytes > 0 ? fileSize(stats().policy.targetBytes) : "-"}</strong></div>
-                <div><span>待自动回收</span><strong>{fileSize(automaticReleaseBytes())}</strong><small>{automaticRelease().length} 个 workspace</small></div>
-              </div>
-              <Show when={stats().policy.highWaterBytes > 0}>
-                <div class="workspace-capacity-meter" aria-label={`Workspace 容量使用 ${Math.round(capacityPercent())}%`}>
-                  <div><i style={{ width: `${capacityPercent()}%` }} /></div>
-                  <span>{Math.round(capacityPercent())}%</span>
-                </div>
-              </Show>
-              <div class="workspace-capacity-table">
-                <div class="workspace-capacity-head"><span>工单</span><span>工单状态</span><span>占用</span><span>自动回收</span></div>
-                <For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的开发 workspace</div>}>
-                  {(workspace) => <div class="workspace-capacity-row"><strong>{workspace.issueKey}</strong><span>{statusLabel[workspace.issueStatus]}</span><span>{fileSize(workspace.bytes)}</span><span class={workspace.issueStatus === "resolved" ? (workspace.releasable ? "release-ready" : "release-blocked") : ""}>{releaseState(workspace)}</span></div>}
-                </For>
-              </div>
-            </section>
-          }</Show>
+          <Show when={!workspaceLoading()} fallback={<section class="statistics-section workspace-capacity-section" aria-labelledby="workspace-capacity-title" aria-busy="true"><div class="statistics-title workspace-capacity-title"><div><h2 id="workspace-capacity-title">Workspace 存储</h2></div></div><Skeleton active paragraph={{ rows: 4 }} /></section>}>
+            <Show when={!workspaceError()} fallback={<div class="queue-error" role="alert">{workspaceError()}</div>}>
+              <Show when={workspaceStats()}>{(stats) =>
+                <section class="statistics-section workspace-capacity-section" aria-labelledby="workspace-capacity-title">
+                  <div class="statistics-title workspace-capacity-title">
+                    <div><h2 id="workspace-capacity-title">Workspace 存储</h2><span>{stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}</span></div>
+                    <span>{storedWorkspaces().length} 个占用空间</span>
+                  </div>
+                  <div class="workspace-capacity-metrics">
+                    <div><span>当前占用</span><strong>{fileSize(stats().totalBytes)}</strong></div>
+                    <div><span>容量上限</span><strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong></div>
+                    <div><span>回收目标</span><strong>{stats().policy.targetBytes > 0 ? fileSize(stats().policy.targetBytes) : "-"}</strong></div>
+                    <div><span>待自动回收</span><strong>{fileSize(automaticReleaseBytes())}</strong><small>{automaticRelease().length} 个 workspace</small></div>
+                  </div>
+                  <Show when={stats().policy.highWaterBytes > 0}>
+                    <div class="workspace-capacity-meter" aria-label={`Workspace 容量使用 ${Math.round(capacityPercent())}%`}>
+                      <div><i style={{ width: `${capacityPercent()}%` }} /></div>
+                      <span>{Math.round(capacityPercent())}%</span>
+                    </div>
+                  </Show>
+                  <div class="workspace-capacity-table">
+                    <div class="workspace-capacity-head"><span>工单</span><span>工单状态</span><span>占用</span><span>自动回收</span></div>
+                    <For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的开发 workspace</div>}>
+                      {(workspace) => <div class="workspace-capacity-row"><strong>{workspace.issueKey}</strong><span>{statusLabel[workspace.issueStatus]}</span><span>{fileSize(workspace.bytes)}</span><span class={workspace.issueStatus === "resolved" ? (workspace.releasable ? "release-ready" : "release-blocked") : ""}>{releaseState(workspace)}</span></div>}
+                    </For>
+                  </div>
+                </section>
+              }</Show>
+            </Show>
+          </Show>
           <div class="statistics-grid">
             <section class="statistics-section">
               <div class="statistics-title"><h2>服务工单量</h2><span>按工单服务计数</span></div>
