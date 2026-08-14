@@ -213,7 +213,7 @@ describe("Agent conversation state", () => {
     resolvedView.unmount();
   });
 
-  it("focuses the conversation and uses Space to scroll to the latest message", () => {
+  it("focuses the conversation and uses Enter to scroll to the latest message", () => {
     EventSourceMock.instances.length = 0;
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
@@ -230,11 +230,13 @@ describe("Agent conversation state", () => {
     fireEvent.click(conversation);
     expect(document.activeElement).toBe(panel);
     fireEvent.keyDown(panel, { key: " ", code: "Space" });
+    expect(scrollTo).not.toHaveBeenCalled();
+    fireEvent.keyDown(panel, { key: "Enter", code: "Enter" });
     expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: "auto" });
 
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     editor.focus();
-    fireEvent.keyDown(editor, { key: " ", code: "Space" });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
     expect(scrollTo).toHaveBeenCalledTimes(1);
     view.unmount();
   });

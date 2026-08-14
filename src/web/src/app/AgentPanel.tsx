@@ -170,7 +170,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     transcript?.focus({ preventScroll: true });
   };
   const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
-    if (event.key !== " " || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== "Enter" || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
     scrollLatest();
   };
