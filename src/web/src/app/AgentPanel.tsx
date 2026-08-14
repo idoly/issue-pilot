@@ -122,7 +122,7 @@ function footerText(footer: AgentFooterStats): string {
   ].filter(Boolean).join(" ");
 }
 
-export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
+export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<IssueDetail> }) {
   const [connected, setConnected] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [processing, setProcessing] = createSignal(false, { ownedWrite: true });
@@ -177,9 +177,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       else setUnread((value) => value + 1);
     });
   };
-  const refreshIssue = (issueId: string, connectionGeneration: number) => {
+  const refreshIssue = (issueKey: string, connectionGeneration: number) => {
     const currentRefresh = ++issueRefreshId;
-    void Promise.resolve().then(() => props.onRefresh(issueId)).then(() => {
+    void Promise.resolve().then(() => props.onRefresh(issueKey)).then(() => {
       if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId && error() === "issue_refresh_failed") setError("");
     }).catch(() => {
       if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId) setError("issue_refresh_failed");
@@ -200,7 +200,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     },
     onEvent: (envelope, generation) => {
       append(envelope);
-      if (envelope.event.type === "issue_status") refreshIssue(envelope.issueId, generation);
+      if (envelope.event.type === "issue_status") refreshIssue(props.issue.id, generation);
     },
   });
   const connect = (issueId: string, resetForIssue = false) => {

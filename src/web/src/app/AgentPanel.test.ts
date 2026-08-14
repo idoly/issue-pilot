@@ -10,7 +10,7 @@ import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent,
 import { piDarkThemeStyle } from "./pi-theme";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
-  return { id, issueId: "ISSUE-20260810-001", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
+  return { id, issueId: "63ccbb08-d769-47b6-87a6-e93acea184f7", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
 }
 
 const usage = {
@@ -300,9 +300,11 @@ describe("Agent conversation state", () => {
     source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-failed"));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("工单状态刷新失败"));
+    expect(onRefresh).toHaveBeenLastCalledWith(issue.id);
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-retry"));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenLastCalledWith(issue.id);
     view.unmount();
   });
 });

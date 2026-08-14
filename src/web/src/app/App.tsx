@@ -23,7 +23,7 @@ import "@idoly/ant-design-solid/skeleton/style.css";
 import "@idoly/ant-design-solid/space/style.css";
 import "@idoly/ant-design-solid/tag/style.css";
 
-function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; codeServerTarget: string | null; onCloseCode: () => void; onRefresh: (issueId: string) => Promise<IssueDetail> }) {
+function AgentWorkbench(props: { issue: IssueDetail; codeExpanded: boolean; codeServerTarget: string | null; onCloseCode: () => void; onRefresh: (issueKey: string) => Promise<IssueDetail> }) {
   return (
     <section class={`agent-workbench${props.codeExpanded ? " code-only" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
       <AgentPanel issue={props.issue} hidden={props.codeExpanded} onRefresh={props.onRefresh} />
@@ -104,12 +104,12 @@ export function App() {
       });
     },
   );
-  const refreshIssue = async (issueId: string) => {
+  const refreshIssue = async (issueKey: string) => {
     const currentGeneration = selectionGeneration;
-    const currentRefresh = (issueRefreshes.get(issueId) ?? 0) + 1;
-    issueRefreshes.set(issueId, currentRefresh);
-    const refreshed = await getIssue(issueId);
-    if (currentGeneration === selectionGeneration && issueRefreshes.get(issueId) === currentRefresh && selectedId() === issueId) setIssue(refreshed);
+    const currentRefresh = (issueRefreshes.get(issueKey) ?? 0) + 1;
+    issueRefreshes.set(issueKey, currentRefresh);
+    const refreshed = await getIssue(issueKey);
+    if (currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey) setIssue(refreshed);
     return refreshed;
   };
   const appTheme = createMemo(() => ({
