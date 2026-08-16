@@ -90,10 +90,28 @@ test("hydrates current read-only issue runtimes from deployment branches", async
       workspacePath: issueRuntimeRoot(root, entry.key),
     })));
 
-    const { result, fetches } = await withGitFetchCount(root, () => prepareReadOnlyIssueRuntimes(database.db, root));
+    const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
+    const runTransaction = runtimeDatabase.transaction.bind(runtimeDatabase);
+    let activeTransactions = 0;
+    let maximumActiveTransactions = 0;
+    runtimeDatabase.transaction = (async (operation) => {
+      activeTransactions += 1;
+      maximumActiveTransactions = Math.max(maximumActiveTransactions, activeTransactions);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return await runTransaction(operation);
+      } finally {
+        activeTransactions -= 1;
+      }
+    }) as typeof runtimeDatabase.transaction;
+    const { result, fetches } = await (async () => {
+      try { return await withGitFetchCount(root, () => prepareReadOnlyIssueRuntimes(database.db, root)); }
+      finally { runtimeDatabase.transaction = runTransaction; }
+    })();
     assert.deepEqual([...result.prepared].sort(), [issue!.key, secondIssue!.key]);
     assert.deepEqual(result.blocked, []);
     assert.equal(fetches, 1);
+    assert.equal(maximumActiveTransactions, 1);
     await database.db.delete(issues).where(eq(issues.id, secondIssue!.id));
 
     const [repository] = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
@@ -113,8 +131,6 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     assert.equal(failedSwitch.blocked[0]?.issueKey, issue!.key);
     assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
     await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "main" }).where(eq(serviceDeploymentRepositories.repositoryId, extraRepository!.id));
-    const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
-    const runTransaction = runtimeDatabase.transaction.bind(runtimeDatabase);
     let failRepositoryTransaction = true;
     runtimeDatabase.transaction = (async (operation) => {
       if (failRepositoryTransaction) {

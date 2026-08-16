@@ -1,9 +1,11 @@
-import { and, eq, notInArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { rmdir } from "node:fs/promises";
 import path from "node:path";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, issueRepositories, issueWorkspaces } from "../db/schema.ts";
+import { SerialQueue } from "../serial.ts";
 import type { EnvironmentKind, IssueType } from "../domain/contracts.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
@@ -168,15 +170,31 @@ export class IssueProjectManager {
 
   async hydrateReadOnlyRuntimes(issues: ProjectIssue[]): Promise<RuntimePreparationResult> {
     const preparations: ReadOnlyDeploymentPreparationCache = new Map();
+    const repositoryRows = issues.length
+      ? await this.database.select().from(issueRepositories).where(inArray(issueRepositories.issueId, issues.map(({ id }) => id)))
+      : [];
+    const repositoriesByIssue = new Map<string, IssueRepository[]>();
+    for (const repository of repositoryRows) {
+      const repositories = repositoriesByIssue.get(repository.issueId) ?? [];
+      repositories.push(repository);
+      repositoriesByIssue.set(repository.issueId, repositories);
+    }
+    const databaseQueue = new SerialQueue();
     return prepareIssueRuntimeBatch(
       this.database,
       issues,
-      (issue) => this.hydrateReadOnlyRuntimeWithPreparations(issue, preparations),
+      (issue) => this.hydrateReadOnlyRuntimeWithPreparations(issue, preparations, repositoriesByIssue.get(issue.id) ?? [], databaseQueue),
+      { concurrency: issuePilotConfig.workspace.taskConcurrency },
     );
   }
 
-  private async hydrateReadOnlyRuntimeWithPreparations(issue: ProjectIssue, preparations?: ReadOnlyDeploymentPreparationCache): Promise<string> {
-    const existingRepositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+  private async hydrateReadOnlyRuntimeWithPreparations(
+    issue: ProjectIssue,
+    preparations?: ReadOnlyDeploymentPreparationCache,
+    repositoryRows?: IssueRepository[],
+    databaseQueue?: SerialQueue,
+  ): Promise<string> {
+    const existingRepositoryRows = repositoryRows ?? await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
     if (existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
 
     const preparationKey = JSON.stringify([issue.serviceId, issue.environmentId]);
@@ -187,7 +205,7 @@ export class IssueProjectManager {
     }
     const { names, repositories } = await preparation;
     const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, repositories.map(({ repository, checkout }) => ({ name: names.get(repository.url)!, repositoryPath: checkout.workspacePath })), "read");
-    await this.database.transaction(async (transaction) => {
+    const saveRuntimeState = () => this.database.transaction(async (transaction) => {
       const now = new Date();
       await replaceIssueRepositoryRows(transaction, issue.id, existingRepositoryRows, repositories.map(({ repository, checkout }) => ({
         url: repository.url,
@@ -200,6 +218,8 @@ export class IssueProjectManager {
       await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
       await transaction.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
     });
+    if (databaseQueue) await databaseQueue.run(saveRuntimeState);
+    else await saveRuntimeState();
     return runtimeRoot;
   }
 
