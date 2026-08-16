@@ -48,7 +48,7 @@ type WorkspaceStatistics = {
   workspaces: WorkspaceInspection[];
 };
 
-export class WorkspaceReleaseRefusal extends Error {
+class WorkspaceRefusal extends Error {
   readonly reason: string;
 
   constructor(reason: string) {
@@ -57,23 +57,9 @@ export class WorkspaceReleaseRefusal extends Error {
   }
 }
 
-export class WorkspaceRestoreRefusal extends Error {
-  readonly reason: string;
-
-  constructor(reason: string) {
-    super(reason);
-    this.reason = reason;
-  }
-}
-
-export class WorkspaceConversionRefusal extends Error {
-  readonly reason: string;
-
-  constructor(reason: string) {
-    super(reason);
-    this.reason = reason;
-  }
-}
+export class WorkspaceReleaseRefusal extends WorkspaceRefusal {}
+export class WorkspaceRestoreRefusal extends WorkspaceRefusal {}
+export class WorkspaceConversionRefusal extends WorkspaceRefusal {}
 
 type Issue = typeof issues.$inferSelect;
 type IssueWorkspace = typeof issueWorkspaces.$inferSelect;
@@ -173,33 +159,36 @@ export class WorkspaceLifecycleManager {
   }
 
   async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {
-    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
-      try { return await this.engine.runExclusive([issueId], async (reservation) => this.releaseLocked(await this.issueRow(issueId), reservation)); }
-      catch (error) {
+    return this.withIssueReservation(
+      issueId,
+      async (reservation) => this.releaseLocked(await this.issueRow(issueId), reservation),
+      (error) => {
         if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceReleaseRefusal(error.message);
         throw error;
-      }
-    }));
+      },
+    );
   }
 
   async reopenIssue(issueId: string): Promise<Issue> {
-    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
-      try { return await this.engine.runExclusive([issueId], async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation)); }
-      catch (error) {
+    return this.withIssueReservation(
+      issueId,
+      async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation),
+      (error) => {
         if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceRestoreRefusal(error.message);
         throw error;
-      }
-    }));
+      },
+    );
   }
 
   async convertIssueToDevelopment(issueId: string): Promise<Issue> {
-    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
-      try { return await this.engine.runExclusive([issueId], async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation)); }
-      catch (error) {
+    return this.withIssueReservation(
+      issueId,
+      async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation),
+      (error) => {
         if (error instanceof WorkspaceConversionRefusal) throw error;
         throw new WorkspaceConversionRefusal(errorMessage(error));
-      }
-    }));
+      },
+    );
   }
 
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }> }> {
@@ -477,6 +466,17 @@ export class WorkspaceLifecycleManager {
     const invalid = rows.find((row) => !row.workspace);
     if (invalid) throw new Error(`issue_workspace_missing:${invalid.issue.key}`);
     return rows;
+  }
+
+  private withIssueReservation<T>(
+    issueId: string,
+    operation: (reservation: AgentReservation) => Promise<T>,
+    rethrow: (error: unknown) => never,
+  ): Promise<T> {
+    return this.exclusive(() => this.issueQueue.run(issueId, async () => {
+      try { return await this.engine.runExclusive([issueId], operation); }
+      catch (error) { return rethrow(error); }
+    }));
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
