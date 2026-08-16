@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { applicationConfig } from "../../src/config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
@@ -19,7 +20,13 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");
   assert.equal(applicationConfig.workspace.highWaterBytes, 20 * 1024 ** 3);
   assert.equal(applicationConfig.workspace.targetBytes, 16 * 1024 ** 3);
-  assert.equal(applicationConfig.runtime.codeServer.publicUrl, `http://${applicationConfig.runtime.codeServer.listenHost}:${applicationConfig.runtime.codeServer.listenPort}/`);
+  assert.match(applicationConfig.runtime.projectTools.node.image, /^docker\.io\/library\/node:24-bookworm-slim@sha256:/);
+  assert.equal(applicationConfig.runtime.application.image, "localhost/issue-pilot:0.1.0-node24-bookworm");
+  assert.equal(applicationConfig.runtime.application.listenHost, "0.0.0.0");
+  assert.equal(applicationConfig.runtime.playwright.executionSeconds, 300);
+  assert.equal(applicationConfig.runtime.application.podmanSocket, "/run/user/1000/podman/podman.sock");
+  assert.equal(applicationConfig.webRoot, join(applicationConfig.stateRoot, "..", "src", "web", "dist"));
+  assert.equal(applicationConfig.limits.sourceBrowser.fileBytes, 2 * 1024 * 1024);
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
   assert.deepEqual(applicationConfig.runtime.dms, { endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" });
   assert.deepEqual(applicationConfig.limits.capability.dms, { queryChars: 20_000, rows: 500, executionMs: 30_000 });
@@ -39,6 +46,7 @@ test("restores interrupted and ready workspaces when the application database re
   try {
     const [environment] = await initial.db.select().from(environments);
     assert.ok(environment);
+    await initial.db.update(subjects).set({ displayName: "Bootstrap renamed" }).where(eq(subjects.subject, issuePilotConfig.bootstrapUser.subject));
     await initial.db.insert(subjects).values({ subject: "owner", displayName: "Owner" });
     const [service] = await initial.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     assert.ok(service);
@@ -64,6 +72,8 @@ test("restores interrupted and ready workspaces when the application database re
     const interrupted = Object.values(workspaces).find((workspace) => workspace.issueId === recoveredIssues["ISSUE-20260809-001"]?.id);
     assert.equal(interrupted?.status, "failed");
     assert.equal(interrupted?.lastError, "agent_interrupted_by_api_restart");
+    const [bootstrapUser] = await reopened.db.select().from(subjects).where(eq(subjects.subject, issuePilotConfig.bootstrapUser.subject));
+    assert.equal(bootstrapUser?.displayName, "Bootstrap renamed");
     const configuredEnvironments = Object.fromEntries((await reopened.db.select().from(environments)).map((environment) => [environment.key, environment.name]));
     assert.deepEqual(configuredEnvironments, { prod: "正式", test: "测试", dev: "开发" });
   } finally {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -8,7 +8,7 @@ import type { Database } from "../db/client.ts";
 import { issueWorkspaces } from "../db/schema.ts";
 import { errorMessage } from "../domain/contracts.ts";
 import { replaceGeneratedDirectory } from "./generated-directory.ts";
-import { issueRoot, issueRuntimeRoot, issueRuntimeWorkspaceFile, issueWorkspaceRoot, sharedCheckoutsRoot } from "./state.ts";
+import { issueRoot, issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "./state.ts";
 
 export interface IssueRuntimeRepository {
   name: string;
@@ -34,7 +34,7 @@ export async function prepareIssueRuntimeBatch<T extends { id: string; key: stri
       await prepareRuntime(issue);
       prepared.push(issue.key);
     } catch (error) {
-      await database.update(issueWorkspaces).set({ codeServerReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).catch(() => undefined);
+      await database.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).catch(() => undefined);
       blocked.push({ issueKey: issue.key, reason: errorMessage(error) });
     }
   }
@@ -76,13 +76,6 @@ export async function prepareIssueRuntime(
       const repositoryTarget = managedRepository(stateRoot, issueKey, repository.repositoryPath, access);
       await symlink(path.relative(temporaryRoot, repositoryTarget), path.join(temporaryRoot, repository.name), "dir");
     }
-    const workspaceFile = path.join(temporaryRoot, path.basename(issueRuntimeWorkspaceFile(stateRoot, issueKey)));
-    const workspace = {
-      folders: repositories.map((repository) => ({ name: repository.name, path: repository.name })),
-      ...(access === "read" ? { settings: { "files.readonlyInclude": { "**": true } } } : {}),
-    };
-    await writeFile(workspaceFile, `${JSON.stringify(workspace, null, 2)}\n`, { mode: 0o400 });
-    await chmod(workspaceFile, 0o400);
 
     await replaceGeneratedDirectory(runtimeRoot, temporaryRoot, previousRoot);
     return runtimeRoot;

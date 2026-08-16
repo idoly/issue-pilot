@@ -13,8 +13,8 @@ const timestamps = {
 };
 
 export const subjects = sqliteTable("subjects", {
-  subject: text("subject").primaryKey(), username: text("username"), displayName: text("display_name"), email: text("email"), ...timestamps,
-});
+  subject: text("subject").primaryKey(), displayName: text("display_name"), email: text("email"), active: integer("active", { mode: "boolean" }).notNull().default(true), ...timestamps,
+}, (table) => [index("subjects_active_name_idx").on(table.active, table.displayName)]);
 
 export const environments = sqliteTable("environments", {
   id: id(), key: text("key").notNull(), name: text("name").notNull(), kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), ...timestamps,
@@ -75,5 +75,5 @@ export const agentSessions = sqliteTable("issue_pilot_sessions", {
 
 export const issueWorkspaces = sqliteTable("issue_workspaces", {
   issueId: text("issue_id").primaryKey().references(() => issues.id, { onDelete: "cascade" }), status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("not_created"),
-  codeServerReady: integer("code_server_ready", { mode: "boolean" }).notNull().default(false), lastError: text("last_error"), ...timestamps,
+  runtimeReady: integer("runtime_ready", { mode: "boolean" }).notNull().default(false), lastError: text("last_error"), ...timestamps,
 });

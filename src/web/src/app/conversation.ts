@@ -178,7 +178,7 @@ export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): 
   if (name === "ls") return `ls ${path() || "."}`;
   if (name === "edit") return `edit ${path()}`.trim();
   if (name === "write") return `write ${path()}`.trim();
-  const labels: Record<string, string> = { playwright: "browser", nacos: "config", sls: "logs" };
+  const labels: Record<string, string> = { nacos: "config", sls: "logs" };
   return labels[name] ?? name;
 }
 

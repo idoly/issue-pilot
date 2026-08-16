@@ -1,15 +1,14 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import type { ContainerRuntime } from "../container-runtime.ts";
 import { isDmsDatabaseId, isDmsTenantId } from "../domain/contracts.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
-import { withAliyunCliProfile } from "./aliyun.ts";
+import { runAliyunCli, withAliyunCliProfile, type AliyunCliRuntime } from "./aliyun.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
-import type { CommandExecutor } from "./local-exec.ts";
 import { validateReadOnlySql } from "./sql.ts";
 
 const limits = issuePilotConfig.limits.capability.dms;
 
-interface DmsRuntime {
-  cliPath: string;
+interface DmsRuntime extends AliyunCliRuntime {
   endpoint: string;
   cliRegion: string;
 }
@@ -104,12 +103,12 @@ function parseDmsResponse(stdout: string): { requestId: string; result: DmsScrip
 }
 
 export async function queryDms(
-  executor: CommandExecutor,
+  containers: ContainerRuntime,
   policy: IssuePolicy,
   input: { statement: string },
   configured: Record<string, unknown>,
   signal?: AbortSignal,
-  runtime: DmsRuntime = { cliPath: issuePilotConfig.runtime.aliyunCli, ...issuePilotConfig.runtime.dms },
+  runtime: DmsRuntime = { ...issuePilotConfig.runtime.aliyunCli, ...issuePilotConfig.runtime.dms },
 ) {
   const statement = validateDmsQuery(input.statement);
   const scope = policy.service.dms;
@@ -118,7 +117,7 @@ export async function queryDms(
   if (!isDmsDatabaseId(scope.dbId) || (scope.tid !== undefined && !isDmsTenantId(scope.tid))) throw new Error("invalid_dms_service_scope");
   if (runtime.endpoint !== issuePilotConfig.runtime.dms.endpoint || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(runtime.cliRegion)) throw new Error("invalid_dms_runtime");
 
-  return withAliyunCliProfile(runtime.cliPath, {
+  return withAliyunCliProfile({
     accessKeyId: configured.accessKeyId,
     accessKeySecret: configured.accessKeySecret,
     region: runtime.cliRegion,
@@ -132,15 +131,14 @@ export async function queryDms(
       "--endpoint", runtime.endpoint,
       "--secure",
     ];
-    const execution = await executor.execute(runtime.cliPath, args, {
+    const execution = await runAliyunCli(containers, profileRoot, args, {
       timeout: limits.executionMs,
-      environment: { HOME: profileRoot, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" },
       ...(signal ? { signal } : {}),
-    });
+    }, runtime);
     if (execution.killed || execution.code !== 0) throw new Error("dms_query_failed");
     const { requestId, result } = parseDmsResponse(execution.stdout);
     const query = { dbId: scope.dbId, logic: scope.logic, ...(scope.tid === undefined ? {} : { tid: scope.tid }), returnedRows: result.RowCount, possiblyIncomplete: false };
     const text = capabilityResultText({ query, columns: result.ColumnNames, rows: result.Rows });
-    return capabilityTextResult(text, { provider: "aliyun-dms", deploymentId: scope.deploymentId, requestId, ...query, runtime: "local-cli" });
+    return capabilityTextResult(text, { provider: "aliyun-dms", deploymentId: scope.deploymentId, requestId, ...query, runtime: "container-cli" });
   });
 }

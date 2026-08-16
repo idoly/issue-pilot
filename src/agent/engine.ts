@@ -6,10 +6,11 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { createCapabilityExecutor } from "../capabilities/broker.ts";
+import { localContainerRuntime, type ContainerRuntime } from "../container-runtime.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
-import { CodeServerManager } from "../workspace/code-server.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { issueAttachmentRoot, issueSessionRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
@@ -47,24 +48,29 @@ export class AgentEngine implements AgentController {
   private readonly reservations = new Set<string>();
   private readonly idleWaiters = new Set<() => void>();
   private readonly projectManager: IssueProjectManager;
-  private readonly codeServerManager: CodeServerManager;
   private readonly stateRoot: string;
   private readonly database: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly onError: (error: unknown) => void;
   private readonly sessions = new Map<string, ManagedPiSession>();
   private readonly sharedReadOnlySessions = new Set<string>();
-  private readonly piRuntime = new PiSessionRuntime();
+  private readonly piRuntime: PiSessionRuntime;
   private closePromise: Promise<void> | undefined;
   private closing = false;
 
-  constructor(database: Database, stateRoot = ".issue-pilot", publish?: (event: RunEvent) => void, onError: (error: unknown) => void = () => undefined) {
+  constructor(
+    database: Database,
+    stateRoot = ".issue-pilot",
+    publish?: (event: RunEvent) => void,
+    onError: (error: unknown) => void = () => undefined,
+    containers: ContainerRuntime = localContainerRuntime,
+  ) {
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
-    this.codeServerManager = new CodeServerManager(this.stateRoot);
     this.publish = publish;
     this.onError = onError;
+    this.piRuntime = new PiSessionRuntime(undefined, createCapabilityExecutor(containers));
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
@@ -217,7 +223,7 @@ export class AgentEngine implements AgentController {
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
     const currentMessage = latestMessage?.trim() || undefined;
-    const [preparingWorkspace] = await this.database.update(issueWorkspaces).set({ status: "preparing", codeServerReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).returning({ issueId: issueWorkspaces.issueId });
+    const [preparingWorkspace] = await this.database.update(issueWorkspaces).set({ status: "preparing", runtimeReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).returning({ issueId: issueWorkspaces.issueId });
     if (!preparingWorkspace) throw new Error("issue_workspace_missing");
 
     const [service] = await this.database.select({
@@ -236,7 +242,7 @@ export class AgentEngine implements AgentController {
     const environmentKind = service.environmentKind as EnvironmentKind;
     await this.stopSession(issue.id);
 
-    const project = await this.projectManager.prepare(issue, environmentKind, this.codeServerManager);
+    const project = await this.projectManager.prepare(issue, environmentKind);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
@@ -278,7 +284,7 @@ export class AgentEngine implements AgentController {
       target: agentSessions.issueId,
       set: { sessionFile, workspacePath: project.workspaceRoot, updatedAt: new Date() },
     });
-    await this.markRunning(issue.id, project.codeServerReady);
+    await this.markRunning(issue.id, project.runtimeReady);
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
 
     const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: path.relative(project.workspaceRoot, repository.workspacePath), readOnly: repository.access === "read" }));
@@ -317,14 +323,14 @@ export class AgentEngine implements AgentController {
     await this.finalizeRun(issueId);
   }
 
-  private async markRunning(issueId: string, codeServerReady?: boolean): Promise<void> {
+  private async markRunning(issueId: string, runtimeReady?: boolean): Promise<void> {
     await this.database.transaction(async (transaction) => {
       const [runningIssue] = await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() })
         .where(and(eq(issues.id, issueId), inArray(issues.status, ["open", "pending"]))).returning({ id: issues.id });
       if (!runningIssue) throw new Error("issue_not_runnable");
       const [runningWorkspace] = await transaction.update(issueWorkspaces).set({
         status: "running",
-        ...(codeServerReady !== undefined ? { codeServerReady } : {}),
+        ...(runtimeReady !== undefined ? { runtimeReady } : {}),
         lastError: null,
         updatedAt: new Date(),
       }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });

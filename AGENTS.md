@@ -29,7 +29,7 @@ Do not revert unrelated changes. Do not commit or push unless explicitly request
 
 ## Protect Real State
 
-The repository's `.issue-pilot` may contain real Issues, Deployment credentials, attachments, Pi JSONL, local branches, active worktrees, code-server data, and backups. Never use it for development experiments.
+The repository's `.issue-pilot` may contain real Issues, Deployment credentials, attachments, Pi JSONL, local branches, active worktrees, legacy code-server data, and backups. Never use it for development experiments.
 
 Application entry points resolve state only from `issue-pilot.config.ts`. There is no environment-variable override. Automated tests inject temporary roots through `buildApi({ stateRoot, databaseFile })` and manager constructors.
 
@@ -45,7 +45,7 @@ Never automatically delete or rewrite evidence when state is dirty, untracked, r
 | Business enums and shared state predicates | `src/domain/contracts.ts` |
 | Current database model | `src/db/schema.ts` |
 | Schema upgrade order | Immutable `drizzle/*.sql` and `drizzle/meta/_journal.json` |
-| Issue, Service, Deployment, repository, workspace, and attachment rows | SQLite |
+| User, Issue, Service, Deployment, repository, workspace, and attachment rows | SQLite |
 | Deployment repository resolution | `src/workspace/deployment.ts` |
 | Repository state classification and managed paths | `src/workspace/state.ts` |
 | Issue project preparation | `src/workspace/project.ts` |
@@ -57,7 +57,8 @@ Never automatically delete or rewrite evidence when state is dirty, untracked, r
 | Configuration credential fields, requiredness, and update states | `src/configuration/contracts.ts` |
 | Service configuration content revision | `src/configuration/revision.ts` |
 | Capability execution dispatch | `src/capabilities/broker.ts` |
-| Generated code-server resources | `src/workspace/runtime.ts` and `src/workspace/project-wrappers.ts` |
+| Generated Issue runtime and project wrappers | `src/workspace/runtime.ts` and `src/workspace/project-wrappers.ts` |
+| Read-only source browsing | `src/workspace/source-browser.ts` and `src/http/source-browser-routes.ts` |
 
 Do not create a second source for any of these facts.
 
@@ -68,6 +69,7 @@ Do not create a second source for any of these facts.
 | Business enum, state, or shared predicate | `src/domain/contracts.ts` |
 | Table, column, index, trigger, or constraint | `src/db/schema.ts` plus a new migration |
 | HTTP behavior | `src/http/*-routes.ts` and focused route tests |
+| User lifecycle | `src/http/user-routes.ts`, `subjects`, and `UserManagement.tsx` |
 | Configuration DTO, credential projection/merge, revision, and snapshot projection | `src/configuration` |
 | Service configuration command prepare/apply | `src/http/service-configuration.ts` |
 | Attachment transaction/store behavior | `src/http/attachment-store.ts` |
@@ -111,7 +113,7 @@ Every change must preserve these rules:
 - Service PATCH/DELETE requires the full-content revision from the same configuration snapshot; stale edits fail before session close and transaction apply.
 - Capability results are Agent evidence and may enter Pi JSONL; do not confuse this with direct Deployment credential exposure.
 - Capability clients validate frozen scope, current configuration, input, timeout, and result bounds even if an earlier layer already validated them.
-- API, migration, Git, runtime, and code-server resolve the same state root.
+- API, migration, Git, runtime, source browser, and project-tool broker resolve the same state root.
 
 The rationale is in [Architecture](docs/ARCHITECTURE.md#必须保持的不变量).
 
@@ -173,7 +175,8 @@ For dependency, runtime, capability security, or container changes also run:
 ```bash
 npm audit --omit=dev --audit-level=high
 infra/playwright.sh status
-infra/code-server.sh status
+infra/aliyun-cli.sh status
+infra/project-tools.sh status
 ```
 
 For schema or real-state operations additionally verify SQLite integrity, foreign keys, file modes, repository HEAD/ref consistency, and absence of unmanaged Issue directories. Follow [Runbook](docs/RUNBOOK.md).

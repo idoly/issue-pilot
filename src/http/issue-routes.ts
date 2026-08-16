@@ -8,7 +8,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_TYPES, ISSUE_TYPES_BY_ENVIRONMENT, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
-import { issueCodeServerUrl } from "../workspace/code-server.ts";
+import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import { finalizeQuarantinedAttachments, type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachment-store.ts";
@@ -51,7 +51,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
   const validateSubjects = async (subjectValues: Array<string | null>): Promise<void> => {
     const requestedSubjects = [...new Set(subjectValues.filter((value): value is string => Boolean(value)))];
     if (!requestedSubjects.length) return;
-    const matchingSubjects = await database.db.select({ subject: subjects.subject }).from(subjects).where(inArray(subjects.subject, requestedSubjects));
+    const matchingSubjects = await database.db.select({ subject: subjects.subject }).from(subjects).where(and(inArray(subjects.subject, requestedSubjects), eq(subjects.active, true)));
     if (matchingSubjects.length !== requestedSubjects.length) throw new ApiError(400, "invalid_subject");
   };
   const parseIssueInput = async (input: Record<string, unknown>, environment: { id: string; kind: string }) => {
@@ -88,7 +88,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       if (!service) throw new Error("issue_service_not_found");
       return {
         id: issue.key, title: issue.title, priority: issue.priority, type: issue.type, status: issue.status,
-        assignee: assignee?.displayName ?? assignee?.username ?? null, assigneeSubject: issue.assigneeSubject,
+        assignee: assignee?.displayName ?? null, assigneeSubject: issue.assigneeSubject,
         service: { key: service.key, name: service.name },
         createdAt: isoDate(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
       };
@@ -265,14 +265,16 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const workspaceStatus = workspace?.status ?? "not_created";
     const sessionReady = sessionBinding ? await pathExists(sessionBinding.sessionFile) : false;
     const repositoryState = classifyRepositoryState(repositoryRows);
-    const codeServerRoot = repositoryState === "invalid" ? null : issueRuntimeRoot(stateRoot, issue.key);
+    let repositoryNames = new Map<string, string>();
+    if (repositoryState !== "invalid") repositoryNames = issueRepositoryWorkspaceNames(repositoryRows);
+    const sourceAvailable = Boolean(workspace?.runtimeReady && repositoryState !== "invalid" && await pathExists(issueRuntimeRoot(stateRoot, issue.key)));
     return {
       ...summary, description: issue.description,
-      repositories: repositoryRows.map((repository) => ({ url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch })),
+      repositories: repositoryRows.map((repository) => ({ name: repositoryNames.get(repository.url) ?? "", url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch })),
       attachments: attachmentRows.map(serializeAttachment),
       workspace: {
         status: workspaceStatus,
-        url: workspace?.codeServerReady && codeServerRoot ? issueCodeServerUrl(stateRoot, issue.key, codeServerRoot) : null,
+        sourceAvailable,
         lastError: workspace?.lastError ?? null,
         retryable: issue.status !== "resolved" && !engine.isRunning(issue.id) && (
           workspaceStatus !== "ready"
@@ -282,7 +284,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),
       environmentKey: (await database.db.select().from(environments).where(eq(environments.id, issue.environmentId)).limit(1))[0]?.key,
-      comments: commentRows.map(({ comment, person }) => ({ id: comment.id, author: person.displayName ?? person.username ?? person.subject, body: comment.body, createdAt: comment.createdAt.toISOString() })),
+      comments: commentRows.map(({ comment, person }) => ({ id: comment.id, author: person.displayName ?? person.subject, body: comment.body, createdAt: comment.createdAt.toISOString() })),
     };
   });
 

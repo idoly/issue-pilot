@@ -14,6 +14,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import { executeCapability, type CapabilityExecutor } from "../capabilities/broker.ts";
 import { createCapabilityTools } from "../pi/tools.ts";
 import { piToolAllowlist, type IssuePolicy } from "../pi/policy.ts";
 
@@ -55,8 +56,8 @@ function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
   return { ...event, assistantMessageEvent } as JsonAgentSessionEvent;
 }
 
-function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string, executableRoot?: string): ToolDefinition<any, any, any>[] {
-  const tools = createCapabilityTools(policy, deploymentConfig);
+function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string, capabilityExecutor: CapabilityExecutor, executableRoot?: string): ToolDefinition<any, any, any>[] {
+  const tools = createCapabilityTools(policy, deploymentConfig, capabilityExecutor);
   if (!piToolAllowlist(policy).includes("bash")) return tools;
   if (!executableRoot) throw new Error("project_wrapper_root_required");
   tools.unshift(createBashToolDefinition(workspaceRoot, {
@@ -93,9 +94,11 @@ async function abortAndDispose(session: AgentSession): Promise<void> {
 
 export class PiSessionRuntime {
   readonly #modelRuntime: Promise<ModelRuntime>;
+  readonly #capabilityExecutor: CapabilityExecutor;
 
-  constructor(modelRuntime = ModelRuntime.create({ allowModelNetwork: false })) {
+  constructor(modelRuntime = ModelRuntime.create({ allowModelNetwork: false }), capabilityExecutor: CapabilityExecutor = executeCapability) {
     this.#modelRuntime = modelRuntime;
+    this.#capabilityExecutor = capabilityExecutor;
   }
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
@@ -137,7 +140,7 @@ export class PiSessionRuntime {
       model,
       thinkingLevel: policy.model.thinkingLevel,
       tools: expectedTools,
-      customTools: sessionTools(policy, options.deploymentConfig, workspaceRoot, options.executableRoot),
+      customTools: sessionTools(policy, options.deploymentConfig, workspaceRoot, this.#capabilityExecutor, options.executableRoot),
       sessionManager: options.manager,
       settingsManager,
       resourceLoader,

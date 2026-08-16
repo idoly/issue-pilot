@@ -6,17 +6,12 @@ vi.mock("../data/client", async (importOriginal) => {
   const { issuePilotConfig } = await import("../../../../issue-pilot.config.ts");
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
-  const codeServerUrl = (id: string) => {
-    const url = new URL(issuePilotConfig.runtime.codeServer.publicUrl);
-    url.searchParams.set("workspace", `/home/coder/state/issues/${id.toLowerCase()}/runtime/${id.toLowerCase()}.code-workspace`);
-    return url.toString();
-  };
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
     assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
-    service, createdAt: now, updatedAt: now, repositories: [{ url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    service, createdAt: now, updatedAt: now, repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
-    workspace: { status: retryable ? "failed" : "ready", url: codeServerUrl(id), retryable },
+    workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
   });
   const issues = [
     issue("ISSUE-20260810-042", "结算页提交后订单状态未刷新", "in_progress"),
@@ -26,6 +21,10 @@ vi.mock("../data/client", async (importOriginal) => {
   issues[1]!.type = "smart_analysis";
   issues[1]!.environmentKey = "prod";
   issues[1]!.repositories[0]!.workingBranch = null;
+  const managedUsers = [
+    { subject: "fixture-user", name: "严欣", email: "owner@example.test", active: true, createdAt: now, updatedAt: now },
+    { subject: "second-user", name: "刘宜展", email: "lyz@example.test", active: true, createdAt: now, updatedAt: now },
+  ];
   const configuration = {
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ key: "test", name: "测试" }],
@@ -37,14 +36,18 @@ vi.mock("../data/client", async (importOriginal) => {
   };
   return {
     ...actual,
-    loadUsers: vi.fn(async () => [
-      { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
-      { subject: "second-user", name: "刘宜展", email: "lyz@example.test" },
-    ]),
-    loadPeople: vi.fn(async () => [
-      { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
-      { subject: "second-user", name: "刘宜展", email: "lyz@example.test" },
-    ]),
+    loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email }) => ({ subject, name, email })))),
+    loadManagedUsers: vi.fn(async () => structuredClone(managedUsers)),
+    createUser: vi.fn(async (input: { subject: string; name: string; email: string }) => {
+      const user = { ...input, active: true, createdAt: now, updatedAt: now };
+      managedUsers.push(user);
+      return structuredClone(user);
+    }),
+    updateUser: vi.fn(async (subject: string, input: { name: string; email: string; active: boolean }) => {
+      const user = managedUsers.find((candidate) => candidate.subject === subject)!;
+      Object.assign(user, input, { updatedAt: now });
+      return structuredClone(user);
+    }),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
@@ -64,6 +67,30 @@ vi.mock("../data/client", async (importOriginal) => {
       ],
     })),
     getIssue: vi.fn(async (id: string) => structuredClone(issues.find((item) => item.id === id))),
+    loadSourceRepositories: vi.fn(async () => [
+      { name: "srm", url: "git@example.com:team/srm.git", branch: "hotfix-issue", access: "write" as const },
+      { name: "srm-server", url: "git@example.com:team/srm-server.git", branch: "hotfix-issue", access: "write" as const },
+    ]),
+    loadSourceTree: vi.fn(async (_id: string, sourceRepository: string, sourcePath: string) => sourcePath
+      ? { path: sourcePath, entries: [{ name: "index.ts", path: "src/index.ts", type: "file" as const, size: 32 }], truncated: false }
+      : sourceRepository === "srm-server"
+        ? { path: "", entries: [{ name: "pom.xml", path: "pom.xml", type: "file" as const, size: 24 }], truncated: false }
+        : { path: "", entries: [{ name: "src", path: "src", type: "directory" as const, size: null }, { name: "README.md", path: "README.md", type: "file" as const, size: 24 }], truncated: false }),
+    loadSourceFile: vi.fn(async (_id: string, _repository: string, sourcePath: string) => ({ path: sourcePath, content: sourcePath === "README.md" ? "# SRM source\n" : "export const ready = true;\n", size: 24 })),
+    searchSource: vi.fn(async () => ({ matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false })),
+    loadSourceHistory: vi.fn(async () => ({ commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Fixture User", date: now, subject: "Fix source browser" }], truncated: false })),
+    loadSourceCommit: vi.fn(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
+    loadSourceCommitFile: vi.fn(async () => ({
+      file: { status: "modified" as const, path: "README.md", previousPath: null },
+      before: { path: "README.md", revision: "a".repeat(40), content: "# Old SRM source\n" },
+      after: { path: "README.md", revision: "b".repeat(40), content: "# SRM source\n" },
+    })),
+    loadSourceDiff: vi.fn(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
+    loadSourceDiffFile: vi.fn(async () => ({
+      file: { status: "modified" as const, path: "README.md", previousPath: null },
+      before: { path: "README.md", version: "index" as const, content: "# Indexed SRM source\n" },
+      after: { path: "README.md", version: "working-tree" as const, content: "# SRM source\n" },
+    })),
     addIssueComment: async (id: string, body: string) => {
       const selected = issues.find((item) => item.id === id)!;
       const comment = { id: `comment-${selected.comments.length + 1}`, author: "fixture-user", body, createdAt: now };
@@ -122,30 +149,67 @@ describe("issue pilot workspace", () => {
     fireEvent.input(commentInput, { target: { value: "还原后保留的评论草稿" } });
     const issueQueue = screen.getByLabelText("工单队列") as HTMLElement;
     const issueWorkspace = document.querySelector(".issue-workspace") as HTMLElement;
-    fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
-    const codeServerFrame = await waitFor(() => screen.getByTitle("ISSUE-20260810-042 code-server 编辑器") as HTMLIFrameElement);
+    fireEvent.click(screen.getByRole("button", { name: "浏览工单代码" }));
+    const sourceBrowser = await waitFor(() => screen.getByRole("region", { name: "ISSUE-20260810-042 代码浏览器" }));
     expect(issueQueue.hidden).toBe(true);
-    expect(issueWorkspace.hidden).toBe(true);
-    expect(agentRegion.hidden).toBe(true);
+    expect(issueWorkspace.hidden).toBe(false);
+    expect(issueWorkspace.classList.contains("source-detail-panel")).toBe(true);
+    expect(agentRegion.hidden).toBe(false);
     expect(issueQueue.isConnected && issueWorkspace.isConnected && agentRegion.isConnected).toBe(true);
-    const codeServerUrl = new URL(codeServerFrame.src);
-    expect(codeServerUrl.pathname).toBe("/code-server/");
-    expect(codeServerUrl.searchParams.get("workspace")).toBe("/home/coder/state/issues/issue-20260810-042/runtime/issue-20260810-042.code-workspace");
-    fireEvent.click(screen.getByRole("button", { name: "还原 code-server" }));
-    const codeServerPane = codeServerFrame.closest(".code-server-pane") as HTMLElement;
-    await waitFor(() => expect(codeServerPane.hidden).toBe(true));
-    expect(codeServerFrame.isConnected).toBe(true);
+    const workbench = within(sourceBrowser).getByTitle("ISSUE-20260810-042 VS Code只读工作台") as HTMLIFrameElement;
+    expect(workbench.src).toContain("/vscode.html?issue=ISSUE-20260810-042");
+    expect(workbench.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+    const viewToolbar = within(sourceBrowser).getByRole("toolbar", { name: "代码视图" });
+    expect(within(viewToolbar).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Explorer", "Search", "Source Control"]);
+    const searchToggle = within(viewToolbar).getByRole("button", { name: "Search" });
+    fireEvent.click(searchToggle);
+    await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("true"));
+    expect(within(viewToolbar).getByRole("button", { name: "Explorer" }).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(searchToggle);
+    await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("false"));
+    fireEvent.click(searchToggle);
+    await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("true"));
+    const agentToggle = within(sourceBrowser).getByRole("button", { name: "Agent面板" });
+    expect(agentToggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(agentToggle);
+    await waitFor(() => expect(agentToggle.getAttribute("aria-pressed")).toBe("false"));
+    expect(agentRegion.hidden).toBe(true);
+    fireEvent.click(agentToggle);
+    await waitFor(() => expect(agentToggle.getAttribute("aria-pressed")).toBe("true"));
+    expect(agentRegion.hidden).toBe(false);
+
+    const detailsToggle = within(sourceBrowser).getByRole("button", { name: "工单详情" });
+    expect(detailsToggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(detailsToggle);
+    await waitFor(() => expect(detailsToggle.getAttribute("aria-pressed")).toBe("false"));
+    expect(issueWorkspace.classList.contains("details-open")).toBe(false);
+    fireEvent.click(detailsToggle);
+    await waitFor(() => expect(detailsToggle.getAttribute("aria-pressed")).toBe("true"));
+    expect(issueWorkspace.classList.contains("details-open")).toBe(true);
+    Object.defineProperties(workbench, {
+      clientWidth: { configurable: true, value: 1360 },
+      clientHeight: { configurable: true, value: 820 },
+    });
+    window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      source: workbench.contentWindow,
+      data: {
+        kind: "issue-pilot-workbench-layout",
+        issueKey: "ISSUE-20260810-042",
+        panel: { x: 300, y: 520, width: 700, height: 300 },
+        auxiliary: { x: 1000, y: 0, width: 360, height: 820 },
+      },
+    }));
+    await waitFor(() => expect((document.querySelector(".app-content") as HTMLElement).style.getPropertyValue("--source-panel-x")).toBe("300px"));
+    fireEvent.click(within(sourceBrowser).getByRole("button", { name: "关闭代码浏览器" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "ISSUE-20260810-042 代码浏览器" })).toBeNull());
     expect(screen.getByLabelText("工单队列")).toBe(issueQueue);
     expect(document.querySelector(".issue-workspace")).toBe(issueWorkspace);
+    expect(issueWorkspace.classList.contains("source-detail-panel")).toBe(false);
     expect(screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" })).toBe(agentRegion);
     expect(agentInput.value).toBe("还原后保留的 Agent 草稿");
     expect(commentInput.value).toBe("还原后保留的评论草稿");
     expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "在 code-server 中打开工单代码" }));
-    await waitFor(() => expect(codeServerPane.hidden).toBe(false));
-    expect(screen.getByTitle("ISSUE-20260810-042 code-server 编辑器")).toBe(codeServerFrame);
-    fireEvent.click(screen.getByRole("button", { name: "还原 code-server" }));
-    await waitFor(() => expect(codeServerPane.hidden).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
     await waitFor(() => expect(within(previewDialog).getByText(/42,ready/)).toBeTruthy());
@@ -267,14 +331,13 @@ describe("issue pilot workspace", () => {
     const modelButton = within(serviceDialog).getByRole("button", { name: "model" }) as HTMLButtonElement;
     expect(modelButton.disabled).toBe(true);
     expect(modelButton.getAttribute("aria-pressed")).toBe("true");
-    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+    expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
     await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent).slice(-2)).toEqual(["dms", "sls"]));
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
     await waitFor(() => expect(screen.queryByLabelText("sls accessKeyId 1")).toBeNull());
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "playwright" }));
-    await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "model", "playwright", "nacos", "db", "dms"]));
-    expect(screen.getByLabelText("playwright baseUrl 1")).toBeTruthy();
+    expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "model", "nacos", "db", "dms"]);
     const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
     expect((screen.getByLabelText("nacos dataIds 1") as HTMLInputElement).value).toBe("srm-test.yaml, srm-shared.yaml");
     const databaseUrl = screen.getByLabelText("db url 1");
@@ -311,8 +374,6 @@ describe("issue pilot workspace", () => {
     expect(screen.getByLabelText("db url 1")).toBeTruthy();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
     await waitFor(() => expect(screen.queryByLabelText("es url 1")).toBeNull());
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "playwright" }));
-    await waitFor(() => expect(screen.queryByLabelText("playwright baseUrl 1")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
     const client = await import("../data/client");
     await waitFor(() => {
@@ -332,9 +393,41 @@ describe("issue pilot workspace", () => {
     expect(client.loadCatalog).toHaveBeenCalledTimes(2);
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
     expect(client.loadUsers).toHaveBeenCalledTimes(1);
-    expect(client.loadPeople).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
+  });
+
+  test("adds, edits, and disables users from the user management view", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.createUser).mockClear();
+    vi.mocked(client.updateUser).mockClear();
+    render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("radio", { name: "用户" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "用户管理" })).toBeTruthy());
+    expect(screen.getByText("fixture-user")).toBeTruthy();
+    expect(screen.getByText("second-user")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加用户" }));
+    const dialog = await waitFor(() => screen.getByRole("dialog", { name: "添加用户" }));
+    fireEvent.input(within(dialog).getByLabelText("用户标识"), { target: { value: "new-user@example.test" } });
+    fireEvent.input(within(dialog).getByLabelText("用户姓名"), { target: { value: "新用户" } });
+    fireEvent.input(within(dialog).getByLabelText("用户邮箱"), { target: { value: "new.user@example.test" } });
+    const saveUser = within(dialog).getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    expect(saveUser.disabled).toBe(false);
+    fireEvent.click(saveUser);
+    await waitFor(() => {
+      const alert = within(dialog).queryByRole("alert");
+      if (alert) throw new Error(alert.textContent ?? "user save failed");
+      expect(client.createUser).toHaveBeenCalledWith({ subject: "new-user@example.test", name: "新用户", email: "new.user@example.test" });
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加用户" })).toBeNull());
+    const newUserRow = await waitFor(() => screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement);
+    expect(newUserRow).toBeTruthy();
+    fireEvent.click(within(newUserRow).getByRole("button", { name: "停用" }));
+    await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { name: "新用户", email: "new.user@example.test", active: false }));
+    await waitFor(() => expect(within(screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement).getByText("停用")).toBeTruthy());
   });
 
   test("keeps a stale Service editor open and refreshes configuration after a revision conflict", async () => {

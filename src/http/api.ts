@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import { applicationConfig } from "../config.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
+import type { ContainerRuntime } from "../container-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
@@ -13,13 +14,18 @@ import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
 import { SerialQueue } from "../serial.ts";
 import { prepareDevelopmentIssueRuntimes } from "../workspace/development.ts";
 import { WorkspaceLifecycleManager, type WorkspaceRetentionPolicy } from "../workspace/lifecycle.ts";
+import { ProjectToolBroker } from "../workspace/project-tools.ts";
 import { prepareReadOnlyIssueRuntimes } from "../workspace/read-only.ts";
+import { SourceBrowser } from "../workspace/source-browser.ts";
 import { pruneState } from "../workspace/state.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
 import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
 import { ApiError } from "./input.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
+import { registerSourceBrowserRoutes } from "./source-browser-routes.ts";
+import { registerUserRoutes } from "./user-routes.ts";
+import { registerWebRoutes } from "./web-routes.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
 export type { AgentController } from "../agent/engine.ts";
@@ -28,9 +34,13 @@ export interface ApiOptions {
   databaseFile?: string;
   stateRoot?: string;
   engine?: AgentController;
+  containerRuntime?: ContainerRuntime;
   logger?: boolean;
+  listenHost?: string;
   modelCatalog?: AgentModelCatalog;
   workspacePolicy?: WorkspaceRetentionPolicy;
+  projectTools?: Pick<ProjectToolBroker, "start" | "close">;
+  webRoot?: string;
 }
 
 interface ShutdownTarget {
@@ -63,24 +73,27 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const database = await openApplicationDatabase(databaseFile);
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: true });
   let engine: AgentController | undefined;
+  let projectTools: Pick<ProjectToolBroker, "start" | "close"> | undefined;
   let stopWorkspaceMaintenance: (() => Promise<void>) | undefined;
 
   try {
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
     await pruneState(stateRoot, issueKeys);
+    projectTools = options.projectTools ?? new ProjectToolBroker(database.db, stateRoot, options.containerRuntime, undefined, (error) => app.log.error(error));
+    await projectTools.start();
 
     const developmentRuntimes = await prepareDevelopmentIssueRuntimes(database.db, stateRoot);
     for (const blocked of developmentRuntimes.blocked) app.log.warn(blocked, "Development issue runtime could not be prepared");
     if (developmentRuntimes.prepared.length) app.log.info({ issueKeys: developmentRuntimes.prepared }, "Prepared development issue runtimes");
     const readOnlyRuntimes = await prepareReadOnlyIssueRuntimes(database.db, stateRoot);
-    for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only code-server runtime could not be prepared");
-    if (readOnlyRuntimes.prepared.length) app.log.info({ issueKeys: readOnlyRuntimes.prepared }, "Prepared read-only code-server runtimes");
+    for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only issue runtime could not be prepared");
+    if (readOnlyRuntimes.prepared.length) app.log.info({ issueKeys: readOnlyRuntimes.prepared }, "Prepared read-only issue runtimes");
 
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog();
     const attachmentLimits = applicationConfig.limits.attachment;
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
     const events = new AgentEventBus((error) => app.log.error(error));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error));
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.containerRuntime);
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -115,17 +128,22 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       return reply.code(500).send({ error: "internal_error" });
     });
 
-    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, runScopeExclusive };
+    const sourceBrowser = new SourceBrowser(database.db, stateRoot);
+    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, sourceBrowser, runScopeExclusive };
     app.get("/health", async () => ({ ok: true }));
+    registerUserRoutes(routeContext);
     registerConfigurationRoutes(routeContext);
     registerIssueRoutes(routeContext);
     registerAttachmentRoutes(routeContext);
     registerAgentRoutes(routeContext);
+    registerSourceBrowserRoutes(routeContext);
     registerWorkspaceRoutes(routeContext);
+    if (options.webRoot) await registerWebRoutes(app, options.webRoot);
     app.addHook("onClose", async () => {
       const failures: unknown[] = [];
       try { await stopWorkspaceMaintenance?.(); } catch (error) { failures.push(error); }
       try { await engine?.close?.(); } catch (error) { failures.push(error); }
+      try { await projectTools?.close(); } catch (error) { failures.push(error); }
       try { await database.close(); } catch (error) { failures.push(error); }
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) throw new AggregateError(failures, "api_close_failed");
@@ -134,6 +152,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   } catch (error) {
     if (stopWorkspaceMaintenance) await stopWorkspaceMaintenance().catch(() => undefined);
     if (engine?.close) await engine.close().catch(() => undefined);
+    await projectTools?.close().catch(() => undefined);
     await app.close().catch(() => undefined);
     try { await database.close(); } catch {
       // Preserve the startup error that triggered cleanup.
@@ -142,16 +161,17 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   }
 }
 
-async function main(): Promise<void> {
-  const app = await buildApi();
+export async function startApi(options: ApiOptions = {}): Promise<FastifyInstance> {
+  const app = await buildApi(options);
   const removeShutdownHandlers = installShutdownHandlers(app);
   try {
-    await app.listen({ port: applicationConfig.http.port, host: applicationConfig.http.host });
+    await app.listen({ port: applicationConfig.http.port, host: options.listenHost ?? applicationConfig.http.host });
   } catch (error) {
     removeShutdownHandlers();
     await app.close().catch(() => undefined);
     throw error;
   }
+  return app;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void startApi();

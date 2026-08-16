@@ -4,8 +4,9 @@ import { test } from "node:test";
 import { parseCapabilityConfiguration } from "../../src/capabilities/registry.ts";
 import { parseCapabilities } from "../../src/http/service-configuration.ts";
 
-test("rejects unknown or duplicate capability declarations", () => {
+test("rejects removed, unknown, or duplicate capability declarations", () => {
   assert.deepEqual(parseCapabilities(["db", "redis"]), ["db", "redis"]);
+  assert.throws(() => parseCapabilities(["playwright"]), /invalid_capabilities/);
   assert.throws(() => parseCapabilities(["db", "unknown"]), /invalid_capabilities/);
   assert.throws(() => parseCapabilities(["db", "db"]), /invalid_capabilities/);
 });
@@ -22,9 +23,6 @@ test("validates capability connection settings when saving page configuration", 
   assert.throws(() => parseCapabilityConfiguration("db", { url: "jdbc:mysql://db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
   assert.throws(() => parseCapabilityConfiguration("db", { url: "mariadb://db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
   assert.throws(() => parseCapabilityConfiguration("db", { url: "mysql://hidden:secret@db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("playwright", { baseUrl: "ftp://app.example.test", username: "", password: "" }), /invalid_browser_base_url/);
-  assert.throws(() => parseCapabilityConfiguration("playwright", { baseUrl: "https://user@app.example.test", username: "", password: "" }), /invalid_browser_base_url/);
-  assert.throws(() => parseCapabilityConfiguration("playwright", { baseUrl: "https://app.example.test", username: "reader", password: "" }), /invalid_browser_credentials/);
   assert.throws(() => parseCapabilityConfiguration("es", { url: "https://es.example.test", username: "reader", password: "" }), /invalid_es_credentials/);
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 70_000, username: "", database: 0 }), /invalid_redis_port/);
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 6379, username: "", database: -1 }), /invalid_redis_database/);

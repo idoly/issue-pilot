@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readlink, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -186,7 +186,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
   try {
     const [environment] = await database.db.select().from(environments).where(eq(environments.key, "dev")).limit(1);
     assert.ok(environment);
-    await database.db.insert(subjects).values({ subject: "tester", username: "tester", displayName: "Tester", email: "tester@example.test" });
+    await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", email: "tester@example.test" });
     const [service] = await database.db.insert(services).values({ key: "workspace-test", name: "Workspace Test" }).returning();
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment.id, config: {} });
     const [issue] = await database.db.insert(issues).values({
@@ -201,7 +201,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       reporterSubject: "tester",
       resolvedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
     }).returning();
-    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", codeServerReady: true });
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
 
     const remotes = await Promise.all([createRemote(root, "alpha"), createRemote(root, "beta")]);
     const worktrees = new WorktreeManager(root);
@@ -243,9 +243,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal((await stat(durableAttachment)).mode & 0o777, 0o400);
 
-    const codeServer = { async ensure() { return "http://127.0.0.1:18080"; } };
-    const prepareRuntime = (candidate: { id: string; key: string }) => prepareDevelopmentIssueRuntime(database.db, root, candidate, codeServer);
-    const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root, codeServer);
+    const prepareRuntime = (candidate: { id: string; key: string }) => prepareDevelopmentIssueRuntime(database.db, root, candidate);
+    const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
     assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
     const wrapperRoot = path.join(issueRuntimeRoot(root, issue!.key), "bin");
     assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
@@ -257,18 +256,18 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
     await mkdir(path.dirname(unknownMetadata), { recursive: true });
     await writeFile(unknownMetadata, "preserve\n", "utf8");
-    const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root, codeServer);
+    const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
     assert.deepEqual(blockedPreparation, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "workspace_has_untracked_files" }] });
     assert.equal(await readFile(unknownMetadata, "utf8"), "preserve\n");
     await rm(path.dirname(unknownMetadata), { recursive: true });
-    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root, codeServer), { prepared: [issue!.key], blocked: [] });
+    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
 
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
       retentionMs: Number.POSITIVE_INFINITY,
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-    }, prepareRuntime, codeServer);
+    }, prepareRuntime);
     await writeFile(path.join(prepared[1]!.workspacePath, "untracked.txt"), "do not delete\n", "utf8");
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
     assert.equal(dirtyInspection.releasable, false);
@@ -296,7 +295,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(releasedRows.every((repository) => repository.workingBranch?.startsWith("hotfix-") && repository.commitBefore), true);
     const [releasedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(releasedWorkspace!.status, "stopped");
-    assert.equal(releasedWorkspace!.codeServerReady, true);
+    assert.equal(releasedWorkspace!.runtimeReady, true);
     for (const [index, repository] of releasedRows.entries()) {
       const runtimeRepository = path.join(issueRuntimeRoot(root, issue!.key), index === 0 ? "alpha" : "beta");
       const repositoryRoot = path.join(root, "git", "repositories", createHash("sha256").update(repository.url).digest("hex").slice(0, 20));
@@ -317,19 +316,6 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
     engine.closeError = undefined;
 
-    const failingRestore = new WorkspaceLifecycleManager(database.db, root, engine as never, {
-      retentionMs: Number.POSITIVE_INFINITY,
-      highWaterBytes: 0,
-      targetBytes: 0,
-      maintenanceIntervalMs: 0,
-    }, prepareRuntime, { async ensure() { throw new Error("code_server_unavailable"); } });
-    await assert.rejects(failingRestore.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "code_server_unavailable");
-    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
-    const rowsAfterFailedRestore = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(rowsAfterFailedRestore.every((repository) => repository.localPath === null), true);
-    assert.deepEqual(rowsAfterFailedRestore.map((repository) => repository.workspaceName), ["alpha", "beta"]);
-    assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.status, "resolved");
-
     const lifecycleDatabase = (lifecycle as unknown as { database: { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> } }).database;
     const runTransaction = lifecycleDatabase.transaction.bind(lifecycleDatabase);
     let failRestoreTransaction = true;
@@ -344,28 +330,6 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     lifecycleDatabase.transaction = runTransaction;
     await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
     assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null), true);
-
-    const cleanupEvidence = path.join(issueWorkspaceRoot(root, issue!.key), "concurrent-restore-evidence.txt");
-    const failingCleanup = new WorkspaceLifecycleManager(database.db, root, engine as never, {
-      retentionMs: Number.POSITIVE_INFINITY,
-      highWaterBytes: 0,
-      targetBytes: 0,
-      maintenanceIntervalMs: 0,
-    }, prepareRuntime, { async ensure() { throw new Error("code_server_unavailable"); } });
-    const cleanupWorktrees = (failingCleanup as unknown as { worktrees: WorktreeManager }).worktrees;
-    const cleanupRemove = cleanupWorktrees.remove.bind(cleanupWorktrees);
-    let cleanupRemovalCount = 0;
-    cleanupWorktrees.remove = async (url, workspacePath) => {
-      const commit = await cleanupRemove(url, workspacePath);
-      cleanupRemovalCount += 1;
-      if (cleanupRemovalCount === releasedRows.length) await writeFile(cleanupEvidence, "preserve restore evidence\n", "utf8");
-      return commit;
-    };
-    await assert.rejects(failingCleanup.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_restore_cleanup_failed");
-    assert.equal(await readFile(cleanupEvidence, "utf8"), "preserve restore evidence\n");
-    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null), true);
-    await unlink(cleanupEvidence);
-    await rmdir(issueWorkspaceRoot(root, issue!.key));
 
     const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
     assert.equal(reopenedIssue.status, "open");
@@ -382,7 +346,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await unlink(restoredFile);
     const [restoredWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(restoredWorkspace!.status, "ready");
-    assert.equal(restoredWorkspace!.codeServerReady, true);
+    assert.equal(restoredWorkspace!.runtimeReady, true);
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "issue_not_resolved");
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_not_resolved");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
@@ -536,13 +500,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       reporterSubject: "tester",
       resolvedAt: new Date(0),
     }).returning();
-    await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", codeServerReady: true });
+    await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });
     await database.db.insert(issueRepositories).values({ issueId: readOnlyIssue!.id, url: remotes[0]!, baseBranch: "main", workingBranch: null, localPath: null, commitBefore: "a".repeat(40) });
     const readOnlyMaintenance = await retentionLifecycle.maintain();
     assert.equal(readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key), false);
     await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_not_development");
     const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
-    assert.equal(readOnlyWorkspace!.codeServerReady, true);
+    assert.equal(readOnlyWorkspace!.runtimeReady, true);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });
@@ -556,7 +520,7 @@ test("converts a completed production analysis to a development defect while pre
     const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     assert.ok(prodEnvironment && devEnvironment);
-    await database.db.insert(subjects).values({ subject: "conversion-tester", username: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
+    await database.db.insert(subjects).values({ subject: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
     const [service] = await database.db.insert(services).values({ key: "conversion-service", name: "Conversion Service" }).returning();
     const remote = await createRemote(root, "conversion");
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "conversion", url: remote }).returning();
@@ -577,12 +541,11 @@ test("converts a completed production analysis to a development defect while pre
       environmentId: prodEnvironment.id,
       reporterSubject: "conversion-tester",
     }).returning();
-    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", codeServerReady: true });
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
 
-    const codeServer = { async ensure() { return "http://127.0.0.1:18080"; } };
     const worktrees = new WorktreeManager(root);
     const projects = new IssueProjectManager(database.db, root, worktrees);
-    const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!, "prod", codeServer);
+    const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!, "prod");
     const sessionRoot = issueSessionRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "analysis.jsonl");
     await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
@@ -617,7 +580,7 @@ test("converts a completed production analysis to a development defect while pre
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-    }, undefined, codeServer);
+    });
 
     const mutableDatabase = database.db as typeof database.db & { transaction: typeof database.db.transaction };
     const transaction = mutableDatabase.transaction.bind(mutableDatabase);
@@ -638,8 +601,7 @@ test("converts a completed production analysis to a development defect while pre
     assert.equal(rolledBackIssue!.type, "smart_analysis");
     assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
     await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
-    const rolledBackManifest = JSON.parse(await readFile(path.join(runtimeRoot, "issue-20260814-101.code-workspace"), "utf8")) as { settings?: unknown };
-    assert.ok(rolledBackManifest.settings);
+    assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))).startsWith(path.join(root, "git", "checkouts")), true);
     assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.deepEqual(conversionEngine.enqueued, []);

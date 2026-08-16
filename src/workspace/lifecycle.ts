@@ -11,7 +11,6 @@ import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
-import { CodeServerManager } from "./code-server.ts";
 import { prepareDevelopmentIssueRuntime } from "./development.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager } from "./project.ts";
@@ -76,7 +75,6 @@ export class WorkspaceConversionRefusal extends Error {
   }
 }
 
-type CodeServer = Pick<CodeServerManager, "ensure">;
 type Issue = typeof issues.$inferSelect;
 type IssueWorkspace = typeof issueWorkspaces.$inferSelect;
 type IssueRepository = typeof issueRepositories.$inferSelect;
@@ -97,7 +95,6 @@ export class WorkspaceLifecycleManager {
   private readonly engine: AgentController;
   private readonly worktrees: WorktreeManager;
   private readonly projects: IssueProjectManager;
-  private readonly codeServer: CodeServer;
   private readonly prepareDevelopmentRuntime: (issue: { id: string; key: string }) => Promise<unknown>;
   readonly policy: WorkspaceRetentionPolicy;
   private readonly queue = new SerialQueue();
@@ -112,7 +109,6 @@ export class WorkspaceLifecycleManager {
     engine: AgentController,
     policy: WorkspaceRetentionPolicy = issuePilotConfig.workspace,
     prepareRuntime?: (issue: { id: string; key: string }) => Promise<unknown>,
-    codeServer: CodeServer = new CodeServerManager(stateRoot),
   ) {
     if (policy.highWaterBytes > 0 && policy.targetBytes >= policy.highWaterBytes) throw new Error("workspace_target_must_be_below_high_water");
     this.database = database;
@@ -121,8 +117,7 @@ export class WorkspaceLifecycleManager {
     this.policy = policy;
     this.worktrees = new WorktreeManager(this.stateRoot);
     this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
-    this.codeServer = codeServer;
-    this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => prepareDevelopmentIssueRuntime(this.database, this.stateRoot, issue, this.codeServer, this.worktrees));
+    this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => prepareDevelopmentIssueRuntime(this.database, this.stateRoot, issue, this.worktrees));
   }
 
   start(onError: (error: unknown) => void = () => undefined): () => Promise<void> {
@@ -264,7 +259,7 @@ export class WorkspaceLifecycleManager {
     if (!developmentEnvironment) throw new WorkspaceConversionRefusal("development_environment_not_found");
     await reservation.closeSession(issue.id);
     try {
-      const converted = await this.projects.convertReadOnlyToDevelopment(issue, "prod", developmentEnvironment.id, this.codeServer, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+      const converted = await this.projects.convertReadOnlyToDevelopment(issue, "prod", developmentEnvironment.id, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
         return this.database.transaction(async (transaction) => {
           const now = new Date();
           const targetUrls = repositories.map(({ repository }) => repository.url);
@@ -286,7 +281,7 @@ export class WorkspaceLifecycleManager {
             await transaction.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, targetUrls)));
           }
           await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
-          const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now })
+          const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
             .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
           const [converted] = await transaction.update(issues).set({ environmentId: developmentEnvironment.id, type: "defect_fix", updatedAt: now }).where(and(
             eq(issues.id, issue.id),
@@ -336,14 +331,13 @@ export class WorkspaceLifecycleManager {
       return await this.projects.restoreDevelopmentWorkspace(
         issue,
         repositories,
-        this.codeServer,
         () => this.restoreDevelopmentRuntime(issue),
         (prepared, names) => this.database.transaction(async (transaction) => {
           const now = new Date();
           for (const [index, repository] of repositories.entries()) {
             await transaction.update(issueRepositories).set({ localPath: prepared[index]!.workspacePath, workspaceName: names.get(repository.url)!, updatedAt: now }).where(eq(issueRepositories.id, repository.id));
           }
-          await transaction.update(issueWorkspaces).set({ status: "ready", codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
+          await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
           const [reopened] = await transaction.update(issues).set({ status: "open", resolvedAt: null, updatedAt: now }).where(and(eq(issues.id, issue.id), eq(issues.status, "resolved"))).returning();
           if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
           return reopened;
@@ -374,7 +368,7 @@ export class WorkspaceLifecycleManager {
     if (repositoryState === "development_snapshot") {
       if (inspection.blockedReason !== "workspace_missing") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
       await reservation.closeSession(issue.id);
-      if (!workspace?.codeServerReady) await this.restoreDevelopmentRuntime(issue);
+      if (!workspace?.runtimeReady) await this.restoreDevelopmentRuntime(issue);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true };
     }
     if (repositoryState !== "development_workspace") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
@@ -421,7 +415,7 @@ export class WorkspaceLifecycleManager {
       await this.prepareDevelopmentRuntime({ id: issue.id, key: issue.key });
     } catch (error) {
       const reason = errorMessage(error);
-      await this.database.update(issueWorkspaces).set({ codeServerReady: false, lastError: reason, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+      await this.database.update(issueWorkspaces).set({ runtimeReady: false, lastError: reason, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     }
   }
 
@@ -432,7 +426,7 @@ export class WorkspaceLifecycleManager {
       for (const repository of repositories) {
         await transaction.update(issueRepositories).set({ localPath: null, workspaceName: names.get(repository.url)!, updatedAt: now }).where(eq(issueRepositories.id, repository.id));
       }
-      await transaction.update(issueWorkspaces).set({ status: "stopped", codeServerReady: false, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));
+      await transaction.update(issueWorkspaces).set({ status: "stopped", runtimeReady: false, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));
     });
   }
 

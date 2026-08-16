@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
-import { issueRuntimeRoot, issueRuntimeWorkspaceFile, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 test("prepares the same issue runtime shape for read-only checkouts and writable worktrees", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-runtime-"));
@@ -35,17 +35,6 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     await writeFile(path.join(writableRuntime, "orders", "created-through-runtime.txt"), "writable\n", "utf8");
     assert.equal(await readFile(path.join(worktree, "created-through-runtime.txt"), "utf8"), "writable\n");
 
-    const readOnlyWorkspaceFile = issueRuntimeWorkspaceFile(root, readOnlyIssue);
-    assert.deepEqual(JSON.parse(await readFile(readOnlyWorkspaceFile, "utf8")), {
-      folders: [{ name: "orders", path: "orders" }],
-      settings: { "files.readonlyInclude": { "**": true } },
-    });
-    assert.deepEqual(JSON.parse(await readFile(issueRuntimeWorkspaceFile(root, writableIssue), "utf8")), {
-      folders: [{ name: "orders", path: "orders" }],
-    });
-    for (const issueKey of [readOnlyIssue, writableIssue]) {
-      assert.equal((await stat(issueRuntimeWorkspaceFile(root, issueKey))).mode & 0o777, 0o400);
-    }
     await assert.rejects(
       prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"),
       /repository_workspace_outside_issue_root/,

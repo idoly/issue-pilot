@@ -28,7 +28,9 @@ git status --short
 
 ```bash
 npm ci
-infra/playwright.sh prepare
+infra/playwright.sh prepare # 仅准备Issue Pilot应用自测浏览器
+infra/aliyun-cli.sh prepare
+infra/project-tools.sh prepare
 npm run db:migrate
 npm run server
 ```
@@ -39,13 +41,13 @@ npm run server
 npm run dev:web
 ```
 
-默认 API 为 `127.0.0.1:3000`，Vite 为 `0.0.0.0:4173`，code-server 为 `127.0.0.1:18080`。
+默认API为`127.0.0.1:3000`，Vite为`0.0.0.0:4173`。VS Code Workbench代码浏览器由Vite的`vscode.html`多入口构建提供，不启动独立IDE服务。
 
 ## 源码地图
 
 | 路径 | 当前责任 |
 | --- | --- |
-| `issue-pilot.config.ts` | State、用户、端口、默认值、retention、runtime 和上限 |
+| `issue-pilot.config.ts` | State、空库bootstrap用户、端口、默认值、retention、runtime 和上限 |
 | `src/config.ts` | 把相对 state 配置解析成绝对路径 |
 | `src/domain/contracts.ts` | 前后端共享的 key、enum、type 和共享 predicate |
 | `src/configuration/contracts.ts` | 配置中心 catalog、脱敏 editable configuration 和 credential update 共享 DTO |
@@ -54,8 +56,9 @@ npm run dev:web
 | `src/configuration/revision.ts` | Service 完整配置内容 revision 和一致性读取 |
 | `src/db/schema.ts` | 当前 Drizzle schema |
 | `src/db/bootstrap.ts` | Migration、启动状态恢复和 Environment同步 |
-| `src/http/api.ts` | API 装配、error mapping、启动/关闭资源生命周期 |
-| `src/http/*-routes.ts` | 配置、Issue、Agent、Attachment GET 和 Workspace routes |
+| `src/http/api.ts` | API装配、error mapping、启动/关闭资源生命周期和开发入口 |
+| `src/http/production.ts` | 主应用镜像的API + static Web显式生产入口 |
+| `src/http/*-routes.ts` | User、配置、Issue、Agent、Attachment、Source GET、生产静态Web和Workspace routes |
 | `src/http/service-configuration.ts` | Service/Deployment request prepare 和 transaction apply |
 | `src/http/attachment-store.ts` | Attachment multipart、write、quarantine、rollback/finalize 和安全读取路径 |
 | `src/agent/engine.ts` | Issue Agent queue、reservation、状态转换和 Pi session 协调 |
@@ -67,19 +70,32 @@ npm run dev:web
 | `src/capabilities/broker.ts` | Allowlist、input parse 和 keyed handler dispatch |
 | `src/capabilities/*.ts` | 独立协议 client和共享 bounded HTTP/process primitives |
 | `src/serial.ts` | `SerialQueue`、`KeyedSerialQueue` 和 `idle()` |
+| `src/container.ts` | 临时工具容器共同的安全argv、mount和资源限制构建器 |
+| `src/container-runtime.ts` | Podman与fail-closed临时容器适配；Capability/项目工具共用的Kubernetes Job runner扩展点 |
+| `infra/application-compose.mjs` | 从根配置和绝对宿主路径生成application + tools Compose模型 |
 | `src/workspace/project.ts` | Agent/cold-start/reopen 的 Issue project准备 |
 | `src/workspace/deployment.ts` | Deployment Repository完整性和顺序解析 |
 | `src/workspace/git.ts` | Bare store、checkout、worktree、batch rollback和 Repository锁 |
 | `src/workspace/state.ts` | State path、Repository分类、布局、unmanaged/shared checkout检查 |
-| `src/workspace/runtime.ts` | Multi-root runtime原子生成 |
+| `src/workspace/runtime.ts` | Issue runtime Repository link原子生成 |
+| `src/workspace/source-browser.ts` | Repository相对路径、tree/file/rg/history/commit/diff只读边界 |
+| `src/workspace/project-tools.ts` | Unix socket broker和Node/Maven受限容器执行 |
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
 | `src/web/src/data/client.ts` | Web request、共享 DTO re-export和 current-user header |
 | `src/web/src/app/agent-stream.ts` | EventSource transport state machine |
 | `src/web/src/app/conversation.ts` | Agent event纯投影 |
 | `src/web/src/app/configuration-model.ts` | Selected capability draft serializer |
+| `src/web/src/app/CodeBrowser.tsx` | VS Code Workbench iframe生命周期、Part矩形消息和固定视图工具栏 |
+| `src/web/src/app/UserManagement.tsx` | SQLite用户新增、编辑、启停和状态反馈 |
+| `src/web/src/vscode/main.ts` | Workbench service组合、固定theme和只读产品设置 |
+| `src/web/src/vscode/workers.ts` | Editor、language、TextMate和受控Web Worker extension host工厂 |
+| `src/web/src/vscode/source-file-system.ts` | Source API到multi-root VS Code文件系统的只读映射 |
+| `src/web/src/vscode/source-search.ts` | 原生Search到预算literal Source API的provider |
+| `src/web/src/vscode/source-control.ts` | 原生SCM Changes、提交Graph和按需revision Diff的只读投影 |
+| `src/web/vite.config.ts` | 主应用/Workbench多入口以及GitHub、Material、Markdown preview静态contribution构建 |
 | `src/web/src/app` | 页面和用户交互 |
 | `tests/http/fixture.ts` | 独立 API test fixture |
-| `infra` | code-server/Playwright runtime和根配置读取 |
+| `infra` | 主应用、自测Playwright、Aliyun CLI、Node/Maven image准备和根配置读取 |
 | `drizzle` | 不可变 migration history |
 
 ## 追踪一次请求
@@ -413,12 +429,11 @@ elasticsearch.ts
 mysql.ts + sql.ts
 dms.ts + aliyun.ts
 sls.ts + aliyun.ts
-playwright.ts + infra/playwright-runner.cjs
 http-client.ts
 local-exec.ts
 ```
 
-协议模块必须直接导入 owning client；不保留聚合兼容 barrel。
+协议模块必须直接导入 owning client；不保留聚合兼容 barrel。Playwright不属于Agent capability；`infra/playwright.sh run`只运行operator提供的Issue Pilot应用自测脚本，不经过registry、policy、Pi tools或broker。
 
 ## Web 开发
 
@@ -428,7 +443,7 @@ Web使用 SolidJS和 `@idoly/ant-design-solid`。
 
 - Shared enum从 `src/domain/contracts.ts`导入。
 - API DTO/request集中在 `src/web/src/data/client.ts`。
-- `App.tsx`负责顶层资源、用户和页面选择。
+- `App.tsx`负责顶层资源、当前用户和页面选择；用户CRUD只属于`UserManagement.tsx`。
 - 页面组件负责具体 interaction，不复制 transport或 serializer。
 - Capability页面保留每种能力的显式 UI，不构建万能 schema form。
 - `configuration-model.ts`只序列化 selected capability 和 credential update 意图；已存 secret 不能进入 draft 或请求 payload。
@@ -480,14 +495,17 @@ git diff --check
 | --- | --- |
 | 纯 Web展示 | 对应 Vitest、Web typecheck、build |
 | Shared contract | Domain、DB、HTTP和 Web |
+| User管理 | Bootstrap、active migration、API事务、当前用户刷新和管理页面 |
 | API transaction | 独立 fixture、success、conflict、rollback |
 | Attachment | Multipart limits、quarantine、rollback/finalize、GET integrity |
 | Agent/session | Queue、reservation、success、failure、steer、abort、shutdown |
 | SSE/Web stream | Replay、snapshot、live、backpressure、stale generation、reconnect |
 | Capability | Save parse、scope escape、schema、client、timeout、oversize、abort |
 | Git/project/lifecycle | Real Git、dirty、missing ref、batch rollback、cold start、reopen |
+| Source browser | Multi-root alias授权、path traversal、symlink escape、binary/size、rg JSON、HEAD ancestry、commit/diff API预算、只读文件系统mutation失败、Explorer/Editor Groups/Tabs、Search逐文件progress、SCM Changes/Graph/提交文件、Markdown Preview按钮/Web Worker、Bottom Panel与Secondary Side Bar矩形对齐、窄屏详情抽屉、无Terminal/本地扩展host和水平溢出 |
+| Project tools | Socket mode/protocol、DB path授权、容器argv/mount/limits、same-Issue串行 |
 | Startup/state | Fresh DB、migration、interrupted state、unmanaged/changed checkout |
-| Infra/dependency | Shell status、build、audit、runtime status |
+| Infra/dependency | Application multi-stage build/同源静态smoke、绝对路径label、Healthcheck、Shell status、build、audit和runtime status |
 
 ## Debugging
 
@@ -503,7 +521,7 @@ SQLite只读检查使用 `src/config.ts`解析的实际 database path。直接�
 
 1. Bare repository的 remote-tracking和 local working branch ref。
 2. Worktree/checkout的 HEAD、common dir和 `git status --porcelain`。
-3. Runtime symlink、manifest和 code-server mounts。
+3. Runtime symlink、Source API realpath containment和project wrapper socket。
 
 只看 Explorer文件不足以证明 Git state正确。
 
@@ -550,6 +568,7 @@ SQLite只读检查使用 `src/config.ts`解析的实际 database path。直接�
 | `ARCHITECTURE.md` | 状态、所有权、生命周期、并发和安全不变量 |
 | `CONFIGURATION.md` | 可配置字段、capability contract和 credential数据流 |
 | `DEPLOYMENT.md` | 宿主依赖、进程、容器、代理和首次验收 |
+| `KUBERNETES.md` | StatefulSet、PVC、Job runner、RBAC和迁移门槛 |
 | `DEVELOPMENT.md` | 模块边界、改动方法、测试和 review |
 | `RUNBOOK.md` | 日常检查、容量、备份、升级、恢复和故障 |
 | `AGENTS.md` | Coding Agent执行规则 |

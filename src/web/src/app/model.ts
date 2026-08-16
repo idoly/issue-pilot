@@ -50,19 +50,3 @@ export function fileSize(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
-
-function codeServerUrl(value: string): URL {
-  const url = new URL(value, window.location.href);
-  const configuredOrigin = new URL(issuePilotConfig.runtime.codeServer.publicUrl).origin;
-  const loopbackCodeServer = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.origin === configuredOrigin;
-  if (loopbackCodeServer && url.origin !== window.location.origin) {
-    url.protocol = window.location.protocol;
-    url.host = window.location.host;
-    url.pathname = `/code-server${url.pathname.startsWith("/") ? url.pathname : `/${url.pathname}`}`;
-  }
-  return url;
-}
-
-export function workspaceUrl(value: string | null): string | null {
-  return value ? codeServerUrl(value).toString() : null;
-}

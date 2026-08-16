@@ -29,5 +29,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
 
   const writable = continuationPrompt("ISSUE-20260810-002", [{ ...readOnlyRepositories[0]!, readOnly: false }], "/issues/issue-20260810-002/attachments", undefined, now);
   assert.match(writable, /defect_fix and feature_development, make only the minimum changes required/);
+  assert.match(writable, /Do not start the project.*watch mode/);
+  assert.match(writable, /Node start\/dev\/serve\/preview actions are unavailable/);
   assert.match(writable, /unless the user explicitly asks you to commit or push them/);
 });

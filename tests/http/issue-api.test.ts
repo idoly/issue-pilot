@@ -62,6 +62,8 @@ test("serializes retries, status transitions, messages, and comments with one Is
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "blocked" } })).statusCode, 409);
     assert.equal((await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}/status`, payload: { status: "open" } })).statusCode, 200);
 
+    const commentUser = await fixture.app.inject({ method: "POST", url: "/api/users", payload: { subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" } });
+    assert.equal(commentUser.statusCode, 201);
     const comment = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/comments`, headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" }, payload: { body: "A note" } });
     assert.equal(comment.statusCode, 201);
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { comments: Array<{ author: string; body: string }> };
@@ -169,9 +171,38 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     const response = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` });
     assert.equal(response.statusCode, 200);
     const detail = await json(response);
-    assert.deepEqual(Object.keys(detail.workspace as Record<string, unknown>).sort(), ["lastError", "retryable", "status", "url"]);
+    assert.deepEqual(Object.keys(detail.workspace as Record<string, unknown>).sort(), ["lastError", "retryable", "sourceAvailable", "status"]);
     assert.equal("agentSession" in detail, false);
     assert.equal("scopeCandidates" in detail, false);
+    const unavailableSource = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/source/repositories` });
+    assert.equal(unavailableSource.statusCode, 409);
+    assert.equal(unavailableSource.headers["cache-control"], "private, no-store");
+    const malformedSourceHeader = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/source/tree`, headers: { "X-Issue-Pilot-Repository": "%" } });
+    assert.equal(malformedSourceHeader.statusCode, 400);
+    const invalidSearchMode = await fixture.app.inject({
+      method: "GET",
+      url: `/api/issues/${issue.id}/source/search`,
+      headers: {
+        "X-Issue-Pilot-Repository": "alpha-1",
+        "X-Issue-Pilot-Query": "needle",
+        "X-Issue-Pilot-Case-Sensitive": "yes",
+        "X-Issue-Pilot-Word-Match": "false",
+      },
+    });
+    assert.equal(invalidSearchMode.statusCode, 400);
+    assert.equal((await json(invalidSearchMode)).error, "invalid_source_request");
+    const acceptedSearchModes = await fixture.app.inject({
+      method: "GET",
+      url: `/api/issues/${issue.id}/source/search`,
+      headers: {
+        "X-Issue-Pilot-Repository": "alpha-1",
+        "X-Issue-Pilot-Query": "needle",
+        "X-Issue-Pilot-Case-Sensitive": "false",
+        "X-Issue-Pilot-Word-Match": "true",
+      },
+    });
+    assert.equal(acceptedSearchModes.statusCode, 409);
+    assert.equal((await json(acceptedSearchModes)).error, "source_browser_unavailable");
     const stats = await fixture.app.inject({ method: "GET", url: "/api/workspaces/stats" });
     assert.equal(stats.statusCode, 200);
     const body = await json(stats) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };

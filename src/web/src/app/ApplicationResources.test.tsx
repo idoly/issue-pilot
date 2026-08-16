@@ -7,8 +7,7 @@ vi.mock("../data/client", async (importOriginal) => {
     ...actual,
     loadCatalog: vi.fn(async () => ({ environments: [], services: [] })),
     loadConfig: vi.fn(),
-    loadUsers: vi.fn(async () => []),
-    loadPeople: vi.fn(async () => []),
+    loadUsers: vi.fn(async () => [{ subject: "user", name: "User", email: "user@example.test" }]),
     loadCurrentUser: vi.fn(async () => ({ subject: "user", name: "User", email: "user@example.test" })),
   };
 });

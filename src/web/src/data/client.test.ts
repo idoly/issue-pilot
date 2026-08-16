@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { convertIssueToDevelopment, createIssue, deleteService, listIssues, loadCatalog, loadCurrentUser, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService } from "./client";
+import { convertIssueToDevelopment, createIssue, createUser, deleteService, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService, updateUser } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -58,6 +58,22 @@ describe("API client", () => {
     expect((init.headers as Headers).get("X-Issue-Pilot-Subject")).toBe("lyz5613@xianhengguoji.com");
   });
 
+  it("uses the managed user endpoints without putting subjects in query strings", async () => {
+    const user = { subject: "operator@example.test", name: "Operator", email: "operator@example.test", active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify(user), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await loadManagedUsers();
+    await createUser({ subject: user.subject, name: user.name, email: user.email });
+    await updateUser(user.subject, { name: "Operations", email: user.email, active: false });
+
+    expect(fetch.mock.calls[0]![0]).toBe("/api/users/manage");
+    expect(fetch.mock.calls[1]![0]).toBe("/api/users");
+    expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "POST" });
+    expect(fetch.mock.calls[2]![0]).toBe("/api/users/operator%40example.test");
+    expect(fetch.mock.calls[2]![1]).toMatchObject({ method: "PATCH" });
+  });
+
   it("loads the non-secret configuration catalog independently", async () => {
     const catalog = { environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }] };
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
@@ -89,6 +105,60 @@ describe("API client", () => {
     await listIssues(controller.signal);
 
     expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
+  });
+
+  it("keeps source paths and search queries out of request URLs", async () => {
+    const fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("/source/commit-file")) return new Response(JSON.stringify({
+        file: { status: "modified", path: "src/订单.ts", previousPath: null },
+        before: { path: "src/订单.ts", revision: "b".repeat(40), content: "before" },
+        after: { path: "src/订单.ts", revision: "a".repeat(40), content: "after" },
+      }), { status: 200 });
+      if (url.endsWith("/source/commit")) return new Response(JSON.stringify({ files: [{ status: "modified", path: "src/订单.ts", previousPath: null }], truncated: false }), { status: 200 });
+      if (url.endsWith("/source/diff-file")) return new Response(JSON.stringify({
+        file: { status: "modified", path: "src/订单.ts", previousPath: null },
+        before: { path: "src/订单.ts", version: "index", content: "before" },
+        after: { path: "src/订单.ts", version: "working-tree", content: "after" },
+      }), { status: 200 });
+      if (url.endsWith("/source/diff")) return new Response(JSON.stringify({ files: [{ status: "modified", path: "src/订单.ts", previousPath: null }], truncated: false }), { status: 200 });
+      return new Response(JSON.stringify({ path: "src/index.ts", content: "", size: 0 }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await loadSourceFile("ISSUE-20260810-001", "orders", "src/订单.ts");
+    await searchSource("ISSUE-20260810-001", "orders", "客户编号");
+    await loadSourceCommit("ISSUE-20260810-001", "orders", "a".repeat(40), "src/订单.ts");
+    await loadSourceCommitFile("ISSUE-20260810-001", "orders", "a".repeat(40), "src/订单.ts");
+    await loadSourceDiff("ISSUE-20260810-001", "orders", "src/订单.ts");
+    await loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/订单.ts");
+
+    expect(fetch.mock.calls[0]![0]).toBe("/api/issues/ISSUE-20260810-001/source/file");
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("X-Issue-Pilot-Repository")).toBe("orders");
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect(fetch.mock.calls[1]![0]).toBe("/api/issues/ISSUE-20260810-001/source/search");
+    expect((fetch.mock.calls[1]![1].headers as Headers).get("X-Issue-Pilot-Query")).toBe("%E5%AE%A2%E6%88%B7%E7%BC%96%E5%8F%B7");
+    expect((fetch.mock.calls[1]![1].headers as Headers).get("X-Issue-Pilot-Case-Sensitive")).toBe("true");
+    expect((fetch.mock.calls[1]![1].headers as Headers).get("X-Issue-Pilot-Word-Match")).toBe("false");
+    expect(fetch.mock.calls[2]![0]).toBe("/api/issues/ISSUE-20260810-001/source/commit");
+    expect((fetch.mock.calls[2]![1].headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
+    expect((fetch.mock.calls[2]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect(fetch.mock.calls[3]![0]).toBe("/api/issues/ISSUE-20260810-001/source/commit-file");
+    expect((fetch.mock.calls[3]![1].headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
+    expect((fetch.mock.calls[3]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect(fetch.mock.calls[4]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff");
+    expect((fetch.mock.calls[4]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect(fetch.mock.calls[5]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff-file");
+    expect((fetch.mock.calls[5]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+  });
+
+  it("rejects stale source commit response contracts", async () => {
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ content: "raw patch", truncated: false }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(loadSourceCommit("ISSUE-20260810-001", "orders", "a".repeat(40))).rejects.toThrow("source_commit_response_invalid");
+    await expect(loadSourceCommitFile("ISSUE-20260810-001", "orders", "a".repeat(40), "src/index.ts")).rejects.toThrow("source_commit_file_response_invalid");
+    await expect(loadSourceDiff("ISSUE-20260810-001", "orders")).rejects.toThrow("source_diff_response_invalid");
+    await expect(loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/index.ts")).rejects.toThrow("source_diff_file_response_invalid");
   });
 
   it("uses the dedicated development conversion endpoint", async () => {

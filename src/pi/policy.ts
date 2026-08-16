@@ -55,23 +55,16 @@ export function createIssuePolicy(input: {
     db: input.service.db,
     dms: input.service.dms,
     sls: input.service.sls,
-    playwright: input.service.playwright,
     redis: input.service.redis,
     es: input.service.es,
     mq: input.service.mq,
   };
   for (const capability of CAPABILITY_KEYS) {
-    const label = capability === "playwright" ? "browser" : capability;
     const scope = scopes[capability];
-    if (capabilities.has(capability) !== Boolean(scope) || (scope && !isNonEmptyString(scope.deploymentId))) throw new Error(`invalid_${label}_service_scope`);
+    if (capabilities.has(capability) !== Boolean(scope) || (scope && !isNonEmptyString(scope.deploymentId))) throw new Error(`invalid_${capability}_service_scope`);
   }
   if (input.service.dms && (!isDmsDatabaseId(input.service.dms.dbId) || typeof input.service.dms.logic !== "boolean" || (input.service.dms.tid !== undefined && !isDmsTenantId(input.service.dms.tid)))) throw new Error("invalid_dms_service_scope");
   if (input.service.mq && !isNonEmptyString(input.service.mq.virtualHost)) throw new Error("invalid_mq_service_scope");
-  if (input.service.playwright) {
-    let parsedUrl: URL;
-    try { parsedUrl = new URL(input.service.playwright.baseUrl); } catch { throw new Error("invalid_browser_service_scope"); }
-    if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) throw new Error("invalid_browser_service_scope");
-  }
 
   const codeMutationAllowed = input.service.environmentKind === "dev" && ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(input.issueType);
   const policy: IssuePolicy = {
@@ -84,7 +77,6 @@ export function createIssuePolicy(input: {
       capabilities: CAPABILITY_KEYS.filter((capability) => capabilities.has(capability)),
       ...(input.service.nacos ? { nacos: { ...input.service.nacos, dataIds: [...new Set(input.service.nacos.dataIds)] } } : {}),
       ...(input.service.sls ? { sls: { ...input.service.sls, logstores: [...new Set(input.service.sls.logstores)].sort() } } : {}),
-      ...(input.service.playwright ? { playwright: { ...input.service.playwright } } : {}),
       ...(input.service.db ? { db: { ...input.service.db } } : {}),
       ...(input.service.dms ? { dms: { ...input.service.dms } } : {}),
       ...(input.service.redis ? { redis: { ...input.service.redis } } : {}),
@@ -102,7 +94,7 @@ export function createIssuePolicy(input: {
   Object.freeze(policy.service.repositories);
   if (policy.service.nacos) Object.freeze(policy.service.nacos.dataIds);
   if (policy.service.sls) Object.freeze(policy.service.sls.logstores);
-  for (const scope of [policy.service.nacos, policy.service.db, policy.service.dms, policy.service.sls, policy.service.playwright, policy.service.redis, policy.service.es, policy.service.mq]) {
+  for (const scope of [policy.service.nacos, policy.service.db, policy.service.dms, policy.service.sls, policy.service.redis, policy.service.es, policy.service.mq]) {
     if (scope) Object.freeze(scope);
   }
   Object.freeze(policy.service);

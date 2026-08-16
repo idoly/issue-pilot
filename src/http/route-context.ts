@@ -1,7 +1,5 @@
-import { eq, sql } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { AgentEventBus } from "../agent/events.ts";
@@ -10,6 +8,7 @@ import { issues, subjects } from "../db/schema.ts";
 import { parseIssueKey } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import type { WorkspaceLifecycleManager } from "../workspace/lifecycle.ts";
+import type { SourceBrowser } from "../workspace/source-browser.ts";
 import { ApiError } from "./input.ts";
 
 export interface ApiRouteContext {
@@ -20,33 +19,22 @@ export interface ApiRouteContext {
   modelCatalog: AgentModelCatalog;
   events: AgentEventBus;
   workspaces: WorkspaceLifecycleManager;
+  sourceBrowser: SourceBrowser;
   runScopeExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export function serializePerson(person: typeof subjects.$inferSelect) {
-  return { subject: person.subject, name: person.displayName ?? person.username ?? person.subject, email: person.email ?? "" };
-}
-
-async function ensureConfiguredSubject(database: ApiRouteContext["database"], user: typeof issuePilotConfig.users[number]): Promise<void> {
-  await database.db.insert(subjects).values({ subject: user.subject, username: user.subject, displayName: user.name, email: user.email }).onConflictDoUpdate({
-    target: subjects.subject,
-    set: { username: user.subject, displayName: user.name, email: user.email, updatedAt: new Date() },
-    setWhere: sql`${subjects.username} IS NOT ${user.subject} OR ${subjects.displayName} IS NOT ${user.name} OR ${subjects.email} IS NOT ${user.email}`,
-  });
-}
-
-export async function ensureConfiguredSubjects(database: ApiRouteContext["database"]): Promise<void> {
-  for (const user of issuePilotConfig.users) await ensureConfiguredSubject(database, user);
+  return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "" };
 }
 
 export async function ensureCurrentSubject(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">): Promise<string> {
   const requested = request?.headers["x-issue-pilot-subject"];
   if (Array.isArray(requested)) throw new ApiError(400, "invalid_current_subject");
-  const subject = requested ?? issuePilotConfig.subject;
-  const user = issuePilotConfig.users.find((candidate) => candidate.subject === subject);
+  const [user] = requested
+    ? await database.db.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.subject, requested), eq(subjects.active, true))).limit(1)
+    : await database.db.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.createdAt), asc(subjects.subject)).limit(1);
   if (!user) throw new ApiError(400, "invalid_current_subject");
-  await ensureConfiguredSubject(database, user);
-  return subject;
+  return user.subject;
 }
 
 export async function requireIssue(database: ApiRouteContext["database"], key: string) {

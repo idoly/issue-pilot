@@ -11,6 +11,9 @@ export type Service = ServiceConfiguration;
 export type ServiceInput = ServiceConfigurationInput;
 
 export interface Person { subject: string; name: string; email: string }
+export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
+export interface ManagedUserInput { subject: string; name: string; email: string }
+export interface ManagedUserUpdate { name: string; email: string; active: boolean }
 
 export interface IssueListItem {
   id: string;
@@ -34,14 +37,27 @@ export interface IssueComment {
 
 export interface IssueDetail extends IssueListItem {
   description: string;
-  repositories: Array<{ url: string; baseBranch: string; workingBranch: string | null }>;
-  workspace: { status: WorkspaceStatus; url: string | null; lastError?: string | null; retryable?: boolean };
+  repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
+  workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
   environmentKey: string;
   comments: IssueComment[];
 }
+
+export interface SourceRepository { name: string; url: string; branch: string; access: "read" | "write" }
+export interface SourceTreeEntry { name: string; path: string; type: "directory" | "file" | "symlink" | "other"; size: number | null }
+export interface SourceTree { path: string; entries: SourceTreeEntry[]; truncated: boolean }
+export interface SourceFile { path: string; content: string; size: number }
+export interface SourceSearchMatch { path: string; line: number; column: number; preview: string }
+export interface SourceCommit { hash: string; shortHash: string; parents: string[]; author: string; date: string; subject: string }
+export type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
+export interface SourceCommitFile { status: SourceCommitFileStatus; path: string; previousPath: string | null }
+export interface SourceRevisionFile { path: string; revision: string; content: string }
+export interface SourceWorkspaceFile { path: string; version: "index" | "working-tree"; content: string }
+export interface SourceCommitFileComparison { file: SourceCommitFile; before: SourceRevisionFile | null; after: SourceRevisionFile | null }
+export interface SourceWorkspaceFileComparison { file: SourceCommitFile; before: SourceWorkspaceFile | null; after: SourceWorkspaceFile | null }
 
 export interface WorkspaceStats {
   totalBytes: number;
@@ -90,9 +106,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponent(key)}${suffix}`;
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
+const userPath = (subject: string) => `/api/users/${encodeURIComponent(subject)}`;
 
 export const loadUsers = () => request<Person[]>("/api/users");
-export const loadPeople = () => request<Person[]>("/api/people");
+export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage");
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
@@ -100,12 +117,85 @@ export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/a
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 
+type SourceHeader = "Path" | "Query" | "Revision" | "Case-Sensitive" | "Word-Match";
+
+function sourceResponseRecord(value: unknown, code: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
+  return value as Record<string, unknown>;
+}
+
+function sourceCommitFile(value: unknown, code: string): SourceCommitFile {
+  const file = sourceResponseRecord(value, code);
+  if (!["added", "modified", "deleted", "renamed", "copied"].includes(String(file.status)) || typeof file.path !== "string" || !file.path || (file.previousPath !== null && typeof file.previousPath !== "string")) throw new Error(code);
+  return { status: file.status as SourceCommitFileStatus, path: file.path, previousPath: file.previousPath as string | null };
+}
+
+function sourceRevisionFile(value: unknown, code: string): SourceRevisionFile | null {
+  if (value === null) return null;
+  const file = sourceResponseRecord(value, code);
+  if (typeof file.path !== "string" || !file.path || typeof file.revision !== "string" || !/^[0-9a-f]{40}$/i.test(file.revision) || typeof file.content !== "string") throw new Error(code);
+  return { path: file.path, revision: file.revision, content: file.content };
+}
+
+function sourceWorkspaceFile(value: unknown, code: string): SourceWorkspaceFile | null {
+  if (value === null) return null;
+  const file = sourceResponseRecord(value, code);
+  if (typeof file.path !== "string" || !file.path || !["index", "working-tree"].includes(String(file.version)) || typeof file.content !== "string") throw new Error(code);
+  return { path: file.path, version: file.version as SourceWorkspaceFile["version"], content: file.content };
+}
+
+function sourceRequest(key: string, resource: string, repository: string, values: Partial<Record<SourceHeader, string>> = {}, signal?: AbortSignal) {
+  const headers = new Headers({ "X-Issue-Pilot-Repository": encodeURIComponent(repository) });
+  for (const [name, value] of Object.entries(values)) if (value) headers.set(`X-Issue-Pilot-${name}`, encodeURIComponent(value));
+  return request(issuePath(key, `/source/${resource}`), { headers, ...(signal ? { signal } : {}) });
+}
+
+export const loadSourceRepositories = (key: string, signal?: AbortSignal) => request<SourceRepository[]>(issuePath(key, "/source/repositories"), signal ? { signal } : undefined);
+export const loadSourceTree = (key: string, repository: string, path = "", signal?: AbortSignal) => sourceRequest(key, "tree", repository, { Path: path }, signal) as Promise<SourceTree>;
+export const loadSourceFile = (key: string, repository: string, path: string, signal?: AbortSignal) => sourceRequest(key, "file", repository, { Path: path }, signal) as Promise<SourceFile>;
+export const searchSource = (key: string, repository: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}, signal?: AbortSignal) => sourceRequest(key, "search", repository, {
+  Query: query,
+  "Case-Sensitive": String(options.caseSensitive ?? true),
+  "Word-Match": String(options.wordMatch ?? false),
+}, signal) as Promise<{ matches: SourceSearchMatch[]; truncated: boolean }>;
+export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal) => sourceRequest(key, "history", repository, { Path: path }, signal) as Promise<{ commits: SourceCommit[]; truncated: boolean }>;
+export async function loadSourceCommit(key: string, repository: string, revision: string, path = "", signal?: AbortSignal): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
+  const code = "source_commit_response_invalid";
+  const response = sourceResponseRecord(await sourceRequest(key, "commit", repository, { Revision: revision, Path: path }, signal), code);
+  if (!Array.isArray(response.files) || typeof response.truncated !== "boolean") throw new Error(code);
+  return { files: response.files.map((file) => sourceCommitFile(file, code)), truncated: response.truncated };
+}
+export async function loadSourceCommitFile(key: string, repository: string, revision: string, path: string, signal?: AbortSignal): Promise<SourceCommitFileComparison> {
+  const code = "source_commit_file_response_invalid";
+  const response = sourceResponseRecord(await sourceRequest(key, "commit-file", repository, { Revision: revision, Path: path }, signal), code);
+  const before = sourceRevisionFile(response.before, code);
+  const after = sourceRevisionFile(response.after, code);
+  if (!before && !after) throw new Error(code);
+  return { file: sourceCommitFile(response.file, code), before, after };
+}
+export async function loadSourceDiff(key: string, repository: string, path = "", signal?: AbortSignal): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
+  const code = "source_diff_response_invalid";
+  const response = sourceResponseRecord(await sourceRequest(key, "diff", repository, { Path: path }, signal), code);
+  if (!Array.isArray(response.files) || typeof response.truncated !== "boolean") throw new Error(code);
+  return { files: response.files.map((file) => sourceCommitFile(file, code)), truncated: response.truncated };
+}
+export async function loadSourceDiffFile(key: string, repository: string, path: string, signal?: AbortSignal): Promise<SourceWorkspaceFileComparison> {
+  const code = "source_diff_file_response_invalid";
+  const response = sourceResponseRecord(await sourceRequest(key, "diff-file", repository, { Path: path }, signal), code);
+  const before = sourceWorkspaceFile(response.before, code);
+  const after = sourceWorkspaceFile(response.after, code);
+  if (!before && !after) throw new Error(code);
+  return { file: sourceCommitFile(response.file, code), before, after };
+}
+
 const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
 
 function appendFiles(form: FormData, files: File[]): void {
   for (const file of files) form.append("files", file, file.name);
 }
 
+export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
+export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(userPath(subject), "PATCH", input);
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
 export const updateService = (key: string, revision: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", headers: { "If-Match": revision }, body: JSON.stringify(input) });
 export const deleteService = (key: string, revision: string) => request<void>(servicePath(key), { method: "DELETE", headers: { "If-Match": revision } });

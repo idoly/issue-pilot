@@ -18,6 +18,9 @@ require_tools() {
   playwright_version=$(configuration_value runtime.playwright.version)
   playwright_core_root=$(configuration_value runtime.playwright.playwrightCoreRoot)
   playwright_image=$(configuration_value runtime.playwright.image)
+  playwright_timeout=$(configuration_value runtime.playwright.executionSeconds)
+  playwright_pids=$(configuration_value runtime.playwright.containerPids)
+  playwright_memory=$(configuration_value runtime.playwright.containerMemory)
 }
 
 installed_version() {
@@ -44,8 +47,39 @@ status() {
   else
     printf 'image missing %s\n' "$playwright_image"
   fi
-  running=$(podman ps --filter label=io.issue-pilot.component=pi-tool --format '{{.Names}}')
-  [ -z "$running" ] || { printf 'unexpected persistent tool containers:\n%s\n' "$running"; return 1; }
+  running=$(podman ps --filter label=io.issue-pilot.component=application-test --format '{{.Names}}')
+  [ -z "$running" ] || { printf 'unexpected persistent application test containers:\n%s\n' "$running"; return 1; }
+}
+
+run_test() {
+  require_tools
+  script=$(realpath -e -- "$1")
+  output=$(realpath -e -- "$2")
+  [ -f "$script" ] || { printf 'Test script not found: %s\n' "$script" >&2; exit 1; }
+  [ -d "$output" ] || { printf 'Output directory not found: %s\n' "$output" >&2; exit 1; }
+  case "$script$output$playwright_core_root" in *:*|*'
+'*) printf 'Invalid Playwright test path\n' >&2; exit 1 ;; esac
+  container="issue-pilot-application-test-$$"
+  cleanup_container() {
+    podman rm --force "$container" >/dev/null 2>&1 || true
+  }
+  trap cleanup_container EXIT HUP INT TERM
+  podman run --rm --pull never \
+    --name "$container" --timeout "$playwright_timeout" \
+    --label io.issue-pilot.component=application-test \
+    --security-opt no-new-privileges --cap-drop ALL \
+    --network host \
+    --pids-limit "$playwright_pids" --memory "$playwright_memory" \
+    --read-only --userns keep-id --user "$(id -u):$(id -g)" \
+    --env HOME=/tmp/home \
+    --volume "$script:/work/test.cjs:ro,Z" \
+    --volume "$playwright_core_root:/tool/node_modules/playwright-core:ro,Z" \
+    --volume "$output:/out:rw,z" \
+    --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+    --workdir /work \
+    "$playwright_image" node /work/test.cjs
+  trap - EXIT HUP INT TERM
+  cleanup_container
 }
 
 clean() {
@@ -56,6 +90,7 @@ clean() {
 case "${1:-}" in
   prepare) [ "$#" -eq 1 ] || exit 2; prepare ;;
   status) [ "$#" -eq 1 ] || exit 2; status ;;
+  run) [ "$#" -eq 3 ] || exit 2; run_test "$2" "$3" ;;
   clean) [ "$#" -eq 1 ] || exit 2; clean ;;
-  *) printf 'Usage: %s prepare|status|clean\n' "$0" >&2; exit 2 ;;
+  *) printf 'Usage: %s prepare|status|run <script> <output-directory>|clean\n' "$0" >&2; exit 2 ;;
 esac

@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { asc, eq } from "drizzle-orm";
-
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { eq } from "drizzle-orm";
 import { loadConfiguration, loadConfigurationCatalog } from "../configuration/read.ts";
 import { loadServiceConfigurationRevision } from "../configuration/revision.ts";
-import { issues, services, subjects } from "../db/schema.ts";
+import { issues, services } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
-import { ensureConfiguredSubjects, ensureCurrentSubject, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import { runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
 
 function requiredServiceRevision(value: string | string[] | undefined): string {
@@ -27,23 +25,6 @@ function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
 export function registerConfigurationRoutes(context: ApiRouteContext): void {
   const { app, database, engine, modelCatalog, runScopeExclusive } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
-
-  app.get("/api/users", async () => {
-    await ensureConfiguredSubjects(database);
-    return issuePilotConfig.users.map((user) => ({ subject: user.subject, name: user.name, email: user.email }));
-  });
-
-  app.get("/api/me", async (request) => {
-    const subject = await ensureCurrentSubject(database, request);
-    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (!person) throw new Error("current_subject_not_found");
-    return serializePerson(person);
-  });
-
-  app.get("/api/people", async () => {
-    await ensureConfiguredSubjects(database);
-    return (await database.db.select().from(subjects).orderBy(asc(subjects.displayName))).map(serializePerson);
-  });
 
   app.get("/api/catalog", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");

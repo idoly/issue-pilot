@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { executeCapability } from "../../src/capabilities/broker.ts";
+import { createCapabilityExecutor, executeCapability } from "../../src/capabilities/broker.ts";
+import { UnavailableContainerRuntime } from "../../src/container-runtime.ts";
 import { createIssuePolicy } from "../../src/pi/policy.ts";
 
 const policy = createIssuePolicy({
@@ -13,8 +14,7 @@ const policy = createIssuePolicy({
     serviceKey: "service",
     environmentKey: "test",
     environmentKind: "test",
-    capabilities: ["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"],
-    playwright: { deploymentId: "deployment", baseUrl: "https://app.example.test" },
+    capabilities: ["nacos", "db", "redis", "mq", "es", "dms", "sls"],
     nacos: { deploymentId: "deployment", serverUrl: "https://nacos.example.test:443", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["app.yaml"] },
     db: { deploymentId: "deployment" },
     dms: { deploymentId: "deployment", dbId: "123456", logic: false },
@@ -26,9 +26,15 @@ const policy = createIssuePolicy({
   },
 });
 
+test("injects the deployment container runtime into Aliyun capabilities", async () => {
+  const execute = createCapabilityExecutor(new UnavailableContainerRuntime());
+  await assert.rejects(execute(policy, {
+    dms: { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false },
+  }, "dms", { statement: "SELECT 1 LIMIT 1" }), /container_runtime_unavailable/);
+});
+
 test("validates capability input at the broker execution boundary", async () => {
   const config = {
-    playwright: { baseUrl: "https://app.example.test", username: "", password: "" },
     nacos: { serverUrl: "https://nacos.example.test", username: "" },
     db: { url: "mysql://db.example.test:3306/app", username: "reader", password: "secret" },
     dms: { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false },
@@ -44,7 +50,6 @@ test("validates capability input at the broker execution boundary", async () => 
     ["mq", { action: "delete", queue: "queue" }, "invalid_mq_input"],
     ["db", { statement: "SELECT 1", extra: true }, "invalid_db_input"],
     ["dms", { statement: "SELECT 1 LIMIT 1", extra: true }, "invalid_dms_input"],
-    ["playwright", { actions: [{ type: "login", username_selector: "#user" }] }, "invalid_playwright_input"],
   ] as const) {
     await assert.rejects(executeCapability(policy, config, capability, input), new RegExp(error));
   }

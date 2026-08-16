@@ -7,17 +7,15 @@ import { createApiFixture, createIssue, createService, json, servicePayload, tes
 
 const matchRevision = (revision: string) => ({ "if-match": revision });
 
-test("projects users, environments, models, repositories, and deployments without internal fields", async () => {
+test("projects bootstrap user, environments, models, repositories, and deployments without internal fields", async () => {
   const fixture = await createApiFixture();
   try {
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);
-    const currentUsers = await Promise.all(Array.from({ length: 4 }, () => fixture.app.inject({ method: "GET", url: "/api/me" })));
-    assert.deepEqual(currentUsers.map((response) => response.statusCode), [200, 200, 200, 200]);
-    assert.equal((await json(currentUsers[0]!)).subject, issuePilotConfig.subject);
+    const currentUser = await fixture.app.inject({ method: "GET", url: "/api/me" });
+    assert.equal(currentUser.statusCode, 200);
+    assert.deepEqual(await json(currentUser), issuePilotConfig.bootstrapUser);
     const users = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string }>;
-    assert.deepEqual(users.map(({ subject }) => subject), issuePilotConfig.users.map(({ subject }) => subject));
-    const switched = await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "hjx4403@xianhengguoji.com" } });
-    assert.deepEqual(await json(switched), { subject: "hjx4403@xianhengguoji.com", name: "黄佳鑫", email: "hjx4403@xianhengguoji.com" });
+    assert.deepEqual(users.map(({ subject }) => subject), [issuePilotConfig.bootstrapUser.subject]);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } })).statusCode, 400);
 
     await createService(fixture.app, "Alpha", ["test"], ["https://example.test/alpha.git", "https://example.test/alpha-shared.git"]);
@@ -76,9 +74,8 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
       deployments: [{
         environmentKey: "test",
         repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }],
-        capabilities: ["sls", "dms", "es", "mq", "redis", "db", "nacos", "playwright"],
+        capabilities: ["sls", "dms", "es", "mq", "redis", "db", "nacos"],
         agent: testAgent,
-        playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "operator", credentialUpdate: replace({ password: "browser-secret" }) },
         nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha.yaml"], username: "operator", credentialUpdate: replace({ password: "nacos-secret" }) },
         db: { url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: replace({ password: "db-secret" }) },
         redis: { host: "redis.example.test", port: 6379, username: "", database: 0, credentialUpdate: replace({ password: "redis-secret" }) },
@@ -96,19 +93,19 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
     const savedService = saved.services[0]!;
     assert.notEqual(savedService.revision, initialService.revision);
     const deployment = savedService.deployments[0]!;
-    assert.deepEqual(deployment.capabilities, ["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+    assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
     assert.deepEqual(deployment.dms, { dbId: "123456", logic: true, tid: "987654", credentialConfigured: true });
-    assert.deepEqual(deployment.playwright, { baseUrl: "https://alpha.example.test/admin/login", username: "operator", credentialConfigured: true });
+    assert.equal("playwright" in deployment, false);
     assert.deepEqual(deployment.sls, { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialConfigured: true });
     assert.deepEqual(deployment.es, { url: "http://es.example.test/proxy", username: "", credentialConfigured: false });
-    const secrets = ["browser-secret", "nacos-secret", "db-secret", "redis-secret", "mq-secret", "dms-key", "dms-secret", "sls-key", "sls-secret"];
+    const secrets = ["nacos-secret", "db-secret", "redis-secret", "mq-secret", "dms-key", "dms-secret", "sls-key", "sls-secret"];
     assert.equal(secrets.some((secret) => response.body.includes(secret)), false);
     assert.equal(response.body.includes("accessKeyId") || response.body.includes("accessKeySecret") || response.body.includes("password"), false);
 
     const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, string>>;
     sqlite.close();
-    assert.equal(stored.playwright!.password, "browser-secret");
+    assert.equal("playwright" in stored, false);
     assert.equal(stored.db!.password, "db-secret");
     assert.equal(stored.dms!.accessKeyId, "dms-key");
     assert.equal(stored.dms!.accessKeySecret, "dms-secret");
@@ -122,7 +119,6 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
       ...payload,
       deployments: [{
         ...originalDeployment,
-        playwright: preserve(originalDeployment.playwright),
         nacos: preserve(originalDeployment.nacos),
         db: preserve(originalDeployment.db),
         redis: preserve(originalDeployment.redis),
@@ -144,12 +140,12 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
     assert.notEqual(afterPreserveRevision, savedService.revision);
     const cleared = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(afterPreserveRevision), payload: {
       ...payload,
-      deployments: [{ ...payload.deployments[0], capabilities: ["playwright"], playwright: { baseUrl: "https://alpha.example.test/admin/login", username: "", credentialUpdate: { mode: "clear" } } }],
+      deployments: [{ ...originalDeployment, capabilities: ["nacos"], nacos: { ...originalDeployment.nacos, username: "", credentialUpdate: { mode: "clear" } } }],
     } });
     assert.equal(cleared.statusCode, 200, cleared.body);
-    const clearedConfig = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((result) => JSON.parse(result.body)) as { services: Array<{ revision: string; deployments: Array<{ playwright: Record<string, unknown> }> }> };
+    const clearedConfig = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((result) => JSON.parse(result.body)) as { services: Array<{ revision: string; deployments: Array<{ nacos: Record<string, unknown> }> }> };
     const clearedService = clearedConfig.services[0]!;
-    assert.equal(clearedService.deployments[0]!.playwright.credentialConfigured, false);
+    assert.equal(clearedService.deployments[0]!.nacos.credentialConfigured, false);
 
     for (const [section, error] of [
       [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "clear" } }, "credential_required"],

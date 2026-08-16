@@ -5,7 +5,6 @@ import path from "node:path";
 import type { Database } from "../db/client.ts";
 import { agentSessions, issueRepositories, issueWorkspaces } from "../db/schema.ts";
 import type { EnvironmentKind, IssueType } from "../domain/contracts.ts";
-import { CodeServerManager } from "./code-server.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
@@ -27,10 +26,8 @@ export interface PreparedIssueProject {
   workspaceRoot: string;
   executableRoot?: string;
   repositories: PreparedIssueRepository[];
-  codeServerReady: boolean;
+  runtimeReady: boolean;
 }
-
-type CodeServer = Pick<CodeServerManager, "ensure">;
 type ProjectIssue = { id: string; key: string; type: IssueType; serviceId: string; environmentId: string };
 type IssueRepository = typeof issueRepositories.$inferSelect;
 type DeploymentRepository = Awaited<ReturnType<typeof loadDeploymentRepositories>>["repositories"][number];
@@ -64,7 +61,7 @@ export class IssueProjectManager {
     this.worktrees = worktrees;
   }
 
-  async hydrateDevelopmentRuntime(issue: Pick<ProjectIssue, "id" | "key" | "type">, codeServer: CodeServer): Promise<string> {
+  async hydrateDevelopmentRuntime(issue: Pick<ProjectIssue, "id" | "key" | "type">): Promise<string> {
     const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
     if (!repositories.length) throw new Error("issue_has_no_repositories");
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
@@ -84,15 +81,13 @@ export class IssueProjectManager {
       }
       runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, snapshots, "read");
     }
-    await codeServer.ensure(issue.key, runtimeRoot);
-    await this.database.update(issueWorkspaces).set({ codeServerReady: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.database.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     return runtimeRoot;
   }
 
   async restoreDevelopmentWorkspace<T>(
     issue: Pick<ProjectIssue, "id" | "key" | "type">,
     repositories: Array<typeof issueRepositories.$inferSelect>,
-    codeServer: CodeServer,
     recoverRuntime: () => Promise<void>,
     finalize: (prepared: PreparedWorktree[], names: Map<string, string>) => Promise<T>,
   ): Promise<T> {
@@ -114,7 +109,6 @@ export class IssueProjectManager {
           await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
           const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })), "write");
           await prepareProjectWrappers(runtimeRoot);
-          await codeServer.ensure(issue.key, runtimeRoot);
           return finalize(prepared, names);
         },
       });
@@ -130,7 +124,7 @@ export class IssueProjectManager {
     }
   }
 
-  async hydrateReadOnlyRuntime(issue: ProjectIssue, _environmentKind: Exclude<EnvironmentKind, "dev">, codeServer: CodeServer): Promise<string> {
+  async hydrateReadOnlyRuntime(issue: ProjectIssue, _environmentKind: Exclude<EnvironmentKind, "dev">): Promise<string> {
     const [{ repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
       loadDeploymentRepositories(this.database, { serviceId: issue.serviceId, environmentId: issue.environmentId }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
@@ -143,7 +137,6 @@ export class IssueProjectManager {
       prepared.push({ repository, checkout: await this.worktrees.prepareShared({ url: repository.url, baseBranch }) });
     }
     const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map(({ repository, checkout }) => ({ name: names.get(repository.url)!, repositoryPath: checkout.workspacePath })), "read");
-    await codeServer.ensure(issue.key, runtimeRoot);
     await this.database.transaction(async (transaction) => {
       const now = new Date();
       for (const { repository, checkout } of prepared) {
@@ -157,7 +150,7 @@ export class IssueProjectManager {
         await transaction.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, urls)));
       }
       await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
-      await transaction.update(issueWorkspaces).set({ codeServerReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
+      await transaction.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
     });
     return runtimeRoot;
   }
@@ -166,7 +159,6 @@ export class IssueProjectManager {
     issue: ProjectIssue,
     environmentKind: Exclude<EnvironmentKind, "dev">,
     developmentEnvironmentId: string,
-    codeServer: CodeServer,
     finalize: (conversion: PreparedDevelopmentConversion) => Promise<T>,
   ): Promise<T> {
     const [{ repositories }, existingRepositories] = await Promise.all([
@@ -193,21 +185,20 @@ export class IssueProjectManager {
             repositoryPath: worktree.workspacePath,
           })), "write");
           await prepareProjectWrappers(runtimeRoot);
-          await codeServer.ensure(issue.key, runtimeRoot);
           return finalize({ prepared, repositories, existingRepositories, names, runtimeRoot });
         },
       });
     } catch (error) {
       let cleanupFailed = error instanceof WorktreeRollbackFailure;
       let recoveryError: unknown;
-      try { await this.hydrateReadOnlyRuntime(issue, environmentKind, codeServer); }
+      try { await this.hydrateReadOnlyRuntime(issue, environmentKind); }
       catch (caught) { cleanupFailed = true; recoveryError = caught; }
       if (cleanupFailed) throw new Error("workspace_conversion_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_conversion_cleanup_failed") });
       throw error;
     }
   }
 
-  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, codeServer: CodeServer, editorRequired = false): Promise<PreparedIssueProject> {
+  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind): Promise<PreparedIssueProject> {
     const [{ deployment, repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
       loadDeploymentRepositories(this.database, { serviceId: issue.serviceId, environmentId: issue.environmentId }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
@@ -294,13 +285,6 @@ export class IssueProjectManager {
     );
     const workspaceRoot = shared ? runtimeRoot : issueWorkspaceRoot(this.stateRoot, issue.key);
     const executableRoot = shared ? undefined : await prepareProjectWrappers(runtimeRoot);
-    let codeServerReady = false;
-    try {
-      await codeServer.ensure(issue.key, runtimeRoot);
-      codeServerReady = true;
-    } catch (error) {
-      if (editorRequired) throw error;
-    }
     return {
       deployment: { id: deployment.id, config: deployment.config },
       runtimeRoot,
@@ -317,7 +301,7 @@ export class IssueProjectManager {
           access: shared ? "read" : "write",
         };
       }),
-      codeServerReady,
+      runtimeReady: true,
     };
   }
 }

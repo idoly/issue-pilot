@@ -6,7 +6,7 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { openDatabase, type DatabaseConnection } from "./client.ts";
-import { environments } from "./schema.ts";
+import { environments, subjects } from "./schema.ts";
 
 async function assertIssueStructure(database: DatabaseConnection): Promise<void> {
   const tableRows = await database.client.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('issues', 'issue_workspaces')");
@@ -38,6 +38,11 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
     await database.client.execute("PRAGMA journal_mode = WAL");
     await migrateDatabase(database);
     await database.client.execute("PRAGMA foreign_keys = ON");
+    const [existingSubject] = await database.db.select({ subject: subjects.subject }).from(subjects).limit(1);
+    if (!existingSubject) {
+      const user = issuePilotConfig.bootstrapUser;
+      await database.db.insert(subjects).values({ subject: user.subject, displayName: user.name, email: user.email });
+    }
     await database.client.execute({
       sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() * 1000 WHERE status != 'resolved' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
       args: [],

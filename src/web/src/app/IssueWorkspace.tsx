@@ -2,13 +2,13 @@ import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { CheckCircle2, Download, ExternalLink, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
+import { CheckCircle2, Code2, Download, Eye, GitBranch, MessageSquare, Paperclip, Pencil, RefreshCw, Send } from "../ui/icons";
 import { addIssueComment, attachmentUrl, convertIssueToDevelopment, errorMessage, isWorkspaceBusy, retryIssue, updateIssue, updateIssueStatus, type IssueDetail, type IssuePriority, type IssueType } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { AttachmentPicker, DescriptionField, bindMultipleSelectBlankToggle, issueTypesForEnvironment, selectedChoice, selectedStrings } from "./IssueForm";
-import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workspaceUrl } from "./model";
+import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
 
@@ -26,7 +26,7 @@ function localDateTime(value: string, includeYear = true): string {
   return (includeYear ? issueDateTimeFormat : commentDateTimeFormat).format(new Date(value));
 }
 
-export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; onOpenCodeServer: (url: string) => void; onUpdated: () => Promise<void> }) {
+export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void> }) {
   const { catalog, people, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
@@ -140,7 +140,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
   const environmentName = () => catalog().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
   const availableIssueTypes = createMemo(() => issueTypesForEnvironment(props.issue.environmentKey));
   return (
-    <section class="issue-workspace" hidden={props.hidden}>
+    <section class={`issue-workspace ip-scrollbar${props.sourcePanel ? ` ip-scrollbar-dark source-detail-panel${props.sourcePanelOpen ? " details-open" : ""}` : ""}`} hidden={props.hidden}>
       <header class="issue-header">
         <div class="issue-heading">
           <div class="issue-heading-meta">
@@ -178,8 +178,8 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; on
         <div class="band-title"><GitBranch size={16} /><h2 id="repositories-title">代码分支</h2></div>
         <div class="issue-branch-row">
           <code title={branchName()}>{branchName()}</code>
-          <Show when={workspaceUrl(props.issue.workspace.url)}>
-            {(url) => <Button type="text" shape="circle" icon={<ExternalLink size={15} />} title="在 code-server 中打开工单代码" aria-label="在 code-server 中打开工单代码" onClick={() => props.onOpenCodeServer(url())} />}
+          <Show when={props.issue.workspace.sourceAvailable && !props.sourcePanel}>
+            <Button type="text" shape="circle" icon={<Code2 size={15} />} title="浏览工单代码" aria-label="浏览工单代码" onClick={props.onOpenSource} />
           </Show>
         </div>
       </section>

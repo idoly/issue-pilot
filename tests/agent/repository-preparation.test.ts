@@ -61,16 +61,11 @@ test("atomically switches development repository sets across preparation and fin
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
       piRuntime: { start(): Promise<unknown> };
-      codeServerManager: { ensure(issueKey: string, workspacePath: string): Promise<string> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
       async start() { return { session: {}, streaming: false, async prompt() {}, async stop() {} }; },
     };
-    internal.codeServerManager = {
-      async ensure() { return "http://127.0.0.1:18080"; },
-    };
-
     const [unmanagedIssue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-104", title: "Preserve unmanaged workspace", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: unmanagedIssue!.id });
     const unmanagedEvidence = path.join(issueWorkspaceRoot(stateRoot, unmanagedIssue!.key), "operator-evidence.txt");
@@ -149,12 +144,11 @@ test("atomically switches development repository sets across preparation and fin
   }
 });
 
-test("uses unified code-server runtimes while preserving read-only and writable Agent workspaces", async () => {
+test("uses unified issue runtimes while preserving read-only and writable Agent workspaces", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
   const policies: IssuePolicy[] = [];
-  const codeServerPaths: string[] = [];
   let sessionStops = 0;
   try {
     const { source, remotes } = await createRemote(root);
@@ -187,7 +181,6 @@ test("uses unified code-server runtimes while preserving read-only and writable 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
       piRuntime: { start(options: { policy: IssuePolicy }): Promise<unknown> };
-      codeServerManager: { ensure(issueKey: string, workspacePath: string): Promise<string> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
@@ -196,10 +189,6 @@ test("uses unified code-server runtimes while preserving read-only and writable 
         return { session: {}, streaming: false, async prompt() {}, async stop() { sessionStops += 1; } };
       },
     };
-    internal.codeServerManager = {
-      async ensure(_issueKey, workspacePath) { codeServerPaths.push(workspacePath); return "http://127.0.0.1:18080"; },
-    };
-
     await internal.run(prodIssue!.id);
     const prodRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, prodIssue!.id));
     const prodRepositoryByUrl = new Map(prodRepositories.map((repository) => [repository.url, repository]));
@@ -213,7 +202,7 @@ test("uses unified code-server runtimes while preserving read-only and writable 
     assert.equal(prodRepository!.baseBranch, "prod");
     assert.equal(prodRepository!.workingBranch, null);
     assert.equal(prodRepository!.localPath, null);
-    assert.equal(prodWorkspace!.codeServerReady, true);
+    assert.equal(prodWorkspace!.runtimeReady, true);
     assert.equal(prodSession!.workspacePath, issueRuntimeRoot(stateRoot, prodIssue!.key));
     assert.equal(policies[0]!.service.repositories[0]!.codeAccess, "read");
     assert.equal(sessionStops, 1);
@@ -249,7 +238,7 @@ test("uses unified code-server runtimes while preserving read-only and writable 
     assert.equal(devRepository!.workingBranch, `hotfix-${devIssue!.key.toLowerCase()}`);
     assert.equal(devRepository!.localPath?.startsWith(issueWorkspaceRoot(stateRoot, devIssue!.key)), true);
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
-    assert.equal(devWorkspace!.codeServerReady, true);
+    assert.equal(devWorkspace!.runtimeReady, true);
     assert.equal(policies[2]!.service.repositories[0]!.codeAccess, "write");
 
     await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "prod" }).where(and(
@@ -267,12 +256,6 @@ test("uses unified code-server runtimes while preserving read-only and writable 
       { url: remotes[1], baseBranch: "prod" },
     ]);
 
-    assert.deepEqual(codeServerPaths, [
-      issueRuntimeRoot(stateRoot, prodIssue!.key),
-      issueRuntimeRoot(stateRoot, prodIssue!.key),
-      issueRuntimeRoot(stateRoot, devIssue!.key),
-      issueRuntimeRoot(stateRoot, devIssue!.key),
-    ]);
     await engine.close();
     assert.equal(sessionStops, 4);
   } finally {

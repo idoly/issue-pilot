@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { CAPABILITY_KEYS, isDmsDatabaseId, isDmsTenantId, isIssueKey, isWorkspaceBusy, normalizeIssueKey, parseIssueKey } from "../../src/domain/contracts.ts";
+import { CAPABILITY_KEYS, configuredCapabilities, isDmsDatabaseId, isDmsTenantId, isIssueKey, isWorkspaceBusy, normalizeIssueKey, parseIssueKey } from "../../src/domain/contracts.ts";
 
 test("accepts only current date-sequence issue keys", () => {
   assert.equal(normalizeIssueKey("issue-20260810-001"), "ISSUE-20260810-001");
@@ -14,8 +14,9 @@ test("accepts only current date-sequence issue keys", () => {
   }
 });
 
-test("keeps the capability catalog in its shared display order", () => {
-  assert.deepEqual(CAPABILITY_KEYS, ["playwright", "nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+test("keeps the Agent capability catalog in its shared display order", () => {
+  assert.deepEqual(CAPABILITY_KEYS, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+  assert.deepEqual(configuredCapabilities({ db: {}, unknown: {} }), ["db"]);
 });
 
 test("enforces the official DMS numeric identifier bounds", () => {

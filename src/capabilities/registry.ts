@@ -18,7 +18,6 @@ export interface ToolMetadata {
 }
 
 export interface CapabilityScopeMap {
-  playwright: { deploymentId: string; baseUrl: string };
   nacos: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
   db: { deploymentId: string };
   redis: { deploymentId: string };
@@ -97,17 +96,6 @@ function stringArray(value: unknown): string[] | undefined {
 }
 
 export const capabilityInputSchemas = {
-  playwright: Type.Object({
-    actions: Type.Array(Type.Union([
-      Type.Object({ type: Type.Literal("goto"), path: Type.String({ maxLength: limits.browser.pathChars }) }, { additionalProperties: false }),
-      Type.Object({ type: Type.Literal("login"), username_selector: Type.String({ maxLength: limits.browser.selectorChars }), password_selector: Type.String({ maxLength: limits.browser.selectorChars }), submit_selector: Type.String({ maxLength: limits.browser.selectorChars }) }, { additionalProperties: false }),
-      Type.Object({ type: Type.Literal("click"), selector: Type.String({ maxLength: limits.browser.selectorChars }) }, { additionalProperties: false }),
-      Type.Object({ type: Type.Literal("fill"), selector: Type.String({ maxLength: limits.browser.selectorChars }), value: Type.String({ maxLength: limits.browser.valueChars }) }, { additionalProperties: false }),
-      Type.Object({ type: Type.Literal("select"), selector: Type.String({ maxLength: limits.browser.selectorChars }), value: Type.String({ maxLength: limits.browser.valueChars }) }, { additionalProperties: false }),
-      Type.Object({ type: Type.Literal("wait_for"), selector: Type.String({ maxLength: limits.browser.selectorChars }) }, { additionalProperties: false }),
-    ]), { minItems: 1, maxItems: limits.browser.actions }),
-    screenshot: Type.Optional(Type.Boolean()),
-  }, { additionalProperties: false }),
   nacos: Type.Object({}, { additionalProperties: false }),
   db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
   redis: Type.Object({
@@ -144,23 +132,6 @@ export type CapabilityInputs = {
 };
 
 const definitions = {
-  playwright: {
-    key: "playwright",
-    inputSchema: capabilityInputSchemas.playwright,
-    metadata: {
-      label: "Use Service Browser",
-      description: "Run declarative browser actions against the selected deployment.",
-      promptSnippet: "Run bounded declarative browser actions at the fixed deployment origin",
-      promptGuidelines: ["Use playwright only at the fixed deployment origin and never request credentials in output."],
-    },
-    parseConfiguration(value) {
-      const input = inputRecord(value);
-      return { baseUrl: connectionUrl(input.baseUrl, "browser_base_url", ["http:", "https:"]), ...optionalCredentials(input, "browser") };
-    },
-    createScope(config, deploymentId) {
-      return stringValue(config.baseUrl) ? { deploymentId, baseUrl: config.baseUrl } : undefined;
-    },
-  },
   nacos: {
     key: "nacos",
     inputSchema: capabilityInputSchemas.nacos,

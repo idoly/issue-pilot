@@ -1,7 +1,6 @@
 import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
 
 export const CAPABILITY_CREDENTIALS = {
-  playwright: { fields: ["password"], required: false },
   nacos: { fields: ["password"], required: false },
   db: { fields: ["password"], required: true },
   redis: { fields: ["password"], required: false },

@@ -1,6 +1,6 @@
 # 配置说明
 
-本文说明 Issue Pilot 当前配置来源、Service/Deployment 模型、Environment/Issue type、Pi model 和八种 capability 的保存及执行边界。代码生命周期见 [架构说明](ARCHITECTURE.md)，宿主和网络要求见 [部署说明](DEPLOYMENT.md)。
+本文说明 Issue Pilot 当前配置来源、用户、Service/Deployment 模型、Environment/Issue type、Pi model 和七种 capability 的保存及执行边界。代码生命周期见 [架构说明](ARCHITECTURE.md)，宿主和网络要求见 [部署说明](DEPLOYMENT.md)。
 
 ## 配置来源
 
@@ -8,7 +8,7 @@ Issue Pilot 只有三类配置来源：
 
 | 配置 | 事实源 | 内容 |
 | --- | --- | --- |
-| 应用配置 | 根目录 `issue-pilot.config.ts` | State path、用户、端口、默认值、retention、runtime、timeout 和结果预算 |
+| 应用配置 | 根目录 `issue-pilot.config.ts` | State path、首次用户、端口、默认值、retention、runtime、timeout 和结果预算 |
 | Service/Deployment 配置 | SQLite | Repository、各环境分支、Pi model、capability scope 和 credential |
 | IssuePolicy | 每次 Pi session 从实际代码状态和 Deployment 生成 | 冻结 model、Repository access/commit/path 和无 credential capability scope |
 
@@ -35,10 +35,9 @@ Web 的 catalog/config resource 使用递增 generation，只允许最新请求�
 | `state.sqliteBusyTimeoutMs` | `5000` | SQLite busy timeout |
 | `regional.locale` | `zh-CN` | Web 区域显示 |
 | `regional.timeZone` | `Asia/Shanghai` | Issue key 日期和 Agent 时间上下文 |
-| `subject` | `users[0].subject` | 未指定请求 header 时的默认操作人 |
-| `users` | 配置中的四名用户 | Web 可切换操作人和 SQLite subject 同步来源 |
+| `bootstrapUser` | 首次管理员的subject/name/email | 只在`subjects`表为空时插入一次；已有用户不被覆盖 |
 
-`X-Issue-Pilot-Subject` 只能选择 `users` 中的 subject。它改变列表视角和写入署名，不构成认证。
+User以SQLite为唯一事实源。未指定`X-Issue-Pilot-Subject`时，API选择创建时间最早的启用用户；显式header只能选择当前启用的subject。它改变列表视角和写入署名，不构成认证。
 
 ### HTTP 与 Web
 
@@ -82,26 +81,41 @@ Non-zero target 必须小于 high-water。无论 interval 是否为 0，API 启�
 
 | 字段 | 当前值 |
 | --- | --- |
-| `runtime.codeServer.publicUrl` | `http://127.0.0.1:18080/` |
-| `runtime.codeServer.listenHost/listenPort` | `127.0.0.1` / `18080` |
-| `runtime.codeServer.containerPort` | `8080` |
-| `runtime.codeServer.image` | `ghcr.io/coder/code-server:4.131.0-39` |
-| `runtime.codeServer.version` | `keep-id-v24-code-server-4.131.0-current-layout-auth-none` |
-| `runtime.codeServer.chatDisableAiFeatures` | `true` |
+| `runtime.application.name/image` | `issue-pilot` / `localhost/issue-pilot:0.1.0-node24-bookworm` |
+| `runtime.application.listenHost` | `0.0.0.0`，仅用于容器内生产入口 |
+| `runtime.application.podmanSocket` | `/run/user/1000/podman/podman.sock` |
+| `runtime.application.restartPolicy` | `on-failure:5` |
+| `runtime.application.podmanRemote.version` | `5.8.4` |
+| `runtime.application.podmanRemote.*Sha256` | 官方amd64/arm64静态remote tarball固定SHA-256 |
+| `runtime.application.containerPids/memory` | `2048` / `4g` |
+| `runtime.application.stopTimeoutSeconds` | `1800` |
+| `runtime.sourceBrowser.gitExecutable/searchExecutable` | `git` / `rg` |
+| `runtime.projectTools.node.image` | `docker.io/library/node:24-bookworm-slim@sha256:3638...` |
+| `runtime.projectTools.node.npmConfig/npmCache` | `.npmrc` / `.npm`，相对运行账号 HOME |
+| `runtime.projectTools.maven.image` | `docker.io/library/maven:3.9-eclipse-temurin-8@sha256:0537...` |
+| `runtime.projectTools.maven.settings/repository` | `.m2/settings.xml` / `.m2/repository`，相对运行账号 HOME |
+| `runtime.projectTools.containerPids/memory` | `512` / `2g` |
+| `runtime.projectTools.executionMs` | `1800000` |
 | `runtime.playwright.version` | `1.62.1` |
 | `runtime.playwright.image` | `mcr.microsoft.com/playwright:v1.62.1-noble` |
 | `runtime.playwright.playwrightCoreRoot` | `/usr/local/node/lib/node_modules/playwright-core` |
 | `runtime.playwright.actionTimeoutMs` | `10000` |
 | `runtime.playwright.navigationTimeoutMs` | `20000` |
+| `runtime.playwright.executionSeconds` | `300`，Podman硬停止上限 |
 | `runtime.playwright.containerPids/memory` | `256` / `1g` |
 | `runtime.playwright.viewport` | `1280 x 720` |
 | `runtime.redisWorker` | old heap `96 MiB`, young heap `16 MiB` |
 | `runtime.containerUser` | fallback UID/GID `1000:1000` |
-| `runtime.aliyunCli` | `/usr/local/sbin/aliyun` |
+| `runtime.aliyunCli.image/version` | `localhost/issue-pilot-aliyun-cli:3.4.11-alpine3.22.1` / `3.4.11` |
+| `runtime.aliyunCli.containerPids/memory` | `64` / `128m` |
 | `runtime.dms.endpoint` | `dms-enterprise.aliyuncs.com` |
 | `runtime.dms.cliRegion` | `cn-hangzhou` |
 
-DMS endpoint 是固定 central endpoint；`cliRegion` 只用于单次 Aliyun CLI profile，不是数据库 scope。
+`runtime.application`定义主应用容器名、镜像、容器内监听、rootless Podman API socket和资源/关闭预算。`infra/application-compose.mjs`把这些字段和固定Node/Maven/Aliyun镜像投影为Compose JSON；清单不保存第二套默认值。Compose使用bridge网络并只发布宿主`127.0.0.1:3000`。生命周期脚本仍从当前checkout推导绝对应用根和运行账号HOME；这些不是环境变量配置覆盖。镜像在构建时固化同一应用根，启动时拒绝root label、UID/GID或socket不匹配，避免SQLite `local_path`、Git worktree和remote Podman volume出现两套绝对路径。Containerfile默认`APP_ROOT=/opt/issue-pilot`供新容器平台构建，Compose显式覆盖为当前宿主根。
+
+DMS endpoint 是固定 central endpoint；`cliRegion` 只用于单次 Aliyun CLI profile，不是数据库 scope。`runtime.playwright`只配置Issue Pilot自身浏览器测试的Playwright Core、固定image和容器预算，不创建Service/Deployment capability，也不会进入IssuePolicy或Pi tool。
+
+Web内置VS Code Workbench通过只读文件系统overlay展示multi-root源码，workspace URI和文件URI位于`file:///issue-pilot/...`命名空间。Source API从SQLite Issue/Repository关系和受管runtime解析路径，不接受宿主绝对路径。Workbench固定使用GitHub Dark Default、Material Icon Theme和受控Markdown Preview；Search投影受预算`/search`，Source Control投影结构化`/diff`及受限`/history`、`/commit`。Bottom Panel Agent、Secondary Side Bar工单详情和固定视图图标也是Web布局行为，不属于Service、Deployment或根运行配置。Node/Maven image由manifest digest固定；npmrc和Maven settings只读挂载，缓存目录读写挂载，内容不进入根配置、HTTP响应或日志。
 
 ### 通用上限
 
@@ -117,9 +131,26 @@ DMS endpoint 是固定 central endpoint；`cliRegion` 只用于单次 Aliyun CLI
 | Capability default timeout / connection timeout | 15s / 10s |
 | Git operation / output | 120s / 2 MiB |
 | Disk usage | 120s |
-| code-server ensure | 180s |
+| Source file / directory entries | 2 MiB / 500 |
+| Source search query / matches | 200 characters / 200 |
+| Source history commits | 100 per request |
+| Source search and diff command / output | 5s / 2 MiB |
+| Project tool execution | 30 minutes |
 
 各 capability 的细分上限见后文。
+
+## 用户
+
+用户页面直接管理SQLite `subjects`：
+
+| 字段 | 规则 |
+| --- | --- |
+| `subject` | 创建后不可修改，1..255字符，只允许字母、数字、点、下划线、`@`、`+`和连字符 |
+| `name` | 必填，最多100字符 |
+| `email` | 必填，最多254字符，规范化为小写 |
+| `active` | 启用用户可切换身份、创建/编辑工单并作为处理人或抄送人候选 |
+
+停用不会删除用户，因此已有工单、附件、评论和抄送关系继续保留姓名。API事务拒绝停用最后一名启用用户。`/api/users`同时驱动当前身份和处理人/抄送候选，只返回启用用户；`/api/users/manage`返回管理页所需的全部用户和状态。
 
 ## Environment 与 Issue type
 
@@ -223,14 +254,14 @@ Writable dev 的 `bash` PATH 前置 Issue runtime `bin`，提供：
 - `node-project <project> install|test|build|typecheck`
 - `maven-project <project> test|verify|package`
 
-Wrapper 只接受当前 Issue workspace 内的真实 project path。
+Wrapper 只接受当前 Issue workspace 内的真实 project path。Node不提供`start/dev/serve/preview`，拒绝`--watch*`并以`CI=1`运行；Agent不得用允许的script间接启动项目或长驻进程。
 
 ## Capability contract
 
 固定 key 和显示顺序：
 
 ```text
-playwright, nacos, db, redis, mq, es, dms, sls
+nacos, db, redis, mq, es, dms, sls
 ```
 
 `src/capabilities/registry.ts` 是 capability 保存解析、credential-free scope、tool schema 和 metadata 的共同定义。`src/configuration/contracts.ts` 统一声明每种 capability 的 credential 字段、是否必需及配置中心读写 DTO；`credentials.ts` 负责脱敏和 preserve/replace/clear 合并。Web 仍为每种能力保留显式表单，`configuration-model.ts` 只序列化已选择 capability；未选择 section 不进入 payload 或 SQLite。
@@ -244,30 +275,6 @@ playwright, nacos, db, redis, mq, es, dms, sls
 5. Protocol client 再次比较 frozen scope、当前 config、输入和结果预算。
 
 Capability 都是只读且 bounded。应用检查不能替代外部系统的最小权限账号。
-
-## Playwright
-
-### Deployment 字段
-
-| 字段 | 规则 |
-| --- | --- |
-| `baseUrl` | `http://` 或 `https://`，必须有 host，不能含 credential、query 或 fragment |
-| `username`, `password` | 同时为空或同时填写 |
-
-### Tool input
-
-```text
-actions: 1..50
-  goto(path)
-  login(username_selector, password_selector, submit_selector)
-  click(selector)
-  fill(selector, value)
-  select(selector, value)
-  wait_for(selector)
-screenshot?: boolean
-```
-
-`goto.path` 必须以单个 `/` 开始。Runner 将页面请求、redirect 和 WebSocket 限制在 frozen `baseUrl` origin。每次调用创建 `--rm` Chromium 容器；request 和 credential 分别写入私有 `0600` 文件。Credential 不进入 tool input 或 container argv。文本与可选 PNG 合计受 1 MiB 限制。
 
 ## Nacos
 
@@ -352,7 +359,7 @@ Tool action 为 `search`、`count`、`mapping`。Search 默认 `match_all`，可
 
 ## DMS
 
-DMS 使用宿主 Aliyun CLI 内置命令：
+DMS 使用受限临时 Aliyun CLI容器中的内置命令：
 
 ```text
 aliyun dms-enterprise ExecuteScript
@@ -398,7 +405,7 @@ aliyun dms-enterprise ExecuteScript
 
 复用 MySQL read-only syntax；额外要求 `SELECT` 以顶层末尾 `LIMIT n` 结束，`1 <= n <= 500`。不接受 OFFSET，也不会自动改写 SQL。`SHOW`、`DESCRIBE` 和普通 `EXPLAIN` 不要求 LIMIT，但响应仍受 500 行/1 MiB/30s 限制。
 
-每次调用创建临时 HOME 和 `0600 ~/.aliyun/config.json`，结束后递归删除。AccessKey 不进入 argv；由于 CLI API 不支持从 file 读取 Script，SQL 会在执行期间出现在宿主 `ps` 参数中。若 SQL 也不能被本机进程观察，应替换为 SDK/签名 HTTP client。
+每次调用创建临时 HOME 和 `0600 ~/.aliyun/config.json`，只挂载到非root、只读rootfs的 `--rm` CLI容器，结束后递归删除。AccessKey 不进入argv；由于CLI API不支持从file读取Script，SQL仍会作为容器命令参数短暂出现在宿主`ps`中。若SQL也不能被本机进程观察，应替换为SDK/签名HTTP client。
 
 Client 接受官方对象数组 `Rows` 和官方示例中的单层包装对象数组，归一化后核对 `RowCount`；其他结构失败。
 
@@ -425,7 +432,7 @@ limit?             # 1..200，默认 20
 
 未指定时间时，普通 query 默认最近 15 分钟，trace ID 默认最近 24 小时。Endpoint 为 `<region>.log.aliyuncs.com`，project/logstore 与 frozen scope逐项核对。分页达到 limit 后会探测下一条；仍有数据时返回 `capability_result_too_large`，不会把前 N 条伪装成完整结果。
 
-每次调用创建临时 `0600` Aliyun CLI profile。AccessKey 不进入 argv，但 query、project、logstore 和时间范围会出现在宿主进程参数中。
+每次调用创建临时 `0600` Aliyun CLI profile并挂载到受限 `--rm`容器。AccessKey不进入argv，但query、project、logstore和时间范围会出现在宿主进程参数中。
 
 ## 结果与数据留存
 
@@ -433,7 +440,6 @@ Capability 超限时整次失败，不返回静默截断的部分成功。调用
 
 | Capability | 主要上限 |
 | --- | --- |
-| Playwright | 50 actions，90s，文本+图片 1 MiB |
 | Nacos | 50 Data IDs，合计 1 MiB |
 | MySQL | 20,000 chars，500 rows，1 MiB |
 | Redis | 100 keys，500 results，1 MiB |
@@ -454,7 +460,6 @@ Capability 超限时整次失败，不返回静默截断的部分成功。调用
 - Service prepare 在 API 内存中合并 credential 更新，再调用 registry 完整解析；SQLite transaction 保存的是规范化完整配置。
 - `IssuePolicy`、system prompt、tool schema 和 Agent tool input不含这些 credential。
 - `createCapabilityTools()` 对 Deployment config 做 session-local clone；完整配置只在 API 进程闭包内传给 broker/client。
-- Playwright credential 进入临时 `0600` file。
 - DMS/SLS AccessKey 进入调用级临时 `0600` Aliyun profile。
 - MySQL、Redis、RabbitMQ、Elasticsearch 和 Nacos credential 只传给对应 API 进程 client。
 

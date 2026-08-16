@@ -20,7 +20,6 @@ function credentialUpdate<Key extends CapabilityName>(key: Key, draft: Capabilit
 }
 
 const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
-  playwright: (draft) => ({ baseUrl: draft.baseUrl.trim(), username: draft.credentialEnabled ? draft.username.trim() : "", credentialUpdate: credentialUpdate("playwright", draft) }),
   nacos: (draft) => ({ serverUrl: draft.serverUrl.trim(), namespace: draft.namespace.trim(), group: draft.group.trim(), dataIds: [...draft.dataIds], username: draft.credentialEnabled ? draft.username.trim() : "", credentialUpdate: credentialUpdate("nacos", draft) }),
   db: (draft) => ({ url: draft.url.trim(), username: draft.username.trim(), credentialUpdate: credentialUpdate("db", draft) }),
   redis: (draft) => ({ host: draft.host.trim(), port: draft.port, username: draft.username.trim(), database: draft.database, credentialUpdate: credentialUpdate("redis", draft) }),

@@ -55,11 +55,6 @@ export function issueRuntimeRoot(stateRoot: string, issueKey: string): string {
   return path.join(issueRoot(stateRoot, issueKey), "runtime");
 }
 
-export function issueRuntimeWorkspaceFile(stateRoot: string, issueKey: string): string {
-  const segment = issueSegment(issueKey);
-  return path.join(issuesRoot(stateRoot), segment, "runtime", `${segment}.code-workspace`);
-}
-
 export function issueAttachmentRoot(stateRoot: string, issueKey: string): string {
   return path.join(issueRoot(stateRoot, issueKey), "attachments");
 }

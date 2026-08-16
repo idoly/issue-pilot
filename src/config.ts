@@ -10,4 +10,5 @@ export const applicationConfig = Object.freeze({
   ...issuePilotConfig,
   stateRoot,
   databaseFile: path.resolve(stateRoot, issuePilotConfig.state.databaseFile),
+  webRoot: path.resolve(projectRoot, "src/web/dist"),
 });

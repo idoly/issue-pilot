@@ -260,6 +260,13 @@
       "when": 1786646400000,
       "tag": "0036_issue_status_resolution",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1786732800000,
+      "tag": "0037_managed_users",
+      "breakpoints": true
     }
   ]
 }

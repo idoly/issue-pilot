@@ -1,6 +1,6 @@
 import { type Accessor, type ParentProps, createContext, createSignal, useContext } from "solid-js";
 
-import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadPeople, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
+import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
 const emptyConfiguration = (): Config => ({ environments: [], services: [], agentModels: [] });
@@ -58,12 +58,12 @@ export function ApplicationResourcesProvider(props: ParentProps) {
     try {
       const users = await loadUsers();
       if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) setCurrentUserSubject(null);
-      const [people, currentUser] = await Promise.all([loadPeople(), loadCurrentUser()]);
+      const currentUser = await loadCurrentUser();
       setUsers(users);
-      setPeople(people);
+      setPeople(users);
       setCurrentUser(currentUser);
       setPeopleError("");
-      return people;
+      return users;
     } catch (error) {
       setPeopleError(errorMessage(error));
       throw error;

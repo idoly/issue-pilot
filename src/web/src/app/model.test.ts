@@ -1,16 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { workspaceUrl } from "./model";
+import { fileSize, relativeTime } from "./model";
 
-const runtimeWorkspace = "/home/coder/state/issues/issue-20260807-004/runtime/issue-20260807-004.code-workspace";
-const codeServer = new URL(issuePilotConfig.runtime.codeServer.publicUrl);
-codeServer.searchParams.set("workspace", runtimeWorkspace);
+describe("workspace display values", () => {
+  it("formats file sizes without an external editor URL", () => {
+    expect(fileSize(512)).toBe("512 B");
+    expect(fileSize(2048)).toBe("2.0 KB");
+    expect(fileSize(5 * 1024 * 1024)).toBe("5.0 MB");
+  });
 
-describe("code-server URLs", () => {
-  it("keeps the Issue multi-root runtime manifest when proxying code-server", () => {
-    const url = new URL(workspaceUrl(codeServer.toString())!);
-    expect(url.pathname).toBe("/code-server/");
-    expect(url.searchParams.get("workspace")).toBe(runtimeWorkspace);
+  it("formats recent timestamps", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-15T00:00:00.000Z"));
+    expect(relativeTime("2026-08-14T23:55:00.000Z")).toBe("5 分钟前");
+    vi.useRealTimers();
   });
 });

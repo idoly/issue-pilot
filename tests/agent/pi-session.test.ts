@@ -35,7 +35,7 @@ test("creates a private Pi session file before the first Agent prompt", async ()
   }
 });
 
-function policy(options: { writable: boolean; capability?: "db" | "playwright" }): IssuePolicy {
+function policy(options: { writable: boolean; capability?: "db" }): IssuePolicy {
   const capability = options.capability;
   return createIssuePolicy({
     issueKey: "ISSUE-20260808-001",
@@ -48,7 +48,6 @@ function policy(options: { writable: boolean; capability?: "db" | "playwright" }
       environmentKind: options.writable ? "dev" : "prod",
       capabilities: capability ? [capability] : [],
       ...(capability === "db" ? { db: { deploymentId: "deployment-1" } } : {}),
-      ...(capability === "playwright" ? { playwright: { deploymentId: "deployment-1", baseUrl: "https://orders.example.test" } } : {}),
       repositories: [{ codeAccess: options.writable ? "write" : "read", repositoryPath: "/tmp/issue-workspace/orders", baseCommit: "abc123" }],
     },
   });
@@ -79,9 +78,9 @@ test("limits read-only deployments to non-mutating Pi tools", () => {
   assert.deepEqual(piToolAllowlist(policy({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "db"]);
 });
 
-test("enables Pi mutation tools only for writable development policies", () => {
-  assert.deepEqual(piToolAllowlist(policy({ writable: true, capability: "playwright" })), [
-    "read", "bash", "edit", "write", "grep", "find", "ls", "playwright",
+test("enables only Pi mutation tools for writable development policies without capabilities", () => {
+  assert.deepEqual(piToolAllowlist(policy({ writable: true })), [
+    "read", "bash", "edit", "write", "grep", "find", "ls",
   ]);
 });
 

@@ -1,12 +1,5 @@
 const gibibyte = 1024 ** 3;
 
-const users = Object.freeze([
-  Object.freeze({ subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
-  Object.freeze({ subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" }),
-  Object.freeze({ subject: "yx4821@xianhengguoji.com", name: "严欣", email: "yx4821@xianhengguoji.com" }),
-  Object.freeze({ subject: "hjx4403@xianhengguoji.com", name: "黄佳鑫", email: "hjx4403@xianhengguoji.com" }),
-]);
-
 export const issuePilotConfig = Object.freeze({
   state: Object.freeze({
     directory: ".issue-pilot",
@@ -17,8 +10,7 @@ export const issuePilotConfig = Object.freeze({
     locale: "zh-CN",
     timeZone: "Asia/Shanghai",
   }),
-  subject: users[0]!.subject,
-  users,
+  bootstrapUser: Object.freeze({ subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
   http: Object.freeze({
     host: "127.0.0.1",
     port: 3000,
@@ -47,14 +39,20 @@ export const issuePilotConfig = Object.freeze({
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
-    codeServer: Object.freeze({
-      publicUrl: "http://127.0.0.1:18080/",
-      listenHost: "127.0.0.1",
-      listenPort: 18080,
-      containerPort: 8080,
-      image: "ghcr.io/coder/code-server:4.131.0-39",
-      version: "keep-id-v24-code-server-4.131.0-current-layout-auth-none",
-      chatDisableAiFeatures: true,
+    application: Object.freeze({
+      name: "issue-pilot",
+      image: "localhost/issue-pilot:0.1.0-node24-bookworm",
+      listenHost: "0.0.0.0",
+      podmanSocket: "/run/user/1000/podman/podman.sock",
+      restartPolicy: "on-failure:5",
+      podmanRemote: Object.freeze({
+        version: "5.8.4",
+        amd64Sha256: "3d2a1a45f668fe5c240deb8df83d9e2e415429fb91f8a7442985a636edf33654",
+        arm64Sha256: "6c7184d158e5d54e5a324ba6a6da264862bd5baa61d992f65fe855db51406bea",
+      }),
+      containerPids: 2_048,
+      containerMemory: "4g",
+      stopTimeoutSeconds: 1_800,
     }),
     playwright: Object.freeze({
       version: "1.62.1",
@@ -62,13 +60,35 @@ export const issuePilotConfig = Object.freeze({
       playwrightCoreRoot: "/usr/local/node/lib/node_modules/playwright-core",
       actionTimeoutMs: 10_000,
       navigationTimeoutMs: 20_000,
+      executionSeconds: 300,
       containerPids: 256,
       containerMemory: "1g",
       viewport: Object.freeze({ width: 1280, height: 720 }),
     }),
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
     containerUser: Object.freeze({ uid: 1000, gid: 1000 }),
-    aliyunCli: "/usr/local/sbin/aliyun",
+    sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
+    projectTools: Object.freeze({
+      node: Object.freeze({
+        image: "docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03",
+        npmConfig: ".npmrc",
+        npmCache: ".npm",
+      }),
+      maven: Object.freeze({
+        image: "docker.io/library/maven:3.9-eclipse-temurin-8@sha256:0537e78bbba084ec350fcaa0dedef6efa34440e4e464bbb284f0f1e47043f629",
+        settings: ".m2/settings.xml",
+        repository: ".m2/repository",
+      }),
+      containerPids: 512,
+      containerMemory: "2g",
+      executionMs: 30 * 60 * 1000,
+    }),
+    aliyunCli: Object.freeze({
+      image: "localhost/issue-pilot-aliyun-cli:3.4.11-alpine3.22.1",
+      version: "3.4.11",
+      containerPids: 64,
+      containerMemory: "128m",
+    }),
     dms: Object.freeze({ endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" }),
   }),
   limits: Object.freeze({
@@ -79,6 +99,16 @@ export const issuePilotConfig = Object.freeze({
       files: 20,
       formFieldBytes: 100_000,
     }),
+    sourceBrowser: Object.freeze({
+      fileBytes: 2 * 1024 * 1024,
+      directoryEntries: 500,
+      searchQueryCharacters: 200,
+      searchMatches: 200,
+      historyCommits: 100,
+      changeFiles: 500,
+      commandMs: 5_000,
+      commandOutputBytes: 2 * 1024 * 1024,
+    }),
     process: Object.freeze({
       commandOutputBytes: 5 * 1024 * 1024,
       terminationGraceMs: 1_000,
@@ -87,14 +117,11 @@ export const issuePilotConfig = Object.freeze({
       gitPruneMs: 30_000,
       diskUsageMs: 120_000,
       diskUsageOutputBytes: 1024 * 1024,
-      codeServerEnsureMs: 180_000,
-      codeServerOutputBytes: 2 * 1024 * 1024,
     }),
     capability: Object.freeze({
       resultBytes: 1024 * 1024,
       timeoutMs: 15_000,
       connectionMs: 10_000,
-      browser: Object.freeze({ actions: 50, pathChars: 2048, selectorChars: 500, valueChars: 10_000, executionMs: 90_000 }),
       database: Object.freeze({ queryChars: 20_000, rows: 500 }),
       dms: Object.freeze({ queryChars: 20_000, rows: 500, executionMs: 30_000 }),
       elasticsearch: Object.freeze({ results: 200 }),

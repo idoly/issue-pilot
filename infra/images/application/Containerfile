@@ -1,0 +1,48 @@
+ARG NODE_IMAGE
+FROM ${NODE_IMAGE} AS build
+
+WORKDIR /build
+COPY package.json package-lock.json ./
+COPY vendor ./vendor
+RUN npm ci
+COPY issue-pilot.config.ts tsconfig.json ./
+COPY drizzle ./drizzle
+COPY src ./src
+RUN npm run build \
+    && npm prune --omit=dev \
+    && find src/web -mindepth 1 -maxdepth 1 ! -name dist -exec rm -rf '{}' +
+
+FROM ${NODE_IMAGE} AS podman-remote
+
+ARG TARGETARCH
+ARG PODMAN_REMOTE_VERSION
+ARG PODMAN_REMOTE_SHA256
+RUN case "$TARGETARCH" in amd64|arm64) ;; *) exit 1 ;; esac \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && archive="/tmp/podman-remote.tar.gz" \
+    && curl --fail --location --silent --show-error "https://github.com/containers/podman/releases/download/v${PODMAN_REMOTE_VERSION}/podman-remote-static-linux_${TARGETARCH}.tar.gz" --output "$archive" \
+    && printf '%s  %s\n' "$PODMAN_REMOTE_SHA256" "$archive" | sha256sum --check --strict \
+    && tar --extract --gzip --file "$archive" --directory /tmp \
+    && install -D -m 0755 "/tmp/bin/podman-remote-static-linux_${TARGETARCH}" /out/podman-remote
+
+FROM ${NODE_IMAGE}
+
+ARG APP_ROOT=/opt/issue-pilot
+LABEL io.issue-pilot.component="application" \
+      io.issue-pilot.root="${APP_ROOT}"
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl git openssh-client ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+RUN ln -s /usr/local /usr/local/node \
+    && printf '%s\n' '#!/bin/sh' 'config=/tmp/issue-pilot-podman-config' 'mkdir -p "$config"' 'XDG_CONFIG_HOME="$config" exec /usr/local/libexec/issue-pilot/podman-remote --url unix:///run/podman/podman.sock "$@"' > /usr/local/bin/podman \
+    && chmod 0755 /usr/local/bin/podman
+
+COPY --from=podman-remote /out/podman-remote /usr/local/libexec/issue-pilot/podman-remote
+COPY --from=build /build ${APP_ROOT}
+WORKDIR ${APP_ROOT}
+ENV NODE_ENV=production
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD curl --fail --silent http://127.0.0.1:3000/health >/dev/null || exit 1
+CMD ["node", "--experimental-strip-types", "src/http/production.ts"]

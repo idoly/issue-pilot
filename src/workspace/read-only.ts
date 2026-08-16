@@ -2,16 +2,12 @@ import { eq, inArray } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issues } from "../db/schema.ts";
-import { CodeServerManager } from "./code-server.ts";
 import { IssueProjectManager } from "./project.ts";
 import { prepareIssueRuntimeBatch, type RuntimePreparationResult } from "./runtime.ts";
-
-type CodeServer = Pick<CodeServerManager, "ensure">;
 
 export async function prepareReadOnlyIssueRuntimes(
   database: Database,
   stateRoot: string,
-  codeServer: CodeServer = new CodeServerManager(stateRoot),
 ): Promise<RuntimePreparationResult> {
   const readOnlyIssues = await database.select({
     id: issues.id,
@@ -28,6 +24,6 @@ export async function prepareReadOnlyIssueRuntimes(
   return prepareIssueRuntimeBatch(
     database,
     readOnlyIssues,
-    (issue) => project.hydrateReadOnlyRuntime(issue, issue.environmentKind as "prod" | "test", codeServer),
+    (issue) => project.hydrateReadOnlyRuntime(issue, issue.environmentKind as "prod" | "test"),
   );
 }

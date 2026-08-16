@@ -17,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-6).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -6) };
+  assert.deepEqual(journal.entries.slice(-7).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -7) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -84,7 +84,9 @@ test("refuses to install resolution triggers over inconsistent Issue state", asy
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -1) };
+  const resolutionMigrationIndex = journal.entries.findIndex(({ tag }) => tag === "0036_issue_status_resolution");
+  assert.notEqual(resolutionMigrationIndex, -1);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, resolutionMigrationIndex) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -121,7 +123,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
   try {
     await migrate(db, { migrationsFolder: resolve("drizzle") });
     await db.transaction(async (transaction) => {
-      await transaction.insert(subjects).values({ subject: "demo-owner", username: "owner", displayName: "Owner", email: "owner@example.com" });
+      await transaction.insert(subjects).values({ subject: "demo-owner", displayName: "Owner", email: "owner@example.com" });
       await transaction.insert(environments).values({ key: "test", name: "Test", kind: "test" });
     });
     const [environment] = await db.select().from(environments);
@@ -182,6 +184,9 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       "id", "key", "title", "description", "status", "priority", "type", "service_id", "environment_id",
       "reporter_subject", "assignee_subject", "resolved_at", "created_at", "updated_at",
     ]);
+    const subjectColumns = await client.execute("pragma table_info('subjects')");
+    assert.deepEqual(subjectColumns.rows.map((column) => column.name), ["subject", "display_name", "email", "created_at", "updated_at", "active"]);
+    assert.equal((await db.select().from(subjects).where(eq(subjects.subject, "demo-owner")))[0]!.active, true);
     const serviceRepositoryColumns = await client.execute("pragma table_info('service_repositories')");
     assert.deepEqual(serviceRepositoryColumns.rows.map((column) => column.name), ["id", "service_id", "alias", "url", "created_at", "updated_at"]);
     const deploymentColumns = await client.execute("pragma table_info('service_deployments')");
@@ -192,6 +197,8 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.deepEqual(repositoryColumns.rows.map((column) => column.name), [
       "id", "issue_id", "url", "base_branch", "working_branch", "local_path", "commit_before", "created_at", "updated_at", "workspace_name",
     ]);
+    const workspaceColumns = await client.execute("pragma table_info('issue_workspaces')");
+    assert.deepEqual(workspaceColumns.rows.map((column) => column.name), ["issue_id", "status", "runtime_ready", "last_error", "created_at", "updated_at"]);
     const sessionColumns = await client.execute("pragma table_info('issue_pilot_sessions')");
     assert.deepEqual(sessionColumns.rows.map((column) => column.name), ["issue_id", "session_file", "workspace_path", "created_at", "updated_at"]);
     assert.equal((await stat(file)).mode & 0o777, 0o600);

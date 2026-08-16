@@ -7,6 +7,7 @@ export interface CommandExecutionOptions {
   timeout?: number;
   signal?: AbortSignal;
   environment?: Readonly<Record<string, string>>;
+  maxOutputBytes?: number;
 }
 
 export interface CommandExecutionResult {
@@ -50,9 +51,10 @@ export async function executeLocalCommand(command: string, args: string[], optio
     const timer = options.timeout ? setTimeout(terminate, options.timeout) : undefined;
     timer?.unref();
     options.signal?.addEventListener("abort", abort, { once: true });
+    const maximumOutputBytes = options.maxOutputBytes ?? issuePilotConfig.limits.process.commandOutputBytes;
     const capture = (append: (chunk: string) => void) => (chunk: string) => {
       outputBytes += Buffer.byteLength(chunk);
-      if (outputBytes > issuePilotConfig.limits.process.commandOutputBytes) {
+      if (outputBytes > maximumOutputBytes) {
         outputLimitExceeded = true;
         terminate();
         return;

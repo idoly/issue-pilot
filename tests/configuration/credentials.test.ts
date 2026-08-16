@@ -6,7 +6,6 @@ import { redactCapabilityConfiguration, resolveConfiguredCapabilitySections } fr
 import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../../src/domain/contracts.ts";
 
 const configuration: CapabilityConfiguration = {
-  playwright: { baseUrl: "https://app.example.test", username: "operator", password: "browser-secret" },
   nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "operator", password: "nacos-secret" },
   db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "db-secret" },
   redis: { host: "redis.example.test", port: 6379, username: "reader", password: "redis-secret", database: 0 },
@@ -37,7 +36,7 @@ test("redacts and preserves every capability credential through the shared contr
 test("clears only optional credentials and rejects preservation without stored values", () => {
   for (const key of CAPABILITY_KEYS) {
     const section = publicInput(key, { mode: "clear" });
-    if (key === "playwright" || key === "nacos" || key === "es") section.username = "";
+    if (key === "nacos" || key === "es") section.username = "";
     if (CAPABILITY_CREDENTIALS[key].required) {
       assert.throws(() => resolveConfiguredCapabilitySections({ [key]: section }, [key], configuration), /credential_required/);
     } else {

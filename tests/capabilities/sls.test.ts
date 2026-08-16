@@ -1,85 +1,85 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { PodmanContainerRuntime } from "../../src/container-runtime.ts";
 import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { readSlsLogs } from "../../src/capabilities/sls.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
-test("returns complete SLS records through the secured local Aliyun CLI", async () => {
-  const root = await mkdtemp(join(tmpdir(), "issue-pilot-sls-"));
-  const cli = join(root, "aliyun");
-  try {
-    await writeFile(cli, "fixture", { mode: 0o755 });
-    const calls: Array<{ command: string; args: string[]; options: CommandExecutionOptions; profile: Record<string, any> }> = [];
-    let responseRecords: unknown | ((args: string[]) => unknown) = [{ __time__: 1_700_000_000, message: "ready", password: "log-secret" }];
-    const executor: CommandExecutor = {
-      async execute(command: string, args: string[], options: CommandExecutionOptions = {}) {
-        const profileRoot = options.environment?.HOME;
-        assert.ok(profileRoot);
-        const profile = JSON.parse(await readFile(join(profileRoot, ".aliyun", "config.json"), "utf8"));
-        calls.push({ command, args, options, profile });
-        const response = typeof responseRecords === "function" ? responseRecords(args) : responseRecords;
-        return { code: 0, stdout: JSON.stringify(response), stderr: "", killed: false };
-      },
-    };
-    const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
-    const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-    const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(executor, policy, input, configured, undefined, { cliPath: cli });
-    const output = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600, query: "level:ERROR", limit: 20 });
-    assert.equal(calls[0]!.command, cli);
-    assert.deepEqual(calls[0]!.options.environment, { HOME: calls[0]!.options.environment?.HOME, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" });
-    assert.deepEqual({ region_id: calls[0]!.profile.profiles[0].region_id, output_format: calls[0]!.profile.profiles[0].output_format }, { region_id: "cn-test", output_format: "json" });
-    assert.deepEqual(calls[0]!.args, ["sls", "GetLogs", "--endpoint", "cn-test.log.aliyuncs.com", "--project", "srm-test", "--logstore", "application_log", "--from", "1700000000", "--to", "1700003600", "--query", "level:ERROR", "--line", "20", "--offset", "0", "--reverse", "true"]);
-    const outputBody = JSON.parse(output.content[0]!.text);
-    assert.deepEqual({ from: outputBody.query.from, to: outputBody.query.to, order: outputBody.query.order, returnedRows: outputBody.query.returnedRows, possiblyIncomplete: outputBody.query.possiblyIncomplete }, { from: 1_700_000_000, to: 1_700_003_600, order: "newest_first", returnedRows: 1, possiblyIncomplete: false });
-    assert.equal(outputBody.records[0].message, "ready");
-    assert.equal(outputBody.records[0].password, "log-secret");
-    assert.match(output.content[0]!.text, /log-secret/);
+test("returns complete SLS records through a private Aliyun CLI container", async () => {
+  const runtime = issuePilotConfig.runtime.aliyunCli;
+  const calls: Array<{ command: string; args: string[]; cliArgs: string[]; options: CommandExecutionOptions; profile: Record<string, any> }> = [];
+  let responseRecords: unknown | ((args: string[]) => unknown) = [{ __time__: 1_700_000_000, message: "ready", password: "log-secret" }];
+  const executor: CommandExecutor = {
+    async execute(command: string, args: string[], options: CommandExecutionOptions = {}) {
+      const imageIndex = args.indexOf(runtime.image);
+      assert.ok(imageIndex > 0);
+      const volume = args[args.indexOf("--volume") + 1]!;
+      const suffix = ":/home/aliyun:ro,Z";
+      assert.ok(volume.endsWith(suffix));
+      const profileRoot = volume.slice(0, -suffix.length);
+      const profile = JSON.parse(await readFile(join(profileRoot, ".aliyun", "config.json"), "utf8"));
+      const cliArgs = args.slice(imageIndex + 1);
+      calls.push({ command, args, cliArgs, options, profile });
+      const response = typeof responseRecords === "function" ? responseRecords(cliArgs) : responseRecords;
+      return { code: 0, stdout: JSON.stringify(response), stderr: "", killed: false };
+    },
+  };
+  const containers = new PodmanContainerRuntime(executor);
+  const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
+  const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
+  const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(containers, policy, input, configured, undefined, runtime);
+  const output = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600, query: "level:ERROR", limit: 20 });
+  assert.equal(calls[0]!.command, "podman");
+  assert.equal(calls[0]!.options.environment, undefined);
+  assert.doesNotMatch(JSON.stringify({ args: calls[0]!.args, options: calls[0]!.options }), /fixture-key|fixture-secret/);
+  assert.deepEqual({ region_id: calls[0]!.profile.profiles[0].region_id, output_format: calls[0]!.profile.profiles[0].output_format }, { region_id: "cn-test", output_format: "json" });
+  assert.deepEqual(calls[0]!.cliArgs, ["sls", "GetLogs", "--endpoint", "cn-test.log.aliyuncs.com", "--project", "srm-test", "--logstore", "application_log", "--from", "1700000000", "--to", "1700003600", "--query", "level:ERROR", "--line", "20", "--offset", "0", "--reverse", "true"]);
+  const outputBody = JSON.parse(output.content[0]!.text);
+  assert.deepEqual({ from: outputBody.query.from, to: outputBody.query.to, order: outputBody.query.order, returnedRows: outputBody.query.returnedRows, possiblyIncomplete: outputBody.query.possiblyIncomplete }, { from: 1_700_000_000, to: 1_700_003_600, order: "newest_first", returnedRows: 1, possiblyIncomplete: false });
+  assert.equal(outputBody.records[0].message, "ready");
+  assert.equal(outputBody.records[0].password, "log-secret");
+  assert.match(output.content[0]!.text, /log-secret/);
 
-    const before = Math.floor(Date.now() / 1000);
-    await read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", limit: 10 });
-    const traceArgs = calls[1]!.args;
-    const traceFrom = Number(traceArgs[traceArgs.indexOf("--from") + 1]);
-    const traceTo = Number(traceArgs[traceArgs.indexOf("--to") + 1]);
-    assert.equal(traceTo - traceFrom, 24 * 60 * 60);
-    assert.ok(traceTo >= before && traceTo <= Math.floor(Date.now() / 1000));
-    assert.equal(traceArgs[traceArgs.indexOf("--query") + 1], "8ea38737-7d1e-40bb-8fff-69e71bc985ab");
-    await assert.rejects(read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", query: "8ea38737" }), /invalid_sls_query/);
-    await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000 }), /invalid_sls_time_range/);
-    await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_090_000 });
-    await assert.rejects(read({ logstore: "other", from: 1_700_000_000, to: 1_700_000_100 }), /sls_configuration_changed/);
+  const before = Math.floor(Date.now() / 1000);
+  await read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", limit: 10 });
+  const traceArgs = calls[1]!.cliArgs;
+  const traceFrom = Number(traceArgs[traceArgs.indexOf("--from") + 1]);
+  const traceTo = Number(traceArgs[traceArgs.indexOf("--to") + 1]);
+  assert.equal(traceTo - traceFrom, 24 * 60 * 60);
+  assert.ok(traceTo >= before && traceTo <= Math.floor(Date.now() / 1000));
+  assert.equal(traceArgs[traceArgs.indexOf("--query") + 1], "8ea38737-7d1e-40bb-8fff-69e71bc985ab");
+  await assert.rejects(read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", query: "8ea38737" }), /invalid_sls_query/);
+  await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000 }), /invalid_sls_time_range/);
+  await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_090_000 });
+  await assert.rejects(read({ logstore: "other", from: 1_700_000_000, to: 1_700_000_100 }), /sls_configuration_changed/);
 
-    const longMessage = "x".repeat(80_000);
-    responseRecords = [{ TRACE_ID: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", message: longMessage, authorization: "Bearer secret-token" }];
-    const unbounded = await read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", limit: 100 });
-    const unboundedBody = JSON.parse(unbounded.content[0]!.text);
-    assert.equal(unboundedBody.records[0].message.length, 80_000);
-    assert.equal(unboundedBody.records[0].authorization, "Bearer secret-token");
-    assert.equal("truncated" in unboundedBody.query, false);
-    assert.match(unbounded.content[0]!.text, /secret-token/);
+  const longMessage = "x".repeat(80_000);
+  responseRecords = [{ TRACE_ID: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", message: longMessage, authorization: "Bearer secret-token" }];
+  const unbounded = await read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", limit: 100 });
+  const unboundedBody = JSON.parse(unbounded.content[0]!.text);
+  assert.equal(unboundedBody.records[0].message.length, 80_000);
+  assert.equal(unboundedBody.records[0].authorization, "Bearer secret-token");
+  assert.equal("truncated" in unboundedBody.query, false);
+  assert.match(unbounded.content[0]!.text, /secret-token/);
 
-    responseRecords = (args: string[]) => {
-      const offset = Number(args[args.indexOf("--offset") + 1]);
-      return offset === 0 ? Array.from({ length: 100 }, (_, index) => ({ message: `page-${index}` })) : offset === 100 ? [{ message: "last-page" }] : [];
-    };
-    const paged = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100, limit: 150 });
-    assert.equal((JSON.parse(paged.content[0]!.text) as { records: unknown[] }).records.length, 101);
-    const finalPageArgs = calls.at(-1)!.args;
-    assert.equal(finalPageArgs[finalPageArgs.indexOf("--line") + 1], "50");
-    assert.equal(finalPageArgs[finalPageArgs.indexOf("--offset") + 1], "100");
+  responseRecords = (args: string[]) => {
+    const offset = Number(args[args.indexOf("--offset") + 1]);
+    return offset === 0 ? Array.from({ length: 100 }, (_, index) => ({ message: `page-${index}` })) : offset === 100 ? [{ message: "last-page" }] : [];
+  };
+  const paged = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100, limit: 150 });
+  assert.equal((JSON.parse(paged.content[0]!.text) as { records: unknown[] }).records.length, 101);
+  const finalPageArgs = calls.at(-1)!.cliArgs;
+  assert.equal(finalPageArgs[finalPageArgs.indexOf("--line") + 1], "50");
+  assert.equal(finalPageArgs[finalPageArgs.indexOf("--offset") + 1], "100");
 
-    responseRecords = [{ message: "one" }, { message: "two" }];
-    await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100, limit: 2 }), /capability_result_too_large/);
-    const probeArgs = calls.at(-1)!.args;
-    assert.equal(probeArgs[probeArgs.indexOf("--line") + 1], "1");
-    assert.equal(probeArgs[probeArgs.indexOf("--offset") + 1], "2");
-
-    await chmod(cli, 0o777);
-    await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100 }), /insecure_aliyun_cli_file/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  responseRecords = [{ message: "one" }, { message: "two" }];
+  await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_000_100, limit: 2 }), /capability_result_too_large/);
+  const probeArgs = calls.at(-1)!.cliArgs;
+  assert.equal(probeArgs[probeArgs.indexOf("--line") + 1], "1");
+  assert.equal(probeArgs[probeArgs.indexOf("--offset") + 1], "2");
+  assert.equal(output.details.runtime, "container-cli");
 });

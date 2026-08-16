@@ -1,0 +1,7 @@
+.git
+.issue-pilot
+node_modules
+src/web/dist
+*.log
+.tmp
+coverage

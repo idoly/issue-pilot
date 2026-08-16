@@ -161,7 +161,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
-      workspace: { status: "running", url: null },
+      workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
     const view = render(() => AgentPanel({ issue, onRefresh }));
@@ -187,12 +187,13 @@ describe("Agent conversation state", () => {
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-live"));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
     const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
-    Object.defineProperties(panel, {
+    const transcript = panel.querySelector(".agent-scroll") as HTMLDivElement;
+    Object.defineProperties(transcript, {
       scrollHeight: { configurable: true, value: 1_000 },
       clientHeight: { configurable: true, value: 200 },
       scrollTop: { configurable: true, value: 0, writable: true },
     });
-    fireEvent.scroll(panel);
+    fireEvent.scroll(transcript);
     source.emit("message", event({ type: "issue_user", message: "Arrived after scrolling" }, "message-unread"));
     await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
     expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 32.9%/272k (auto)")).toBeTruthy();
@@ -219,13 +220,14 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-      workspace: { status: "ready", url: null },
+      workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
     const conversation = panel.querySelector(".agent-conversation") as HTMLDivElement;
-    const scrollTo = vi.spyOn(panel, "scrollTo");
-    Object.defineProperty(panel, "scrollHeight", { configurable: true, value: 900 });
+    const scroller = panel.querySelector(".agent-scroll") as HTMLDivElement;
+    const scrollTo = vi.spyOn(scroller, "scrollTo");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 900 });
 
     fireEvent.click(conversation);
     expect(document.activeElement).toBe(panel);
@@ -255,7 +257,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
-      workspace: { status: "running", url: null },
+      workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;
@@ -296,7 +298,7 @@ describe("Agent conversation state", () => {
         id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
         assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
         updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-        workspace: { status: "ready", url: null },
+        workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
       const first = EventSourceMock.instances[0]!;
@@ -338,7 +340,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-      workspace: { status: "ready", url: null },
+      workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     let rejectFirst!: (error: unknown) => void;
     const firstRefresh = new Promise<IssueDetail>((_resolve, reject) => { rejectFirst = reject; });
@@ -364,7 +366,7 @@ describe("Agent conversation state", () => {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
       updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
-      workspace: { status: "ready", url: null },
+      workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn<() => Promise<IssueDetail>>()
       .mockRejectedValueOnce(new Error("network_failed"))

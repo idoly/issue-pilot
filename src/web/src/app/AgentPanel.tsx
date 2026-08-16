@@ -143,7 +143,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [queue, setQueue] = createSignal<{ steering: string[]; followUp: string[] }>({ steering: [], followUp: [] }, { ownedWrite: true });
   const [agent, setAgent] = createSignal({ provider: "", model: "", thinkingLevel: "" }, { ownedWrite: true });
   const [footer, setFooter] = createSignal<AgentFooterStats>(emptyFooter(), { ownedWrite: true });
-  let transcript: HTMLElement | undefined;
+  let panel: HTMLElement | undefined;
+  let transcript: HTMLDivElement | undefined;
+  let transcriptObserver: ResizeObserver | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let issueGeneration = 0;
   let issueRefreshId = 0;
@@ -163,11 +165,19 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     followLatest = true;
     setUnread(0);
   };
+  const observeTranscript = (element: HTMLDivElement) => {
+    transcript = element;
+    transcriptObserver?.disconnect();
+    transcriptObserver = new ResizeObserver(() => {
+      if (followLatest) element.scrollTop = element.scrollHeight;
+    });
+    transcriptObserver.observe(element);
+  };
   const focusConversation = (event: MouseEvent & { currentTarget: HTMLDivElement }) => {
     const target = event.target;
     if (!(target instanceof Element) || target.closest("a, button, input, textarea, select, [contenteditable='true']")) return;
     if (window.getSelection() && !window.getSelection()!.isCollapsed) return;
-    transcript?.focus({ preventScroll: true });
+    panel?.focus({ preventScroll: true });
   };
   const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
     if (event.key !== "Enter" || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -367,25 +377,27 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     issueGeneration += 1;
     connect(id, true);
   });
-  onCleanup(() => { issueGeneration += 1; discardMessageUpdates(); streamController.dispose(); });
+  onCleanup(() => { issueGeneration += 1; transcriptObserver?.disconnect(); discardMessageUpdates(); streamController.dispose(); });
 
-  return <section ref={transcript} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
-    <div class="agent-conversation" role="log" aria-live="polite" onClick={focusConversation}>
-      <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
-      <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>
+  return <section ref={panel} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
+    <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
+      <div class="agent-conversation" role="log" aria-live="polite">
+        <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
+        <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>
+      </div>
+      <Show when={queue().steering.length || queue().followUp.length}><div class="agent-queue"><For each={queue().steering}>{(message) => <span><strong>Steering:</strong> {message}</span>}</For><For each={queue().followUp}>{(message) => <span><strong>Follow-up:</strong> {message}</span>}</For></div></Show>
+      <Show when={running() || activity()}><div class={`agent-working ${activity()?.tone ?? "info"}`} role="status"><i />{activity()?.text ?? "Working..."}</div></Show>
+      <div class="agent-composer-gutter">
+        <div class={`agent-composer thinking-${agent().thinkingLevel || "off"}`}>
+          <textarea ref={editor} rows={1} aria-label="发送给 Agent" value={draft()} disabled={sending() || !canSend()} onInput={handleEditorInput} onPaste={handlePaste} onSelect={protectPasteSelection} onKeyDown={handleEditorKeyDown} />
+        </div>
+      </div>
+      <Show when={error()}><div class="agent-panel-error" role="alert">{panelError(error())}</div></Show>
+      <footer class="agent-meta">
+        <div class="agent-meta-primary"><span title={executionRoot()}>{executionRoot()}</span></div>
+        <div class="agent-meta-secondary"><span>{usageText()}</span><span><b>{agent().model || "no-model"}</b>{agent().thinkingLevel ? ` • ${agent().thinkingLevel}` : ""}</span></div>
+      </footer>
     </div>
     <Show when={unread() > 0}><Button class="agent-scroll-latest" shape="round" size="small" icon={<ArrowDown size={14} />} onClick={scrollLatest}>{unread()} 条新消息</Button></Show>
-    <Show when={queue().steering.length || queue().followUp.length}><div class="agent-queue"><For each={queue().steering}>{(message) => <span><strong>Steering:</strong> {message}</span>}</For><For each={queue().followUp}>{(message) => <span><strong>Follow-up:</strong> {message}</span>}</For></div></Show>
-    <Show when={running() || activity()}><div class={`agent-working ${activity()?.tone ?? "info"}`} role="status"><i />{activity()?.text ?? "Working..."}</div></Show>
-    <div class="agent-composer-gutter">
-      <div class={`agent-composer thinking-${agent().thinkingLevel || "off"}`}>
-        <textarea ref={editor} rows={1} aria-label="发送给 Agent" value={draft()} disabled={sending() || !canSend()} onInput={handleEditorInput} onPaste={handlePaste} onSelect={protectPasteSelection} onKeyDown={handleEditorKeyDown} />
-      </div>
-    </div>
-    <Show when={error()}><div class="agent-panel-error" role="alert">{panelError(error())}</div></Show>
-    <footer class="agent-meta">
-      <div class="agent-meta-primary"><span title={executionRoot()}>{executionRoot()}</span></div>
-      <div class="agent-meta-secondary"><span>{usageText()}</span><span><b>{agent().model || "no-model"}</b>{agent().thinkingLevel ? ` • ${agent().thinkingLevel}` : ""}</span></div>
-    </footer>
   </section>;
 }

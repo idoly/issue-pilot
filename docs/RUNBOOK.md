@@ -15,7 +15,7 @@
 | `issues/<key>/runtime` | 否 | 启动/prepare原子重建 |
 | `git/checkouts` | 否 | 验证后由启动/prepare重建 |
 | `workspaces/<key>` | 有条件 | 只能通过受管 release回收 |
-| `code-server/data` | 运行状态 | 可重建部分设置，但可能含编辑器历史；操作前备份 |
+| 遗留`code-server/data` | 历史状态 | 当前版本不读取；可能含编辑历史，确认备份/retention后由Operator处理 |
 | `backups` | 是 | Operator管理 |
 
 不要对整个 state root、`workspaces/<key>`、bare repository或未知 Issue目录执行 `rm -rf`。
@@ -29,17 +29,23 @@ curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:3000/api/me
 curl -fsS http://127.0.0.1:3000/api/users
 curl -fsS http://127.0.0.1:3000/api/workspaces/stats
+podman compose version
+infra/application.sh config
+infra/application.sh status
 infra/playwright.sh status
-infra/code-server.sh status
-ss -ltnp | rg ':3000|:18080'
+infra/aliyun-cli.sh status
+infra/project-tools.sh status
+stat -c '%a %n' .issue-pilot/control/project-tools.sock
+ss -ltnp | rg ':3000'
 ```
 
 预期：
 
 - `/health` 返回 `{"ok":true}`。
-- API 和 code-server只监听 loopback。
-- Playwright core/image ready，且无持久 pi-tool container。
-- code-server为 running，image和 runtime label与根配置一致。
+- 宿主API或Compose发布只监听loopback，主页、Workbench和API同源可达。
+- Application image具有匹配当前绝对项目根的label和Healthcheck；容器状态符合部署方式。
+- Playwright application-test、Aliyun CLI、Node和Maven image ready，且无持久application-test或pi-tool container。
+- 项目工具socket存在且mode为`600`。
 - Workspace stats能在深检完成后返回。
 
 不要把 `/api/config` 加入普通监控日志；响应虽已脱敏，仍包含内部 Repository、model 和 capability scope。任何 `/api/services/*` 写请求 body 都不得记录，因为 credential replace 会携带新值。
@@ -94,7 +100,13 @@ LEFT JOIN service_deployments
 WHERE service_deployments.id IS NULL;
 ```
 
-三项都应返回 0 行。当前 migration trigger会阻止新异常，但恢复旧/部分数据库后仍应显式检查。
+三项都应返回 0 行。当前 migration trigger会阻止新异常，但恢复旧/部分数据库后仍应显式检查。还要确认至少有一名启用用户：
+
+```sql
+SELECT count(*) AS active_users FROM subjects WHERE active = 1;
+```
+
+结果必须大于0。用户停用不应删除历史subject行。
 
 ## Issue 与代码检查
 
@@ -119,15 +131,9 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> log -1 --oneline
 
 对 immutable checkout，branch为空是正常的；HEAD必须等于目录 commit。对 active dev，branch和 `issue_repositories.working_branch`必须一致。
 
-每个 code-server URL应含 `workspace=`，指向：
+`GET /api/issues/:key`的`sourceAvailable`应与Workspace `runtimeReady`和runtime目录存在性一致。`/api/issues/:key/source/repositories`返回的每个alias必须对应runtime中的受管symlink：active dev target等于数据库`local_path`；prod/test/released target位于`git/checkouts/<hash>/<commit>`。
 
-```text
-/home/coder/state/issues/<key>/runtime/<key>.code-workspace
-```
-
-Manifest内 folder link必须与数据库 Repository集合一致且可达。
-
-当前 Service Repository数量与 released dev历史集合不同不一定是损坏。先比较 Issue Repository行、创建时间、本地 working branch和 runtime manifest；不要按当前数量批量插入历史行或改写 base branch。
+当前Service Repository数量与released dev历史集合不同不一定是损坏。先比较Issue Repository行、创建时间、本地working branch和runtime link；不要按当前数量批量插入历史行或改写base branch。
 
 ## Attachment 检查
 
@@ -284,9 +290,8 @@ curl -fsS -X DELETE \
 
 1. 从每个本地 working branch准备 worktree。
 2. 验证精确 layout。
-3. 生成 writable runtime和 wrapper。
-4. Ensure code-server。
-5. 事务更新 Repository、Workspace和 Issue。
+3. 生成writable runtime和wrapper。
+4. 事务更新Repository、Workspace和Issue。
 
 失败会清理本次创建的受管 worktree并恢复只读 runtime。`workspace_restore_cleanup_failed` 表示 cleanup不完整，必须停止重复操作并保留现场。
 
@@ -325,7 +330,7 @@ Agent失败后的预期收敛：
 2. Pi model catalog和本地 auth readiness。
 3. Issue Service/Environment Deployment是否存在且完整。
 4. Repository remote branch、state、path和 Git status。
-5. Runtime manifest和 code-server ensure。
+5. Runtime link、project-tool socket和Source API path验证。
 6. Capability frozen scope与当前 Deployment config是否一致。
 7. 查询是否超时或超过 result budget。
 
@@ -367,33 +372,43 @@ heartbeat
 
 不要直接把 `.deleting` rename/delete，除非已停止 API、备份并核对对应数据库事务结果。
 
-## code-server 排障
+## 代码浏览器与项目工具排障
 
-| 现象 | 检查 |
+| 现象或错误 | 检查 |
 | --- | --- |
-| 没有打开按钮 | `code_server_ready`、Workspace `last_error`、Repository state |
-| Explorer空 | Runtime manifest/link、state root mount、target存在性 |
-| Git为0 repositories | URL是否 `workspace=`、manifest folder和 Git auto detection |
-| Git Graph无历史 | 容器内 host-mounted Git、common dir、bare repository mount |
-| Prod/test/released可编辑 | Manifest readonly setting和 checkout/issues read-only mounts |
-| Dev不可写 | Runtime link是否指向 `workspaces`，Issue是否 active/reopened |
-| Container启动失败 | Fixed host runtime、image、runtime label、container.env权限 |
+| 没有浏览代码按钮 | Workspace `runtimeReady`、`last_error`、Repository state和runtime存在性 |
+| `source_browser_unavailable` | runtime准备是否成功，不要手工把数据库flag改为true |
+| `source_runtime_invalid` | Runtime alias是否symlink、target是否匹配DB `local_path`或受管checkout层级 |
+| `source_path_outside_repository` | 文件路径中的symlink是否逃逸Repository；保留现场调查 |
+| `source_file_binary` / `source_file_too_large` | 使用原始下载/其他受控工具，不放宽为无限 |
+| Search显示无结果但API有匹配 | provider必须通过progress逐个上报`FileMatch`；检查Repository root、literal query、case/word header和浏览器console |
+| 搜索失败/超时 | `rg`固定PATH、query范围、5秒和2 MiB预算；regex不受支持 |
+| Source Control Changes为空 | `/diff`是否为空、Repository runtime是否仍对应当前HEAD/index/working tree；不要启用本地Git扩展 |
+| Source Control Graph无提交或文件无法打开 | 检查`/history`、`/commit`和点击文件后的`/commit-file`是否成功、revision只读provider是否已在Workbench初始化前注册、branch ref和HEAD ancestry；不得回退到宿主Git命令 |
+| Agent或工单详情与Workbench错位 | 检查iframe同源、Issue key、Part矩形消息和`ResizeObserver`；桌面应与Bottom Panel/Secondary Side Bar四边完全一致 |
+| 提交历史为空/commit 404 | 当前Repository/选中文件、commit是否为当前HEAD ancestor |
+| Commit/diff 413 | 变更文件清单、选中文件或Git输出超过预算；缩小到具体文件，不提高为无限 |
+| Markdown Preview空白或浅色不可读 | 检查`markdown.api.render`预热、`extensionHostWorkerMain` worker URL、只读Markdown模型、DOMPurify输出和打包的GitHub Dark/highlight样式；Preview应为`issue-pilot.markdownPreview` Editor Pane且不存在`iframe.webview`，不启用本地extension host |
+| VS Code Workbench加载失败 | 检查`vscode.html`入口、Workbench/editor/TextMate/language/extension worker、theme静态资源、CSP和浏览器console；页面应显示明确错误而不是空白区域 |
+| Wrapper报告broker unavailable | API进程、`control/project-tools.sock` mode/owner和runtime wrapper版本 |
+| Node/Maven任务失败 | `infra/project-tools.sh status`、image digest、本地配置/缓存权限和容器输出 |
 
 命令：
 
 ```bash
-infra/code-server.sh status
-podman logs --tail 200 code-server
-podman exec code-server git --version
+infra/project-tools.sh status
+stat -c '%F %a %U:%G %n' .issue-pilot/control/project-tools.sock
+podman ps -a --filter label=io.issue-pilot.component=pi-tool
+podman ps -a --filter label=io.issue-pilot.component=application-test
 ```
 
-若宿主刚重建 checkout但容器旧 bind mount不可见，可在确认无用户依赖当前容器进程后执行 `infra/code-server.sh stop` 再 `ensure`。不要复制 `.git`。
+不要把Podman socket挂给Web/Agent客户端，不要让wrapper接受image、volume或绝对宿主路径。项目命令是Repository内不可信代码；失败后应保留worktree输出供检查。Application test容器应在300秒内自动停止；若外层测试异常退出，按`io.issue-pilot.component=application-test`标签调查并清理，不能保留长期浏览器容器。
 
 ## DMS/SLS 故障
 
 检查：
 
-- `/usr/local/sbin/aliyun`存在且 group/world不可写。
+- `infra/aliyun-cli.sh status`确认固定Alpine/Aliyun CLI image版本正确。
 - Deployment AccessKey仍有效。
 - DMS使用 `dms-enterprise ExecuteScript`、安全托管数据库、正确 `DbId/Logic/Tid`和 query permission。
 - DMS endpoint固定为 central，数据库 region不是配置字段。
@@ -466,16 +481,20 @@ git fetch --all --prune
 git checkout <reviewed-commit>
 npm ci
 infra/playwright.sh prepare
+infra/application.sh config
+infra/application.sh prepare
 npm run typecheck
 npm test
 npm run build
 npm audit --omit=dev --audit-level=high
-systemctl stop issue-pilot-api
+infra/application.sh stop # 容器部署；宿主部署改用systemctl stop issue-pilot-api
 : "创建一致 database和必要 state备份"
 : "在备份副本 dry-run migration并检查 integrity/FK"
 npm run db:migrate
-systemctl start issue-pilot-api
-infra/code-server.sh ensure
+infra/application.sh remove
+infra/application.sh start # 宿主部署改用systemctl start issue-pilot-api
+infra/application.sh status
+infra/project-tools.sh status
 ```
 
 升级后执行：
@@ -483,7 +502,7 @@ infra/code-server.sh ensure
 - 服务与网络检查。
 - Database integrity/foreign keys和业务不变量。
 - 全部 Issue Repository state检查。
-- Active/released/read-only三类 runtime和 code-server Git检查。
+- Active/released/read-only三类runtime、Source API multi-root/file/search/history/commit/diff检查。
 - Attachment mode/size/hash抽检或全检。
 - Agent replay和 `snapshot_ready`。
 - Capability catalog顺序和必要的只读 smoke query。
@@ -509,16 +528,20 @@ Code和 database必须成对回滚。旧代码不能假定能读取已经执行�
 | 现象 | 先检查 | 不要做 |
 | --- | --- | --- |
 | API启动失败 | Startup code、state root、DB结构、unmanaged/shared checkout | 删除未知目录或 bare store |
+| Application container不健康 | `infra/application.sh status/logs`、image root label、Healthcheck、UID/GID、state mount和Podman socket | 改用`--privileged`、改绝对路径或同时启动第二API |
 | Agent回到 open | `last_error`、model、Deployment、Git、runtime | 把 credential放进 prompt |
 | Issue详情慢 | 是否错误调用 stats/deep inspection | 在 GET详情增加 `du`/Git clean |
 | Workspace无法释放 | Issue/Workspace status、root layout、Git status | `rm -rf workspaces/<key>` |
 | Released dev无代码 | Local working branch ref、bare store、runtime | 从远程同名 branch兜底 |
 | Prod/test路径越界 | Policy path是否位于 Issue runtime | 直接授权 shared checkout物理 root |
-| code-server无 Git | Multi-root manifest、host Git mount、common dir | 复制 `.git` |
+| 代码浏览器不可用 | `runtimeReady`、alias symlink、Source API stable error | 改DB flag或暴露绝对路径 |
+| 项目命令不可用 | Broker socket、image、config/cache mode | 挂Podman socket给客户端 |
 | Attachment写路由404 | 使用 Issue create/edit multipart | 重新调用历史 POST/DELETE route |
 | SSE重连闪烁 | `snapshot_ready`、generation、proxy buffering | 恢复旧 `ready`握手 |
 | Capability超限 | 缩小 query/limit/time range | 静默截断或无限放宽 |
 | Config保存409 | Running/reserved Issue、引用完整性 | 直接写 SQLite绕过 transaction |
+| 用户无法切换 | `/api/users`、subject是否启用、浏览器当前subject | 修改根配置覆盖SQLite用户 |
+| 用户无法停用 | 是否为最后一名启用用户 | 删除历史subject或绕过`last_active_user` |
 
 ## 日志边界
 
@@ -536,6 +559,5 @@ Code和 database必须成对回滚。旧代码不能假定能读取已经执行�
 - `/api/config` request/response body。
 - Authorization、Cookie、proxy identity token。
 - Password、AccessKey、temporary profile。
-- Playwright credential file。
-- code-server `container.env`。
-- 敏感 capability完整结果或 Pi JSONL内容。
+- npmrc、Maven settings和package manager认证header。
+- 敏感Source/capability完整结果或Pi JSONL内容。

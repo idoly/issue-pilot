@@ -6,7 +6,6 @@ import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./conf
 const draft: DeploymentCapabilityDraft = {
   capabilities: [...CAPABILITY_KEYS],
   agent: { provider: "provider", model: "model", thinkingLevel: "medium" },
-  playwright: { baseUrl: " https://app.example.test ", username: " operator ", password: "browser-secret", credentialConfigured: false, credentialEnabled: true },
   nacos: { serverUrl: " https://nacos.example.test ", namespace: " test ", group: " DEFAULT_GROUP ", dataIds: ["orders.yaml"], username: " reader ", password: "nacos-secret", credentialConfigured: false, credentialEnabled: true },
   db: { url: " mysql://db.example.test:3306/orders ", username: " reader ", password: "db-secret", credentialConfigured: false, credentialEnabled: true },
   redis: { host: " redis.example.test ", port: 6379, username: " reader ", password: "redis-secret", database: 1, credentialConfigured: false, credentialEnabled: true },
@@ -22,7 +21,6 @@ describe("capability deployment serialization", () => {
   it("serializes every shared capability key through explicit credential replacements", () => {
     expect(Object.keys(serializeCapabilityDraft(draft))).toEqual(CAPABILITY_KEYS);
     expect(serializeCapabilityDraft(draft)).toEqual({
-      playwright: { baseUrl: "https://app.example.test", username: "operator", credentialUpdate: replace({ password: "browser-secret" }) },
       nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "reader", credentialUpdate: replace({ password: "nacos-secret" }) },
       db: { url: "mysql://db.example.test:3306/orders", username: "reader", credentialUpdate: replace({ password: "db-secret" }) },
       redis: { host: "redis.example.test", port: 6379, username: "reader", database: 1, credentialUpdate: replace({ password: "redis-secret" }) },
@@ -46,8 +44,8 @@ describe("capability deployment serialization", () => {
   });
 
   it("explicitly clears optional credentials and omits unselected capabilities", () => {
-    expect(serializeCapabilityDraft({ ...draft, capabilities: ["playwright"], playwright: { ...draft.playwright!, credentialEnabled: false } })).toEqual({
-      playwright: { baseUrl: "https://app.example.test", username: "", credentialUpdate: { mode: "clear" } },
+    expect(serializeCapabilityDraft({ ...draft, capabilities: ["nacos"], nacos: { ...draft.nacos!, username: "", credentialEnabled: false } })).toEqual({
+      nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "", credentialUpdate: { mode: "clear" } },
     });
     expect(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] })).toEqual({
       dms: { dbId: "123456", logic: true, tid: "987654", credentialUpdate: replace({ accessKeyId: " dms-key ", accessKeySecret: "dms-secret" }) },
