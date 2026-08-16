@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -55,9 +55,49 @@ test("hydrates current read-only issue runtimes from deployment branches", async
       sessionFile: path.join(issueSessionRoot(root, issue!.key), "session.jsonl"),
       workspacePath: issueRuntimeRoot(root, issue!.key),
     });
+    const [secondIssue] = await database.db.insert(issues).values({
+      key: "ISSUE-20260810-202",
+      title: "Inspect the same production deployment",
+      type: "smart_analysis",
+      serviceId: service!.id,
+      environmentId: prod!.id,
+      reporterSubject: "tester",
+    }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: secondIssue!.id, status: "ready", runtimeReady: false });
+    await database.db.insert(agentSessions).values({
+      issueId: secondIssue!.id,
+      sessionFile: path.join(issueSessionRoot(root, secondIssue!.key), "session.jsonl"),
+      workspacePath: issueRuntimeRoot(root, secondIssue!.key),
+    });
 
-    const result = await prepareReadOnlyIssueRuntimes(database.db, root);
-    assert.deepEqual(result, { prepared: [issue!.key], blocked: [] });
+    const binRoot = path.join(root, "bin");
+    const fetchLog = path.join(root, "fetch.log");
+    const gitExecutable = (await execFileAsync("sh", ["-c", "command -v git"], { encoding: "utf8" })).stdout.trim();
+    await mkdir(binRoot);
+    await writeFile(fetchLog, "", "utf8");
+    await writeFile(path.join(binRoot, "git"), `#!/bin/sh
+for argument do
+  if [ "$argument" = fetch ]; then printf 'fetch\\n' >> "$ISSUE_PILOT_FETCH_LOG"; break; fi
+done
+exec ${JSON.stringify(gitExecutable)} "$@"
+`, { mode: 0o700 });
+    const previousPath = process.env.PATH;
+    const previousFetchLog = process.env.ISSUE_PILOT_FETCH_LOG;
+    let result: Awaited<ReturnType<typeof prepareReadOnlyIssueRuntimes>>;
+    try {
+      process.env.PATH = `${binRoot}:${previousPath ?? ""}`;
+      process.env.ISSUE_PILOT_FETCH_LOG = fetchLog;
+      result = await prepareReadOnlyIssueRuntimes(database.db, root);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousFetchLog === undefined) delete process.env.ISSUE_PILOT_FETCH_LOG;
+      else process.env.ISSUE_PILOT_FETCH_LOG = previousFetchLog;
+    }
+    assert.deepEqual([...result.prepared].sort(), [issue!.key, secondIssue!.key]);
+    assert.deepEqual(result.blocked, []);
+    assert.equal((await readFile(fetchLog, "utf8")).trim().split("\n").filter(Boolean).length, 1);
+    await database.db.delete(issues).where(eq(issues.id, secondIssue!.id));
 
     const [repository] = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     const [workspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));

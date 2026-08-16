@@ -2,7 +2,7 @@ import { eq, inArray } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issues } from "../db/schema.ts";
-import { IssueProjectManager } from "./project.ts";
+import { IssueProjectManager, type ReadOnlyDeploymentPreparationCache } from "./project.ts";
 import { prepareIssueRuntimeBatch, type RuntimePreparationResult } from "./runtime.ts";
 
 export async function prepareReadOnlyIssueRuntimes(
@@ -21,9 +21,10 @@ export async function prepareReadOnlyIssueRuntimes(
     .innerJoin(agentSessions, eq(agentSessions.issueId, issues.id))
     .where(inArray(environments.kind, ["prod", "test"]));
   const project = new IssueProjectManager(database, stateRoot);
+  const preparations: ReadOnlyDeploymentPreparationCache = new Map();
   return prepareIssueRuntimeBatch(
     database,
     readOnlyIssues,
-    (issue) => project.hydrateReadOnlyRuntime(issue, issue.environmentKind as "prod" | "test"),
+    (issue) => project.hydrateReadOnlyRuntime(issue, issue.environmentKind as "prod" | "test", preparations),
   );
 }

@@ -31,6 +31,12 @@ export interface PreparedIssueProject {
 type ProjectIssue = { id: string; key: string; type: IssueType; serviceId: string; environmentId: string };
 type IssueRepository = typeof issueRepositories.$inferSelect;
 type DeploymentRepository = Awaited<ReturnType<typeof loadDeploymentRepositories>>["repositories"][number];
+interface PreparedReadOnlyDeployment {
+  urls: string[];
+  names: Map<string, string>;
+  prepared: Array<{ repository: DeploymentRepository["repository"]; checkout: PreparedWorktree }>;
+}
+export type ReadOnlyDeploymentPreparationCache = Map<string, Promise<PreparedReadOnlyDeployment>>;
 
 export interface PreparedDevelopmentConversion {
   prepared: PreparedWorktree[];
@@ -124,18 +130,32 @@ export class IssueProjectManager {
     }
   }
 
-  async hydrateReadOnlyRuntime(issue: ProjectIssue, _environmentKind: Exclude<EnvironmentKind, "dev">): Promise<string> {
-    const [{ repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
-      loadDeploymentRepositories(this.database, { serviceId: issue.serviceId, environmentId: issue.environmentId }),
-      this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
-    ]);
-    if (existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
+  private async prepareReadOnlyDeployment(input: { serviceId: string; environmentId: string }): Promise<PreparedReadOnlyDeployment> {
+    const { repositories: repositoryRows } = await loadDeploymentRepositories(this.database, input);
     const urls = repositoryRows.map(({ repository }) => repository.url);
     const names = repositoryWorkspaceNames(urls);
-    const prepared: Array<{ repository: typeof repositoryRows[number]["repository"]; checkout: PreparedWorktree }> = [];
+    const prepared: PreparedReadOnlyDeployment["prepared"] = [];
     for (const { repository, baseBranch } of repositoryRows) {
       prepared.push({ repository, checkout: await this.worktrees.prepareShared({ url: repository.url, baseBranch }) });
     }
+    return { urls, names, prepared };
+  }
+
+  async hydrateReadOnlyRuntime(
+    issue: ProjectIssue,
+    _environmentKind: Exclude<EnvironmentKind, "dev">,
+    preparations?: ReadOnlyDeploymentPreparationCache,
+  ): Promise<string> {
+    const existingRepositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+    if (existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
+
+    const preparationKey = JSON.stringify([issue.serviceId, issue.environmentId]);
+    let preparation = preparations?.get(preparationKey);
+    if (!preparation) {
+      preparation = this.prepareReadOnlyDeployment({ serviceId: issue.serviceId, environmentId: issue.environmentId });
+      preparations?.set(preparationKey, preparation);
+    }
+    const { urls, names, prepared } = await preparation;
     const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map(({ repository, checkout }) => ({ name: names.get(repository.url)!, repositoryPath: checkout.workspacePath })), "read");
     await this.database.transaction(async (transaction) => {
       const now = new Date();

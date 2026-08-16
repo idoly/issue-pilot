@@ -231,7 +231,7 @@ Runtime在临时目录完整生成后原子替换。附件不会复制或链接�
 
 - `prepare()`：Agent轮次使用，解析Deployment、准备Git、更新Repository行并生成runtime/wrapper。
 - `hydrateDevelopmentRuntime()`：API 冷启动重建 active/released dev runtime。
-- `hydrateReadOnlyRuntime()`：冷启动为已有session的prod/test Issue fetch当前基线，runtime成功生成后提交Repository/workspace行。
+- `hydrateReadOnlyRuntime()`：冷启动为已有session的prod/test Issue fetch当前基线；同一次批次按Service/Environment共享Deployment checkout准备，每个Issue仍独立校验状态、原子生成runtime并提交Repository/workspace事务。
 - `restoreDevelopmentWorkspace()`：released dev reopen 的两阶段恢复与清理。
 
 AgentEngine 只负责业务状态、session 和 prompt；Lifecycle 只负责 release/reopen policy；二者不再分别实现 Repository 准备。
