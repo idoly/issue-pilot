@@ -1,22 +1,20 @@
 import type { IssuePolicy } from "../pi/policy.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { ContainerRuntime } from "../container-runtime.ts";
-import { runAliyunCli, withAliyunCliProfile, type AliyunCliRuntime } from "./aliyun.ts";
+import type { ToolRuntime } from "../tool-runtime.ts";
+import { runAliyunCli, withAliyunCliProfile } from "./aliyun.ts";
 import { capabilityResultText, capabilityTextResult, isSlsLogstore } from "./contracts.ts";
 
 const limits = issuePilotConfig.limits.capability.sls;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type SlsRuntime = AliyunCliRuntime;
-
-export async function readSlsLogs(containers: ContainerRuntime, policy: IssuePolicy, input: {
+export async function readSlsLogs(tools: ToolRuntime, policy: IssuePolicy, input: {
   logstore: string;
   from?: number;
   to?: number;
   query?: string;
   trace_id?: string;
   limit?: number;
-}, configured: Record<string, unknown>, signal?: AbortSignal, runtime: SlsRuntime = issuePilotConfig.runtime.aliyunCli) {
+}, configured: Record<string, unknown>, signal?: AbortSignal) {
   if (!isSlsLogstore(input.logstore)) throw new Error("invalid_sls_logstore");
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
   const now = Math.floor(Date.now() / 1000);
@@ -41,7 +39,7 @@ export async function readSlsLogs(containers: ContainerRuntime, policy: IssuePol
     region: scope.region,
   }, async (profileRoot) => {
     const fetchRecords = async (line: number, offset: number): Promise<unknown[]> => {
-      const execution = await runAliyunCli(containers, profileRoot, [
+      const execution = await runAliyunCli(tools, profileRoot, [
         "sls", "GetLogs",
         "--endpoint", `${scope.region}.log.aliyuncs.com`,
         "--project", scope.project,
@@ -55,7 +53,7 @@ export async function readSlsLogs(containers: ContainerRuntime, policy: IssuePol
       ], {
         timeout: limits.executionMs,
         ...(signal ? { signal } : {}),
-      }, runtime);
+      });
       if (execution.code !== 0) throw new Error("sls_query_failed");
       let parsed: unknown;
       try { parsed = JSON.parse(execution.stdout); } catch { throw new Error("sls_query_invalid_response"); }
@@ -84,6 +82,6 @@ export async function readSlsLogs(containers: ContainerRuntime, policy: IssuePol
       possiblyIncomplete: false,
     };
     const text = capabilityResultText({ query: queryMetadata, records });
-    return capabilityTextResult(text, { provider: "aliyun-sls", ...queryMetadata, runtime: "container-cli" });
+    return capabilityTextResult(text, { provider: "aliyun-sls", ...queryMetadata });
   });
 }

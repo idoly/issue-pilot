@@ -52,9 +52,9 @@ IssueProjectManager ---- WorktreeManager ---- Git stores
         |
 SourceBrowser ---- bounded file / rg / Git reads
         |
-IssuePolicy ---- Capability tools ---- Broker ---- Protocol clients / temporary Aliyun CLI containers
+IssuePolicy ---- Capability tools ---- Broker ---- Protocol clients / ProcessToolRuntime
         |
-ProjectToolBroker ---- temporary Node / Maven containers
+ProjectToolBroker ---- ProcessToolRuntime ---- current process PATH
 
 Application test harness ---- temporary Podman Playwright container
 ```
@@ -69,14 +69,13 @@ Application test harness ---- temporary Podman Playwright container
 | `src/workspace/git.ts` | Bare store、fetch、checkout、worktree、批量 prepare/remove/rollback |
 | `src/workspace/runtime.ts` | 原子生成Issue runtime Repository链接 |
 | `src/workspace/source-browser.ts` | 按SQLite关系解析runtime、限制文件树/文件/搜索/diff读取 |
-| `src/workspace/project-tools.ts` | Unix socket授权、Issue路径校验和Node/Maven临时容器执行 |
+| `src/workspace/project-tools.ts` | Unix socket授权、Issue路径校验和Node/Maven受控执行 |
 | `src/workspace/lifecycle.ts` | 深检、统计、release、reopen 和 retention/quota maintenance |
 | `src/capabilities/registry.ts` | 配置解析、credential-free scope、tool schema 和 metadata |
 | `src/capabilities/broker.ts` | Capability allowlist、输入解析和 handler dispatch |
 | 各 capability client | 协议、scope、timeout、abort 和结果预算的最终校验 |
 | `src/serial.ts` | 通用串行原语；不定义业务锁域 |
-| `src/container.ts` | Aliyun与项目工具共同的临时容器安全argv基线；不定义业务授权 |
-| `src/container-runtime.ts` | 结构化临时容器请求的Podman与fail-closed适配；为Kubernetes Job adapter保留接口 |
+| `src/tool-runtime.ts` | 当前API进程中的命令白名单、环境收敛和调用级临时HOME |
 | `src/web/src/app/agent-stream.ts` | EventSource generation、replay、snapshot、重连和关闭状态机 |
 | `src/web/src/app/conversation.ts` | Pi/Issue event 到可见对话的纯投影 |
 
@@ -84,11 +83,13 @@ Route 不实现 Git 或外部协议。AgentEngine 不拼 Deployment Repository j
 
 ## 生产进程与容器边界
 
-生产镜像使用多阶段构建：build stage安装完整Web开发依赖并生成`src/web/dist`，runtime stage只保留API生产依赖、静态产物、migration、Git/SSH、ripgrep、curl和Podman remote client。Fastify在容器内同一个`0.0.0.0:3000`入口提供Web、`vscode.html`和API；Compose使用bridge网络且只向宿主`127.0.0.1:3000`发布，开发宿主入口仍直接监听loopback。HTML不缓存，Vite哈希资源immutable。根配置通过`infra/application-compose.mjs`投影为Compose JSON，application是唯一常驻service，固定Node/Maven/Aliyun镜像在`tools` profile中统一构建或拉取，但业务执行仍是broker创建的按请求临时容器。
+生产镜像使用多阶段构建：build stage生成`src/web/dist`并裁剪开发依赖，Maven stage提供Maven 3.9/Temurin 8，runtime stage包含API生产依赖、Node 26、Pi、Aliyun CLI、静态Web、migration、Git/SSH、ripgrep和curl。Fastify在容器内同一个`0.0.0.0:3000`入口提供Web、`vscode.html`和API；Compose使用bridge网络且只向宿主`127.0.0.1:3000`发布。根配置通过`infra/application-compose.mjs`投影为只含一个application service的Compose JSON。
 
-应用镜像在构建时把当前checkout绝对路径写入OCI label，并把代码安装到同一路径。启动脚本只把state root和运行账号所需的Pi/package manager配置按原绝对路径挂载；路径、UID/GID、镜像label或rootless Podman socket不匹配时拒绝启动。这样SQLite `local_path`、bare Git worktree metadata、runtime symlink和Podman remote volume source继续共享同一命名空间。
+应用镜像在构建时把当前checkout绝对路径写入OCI label，并把代码安装到同一路径。启动脚本只把state root和运行账号所需的Pi/package manager配置及cache按原绝对路径挂载；路径、UID/GID或镜像label不匹配时拒绝启动。这样SQLite `local_path`、bare Git worktree metadata和runtime symlink继续共享同一命名空间。
 
-应用容器使用bridge网络、只读rootfs，state是唯一主要读写mount。Podman API socket允许可信API通过同一个`ContainerRuntime`启动受限Aliyun/Node/Maven子容器，Capability executor和项目工具broker都只依赖该接口；但socket也等价于运行账号的容器控制权。由于Pi built-in `bash`与API处于同一OS身份，主应用容器不是Agent安全沙箱。Kubernetes基线通过`UnavailableContainerRuntime`稳定拒绝临时容器调用且不挂管理socket；完整迁移必须实现Job adapter并让API只持有最小RBAC。目标清单和边界见[Kubernetes演进](KUBERNETES.md)。
+API只从application容器启动，并使用唯一的`ProcessToolRuntime`。它只从镜像PATH解析`npm`、`mvn`和`aliyun`，不接受image或任意可执行文件。Broker先校验真实project/config/cache路径；执行器只收敛环境，并在调用未指定HOME时创建临时HOME并于finally清理。Node和Maven版本系列直接由Containerfile定义，不进入应用运行配置。
+
+进程执行没有调用级文件系统和cgroup隔离：npm/Maven项目脚本与API使用application容器中的同一OS身份，理论上能读取该身份可读的state、Pi和package配置。该部署只适用于可信内部Repository，不应描述为Agent sandbox；处理不可信Repository前必须另行实现进程sandbox。
 
 ## 业务状态
 
@@ -214,9 +215,9 @@ issues/<issue-key>/runtime/
     maven-project
 ```
 
-`bin`只存在于writable dev runtime。Wrapper解析真实project path，要求它位于当前Issue workspace，再通过`control/project-tools.sock`提交版本化请求。API broker从SQLite重新确认Issue、Repository alias和`local_path`，按Issue串行后启动固定官方Node 24或Maven/Temurin 8 `--rm`容器。客户端不能指定image、volume或宿主路径。
+`bin`只存在于writable dev runtime。Wrapper解析真实project path，要求它位于当前Issue workspace，再通过`control/project-tools.sock`提交版本化请求。API broker从SQLite重新确认Issue、Repository alias和`local_path`并按Issue串行。客户端不能指定可执行文件、配置路径、cache路径或宿主绝对路径。`ProcessToolRuntime`只从application大镜像PATH执行，使用镜像中的Node 26和Maven 3.9/Temurin 8。
 
-任务容器使用只读rootfs、当前UID/GID、`cap-drop ALL`、`no-new-privileges`、PID/内存/timeout/output限制；只挂当前Repository、只读npmrc或Maven settings及读写包缓存。Credential内容不进入argv、HTTP响应或日志。Node只允许`install|test|build|typecheck`，拒绝`start/dev/serve/preview`和`--watch*`，容器固定`CI=1`；Maven只允许`test|verify|package`。
+Node只允许npm `install|test|build|typecheck`，拒绝其他package manager、`start/dev/serve/preview`和`--watch*`并固定`CI=1`；Maven只允许`test|verify|package`。唯一进程执行机制保留timeout和output限制、单Repository workdir、只读挂载的npmrc/Maven settings及读写cache，但不提供调用级rootfs或PID/内存隔离；生产仅受application容器总cgroup约束。
 
 Runtime在临时目录完整生成后原子替换。附件不会复制或链接进runtime。Web代码浏览器使用`@codingame/monaco-vscode-api`启动真实VS Code Workbench；每次打开使用独立iframe生命周期，关闭时销毁该Workbench单例。Workbench通过`registerCustomView()`在Bottom Panel注册Agent View、在Secondary Side Bar注册工单详情View，并把两个原生View body的实时矩形通过同源、Issue绑定的`postMessage`上报父应用；父应用只覆盖View body，原生标题、关闭和sash resize由Workbench负责，两个View不展示最大化动作。同一个Agent会话和工单详情组件继续由父应用维护，因此SSE、草稿、表单和附件状态不复制也不重建。顶部开关与原生Part关闭动作双向同步layout visibility，隐藏时编辑器占用释放后的真实Part空间。Workbench滚动区保留VS Code原生按需显示的透明轨道；工单与Agent共享GitHub Dark scrollbar token。Agent使用覆盖整个View body的单一滚动容器，对话、队列、运行状态、输入区和底部状态按顺序处于同一滚动流，输入区和底部状态只在滚动到内容末尾时出现。窄屏隐藏原生Secondary Side Bar，工单详情由固定图标切换为受边界约束的抽屉。
 
@@ -416,14 +417,14 @@ API 启动顺序：
 
 - 应用运行在可信单机，没有内置认证。
 - 内置VS Code Workbench代码浏览器只读，不启用终端、保存、本地/Node扩展host或扩展市场；唯一Web Worker扩展宿主只运行打包的Markdown功能。Source API仍会返回内部源码，必须按敏感数据保护。
-- 宿主开发API只监听loopback；Compose只向宿主loopback发布容器端口。任何集群或外部入口都必须由认证、授权和TLS proxy保护。
+- Compose只向宿主loopback发布application容器端口。任何集群或外部入口都必须由认证、授权和TLS proxy保护。
 - 项目工具Unix socket mode为`0600`；wrapper请求中的Issue和Repository路径必须由broker按SQLite重新授权。
 - 普通工作台只读取不含 Repository URL、model 和 credential 的 `/api/catalog`；配置视图按需读取 `/api/config`，其中包含可编辑 scope 和 `credentialConfigured`，但不返回已存 password、AccessKeyId 或 AccessKeySecret。
 - `/api/config` 在一个 SQLite snapshot transaction 中读取 Service、Repository、Deployment 和 branch 关系，并为每个 Service 返回完整配置内容的 HMAC-SHA-256 opaque revision。HMAC key 每次 API 启动随机生成、不落盘；响应不能作为 credential 猜测 oracle，重启后旧表单会安全失效。
 - Service PATCH/DELETE 必须用 `If-Match` 提交该 revision。缺失返回 428，内容已变化返回 409，防止多个已打开表单按最后写入静默覆盖。
 - Service 保存对每个已选 capability 显式要求 `preserve`、`replace` 或 `clear`；API 只在内存中把该意图与当前 SQLite credential 合并，再走完整 registry 校验和事务提交。
 - Pi built-in tools 不是 OS sandbox；API/Pi 必须使用专用低权限账号。
-- Aliyun capability 每次创建临时 `0600` profile并只挂载到受限 `--rm` CLI容器，不使用 operator持久profile或宿主CLI。
+- Aliyun capability每次创建临时`0600` profile并只交给application容器内受限`aliyun dms-enterprise/sls`命令，不使用operator持久profile。
 - Playwright只由operator通过应用自测脚本启动临时容器；Service、Deployment、IssuePolicy、Pi tool和capability broker都没有Playwright入口，也不读取Deployment credential或Issue workspace。
 - DMS SQL 和 SLS query 会作为 Aliyun CLI 参数短暂出现在宿主进程列表；Credential 不进入 argv。
 

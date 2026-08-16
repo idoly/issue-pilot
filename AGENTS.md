@@ -10,7 +10,7 @@ Before changing code:
 2. Read [Development](docs/DEVELOPMENT.md) for source entry points, change recipes, tests, and review checks.
 3. Read the task-specific reference:
    - [Configuration](docs/CONFIGURATION.md) for Service, Deployment, model, and capability behavior.
-   - [Deployment](docs/DEPLOYMENT.md) for host runtime, processes, containers, proxy, and security boundaries.
+   - [Deployment](docs/DEPLOYMENT.md) for application runtime, containers, proxy, and security boundaries.
    - [Runbook](docs/RUNBOOK.md) for health checks, retention, backup, recovery, upgrades, and troubleshooting.
 
 Use `README.md` only as the product overview and quick-start entry.
@@ -175,8 +175,7 @@ For dependency, runtime, capability security, or container changes also run:
 ```bash
 npm audit --omit=dev --audit-level=high
 infra/playwright.sh status
-infra/aliyun-cli.sh status
-infra/project-tools.sh status
+infra/application.sh status
 ```
 
 For schema or real-state operations additionally verify SQLite integrity, foreign keys, file modes, repository HEAD/ref consistency, and absence of unmanaged Issue directories. Follow [Runbook](docs/RUNBOOK.md).

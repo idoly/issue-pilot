@@ -1,12 +1,10 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { applicationConfig } from "../config.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
-import type { ContainerRuntime } from "../container-runtime.ts";
+import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
@@ -34,7 +32,7 @@ export interface ApiOptions {
   databaseFile?: string;
   stateRoot?: string;
   engine?: AgentController;
-  containerRuntime?: ContainerRuntime;
+  toolRuntime?: ToolRuntime;
   logger?: boolean;
   listenHost?: string;
   modelCatalog?: AgentModelCatalog;
@@ -79,7 +77,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   try {
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
     await pruneState(stateRoot, issueKeys);
-    projectTools = options.projectTools ?? new ProjectToolBroker(database.db, stateRoot, options.containerRuntime, undefined, (error) => app.log.error(error));
+    projectTools = options.projectTools ?? new ProjectToolBroker(database.db, stateRoot, options.toolRuntime, undefined, (error) => app.log.error(error));
     await projectTools.start();
 
     const developmentRuntimes = await prepareDevelopmentIssueRuntimes(database.db, stateRoot);
@@ -93,7 +91,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const attachmentLimits = applicationConfig.limits.attachment;
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
     const events = new AgentEventBus((error) => app.log.error(error));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.containerRuntime);
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.toolRuntime);
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -173,5 +171,3 @@ export async function startApi(options: ApiOptions = {}): Promise<FastifyInstanc
   }
   return app;
 }
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void startApi();

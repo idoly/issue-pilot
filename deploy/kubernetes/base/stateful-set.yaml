@@ -32,16 +32,40 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
-      containers:
-        - name: application
-          image: localhost/issue-pilot:0.1.0-node24-bookworm
+      initContainers:
+        - name: prepare-runtime-home
+          image: localhost/issue-pilot:0.1.0-node26-bookworm
           imagePullPolicy: IfNotPresent
           command:
-            - node
-            - --experimental-strip-types
-            - src/http/production.ts
-          args:
-            - --container-runtime=unavailable
+            - /bin/sh
+            - -c
+            - |-
+              set -eu
+              install -m 0600 /package-source/npmrc /runtime-home/npmrc
+              install -m 0600 /package-source/maven-settings.xml /runtime-home/maven-settings.xml
+              install -d -m 0700 /runtime-home/pi-agent
+              cp -R /pi-source/. /runtime-home/pi-agent/
+              find /runtime-home/pi-agent -type d -exec chmod 0700 {} +
+              find /runtime-home/pi-agent -type f -exec chmod 0600 {} +
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: package-config-source
+              mountPath: /package-source
+              readOnly: true
+            - name: pi-agent-source
+              mountPath: /pi-source
+              readOnly: true
+            - name: runtime-home
+              mountPath: /runtime-home
+      containers:
+        - name: application
+          image: localhost/issue-pilot:0.1.0-node26-bookworm
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 3000
@@ -88,17 +112,42 @@ spec:
               mountPath: /opt/issue-pilot/.issue-pilot
             - name: tmp
               mountPath: /tmp
-            - name: pi-agent
+            - name: runtime-home
               mountPath: /home/issue-pilot/.pi/agent
+              subPath: pi-agent
               readOnly: true
+            - name: runtime-home
+              mountPath: /home/issue-pilot/.npmrc
+              subPath: npmrc
+              readOnly: true
+            - name: runtime-home
+              mountPath: /home/issue-pilot/.m2/settings.xml
+              subPath: maven-settings.xml
+              readOnly: true
+            - name: npm-cache
+              mountPath: /home/issue-pilot/.npm
+            - name: maven-cache
+              mountPath: /home/issue-pilot/.m2/repository
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
-        - name: pi-agent
+        - name: pi-agent-source
           secret:
             secretName: issue-pilot-pi-agent
             optional: true
+        - name: package-config-source
+          secret:
+            secretName: issue-pilot-package-config
+        - name: runtime-home
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: npm-cache
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: maven-cache
+          emptyDir:
+            sizeLimit: 5Gi
   volumeClaimTemplates:
     - metadata:
         name: state

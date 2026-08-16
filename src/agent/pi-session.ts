@@ -49,11 +49,18 @@ export async function createPrivateSessionManager(cwd: string, sessionDirectory:
   return manager;
 }
 
+type JsonMessageUpdateEvent = Extract<JsonAgentSessionEvent, { type: "message_update" }>;
+
 function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
-  if (event.type !== "message_update" || !("partial" in event.assistantMessageEvent)) return event;
+  if (event.type !== "message_update") return event as JsonAgentSessionEvent;
+  if (event.message.role !== "assistant") throw new Error("invalid_assistant_update_event");
   const assistantMessageEvent = { ...event.assistantMessageEvent };
   delete (assistantMessageEvent as { partial?: unknown }).partial;
-  return { ...event, assistantMessageEvent } as JsonAgentSessionEvent;
+  return {
+    type: "message_update",
+    usage: event.message.usage,
+    assistantMessageEvent: assistantMessageEvent as JsonMessageUpdateEvent["assistantMessageEvent"],
+  };
 }
 
 function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string, capabilityExecutor: CapabilityExecutor, executableRoot?: string): ToolDefinition<any, any, any>[] {

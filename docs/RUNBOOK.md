@@ -33,8 +33,6 @@ podman compose version
 infra/application.sh config
 infra/application.sh status
 infra/playwright.sh status
-infra/aliyun-cli.sh status
-infra/project-tools.sh status
 stat -c '%a %n' .issue-pilot/control/project-tools.sock
 ss -ltnp | rg ':3000'
 ```
@@ -42,9 +40,9 @@ ss -ltnp | rg ':3000'
 预期：
 
 - `/health` 返回 `{"ok":true}`。
-- 宿主API或Compose发布只监听loopback，主页、Workbench和API同源可达。
+- Compose发布只监听loopback，主页、Workbench和API同源可达。
 - Application image具有匹配当前绝对项目根的label和Healthcheck；容器状态符合部署方式。
-- Playwright application-test、Aliyun CLI、Node和Maven image ready，且无持久application-test或pi-tool container。
+- Playwright image ready，且无持久application-test container。
 - 项目工具socket存在且mode为`600`。
 - Workspace stats能在深检完成后返回。
 
@@ -154,13 +152,11 @@ Attachment GET会重复这些核心检查。Attachment只能随 Issue create/edi
 
 ### 正常关闭
 
-Systemd：
-
 ```bash
-systemctl stop issue-pilot-api
+infra/application.sh stop
 ```
 
-前台进程可发送 `SIGINT` 或 `SIGTERM`。
+Compose向application容器发送`SIGTERM`。
 
 关闭流程：
 
@@ -170,7 +166,7 @@ systemctl stop issue-pilot-api
 4. 尝试停止所有 in-memory Pi session。
 5. 关闭 SQLite。
 
-即使某个 session stop失败，后续资源仍会尝试关闭。等待进程完全退出后再复制数据库、移动项目或切换 release。
+即使某个 session stop失败，后续资源仍会尝试关闭。等待容器完全退出后再复制数据库、移动项目或切换release。
 
 ### 启动检查
 
@@ -391,24 +387,23 @@ heartbeat
 | Markdown Preview空白或浅色不可读 | 检查`markdown.api.render`预热、`extensionHostWorkerMain` worker URL、只读Markdown模型、DOMPurify输出和打包的GitHub Dark/highlight样式；Preview应为`issue-pilot.markdownPreview` Editor Pane且不存在`iframe.webview`，不启用本地extension host |
 | VS Code Workbench加载失败 | 检查`vscode.html`入口、Workbench/editor/TextMate/language/extension worker、theme静态资源、CSP和浏览器console；页面应显示明确错误而不是空白区域 |
 | Wrapper报告broker unavailable | API进程、`control/project-tools.sock` mode/owner和runtime wrapper版本 |
-| Node/Maven任务失败 | `infra/project-tools.sh status`、image digest、本地配置/缓存权限和容器输出 |
+| Node/Maven任务失败 | 先直接检查API所在环境的`node/npm/mvn/java`版本与PATH，再查只读配置挂载、cache权限和broker timeout |
 
 命令：
 
 ```bash
-infra/project-tools.sh status
+infra/application.sh status
 stat -c '%F %a %U:%G %n' .issue-pilot/control/project-tools.sock
-podman ps -a --filter label=io.issue-pilot.component=pi-tool
 podman ps -a --filter label=io.issue-pilot.component=application-test
 ```
 
-不要把Podman socket挂给Web/Agent客户端，不要让wrapper接受image、volume或绝对宿主路径。项目命令是Repository内不可信代码；失败后应保留worktree输出供检查。Application test容器应在300秒内自动停止；若外层测试异常退出，按`io.issue-pilot.component=application-test`标签调查并清理，不能保留长期浏览器容器。
+不要让wrapper接受可执行文件、配置路径、cache路径或绝对宿主路径。项目命令会以application容器中的API身份执行Repository脚本，只适用于可信代码，失败后应保留worktree输出供检查。Application test容器应在300秒内自动停止；若外层测试异常退出，按`io.issue-pilot.component=application-test`标签调查并清理，不能保留长期浏览器容器。
 
 ## DMS/SLS 故障
 
 检查：
 
-- `infra/aliyun-cli.sh status`确认固定Alpine/Aliyun CLI image版本正确。
+- 用`infra/application.sh status`确认application镜像和容器状态。
 - Deployment AccessKey仍有效。
 - DMS使用 `dms-enterprise ExecuteScript`、安全托管数据库、正确 `DbId/Logic/Tid`和 query permission。
 - DMS endpoint固定为 central，数据库 region不是配置字段。
@@ -416,7 +411,7 @@ podman ps -a --filter label=io.issue-pilot.component=application-test
 - 查询符合 read-only/limit/time-range contract。
 - Temp profile在调用结束后已删除。
 
-不要运行依赖 operator持久 Aliyun profile的修复，也不要把 AccessKey打印到日志或 Issue。DMS SQL/SLS query会短暂出现在宿主 argv，这是当前 CLI方案的已知边界。
+不要运行依赖operator持久Aliyun profile的修复，也不要把AccessKey打印到日志或Issue。DMS SQL/SLS query会短暂出现在API所在环境的进程参数中，这是当前CLI方案的已知边界。
 
 ## 一致备份
 
@@ -434,7 +429,7 @@ Database、Attachment、Pi JSONL、bare Git和 backup都可能包含 credential�
 示例：
 
 ```bash
-systemctl stop issue-pilot-api
+infra/application.sh stop
 state_root=.issue-pilot
 stamp=$(date +%Y%m%d%H%M%S)
 backup="$state_root/backups/$stamp"
@@ -487,14 +482,13 @@ npm run typecheck
 npm test
 npm run build
 npm audit --omit=dev --audit-level=high
-infra/application.sh stop # 容器部署；宿主部署改用systemctl stop issue-pilot-api
+infra/application.sh stop
 : "创建一致 database和必要 state备份"
 : "在备份副本 dry-run migration并检查 integrity/FK"
 npm run db:migrate
 infra/application.sh remove
-infra/application.sh start # 宿主部署改用systemctl start issue-pilot-api
+infra/application.sh start
 infra/application.sh status
-infra/project-tools.sh status
 ```
 
 升级后执行：
@@ -528,14 +522,14 @@ Code和 database必须成对回滚。旧代码不能假定能读取已经执行�
 | 现象 | 先检查 | 不要做 |
 | --- | --- | --- |
 | API启动失败 | Startup code、state root、DB结构、unmanaged/shared checkout | 删除未知目录或 bare store |
-| Application container不健康 | `infra/application.sh status/logs`、image root label、Healthcheck、UID/GID、state mount和Podman socket | 改用`--privileged`、改绝对路径或同时启动第二API |
+| Application container不健康 | `infra/application.sh status/logs`、image root label、内置工具版本、Healthcheck、UID/GID和state mount | 改用`--privileged`、挂Podman socket、改绝对路径或同时启动第二API |
 | Agent回到 open | `last_error`、model、Deployment、Git、runtime | 把 credential放进 prompt |
 | Issue详情慢 | 是否错误调用 stats/deep inspection | 在 GET详情增加 `du`/Git clean |
 | Workspace无法释放 | Issue/Workspace status、root layout、Git status | `rm -rf workspaces/<key>` |
 | Released dev无代码 | Local working branch ref、bare store、runtime | 从远程同名 branch兜底 |
 | Prod/test路径越界 | Policy path是否位于 Issue runtime | 直接授权 shared checkout物理 root |
 | 代码浏览器不可用 | `runtimeReady`、alias symlink、Source API stable error | 改DB flag或暴露绝对路径 |
-| 项目命令不可用 | Broker socket、image、config/cache mode | 挂Podman socket给客户端 |
+| 项目命令不可用 | Broker socket、application镜像PATH、内置工具版本、config/cache mode | 让wrapper接受任意命令或绝对宿主路径 |
 | Attachment写路由404 | 使用 Issue create/edit multipart | 重新调用历史 POST/DELETE route |
 | SSE重连闪烁 | `snapshot_ready`、generation、proxy buffering | 恢复旧 `ready`握手 |
 | Capability超限 | 缩小 query/limit/time range | 静默截断或无限放宽 |

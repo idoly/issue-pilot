@@ -3,38 +3,31 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { PodmanContainerRuntime } from "../../src/container-runtime.ts";
+import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { readSlsLogs } from "../../src/capabilities/sls.ts";
 import type { IssuePolicy } from "../../src/pi/policy.ts";
 
-test("returns complete SLS records through a private Aliyun CLI container", async () => {
-  const runtime = issuePilotConfig.runtime.aliyunCli;
+test("returns complete SLS records through the process Aliyun CLI", async () => {
   const calls: Array<{ command: string; args: string[]; cliArgs: string[]; options: CommandExecutionOptions; profile: Record<string, any> }> = [];
   let responseRecords: unknown | ((args: string[]) => unknown) = [{ __time__: 1_700_000_000, message: "ready", password: "log-secret" }];
   const executor: CommandExecutor = {
     async execute(command: string, args: string[], options: CommandExecutionOptions = {}) {
-      const imageIndex = args.indexOf(runtime.image);
-      assert.ok(imageIndex > 0);
-      const volume = args[args.indexOf("--volume") + 1]!;
-      const suffix = ":/home/aliyun:ro,Z";
-      assert.ok(volume.endsWith(suffix));
-      const profileRoot = volume.slice(0, -suffix.length);
+      const profileRoot = options.environment!.HOME!;
       const profile = JSON.parse(await readFile(join(profileRoot, ".aliyun", "config.json"), "utf8"));
-      const cliArgs = args.slice(imageIndex + 1);
+      const cliArgs = args;
       calls.push({ command, args, cliArgs, options, profile });
       const response = typeof responseRecords === "function" ? responseRecords(cliArgs) : responseRecords;
       return { code: 0, stdout: JSON.stringify(response), stderr: "", killed: false };
     },
   };
-  const containers = new PodmanContainerRuntime(executor);
+  const tools = new ProcessToolRuntime(executor);
   const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
   const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-  const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(containers, policy, input, configured, undefined, runtime);
+  const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(tools, policy, input, configured);
   const output = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600, query: "level:ERROR", limit: 20 });
-  assert.equal(calls[0]!.command, "podman");
-  assert.equal(calls[0]!.options.environment, undefined);
+  assert.equal(calls[0]!.command, "aliyun");
+  assert.equal(calls[0]!.options.environment!.ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP, "true");
   assert.doesNotMatch(JSON.stringify({ args: calls[0]!.args, options: calls[0]!.options }), /fixture-key|fixture-secret/);
   assert.deepEqual({ region_id: calls[0]!.profile.profiles[0].region_id, output_format: calls[0]!.profile.profiles[0].output_format }, { region_id: "cn-test", output_format: "json" });
   assert.deepEqual(calls[0]!.cliArgs, ["sls", "GetLogs", "--endpoint", "cn-test.log.aliyuncs.com", "--project", "srm-test", "--logstore", "application_log", "--from", "1700000000", "--to", "1700003600", "--query", "level:ERROR", "--line", "20", "--offset", "0", "--reverse", "true"]);
@@ -81,5 +74,4 @@ test("returns complete SLS records through a private Aliyun CLI container", asyn
   const probeArgs = calls.at(-1)!.cliArgs;
   assert.equal(probeArgs[probeArgs.indexOf("--line") + 1], "1");
   assert.equal(probeArgs[probeArgs.indexOf("--offset") + 1], "2");
-  assert.equal(output.details.runtime, "container-cli");
 });

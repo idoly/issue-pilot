@@ -1,14 +1,14 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { ContainerRuntime } from "../container-runtime.ts";
+import type { ToolRuntime } from "../tool-runtime.ts";
 import { isDmsDatabaseId, isDmsTenantId } from "../domain/contracts.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
-import { runAliyunCli, withAliyunCliProfile, type AliyunCliRuntime } from "./aliyun.ts";
+import { runAliyunCli, withAliyunCliProfile } from "./aliyun.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
 import { validateReadOnlySql } from "./sql.ts";
 
 const limits = issuePilotConfig.limits.capability.dms;
 
-interface DmsRuntime extends AliyunCliRuntime {
+interface DmsRuntime {
   endpoint: string;
   cliRegion: string;
 }
@@ -103,12 +103,12 @@ function parseDmsResponse(stdout: string): { requestId: string; result: DmsScrip
 }
 
 export async function queryDms(
-  containers: ContainerRuntime,
+  tools: ToolRuntime,
   policy: IssuePolicy,
   input: { statement: string },
   configured: Record<string, unknown>,
   signal?: AbortSignal,
-  runtime: DmsRuntime = { ...issuePilotConfig.runtime.aliyunCli, ...issuePilotConfig.runtime.dms },
+  runtime: DmsRuntime = issuePilotConfig.runtime.dms,
 ) {
   const statement = validateDmsQuery(input.statement);
   const scope = policy.service.dms;
@@ -131,14 +131,14 @@ export async function queryDms(
       "--endpoint", runtime.endpoint,
       "--secure",
     ];
-    const execution = await runAliyunCli(containers, profileRoot, args, {
+    const execution = await runAliyunCli(tools, profileRoot, args, {
       timeout: limits.executionMs,
       ...(signal ? { signal } : {}),
-    }, runtime);
+    });
     if (execution.killed || execution.code !== 0) throw new Error("dms_query_failed");
     const { requestId, result } = parseDmsResponse(execution.stdout);
     const query = { dbId: scope.dbId, logic: scope.logic, ...(scope.tid === undefined ? {} : { tid: scope.tid }), returnedRows: result.RowCount, possiblyIncomplete: false };
     const text = capabilityResultText({ query, columns: result.ColumnNames, rows: result.Rows });
-    return capabilityTextResult(text, { provider: "aliyun-dms", deploymentId: scope.deploymentId, requestId, ...query, runtime: "container-cli" });
+    return capabilityTextResult(text, { provider: "aliyun-dms", deploymentId: scope.deploymentId, requestId, ...query });
   });
 }

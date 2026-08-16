@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
-import { PodmanContainerRuntime } from "../../src/container-runtime.ts";
+import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
@@ -53,28 +53,29 @@ async function fixture() {
     writeFile(mavenSettings, "<settings><servers><server><password>fixture-secret</password></server></servers></settings>\n", { mode: 0o600 }),
   ]);
   const runtime: ProjectToolRuntime = {
-    node: { image: "node-image@sha256:fixture", npmConfig, npmCache },
-    maven: { image: "maven-image@sha256:fixture", settings: mavenSettings, repository: mavenRepository },
-    containerPids: 32, containerMemory: "512m", executionMs: 30_000,
+    node: { npmConfig, npmCache },
+    maven: { settings: mavenSettings, repository: mavenRepository },
+    executionMs: 30_000,
   };
   return { root, database, issue: issue!, repository, runtime };
 }
 
-test("runs Agent and Code browser project wrappers through the scoped container broker", async () => {
+test("runs Agent and Code browser project wrappers through the scoped process broker", async () => {
   const value = await fixture();
-  const calls: Array<{ command: string; args: string[]; options: CommandExecutionOptions }> = [];
+  const calls: Array<{ command: string; args: string[]; options: CommandExecutionOptions; config: string }> = [];
   const executor: CommandExecutor = {
     async execute(command, args, options = {}) {
-      calls.push({ command, args, options });
-      return { code: 0, stdout: args.includes(value.runtime.node.image) ? "node-ok\n" : "maven-ok\n", stderr: "", killed: false };
+      const configPath = command === "npm" ? options.environment!.NPM_CONFIG_USERCONFIG! : args[args.indexOf("--settings") + 1]!;
+      calls.push({ command, args, options, config: await readFile(configPath, "utf8") });
+      return { code: 0, stdout: command === "npm" ? "node-ok\n" : "maven-ok\n", stderr: "", killed: false };
     },
   };
-  const containers = new PodmanContainerRuntime(executor);
-  const broker = new ProjectToolBroker(value.database.db, value.root, containers, value.runtime);
+  const tools = new ProcessToolRuntime(executor);
+  const broker = new ProjectToolBroker(value.database.db, value.root, tools, value.runtime);
   try {
     await broker.start();
     assert.equal((await stat(broker.socketPath)).mode & 0o777, 0o600);
-    const competing = new ProjectToolBroker(value.database.db, value.root, containers, value.runtime);
+    const competing = new ProjectToolBroker(value.database.db, value.root, tools, value.runtime);
     await assert.rejects(competing.start(), /project_tool_broker_already_running/);
     await competing.close();
     assert.equal((await stat(broker.socketPath)).mode & 0o777, 0o600);
@@ -84,21 +85,24 @@ test("runs Agent and Code browser project wrappers through the scoped container 
     const maven = await execFileAsync(path.join(bin, "maven-project"), [value.repository, "verify", "-DskipTests"]);
     assert.equal(maven.stdout, "maven-ok\n");
 
-    assert.equal(calls[0]!.command, "podman");
-    for (const required of ["--rm", "--read-only", "--network", "host", "--userns", "keep-id", "--pids-limit", "32", "--memory", "512m", "CI=1"]) assert.ok(calls[0]!.args.includes(required));
-    assert.ok(calls[0]!.args.includes(`${value.repository}:/workspace:rw,z`));
-    assert.ok(calls[0]!.args.includes(`${value.runtime.node.npmConfig}:/run/issue-pilot/npmrc:ro`));
-    assert.ok(calls[0]!.args.includes(`${value.runtime.node.npmCache}:/cache/npm:rw,z`));
-    assert.deepEqual(calls[0]!.args.slice(calls[0]!.args.indexOf(value.runtime.node.image) + 1), ["npm", "run", "test", "--", "--runInBand"]);
-    assert.doesNotMatch(JSON.stringify(calls[0]), /fixture-secret/);
+    assert.equal(calls[0]!.command, "npm");
+    assert.deepEqual(calls[0]!.args, ["run", "test", "--", "--runInBand"]);
+    assert.equal(calls[0]!.options.cwd, value.repository);
+    assert.equal(calls[0]!.options.environment!.CI, "1");
+    assert.equal(calls[0]!.options.environment!.NPM_CONFIG_CACHE, value.runtime.node.npmCache);
+    assert.match(calls[0]!.config, /fixture-secret/);
+    assert.doesNotMatch(JSON.stringify({ command: calls[0]!.command, args: calls[0]!.args, options: calls[0]!.options }), /fixture-secret/);
 
-    assert.ok(calls[1]!.args.includes(`${value.runtime.maven.settings}:/run/issue-pilot/maven-settings.xml:ro`));
-    assert.ok(calls[1]!.args.includes(`${value.runtime.maven.repository}:/cache/maven:rw,z`));
-    assert.deepEqual(calls[1]!.args.slice(calls[1]!.args.indexOf(value.runtime.maven.image) + 1), ["mvn", "--batch-mode", "--no-transfer-progress", "--settings", "/run/issue-pilot/maven-settings.xml", "-Dmaven.repo.local=/cache/maven", "verify", "-DskipTests"]);
-    assert.doesNotMatch(JSON.stringify(calls[1]), /fixture-secret/);
+    assert.equal(calls[1]!.command, "mvn");
+    assert.deepEqual(calls[1]!.args.slice(0, 3), ["--batch-mode", "--no-transfer-progress", "--settings"]);
+    assert.equal(calls[1]!.args[3], value.runtime.maven.settings);
+    assert.equal(calls[1]!.args[4], `-Dmaven.repo.local=${value.runtime.maven.repository}`);
+    assert.deepEqual(calls[1]!.args.slice(5), ["verify", "-DskipTests"]);
+    assert.match(calls[1]!.config, /fixture-secret/);
+    assert.doesNotMatch(JSON.stringify({ command: calls[1]!.command, args: calls[1]!.args, options: calls[1]!.options }), /fixture-secret/);
 
     await broker.run({ tool: "node", issueKey: value.issue.key, repository: "application", project: "", action: "install", args: [] });
-    assert.deepEqual(calls[2]!.args.slice(calls[2]!.args.indexOf(value.runtime.node.image) + 1), ["npm", "ci"]);
+    assert.deepEqual(calls[2]!.args, ["ci"]);
     for (const action of ["start", "dev", "serve", "preview"]) {
       await assert.rejects(broker.run({ tool: "node", issueKey: value.issue.key, repository: "application", project: "", action, args: [] }), /invalid_project_tool_action/);
     }
@@ -117,7 +121,7 @@ test("runs Agent and Code browser project wrappers through the scoped container 
   await assert.rejects(stat(path.join(value.root, "control", "project-tools.sock")), /ENOENT/);
 });
 
-test("serializes project containers for the same Issue", async () => {
+test("serializes project processes for the same Issue", async () => {
   const value = await fixture();
   let active = 0;
   let maximum = 0;
@@ -132,7 +136,7 @@ test("serializes project containers for the same Issue", async () => {
       return { code: 0, stdout: "", stderr: "", killed: false };
     },
   };
-  const broker = new ProjectToolBroker(value.database.db, value.root, new PodmanContainerRuntime(executor), value.runtime);
+  const broker = new ProjectToolBroker(value.database.db, value.root, new ProcessToolRuntime(executor), value.runtime);
   const request = { tool: "node" as const, issueKey: value.issue.key, repository: "application", project: "", action: "test", args: [] };
   try {
     const first = broker.run(request);

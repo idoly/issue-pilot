@@ -32,8 +32,8 @@ describe("Agent conversation state", () => {
 
   it("assembles Pi streaming events and replaces them with the final message", () => {
     let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
-    entries = applyAgentEvent(entries, event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
-    entries = applyAgentEvent(entries, event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "完成" } }));
+    entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
+    entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "完成" } }));
     expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查完成" }], streaming: true }]);
 
     entries = applyAgentEvent(entries, event({ type: "message_end", message: assistant([{ type: "text", text: "检查已完成" }], "stop") }));
@@ -264,8 +264,8 @@ describe("Agent conversation state", () => {
     source.emit("open");
     source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
     source.emit("message", event({ type: "message_start", message: assistant([], "pending") }, "stream-start"));
-    source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "First " } }, "stream-first"));
-    source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "second" } }, "stream-second"));
+    source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "First " } }, "stream-first"));
+    source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "second" } }, "stream-second"));
 
     expect(requestFrame).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("First second")).toBeNull();
@@ -276,7 +276,7 @@ describe("Agent conversation state", () => {
     expect(view.container.querySelector(".agent-message.assistant .agent-streaming-block")?.textContent).toBe("First second");
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")).toBeNull();
 
-    source.emit("message", event({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " queued" } }, "stream-queued"));
+    source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " queued" } }, "stream-queued"));
     expect(requestFrame).toHaveBeenCalledTimes(2);
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Final response" }], "stop") }, "stream-final"));
     await waitFor(() => expect(screen.getByText("Final response")).toBeTruthy());

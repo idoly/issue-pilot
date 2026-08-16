@@ -18,28 +18,13 @@ const mounts = [
   `${stateRoot}:${stateRoot}:rw,z`,
   `${path.join(home, ".pi", "agent")}:${path.join(home, ".pi", "agent")}:ro,z`,
   `${hostPath(runtime.projectTools.node.npmConfig)}:${hostPath(runtime.projectTools.node.npmConfig)}:ro,z`,
-  `${hostPath(runtime.projectTools.node.npmCache)}:${hostPath(runtime.projectTools.node.npmCache)}:ro,z`,
+  `${hostPath(runtime.projectTools.node.npmCache)}:${hostPath(runtime.projectTools.node.npmCache)}:rw,z`,
   `${hostPath(runtime.projectTools.maven.settings)}:${hostPath(runtime.projectTools.maven.settings)}:ro,z`,
-  `${hostPath(runtime.projectTools.maven.repository)}:${hostPath(runtime.projectTools.maven.repository)}:ro,z`,
-  `${application.podmanSocket}:/run/podman/podman.sock:rw`,
+  `${hostPath(runtime.projectTools.maven.repository)}:${hostPath(runtime.projectTools.maven.repository)}:rw,z`,
 ];
 for (const optional of [path.join(home, ".gitconfig"), path.join(home, ".ssh")]) {
   if (fs.existsSync(optional)) mounts.push(`${optional}:${optional}:ro,z`);
 }
-
-const restrictedToolService = (image, command) => ({
-  profiles: ["tools"],
-  image,
-  command,
-  network_mode: "none",
-  read_only: true,
-  security_opt: ["no-new-privileges"],
-  cap_drop: ["ALL"],
-  user: `${runtime.containerUser.uid}:${runtime.containerUser.gid}`,
-  pids_limit: runtime.projectTools.containerPids,
-  mem_limit: runtime.projectTools.containerMemory,
-  tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"],
-});
 
 const compose = {
   name: application.name,
@@ -51,11 +36,8 @@ const compose = {
         context: root,
         dockerfile: path.join(root, "infra", "images", "application", "Containerfile"),
         args: {
-          NODE_IMAGE: runtime.projectTools.node.image,
           APP_ROOT: root,
           TARGETARCH: architecture,
-          PODMAN_REMOTE_VERSION: application.podmanRemote.version,
-          PODMAN_REMOTE_SHA256: application.podmanRemote[`${architecture}Sha256`],
         },
       },
       labels: { "io.issue-pilot.component": "application" },
@@ -73,19 +55,6 @@ const compose = {
       volumes: mounts,
       tmpfs: ["/tmp:rw,nosuid,nodev,size=1g"],
       working_dir: root,
-    },
-    "node-tool": restrictedToolService(runtime.projectTools.node.image, ["node", "--version"]),
-    "maven-tool": restrictedToolService(runtime.projectTools.maven.image, ["mvn", "--version"]),
-    "aliyun-tool": {
-      ...restrictedToolService(runtime.aliyunCli.image, ["version"]),
-      build: {
-        context: path.join(root, "infra", "images", "aliyun-cli"),
-        dockerfile: path.join(root, "infra", "images", "aliyun-cli", "Dockerfile"),
-        args: { TARGETARCH: architecture, ALIYUN_CLI_VERSION: runtime.aliyunCli.version },
-      },
-      user: "65532:65532",
-      pids_limit: runtime.aliyunCli.containerPids,
-      mem_limit: runtime.aliyunCli.containerMemory,
     },
   },
 };

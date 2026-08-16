@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { prepareProjectWrappers } from "../../src/workspace/project-wrappers.ts";
 import { issueRuntimeRoot } from "../../src/workspace/state.ts";
 
-test("prepares Issue-scoped project wrappers for the container broker", async () => {
+test("prepares Issue-scoped project wrappers for the application broker", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pi-workspace-"));
   try {
     const runtimeRoot = issueRuntimeRoot(root, "ISSUE-20260810-001");

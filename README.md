@@ -11,8 +11,8 @@ Issue Pilot 是一个运行在可信单机上的本地优先 AI 工单系统。�
 - Dev 使用 Issue 专属本地分支和 worktree，可编辑、测试和构建。
 - Released dev 在释放大体积 worktree 后，仍可从本地 Issue branch 展示只读快照并恢复开发。
 - 通过内置VS Code Workbench只读浏览multi-root Repository，使用Explorer、Editor Groups/Tabs、Search、带提交图的Source Control和Markdown Preview；Agent会话嵌入Bottom Panel，工单详情显示在Secondary Side Bar。
-- Dev 项目命令通过 Unix socket broker 在固定官方 Node 24 或 Maven/Temurin 8 临时容器中运行。
-- 生产镜像把Fastify、静态Web和只读Workbench收敛为单一入口；Compose只向宿主loopback发布，构建后不携带Web工具链。
+- Dev项目命令通过Unix socket broker授权并由application容器内唯一的`ProcessToolRuntime`执行，使用镜像中的Node 26、Maven 3.9/Temurin 8和Aliyun CLI。
+- 生产大镜像把Fastify、Pi、Node、Maven/JDK、Aliyun CLI、静态Web和只读Workbench收敛为单一入口；Compose只向宿主loopback发布，不挂Podman socket或启动工具子容器。
 - 提供SQLite用户管理页面，支持添加、编辑和启停用户并保留历史署名。
 - 提供 Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 只读 Agent capability。
 - 在严格验证状态、Git cleanliness 和目录所有权后自动回收 resolved dev workspace。
@@ -40,28 +40,27 @@ IssueProjectManager ---- bare Git / worktree / checkout / runtime
     |
 Source browser ---- bounded file / rg / Git reads
     |
-Capability broker ---- bounded protocol clients / temporary Aliyun CLI containers
+Capability broker ---- bounded protocol clients / ProcessToolRuntime
 
+Project tool broker ---- ProcessToolRuntime ---- current process PATH
 Application test harness ---- temporary Playwright container
-Project tool broker ---- temporary Node / Maven containers
 ```
 
 详细状态模型与所有权见 [架构说明](docs/ARCHITECTURE.md)。
 
 ## 快速开始
 
-宿主机需要项目约定的 Node.js、Pi、Git、ripgrep、curl、base64 和 Podman。目标项目的 Node、Maven和Java以及DMS/SLS所需Aliyun CLI使用受管容器image；Playwright容器只用于Issue Pilot自身浏览器验收，不属于Agent capability。宿主不安装目标项目工具链或Aliyun CLI。固定路径和首次检查见 [部署说明](docs/DEPLOYMENT.md)。
+宿主只需要项目构建使用的Node.js/npm、Podman和Compose provider。API、Pi、Git、ripgrep、curl、Node/npm、Maven/JDK和Aliyun CLI全部由application大镜像提供；容器不要求Podman API socket，也不启动工具子容器。Playwright容器只用于Operator浏览器验收。构建和首次检查见[部署说明](docs/DEPLOYMENT.md)。
 
 ```bash
 npm ci
 infra/playwright.sh prepare
-infra/aliyun-cli.sh prepare
-infra/project-tools.sh prepare
-npm run db:migrate
+infra/application.sh config
+infra/application.sh prepare
 npm run server
 ```
 
-另一个终端启动 Web：
+application容器已同源提供Web。前端迭代时可在另一个终端启动Vite：
 
 ```bash
 npm run dev:web
@@ -74,7 +73,7 @@ npm run dev:web
 | Vite Web | <http://127.0.0.1:4173/> |
 | API | <http://127.0.0.1:3000/> |
 
-生产构建由Fastify在`http://127.0.0.1:3000/`同源提供Web、Workbench和API。生产使用`podman compose`统一管理application及Node/Maven/Aliyun工具镜像；只有application常驻，工具仍按请求临时运行。准备命令为：
+生产构建由Fastify在`http://127.0.0.1:3000/`同源提供Web、Workbench和API。生产Compose只管理一个application大容器，项目工具和Aliyun CLI按请求在容器内启动受控子进程。准备命令为：
 
 ```bash
 infra/application.sh config
@@ -82,7 +81,7 @@ infra/application.sh prepare
 infra/application.sh status
 ```
 
-生产切换前必须按[部署说明](docs/DEPLOYMENT.md#生产应用容器)停止现有API、备份并启用rootless Podman API socket；不要在当前API仍运行时直接执行`start`。API启动也会自动执行未应用的数据库migration。首次进入Web后，先创建Service、Repository和至少一个Deployment，再创建Issue。
+生产切换前必须按[部署说明](docs/DEPLOYMENT.md#生产应用容器)停止现有API并备份；不需要启用rootless Podman API socket。不要在当前API仍运行时直接执行`start`。API启动也会自动执行未应用的数据库migration。首次进入Web后，先创建Service、Repository和至少一个Deployment，再创建Issue。
 
 ## 配置
 
@@ -123,10 +122,10 @@ Issue Pilot 没有内置认证。右上角用户切换和 `X-Issue-Pilot-Subject
 
 生产部署必须满足：
 
-- 宿主开发API只监听loopback；Compose只向宿主loopback发布生产容器端口。
+- Compose只向宿主loopback发布application容器端口。
 - Web和API由同机TLS + authentication/authorization proxy保护。
 - API/Pi 使用专用低权限宿主账号，不能以 root 运行。
-- 应用容器挂载的Podman API socket等同于该账号的容器控制权；它只属于可信API进程，不构成Agent sandbox。
+- 项目脚本与API在application容器中使用同一OS身份和可读state；只适用于可信内部Repository，不构成Agent sandbox。
 - `/api/config` 不返回已存 credential，但仍包含内部 Repository、model 和 capability scope；Service 写请求可能携带新 credential，配置路由必须严格授权且不得记录 body。
 - Credential 不进入 IssuePolicy、Agent prompt 或 tool input；完整 Deployment config 只保留在 API session 闭包中。
 - Capability 查询结果会发送给 Agent，并写入该 Issue 的 Pi JSONL；结果本身可能包含敏感业务数据。
@@ -166,7 +165,7 @@ git diff --check
 | [架构说明](docs/ARCHITECTURE.md) | 状态、所有权、Agent/Git/runtime、并发和安全不变量 |
 | [配置说明](docs/CONFIGURATION.md) | Service、Deployment、model 和 capability 字段 |
 | [部署说明](docs/DEPLOYMENT.md) | 宿主依赖、进程、容器、代理和首次验收 |
-| [Kubernetes基线](docs/KUBERNETES.md) | `deploy/kubernetes/base`、单副本StatefulSet、PVC和Job runner边界 |
+| [Kubernetes基线](docs/KUBERNETES.md) | 单大容器、单副本StatefulSet、PVC、Secret和恢复边界 |
 | [开发指南](docs/DEVELOPMENT.md) | 源码边界、改动方法、测试和 review checklist |
 | [运维手册](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障处理 |
 | [Agent Guide](AGENTS.md) | Coding Agent 的状态保护和完成标准 |

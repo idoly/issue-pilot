@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createCapabilityExecutor, executeCapability } from "../../src/capabilities/broker.ts";
-import { UnavailableContainerRuntime } from "../../src/container-runtime.ts";
+import type { ToolRuntime } from "../../src/tool-runtime.ts";
 import { createIssuePolicy } from "../../src/pi/policy.ts";
 
 const policy = createIssuePolicy({
@@ -26,11 +26,12 @@ const policy = createIssuePolicy({
   },
 });
 
-test("injects the deployment container runtime into Aliyun capabilities", async () => {
-  const execute = createCapabilityExecutor(new UnavailableContainerRuntime());
+test("injects the selected tool runtime into Aliyun capabilities", async () => {
+  const unavailable: ToolRuntime = { run: () => Promise.reject(new Error("tool_runtime_unavailable")) };
+  const execute = createCapabilityExecutor(unavailable);
   await assert.rejects(execute(policy, {
     dms: { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false },
-  }, "dms", { statement: "SELECT 1 LIMIT 1" }), /container_runtime_unavailable/);
+  }, "dms", { statement: "SELECT 1 LIMIT 1" }), /tool_runtime_unavailable/);
 });
 
 test("validates capability input at the broker execution boundary", async () => {

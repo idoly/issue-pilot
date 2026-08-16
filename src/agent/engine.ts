@@ -7,7 +7,7 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { createCapabilityExecutor } from "../capabilities/broker.ts";
-import { localContainerRuntime, type ContainerRuntime } from "../container-runtime.ts";
+import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
@@ -63,14 +63,14 @@ export class AgentEngine implements AgentController {
     stateRoot = ".issue-pilot",
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
-    containers: ContainerRuntime = localContainerRuntime,
+    tools: ToolRuntime = processToolRuntime,
   ) {
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
     this.publish = publish;
     this.onError = onError;
-    this.piRuntime = new PiSessionRuntime(undefined, createCapabilityExecutor(containers));
+    this.piRuntime = new PiSessionRuntime(undefined, createCapabilityExecutor(tools));
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {

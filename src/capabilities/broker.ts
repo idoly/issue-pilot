@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 
-import { localContainerRuntime, type ContainerRuntime } from "../container-runtime.ts";
+import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 import type { CapabilityName } from "../domain/contracts.ts";
 import type { IssuePolicy } from "../pi/policy.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
@@ -48,7 +48,7 @@ function parseCapabilityInput<Key extends keyof CapabilityInputs>(capability: Ke
 type CapabilityHandler = (policy: IssuePolicy, config: Record<string, unknown>, input: unknown, signal?: AbortSignal) => Promise<unknown>;
 export type CapabilityExecutor = (policy: IssuePolicy, deploymentConfig: Record<string, unknown>, capability: CapabilityName, input: unknown, signal?: AbortSignal) => Promise<unknown>;
 
-export function createCapabilityExecutor(containers: ContainerRuntime): CapabilityExecutor {
+export function createCapabilityExecutor(tools: ToolRuntime): CapabilityExecutor {
   const handlers: Record<CapabilityName, CapabilityHandler> = {
     nacos: async (policy, config, _input, signal) => {
       const scope = policy.service.nacos;
@@ -62,8 +62,8 @@ export function createCapabilityExecutor(containers: ContainerRuntime): Capabili
     redis: (policy, config, input, signal) => readRedis(policy, config, input as CapabilityInputs["redis"], signal),
     mq: (policy, config, input, signal) => readRabbitMq(policy, config, input as CapabilityInputs["mq"], signal),
     es: (policy, config, input, signal) => readElasticsearch(policy, config, input as CapabilityInputs["es"], signal),
-    dms: (policy, config, input, signal) => queryDms(containers, policy, input as CapabilityInputs["dms"], config, signal),
-    sls: (policy, config, input, signal) => readSlsLogs(containers, policy, input as CapabilityInputs["sls"], config, signal),
+    dms: (policy, config, input, signal) => queryDms(tools, policy, input as CapabilityInputs["dms"], config, signal),
+    sls: (policy, config, input, signal) => readSlsLogs(tools, policy, input as CapabilityInputs["sls"], config, signal),
   };
   return async (policy, deploymentConfig, capability, input, signal) => {
     if (!policy.service.capabilities.includes(capability)) throw new Error("capability_not_available");
@@ -72,4 +72,4 @@ export function createCapabilityExecutor(containers: ContainerRuntime): Capabili
   };
 }
 
-export const executeCapability = createCapabilityExecutor(localContainerRuntime);
+export const executeCapability = createCapabilityExecutor(processToolRuntime);

@@ -24,24 +24,25 @@ git status --short
 
 需要手工隔离服务器时使用独立项目副本，而不是临时改变当前 checkout 的真实 state 配置。
 
-## 本地开发
+## 开发流程
+
+API不支持宿主直启。Compose和Kubernetes使用同一个application镜像；宿主只运行构建、测试和可选Vite前端：
 
 ```bash
 npm ci
 infra/playwright.sh prepare # 仅准备Issue Pilot应用自测浏览器
-infra/aliyun-cli.sh prepare
-infra/project-tools.sh prepare
-npm run db:migrate
+infra/application.sh config
+infra/application.sh prepare
 npm run server
 ```
 
-另一个终端：
+前端迭代时可在另一个终端启动Vite：
 
 ```bash
 npm run dev:web
 ```
 
-默认API为`127.0.0.1:3000`，Vite为`0.0.0.0:4173`。VS Code Workbench代码浏览器由Vite的`vscode.html`多入口构建提供，不启动独立IDE服务。
+Compose application API为`127.0.0.1:3000`，Vite为`0.0.0.0:4173`。VS Code Workbench代码浏览器由Vite的`vscode.html`多入口构建提供，不启动独立IDE服务。
 
 ## 源码地图
 
@@ -56,8 +57,8 @@ npm run dev:web
 | `src/configuration/revision.ts` | Service 完整配置内容 revision 和一致性读取 |
 | `src/db/schema.ts` | 当前 Drizzle schema |
 | `src/db/bootstrap.ts` | Migration、启动状态恢复和 Environment同步 |
-| `src/http/api.ts` | API装配、error mapping、启动/关闭资源生命周期和开发入口 |
-| `src/http/production.ts` | 主应用镜像的API + static Web显式生产入口 |
+| `src/http/api.ts` | API装配、error mapping和启动/关闭资源生命周期 |
+| `src/http/production.ts` | application镜像唯一的API + static Web入口 |
 | `src/http/*-routes.ts` | User、配置、Issue、Agent、Attachment、Source GET、生产静态Web和Workspace routes |
 | `src/http/service-configuration.ts` | Service/Deployment request prepare 和 transaction apply |
 | `src/http/attachment-store.ts` | Attachment multipart、write、quarantine、rollback/finalize 和安全读取路径 |
@@ -70,16 +71,15 @@ npm run dev:web
 | `src/capabilities/broker.ts` | Allowlist、input parse 和 keyed handler dispatch |
 | `src/capabilities/*.ts` | 独立协议 client和共享 bounded HTTP/process primitives |
 | `src/serial.ts` | `SerialQueue`、`KeyedSerialQueue` 和 `idle()` |
-| `src/container.ts` | 临时工具容器共同的安全argv、mount和资源限制构建器 |
-| `src/container-runtime.ts` | Podman与fail-closed临时容器适配；Capability/项目工具共用的Kubernetes Job runner扩展点 |
-| `infra/application-compose.mjs` | 从根配置和绝对宿主路径生成application + tools Compose模型 |
+| `src/tool-runtime.ts` | Capability/项目工具共用的进程命令白名单、环境收敛和临时HOME |
+| `infra/application-compose.mjs` | 从根配置和绝对宿主路径生成单application Compose模型 |
 | `src/workspace/project.ts` | Agent/cold-start/reopen 的 Issue project准备 |
 | `src/workspace/deployment.ts` | Deployment Repository完整性和顺序解析 |
 | `src/workspace/git.ts` | Bare store、checkout、worktree、batch rollback和 Repository锁 |
 | `src/workspace/state.ts` | State path、Repository分类、布局、unmanaged/shared checkout检查 |
 | `src/workspace/runtime.ts` | Issue runtime Repository link原子生成 |
 | `src/workspace/source-browser.ts` | Repository相对路径、tree/file/rg/history/commit/diff只读边界 |
-| `src/workspace/project-tools.ts` | Unix socket broker和Node/Maven受限容器执行 |
+| `src/workspace/project-tools.ts` | Unix socket broker和Node/Maven结构化受限执行 |
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
 | `src/web/src/data/client.ts` | Web request、共享 DTO re-export和 current-user header |
 | `src/web/src/app/agent-stream.ts` | EventSource transport state machine |
@@ -95,7 +95,7 @@ npm run dev:web
 | `src/web/vite.config.ts` | 主应用/Workbench多入口以及GitHub、Material、Markdown preview静态contribution构建 |
 | `src/web/src/app` | 页面和用户交互 |
 | `tests/http/fixture.ts` | 独立 API test fixture |
-| `infra` | 主应用、自测Playwright、Aliyun CLI、Node/Maven image准备和根配置读取 |
+| `infra` | 内置完整工具链的主应用镜像、自测Playwright和根配置读取 |
 | `drizzle` | 不可变 migration history |
 
 ## 追踪一次请求
@@ -568,7 +568,7 @@ SQLite只读检查使用 `src/config.ts`解析的实际 database path。直接�
 | `ARCHITECTURE.md` | 状态、所有权、生命周期、并发和安全不变量 |
 | `CONFIGURATION.md` | 可配置字段、capability contract和 credential数据流 |
 | `DEPLOYMENT.md` | 宿主依赖、进程、容器、代理和首次验收 |
-| `KUBERNETES.md` | StatefulSet、PVC、Job runner、RBAC和迁移门槛 |
+| `KUBERNETES.md` | 单大容器StatefulSet、PVC、Secret和迁移验收 |
 | `DEVELOPMENT.md` | 模块边界、改动方法、测试和 review |
 | `RUNBOOK.md` | 日常检查、容量、备份、升级、恢复和故障 |
 | `AGENTS.md` | Coding Agent执行规则 |

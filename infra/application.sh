@@ -40,7 +40,6 @@ load_configuration() {
   podman compose version >/dev/null 2>&1 || fail "Podman Compose provider not found"
   name=$(configuration_value runtime.application.name)
   image=$(configuration_value runtime.application.image)
-  podman_socket=$(configuration_value runtime.application.podmanSocket)
   stop_timeout=$(configuration_value runtime.application.stopTimeoutSeconds)
   configured_uid=$(configuration_value runtime.containerUser.uid)
   configured_gid=$(configuration_value runtime.containerUser.gid)
@@ -53,7 +52,7 @@ load_configuration() {
   case "$state_directory" in /*) state_root=$state_directory ;; *) state_root="$root/$state_directory" ;; esac
   [ "$(id -u)" = "$configured_uid" ] || fail "Runtime UID mismatch: expected $configured_uid"
   [ "$(id -g)" = "$configured_gid" ] || fail "Runtime GID mismatch: expected $configured_gid"
-  for candidate in "$root" "$state_root" "$HOME" "$podman_socket" "$npm_config" "$npm_cache" "$maven_settings" "$maven_repository" "$pi_root"; do safe_path "$candidate"; done
+  for candidate in "$root" "$state_root" "$HOME" "$npm_config" "$npm_cache" "$maven_settings" "$maven_repository" "$pi_root"; do safe_path "$candidate"; done
 }
 
 ensure_compose_file() {
@@ -85,8 +84,7 @@ require_image() {
 
 prepare() {
   load_configuration
-  compose --podman-build-args=--format=docker --profile tools build --pull=always application aliyun-tool
-  compose --profile tools pull node-tool maven-tool
+  compose --podman-build-args=--format=docker build --pull=always application
   require_image
 }
 
@@ -101,11 +99,8 @@ prepare_kubernetes() {
     *) fail "Unsupported architecture" ;;
   esac
   podman build --pull=always --format=docker --file "$containerfile" --tag "$target_image" \
-    --build-arg "NODE_IMAGE=$(configuration_value runtime.projectTools.node.image)" \
     --build-arg APP_ROOT=/opt/issue-pilot \
     --build-arg "TARGETARCH=$architecture" \
-    --build-arg "PODMAN_REMOTE_VERSION=$(configuration_value runtime.application.podmanRemote.version)" \
-    --build-arg "PODMAN_REMOTE_SHA256=$(configuration_value runtime.application.podmanRemote.${architecture}Sha256)" \
     "$root"
   [ "$(podman image inspect "$target_image" --format '{{ index .Config.Labels "io.issue-pilot.root" }}')" = /opt/issue-pilot ] || fail "Portable application image root mismatch"
   [ "$(podman image inspect "$target_image" --format '{{if .Config.Healthcheck}}configured{{else}}missing{{end}}')" = configured ] || fail "Portable application image healthcheck missing"
@@ -113,7 +108,7 @@ prepare_kubernetes() {
 
 config() {
   load_configuration
-  compose --profile tools config
+  compose config
 }
 
 status() {
@@ -133,7 +128,6 @@ start() {
   load_configuration
   require_image
   podman container exists "$name" && fail "Application container already exists: $name"
-  [ -S "$podman_socket" ] || fail "Podman API socket not found: $podman_socket"
   [ -d "$state_root" ] || fail "State root not found: $state_root"
   [ -d "$pi_root" ] || fail "Pi configuration not found: $pi_root"
   [ -f "$npm_config" ] || fail "npm configuration not found: $npm_config"

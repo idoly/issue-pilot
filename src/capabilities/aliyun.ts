@@ -2,8 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { ContainerRuntime } from "../container-runtime.ts";
+import type { ToolRuntime } from "../tool-runtime.ts";
 import type { CommandExecutionOptions, CommandExecutionResult } from "./local-exec.ts";
 
 export interface AliyunCliCredentials {
@@ -12,35 +11,15 @@ export interface AliyunCliCredentials {
   region: string;
 }
 
-export interface AliyunCliRuntime {
-  image: string;
-  version: string;
-  containerPids: number;
-  containerMemory: string;
-}
-
-const containerHome = "/home/aliyun";
-
 export async function runAliyunCli(
-  containers: ContainerRuntime,
+  tools: ToolRuntime,
   profileRoot: string,
   args: string[],
   options: CommandExecutionOptions,
-  runtime: AliyunCliRuntime = issuePilotConfig.runtime.aliyunCli,
 ): Promise<CommandExecutionResult> {
-  const uid = process.getuid?.() ?? issuePilotConfig.runtime.containerUser.uid;
-  const gid = process.getgid?.() ?? issuePilotConfig.runtime.containerUser.gid;
-  return containers.run({
-    image: runtime.image,
-    command: args,
-    label: "io.issue-pilot.component=pi-tool",
-    pids: runtime.containerPids,
-    memory: runtime.containerMemory,
-    uid,
-    gid,
-    environment: { HOME: containerHome, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" },
-    mounts: [{ source: profileRoot, target: containerHome, access: "ro", relabel: "private" }],
-    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16m"],
+  return tools.run({
+    command: ["aliyun", ...args],
+    environment: { HOME: profileRoot, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" },
   }, options);
 }
 

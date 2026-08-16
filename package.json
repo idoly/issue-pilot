@@ -11,15 +11,15 @@
   "license": "MIT",
   "scripts": {
     "dev:web": "vite --config src/web/vite.config.ts",
-    "server": "node --experimental-strip-types src/http/api.ts",
+    "server": "infra/application.sh start",
     "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test tests/**/*.test.ts && vitest run --config src/web/vite.config.ts --environment jsdom",
     "build": "vite build --config src/web/vite.config.ts",
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.84.1",
-    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-coding-agent": "^0.84.2",
     "@fastify/multipart": "^10.1.0",
     "@fastify/static": "^10.1.3",
     "@libsql/client": "^0.17.4",

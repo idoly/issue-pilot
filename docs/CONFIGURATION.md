@@ -81,20 +81,14 @@ Non-zero target 必须小于 high-water。无论 interval 是否为 0，API 启�
 
 | 字段 | 当前值 |
 | --- | --- |
-| `runtime.application.name/image` | `issue-pilot` / `localhost/issue-pilot:0.1.0-node24-bookworm` |
+| `runtime.application.name/image` | `issue-pilot` / `localhost/issue-pilot:0.1.0-node26-bookworm` |
 | `runtime.application.listenHost` | `0.0.0.0`，仅用于容器内生产入口 |
-| `runtime.application.podmanSocket` | `/run/user/1000/podman/podman.sock` |
 | `runtime.application.restartPolicy` | `on-failure:5` |
-| `runtime.application.podmanRemote.version` | `5.8.4` |
-| `runtime.application.podmanRemote.*Sha256` | 官方amd64/arm64静态remote tarball固定SHA-256 |
 | `runtime.application.containerPids/memory` | `2048` / `4g` |
 | `runtime.application.stopTimeoutSeconds` | `1800` |
 | `runtime.sourceBrowser.gitExecutable/searchExecutable` | `git` / `rg` |
-| `runtime.projectTools.node.image` | `docker.io/library/node:24-bookworm-slim@sha256:3638...` |
 | `runtime.projectTools.node.npmConfig/npmCache` | `.npmrc` / `.npm`，相对运行账号 HOME |
-| `runtime.projectTools.maven.image` | `docker.io/library/maven:3.9-eclipse-temurin-8@sha256:0537...` |
 | `runtime.projectTools.maven.settings/repository` | `.m2/settings.xml` / `.m2/repository`，相对运行账号 HOME |
-| `runtime.projectTools.containerPids/memory` | `512` / `2g` |
 | `runtime.projectTools.executionMs` | `1800000` |
 | `runtime.playwright.version` | `1.62.1` |
 | `runtime.playwright.image` | `mcr.microsoft.com/playwright:v1.62.1-noble` |
@@ -106,16 +100,16 @@ Non-zero target 必须小于 high-water。无论 interval 是否为 0，API 启�
 | `runtime.playwright.viewport` | `1280 x 720` |
 | `runtime.redisWorker` | old heap `96 MiB`, young heap `16 MiB` |
 | `runtime.containerUser` | fallback UID/GID `1000:1000` |
-| `runtime.aliyunCli.image/version` | `localhost/issue-pilot-aliyun-cli:3.4.11-alpine3.22.1` / `3.4.11` |
-| `runtime.aliyunCli.containerPids/memory` | `64` / `128m` |
 | `runtime.dms.endpoint` | `dms-enterprise.aliyuncs.com` |
 | `runtime.dms.cliRegion` | `cn-hangzhou` |
 
-`runtime.application`定义主应用容器名、镜像、容器内监听、rootless Podman API socket和资源/关闭预算。`infra/application-compose.mjs`把这些字段和固定Node/Maven/Aliyun镜像投影为Compose JSON；清单不保存第二套默认值。Compose使用bridge网络并只发布宿主`127.0.0.1:3000`。生命周期脚本仍从当前checkout推导绝对应用根和运行账号HOME；这些不是环境变量配置覆盖。镜像在构建时固化同一应用根，启动时拒绝root label、UID/GID或socket不匹配，避免SQLite `local_path`、Git worktree和remote Podman volume出现两套绝对路径。Containerfile默认`APP_ROOT=/opt/issue-pilot`供新容器平台构建，Compose显式覆盖为当前宿主根。
+`runtime.application`定义主应用大容器、容器内监听和整体资源/关闭预算。`infra/application-compose.mjs`只生成一个application service；不挂Podman socket，也不声明Node/Maven/Aliyun工具service。Containerfile使用Node 26和Maven 3.9/Temurin 8系列镜像，并在构建时安装Aliyun CLI latest。Compose使用bridge网络并只发布宿主`127.0.0.1:3000`。生命周期脚本从当前checkout推导绝对应用根和运行账号HOME；镜像在构建时固化同一应用根，启动时拒绝root label或UID/GID不匹配。Containerfile默认`APP_ROOT=/opt/issue-pilot`供Kubernetes构建，Compose显式覆盖为当前宿主根。
+
+application容器使用唯一的`ProcessToolRuntime`，只允许镜像PATH中的`npm`、`mvn`和限定`aliyun dms-enterprise/sls`命令。运行请求不携带image、PID/内存或容器配置；工具版本只由当前application镜像决定。每次调用仍有timeout、abort、output预算、路径规范化和临时HOME清理。项目Node工作流只支持npm，不在运行时下载Yarn/Corepack。
 
 DMS endpoint 是固定 central endpoint；`cliRegion` 只用于单次 Aliyun CLI profile，不是数据库 scope。`runtime.playwright`只配置Issue Pilot自身浏览器测试的Playwright Core、固定image和容器预算，不创建Service/Deployment capability，也不会进入IssuePolicy或Pi tool。
 
-Web内置VS Code Workbench通过只读文件系统overlay展示multi-root源码，workspace URI和文件URI位于`file:///issue-pilot/...`命名空间。Source API从SQLite Issue/Repository关系和受管runtime解析路径，不接受宿主绝对路径。Workbench固定使用GitHub Dark Default、Material Icon Theme和受控Markdown Preview；Search投影受预算`/search`，Source Control投影结构化`/diff`及受限`/history`、`/commit`。Bottom Panel Agent、Secondary Side Bar工单详情和固定视图图标也是Web布局行为，不属于Service、Deployment或根运行配置。Node/Maven image由manifest digest固定；npmrc和Maven settings只读挂载，缓存目录读写挂载，内容不进入根配置、HTTP响应或日志。
+Web内置VS Code Workbench通过只读文件系统overlay展示multi-root源码，workspace URI和文件URI位于`file:///issue-pilot/...`命名空间。Source API从SQLite Issue/Repository关系和受管runtime解析路径，不接受宿主绝对路径。Workbench固定使用GitHub Dark Default、Material Icon Theme和受控Markdown Preview；Search投影受预算`/search`，Source Control投影结构化`/diff`及受限`/history`、`/commit`。Bottom Panel Agent、Secondary Side Bar工单详情和固定视图图标也是Web布局行为，不属于Service、Deployment或根运行配置。Node/Maven版本系列只在Containerfile中声明；npmrc和Maven settings只读挂载，缓存目录读写挂载，内容不进入根配置、HTTP响应或日志。
 
 ### 通用上限
 
@@ -359,7 +353,7 @@ Tool action 为 `search`、`count`、`mapping`。Search 默认 `match_all`，可
 
 ## DMS
 
-DMS 使用受限临时 Aliyun CLI容器中的内置命令：
+DMS使用`ProcessToolRuntime`调用application大镜像PATH中的固定Aliyun CLI命令：
 
 ```text
 aliyun dms-enterprise ExecuteScript

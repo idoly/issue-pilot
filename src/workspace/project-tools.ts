@@ -7,8 +7,7 @@ import { createConnection } from "node:net";
 import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { type ContainerMount } from "../container.ts";
-import { localContainerRuntime, type ContainerRuntime } from "../container-runtime.ts";
+import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issueRepositories, issues } from "../db/schema.ts";
 import { ISSUE_TYPES_BY_ENVIRONMENT, normalizeIssueKey } from "../domain/contracts.ts";
@@ -18,7 +17,6 @@ import { classifyRepositoryState, issueWorkspaceRoot } from "./state.ts";
 const requestBytes = 64 * 1024;
 const argumentCount = 64;
 const argumentCharacters = 4096;
-const containerWorkspace = "/workspace";
 const NODE_PROJECT_ACTIONS = ["install", "test", "build", "typecheck"] as const;
 const MAVEN_PROJECT_ACTIONS = ["test", "verify", "package"] as const;
 const stableRequestErrors = new Set([
@@ -47,10 +45,8 @@ export interface ProjectToolRequest {
 }
 
 export interface ProjectToolRuntime {
-  node: { image: string; npmConfig: string; npmCache: string };
-  maven: { image: string; settings: string; repository: string };
-  containerPids: number;
-  containerMemory: string;
+  node: { npmConfig: string; npmCache: string };
+  maven: { settings: string; repository: string };
   executionMs: number;
 }
 
@@ -149,7 +145,7 @@ export class ProjectToolBroker {
   private readonly queue = new KeyedSerialQueue();
   private readonly database: Database;
   private readonly stateRoot: string;
-  private readonly containers: ContainerRuntime;
+  private readonly tools: ToolRuntime;
   private readonly runtime: ProjectToolRuntime;
   private readonly reporter: (error: unknown) => void;
   private server: Server | undefined;
@@ -159,13 +155,13 @@ export class ProjectToolBroker {
   constructor(
     database: Database,
     stateRoot: string,
-    containers: ContainerRuntime = localContainerRuntime,
+    tools: ToolRuntime = processToolRuntime,
     runtime: ProjectToolRuntime = issuePilotConfig.runtime.projectTools,
     reporter: (error: unknown) => void = () => undefined,
   ) {
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
-    this.containers = containers;
+    this.tools = tools;
     this.runtime = runtime;
     this.reporter = reporter;
     this.socketPath = path.join(this.stateRoot, "control", "project-tools.sock");
@@ -242,28 +238,16 @@ export class ProjectToolBroker {
       const command = input.tool === "node"
         ? await this.nodeCommand(project, input.action, input.args)
         : await this.mavenCommand(project, input.action, input.args);
-      const uid = process.getuid?.() ?? issuePilotConfig.runtime.containerUser.uid;
-      const gid = process.getgid?.() ?? issuePilotConfig.runtime.containerUser.gid;
-      const workdir = relativeProject ? `${containerWorkspace}/${relativeProject.split(path.sep).join("/")}` : containerWorkspace;
-      const execution = await this.containers.run({
-        image: command.image,
+      const execution = await this.tools.run({
         command: command.args,
-        label: "io.issue-pilot.component=pi-tool",
-        pids: this.runtime.containerPids,
-        memory: this.runtime.containerMemory,
-        uid,
-        gid,
-        networkHost: true,
-        environment: { HOME: "/tmp/home", CI: "1", ...command.environment },
-        mounts: [{ source: expectedRepository, target: containerWorkspace, access: "rw", relabel: "shared" }, ...command.mounts],
-        tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"],
-        workdir,
+        cwd: project,
+        environment: { CI: "1", ...command.environment },
       }, { timeout: this.runtime.executionMs, ...(signal ? { signal } : {}) });
       return execution;
     });
   }
 
-  private async nodeCommand(project: string, action: string, args: string[]): Promise<{ image: string; environment: Record<string, string>; mounts: ContainerMount[]; args: string[] }> {
+  private async nodeCommand(project: string, action: string, args: string[]): Promise<{ environment: Record<string, string>; args: string[] }> {
     if (!(NODE_PROJECT_ACTIONS as readonly string[]).includes(action)) throw new Error("invalid_project_tool_action");
     if (args.some((argument) => /^--watch(?:$|[-_=A-Z])/i.test(argument))) throw new Error("invalid_project_tool_argument");
     let packageManifest: { packageManager?: unknown };
@@ -276,23 +260,17 @@ export class ProjectToolBroker {
         let locked = true;
         try { await stat(path.join(project, "package-lock.json")); } catch { locked = false; }
         command = ["npm", locked ? "ci" : "install", ...args];
-      } else if (packageManager.startsWith("yarn@")) command = ["corepack", packageManager, "install", "--frozen-lockfile", ...args];
-      else throw new Error("unsupported_package_manager");
+      } else throw new Error("unsupported_package_manager");
     } else command = ["npm", "run", action, "--", ...args];
     const npmConfig = await secureFile(resolveOperatorPath(this.runtime.node.npmConfig));
     const npmCache = await secureDirectory(resolveOperatorPath(this.runtime.node.npmCache));
     return {
-      image: this.runtime.node.image,
-      environment: { NPM_CONFIG_USERCONFIG: "/run/issue-pilot/npmrc", NPM_CONFIG_CACHE: "/cache/npm" },
-      mounts: [
-        { source: npmConfig, target: "/run/issue-pilot/npmrc", access: "ro" },
-        { source: npmCache, target: "/cache/npm", access: "rw", relabel: "shared" },
-      ],
+      environment: { NPM_CONFIG_USERCONFIG: npmConfig, NPM_CONFIG_CACHE: npmCache },
       args: command,
     };
   }
 
-  private async mavenCommand(project: string, action: string, args: string[]): Promise<{ image: string; environment: Record<string, string>; mounts: ContainerMount[]; args: string[] }> {
+  private async mavenCommand(project: string, action: string, args: string[]): Promise<{ environment: Record<string, string>; args: string[] }> {
     if (!(MAVEN_PROJECT_ACTIONS as readonly string[]).includes(action)) throw new Error("invalid_project_tool_action");
     try {
       const metadata = await stat(path.join(project, "pom.xml"));
@@ -301,13 +279,8 @@ export class ProjectToolBroker {
     const settings = await secureFile(resolveOperatorPath(this.runtime.maven.settings));
     const repository = await secureDirectory(resolveOperatorPath(this.runtime.maven.repository));
     return {
-      image: this.runtime.maven.image,
-      environment: { MAVEN_CONFIG: "/tmp/home/.m2" },
-      mounts: [
-        { source: settings, target: "/run/issue-pilot/maven-settings.xml", access: "ro" },
-        { source: repository, target: "/cache/maven", access: "rw", relabel: "shared" },
-      ],
-      args: ["mvn", "--batch-mode", "--no-transfer-progress", "--settings", "/run/issue-pilot/maven-settings.xml", "-Dmaven.repo.local=/cache/maven", action, ...args],
+      environment: {},
+      args: ["mvn", "--batch-mode", "--no-transfer-progress", "--settings", settings, `-Dmaven.repo.local=${repository}`, action, ...args],
     };
   }
 
