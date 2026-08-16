@@ -10,8 +10,8 @@ import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, pruneState,
 
 const exec = promisify(execFile);
 
-async function createSharedCheckout(root: string): Promise<string> {
-  const source = path.join(root, "checkout-source");
+async function createSharedCheckout(root: string, repositoryKey = "a".repeat(20)): Promise<string> {
+  const source = path.join(root, `checkout-source-${repositoryKey}`);
   await mkdir(source, { recursive: true });
   await exec("git", ["init", "-b", "main", source]);
   await Promise.all([
@@ -21,7 +21,6 @@ async function createSharedCheckout(root: string): Promise<string> {
   await exec("git", ["-C", source, "add", "."]);
   await exec("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
   const commit = (await exec("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
-  const repositoryKey = "a".repeat(20);
   const repository = path.join(repositoriesRoot(root), repositoryKey);
   const checkout = path.join(sharedCheckoutsRoot(root), repositoryKey, commit);
   await Promise.all([mkdir(path.dirname(checkout), { recursive: true }), mkdir(path.dirname(repository), { recursive: true })]);
@@ -152,12 +151,14 @@ test("preserves changed shared checkouts and generated runtimes as evidence", as
       mkdir(path.join(root, "workspaces"), { recursive: true }),
     ]);
     const checkout = await createSharedCheckout(root);
+    const cleanCheckout = await createSharedCheckout(root, "b".repeat(20));
     const evidence = path.join(checkout, "ignored-evidence.txt");
     await writeFile(evidence, "preserve checkout evidence\n", "utf8");
     await writeFile(path.join(issueRuntime, "manifest.json"), "preserve runtime evidence\n", "utf8");
 
     await assert.rejects(pruneState(root, ["ISSUE-20260807-001"]), /shared_checkout_changed/);
     assert.equal(await readFile(evidence, "utf8"), "preserve checkout evidence\n");
+    assert.equal(await readFile(path.join(cleanCheckout, "README.md"), "utf8"), "shared checkout\n");
     assert.equal(await readFile(path.join(issueRuntime, "manifest.json"), "utf8"), "preserve runtime evidence\n");
   } finally {
     await rm(root, { recursive: true, force: true });
