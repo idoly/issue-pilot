@@ -436,6 +436,8 @@ http-client.ts
 local-exec.ts
 ```
 
+`redis.ts`保留授权、命令白名单、AbortSignal和Worker生命周期，`redis-worker.ts`仅作为node-redis协议入口。node-redis会先完整物化RESP reply再返回，Worker heap limit用于在`capabilityResultText()`字节检查之前隔离超大分配；不要把该入口合并回API主事件循环。Redis credential只通过同进程`workerData`传递，不进入argv或日志，Worker返回值只允许稳定错误码。
+
 协议模块必须直接导入 owning client；不保留聚合兼容 barrel。Playwright不属于Agent capability；`infra/playwright.sh run`只运行operator提供的Issue Pilot应用自测脚本，不经过registry、policy、Pi tools或broker。
 
 ## Web 开发

@@ -26,6 +26,18 @@ async function fixture() {
   return { root, policy };
 }
 
+async function within<T>(promise: Promise<T>, milliseconds = 2_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("condition_not_met")), milliseconds); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 test("reads Redis through node-redis and retains the read-only command boundary", async () => {
   const { root, policy } = await fixture();
   let redisRequest = "";
@@ -58,6 +70,57 @@ test("reads Redis through node-redis and retains the read-only command boundary"
     await assert.rejects(() => readRedis(policy, config, { action: "set", key: "order:1" }), /invalid_redis_action/);
   } finally {
     await new Promise<void>((resolve, reject) => redisServer.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("normalizes Redis server failures without exposing upstream error text", async () => {
+  const { root, policy } = await fixture();
+  const redisServer = createTcpServer((socket) => {
+    socket.once("data", () => socket.end("-WRONGPASS redis-secret rejected\r\n"));
+  });
+  await new Promise<void>((resolve) => redisServer.listen(0, "127.0.0.1", resolve));
+  const address = redisServer.address();
+  assert(address && typeof address === "object");
+  try {
+    await assert.rejects(
+      () => readRedis(policy, { host: "127.0.0.1", port: address.port, username: "", password: "redis-secret", database: 0 }, { action: "get", key: "order:1" }),
+      (error: unknown) => {
+        assert(error instanceof Error);
+        assert.equal(error.message, "redis_read_failed");
+        assert.doesNotMatch(error.message, /redis-secret|WRONGPASS/);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise<void>((resolve) => redisServer.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("terminates the Redis worker connection when the capability is aborted", async () => {
+  const { root, policy } = await fixture();
+  let commandReceived!: () => void;
+  let connectionClosed!: () => void;
+  const received = new Promise<void>((resolve) => { commandReceived = resolve; });
+  const closed = new Promise<void>((resolve) => { connectionClosed = resolve; });
+  const redisServer = createTcpServer((socket) => {
+    socket.once("data", commandReceived);
+    socket.once("close", connectionClosed);
+  });
+  await new Promise<void>((resolve) => redisServer.listen(0, "127.0.0.1", resolve));
+  const address = redisServer.address();
+  assert(address && typeof address === "object");
+  const controller = new AbortController();
+  try {
+    const pending = readRedis(policy, { host: "127.0.0.1", port: address.port, username: "", database: 0 }, { action: "get", key: "order:1" }, controller.signal);
+    await within(received);
+    controller.abort(new Error("redis_abort_requested"));
+    await assert.rejects(pending, /redis_abort_requested/);
+    await within(closed);
+  } finally {
+    controller.abort();
+    await new Promise<void>((resolve) => redisServer.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

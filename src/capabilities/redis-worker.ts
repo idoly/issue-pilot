@@ -2,7 +2,6 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { createClient } from "redis";
 
-import { errorMessage } from "../domain/contracts.ts";
 import { capabilityResultText } from "./contracts.ts";
 
 type Input = {
@@ -31,9 +30,14 @@ client.on("error", () => {});
 try {
   await client.connect();
   const output = await client.sendCommand(input.command);
-  parentPort?.postMessage({ ok: true, text: capabilityResultText({ action: input.action, output }) });
-} catch (error) {
-  parentPort?.postMessage({ ok: false, error: errorMessage(error) });
+  try {
+    parentPort?.postMessage({ ok: true, text: capabilityResultText({ action: input.action, output }) });
+  } catch (error) {
+    if (error instanceof Error && error.message === "capability_result_too_large") parentPort?.postMessage({ ok: false, error: "capability_result_too_large" });
+    else throw error;
+  }
+} catch {
+  parentPort?.postMessage({ ok: false, error: "redis_read_failed" });
 } finally {
   if (client.isOpen) client.destroy();
 }

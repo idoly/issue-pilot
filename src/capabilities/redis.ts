@@ -29,13 +29,16 @@ async function redisCommand(config: Record<string, unknown>, action: string, com
       settled = true;
       activeSignal.removeEventListener("abort", abort);
       operation();
-      void worker.terminate();
+      void worker.terminate().catch(() => undefined);
     };
     const abort = () => finish(() => reject(activeSignal.reason));
     activeSignal.addEventListener("abort", abort, { once: true });
-    worker.once("message", (message: { ok?: boolean; text?: string; error?: string }) => finish(() => message.ok && typeof message.text === "string" ? resolve(message.text) : reject(new Error(message.error ?? "redis_read_failed"))));
-    worker.once("error", (error: Error) => finish(() => reject(new Error(/memory limit/i.test(error.message) ? "capability_result_too_large" : "redis_read_failed", { cause: error }))));
-    worker.once("exit", (code) => { if (!settled) finish(() => reject(new Error(code === 0 ? "redis_read_failed" : "capability_result_too_large"))); });
+    worker.once("message", (message: unknown) => finish(() => {
+      if (message && typeof message === "object" && "ok" in message && message.ok === true && "text" in message && typeof message.text === "string") resolve(message.text);
+      else reject(new Error(message && typeof message === "object" && "error" in message && message.error === "capability_result_too_large" ? "capability_result_too_large" : "redis_read_failed"));
+    }));
+    worker.once("error", (error: Error & { code?: string }) => finish(() => reject(new Error(error.code === "ERR_WORKER_OUT_OF_MEMORY" || /memory limit/i.test(error.message) ? "capability_result_too_large" : "redis_read_failed", { cause: error }))));
+    worker.once("exit", () => { if (!settled) finish(() => reject(new Error("redis_read_failed"))); });
   });
 }
 
