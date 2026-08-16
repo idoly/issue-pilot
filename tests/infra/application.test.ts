@@ -97,7 +97,7 @@ exit 0
     assert.deepEqual(Object.keys(manifest.services), ["application"]);
     assert.deepEqual(manifest.services.application!.cap_drop, ["ALL"]);
     assert.equal(manifest.services.application!.network_mode, undefined);
-    assert.deepEqual(manifest.services.application!.ports, ["127.0.0.1:3000:3000"]);
+    assert.deepEqual(manifest.services.application!.ports, ["0.0.0.0:3000:3000"]);
     assert.equal(manifest.services.application!.read_only, true);
     assert.equal(manifest.services.application!.userns_mode, "keep-id");
     assert.equal(manifest.services.application!.stop_grace_period, "1800s");

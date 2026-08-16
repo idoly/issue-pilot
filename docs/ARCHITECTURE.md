@@ -83,7 +83,7 @@ Route 不实现 Git 或外部协议。AgentEngine 不拼 Deployment Repository j
 
 ## 生产进程与容器边界
 
-生产镜像使用多阶段构建：Node 26 build stage生成`src/web/dist`并裁剪开发依赖，Maven stage提供Maven 3.9/Temurin 8，Ubuntu 26.04 runtime stage包含API生产依赖、Pi、Aliyun CLI、静态Web、migration、Git 2.48或更高版本、SSH、ripgrep和curl。Fastify在容器内同一个`0.0.0.0:3000`入口提供Web、`vscode.html`和API；Compose使用bridge网络且只向宿主`127.0.0.1:3000`发布。根配置通过`infra/application-compose.mjs`投影为只含一个application service的Compose JSON。
+生产镜像使用多阶段构建：Node 26 build stage生成`src/web/dist`并裁剪开发依赖，Maven stage提供Maven 3.9/Temurin 8，Ubuntu 26.04 runtime stage包含API生产依赖、Pi、Aliyun CLI、静态Web、migration、Git 2.48或更高版本、SSH、ripgrep和curl。Fastify在容器内同一个`0.0.0.0:3000`入口提供Web、`vscode.html`和API；Compose使用bridge网络并向宿主`0.0.0.0:3000`发布，以支持Windows/WSL端口转发。根配置通过`infra/application-compose.mjs`投影为只含一个application service的Compose JSON。
 
 应用镜像在构建时把当前checkout绝对路径写入OCI label，并把代码安装到同一路径。启动脚本只把state root和运行账号所需的Pi/package manager配置及cache按原绝对路径挂载；路径、UID/GID或镜像label不匹配时拒绝启动。这样SQLite `local_path`、bare Git worktree metadata和runtime symlink继续共享同一命名空间。
 

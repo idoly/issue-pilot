@@ -22,7 +22,7 @@ Browser
    |
 TLS + Authentication/Authorization Proxy
    |
-   +-- all paths -> 127.0.0.1:3000 (Compose host publish)
+   +-- all paths -> 0.0.0.0:3000 (Compose host publish)
                             |
         application container: 0.0.0.0:3000
         Fastify + Web/Workbench + Pi/Git + Node/Maven/JDK/Aliyun CLI
@@ -166,7 +166,7 @@ infra/application.sh remove
 
 `clean`只在容器不存在时删除application image，不删除state。project-tools Unix socket会阻止两个API实例同时启动。
 
-应用容器使用bridge网络，Fastify按`runtime.application.listenHost`监听`0.0.0.0:3000`，Compose固定发布`127.0.0.1:3000:3000`。`ProcessToolRuntime`只允许固定工具命令、收敛进程环境并清理调用级临时HOME；不会调用Podman。npm/Maven项目脚本与API同UID运行，因此大容器不是不可信代码sandbox，也没有调用级rootfs/cgroup隔离。
+应用容器使用bridge网络，Fastify按`runtime.application.listenHost`监听`0.0.0.0:3000`，Compose固定发布`0.0.0.0:3000:3000`，使WSL地址及Windows端口代理可以访问。该端口不提供独立认证边界，Windows防火墙或前置可信网关必须限制不可信来源。`ProcessToolRuntime`只允许固定工具命令、收敛进程环境并清理调用级临时HOME；不会调用Podman。npm/Maven项目脚本与API同UID运行，因此大容器不是不可信代码sandbox，也没有调用级rootfs/cgroup隔离。
 
 `SIGINT`/`SIGTERM`会触发graceful shutdown：停止maintenance、等待lifecycle/inspection队列和Agent reservation、停止Pi session、关闭项目工具broker并等待活动进程、关闭SQLite。Compose和Kubernetes的30分钟termination grace period覆盖当前项目工具上限。
 
@@ -258,8 +258,8 @@ application镜像按目标架构安装官方Aliyun CLI latest。Issue Pilot不�
 - Issue Pilot API 没有内置认证。
 - `X-Issue-Pilot-Subject` 和页面用户切换不是认证。
 - 内置代码浏览器只读但会返回内部源码；Source API与其他Issue API使用相同授权边界。
-- Compose必须只向宿主`127.0.0.1`发布application容器端口。
-- 外部入口必须由可信代理执行 authentication、authorization 和 TLS。
+- Compose为Windows/WSL端口转发向宿主`0.0.0.0:3000`发布application端口；宿主防火墙必须只允许可信来源。
+- 外部入口必须由可信代理执行 authentication、authorization 和 TLS，不能把该裸端口暴露到不可信LAN或Internet。
 - `/api/config` 虽已脱敏，仍包含内部 Repository、model 和 capability scope；`/api/services/*` 写请求还可能携带新 credential，配置路由必须单独授权和审计。
 - 不要直接暴露 Vite dev server 到不受信任网络。
 

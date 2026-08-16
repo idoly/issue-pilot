@@ -43,7 +43,7 @@ const compose = {
       },
       labels: { "io.issue-pilot.component": "application" },
       restart: application.restartPolicy,
-      ports: [`127.0.0.1:${issuePilotConfig.http.port}:${issuePilotConfig.http.port}`],
+      ports: [`0.0.0.0:${issuePilotConfig.http.port}:${issuePilotConfig.http.port}`],
       read_only: true,
       security_opt: ["no-new-privileges"],
       cap_drop: ["ALL"],

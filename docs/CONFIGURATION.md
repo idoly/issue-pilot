@@ -103,7 +103,7 @@ Non-zero target 必须小于 high-water。无论 interval 是否为 0，API 启�
 | `runtime.dms.endpoint` | `dms-enterprise.aliyuncs.com` |
 | `runtime.dms.cliRegion` | `cn-hangzhou` |
 
-`runtime.application`定义主应用大容器、容器内监听和整体资源/关闭预算。`infra/application-compose.mjs`只生成一个application service；不挂Podman socket，也不声明Node/Maven/Aliyun工具service。Containerfile使用Node 26 build stage、Maven 3.9/Temurin 8 stage和Ubuntu 26.04 runtime stage，并在构建时安装发行版Git和Aliyun CLI latest。Compose使用bridge网络并只发布宿主`127.0.0.1:3000`。生命周期脚本从当前checkout推导绝对应用根和运行账号HOME；镜像在构建时固化同一应用根，启动时拒绝root label或UID/GID不匹配。Containerfile默认`APP_ROOT=/opt/issue-pilot`供Kubernetes构建，Compose显式覆盖为当前宿主根。
+`runtime.application`定义主应用大容器、容器内监听和整体资源/关闭预算。`infra/application-compose.mjs`只生成一个application service；不挂Podman socket，也不声明Node/Maven/Aliyun工具service。Containerfile使用Node 26 build stage、Maven 3.9/Temurin 8 stage和Ubuntu 26.04 runtime stage，并在构建时安装发行版Git和Aliyun CLI latest。Compose使用bridge网络并发布宿主`0.0.0.0:3000`，以支持Windows/WSL端口转发；Windows防火墙或前置可信网关负责限制外部来源。生命周期脚本从当前checkout推导绝对应用根和运行账号HOME；镜像在构建时固化同一应用根，启动时拒绝root label或UID/GID不匹配。Containerfile默认`APP_ROOT=/opt/issue-pilot`供Kubernetes构建，Compose显式覆盖为当前宿主根。
 
 application容器使用唯一的`ProcessToolRuntime`，只允许镜像PATH中的`npm`、`mvn`和限定`aliyun dms-enterprise/sls`命令。运行请求不携带image、PID/内存或容器配置；工具版本只由当前application镜像决定。每次调用仍有timeout、abort、output预算、路径规范化和临时HOME清理。项目Node工作流只支持npm，不在运行时下载Yarn/Corepack。
 

@@ -42,7 +42,7 @@ npm run server
 npm run dev:web
 ```
 
-Compose application API为`127.0.0.1:3000`，Vite为`0.0.0.0:4173`。VS Code Workbench代码浏览器由Vite的`vscode.html`多入口构建提供，不启动独立IDE服务。
+Compose application API发布在`0.0.0.0:3000`并可从本机`127.0.0.1:3000`访问，Vite为`0.0.0.0:4173`。VS Code Workbench代码浏览器由Vite的`vscode.html`多入口构建提供，不启动独立IDE服务。
 
 ## 源码地图
 
