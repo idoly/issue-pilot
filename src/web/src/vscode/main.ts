@@ -35,7 +35,7 @@ import getConfigurationServiceOverride, { initUserConfiguration } from "@codinga
 import getEnvironmentServiceOverride from "@codingame/monaco-vscode-environment-service-override";
 import getExplorerServiceOverride from "@codingame/monaco-vscode-explorer-service-override";
 import getExtensionServiceOverride from "@codingame/monaco-vscode-extensions-service-override";
-import getFilesServiceOverride, { registerCustomProvider, registerFileSystemOverlay } from "@codingame/monaco-vscode-files-service-override";
+import getFilesServiceOverride, { registerFileSystemOverlay } from "@codingame/monaco-vscode-files-service-override";
 import getKeybindingsServiceOverride from "@codingame/monaco-vscode-keybindings-service-override";
 import getLanguagesServiceOverride from "@codingame/monaco-vscode-languages-service-override";
 import getLifecycleServiceOverride from "@codingame/monaco-vscode-lifecycle-service-override";
@@ -58,9 +58,10 @@ import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { loadSourceRepositories } from "../data/client";
 import { registerMarkdownPreview, registerMarkdownPreviewAction, registerMarkdownPreviewCommands } from "./markdown-preview";
-import { registerSourceControls, sourceRevisionScheme, SourceRevisionFileSystemProvider } from "./source-control";
+import { registerSourceControls } from "./source-control";
 import { SourceFileSystemProvider } from "./source-file-system";
-import { getBudgetedSearchServiceOverride, registerSourceSearch, SourceSearchProvider } from "./source-search";
+import { getBudgetedSearchServiceOverride } from "./search-service";
+import { registerSourceSearch } from "./source-search";
 import "./workbench.css";
 
 const agentViewClass = "issue-pilot-agent-view";
@@ -162,11 +163,9 @@ async function start(): Promise<void> {
   if (!repositories.length) throw new Error("source_repository_not_found");
 
   const provider = new SourceFileSystemProvider(issueKey, repositories);
-  const revisionContent = new SourceRevisionFileSystemProvider();
   registerMarkdownPreview();
   registerEmbeddedViews();
   registerFileSystemOverlay(100, provider);
-  registerCustomProvider(sourceRevisionScheme, revisionContent);
   await initUserConfiguration(JSON.stringify({
     "workbench.colorTheme": "GitHub Dark Default",
     "workbench.iconTheme": "material-icon-theme",
@@ -261,8 +260,8 @@ async function start(): Promise<void> {
   await Promise.all([
     materialIconThemeReady(),
     markdownFeaturesReady(),
-    registerSourceSearch(new SourceSearchProvider(issueKey, repositories)),
-    registerSourceControls(issueKey, repositories, provider.workspacePath, revisionContent),
+    registerSourceSearch(issueKey, repositories),
+    registerSourceControls(issueKey, repositories, provider.workspacePath),
   ]);
   await commandService.executeCommand("markdown.api.render", "# Issue Pilot");
   registerMarkdownPreviewCommands(container);

@@ -724,7 +724,7 @@ button, input, textarea { font: inherit; }
   .deployment-detail-row > div:nth-child(4) .capability-labels { width: 100%; }
   .deployment-detail-row > div:nth-child(4) .capability-labels code { padding-inline: 6px; }
   .source-browser-title small { display: none; }
-  .source-browser-header-workbench { grid-template-columns: minmax(0, 1fr) auto 32px 32px; gap: 3px; padding-inline: 6px; }
+  .source-browser-header-workbench { grid-template-columns: minmax(0, 1fr) auto 32px 32px 32px; gap: 3px; padding-inline: 6px; }
   .app-content.source-expanded .source-detail-panel {
     display: none;
     top: 44px;

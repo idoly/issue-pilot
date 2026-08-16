@@ -1,34 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@codingame/monaco-vscode-api/vscode/vs/base/common/uri", () => ({
-  URI: {
-    file: (path: string) => ({ path, toString: () => `file://${path}` }),
-  },
-}));
-vi.mock("@codingame/monaco-vscode-api/vscode/vs/platform/instantiation/common/descriptors", () => ({ SyncDescriptor: class {} }));
-vi.mock("@codingame/monaco-vscode-api/vscode/vs/workbench/services/search/common/search", () => {
-  class FileMatch {
-    readonly results: unknown[] = [];
-    constructor(readonly resource: unknown) {}
-  }
-  class OneLineRange {
-    constructor(readonly startLineNumber: number, readonly startColumn: number, readonly endColumn: number) {}
-  }
-  class TextSearchMatch {
-    constructor(readonly preview: string, readonly range: OneLineRange, readonly previewOptions: unknown) {}
-  }
-  return {
-    FileMatch,
-    OneLineRange,
-    TextSearchMatch,
-    SearchCompletionExitCode: { Normal: 0 },
-    SearchProviderType: { file: 0, text: 1 },
-    TextSearchCompleteMessageType: { Warning: 2 },
-  };
-});
-vi.mock("@codingame/monaco-vscode-api/vscode/vs/workbench/services/search/common/search.service", () => ({ ISearchService: { toString: () => "search" } }));
-vi.mock("@codingame/monaco-vscode-search-service-override", () => ({ default: () => ({}) }));
-vi.mock("@codingame/monaco-vscode-search-service-override/vscode/vs/workbench/services/search/common/searchService", () => ({ SearchService: class {} }));
+vi.mock("./extension-api", () => ({ getIssuePilotVscodeApi: vi.fn() }));
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
   return { ...actual, searchSource: vi.fn() };
@@ -42,24 +14,25 @@ const repositories = [
   { name: "web", url: "https://example.test/web.git", branch: "main", access: "read" as const },
   { name: "api", url: "https://example.test/api.git", branch: "main", access: "read" as const },
 ];
-
-function query(overrides: Record<string, unknown> = {}) {
-  return {
-    contentPattern: { pattern: "agreementNo", isRegExp: false, isCaseSensitive: false, isWordMatch: true },
-    folderQueries: [
-      { folder: { path: `/issue-pilot/${issueKey}/web` } },
-      { folder: { path: `/issue-pilot/${issueKey}/api/src` } },
-    ],
-    previewOptions: { matchLines: 1, charsPerLine: 120 },
-    maxResults: 10,
-    ...overrides,
-  } as never;
+class Range {
+  constructor(readonly startLine: number, readonly startColumn: number, readonly endLine: number, readonly endColumn: number) {}
 }
+const vscode = {
+  Range,
+  TextSearchCompleteMessageType: { Warning: 2 },
+  Uri: { file: (path: string) => ({ path, toString: () => `file://${path}` }) },
+};
+const token = {
+  isCancellationRequested: false,
+  onCancellationRequested: () => ({ dispose() {} }),
+};
+const query = { pattern: "agreementNo", isRegExp: false, isCaseSensitive: false, isWordMatch: true };
+const options = (folder: string) => ({ folder: { path: folder }, maxResults: 10 });
 
-describe("VS Code Source API search provider", () => {
+describe("VS Code Source API text search extension", () => {
   beforeEach(() => vi.mocked(searchSource).mockReset());
 
-  it("reports budgeted literal matches per file and preserves repository roots", async () => {
+  it("reports budgeted literal matches with source and preview ranges", async () => {
     vi.mocked(searchSource)
       .mockResolvedValueOnce({
         matches: [
@@ -75,26 +48,35 @@ describe("VS Code Source API search provider", () => {
         ],
         truncated: true,
       });
-    const progress: Array<{ resource: { path: string }; results: unknown[] }> = [];
-    const result = await new SourceSearchProvider(issueKey, repositories).textSearch(query(), (item) => progress.push(item as never));
+    const progress: Array<{ uri: { path: string }; ranges: Range; preview: { matches: Range } }> = [];
+    const provider = new SourceSearchProvider(issueKey, repositories, vscode as never);
+    const web = await provider.provideTextSearchResults(query, options(`/issue-pilot/${issueKey}/web`) as never, { report: (item) => progress.push(item as never) }, token as never);
+    const api = await provider.provideTextSearchResults(query, options(`/issue-pilot/${issueKey}/api/src`) as never, { report: (item) => progress.push(item as never) }, token as never);
 
     expect(searchSource).toHaveBeenNthCalledWith(1, issueKey, "web", "agreementNo", { caseSensitive: false, wordMatch: true }, expect.any(AbortSignal));
     expect(searchSource).toHaveBeenNthCalledWith(2, issueKey, "api", "agreementNo", { caseSensitive: false, wordMatch: true }, expect.any(AbortSignal));
-    expect(progress.map((file) => [file.resource.path, file.results.length])).toEqual([
-      [`/issue-pilot/${issueKey}/web/src/form.ts`, 2],
-      [`/issue-pilot/${issueKey}/api/src/Query.java`, 1],
+    expect(progress.map((match) => match.uri.path)).toEqual([
+      `/issue-pilot/${issueKey}/web/src/form.ts`,
+      `/issue-pilot/${issueKey}/web/src/form.ts`,
+      `/issue-pilot/${issueKey}/api/src/Query.java`,
     ]);
-    expect(result.results).toHaveLength(2);
-    expect(result.limitHit).toBe(true);
+    expect(progress[0]).toEqual(expect.objectContaining({
+      ranges: new Range(3, 9, 3, 20),
+      preview: expect.objectContaining({ matches: new Range(0, 6, 0, 17) }),
+    }));
+    expect(web.limitHit).toBe(false);
+    expect(api.limitHit).toBe(true);
   });
 
   it("rejects regular expressions without issuing a Source API request", async () => {
-    const result = await new SourceSearchProvider(issueKey, repositories).textSearch(query({
-      contentPattern: { pattern: ".*", isRegExp: true, isCaseSensitive: true, isWordMatch: false },
-    }));
+    const result = await new SourceSearchProvider(issueKey, repositories, vscode as never).provideTextSearchResults(
+      { ...query, pattern: ".*", isRegExp: true },
+      options(`/issue-pilot/${issueKey}/web`) as never,
+      { report() {} },
+      token as never,
+    );
 
     expect(searchSource).not.toHaveBeenCalled();
-    expect(result.results).toEqual([]);
-    expect(result.messages).toEqual([expect.objectContaining({ text: "Issue Pilot代码搜索只支持纯文本" })]);
+    expect(result).toEqual({ limitHit: false, message: expect.objectContaining({ text: "Issue Pilot代码搜索只支持纯文本" }) });
   });
 });
