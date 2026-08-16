@@ -41,7 +41,7 @@ test("uses the central Workspace lifecycle configuration", () => {
     highWaterBytes: 20 * 1024 ** 3,
     targetBytes: 16 * 1024 ** 3,
     maintenanceIntervalMs: 15 * 60 * 1000,
-    inspectionConcurrency: 4,
+    taskConcurrency: 4,
   });
 });
 
@@ -58,10 +58,10 @@ const engine = {
   async closeSession(issueId: string) { this.closed.push(issueId); if (this.closeError) throw this.closeError; },
 };
 
-test("rejects invalid Workspace inspection concurrency", () => {
+test("rejects invalid Workspace task concurrency", () => {
   assert.throws(
-    () => new WorkspaceLifecycleManager({} as never, ".", engine as never, { ...issuePilotConfig.workspace, inspectionConcurrency: 0 }),
-    /workspace_inspection_concurrency_invalid/,
+    () => new WorkspaceLifecycleManager({} as never, ".", engine as never, { ...issuePilotConfig.workspace, taskConcurrency: 0 }),
+    /workspace_task_concurrency_invalid/,
   );
 });
 
@@ -71,7 +71,7 @@ test("stops maintenance only after the active exclusive operation drains", async
     highWaterBytes: 0,
     targetBytes: 0,
     maintenanceIntervalMs: 0,
-    inspectionConcurrency: 1,
+    taskConcurrency: 1,
   });
   const internal = manager as unknown as { exclusive<T>(operation: () => Promise<T>): Promise<T> };
   let operationStarted!: () => void;
@@ -103,7 +103,7 @@ test("serializes deep inspection per Issue without blocking other Issues", async
     highWaterBytes: 0,
     targetBytes: 0,
     maintenanceIntervalMs: 0,
-    inspectionConcurrency: 1,
+    taskConcurrency: 1,
   });
   const internal = manager as unknown as {
     issueRow(issueId: string): Promise<{ issue: { id: string; key: string }; workspace: null }>;
@@ -140,7 +140,7 @@ test("shares one active Workspace statistics scan across concurrent callers", as
     highWaterBytes: 0,
     targetBytes: 0,
     maintenanceIntervalMs: 0,
-    inspectionConcurrency: 1,
+    taskConcurrency: 1,
   });
   const internal = manager as unknown as {
     issueRows(): Promise<Array<{ issue: { id: string; key: string }; workspace: null }>>;
@@ -180,7 +180,7 @@ test("bounds concurrent Workspace inspections while preserving Issue order", asy
     highWaterBytes: 0,
     targetBytes: 0,
     maintenanceIntervalMs: 0,
-    inspectionConcurrency: 2,
+    taskConcurrency: 2,
   });
   const issueRows = Array.from({ length: 5 }, (_, index) => ({ issue: { id: `issue-${index}`, key: `ISSUE-20260814-10${index}` }, workspace: null }));
   const internal = manager as unknown as {
@@ -221,7 +221,7 @@ test("isolates maintenance reporter failures", async () => {
     highWaterBytes: 0,
     targetBytes: 0,
     maintenanceIntervalMs: 1,
-    inspectionConcurrency: 1,
+    taskConcurrency: 1,
   });
   let reports = 0;
   const stop = manager.start(() => {
@@ -320,7 +320,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-      inspectionConcurrency: 1,
+      taskConcurrency: 1,
     }, prepareRuntime);
     await writeFile(path.join(prepared[1]!.workspacePath, "untracked.txt"), "do not delete\n", "utf8");
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
@@ -527,7 +527,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-      inspectionConcurrency: 1,
+      taskConcurrency: 1,
     }, prepareRuntime);
     const retention = await retentionLifecycle.maintain();
     assert.deepEqual(retention.released.map(({ issueKey }) => issueKey), [issue!.key]);
@@ -538,7 +538,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       highWaterBytes: 1,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-      inspectionConcurrency: 1,
+      taskConcurrency: 1,
     }, prepareRuntime);
     const quota = await quotaLifecycle.maintain();
     assert.deepEqual(quota.released.map(({ issueKey }) => issueKey), [issue!.key]);
@@ -636,7 +636,7 @@ test("converts a completed production analysis to a development defect while pre
       highWaterBytes: 0,
       targetBytes: 0,
       maintenanceIntervalMs: 0,
-      inspectionConcurrency: 1,
+      taskConcurrency: 1,
     });
 
     const mutableDatabase = database.db as typeof database.db & { transaction: typeof database.db.transaction };

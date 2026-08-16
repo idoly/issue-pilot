@@ -9,7 +9,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 
 const execFileAsync = promisify(execFile);
-const stateTaskOptions = { concurrency: issuePilotConfig.workspace.inspectionConcurrency, stopOnError: false } as const;
+const stateTaskOptions = { concurrency: issuePilotConfig.workspace.taskConcurrency, stopOnError: false } as const;
 
 type DisposableSharedCheckout = { checkout: string; commit: string };
 type DisposableSharedRepository = { repositoryRoot: string; commonDirectory: string; checkouts: DisposableSharedCheckout[] };

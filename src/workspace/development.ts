@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues } from "../db/schema.ts";
 import { WorktreeManager } from "./git.ts";
@@ -27,5 +28,10 @@ export async function prepareDevelopmentIssueRuntimes(
     .innerJoin(environments, eq(environments.id, issues.environmentId))
     .where(eq(environments.kind, "dev"));
   const project = new IssueProjectManager(database, stateRoot);
-  return prepareIssueRuntimeBatch(database, developmentIssues, (issue) => project.hydrateDevelopmentRuntime(issue));
+  return prepareIssueRuntimeBatch(
+    database,
+    developmentIssues,
+    (issue) => project.hydrateDevelopmentRuntime(issue),
+    { concurrency: issuePilotConfig.workspace.taskConcurrency },
+  );
 }

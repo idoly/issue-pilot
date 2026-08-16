@@ -68,24 +68,31 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? applicationConfig.stateRoot);
   const databaseFile = options.databaseFile ?? applicationConfig.databaseFile;
+  const databaseStartedAt = performance.now();
   const database = await openApplicationDatabase(databaseFile);
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: true });
+  app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
   let engine: AgentController | undefined;
   let projectTools: Pick<ProjectToolBroker, "start" | "close"> | undefined;
   let stopWorkspaceMaintenance: (() => Promise<void>) | undefined;
 
   try {
+    const pruneStartedAt = performance.now();
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
     await pruneState(stateRoot, issueKeys);
+    app.log.info({ durationMs: Math.round(performance.now() - pruneStartedAt) }, "Pruned application state");
     projectTools = options.projectTools ?? new ProjectToolBroker(database.db, stateRoot, options.toolRuntime, undefined, (error) => app.log.error(error));
     await projectTools.start();
 
+    const developmentStartedAt = performance.now();
     const developmentRuntimes = await prepareDevelopmentIssueRuntimes(database.db, stateRoot);
     for (const blocked of developmentRuntimes.blocked) app.log.warn(blocked, "Development issue runtime could not be prepared");
-    if (developmentRuntimes.prepared.length) app.log.info({ issueKeys: developmentRuntimes.prepared }, "Prepared development issue runtimes");
+    app.log.info({ issueKeys: developmentRuntimes.prepared, durationMs: Math.round(performance.now() - developmentStartedAt) }, "Prepared development issue runtimes");
+
+    const readOnlyStartedAt = performance.now();
     const readOnlyRuntimes = await prepareReadOnlyIssueRuntimes(database.db, stateRoot);
     for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only issue runtime could not be prepared");
-    if (readOnlyRuntimes.prepared.length) app.log.info({ issueKeys: readOnlyRuntimes.prepared }, "Prepared read-only issue runtimes");
+    app.log.info({ issueKeys: readOnlyRuntimes.prepared, durationMs: Math.round(performance.now() - readOnlyStartedAt) }, "Prepared read-only issue runtimes");
 
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog();
     const attachmentLimits = applicationConfig.limits.attachment;
@@ -95,7 +102,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
+    const maintenanceStartedAt = performance.now();
     await workspaces.maintain();
+    app.log.info({ durationMs: Math.round(performance.now() - maintenanceStartedAt) }, "Completed workspace maintenance");
     stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(error));
 
     app.setErrorHandler((error, _request, reply) => {

@@ -3,6 +3,7 @@ import { chmod, mkdir, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
+import pMap from "p-map";
 
 import type { Database } from "../db/client.ts";
 import { issueWorkspaces } from "../db/schema.ts";
@@ -26,19 +27,21 @@ export async function prepareIssueRuntimeBatch<T extends { id: string; key: stri
   database: Database,
   issueRows: T[],
   prepareRuntime: (issue: T) => Promise<unknown>,
+  options: { concurrency?: number } = {},
 ): Promise<RuntimePreparationResult> {
-  const prepared: string[] = [];
-  const blocked: RuntimePreparationResult["blocked"] = [];
-  for (const issue of issueRows) {
+  const outcomes = await pMap(issueRows, async (issue) => {
     try {
       await prepareRuntime(issue);
-      prepared.push(issue.key);
+      return { issueKey: issue.key };
     } catch (error) {
       await database.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).catch(() => undefined);
-      blocked.push({ issueKey: issue.key, reason: errorMessage(error) });
+      return { issueKey: issue.key, reason: errorMessage(error) };
     }
-  }
-  return { prepared, blocked };
+  }, { concurrency: options.concurrency ?? 1, stopOnError: false });
+  return {
+    prepared: outcomes.filter((outcome) => outcome.reason === undefined).map(({ issueKey }) => issueKey),
+    blocked: outcomes.filter((outcome): outcome is { issueKey: string; reason: string } => outcome.reason !== undefined),
+  };
 }
 
 function managedRepository(stateRoot: string, issueKey: string, repositoryPath: string, access: IssueRuntimeAccess): string {

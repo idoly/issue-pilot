@@ -4,8 +4,38 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
+import { prepareIssueRuntime, prepareIssueRuntimeBatch } from "../../src/workspace/runtime.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+
+test("bounds runtime preparation concurrency and preserves Issue result order", async () => {
+  const issues = ["001", "002", "003", "004"].map((suffix) => ({ id: suffix, key: `ISSUE-20260816-${suffix}` }));
+  let active = 0;
+  let maximumActive = 0;
+  let failedUpdates = 0;
+  const database = {
+    update() {
+      failedUpdates += 1;
+      return { set: () => ({ where: async () => undefined }) };
+    },
+  };
+  const result = await prepareIssueRuntimeBatch(database as never, issues, async (issue) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, issue.id === "001" ? 15 : 2));
+      if (issue.id === "002") throw new Error("runtime_blocked");
+    } finally {
+      active -= 1;
+    }
+  }, { concurrency: 2 });
+
+  assert.equal(maximumActive, 2);
+  assert.equal(failedUpdates, 1);
+  assert.deepEqual(result, {
+    prepared: ["ISSUE-20260816-001", "ISSUE-20260816-003", "ISSUE-20260816-004"],
+    blocked: [{ issueKey: "ISSUE-20260816-002", reason: "runtime_blocked" }],
+  });
+});
 
 test("prepares the same issue runtime shape for read-only checkouts and writable worktrees", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-runtime-"));

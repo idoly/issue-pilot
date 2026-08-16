@@ -24,7 +24,7 @@ export interface WorkspaceLifecyclePolicy {
   highWaterBytes: number;
   targetBytes: number;
   maintenanceIntervalMs: number;
-  inspectionConcurrency: number;
+  taskConcurrency: number;
 }
 
 export interface WorkspaceInspection {
@@ -99,7 +99,7 @@ export class WorkspaceLifecycleManager {
     prepareRuntime?: (issue: { id: string; key: string }) => Promise<unknown>,
   ) {
     if (policy.highWaterBytes > 0 && policy.targetBytes >= policy.highWaterBytes) throw new Error("workspace_target_must_be_below_high_water");
-    if (!Number.isSafeInteger(policy.inspectionConcurrency) || policy.inspectionConcurrency < 1) throw new Error("workspace_inspection_concurrency_invalid");
+    if (!Number.isSafeInteger(policy.taskConcurrency) || policy.taskConcurrency < 1) throw new Error("workspace_task_concurrency_invalid");
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.engine = engine;
@@ -146,7 +146,7 @@ export class WorkspaceLifecycleManager {
       const inspections = await pMap(
         issueRows,
         (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace)),
-        { concurrency: this.policy.inspectionConcurrency, stopOnError: false },
+        { concurrency: this.policy.taskConcurrency, stopOnError: false },
       );
       return {
         totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
@@ -203,7 +203,7 @@ export class WorkspaceLifecycleManager {
       const measuredWorkspaces = await pMap(
         issueRows,
         async ({ issue }) => ({ issueId: issue.id, bytes: await directoryBytes(issueWorkspaceRoot(this.stateRoot, issue.key)) }),
-        { concurrency: this.policy.inspectionConcurrency, stopOnError: false },
+        { concurrency: this.policy.taskConcurrency, stopOnError: false },
       );
       const workspaceBytes = new Map(measuredWorkspaces.map(({ issueId, bytes }) => [issueId, bytes]));
       let totalBytes = measuredWorkspaces.reduce((total, { bytes }) => total + bytes, 0);

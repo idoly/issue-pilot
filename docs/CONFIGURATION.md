@@ -62,9 +62,9 @@ Vite 监听 `0.0.0.0` 仅用于受信任开发网络。生产安全边界仍要�
 | `workspace.highWaterBytes` | `21474836480` | 总量 20 GiB 时触发 quota 回收；`0` 关闭 |
 | `workspace.targetBytes` | `17179869184` | 回收到 16 GiB |
 | `workspace.maintenanceIntervalMs` | `900000` | 每 15 分钟运行；`0` 关闭定时器 |
-| `workspace.inspectionConcurrency` | `4` | Workspace检查及disposable generated state清理的最大并发数 |
+| `workspace.taskConcurrency` | `4` | 独立Workspace检查、runtime准备及disposable generated state清理的最大并发数 |
 
-Non-zero target 必须小于 high-water，inspection concurrency必须为正整数。无论 interval 是否为 0，API 启动都会运行一次 maintenance。
+Non-zero target 必须小于 high-water，task concurrency必须为正整数。无论 interval 是否为 0，API 启动都会运行一次 maintenance。
 
 ### 默认值
 
