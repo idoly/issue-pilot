@@ -30,6 +30,35 @@ async function createRemote(root: string): Promise<string> {
   return remote;
 }
 
+async function withGitFetchCount<T>(root: string, operation: () => Promise<T>): Promise<{ result: T; fetches: number }> {
+  const binRoot = path.join(root, "bin");
+  const fetchLog = path.join(root, "fetch.log");
+  const gitExecutable = (await execFileAsync("sh", ["-c", "command -v git"], { encoding: "utf8" })).stdout.trim();
+  await mkdir(binRoot);
+  await writeFile(fetchLog, "", "utf8");
+  await writeFile(path.join(binRoot, "git"), `#!/bin/sh
+for argument do
+  if [ "$argument" = fetch ]; then printf 'fetch\\n' >> "$ISSUE_PILOT_FETCH_LOG"; break; fi
+done
+exec ${JSON.stringify(gitExecutable)} "$@"
+`, { mode: 0o700 });
+
+  const previousPath = process.env.PATH;
+  const previousFetchLog = process.env.ISSUE_PILOT_FETCH_LOG;
+  try {
+    process.env.PATH = `${binRoot}:${previousPath ?? ""}`;
+    process.env.ISSUE_PILOT_FETCH_LOG = fetchLog;
+    const result = await operation();
+    const fetches = (await readFile(fetchLog, "utf8")).split("\n").filter(Boolean).length;
+    return { result, fetches };
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousFetchLog === undefined) delete process.env.ISSUE_PILOT_FETCH_LOG;
+    else process.env.ISSUE_PILOT_FETCH_LOG = previousFetchLog;
+  }
+}
+
 test("hydrates current read-only issue runtimes from deployment branches", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-read-only-runtime-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
@@ -41,62 +70,30 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: remote }).returning();
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" });
-    const [issue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260810-201",
-      title: "Inspect production",
-      type: "smart_analysis",
+    const issueValues = {
+      type: "smart_analysis" as const,
       serviceId: service!.id,
       environmentId: prod!.id,
       reporterSubject: "tester",
-    }).returning();
-    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: false });
-    await database.db.insert(agentSessions).values({
-      issueId: issue!.id,
-      sessionFile: path.join(issueSessionRoot(root, issue!.key), "session.jsonl"),
-      workspacePath: issueRuntimeRoot(root, issue!.key),
-    });
-    const [secondIssue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260810-202",
-      title: "Inspect the same production deployment",
-      type: "smart_analysis",
-      serviceId: service!.id,
-      environmentId: prod!.id,
-      reporterSubject: "tester",
-    }).returning();
-    await database.db.insert(issueWorkspaces).values({ issueId: secondIssue!.id, status: "ready", runtimeReady: false });
-    await database.db.insert(agentSessions).values({
-      issueId: secondIssue!.id,
-      sessionFile: path.join(issueSessionRoot(root, secondIssue!.key), "session.jsonl"),
-      workspacePath: issueRuntimeRoot(root, secondIssue!.key),
-    });
+    };
+    const [issue, secondIssue] = await database.db.insert(issues).values([
+      { ...issueValues, key: "ISSUE-20260810-201", title: "Inspect production" },
+      { ...issueValues, key: "ISSUE-20260810-202", title: "Inspect the same production deployment" },
+    ]).returning();
+    await database.db.insert(issueWorkspaces).values([
+      { issueId: issue!.id, status: "ready", runtimeReady: false },
+      { issueId: secondIssue!.id, status: "ready", runtimeReady: false },
+    ]);
+    await database.db.insert(agentSessions).values([issue!, secondIssue!].map((entry) => ({
+      issueId: entry.id,
+      sessionFile: path.join(issueSessionRoot(root, entry.key), "session.jsonl"),
+      workspacePath: issueRuntimeRoot(root, entry.key),
+    })));
 
-    const binRoot = path.join(root, "bin");
-    const fetchLog = path.join(root, "fetch.log");
-    const gitExecutable = (await execFileAsync("sh", ["-c", "command -v git"], { encoding: "utf8" })).stdout.trim();
-    await mkdir(binRoot);
-    await writeFile(fetchLog, "", "utf8");
-    await writeFile(path.join(binRoot, "git"), `#!/bin/sh
-for argument do
-  if [ "$argument" = fetch ]; then printf 'fetch\\n' >> "$ISSUE_PILOT_FETCH_LOG"; break; fi
-done
-exec ${JSON.stringify(gitExecutable)} "$@"
-`, { mode: 0o700 });
-    const previousPath = process.env.PATH;
-    const previousFetchLog = process.env.ISSUE_PILOT_FETCH_LOG;
-    let result: Awaited<ReturnType<typeof prepareReadOnlyIssueRuntimes>>;
-    try {
-      process.env.PATH = `${binRoot}:${previousPath ?? ""}`;
-      process.env.ISSUE_PILOT_FETCH_LOG = fetchLog;
-      result = await prepareReadOnlyIssueRuntimes(database.db, root);
-    } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-      if (previousFetchLog === undefined) delete process.env.ISSUE_PILOT_FETCH_LOG;
-      else process.env.ISSUE_PILOT_FETCH_LOG = previousFetchLog;
-    }
+    const { result, fetches } = await withGitFetchCount(root, () => prepareReadOnlyIssueRuntimes(database.db, root));
     assert.deepEqual([...result.prepared].sort(), [issue!.key, secondIssue!.key]);
     assert.deepEqual(result.blocked, []);
-    assert.equal((await readFile(fetchLog, "utf8")).trim().split("\n").filter(Boolean).length, 1);
+    assert.equal(fetches, 1);
     await database.db.delete(issues).where(eq(issues.id, secondIssue!.id));
 
     const [repository] = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));

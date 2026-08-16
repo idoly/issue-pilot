@@ -545,7 +545,7 @@ test("converts a completed production analysis to a development defect while pre
 
     const worktrees = new WorktreeManager(root);
     const projects = new IssueProjectManager(database.db, root, worktrees);
-    const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!, "prod");
+    const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!);
     const sessionRoot = issueSessionRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "analysis.jsonl");
     await mkdir(sessionRoot, { recursive: true, mode: 0o700 });

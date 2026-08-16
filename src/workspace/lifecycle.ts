@@ -259,7 +259,7 @@ export class WorkspaceLifecycleManager {
     if (!developmentEnvironment) throw new WorkspaceConversionRefusal("development_environment_not_found");
     await reservation.closeSession(issue.id);
     try {
-      const converted = await this.projects.convertReadOnlyToDevelopment(issue, "prod", developmentEnvironment.id, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+      const converted = await this.projects.convertReadOnlyToDevelopment(issue, developmentEnvironment.id, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
         return this.database.transaction(async (transaction) => {
           const now = new Date();
           const targetUrls = repositories.map(({ repository }) => repository.url);

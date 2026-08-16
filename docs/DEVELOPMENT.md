@@ -317,7 +317,8 @@ src/web/src/app/AgentPanel.test.ts
 
 - `IssueProjectManager.prepare()`：Agent路径。
 - `hydrateDevelopmentRuntime()`：dev cold start。
-- `hydrateReadOnlyRuntime()`：prod/test cold start。
+- `hydrateReadOnlyRuntime()`：单个prod/test runtime恢复。
+- `hydrateReadOnlyRuntimes()`：prod/test cold-start批次，按Deployment复用checkout准备。
 - `restoreDevelopmentWorkspace()`：released dev reopen。
 
 新入口应复用这些方法或扩展 owning manager，不要复制 prepare sequence。
