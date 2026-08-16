@@ -79,7 +79,7 @@ test("closes initialized resources when API assembly fails", async () => {
       databaseFile,
       engine,
       logger: false,
-      workspacePolicy: { retentionMs: 0, highWaterBytes: 1, targetBytes: 1, maintenanceIntervalMs: 0 },
+      workspacePolicy: { retentionMs: 0, highWaterBytes: 1, targetBytes: 1, maintenanceIntervalMs: 0, inspectionConcurrency: 1 },
     }), /workspace_target_must_be_below_high_water/);
     assert.equal(engine.closed, 1);
     const database = openDatabase(databaseFile);

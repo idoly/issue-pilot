@@ -30,6 +30,7 @@ export const issuePilotConfig = Object.freeze({
     highWaterBytes: 20 * gibibyte,
     targetBytes: 16 * gibibyte,
     maintenanceIntervalMs: 15 * 60 * 1000,
+    inspectionConcurrency: 4,
   }),
   defaults: Object.freeze({
     environments: Object.freeze({ prod: "正式", test: "测试", dev: "开发" }),

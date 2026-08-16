@@ -11,7 +11,7 @@ import { issues } from "../db/schema.ts";
 import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
 import { SerialQueue } from "../serial.ts";
 import { prepareDevelopmentIssueRuntimes } from "../workspace/development.ts";
-import { WorkspaceLifecycleManager, type WorkspaceRetentionPolicy } from "../workspace/lifecycle.ts";
+import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { ProjectToolBroker } from "../workspace/project-tools.ts";
 import { prepareReadOnlyIssueRuntimes } from "../workspace/read-only.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
@@ -36,7 +36,7 @@ export interface ApiOptions {
   logger?: boolean;
   listenHost?: string;
   modelCatalog?: AgentModelCatalog;
-  workspacePolicy?: WorkspaceRetentionPolicy;
+  workspacePolicy?: WorkspaceLifecyclePolicy;
   projectTools?: Pick<ProjectToolBroker, "start" | "close">;
   webRoot?: string;
 }

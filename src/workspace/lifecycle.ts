@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { and, asc, eq, notInArray } from "drizzle-orm";
+import pMap from "p-map";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
@@ -18,11 +19,12 @@ import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, cl
 
 const execFileAsync = promisify(execFile);
 
-export interface WorkspaceRetentionPolicy {
+export interface WorkspaceLifecyclePolicy {
   retentionMs: number;
   highWaterBytes: number;
   targetBytes: number;
   maintenanceIntervalMs: number;
+  inspectionConcurrency: number;
 }
 
 export interface WorkspaceInspection {
@@ -82,7 +84,7 @@ export class WorkspaceLifecycleManager {
   private readonly worktrees: WorktreeManager;
   private readonly projects: IssueProjectManager;
   private readonly prepareDevelopmentRuntime: (issue: { id: string; key: string }) => Promise<unknown>;
-  readonly policy: WorkspaceRetentionPolicy;
+  readonly policy: WorkspaceLifecyclePolicy;
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
   private statsPromise: Promise<WorkspaceStatistics> | undefined;
@@ -93,10 +95,11 @@ export class WorkspaceLifecycleManager {
     database: Database,
     stateRoot: string,
     engine: AgentController,
-    policy: WorkspaceRetentionPolicy = issuePilotConfig.workspace,
+    policy: WorkspaceLifecyclePolicy = issuePilotConfig.workspace,
     prepareRuntime?: (issue: { id: string; key: string }) => Promise<unknown>,
   ) {
     if (policy.highWaterBytes > 0 && policy.targetBytes >= policy.highWaterBytes) throw new Error("workspace_target_must_be_below_high_water");
+    if (!Number.isSafeInteger(policy.inspectionConcurrency) || policy.inspectionConcurrency < 1) throw new Error("workspace_inspection_concurrency_invalid");
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.engine = engine;
@@ -140,8 +143,11 @@ export class WorkspaceLifecycleManager {
     if (this.statsPromise) return this.statsPromise;
     const request = this.exclusive(async () => {
       const issueRows = await this.issueRows();
-      const inspections: WorkspaceInspection[] = [];
-      for (const issueRow of issueRows) inspections.push(await this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace)));
+      const inspections = await pMap(
+        issueRows,
+        (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace)),
+        { concurrency: this.policy.inspectionConcurrency, stopOnError: false },
+      );
       return {
         totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
         policy: {
@@ -194,13 +200,13 @@ export class WorkspaceLifecycleManager {
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }> }> {
     return this.exclusive(async () => {
       const issueRows = await this.issueRows();
-      const workspaceBytes = new Map<string, number>();
-      let totalBytes = 0;
-      for (const { issue } of issueRows) {
-        const bytes = await directoryBytes(issueWorkspaceRoot(this.stateRoot, issue.key));
-        workspaceBytes.set(issue.id, bytes);
-        totalBytes += bytes;
-      }
+      const measuredWorkspaces = await pMap(
+        issueRows,
+        async ({ issue }) => ({ issueId: issue.id, bytes: await directoryBytes(issueWorkspaceRoot(this.stateRoot, issue.key)) }),
+        { concurrency: this.policy.inspectionConcurrency, stopOnError: false },
+      );
+      const workspaceBytes = new Map(measuredWorkspaces.map(({ issueId, bytes }) => [issueId, bytes]));
+      let totalBytes = measuredWorkspaces.reduce((total, { bytes }) => total + bytes, 0);
 
       const released: WorkspaceReleaseResult[] = [];
       const blocked: Array<{ issueKey: string; reason: string }> = [];
