@@ -33,7 +33,7 @@ const stableRequestErrors = new Set([
   "unsupported_package_manager",
 ]);
 
-export type ProjectToolKind = "node" | "maven";
+type ProjectToolKind = "node" | "maven";
 
 export interface ProjectToolRequest {
   tool: ProjectToolKind;

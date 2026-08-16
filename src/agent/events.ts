@@ -1,6 +1,6 @@
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 
-export type AgentWireEvent = JsonAgentSessionEvent
+type AgentWireEvent = JsonAgentSessionEvent
   | { type: "issue_user"; message: string }
   | { type: "issue_status"; status: "complete" | "error" };
 

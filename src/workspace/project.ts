@@ -13,7 +13,7 @@ import { prepareProjectWrappers } from "./project-wrappers.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RuntimePreparationResult } from "./runtime.ts";
 import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
-export interface PreparedIssueRepository {
+interface PreparedIssueRepository {
   name: string;
   workspacePath: string;
   baseBranch: string;

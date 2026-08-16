@@ -20,7 +20,7 @@ import type {
 import { errorMessage, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceHistory, type SourceCommit, type SourceCommitFile, type SourceCommitFileComparison, type SourceRepository } from "../data/client";
 import { getIssuePilotVscodeApi, sourceControlRefreshCommand, type IssuePilotVscodeApi } from "./extension-api";
 
-export const sourceRevisionScheme = "issue-pilot-commit";
+const sourceRevisionScheme = "issue-pilot-commit";
 const encoder = new TextEncoder();
 
 type RevisionResource = {
@@ -31,7 +31,7 @@ type RevisionResource = {
   side: "before" | "after";
 };
 
-export class SourceRevisionFileSystemProvider implements FileSystemProvider {
+class SourceRevisionFileSystemProvider implements FileSystemProvider {
   readonly onDidChangeFile: Event<FileChangeEvent[]>;
   private readonly resources = new Map<string, RevisionResource>();
   private readonly comparisons = new Map<string, Promise<SourceCommitFileComparison>>();

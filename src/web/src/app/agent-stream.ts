@@ -1,14 +1,14 @@
 import type { AgentFooterStats, IssueStatus, RunEvent } from "../data/client";
 import { activityForEvent, applyAgentEvent, type AgentActivity, type ConversationEntry } from "./conversation";
 
-export interface AgentStreamSnapshot {
+interface AgentStreamSnapshot {
   agent?: { provider: string; model: string; thinkingLevel: string };
   footer?: AgentFooterStats;
   running?: boolean;
   issueStatus?: IssueStatus;
 }
 
-export interface AgentStreamReplay {
+interface AgentStreamReplay {
   entries: ConversationEntry[];
   activity: AgentActivity | null;
   queue: { steering: string[]; followUp: string[] };

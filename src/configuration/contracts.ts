@@ -10,7 +10,7 @@ export const CAPABILITY_CREDENTIALS = {
   sls: { fields: ["accessKeyId", "accessKeySecret"], required: true },
 } as const satisfies { [Key in CapabilityName]: { fields: readonly (keyof NonNullable<CapabilityConfiguration[Key]>)[]; required: boolean } };
 
-export type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIALS)[Key]["fields"][number];
+type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIALS)[Key]["fields"][number];
 export type CapabilityCredentialValues<Key extends CapabilityName> = Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
 export type PublicCapabilitySection<Key extends CapabilityName> = Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialConfigured: boolean };
 export type PublicCapabilityConfiguration = { [Key in CapabilityName]?: PublicCapabilitySection<Key> };
@@ -24,12 +24,12 @@ export type CapabilityConfigurationInput = {
 
 export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;
 
-export interface EnvironmentOption {
+interface EnvironmentOption {
   key: string;
   name: string;
 }
 
-export interface ServiceCatalogItem {
+interface ServiceCatalogItem {
   key: string;
   name: string;
   deployments: Array<{ environmentKey: string }>;
@@ -40,7 +40,7 @@ export interface ConfigurationCatalog {
   services: ServiceCatalogItem[];
 }
 
-export interface ServiceDeployment extends PublicCapabilityConfiguration {
+interface ServiceDeployment extends PublicCapabilityConfiguration {
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];

@@ -11,7 +11,7 @@ const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 
-export interface ToolMetadata {
+interface ToolMetadata {
   label: string;
   description: string;
   promptSnippet: string;
@@ -75,7 +75,7 @@ function connectionUrl(value: unknown, name: string, protocols: string[], option
   return configuredUrl;
 }
 
-export const capabilityInputSchemas = {
+const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
   db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
   redis: Type.Object({

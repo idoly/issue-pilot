@@ -1,10 +1,10 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentFooterStats, type AgentThinkingLevel, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
 export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy };
-export type { AgentConfiguration, CapabilityConfiguration, CapabilityName } from "../../../domain/contracts";
-export type { AgentFooterStats, AgentModelOption, AgentThinkingLevel, IssuePriority, IssueStatus, IssueType, WorkspaceStatus };
+export type { AgentConfiguration, CapabilityName } from "../../../domain/contracts";
+export type { AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType };
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
 export type Service = ServiceConfiguration;
@@ -52,10 +52,10 @@ export interface SourceTree { path: string; entries: SourceTreeEntry[]; truncate
 export interface SourceFile { path: string; content: string; size: number }
 export interface SourceSearchMatch { path: string; line: number; column: number; preview: string }
 export interface SourceCommit { hash: string; shortHash: string; parents: string[]; author: string; date: string; subject: string }
-export type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
+type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
 export interface SourceCommitFile { status: SourceCommitFileStatus; path: string; previousPath: string | null }
-export interface SourceRevisionFile { path: string; revision: string; content: string }
-export interface SourceWorkspaceFile { path: string; version: "index" | "working-tree"; content: string }
+interface SourceRevisionFile { path: string; revision: string; content: string }
+interface SourceWorkspaceFile { path: string; version: "index" | "working-tree"; content: string }
 export interface SourceCommitFileComparison { file: SourceCommitFile; before: SourceRevisionFile | null; after: SourceRevisionFile | null }
 export interface SourceWorkspaceFileComparison { file: SourceCommitFile; before: SourceWorkspaceFile | null; after: SourceWorkspaceFile | null }
 

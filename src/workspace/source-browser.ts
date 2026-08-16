@@ -42,7 +42,7 @@ export interface SourceCommit {
   subject: string;
 }
 
-export type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
+type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
 
 export interface SourceCommitFile {
   status: SourceCommitFileStatus;
@@ -50,13 +50,13 @@ export interface SourceCommitFile {
   previousPath: string | null;
 }
 
-export interface SourceRevisionFile {
+interface SourceRevisionFile {
   path: string;
   revision: string;
   content: string;
 }
 
-export interface SourceWorkspaceFile {
+interface SourceWorkspaceFile {
   path: string;
   version: "index" | "working-tree";
   content: string;

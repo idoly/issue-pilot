@@ -21,6 +21,15 @@
 - workspace/development.ts与workspace/read-only.ts薄启动查询已并入project.ts；其他大文件拆分会增加事务、queue、rollback或授权协调。
 - 没有发现其他零入站生产模块；零入站项均为entrypoint、Worker、Vite入口或测试。
 
+## 后续优化
+
+基于本报告再次执行逐符号引用扫描后：
+
+- 删除`ExternalLink`、`FolderOpen`、`GitCompare`和`Minimize2`四个无引用icon wrapper。
+- 将24个仅在定义模块内部使用的type、schema、constant和class取消export，缩小后端、Web client和Workbench内部公开面。
+- 保留Knip误报的Node/Vite/Worker入口、跨模块Workbench注册函数和vendor package导出；这些项目分别由脚本、HTML、virtual module、运行时注册或第三方package contract消费。
+- 复跑TypeScript、129个后端测试、56个Web测试和生产构建，未发现行为变化。
+
 ## 逐文件清单
 
 | 文件 | 行数 | 作用 | 设计判断 | 重复/兼容/无用判断 | 建议 |

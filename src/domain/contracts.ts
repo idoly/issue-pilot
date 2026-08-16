@@ -46,8 +46,8 @@ export interface AgentFooterStats {
   autoCompact: boolean;
 }
 
-export const DMS_DATABASE_ID_MAX = 2_147_483_647;
-export const DMS_TENANT_ID_MAX = Number.MAX_SAFE_INTEGER;
+const DMS_DATABASE_ID_MAX = 2_147_483_647;
+const DMS_TENANT_ID_MAX = Number.MAX_SAFE_INTEGER;
 
 export function isDmsDatabaseId(value: unknown): value is string {
   return typeof value === "string" && /^[1-9][0-9]{0,9}$/.test(value) && Number(value) <= DMS_DATABASE_ID_MAX;
