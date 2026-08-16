@@ -1,5 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai";
-import { calculateContextTokens, estimateTokens, sessionEntryToContextMessages, type SessionManager } from "@earendil-works/pi-coding-agent";
+import { calculateContextTokens, estimateTokens, type SessionManager } from "@earendil-works/pi-coding-agent";
 
 import type { AgentFooterStats } from "../domain/contracts.ts";
 
@@ -48,7 +48,7 @@ export function sessionFooterStats(manager: SessionManager, contextWindow: numbe
   const compactionIndex = branch.findLastIndex((entry) => entry.type === "compaction");
   if (compactionIndex >= 0 && !branch.slice(compactionIndex + 1).some((entry) => entry.type === "message" && hasValidUsage(entry.message))) return stats;
 
-  const messages = manager.buildContextEntries().flatMap((entry) => sessionEntryToContextMessages(entry));
+  const messages = manager.buildSessionContext().messages;
   let lastUsageIndex = -1;
   let contextTokens = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {

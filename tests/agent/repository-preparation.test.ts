@@ -60,11 +60,12 @@ test("atomically switches development repository sets across preparation and fin
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(): Promise<unknown> };
+      piRuntime: { start(): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
       async start() { return { session: {}, streaming: false, async prompt() {}, async stop() {} }; },
+      async close() {},
     };
     const [unmanagedIssue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-104", title: "Preserve unmanaged workspace", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: unmanagedIssue!.id });
@@ -180,7 +181,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(options: { policy: IssuePolicy }): Promise<unknown> };
+      piRuntime: { start(options: { policy: IssuePolicy }): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
@@ -188,6 +189,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
         policies.push(options.policy);
         return { session: {}, streaming: false, async prompt() {}, async stop() { sessionStops += 1; } };
       },
+      async close() {},
     };
     await internal.run(prodIssue!.id);
     const prodRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, prodIssue!.id));

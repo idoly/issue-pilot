@@ -233,7 +233,9 @@ Thinking level 固定集合：
 off, minimal, low, medium, high, xhigh, max
 ```
 
-API 保存前从本机 Pi `ModelRuntime` 获取已配置认证且当前可用的 model，并验证 thinking level。不存在环境变量 fallback。
+API 保存前从进程内共享的 Pi `ModelRuntime` 获取已配置认证且当前可用的 model，并验证 thinking level。目录读取执行全量离线刷新；启动 Issue session 时只离线刷新目标 provider。两者复用同一当前快照，不从远程 model catalog 拉取，也不存在 Issue Pilot 环境变量 fallback。
+
+Pi 配置继续只读挂载。Runtime 直接读取原 `models.json`，并把 `auth.json` 与 `models-store.json` 复制到进程私有的 `0700` 临时目录，副本权限为 `0600`，只供 Pi 的公开 storage 实现加锁和维护当前进程的 credential/catalog 状态；关闭 runtime 时删除。副本不进入 Issue runtime、state、日志或进程参数。外部修改 `models.json` 会在下一次 refresh 生效；外部修改 `auth.json` 或 `models-store.json` 后必须重启 application，以明确替换当前进程可能已刷新的 OAuth 或 catalog 状态。
 
 ## 本地 Pi 工具
 

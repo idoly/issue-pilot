@@ -8,7 +8,7 @@ import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
-import { PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
+import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
 import { SerialQueue } from "../serial.ts";
 import { prepareDevelopmentIssueRuntimes } from "../workspace/development.ts";
 import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
@@ -73,6 +73,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: true });
   app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
   let engine: AgentController | undefined;
+  let modelRuntime: ReturnType<typeof createPiModelRuntime> | undefined;
   let projectTools: Pick<ProjectToolBroker, "start" | "close"> | undefined;
   let stopWorkspaceMaintenance: (() => Promise<void>) | undefined;
 
@@ -94,11 +95,12 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only issue runtime could not be prepared");
     app.log.info({ issueKeys: readOnlyRuntimes.prepared, durationMs: Math.round(performance.now() - readOnlyStartedAt) }, "Prepared read-only issue runtimes");
 
-    const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog();
+    const sharedModelRuntime = () => modelRuntime ??= createPiModelRuntime();
+    const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
     const attachmentLimits = applicationConfig.limits.attachment;
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
     const events = new AgentEventBus((error) => app.log.error(error));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.toolRuntime);
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.toolRuntime, sharedModelRuntime());
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -150,6 +152,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       const failures: unknown[] = [];
       try { await stopWorkspaceMaintenance?.(); } catch (error) { failures.push(error); }
       try { await engine?.close?.(); } catch (error) { failures.push(error); }
+      try { await modelRuntime?.close(); } catch (error) { failures.push(error); }
       try { await projectTools?.close(); } catch (error) { failures.push(error); }
       try { await database.close(); } catch (error) { failures.push(error); }
       if (failures.length === 1) throw failures[0];
@@ -159,6 +162,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   } catch (error) {
     if (stopWorkspaceMaintenance) await stopWorkspaceMaintenance().catch(() => undefined);
     if (engine?.close) await engine.close().catch(() => undefined);
+    await modelRuntime?.close().catch(() => undefined);
     await projectTools?.close().catch(() => undefined);
     await app.close().catch(() => undefined);
     try { await database.close(); } catch {

@@ -22,6 +22,7 @@ import {
   services,
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind } from "../domain/contracts.ts";
+import type { PiModelRuntime } from "../pi/models.ts";
 import { createDeploymentPolicy } from "../pi/policy.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -64,13 +65,14 @@ export class AgentEngine implements AgentController {
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
     tools: ToolRuntime = processToolRuntime,
+    modelRuntime?: PiModelRuntime,
   ) {
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
     this.publish = publish;
     this.onError = onError;
-    this.piRuntime = new PiSessionRuntime(undefined, createCapabilityExecutor(tools));
+    this.piRuntime = new PiSessionRuntime(modelRuntime, createCapabilityExecutor(tools));
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
@@ -159,6 +161,8 @@ export class AgentEngine implements AgentController {
       try { await this.stopSession(issueId); }
       catch (error) { failures.push(error); }
     }
+    try { await this.piRuntime.close(); }
+    catch (error) { failures.push(error); }
     if (failures.length) throw new AggregateError(failures, "agent_close_failed");
   }
 
@@ -265,7 +269,7 @@ export class AgentEngine implements AgentController {
     const manager = binding && await pathExists(binding.sessionFile)
       ? SessionManager.open(binding.sessionFile, sessionDirectory, project.workspaceRoot)
       : await createPrivateSessionManager(project.workspaceRoot, sessionDirectory);
-    const hadMessages = manager.buildContextEntries().some((entry) => entry.type === "message");
+    const hadMessages = manager.buildSessionContext().messages.length > 0;
 
     const managed = await this.piRuntime.start({
       workspaceRoot: project.workspaceRoot,

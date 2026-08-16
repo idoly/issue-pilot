@@ -5,7 +5,6 @@ import {
   createBashToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
-  ModelRuntime,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -15,6 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { executeCapability, type CapabilityExecutor } from "../capabilities/broker.ts";
+import { createPiModelRuntime, type PiModelRuntime } from "../pi/models.ts";
 import { createCapabilityTools } from "../pi/tools.ts";
 import { piToolAllowlist, type IssuePolicy } from "../pi/policy.ts";
 
@@ -100,22 +100,27 @@ async function abortAndDispose(session: AgentSession): Promise<void> {
 }
 
 export class PiSessionRuntime {
-  readonly #modelRuntime: Promise<ModelRuntime>;
+  readonly #modelRuntime: PiModelRuntime;
+  readonly #ownsModelRuntime: boolean;
   readonly #capabilityExecutor: CapabilityExecutor;
 
-  constructor(modelRuntime = ModelRuntime.create({ allowModelNetwork: false }), capabilityExecutor: CapabilityExecutor = executeCapability) {
-    this.#modelRuntime = modelRuntime;
+  constructor(modelRuntime?: PiModelRuntime, capabilityExecutor: CapabilityExecutor = executeCapability) {
+    this.#modelRuntime = modelRuntime ?? createPiModelRuntime();
+    this.#ownsModelRuntime = modelRuntime === undefined;
     this.#capabilityExecutor = capabilityExecutor;
+  }
+
+  async close(): Promise<void> {
+    if (this.#ownsModelRuntime) await this.#modelRuntime.close();
   }
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
     const { policy, workspaceRoot } = options;
-    const modelRuntime = await this.#modelRuntime;
-    await modelRuntime.refresh();
+    const modelRuntime = await this.#modelRuntime.load();
+    await modelRuntime.refresh({ providers: [policy.model.provider], allowNetwork: false });
     const model = modelRuntime.getModel(policy.model.provider, policy.model.modelId);
     if (!model) throw new Error(`configured_model_not_found:${policy.model.provider}/${policy.model.modelId}`);
-    const available = await modelRuntime.getAvailable(policy.model.provider);
-    if (!available.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) {
+    if (!modelRuntime.getAvailableSnapshot().some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) {
       throw new Error(`configured_model_unavailable:${model.provider}/${model.id}`);
     }
 

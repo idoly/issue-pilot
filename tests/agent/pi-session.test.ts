@@ -8,6 +8,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { createPrivateSessionManager, PiSessionRuntime } from "../../src/agent/pi-session.ts";
+import type { PiModelRuntime } from "../../src/pi/models.ts";
 import { createIssuePolicy, piToolAllowlist, type IssuePolicy } from "../../src/pi/policy.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
@@ -66,12 +67,19 @@ const model: Model<"openai-responses"> = {
   maxTokens: 8_000,
 };
 
-function modelRuntime(available = true): ModelRuntime {
+function modelRuntime(available = true, refreshes?: unknown[]): ModelRuntime {
   return {
-    async refresh() { return { aborted: false, errors: new Map() }; },
+    async refresh(options: unknown) {
+      refreshes?.push(options);
+      return { aborted: false, errors: new Map() };
+    },
     getModel() { return model; },
-    async getAvailable() { return available ? [model] : []; },
+    getAvailableSnapshot() { return available ? [model] : []; },
   } as unknown as ModelRuntime;
+}
+
+function sharedModelRuntime(runtime: ModelRuntime): PiModelRuntime {
+  return { async load() { return runtime; }, async close() {} };
 }
 
 test("limits read-only deployments to non-mutating Pi tools", () => {
@@ -90,7 +98,8 @@ test("starts an SDK session with only policy-selected tools and explicit resourc
   const sessionDirectory = join(root, "sessions");
   await Promise.all([mkdir(workspaceRoot), mkdir(sessionDirectory)]);
   const manager = await createPrivateSessionManager(workspaceRoot, sessionDirectory);
-  const runtime = new PiSessionRuntime(Promise.resolve(modelRuntime()));
+  const refreshes: unknown[] = [];
+  const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime(true, refreshes)));
   try {
     const managed = await runtime.start({
       manager,
@@ -100,6 +109,7 @@ test("starts an SDK session with only policy-selected tools and explicit resourc
       systemPrompt: "Issue Pilot test policy.",
       onEvent: () => undefined,
     });
+    assert.deepEqual(refreshes, [{ providers: ["test-provider"], allowNetwork: false }]);
     assert.deepEqual(managed.session.getActiveToolNames(), ["read", "grep", "find", "ls"]);
     assert.equal(managed.session.model?.id, "test-model");
     assert.equal(managed.session.thinkingLevel, "medium");
@@ -113,7 +123,7 @@ test("starts an SDK session with only policy-selected tools and explicit resourc
 test("disposes an SDK session even when abort fails during stop", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
   const manager = await createPrivateSessionManager(root, root);
-  const managed = await new PiSessionRuntime(Promise.resolve(modelRuntime())).start({
+  const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
     manager,
     policy: policy({ writable: false }),
     deploymentConfig: {},
@@ -140,7 +150,7 @@ test("rejects configured models that are not currently available", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
   const manager = await createPrivateSessionManager(root, root);
   try {
-    await assert.rejects(new PiSessionRuntime(Promise.resolve(modelRuntime(false))).start({
+    await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime(false))).start({
       manager,
       policy: policy({ writable: false }),
       deploymentConfig: {},
