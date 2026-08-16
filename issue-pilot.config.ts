@@ -41,7 +41,7 @@ export const issuePilotConfig = Object.freeze({
   runtime: Object.freeze({
     application: Object.freeze({
       name: "issue-pilot",
-      image: "localhost/issue-pilot:0.1.0-node26-bookworm",
+      image: "localhost/issue-pilot:0.1.0-node26-ubuntu2604",
       listenHost: "0.0.0.0",
       restartPolicy: "on-failure:5",
       containerPids: 2_048,

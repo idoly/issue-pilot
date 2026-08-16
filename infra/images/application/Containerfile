@@ -13,29 +13,34 @@ RUN npm run build \
 
 FROM docker.io/library/maven:3.9-eclipse-temurin-8 AS maven-tool
 
-FROM docker.io/library/node:26-bookworm-slim
+FROM docker.io/library/ubuntu:26.04
 
 ARG APP_ROOT=/opt/issue-pilot
+ARG RUNTIME_HOME=/home/issue-pilot
 ARG TARGETARCH
 LABEL io.issue-pilot.component="application" \
       io.issue-pilot.root="${APP_ROOT}"
 
 RUN case "$TARGETARCH" in amd64|arm64) ;; *) exit 1 ;; esac \
     && apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl git openssh-client ripgrep \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates curl git libatomic1 openssh-client ripgrep \
+    && runtime_user="$(getent passwd 1000 | cut -d: -f1)" \
+    && test -n "$runtime_user" \
+    && usermod --home "$RUNTIME_HOME" "$runtime_user" \
     && curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-${TARGETARCH}.tgz" --output /tmp/aliyun-cli.tgz \
     && tar --extract --gzip --file /tmp/aliyun-cli.tgz --directory /tmp \
     && install -m 0555 /tmp/aliyun /usr/local/bin/aliyun \
     && rm -f /tmp/aliyun /tmp/aliyun-cli.tgz \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local /usr/local
 COPY --from=maven-tool /opt/java/openjdk /opt/java/openjdk
 COPY --from=maven-tool /usr/share/maven /usr/share/maven
 COPY --from=build /build ${APP_ROOT}
 RUN ln -s /usr/local /usr/local/node \
     && ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
     && ln -s "${APP_ROOT}/node_modules/.bin/pi" /usr/local/bin/pi \
-    && install -d -m 0755 /home/issue-pilot /home/issue-pilot/.pi /home/issue-pilot/.pi/agent /home/issue-pilot/.m2 \
-    && touch /home/issue-pilot/.npmrc /home/issue-pilot/.m2/settings.xml
+    && install -d -m 0755 "$RUNTIME_HOME" "$RUNTIME_HOME/.pi" "$RUNTIME_HOME/.pi/agent" "$RUNTIME_HOME/.m2" \
+    && touch "$RUNTIME_HOME/.npmrc" "$RUNTIME_HOME/.m2/settings.xml"
 
 WORKDIR ${APP_ROOT}
 ENV NODE_ENV=production \

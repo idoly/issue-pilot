@@ -37,6 +37,7 @@ const compose = {
         dockerfile: path.join(root, "infra", "images", "application", "Containerfile"),
         args: {
           APP_ROOT: root,
+          RUNTIME_HOME: home,
           TARGETARCH: architecture,
         },
       },

@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: prepare-runtime-home
-          image: localhost/issue-pilot:0.1.0-node26-bookworm
+          image: localhost/issue-pilot:0.1.0-node26-ubuntu2604
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -64,7 +64,7 @@ spec:
               mountPath: /runtime-home
       containers:
         - name: application
-          image: localhost/issue-pilot:0.1.0-node26-bookworm
+          image: localhost/issue-pilot:0.1.0-node26-ubuntu2604
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

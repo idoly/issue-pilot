@@ -101,6 +101,8 @@ exit 0
     assert.equal(manifest.services.application!.read_only, true);
     assert.equal(manifest.services.application!.userns_mode, "keep-id");
     assert.equal(manifest.services.application!.stop_grace_period, "1800s");
+    const build = manifest.services.application!.build as { args: Record<string, string> };
+    assert.equal(build.args.RUNTIME_HOME, home);
     const volumes = manifest.services.application!.volumes as string[];
     assert.ok(volumes.includes(`${path.join(root, ".issue-pilot")}:${path.join(root, ".issue-pilot")}:rw,z`));
     assert.equal(volumes.some((volume) => volume.includes("podman.sock")), false);
@@ -115,8 +117,13 @@ exit 0
     assert.doesNotMatch(calls, /podman run --detach|--privileged|--publish/);
     assert.match(containerfile, /FROM docker\.io\/library\/node:26-bookworm-slim AS build/);
     assert.match(containerfile, /FROM docker\.io\/library\/maven:3\.9-eclipse-temurin-8 AS maven-tool/);
+    assert.match(containerfile, /FROM docker\.io\/library\/ubuntu:26\.04/);
+    assert.match(containerfile, /apt-get install .* git /);
+    assert.match(containerfile, /COPY --from=build \/usr\/local \/usr\/local/);
     assert.match(containerfile, /aliyun-cli-linux-latest-\$\{TARGETARCH\}\.tgz/);
     assert.match(containerfile, /ARG APP_ROOT=\/opt\/issue-pilot/);
+    assert.match(containerfile, /ARG RUNTIME_HOME=\/home\/issue-pilot/);
+    assert.match(containerfile, /usermod --home "\$RUNTIME_HOME"/);
     assert.match(containerfile, /COPY vendor \.\/vendor\nRUN npm ci/);
     assert.match(containerfile, /npm prune --omit=dev/);
     assert.doesNotMatch(containerfile, /legacy-peer-deps|podman-remote|podman\.sock/);

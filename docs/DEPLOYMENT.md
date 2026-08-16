@@ -43,8 +43,8 @@ TLS + Authentication/Authorization Proxy
 | Pi model runtime | application内项目依赖与只读挂载的`~/.pi/agent`配置 |
 | Application utilities | Git/SSH、`rg`、`curl`、`base64` |
 | Podman | 构建application镜像和运行Playwright验收需要；API工具执行不需要 |
-| Application image | `localhost/issue-pilot:0.1.0-node26-bookworm`，按当前checkout绝对路径构建 |
-| Application build images | `node:26-bookworm-slim`和`maven:3.9-eclipse-temurin-8` |
+| Application image | `localhost/issue-pilot:0.1.0-node26-ubuntu2604`，按当前checkout绝对路径构建 |
+| Application build images | `node:26-bookworm-slim`、`maven:3.9-eclipse-temurin-8`和`ubuntu:26.04` |
 | Playwright core | `1.62.1` |
 | Playwright image | `mcr.microsoft.com/playwright:v1.62.1-noble` |
 
@@ -142,7 +142,7 @@ npm run server
 
 ## 生产应用容器
 
-主应用大镜像是唯一API入口。它在一个容器中提供Fastify API、静态Web/Workbench、Pi、Node 26、Maven 3.9/Temurin 8、Aliyun CLI、Git/SSH、ripgrep和curl。Web构建依赖位于`devDependencies`，multi-stage build完成后执行`npm prune --omit=dev`。`infra/application-compose.mjs`从根配置和当前绝对路径生成只有一个application service的Compose JSON；容器不包含Podman client，也不挂rootless Podman API socket。
+主应用大镜像是唯一API入口。它在一个Ubuntu 26.04 runtime容器中提供Fastify API、静态Web/Workbench、Pi、Node 26、Maven 3.9/Temurin 8、Aliyun CLI、Git 2.48或更高版本、SSH、ripgrep和curl。Web构建依赖位于`devDependencies`，multi-stage build完成后执行`npm prune --omit=dev`。`infra/application-compose.mjs`从根配置和当前绝对路径生成只有一个application service的Compose JSON；容器不包含Podman client，也不挂rootless Podman API socket。
 
 构建宿主只需要Podman和Compose provider。准备及启动：
 
@@ -154,7 +154,7 @@ infra/application.sh start
 infra/application.sh logs
 ```
 
-`prepare`从Containerfile中的稳定系列tag构建单一application image。`start`拒绝覆盖同名容器，通过Compose设置`on-failure:5`重启策略，并要求以下路径在容器内外完全相同：项目根、state root、`HOME`、Pi配置、npmrc/cache和Maven settings/repository。应用rootfs只读；state root与package cache读写；Pi/package manager配置只读。可选`~/.gitconfig`和`~/.ssh`只读挂载。
+`prepare`从Containerfile中的稳定系列tag构建单一application image。`start`拒绝覆盖同名容器，通过Compose设置`on-failure:5`重启策略，并要求以下路径在容器内外完全相同：项目根、state root、`HOME`、Pi配置、npmrc/cache和Maven settings/repository。应用rootfs只读；state root与package cache读写；Pi/package manager配置只读。可选`~/.gitconfig`和`~/.ssh`只读挂载。Compose构建参数同时把镜像中UID 1000用户的passwd home设为宿主`HOME`，确保OpenSSH从该只读挂载读取known_hosts和私钥；Kubernetes镜像默认使用`/home/issue-pilot`。
 
 停机保留容器日志供检查：
 
