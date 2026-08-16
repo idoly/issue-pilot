@@ -1,21 +1,13 @@
-import type { IssuePolicy } from "../pi/policy.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
 import { runAliyunCli, withAliyunCliProfile } from "./aliyun.ts";
-import { capabilityResultText, capabilityTextResult, isSlsLogstore } from "./contracts.ts";
+import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
+import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability.sls;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export async function readSlsLogs(tools: ToolRuntime, policy: IssuePolicy, input: {
-  logstore: string;
-  from?: number;
-  to?: number;
-  query?: string;
-  trace_id?: string;
-  limit?: number;
-}, configured: Record<string, unknown>, signal?: AbortSignal) {
-  if (!isSlsLogstore(input.logstore)) throw new Error("invalid_sls_logstore");
+export async function readSlsLogs(tools: ToolRuntime, input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">, signal?: AbortSignal) {
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
   const now = Math.floor(Date.now() / 1000);
   const to = input.to ?? now;
@@ -28,21 +20,18 @@ export async function readSlsLogs(tools: ToolRuntime, policy: IssuePolicy, input
   const searchQuery = traceId || input.query?.trim() || "*";
   if (searchQuery.includes("\0")) throw new Error("invalid_sls_query");
   const limit = input.limit ?? limits.defaultResults;
-  if (!Number.isInteger(limit) || limit < 1 || limit > limits.results) throw new Error("invalid_sls_limit");
 
-  const scope = policy.service.sls;
-  if (!scope) throw new Error("sls_scope_not_granted_for_service");
-  if (configured.region !== scope.region || configured.project !== scope.project || !Array.isArray(configured.logstores) || !configured.logstores.includes(input.logstore) || !scope.logstores.includes(input.logstore) || typeof configured.accessKeyId !== "string" || typeof configured.accessKeySecret !== "string") throw new Error("sls_configuration_changed");
+  if (!configured.logstores.includes(input.logstore)) throw new Error("sls_logstore_not_granted");
   return withAliyunCliProfile({
     accessKeyId: configured.accessKeyId,
     accessKeySecret: configured.accessKeySecret,
-    region: scope.region,
+    region: configured.region,
   }, async (profileRoot) => {
     const fetchRecords = async (line: number, offset: number): Promise<unknown[]> => {
       const execution = await runAliyunCli(tools, profileRoot, [
         "sls", "GetLogs",
-        "--endpoint", `${scope.region}.log.aliyuncs.com`,
-        "--project", scope.project,
+        "--endpoint", `${configured.region}.log.aliyuncs.com`,
+        "--project", configured.project,
         "--logstore", input.logstore,
         "--from", String(from),
         "--to", String(to),
@@ -70,7 +59,7 @@ export async function readSlsLogs(tools: ToolRuntime, policy: IssuePolicy, input
     }
     if (records.length === limit && (await fetchRecords(1, limit)).length) throw new Error("capability_result_too_large");
     const queryMetadata = {
-      project: scope.project,
+      project: configured.project,
       logstore: input.logstore,
       from,
       to,

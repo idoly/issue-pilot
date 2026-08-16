@@ -83,17 +83,14 @@ describe("API client", () => {
     expect(fetch).toHaveBeenCalledWith("/api/catalog", expect.any(Object));
   });
 
-  it("sends the selected Service revision with configuration writes", async () => {
+  it("sends direct Service configuration writes", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
-    const revision = "a".repeat(64);
 
-    await updateService("orders", revision, { name: "Orders", description: "", repositories: [], deployments: [] });
-    await deleteService("orders", revision);
+    await updateService("orders", { name: "Orders", description: "", repositories: [], deployments: [] });
+    await deleteService("orders");
 
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("If-Match")).toBe(revision);
     expect(fetch.mock.calls[0]![1]).toMatchObject({ method: "PATCH" });
-    expect((fetch.mock.calls[1]![1].headers as Headers).get("If-Match")).toBe(revision);
     expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "DELETE" });
   });
 

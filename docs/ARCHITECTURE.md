@@ -15,7 +15,7 @@
 | Immutable checkout | 按完整 commit 定址的 detached、只读、可重建 worktree |
 | Runtime | `issues/<key>/runtime` 下供Agent和内置代码浏览器使用的Repository链接与wrapper生成目录 |
 | Session | 一张 Issue 对应的持久 Pi JSONL active branch |
-| IssuePolicy | 每次 Pi session 冻结的 model、Repository 和无 credential capability scope |
+| AgentSessionContext | 每次 Pi session 使用的 model、capability 名称和代码写权限 |
 | Capability | 受限的Agent外部读取工具，例如 Nacos、MySQL、DMS 或 SLS；Playwright不属于capability |
 
 ## 事实源
@@ -32,7 +32,7 @@ Issue Pilot 不把所有状态放在同一个介质中。每个事实只有一�
 | 对话历史 | 每 Issue Pi JSONL active branch |
 | Attachment 内容 | Durable file；数据库保存 object path、size 和 SHA-256 |
 | Runtime link、wrapper | `src/workspace` 的生成器 |
-| Capability 保存 contract 和无 credential scope | `src/capabilities/registry.ts` |
+| Capability 保存 contract、tool schema 和 metadata | `src/capabilities/registry.ts` |
 | 配置中心脱敏 DTO 和 credential 更新状态 | `src/configuration/contracts.ts` |
 
 生成物不能反向成为业务事实源。Runtime link、checkout 或页面状态都不能覆盖 SQLite、JSONL 或本地 Git ref。
@@ -52,7 +52,7 @@ IssueProjectManager ---- WorktreeManager ---- Git stores
         |
 SourceBrowser ---- bounded file / rg / Git reads
         |
-IssuePolicy ---- Capability tools ---- Broker ---- Protocol clients / ProcessToolRuntime
+AgentSessionContext ---- Pi capability tools ---- Protocol clients / ProcessToolRuntime
         |
 ProjectToolBroker ---- ProcessToolRuntime ---- current process PATH
 
@@ -62,24 +62,24 @@ Application test harness ---- temporary Podman Playwright container
 | 模块 | 责任 |
 | --- | --- |
 | `src/http` | HTTP 边界、用户管理、reservation、数据库事务和 SSE |
-| `src/configuration` | 配置中心共享 DTO、credential 脱敏/合并、内容 revision，以及 snapshot projection |
-| `src/agent` | 每 Issue Agent 队列、Pi session 生命周期、事件与 prompt |
-| `src/pi` | Model catalog、冻结 policy、built-in/custom tool 授权 |
+| `src/configuration` | 配置中心共享 DTO、credential 脱敏/合并和 snapshot projection |
+| `src/agent` | 每 Issue Agent 队列、session context、Pi session 生命周期、事件与 prompt |
+| `src/pi` | Model catalog 和 Registry-driven custom tool 注册 |
 | `src/workspace/project.ts` | Issue 项目的 prepare、dev restore、read-only/dev runtime hydration |
 | `src/workspace/git.ts` | Bare store、fetch、checkout、worktree、批量 prepare/remove/rollback |
 | `src/workspace/runtime.ts` | 原子生成Issue runtime Repository链接 |
 | `src/workspace/source-browser.ts` | 按SQLite关系解析runtime、限制文件树/文件/搜索/diff读取 |
 | `src/workspace/project-tools.ts` | Unix socket授权、Issue路径校验和Node/Maven受控执行 |
 | `src/workspace/lifecycle.ts` | 深检、统计、release、reopen 和 retention/quota maintenance |
-| `src/capabilities/registry.ts` | 配置解析、credential-free scope、tool schema 和 metadata |
-| `src/capabilities/broker.ts` | Capability allowlist、输入解析和 handler dispatch |
+| `src/capabilities/registry.ts` | 配置解析、tool schema 和 metadata |
+| `src/pi/tools.ts` | 按 session capability 名称注册TypeBox工具并直接分发到protocol client |
 | 各 capability client | 协议、scope、timeout、abort 和结果预算的最终校验 |
 | `src/serial.ts` | 通用串行原语；不定义业务锁域 |
 | `src/tool-runtime.ts` | 当前API进程中的命令白名单、环境收敛和调用级临时HOME |
 | `src/web/src/app/agent-stream.ts` | EventSource generation、replay、snapshot、重连和关闭状态机 |
 | `src/web/src/app/conversation.ts` | Pi/Issue event 到可见对话的纯投影 |
 
-Route 不实现 Git 或外部协议。AgentEngine 不拼 Deployment Repository join。Capability client 不信任 registry、tool schema 或 broker 已经完成检查。
+Route 不实现 Git 或外部协议。AgentEngine 不拼 Deployment Repository join。内部模块通过明确类型互信：Registry解析保存配置，Pi tool用TypeBox解析一次输入并直接调用protocol client。
 
 ## 生产进程与容器边界
 
@@ -115,7 +115,7 @@ open -> in_progress -> pending -> resolved
 | 状态 | 含义 |
 | --- | --- |
 | `not_created` | 尚未准备代码和 session |
-| `preparing` | 正在准备 Repository、runtime、policy 或 session |
+| `preparing` | 正在准备 Repository、runtime、Agent context 或 session |
 | `running` | Pi 正在处理当前轮次 |
 | `ready` | 当前轮次完成，可以继续对话 |
 | `stopped` | Dev worktree 已释放，保留只读 snapshot runtime |
@@ -171,7 +171,7 @@ Immutable checkout 按完整 40 字符 commit 定址，相同 URL/commit 可跨 
 5. 把 `issue_repositories` 原子更新为 `read_only` 状态和当前 commit。
 6. 生成只读 runtime。
 
-Prod/test policy 的 Repository path 指向 Issue runtime 中的只读 link，而不是暴露 shared checkout 的物理路径。Pi 轮次结束后内存 session 会关闭；下一轮重新读取当前 Deployment 和最新 commit。
+Prod/test Agent context 的 Repository path 指向 Issue runtime 中的只读 link，而不是暴露 shared checkout 的物理路径。Pi 轮次结束后内存 session 会关闭；下一轮重新读取当前 Deployment 和最新 commit。
 
 ### Active dev
 
@@ -245,7 +245,7 @@ AgentEngine 只负责业务状态、session 和 prompt；Lifecycle 只负责 rel
 2. 读取 Issue、Service 和 Environment。
 3. 关闭旧内存 session。
 4. 通过 `IssueProjectManager` 准备项目。
-5. 从实际 Repository path/commit/access 和 Deployment config 创建冻结 `IssuePolicy`。
+5. 从实际 Repository access 和 Deployment config 创建精简 `AgentSessionContext`。
 6. 打开现有 Pi JSONL，或以 `0600` 原子创建新 session file。
 7. 创建 Pi SDK session，并核对 session ID、model、thinking level 和 active tools。
 8. 持久化 session binding。
@@ -257,28 +257,26 @@ Pi resource loader 禁用 extension、skill、prompt template、theme、context 
 
 Streaming session 的 steer 按 Issue 串行。只有 Pi 接受 steer 后才追加 `issue-pilot-user` JSONL entry；若记录失败，会关闭 session并返回失败，避免可见 phantom message。
 
-## Policy 与 capability
+## Session context 与 capability
 
-IssuePolicy 只包含：
+AgentSessionContext 只包含：
 
-- Issue key/type 和 session workspace root。
+- Issue、Environment 和 Service 标识。
 - Model provider、model ID 和 thinking level。
-- Environment 和 Service 标识。
-- Repository path、base commit 和实际 read/write access。
-- Capability 名称和 credential-free frozen scope。
+- Capability 名称。
+- 根据 Issue type、Environment 和实际 Repository access计算的代码写权限。
 
-Deployment password、AccessKey 和 bearer token 不进入配置读取响应、policy、system prompt 或 tool input。Pi custom tool 闭包持有从 SQLite 读取的 Deployment config session 副本，并把调用交给 broker。
+Deployment password、AccessKey 和 bearer token 不进入配置读取响应、session context、system prompt 或 tool input。Pi custom tool 闭包持有从 SQLite 读取的 typed Deployment config session副本，并直接调用protocol client。
 
-授权链如下：
+配置与调用分为两条短链：
 
 ```text
-Service save parser
-  -> Registry definition
-  -> Frozen credential-free scope
-  -> Tool input schema
-  -> Broker allowlist/dispatch
-  -> Protocol client scope + current config + bounds
+Service request -> Registry typed config -> SQLite
+Deployment config -> AgentSessionContext capability names + Pi tool definitions
+Pi tool TypeBox input + typed Deployment config -> Protocol client
 ```
+
+Protocol client信任Pi tool提供的typed input和Deployment config，只负责授权target的外部I/O、协议语义、timeout/abort、响应解析和结果预算。
 
 本地 built-in tools 按实际 Repository access 决定：
 
@@ -359,7 +357,6 @@ Controller 使用递增 generation 忽略旧 EventSource、旧 refresh 和旧 ti
 
 - 配置读取：`scope queue -> SQLite snapshot transaction`
 - Service/Issue scope：`scope queue -> Issue reservation`
-- Service PATCH/DELETE 在 reservation 前核对完整配置内容 revision；陈旧表单不关闭 session、不进入事务。
 - Release/reopen：`lifecycle queue -> inspection queue -> Issue reservation`
 
 不能反向获取，也不能把所有锁合并成一个全局 mutex。
@@ -421,12 +418,11 @@ API 启动顺序：
 - Compose只向宿主loopback发布application容器端口。任何集群或外部入口都必须由认证、授权和TLS proxy保护。
 - 项目工具Unix socket mode为`0600`；wrapper请求中的Issue和Repository路径必须由broker按SQLite重新授权。
 - 普通工作台只读取不含 Repository URL、model 和 credential 的 `/api/catalog`；配置视图按需读取 `/api/config`，其中包含可编辑 scope 和 `credentialConfigured`，但不返回已存 password、AccessKeyId 或 AccessKeySecret。
-- `/api/config` 在一个 SQLite snapshot transaction 中读取 Service、Repository、Deployment 和 branch 关系，并为每个 Service 返回完整配置内容的 HMAC-SHA-256 opaque revision。HMAC key 每次 API 启动随机生成、不落盘；响应不能作为 credential 猜测 oracle，重启后旧表单会安全失效。
-- Service PATCH/DELETE 必须用 `If-Match` 提交该 revision。缺失返回 428，内容已变化返回 409，防止多个已打开表单按最后写入静默覆盖。
+- `/api/config` 在一个 SQLite snapshot transaction 中读取 Service、Repository、Deployment 和 branch 关系；Service写入由scope queue、Issue reservation和SQLite transaction串行并原子提交。
 - Service 保存对每个已选 capability 显式要求 `preserve`、`replace` 或 `clear`；API 只在内存中把该意图与当前 SQLite credential 合并，再走完整 registry 校验和事务提交。
 - Pi built-in tools 不是 OS sandbox；API/Pi 必须使用专用低权限账号。
 - Aliyun capability每次创建临时`0600` profile并只交给application容器内受限`aliyun dms-enterprise/sls`命令，不使用operator持久profile。
-- Playwright只由operator通过应用自测脚本启动临时容器；Service、Deployment、IssuePolicy、Pi tool和capability broker都没有Playwright入口，也不读取Deployment credential或Issue workspace。
+- Playwright只由operator通过应用自测脚本启动临时容器；Service、Deployment、AgentSessionContext和Pi capability tools都没有Playwright入口，也不读取Deployment credential或Issue workspace。
 - DMS SQL 和 SLS query 会作为 Aliyun CLI 参数短暂出现在宿主进程列表；Credential 不进入 argv。
 
 ## 必须保持的不变量
@@ -441,10 +437,9 @@ API 启动顺序：
 8. Durable state 不进入 runtime 或 immutable checkout。
 9. Attachment 只有一个 `0400` durable 副本，写操作只属于 Issue create/edit 事务。
 10. Repository 集合变化先准备完整文件系统目标，再提交数据库关系；失败可回滚并保留证据。
-11. Policy、prompt 和 tool input 不含 Deployment credential。
-12. Capability client 自己验证 scope、当前 config、协议和结果预算。
+11. Agent session context、prompt 和 tool input 不含 Deployment credential。
+12. Pi tool用TypeBox只解析一次 capability input并直接调用protocol client；client信任typed config/input，保留外部授权target、协议和结果预算。
 13. API、migration、Git、runtime、source browser和project-tool broker使用同一个state root。
 14. Published migration 和 journal 不修改、不重排、不删除。
 15. 已存 Deployment credential 不进入配置读取响应；未轮换的保存请求只携带 `preserve` 意图，不回传 secret 值。
-16. Service 配置写入必须匹配基于完整内容生成的 revision；陈旧编辑不能静默覆盖当前配置。
-17. User以SQLite为唯一事实源；停用不删除历史主体，且始终至少有一名启用用户。
+16. User以SQLite为唯一事实源；停用不删除历史主体，且始终至少有一名启用用户。

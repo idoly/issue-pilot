@@ -127,7 +127,7 @@ Issue Pilot 没有内置认证。右上角用户切换和 `X-Issue-Pilot-Subject
 - API/Pi 使用专用低权限宿主账号，不能以 root 运行。
 - 项目脚本与API在application容器中使用同一OS身份和可读state；只适用于可信内部Repository，不构成Agent sandbox。
 - `/api/config` 不返回已存 credential，但仍包含内部 Repository、model 和 capability scope；Service 写请求可能携带新 credential，配置路由必须严格授权且不得记录 body。
-- Credential 不进入 IssuePolicy、Agent prompt 或 tool input；完整 Deployment config 只保留在 API session 闭包中。
+- Credential 不进入 AgentSessionContext、Agent prompt 或 tool input；完整 Deployment config 只保留在 API session 闭包中。
 - Capability 查询结果会发送给 Agent，并写入该 Issue 的 Pi JSONL；结果本身可能包含敏感业务数据。
 
 更多部署约束见 [部署说明](docs/DEPLOYMENT.md#安全边界)。

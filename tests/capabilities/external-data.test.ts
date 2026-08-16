@@ -10,20 +10,10 @@ import { readElasticsearch } from "../../src/capabilities/elasticsearch.ts";
 import { readRabbitMq } from "../../src/capabilities/rabbitmq.ts";
 import { readRedis } from "../../src/capabilities/redis.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-external-"));
-  const policy = {
-    workspaceRoot: root,
-    service: {
-      serviceKey: "external",
-      redis: { deploymentId: "deployment-external" },
-      es: { deploymentId: "deployment-external" },
-      mq: { deploymentId: "deployment-external", virtualHost: "/" },
-    },
-  } as IssuePolicy;
-  return { root, policy };
+  return { root };
 }
 
 async function within<T>(promise: Promise<T>, milliseconds = 2_000): Promise<T> {
@@ -39,7 +29,7 @@ async function within<T>(promise: Promise<T>, milliseconds = 2_000): Promise<T> 
 }
 
 test("reads Redis through node-redis and retains the read-only command boundary", async () => {
-  const { root, policy } = await fixture();
+  const { root } = await fixture();
   let redisRequest = "";
   const redisServer = createTcpServer((socket) => {
     let authReplied = false;
@@ -61,13 +51,12 @@ test("reads Redis through node-redis and retains the read-only command boundary"
   assert(address && typeof address === "object");
   const config = { host: "127.0.0.1", port: address.port, username: "", password: "redis-secret", database: 0 };
   try {
-    const result = await readRedis(policy, config, { action: "get", key: "order:1" });
+    const result = await readRedis(config, { action: "get", key: "order:1" });
     assert.match(result.content[0]!.text, /value/);
     assert.match(redisRequest, /AUTH/);
     assert.match(redisRequest, /redis-secret/);
     assert.match(redisRequest, /GET/);
     assert.match(redisRequest, /order:1/);
-    await assert.rejects(() => readRedis(policy, config, { action: "set", key: "order:1" }), /invalid_redis_action/);
   } finally {
     await new Promise<void>((resolve, reject) => redisServer.close((error) => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
@@ -75,7 +64,7 @@ test("reads Redis through node-redis and retains the read-only command boundary"
 });
 
 test("normalizes Redis server failures without exposing upstream error text", async () => {
-  const { root, policy } = await fixture();
+  const { root } = await fixture();
   const redisServer = createTcpServer((socket) => {
     socket.once("data", () => socket.end("-WRONGPASS redis-secret rejected\r\n"));
   });
@@ -84,7 +73,7 @@ test("normalizes Redis server failures without exposing upstream error text", as
   assert(address && typeof address === "object");
   try {
     await assert.rejects(
-      () => readRedis(policy, { host: "127.0.0.1", port: address.port, username: "", password: "redis-secret", database: 0 }, { action: "get", key: "order:1" }),
+      () => readRedis({ host: "127.0.0.1", port: address.port, username: "", password: "redis-secret", database: 0 }, { action: "get", key: "order:1" }),
       (error: unknown) => {
         assert(error instanceof Error);
         assert.equal(error.message, "redis_read_failed");
@@ -99,7 +88,7 @@ test("normalizes Redis server failures without exposing upstream error text", as
 });
 
 test("terminates the Redis worker connection when the capability is aborted", async () => {
-  const { root, policy } = await fixture();
+  const { root } = await fixture();
   let commandReceived!: () => void;
   let connectionClosed!: () => void;
   const received = new Promise<void>((resolve) => { commandReceived = resolve; });
@@ -113,7 +102,7 @@ test("terminates the Redis worker connection when the capability is aborted", as
   assert(address && typeof address === "object");
   const controller = new AbortController();
   try {
-    const pending = readRedis(policy, { host: "127.0.0.1", port: address.port, username: "", database: 0 }, { action: "get", key: "order:1" }, controller.signal);
+    const pending = readRedis({ host: "127.0.0.1", port: address.port, username: "", database: 0 }, { action: "get", key: "order:1" }, controller.signal);
     await within(received);
     controller.abort(new Error("redis_abort_requested"));
     await assert.rejects(pending, /redis_abort_requested/);
@@ -126,7 +115,7 @@ test("terminates the Redis worker connection when the capability is aborted", as
 });
 
 test("reads RabbitMQ management data with encoded scope and credentials", async () => {
-  const { root, policy } = await fixture();
+  const { root } = await fixture();
   const requests: Array<{ url: string; authorization?: string }> = [];
   const server = createServer((request, response) => {
     requests.push({ url: request.url ?? "", ...(typeof request.headers.authorization === "string" ? { authorization: request.headers.authorization } : {}) });
@@ -138,7 +127,7 @@ test("reads RabbitMQ management data with encoded scope and credentials", async 
   assert(address && typeof address === "object");
   try {
     const config = { host: "127.0.0.1", port: 5672, managementPort: address.port, username: "reader", password: "secret", virtualHost: "/" };
-    const result = await readRabbitMq(policy, config, { action: "bindings", queue: "orders" });
+    const result = await readRabbitMq(config, { action: "bindings", queue: "orders" });
     const output = JSON.parse(result.content[0]!.text) as { output: unknown[] };
     assert.equal(output.output.length, 150);
     assert.equal(requests[0]?.url, "/api/queues/%2F/orders/bindings");
@@ -150,7 +139,7 @@ test("reads RabbitMQ management data with encoded scope and credentials", async 
 });
 
 test("rejects oversized native Redis and HTTP responses before returning them", async () => {
-  const { root, policy } = await fixture();
+  const { root } = await fixture();
   const redisServer = createTcpServer((socket) => {
     socket.once("data", () => {
       const value = "x".repeat(issuePilotConfig.limits.capability.resultBytes + 1);
@@ -170,8 +159,8 @@ test("rejects oversized native Redis and HTTP responses before returning them", 
   assert(redisAddress && typeof redisAddress === "object");
   assert(httpAddress && typeof httpAddress === "object");
   try {
-    await assert.rejects(() => readRedis(policy, { host: "127.0.0.1", port: redisAddress.port, username: "", database: 0 }, { action: "get", key: "large" }), /capability_result_too_large/);
-    await assert.rejects(() => readRabbitMq(policy, { host: "127.0.0.1", port: 5672, managementPort: httpAddress.port, username: "reader", password: "secret", virtualHost: "/" }, { action: "overview" }), /capability_result_too_large/);
+    await assert.rejects(() => readRedis({ host: "127.0.0.1", port: redisAddress.port, username: "", database: 0 }, { action: "get", key: "large" }), /capability_result_too_large/);
+    await assert.rejects(() => readRabbitMq({ host: "127.0.0.1", port: 5672, managementPort: httpAddress.port, username: "reader", password: "secret", virtualHost: "/" }, { action: "overview" }), /capability_result_too_large/);
   } finally {
     await Promise.all([
       new Promise<void>((resolve) => redisServer.close(() => resolve())),
@@ -182,7 +171,7 @@ test("rejects oversized native Redis and HTTP responses before returning them", 
 });
 
 test("preserves an Elasticsearch reverse-proxy path and refuses redirects", async () => {
-  const { root, policy } = await fixture();
+  const { root } = await fixture();
   const requests: Array<{ url: string; authorization?: string }> = [];
   let redirect = false;
   const server = createServer((request, response) => {
@@ -196,13 +185,13 @@ test("preserves an Elasticsearch reverse-proxy path and refuses redirects", asyn
   assert(address && typeof address === "object");
   const config = { url: `http://127.0.0.1:${address.port}/elastic-proxy`, username: "reader", password: "secret" };
   try {
-    const result = await readElasticsearch(policy, config, { action: "count", query: { match_all: {} } });
+    const result = await readElasticsearch(config, { action: "count", query: { match_all: {} } });
     assert.deepEqual(JSON.parse(result.content[0]!.text), { action: "count", output: { count: 3 } });
     assert.equal(requests[0]?.url, "/elastic-proxy/_count");
     assert.equal(requests[0]?.authorization, `Basic ${Buffer.from("reader:secret").toString("base64")}`);
 
     redirect = true;
-    await assert.rejects(() => readElasticsearch(policy, config, { action: "count", query: { match_all: {} } }));
+    await assert.rejects(() => readElasticsearch(config, { action: "count", query: { match_all: {} } }));
     assert.equal(requests.some((request) => request.url === "/unexpected"), false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

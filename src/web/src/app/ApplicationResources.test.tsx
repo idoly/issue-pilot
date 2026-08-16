@@ -25,7 +25,7 @@ function deferred<Value>() {
 const configuration = (name: string): Config => ({
   agentModels: [],
   environments: [],
-  services: [{ key: "orders", revision: name.padEnd(64, "0").slice(0, 64), name, description: "", repositories: [], deployments: [] }],
+  services: [{ key: "orders", name, description: "", repositories: [], deployments: [] }],
 });
 
 describe("application configuration resources", () => {

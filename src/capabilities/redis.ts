@@ -1,12 +1,12 @@
 import { Worker } from "node:worker_threads";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { IssuePolicy } from "../pi/policy.ts";
 import { capabilitySignal, capabilityTextResult } from "./contracts.ts";
+import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability;
 
-async function redisCommand(config: Record<string, unknown>, action: string, command: string[], signal?: AbortSignal): Promise<string> {
+async function redisCommand(config: CapabilityConfig<"redis">, action: string, command: string[], signal?: AbortSignal): Promise<string> {
   const activeSignal = capabilitySignal(signal);
   if (activeSignal.aborted) throw activeSignal.reason;
   return new Promise<string>((resolve, reject) => {
@@ -42,22 +42,12 @@ async function redisCommand(config: Record<string, unknown>, action: string, com
   });
 }
 
-interface RedisReadInput {
-  action: string;
-  key?: string;
-  keys?: string[];
-  field?: string;
-  pattern?: string;
-  cursor?: string;
-  limit?: number;
-}
-
 function redisArgument(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value || value.length > limits.redis.keyChars || value.includes("\0")) throw new Error(`invalid_redis_${name}`);
+  if (typeof value !== "string" || !value || value.includes("\0")) throw new Error(`invalid_redis_${name}`);
   return value;
 }
 
-function redisReadCommand(input: RedisReadInput): string[] {
+function redisReadCommand(input: CapabilityInputs["redis"]): string[] {
   switch (input.action) {
     case "get":
     case "type":
@@ -67,24 +57,18 @@ function redisReadCommand(input: RedisReadInput): string[] {
     case "hget":
       return ["HGET", redisArgument(input.key, "key"), redisArgument(input.field, "field")];
     case "mget":
-      if (!input.keys?.length || input.keys.length > limits.redis.keys) throw new Error("invalid_redis_keys");
+      if (!input.keys?.length) throw new Error("invalid_redis_keys");
       return ["MGET", ...input.keys.map((key) => redisArgument(key, "key"))];
     case "scan": {
       const limit = input.limit ?? issuePilotConfig.defaults.redis.scanResults;
-      if (!Number.isInteger(limit) || limit < 1 || limit > limits.redis.results) throw new Error("invalid_redis_limit");
       const cursor = input.cursor && /^\d+$/.test(input.cursor) ? input.cursor : "0";
       const pattern = input.pattern ? redisArgument(input.pattern, "pattern") : "*";
       return ["SCAN", cursor, "MATCH", pattern, "COUNT", String(limit)];
     }
-    default:
-      throw new Error("invalid_redis_action");
   }
 }
 
-export async function readRedis(policy: IssuePolicy, config: Record<string, unknown>, input: RedisReadInput, signal?: AbortSignal) {
-  const grant = policy.service.redis;
-  if (!grant) throw new Error("redis_scope_not_granted_for_service");
-  if (typeof config.host !== "string" || !Number.isInteger(config.port) || typeof config.username !== "string" || (config.password !== undefined && typeof config.password !== "string") || !Number.isInteger(config.database)) throw new Error("redis_configuration_changed");
+export async function readRedis(config: CapabilityConfig<"redis">, input: CapabilityInputs["redis"], signal?: AbortSignal) {
   const response = await redisCommand(config, input.action, redisReadCommand(input), signal);
-  return capabilityTextResult(response, { deploymentId: grant.deploymentId });
+  return capabilityTextResult(response, {});
 }

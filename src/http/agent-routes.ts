@@ -8,7 +8,7 @@ import { agentSessions, issues, serviceDeployments } from "../db/schema.ts";
 import { AGENT_THINKING_LEVELS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { assertIssueRunnable, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
@@ -84,7 +84,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    assertIssueRunnable(issue);
+    if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     const input = record(request.body);
     const message = text(input.message, "agent_message", issuePilotConfig.limits.agentMessageChars);
     try { await engine.send(issue.id, message); }

@@ -6,7 +6,6 @@ import { test } from "node:test";
 import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
 import { readSlsLogs } from "../../src/capabilities/sls.ts";
-import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 test("returns complete SLS records through the process Aliyun CLI", async () => {
   const calls: Array<{ command: string; args: string[]; cliArgs: string[]; options: CommandExecutionOptions; profile: Record<string, any> }> = [];
@@ -22,9 +21,8 @@ test("returns complete SLS records through the process Aliyun CLI", async () => 
     },
   };
   const tools = new ProcessToolRuntime(executor);
-  const policy = { service: { sls: { deploymentId: "deployment-test", region: "cn-test", project: "srm-test", logstores: ["application_log"] } } } as IssuePolicy;
   const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-  const read = (input: Parameters<typeof readSlsLogs>[2]) => readSlsLogs(tools, policy, input, configured);
+  const read = (input: Parameters<typeof readSlsLogs>[1]) => readSlsLogs(tools, input, configured);
   const output = await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600, query: "level:ERROR", limit: 20 });
   assert.equal(calls[0]!.command, "aliyun");
   assert.equal(calls[0]!.options.environment!.ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP, "true");
@@ -48,7 +46,7 @@ test("returns complete SLS records through the process Aliyun CLI", async () => 
   await assert.rejects(read({ logstore: "application_log", trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", query: "8ea38737" }), /invalid_sls_query/);
   await assert.rejects(read({ logstore: "application_log", from: 1_700_000_000 }), /invalid_sls_time_range/);
   await read({ logstore: "application_log", from: 1_700_000_000, to: 1_700_090_000 });
-  await assert.rejects(read({ logstore: "other", from: 1_700_000_000, to: 1_700_000_100 }), /sls_configuration_changed/);
+  await assert.rejects(read({ logstore: "other", from: 1_700_000_000, to: 1_700_000_100 }), /sls_logstore_not_granted/);
 
   const longMessage = "x".repeat(80_000);
   responseRecords = [{ TRACE_ID: "8ea38737-7d1e-40bb-8fff-69e71bc985ab", message: longMessage, authorization: "Bearer secret-token" }];

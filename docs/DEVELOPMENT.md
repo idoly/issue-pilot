@@ -54,7 +54,6 @@ Compose application API发布在`0.0.0.0:3000`并可从本机`127.0.0.1:3000`访
 | `src/configuration/contracts.ts` | 配置中心 catalog、脱敏 editable configuration 和 credential update 共享 DTO |
 | `src/configuration/read.ts` | Catalog 和脱敏 editable configuration projection |
 | `src/configuration/credentials.ts` | 已存 credential 脱敏及 preserve/replace/clear 合并 |
-| `src/configuration/revision.ts` | Service 完整配置内容 revision 和一致性读取 |
 | `src/db/schema.ts` | 当前 Drizzle schema |
 | `src/db/bootstrap.ts` | Migration、启动状态恢复和 Environment同步 |
 | `src/http/api.ts` | API装配、error mapping和启动/关闭资源生命周期 |
@@ -63,12 +62,11 @@ Compose application API发布在`0.0.0.0:3000`并可从本机`127.0.0.1:3000`访
 | `src/http/service-configuration.ts` | Service/Deployment request prepare 和 transaction apply |
 | `src/http/attachment-store.ts` | Attachment multipart、write、quarantine、rollback/finalize 和安全读取路径 |
 | `src/agent/engine.ts` | Issue Agent queue、reservation、状态转换和 Pi session 协调 |
+| `src/agent/context.ts` | Agent session context 和 built-in tool allowlist |
 | `src/agent/pi-session.ts` | Private JSONL、Pi SDK session、resource loader 和 tool核对 |
 | `src/agent/events.ts` | Event bus、replay projection 和 replay/live buffer |
-| `src/pi/policy.ts` | Frozen IssuePolicy 和 built-in tool allowlist |
-| `src/pi/tools.ts` | Registry-driven custom tool creation |
-| `src/capabilities/registry.ts` | 配置解析、credential-free scope、schema、metadata |
-| `src/capabilities/broker.ts` | Allowlist、input parse 和 keyed handler dispatch |
+| `src/pi/tools.ts` | 按 session capability 名称注册TypeBox工具并直接调用protocol client |
+| `src/capabilities/registry.ts` | 配置解析、schema 和 metadata |
 | `src/capabilities/*.ts` | 独立协议 client和共享 bounded HTTP/process primitives |
 | `src/serial.ts` | `SerialQueue`、`KeyedSerialQueue` 和 `idle()` |
 | `src/tool-runtime.ts` | Capability/项目工具共用的进程命令白名单、环境收敛和临时HOME |
@@ -120,7 +118,7 @@ Agent 请求：
 agent-routes
   -> AgentEngine
   -> IssueProjectManager
-  -> createDeploymentPolicy
+  -> createAgentSessionContext
   -> PiSessionRuntime
   -> AgentEventBus
   -> SSE replay + snapshot_ready + live
@@ -133,9 +131,9 @@ Capability 请求：
 ```text
 Deployment save
   -> registry parser
-  -> credential-free policy scope
-  -> registry tool schema
-  -> broker
+  -> typed Deployment config
+  -> session capability selection
+  -> Pi tool TypeBox parse
   -> protocol client
 ```
 
@@ -190,13 +188,12 @@ Route应完成：
 2. 使用 `ApiRouteContext`取得 database、engine、events和 managers。
 3. 使用 `requireIssue()`、`ensureCurrentSubject()` 等 guard。
 4. 影响 Issue code、scope、Attachment、session或 lifecycle时使用 Issue reservation。
-5. 配置 snapshot读取、Service配置或 Issue scope变化先进入 scope queue；读取顺序为 `scope -> snapshot transaction`，Service写入顺序为 `scope -> revision check -> reservation`。
+5. 配置 snapshot读取、Service配置或 Issue scope变化先进入 scope queue；读取顺序为 `scope -> snapshot transaction`，Service写入顺序为 `scope -> reservation`。
 6. 多表更新放在一个 transaction。
 7. 文件系统事务明确 prepare/commit/rollback/finalize。
-8. Service PATCH/DELETE 使用 `/api/config` 返回的 revision 和 `If-Match`；冲突必须在 session close和 transaction之前失败。
-9. 返回 Web实际需要的 DTO，不暴露 raw row。
-10. 在 `src/web/src/data/client.ts`同步 contract/helper。
-11. 在职责对应的 HTTP test文件添加成功和失败场景。
+8. 返回 Web实际需要的 DTO，不暴露 raw row。
+9. 在 `src/web/src/data/client.ts`同步 contract/helper。
+10. 在职责对应的 HTTP test文件添加成功和失败场景。
 
 当前 route tests按域拆分：
 
@@ -257,8 +254,8 @@ AgentEngine拥有：
 
 修改时检查：
 
-- Repository先准备，policy后生成。
-- Prod/test policy path指向 Issue runtime link，不是 shared checkout物理 path。
+- Repository先准备，Agent session context后生成。
+- Prod/test context path指向 Issue runtime link，不是 shared checkout物理 path。
 - Session file在第一条可见消息前初始化并绑定。
 - User message只有状态提交或 Pi accept成功后才写 JSONL。
 - Resolved Issue不能执行。
@@ -277,7 +274,7 @@ tests/agent/engine.test.ts
 tests/agent/pi-session.test.ts
 tests/agent/events.test.ts
 tests/agent/repository-preparation.test.ts
-tests/pi/policy.test.ts
+tests/agent/context.test.ts
 tests/pi/tools.test.ts
 ```
 
@@ -400,17 +397,17 @@ node --experimental-strip-types --test \
 
 1. `CAPABILITY_KEYS` 和 `CapabilityConfiguration`。
 2. `registry.ts` definition：parse、scope、schema、metadata。
-3. `broker.ts` keyed handler。
+3. `pi/tools.ts` direct dispatch。
 4. 独立 protocol client。
 5. Root config limits/runtime。
 6. Web显式表单。
 7. `configuration-model.ts` serializer。
-8. Configuration API round-trip和 registry/client tests。
+8. Configuration API round-trip和 tool/client tests。
 9. [配置说明](CONFIGURATION.md)。
 
 必须回答：
 
-- Exact target如何冻结？
+- Exact target如何由Registry解析并保存在Deployment config？
 - Credential在哪里读取、传递和销毁，配置 GET 是否仍保持脱敏？
 - 新 credential 字段是否加入共享 `CAPABILITY_CREDENTIALS`，并覆盖 preserve/replace/clear 测试？
 - 哪些 action明确允许？
@@ -420,7 +417,7 @@ node --experimental-strip-types --test \
 - 超限是完整失败还是可证明完整的 pagination？
 - Result是否可能包含敏感数据并进入 Pi JSONL？
 
-Registry不替代 client校验。Tool description不是安全边界。应用只读解析也不替代外部系统最小权限账号。
+Registry在保存边界生成typed config；Pi tool用TypeBox只解析一次input并直接调用protocol client。Client信任内部typed config/input，只保留外部target授权、协议语义、timeout/abort、响应解析和结果预算。Tool description不是安全边界，外部系统仍使用最小权限账号。
 
 协议 client当前按职责拆分：
 
@@ -438,7 +435,7 @@ local-exec.ts
 
 `redis.ts`保留授权、命令白名单、AbortSignal和Worker生命周期，`redis-worker.ts`仅作为node-redis协议入口。node-redis会先完整物化RESP reply再返回，Worker heap limit用于在`capabilityResultText()`字节检查之前隔离超大分配；不要把该入口合并回API主事件循环。Redis credential只通过同进程`workerData`传递，不进入argv或日志，Worker返回值只允许稳定错误码。
 
-协议模块必须直接导入 owning client；不保留聚合兼容 barrel。Playwright不属于Agent capability；`infra/playwright.sh run`只运行operator提供的Issue Pilot应用自测脚本，不经过registry、policy、Pi tools或broker。
+协议模块不保留聚合兼容barrel。Playwright不属于Agent capability；`infra/playwright.sh run`只运行operator提供的Issue Pilot应用自测脚本，不经过registry、Agent session context或Pi tools。
 
 ## Web 开发
 
@@ -551,16 +548,15 @@ SQLite只读检查使用 `src/config.ts`解析的实际 database path。直接�
 - 改动是否放在拥有该事实的模块？
 - 是否保留唯一事实源，没有新建重复 enum/default/schema/branch join？
 - Prod/test是否仍只读，dev是否按 Issue隔离？
-- Read-only policy path是否仍位于 Issue runtime？
+- Read-only Agent context path是否仍位于 Issue runtime？
 - Existing dev base branch、working branch和 workspace name是否保持历史？
 - Dirty、untracked、running、invalid和 unmanaged state是否仍阻止删除？
 - Attachment、Pi JSONL、本地 Issue branch和 migration history是否保留？
 - File/database跨介质更新是否有 rollback/finalize test？
 - 锁顺序是否保持，没有 global mutex或反向 acquisition？
-- 已存 Credential 是否未进入配置 GET、未轮换的 PATCH、policy、prompt、tool input、日志或不必要 argv？
+- 已存 Credential 是否未进入配置 GET、未轮换的 PATCH、Agent session context、prompt、tool input、日志或不必要 argv？
 - Capability result的敏感留存是否明确？
 - DTO、Web interaction和 removed route是否一致？
-- Service 配置读取是否来自同一 SQLite snapshot，写入是否拒绝缺失或陈旧 revision？
 - Startup、shutdown、retry、abort和 repeated call是否有确定行为？
 - 文档是否更新到唯一 owning文档？
 - Typecheck、tests、build、audit和 diff check是否按风险通过？

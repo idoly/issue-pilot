@@ -2,16 +2,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { localCommandExecutor, type CommandExecutionOptions, type CommandExecutionResult, type CommandExecutor } from "./capabilities/local-exec.ts";
+import { localCommandExecutor, type CommandExecutionResult, type CommandExecutor } from "./capabilities/local-exec.ts";
 
 export interface ToolRunOptions {
   command: readonly string[];
   cwd?: string;
   environment?: Readonly<Record<string, string>>;
+  timeout?: number;
+  signal?: AbortSignal;
+  maxOutputBytes?: number;
 }
 
 export interface ToolRuntime {
-  run(options: ToolRunOptions, execution?: CommandExecutionOptions): Promise<CommandExecutionResult>;
+  run(options: ToolRunOptions): Promise<CommandExecutionResult>;
 }
 
 const inheritedEnvironment = [
@@ -35,9 +38,8 @@ export class ProcessToolRuntime implements ToolRuntime {
     this.executor = executor;
   }
 
-  async run(options: ToolRunOptions, execution?: CommandExecutionOptions): Promise<CommandExecutionResult> {
+  async run(options: ToolRunOptions): Promise<CommandExecutionResult> {
     if (options.cwd && (!path.isAbsolute(options.cwd) || options.cwd.includes("\0"))) throw new Error("invalid_tool_configuration");
-    if (execution?.cwd || execution?.environment) throw new Error("tool_execution_override_not_allowed");
     for (const [name, value] of Object.entries(options.environment ?? {})) {
       if (!/^[A-Z_][A-Z0-9_]*$/i.test(name) || value.includes("\0")) throw new Error("invalid_tool_configuration");
     }
@@ -53,9 +55,9 @@ export class ProcessToolRuntime implements ToolRuntime {
       return await this.executor.execute(selected.command, selected.args, {
         ...(options.cwd ? { cwd: options.cwd } : {}),
         environment,
-        ...(execution?.timeout !== undefined ? { timeout: execution.timeout } : {}),
-        ...(execution?.signal ? { signal: execution.signal } : {}),
-        ...(execution?.maxOutputBytes !== undefined ? { maxOutputBytes: execution.maxOutputBytes } : {}),
+        ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
       });
     } finally {
       if (temporaryHome) await rm(temporaryHome, { recursive: true, force: true });

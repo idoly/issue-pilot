@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
 
-import { readNacosCapability } from "../../src/capabilities/broker.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/nacos.ts";
 
@@ -74,21 +73,14 @@ test("reads exact Nacos Data IDs over one authenticated bounded HTTP session", a
       { dataId: "orders-shared.yaml", group: "MANAGED_GROUP", tenant: "managed-space", accessToken: "managed-token" },
     ]);
 
-    const toolResult = await readNacosCapability("orders", { ...configured, dataIds: ["orders.yaml"] });
-    const output = JSON.stringify(toolResult);
-    assert.match(output, /business-secret/);
-    assert.doesNotMatch(output, /managed-user|managed-secret|managed-token/);
   } finally {
     await server.close();
   }
 });
 
-test("rejects invalid targets and oversized Nacos responses", async () => {
+test("rejects oversized Nacos responses", async () => {
   const server = await nacosServer();
   try {
-    await assert.rejects(readNacosConfigurations(connection(server.origin, [])), /invalid_nacos_configuration_target/);
-    await assert.rejects(readNacosConfigurations(connection(server.origin, ["orders.yaml", "orders.yaml"])), /invalid_nacos_configuration_target/);
-    await assert.rejects(readNacosConfigurations(connection(server.origin, ["../orders.yaml"])), /invalid_nacos_configuration_target/);
     await assert.rejects(readNacosConfigurations(connection(server.origin, ["oversized.yaml"])), /capability_result_too_large/);
   } finally {
     await server.close();

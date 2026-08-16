@@ -19,9 +19,9 @@ test("runs fixed tools from the application process environment", async () => {
     },
   };
   const runtime = new ProcessToolRuntime(executor);
-  assert.equal((await runtime.run({ command: ["npm", "run", "test"], cwd: "/workspace", environment: { CI: "1" } })).stdout, "ok");
-  assert.deepEqual({ command: call!.command, args: call!.args, cwd: call!.options!.cwd, ci: call!.options!.environment!.CI }, {
-    command: "npm", args: ["run", "test"], cwd: "/workspace", ci: "1",
+  assert.equal((await runtime.run({ command: ["npm", "run", "test"], cwd: "/workspace", environment: { CI: "1" }, timeout: 123 })).stdout, "ok");
+  assert.deepEqual({ command: call!.command, args: call!.args, cwd: call!.options!.cwd, ci: call!.options!.environment!.CI, timeout: call!.options!.timeout }, {
+    command: "npm", args: ["run", "test"], cwd: "/workspace", ci: "1", timeout: 123,
   });
   await assert.rejects(access(temporaryHome), { code: "ENOENT" });
 });

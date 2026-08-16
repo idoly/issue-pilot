@@ -10,7 +10,7 @@ import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
-import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/read-only.ts";
+import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
 import { issueRuntimeRoot, issueSessionRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);

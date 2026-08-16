@@ -3,12 +3,13 @@ import { Type, type Static, type TSchema } from "typebox";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { CAPABILITY_KEYS, isDmsDatabaseId, isDmsTenantId, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
-import { isNacosTarget, isSlsLogstore } from "./contracts.ts";
 
 const defaults = issuePilotConfig.defaults;
 const limits = issuePilotConfig.limits.capability;
+const NACOS_TARGET = /^[a-zA-Z0-9._-]{1,255}$/;
 const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 
 export interface ToolMetadata {
   label: string;
@@ -17,26 +18,13 @@ export interface ToolMetadata {
   promptGuidelines: string[];
 }
 
-export interface CapabilityScopeMap {
-  nacos: { deploymentId: string; serverUrl: string; namespace: string; group: string; dataIds: string[] };
-  db: { deploymentId: string };
-  redis: { deploymentId: string };
-  mq: { deploymentId: string; virtualHost: string };
-  es: { deploymentId: string };
-  dms: { deploymentId: string; dbId: string; logic: boolean; tid?: string };
-  sls: { deploymentId: string; region: string; project: string; logstores: string[] };
-}
-
-export type CapabilityScopes = Partial<CapabilityScopeMap>;
-
-type CapabilityConfig<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]>;
+export type CapabilityConfig<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]>;
 
 type CapabilityDefinition<Key extends CapabilityName> = {
   key: Key;
   inputSchema: TSchema;
   metadata: ToolMetadata;
   parseConfiguration(value: unknown): CapabilityConfig<Key>;
-  createScope(config: Record<string, unknown>, deploymentId: string): CapabilityScopeMap[Key] | undefined;
 };
 
 export class CapabilityConfigurationError extends Error {}
@@ -87,14 +75,6 @@ function connectionUrl(value: unknown, name: string, protocols: string[], option
   return configuredUrl;
 }
 
-function stringValue(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function stringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every(stringValue) ? value : undefined;
-}
-
 export const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
   db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
@@ -118,7 +98,7 @@ export const capabilityInputSchemas = {
   }, { additionalProperties: false }),
   dms: Type.Object({ statement: Type.String({ maxLength: limits.dms.queryChars }) }, { additionalProperties: false }),
   sls: Type.Object({
-    logstore: Type.String({ maxLength: 63 }),
+    logstore: Type.String({ maxLength: 63, pattern: SLS_LOGSTORE.source }),
     from: Type.Optional(Type.Integer({ minimum: 0 })),
     to: Type.Optional(Type.Integer({ minimum: 1 })),
     query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars })),
@@ -145,16 +125,10 @@ const definitions = {
       const input = inputRecord(value);
       const credentials = optionalCredentials(input, "nacos");
       const dataIds = [...new Set(stringList(input.dataIds, "nacos_data_ids").map((entry) => requiredText(entry, "nacos_data_id", 255)))];
-      if (!dataIds.length || dataIds.length > limits.nacos.dataIds || dataIds.some((entry) => !isNacosTarget(entry))) fail("invalid_nacos_data_ids");
+      if (!dataIds.length || dataIds.length > limits.nacos.dataIds || dataIds.some((entry) => !NACOS_TARGET.test(entry))) fail("invalid_nacos_data_ids");
       const group = requiredText(input.group, "nacos_group", 255);
-      if (!isNacosTarget(group)) fail("invalid_nacos_group");
+      if (!NACOS_TARGET.test(group)) fail("invalid_nacos_group");
       return { serverUrl: connectionUrl(input.serverUrl, "nacos_server_url", ["http:", "https:"], { rootOnly: true }), namespace: optionalText(input.namespace, 255), group, dataIds, ...credentials };
-    },
-    createScope(config, deploymentId) {
-      const dataIds = stringArray(config.dataIds);
-      return stringValue(config.serverUrl) && typeof config.namespace === "string" && stringValue(config.group) && dataIds?.length
-        ? { deploymentId, serverUrl: config.serverUrl, namespace: config.namespace, group: config.group, dataIds: [...new Set(dataIds)] }
-        : undefined;
     },
   },
   db: {
@@ -175,7 +149,6 @@ const definitions = {
       if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) fail("invalid_db_url");
       return { url, username: requiredText(input.username, "db_username", 500), password: requiredText(input.password, "db_password") };
     },
-    createScope(_config, deploymentId) { return { deploymentId }; },
   },
   redis: {
     key: "redis",
@@ -191,7 +164,6 @@ const definitions = {
       const password = optionalText(input.password);
       return { host: requiredText(input.host, "redis_host", 255), port: boundedInteger(input.port ?? defaults.redis.port, "redis_port", 1, 65_535), username: optionalText(input.username, 500), ...(password ? { password } : {}), database: boundedInteger(input.database ?? defaults.redis.database, "redis_database", 0, 1_000_000) };
     },
-    createScope(_config, deploymentId) { return { deploymentId }; },
   },
   mq: {
     key: "mq",
@@ -206,7 +178,6 @@ const definitions = {
       const input = inputRecord(value);
       return { host: requiredText(input.host, "mq_host", 255), port: boundedInteger(input.port ?? defaults.rabbitmq.port, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: requiredText(input.username, "mq_username", 500), password: requiredText(input.password, "mq_password"), virtualHost: requiredText(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
     },
-    createScope(config, deploymentId) { return stringValue(config.virtualHost) ? { deploymentId, virtualHost: config.virtualHost } : undefined; },
   },
   es: {
     key: "es",
@@ -221,7 +192,6 @@ const definitions = {
       const input = inputRecord(value);
       return { url: connectionUrl(input.url, "es_url", ["http:", "https:"]), ...optionalCredentials(input, "es") };
     },
-    createScope(_config, deploymentId) { return { deploymentId }; },
   },
   dms: {
     key: "dms",
@@ -239,11 +209,6 @@ const definitions = {
       if (!isDmsDatabaseId(dbId) || typeof input.logic !== "boolean" || (tid !== undefined && !isDmsTenantId(tid))) fail("invalid_dms_scope");
       return { accessKeyId: requiredText(input.accessKeyId, "dms_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "dms_access_key_secret"), dbId, logic: input.logic, ...(tid === undefined ? {} : { tid }) };
     },
-    createScope(config, deploymentId) {
-      return stringValue(config.dbId) && typeof config.logic === "boolean" && (config.tid === undefined || stringValue(config.tid))
-        ? { deploymentId, dbId: config.dbId, logic: config.logic, ...(stringValue(config.tid) ? { tid: config.tid } : {}) }
-        : undefined;
-    },
   },
   sls: {
     key: "sls",
@@ -259,14 +224,8 @@ const definitions = {
       const region = requiredText(input.region, "sls_region", 63);
       const project = requiredText(input.project, "sls_project", 63);
       const logstores = [...new Set(stringList(input.logstores, "sls_logstores").map((entry) => requiredText(entry, "sls_logstore", 63)))];
-      if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some((entry) => !isSlsLogstore(entry))) fail("invalid_sls_scope");
+      if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some((entry) => !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
       return { accessKeyId: requiredText(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "sls_access_key_secret"), region, project, logstores };
-    },
-    createScope(config, deploymentId) {
-      const logstores = stringArray(config.logstores);
-      return stringValue(config.region) && stringValue(config.project) && logstores
-        ? { deploymentId, region: config.region, project: config.project, logstores }
-        : undefined;
     },
   },
 } satisfies { [Key in CapabilityName]: CapabilityDefinition<Key> };
@@ -279,15 +238,4 @@ export function parseCapabilityConfiguration<Key extends CapabilityName>(key: Ke
 
 export function storedCapabilitySections(input: CapabilityConfiguration): CapabilityConfiguration {
   return Object.fromEntries(CAPABILITY_KEYS.flatMap((key) => input[key] ? [[key, input[key]]] : [])) as CapabilityConfiguration;
-}
-
-export function capabilityScopesFromConfiguration(config: Record<string, unknown>, deploymentId: string): CapabilityScopes {
-  const scopes: CapabilityScopes = {};
-  for (const key of CAPABILITY_KEYS) {
-    const section = config[key];
-    if (!section || typeof section !== "object" || Array.isArray(section)) continue;
-    const scope = capabilityDefinitions[key].createScope(section as Record<string, unknown>, deploymentId);
-    if (scope) Object.assign(scopes, { [key]: scope });
-  }
-  return scopes;
 }

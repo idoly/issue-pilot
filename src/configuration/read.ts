@@ -2,16 +2,10 @@ import { asc, inArray, sql } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition, type DeploymentConfig } from "../domain/contracts.ts";
+import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
 import { redactCapabilityConfiguration } from "./credentials.ts";
-import { serviceConfigurationRevision } from "./revision.ts";
-
-function configurationRecord(value: unknown): DeploymentConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("deployment_configuration_invalid");
-  return value as DeploymentConfig;
-}
 
 type ConfigurationReader = Pick<Database, "select">;
 
@@ -52,8 +46,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
   const deploymentsByServiceId = new Map<string, typeof deploymentRows>();
   const repositoriesByServiceId = new Map<string, typeof repositoryRows>();
   const branchesByDeploymentId = new Map<string, Map<string, string>>();
-  const deploymentRepositoriesByServiceId = new Map<string, typeof deploymentRepositoryRows>();
-  const serviceIdByDeploymentId = new Map(deploymentRows.map((deployment) => [deployment.id, deployment.serviceId]));
+
   for (const deployment of deploymentRows) {
     const grouped = deploymentsByServiceId.get(deployment.serviceId) ?? [];
     grouped.push(deployment);
@@ -68,11 +61,6 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
     const grouped = branchesByDeploymentId.get(branch.deploymentId) ?? new Map<string, string>();
     grouped.set(branch.repositoryId, branch.baseBranch);
     branchesByDeploymentId.set(branch.deploymentId, grouped);
-    const serviceId = serviceIdByDeploymentId.get(branch.deploymentId);
-    if (!serviceId) throw new Error("deployment_not_found");
-    const serviceBranches = deploymentRepositoriesByServiceId.get(serviceId) ?? [];
-    serviceBranches.push(branch);
-    deploymentRepositoriesByServiceId.set(serviceId, serviceBranches);
   }
   return {
     agentModels: agentModels.map(({ provider, id, thinkingLevels }) => ({ provider, id, thinkingLevels })),
@@ -82,11 +70,10 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
       const repositories = repositoriesByServiceId.get(service.id) ?? [];
       return {
         key: service.key,
-        revision: serviceConfigurationRevision(service, repositories, deployments, deploymentRepositoriesByServiceId.get(service.id) ?? []),
         name: service.name,
         description: service.description,
         deployments: deployments.map((deployment) => {
-          const deploymentConfig = configurationRecord(deployment.config);
+          const deploymentConfig = deployment.config;
           const environmentKey = environmentKeyById.get(deployment.environmentId);
           if (!environmentKey) throw new Error("deployment_environment_not_found");
           const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();

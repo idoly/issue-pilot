@@ -3,6 +3,7 @@ import { rename } from "node:fs/promises";
 import path from "node:path";
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
@@ -13,7 +14,7 @@ import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import { finalizeQuarantinedAttachments, type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachment-store.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { ensureCurrentSubject, requireIssue, runIssueExclusive, serializePerson, touchIssue, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 
@@ -36,6 +37,28 @@ const regionalDateFormat = new Intl.DateTimeFormat("en-CA", {
 function regionalDateStamp(now = new Date()): string {
   const dateParts = new Map(regionalDateFormat.formatToParts(now).map((part) => [part.type, part.value]));
   return `${dateParts.get("year")}${dateParts.get("month")}${dateParts.get("day")}`;
+}
+
+async function readIssueInput(request: FastifyRequest): Promise<{ input: Record<string, unknown>; attachments: PendingAttachment[] }> {
+  if (!request.isMultipart()) return { input: record(request.body), attachments: [] };
+  const attachments: PendingAttachment[] = [];
+  let attachmentBytes = 0;
+  let issueField: unknown;
+  for await (const part of request.parts()) {
+    if (part.type === "file") {
+      const attachment = await readMultipartAttachment(part, attachmentBytes);
+      attachmentBytes += attachment.content.length;
+      attachments.push(attachment);
+    } else if (part.fieldname === "issue") {
+      issueField = part.value;
+    }
+  }
+  try {
+    return { input: record(JSON.parse(text(issueField, "issue", 100_000))), attachments };
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(400, "invalid_issue");
+  }
 }
 
 export function registerIssueRoutes(context: ApiRouteContext): void {
@@ -98,29 +121,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
   app.get("/api/issues", async () => serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.createdAt), desc(issues.key))));
 
   app.post("/api/issues", async (request, reply) => {
-    const initialAttachments: PendingAttachment[] = [];
-    let attachmentBytes = 0;
-    let input: Record<string, unknown>;
-    if (request.isMultipart()) {
-      let issueField: unknown;
-      for await (const part of request.parts()) {
-        if (part.type === "file") {
-          const attachment = await readMultipartAttachment(part, attachmentBytes);
-          attachmentBytes += attachment.content.length;
-          initialAttachments.push(attachment);
-        } else if (part.fieldname === "issue") {
-          issueField = part.value;
-        }
-      }
-      try {
-        input = record(JSON.parse(text(issueField, "issue", 100_000)));
-      } catch (error) {
-        if (error instanceof ApiError) throw error;
-        throw new ApiError(400, "invalid_issue");
-      }
-    } else {
-      input = record(request.body);
-    }
+    const { input, attachments: initialAttachments } = await readIssueInput(request);
     const reporterSubject = await ensureCurrentSubject(database, request);
     const createdIssue = await runScopeExclusive(async () => {
       const selectedEnvironment = await findEnvironmentByKey(text(input.environmentKey, "environment_key", 100));
@@ -159,28 +160,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
-    const pendingAttachments: PendingAttachment[] = [];
-    let attachmentBytes = 0;
-    let input: Record<string, unknown>;
-    if (request.isMultipart()) {
-      let issueField: unknown;
-      for await (const part of request.parts()) {
-        if (part.type === "file") {
-          const attachment = await readMultipartAttachment(part, attachmentBytes);
-          attachmentBytes += attachment.content.length;
-          pendingAttachments.push(attachment);
-        } else if (part.fieldname === "issue") {
-          issueField = part.value;
-        }
-      }
-      try { input = record(JSON.parse(text(issueField, "issue", 100_000))); }
-      catch (error) {
-        if (error instanceof ApiError) throw error;
-        throw new ApiError(400, "invalid_issue");
-      }
-    } else {
-      input = record(request.body);
-    }
+    const { input, attachments: pendingAttachments } = await readIssueInput(request);
     const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
     const editorSubject = await ensureCurrentSubject(database, request);
     return runScopeExclusive(() => runIssueExclusive(engine, [issue.id], async (reservation) => {
@@ -294,7 +274,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const authorSubject = await ensureCurrentSubject(database, request);
     const comment = await database.db.transaction(async (transaction) => {
       const [createdComment] = await transaction.insert(issueComments).values({ issueId: issue.id, authorSubject, body: text(input.body, "comment", 50_000) }).returning();
-      await touchIssue(transaction, issue.id);
+      await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
       return createdComment!;
     });
     return reply.code(201).send({ id: comment.id, author: authorSubject, body: comment.body, createdAt: comment.createdAt.toISOString() });

@@ -16,6 +16,3 @@ export function capabilitySignal(signal?: AbortSignal): AbortSignal {
 export function capabilityTextResult<Details extends Record<string, unknown>>(text: string, details: Details) {
   return { content: [{ type: "text" as const, text }], details };
 }
-
-export const isNacosTarget = (value: string): boolean => /^[a-zA-Z0-9._-]{1,255}$/.test(value);
-export const isSlsLogstore = (value: string): boolean => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/.test(value);

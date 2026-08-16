@@ -4,9 +4,9 @@ import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { Database } from "../db/client.ts";
-import { agentSessions, issueRepositories, issueWorkspaces } from "../db/schema.ts";
+import { agentSessions, environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { SerialQueue } from "../serial.ts";
-import type { EnvironmentKind, IssueType } from "../domain/contracts.ts";
+import type { DeploymentConfig, EnvironmentKind, IssueType } from "../domain/contracts.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
@@ -23,7 +23,7 @@ export interface PreparedIssueRepository {
 }
 
 export interface PreparedIssueProject {
-  deployment: { id: string; config: Record<string, unknown> };
+  deployment: { id: string; config: DeploymentConfig };
   runtimeRoot: string;
   workspaceRoot: string;
   executableRoot?: string;
@@ -164,10 +164,6 @@ export class IssueProjectManager {
     return { names, repositories };
   }
 
-  async hydrateReadOnlyRuntime(issue: ProjectIssue): Promise<string> {
-    return this.hydrateReadOnlyRuntimeWithPreparations(issue);
-  }
-
   async hydrateReadOnlyRuntimes(issues: ProjectIssue[]): Promise<RuntimePreparationResult> {
     const preparations: ReadOnlyDeploymentPreparationCache = new Map();
     const repositoryRows = issues.length
@@ -183,12 +179,12 @@ export class IssueProjectManager {
     return prepareIssueRuntimeBatch(
       this.database,
       issues,
-      (issue) => this.hydrateReadOnlyRuntimeWithPreparations(issue, preparations, repositoriesByIssue.get(issue.id) ?? [], databaseQueue),
+      (issue) => this.hydrateReadOnlyRuntime(issue, preparations, repositoriesByIssue.get(issue.id) ?? [], databaseQueue),
       { concurrency: issuePilotConfig.workspace.taskConcurrency },
     );
   }
 
-  private async hydrateReadOnlyRuntimeWithPreparations(
+  async hydrateReadOnlyRuntime(
     issue: ProjectIssue,
     preparations?: ReadOnlyDeploymentPreparationCache,
     repositoryRows?: IssueRepository[],
@@ -370,4 +366,31 @@ export class IssueProjectManager {
       runtimeReady: true,
     };
   }
+}
+
+export async function prepareDevelopmentIssueRuntimes(database: Database, stateRoot: string): Promise<RuntimePreparationResult> {
+  const developmentIssues = await database.select({ id: issues.id, key: issues.key, type: issues.type }).from(issues)
+    .innerJoin(environments, eq(environments.id, issues.environmentId))
+    .where(eq(environments.kind, "dev"));
+  const project = new IssueProjectManager(database, stateRoot);
+  return prepareIssueRuntimeBatch(
+    database,
+    developmentIssues,
+    (issue) => project.hydrateDevelopmentRuntime(issue),
+    { concurrency: issuePilotConfig.workspace.taskConcurrency },
+  );
+}
+
+export async function prepareReadOnlyIssueRuntimes(database: Database, stateRoot: string): Promise<RuntimePreparationResult> {
+  const readOnlyIssues = await database.select({
+    id: issues.id,
+    key: issues.key,
+    type: issues.type,
+    serviceId: issues.serviceId,
+    environmentId: issues.environmentId,
+  }).from(issues)
+    .innerJoin(environments, eq(environments.id, issues.environmentId))
+    .innerJoin(agentSessions, eq(agentSessions.issueId, issues.id))
+    .where(inArray(environments.kind, ["prod", "test"]));
+  return new IssueProjectManager(database, stateRoot).hydrateReadOnlyRuntimes(readOnlyIssues);
 }

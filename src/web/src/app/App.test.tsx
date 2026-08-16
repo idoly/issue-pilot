@@ -29,7 +29,7 @@ vi.mock("../data/client", async (importOriginal) => {
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ key: "test", name: "测试" }],
     services: [{
-      key: "srm", revision: "a".repeat(64), name: "SRM", description: "供应商关系管理服务。",
+      key: "srm", name: "SRM", description: "供应商关系管理服务。",
       deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", credentialConfigured: true }, dms: { dbId: "123456", logic: false, tid: "987654", credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }],
@@ -381,8 +381,8 @@ describe("issue pilot workspace", () => {
       if (alert) throw new Error(alert.textContent ?? "service save failed");
       expect(client.updateService).toHaveBeenCalled();
     });
-    expect(vi.mocked(client.updateService).mock.calls.at(-1)?.slice(0, 2)).toEqual(["srm", "a".repeat(64)]);
-    const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[2];
+    expect(vi.mocked(client.updateService).mock.calls.at(-1)?.[0]).toBe("srm");
+    const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
     expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
@@ -428,28 +428,6 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(newUserRow).getByRole("button", { name: "停用" }));
     await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { name: "新用户", email: "new.user@example.test", active: false }));
     await waitFor(() => expect(within(screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement).getByText("停用")).toBeTruthy());
-  });
-
-  test("keeps a stale Service editor open and refreshes configuration after a revision conflict", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.loadCatalog).mockClear();
-    vi.mocked(client.loadConfig).mockClear();
-    vi.mocked(client.updateService).mockRejectedValueOnce(new Error("service_configuration_changed"));
-    const view = render(() => <App />);
-    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
-
-    fireEvent.click(screen.getByRole("radio", { name: "配置" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "配置" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "编辑服务" }));
-    const dialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑服务" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-
-    await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("配置已被其他用户更新"));
-    expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(dialog);
-    expect(client.loadConfig).toHaveBeenCalledTimes(2);
-    expect(client.loadCatalog).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(client.updateService).mock.calls[0]?.slice(0, 2)).toEqual(["srm", "a".repeat(64)]);
-    view.unmount();
   });
 
   test("retries the initial configuration request in place", async () => {

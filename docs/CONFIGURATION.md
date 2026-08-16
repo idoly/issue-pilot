@@ -10,17 +10,15 @@ Issue Pilot 只有三类配置来源：
 | --- | --- | --- |
 | 应用配置 | 根目录 `issue-pilot.config.ts` | State path、首次用户、端口、默认值、retention、runtime、timeout 和结果预算 |
 | Service/Deployment 配置 | SQLite | Repository、各环境分支、Pi model、capability scope 和 credential |
-| IssuePolicy | 每次 Pi session 从实际代码状态和 Deployment 生成 | 冻结 model、Repository access/commit/path 和无 credential capability scope |
+| Agent session context | 每次 Pi session 从实际代码状态和 Deployment 生成 | Issue/Service/Environment标识、model、capability名称和代码写权限 |
 
 应用不接受环境变量覆盖。Node 和 Web 直接导入根配置；Shell 通过 `infra/config-value.mjs` 读取同一对象的标量字段。页面不定义第二套后端默认值。
 
 普通工单工作台只读取 `/api/catalog`，其中只有 Environment key/name 和 Service key/name/可用 Environment，不包含 Repository URL、model、capability 或 credential。配置视图才按需读取 `/api/config`；该响应包含 Repository、model、capability scope 和每组 `credentialConfigured` 状态，但不包含已存 password、AccessKeyId 或 AccessKeySecret。两种响应共用 `src/configuration/contracts.ts`，分别由 `src/configuration/read.ts` 投影。
 
-`/api/catalog` 和 `/api/config` 通过 scope queue 串行进入 SQLite snapshot transaction，避免单连接并发 transaction 的 `SQLITE_BUSY`，也不会跨过正在提交的 Service 配置读取混合版本。每个 Service 带一个 64 字符 opaque revision，它是 Service 字段、Repository、Deployment 完整 config（包括 credential）和 branch 关系的规范化 HMAC-SHA-256。HMAC key 在 API 启动时随机生成且不落盘，避免 revision 成为 credential 猜测 oracle；API 重启会使已打开表单的旧 revision失效。时间戳不参与，因此同一秒连续保存也能区分，字段顺序或查询顺序不会制造伪变化。
+`/api/catalog` 和 `/api/config` 通过 scope queue 串行进入 SQLite snapshot transaction，避免单连接并发 transaction 的 `SQLITE_BUSY`，也不会跨过正在提交的 Service 配置读取混合版本。Web 的 catalog/config resource 使用递增 generation，只允许最新请求提交 state 或 error；首次配置读取失败时页面保留原地重试。
 
-Web 的 catalog/config resource 使用递增 generation，只允许最新请求提交 state 或 error；旧响应不能覆盖较新的 revision。首次配置读取失败时页面保留原地重试，不要求切换视图或刷新整个应用。
-
-保存或删除 Service 必须通过 `If-Match` 提交当前 revision。缺失返回 `428 service_revision_required`；当前内容已变化返回 `409 service_configuration_changed`，且不会关闭 Issue session或进入写事务。每个已选 capability 还必须显式提交一种 credential 更新：`preserve` 保留目标 Environment 当前值，`replace` 提交一组完整新值，`clear` 只允许可选 credential。API 在内存中合并当前 SQLite 配置并重新执行 registry 校验，然后把请求、model 和关系状态固化为 prepared configuration，再 reservation 全部受影响 Issue并关闭内存 Pi session，最后在一个 SQLite transaction 中 apply；事务阶段不会重新解析请求或重新读取配置关系。已存在的 Pi JSONL 不会改写；下一轮执行使用新配置。
+保存 Service 时，每个已选 capability 必须显式提交一种 credential 更新：`preserve` 保留目标 Environment 当前值，`replace` 提交一组完整新值，`clear` 只允许可选 credential。API 在内存中合并当前 SQLite 配置并由registry解析一次，再 reservation 全部受影响 Issue并关闭内存 Pi session，最后在一个 SQLite transaction 中 apply。删除Service直接在同一scope queue中检查Issue引用并提交。已存在的 Pi JSONL 不会改写；下一轮执行使用新配置。
 
 ## 根配置
 
@@ -108,7 +106,7 @@ Non-zero target 必须小于 high-water，task concurrency必须为正整数。�
 
 application容器使用唯一的`ProcessToolRuntime`，只允许镜像PATH中的`npm`、`mvn`和限定`aliyun dms-enterprise/sls`命令。运行请求不携带image、PID/内存或容器配置；工具版本只由当前application镜像决定。每次调用仍有timeout、abort、output预算、路径规范化和临时HOME清理。项目Node工作流只支持npm，不在运行时下载Yarn/Corepack。
 
-DMS endpoint 是固定 central endpoint；`cliRegion` 只用于单次 Aliyun CLI profile，不是数据库 scope。`runtime.playwright`只配置Issue Pilot自身浏览器测试的Playwright Core、固定image和容器预算，不创建Service/Deployment capability，也不会进入IssuePolicy或Pi tool。
+DMS endpoint 是固定 central endpoint；`cliRegion` 只用于单次 Aliyun CLI profile，不是数据库 scope。`runtime.playwright`只配置Issue Pilot自身浏览器测试的Playwright Core、固定image和容器预算，不创建Service/Deployment capability，也不会进入Agent session context或Pi tool。
 
 Web内置VS Code Workbench通过只读文件系统overlay展示multi-root源码，workspace URI和文件URI位于`file:///issue-pilot/...`命名空间。Source API从SQLite Issue/Repository关系和受管runtime解析路径，不接受宿主绝对路径。Workbench固定使用GitHub Dark Default、Material Icon Theme和受控Markdown Preview；Search投影受预算`/search`，Source Control投影结构化`/diff`及受限`/history`、`/commit`。Bottom Panel Agent、Secondary Side Bar工单详情和固定视图图标也是Web布局行为，不属于Service、Deployment或根运行配置。Node/Maven版本系列只在Containerfile中声明；npmrc和Maven settings只读挂载，缓存目录读写挂载，内容不进入根配置、HTTP响应或日志。
 
@@ -261,17 +259,9 @@ Wrapper 只接受当前 Issue workspace 内的真实 project path。Node不提�
 nacos, db, redis, mq, es, dms, sls
 ```
 
-`src/capabilities/registry.ts` 是 capability 保存解析、credential-free scope、tool schema 和 metadata 的共同定义。`src/configuration/contracts.ts` 统一声明每种 capability 的 credential 字段、是否必需及配置中心读写 DTO；`credentials.ts` 负责脱敏和 preserve/replace/clear 合并。Web 仍为每种能力保留显式表单，`configuration-model.ts` 只序列化已选择 capability；未选择 section 不进入 payload 或 SQLite。
+`src/capabilities/registry.ts` 是 capability 保存解析、tool schema 和 metadata 的共同定义。`src/configuration/contracts.ts` 统一声明每种 capability 的 credential 字段、是否必需及配置中心读写 DTO；`credentials.ts` 负责脱敏和 preserve/replace/clear 合并。Web 仍为每种能力保留显式表单，`configuration-model.ts` 只序列化已选择 capability；未选择 section 不进入 payload 或 SQLite。
 
-一次执行经过：
-
-1. Service save parser 校验并规范化配置。
-2. Registry 从保存配置投影 credential-free IssuePolicy scope。
-3. Pi tool schema 解析 Agent input，拒绝 additional properties。
-4. Broker 确认 capability 在 frozen allowlist 中，并取得 session config。
-5. Protocol client 再次比较 frozen scope、当前 config、输入和结果预算。
-
-Capability 都是只读且 bounded。应用检查不能替代外部系统的最小权限账号。
+配置保存时由Registry规范化为typed Deployment config。执行时，Agent session context只选择capability名称；每个tool用TypeBox解析一次Agent input后，把typed input和session-local Deployment config直接交给protocol client。Client负责只读外部I/O、timeout/abort和结果预算。应用约束不能替代外部系统的最小权限账号。
 
 ## Nacos
 
@@ -287,7 +277,7 @@ Capability 都是只读且 bounded。应用检查不能替代外部系统的最�
 
 Group/Data ID 只允许字母、数字、点、下划线和连字符。
 
-Tool input 是空对象。一次调用读取 frozen 列表中的全部 Data ID；404 映射为 `content: null`，其他 HTTP 失败整次失败。Login response 和所有配置内容受独立/合计 byte budget 限制。
+Tool input 是空对象。一次调用读取当前 Deployment config中的全部 Data ID；404 映射为 `content: null`，其他 HTTP 失败整次失败。Login response 和所有配置内容受独立/合计 byte budget 限制。
 
 ## MySQL (`db`)
 
@@ -339,7 +329,7 @@ Key/field/pattern 最多 1,024 字符；`mget` 最多 100 keys；结果最多 50
 | `port` | AMQP port，默认 5672 |
 | `managementPort` | HTTP management port，默认 15672 |
 | `username`, `password` | 必填 |
-| `virtualHost` | 必填，默认 `/`，进入 frozen scope |
+| `virtualHost` | 必填，默认 `/`，执行时直接使用已解析的 Deployment config |
 
 Tool action 为 `overview`、`queues`、`queue`、`bindings`。后两者要求 queue，最长 255 字符。Client 只访问 Management HTTP API，不建立 AMQP producer/consumer，不跟随 redirect。
 
@@ -381,7 +371,7 @@ aliyun dms-enterprise ExecuteScript
 - RAM 只授予 `dms:ExecuteScript`；该 action 的 resource 为 `*`。
 - DMS tenant 内保持普通用户，不授予 admin/DBA/Owner/change/export。
 - 只授予目标数据库 query 权限，并继续使用列权限、行权限和脱敏。
-- Deployment frozen scope 再固定 exact `dbId/logic/tid`。
+- 执行时直接使用 session-local Deployment config 中的 exact `dbId/logic/tid`。
 
 最小 RAM policy：
 
@@ -427,7 +417,7 @@ trace_id?          # UUID；与 query 互斥
 limit?             # 1..200，默认 20
 ```
 
-未指定时间时，普通 query 默认最近 15 分钟，trace ID 默认最近 24 小时。Endpoint 为 `<region>.log.aliyuncs.com`，project/logstore 与 frozen scope逐项核对。分页达到 limit 后会探测下一条；仍有数据时返回 `capability_result_too_large`，不会把前 N 条伪装成完整结果。
+未指定时间时，普通 query 默认最近 15 分钟，trace ID 默认最近 24 小时。Endpoint 为 `<region>.log.aliyuncs.com`，project/logstore 直接取自 session-local Deployment config。分页达到 limit 后会探测下一条；仍有数据时返回 `capability_result_too_large`，不会把前 N 条伪装成完整结果。
 
 每次调用创建临时 `0600` Aliyun CLI profile并挂载到受限 `--rm`容器。AccessKey不进入argv，但query、project、logstore和时间范围会出现在宿主进程参数中。
 
@@ -455,8 +445,8 @@ Capability 超限时整次失败，不返回静默截断的部分成功。调用
 - 配置表单中的 secret input 始终为空。已有值显示“已配置”；留空保存发送 `preserve`，填写完整新值发送 `replace`，可选认证关闭后发送 `clear`。
 - `preserve` 只从同一 Service、同一 Environment 的当前 Deployment 取值。目标不存在或没有已配置值时失败，不从其他 Environment 猜测或复制。
 - Service prepare 在 API 内存中合并 credential 更新，再调用 registry 完整解析；SQLite transaction 保存的是规范化完整配置。
-- `IssuePolicy`、system prompt、tool schema 和 Agent tool input不含这些 credential。
-- `createCapabilityTools()` 对 Deployment config 做 session-local clone；完整配置只在 API 进程闭包内传给 broker/client。
+- `AgentSessionContext`、system prompt、tool schema 和 Agent tool input不含这些 credential。
+- `createCapabilityTools()` 对 Deployment config 做 session-local clone；完整配置只在 API 进程的tool闭包内传给protocol client。
 - DMS/SLS AccessKey 进入调用级临时 `0600` Aliyun profile。
 - MySQL、Redis、RabbitMQ、Elasticsearch 和 Nacos credential 只传给对应 API 进程 client。
 

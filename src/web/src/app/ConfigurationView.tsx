@@ -26,8 +26,6 @@ function serviceSaveErrorMessage(error: unknown): string {
     invalid_credential_replacement: "请填写完整的新凭据",
     invalid_credential_update: "凭据更新状态无效，请刷新配置后重试",
     credential_fields_not_allowed: "请刷新页面后重新提交配置",
-    service_configuration_changed: "配置已被其他用户更新，请关闭编辑窗口后重试",
-    service_revision_required: "配置版本缺失，请刷新页面后重试",
     invalid_repository: "仓库标识无效，请刷新配置后重试",
     duplicate_repository_alias: "仓库别名不能重复",
     invalid_deployment_repository_branches: "请为每个环境配置全部仓库分支",
@@ -184,9 +182,8 @@ export function ConfigurationView() {
   const [serviceRepositories, setServiceRepositories] = createSignal<ServiceRepositoryDraft[]>([newRepositoryDraft()], { ownedWrite: true });
   const [serviceDeployments, setServiceDeployments] = createStore<ServiceDeploymentDraft[]>([]);
   const [editingServiceKey, setEditingServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
-  const [editingServiceRevision, setEditingServiceRevision] = createSignal<string | null>(null, { ownedWrite: true });
   const [selectedServiceKey, setSelectedServiceKey] = createSignal<string | null>(null, { ownedWrite: true });
-  const [deleteTarget, setDeleteTarget] = createSignal<{ kind: "service"; key: string; name: string; revision: string } | null>(null, { ownedWrite: true });
+  const [deleteTarget, setDeleteTarget] = createSignal<{ kind: "service"; key: string; name: string } | null>(null, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
   const refresh = async () => {
@@ -217,7 +214,7 @@ export function ConfigurationView() {
   );
   const selectedService = createMemo(() => configuration().services.find((service) => service.key === selectedServiceKey()));
   const resetServiceForm = () => {
-    setServiceName(""); setDescription(""); setServiceRepositories([newRepositoryDraft()]); setServiceDeployments(() => []); setEditingServiceKey(null); setEditingServiceRevision(null);
+    setServiceName(""); setDescription(""); setServiceRepositories([newRepositoryDraft()]); setServiceDeployments(() => []); setEditingServiceKey(null);
   };
   const openNewService = () => {
     resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
@@ -227,7 +224,7 @@ export function ConfigurationView() {
     return model ? { provider: model.provider, model: model.id, thinkingLevel: model.thinkingLevels.includes("medium") ? "medium" : model.thinkingLevels[0]! } : { provider: "", model: "", thinkingLevel: "off" };
   };
   const openServiceEditor = (service: Service) => {
-    setEditingServiceKey(service.key); setEditingServiceRevision(service.revision);
+    setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
     setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, key: repository.id, alias: repository.alias, url: repository.url })));
     const deployments = service.deployments.map((deployment) => ({
@@ -291,14 +288,11 @@ export function ConfigurationView() {
         })),
       };
       const editingKey = editingServiceKey();
-      const editingRevision = editingServiceRevision();
-      if (editingKey && editingRevision) await updateService(editingKey, editingRevision, definition);
-      else if (editingKey) throw new Error("service_revision_required");
+      if (editingKey) await updateService(editingKey, definition);
       else await createService(definition);
       await refresh();
       setServiceOpen(false); resetServiceForm();
     } catch (error) {
-      if (errorMessage(error) === "service_configuration_changed") await refresh();
       setConfigurationError(serviceSaveErrorMessage(error));
     } finally { setSaving(false); }
   };
@@ -307,11 +301,10 @@ export function ConfigurationView() {
     if (!target) return;
     setSaving(true); setConfigurationError("");
     try {
-      await deleteService(target.key, target.revision);
+      await deleteService(target.key);
       setDeleteTarget(null);
       await refresh();
     } catch (error) {
-      if (errorMessage(error) === "service_configuration_changed") await refresh();
       setConfigurationError(serviceSaveErrorMessage(error));
     } finally { setSaving(false); }
   };
@@ -351,7 +344,7 @@ export function ConfigurationView() {
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>别名用于环境分支配置，服务内必须唯一</span></div><Button icon={<Plus size={14} />} onClick={addServiceRepository}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => deleteServiceRepository(repository)} />}</For></div></div>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>按仓库别名配置分支和 Pi 使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} agentModels={configuration().agentModels} repositories={serviceRepositories} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
-          <Show when={editingServiceKey() && editingServiceRevision()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName(), revision: editingServiceRevision()! }); }}>删除服务</Button></div></Show>
+          <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
         </div>
       </Modal>
       <Modal open={Boolean(deleteTarget())} title="删除服务" okText="确认删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onOk={() => { void confirmDelete(); }} onCancel={() => { setDeleteTarget(null); setConfigurationError(""); }}>

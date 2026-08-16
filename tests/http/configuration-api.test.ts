@@ -5,8 +5,6 @@ import { test } from "node:test";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { createApiFixture, createIssue, createService, json, servicePayload, testAgent } from "./fixture.ts";
 
-const matchRevision = (revision: string) => ({ "if-match": revision });
-
 test("projects bootstrap user, environments, models, repositories, and deployments without internal fields", async () => {
   const fixture = await createApiFixture();
   try {
@@ -40,14 +38,13 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     const config = await json(response) as {
       environments: Array<Record<string, unknown>>;
       agentModels: Array<Record<string, unknown>>;
-      services: Array<{ key: string; revision: string; repositories: Array<Record<string, unknown>>; deployments: Array<Record<string, unknown>> }>;
+      services: Array<{ key: string; repositories: Array<Record<string, unknown>>; deployments: Array<Record<string, unknown>> }>;
     };
     assert.deepEqual(config.environments.map(({ key }) => key).sort(), ["dev", "prod", "test"]);
     assert.equal(config.environments.some((environment) => "id" in environment || "kind" in environment), false);
     assert.deepEqual(Object.keys(config.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     const service = config.services[0]!;
     assert.equal(service.key, "alpha");
-    assert.match(service.revision, /^[a-f0-9]{64}$/);
     assert.deepEqual(service.repositories.map(({ alias, url }) => ({ alias, url })), [
       { alias: "alpha-1", url: "https://example.test/alpha.git" },
       { alias: "alpha-2", url: "https://example.test/alpha-shared.git" },
@@ -63,7 +60,7 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
-    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ revision: string; repositories: Array<{ id: string; alias: string; url: string }> }> };
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }> }> };
     const initialService = config.services[0]!;
     const repository = initialService.repositories[0]!;
     const replace = (values: Record<string, string>) => ({ mode: "replace", values });
@@ -85,13 +82,12 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
         sls: { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialUpdate: replace({ accessKeyId: "sls-key", accessKeySecret: "sls-secret" }) },
       }],
     };
-    const update = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(initialService.revision), payload });
+    const update = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
     assert.equal(update.statusCode, 200, update.body);
 
     const response = await fixture.app.inject({ method: "GET", url: "/api/config" });
-    const saved = JSON.parse(response.body) as { services: Array<{ revision: string; deployments: Array<Record<string, unknown>> }> };
+    const saved = JSON.parse(response.body) as { services: Array<{ deployments: Array<Record<string, unknown>> }> };
     const savedService = saved.services[0]!;
-    assert.notEqual(savedService.revision, initialService.revision);
     const deployment = savedService.deployments[0]!;
     assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
     assert.deepEqual(deployment.dms, { dbId: "123456", logic: true, tid: "987654", credentialConfigured: true });
@@ -127,7 +123,7 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
         sls: preserve(originalDeployment.sls),
       }],
     };
-    const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(savedService.revision), payload: preservedPayload });
+    const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: preservedPayload });
     assert.equal(preserved.statusCode, 200, preserved.body);
     const afterPreserve = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     const preservedConfig = JSON.parse(afterPreserve.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, unknown>>;
@@ -136,14 +132,12 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
     assert.equal(preservedConfig.dms!.accessKeySecret, "dms-secret");
     assert.equal(preservedConfig.dms!.logic, false);
 
-    const afterPreserveRevision = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((result) => (JSON.parse(result.body) as { services: Array<{ revision: string }> }).services[0]!.revision);
-    assert.notEqual(afterPreserveRevision, savedService.revision);
-    const cleared = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(afterPreserveRevision), payload: {
+    const cleared = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
       ...payload,
       deployments: [{ ...originalDeployment, capabilities: ["nacos"], nacos: { ...originalDeployment.nacos, username: "", credentialUpdate: { mode: "clear" } } }],
     } });
     assert.equal(cleared.statusCode, 200, cleared.body);
-    const clearedConfig = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((result) => JSON.parse(result.body)) as { services: Array<{ revision: string; deployments: Array<{ nacos: Record<string, unknown> }> }> };
+    const clearedConfig = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((result) => JSON.parse(result.body)) as { services: Array<{ deployments: Array<{ nacos: Record<string, unknown> }> }> };
     const clearedService = clearedConfig.services[0]!;
     assert.equal(clearedService.deployments[0]!.nacos.credentialConfigured, false);
 
@@ -152,7 +146,7 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
       [{ url: "mysql://db.example.test:3306/alpha", username: "reader", password: "forbidden", credentialUpdate: { mode: "preserve" } }, "credential_fields_not_allowed"],
       [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "replace", values: { password: "" } } }, "invalid_credential_replacement"],
     ] as const) {
-      const invalid = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(clearedService.revision), payload: {
+      const invalid = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
         ...payload,
         deployments: [{ ...payload.deployments[0], capabilities: ["db"], db: section }],
       } });
@@ -164,40 +158,16 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
   }
 });
 
-test("rejects stale Service updates and deletes with opaque configuration revisions", async () => {
+test("updates and deletes Service configuration directly", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
     await createService(fixture.app, "Beta");
-    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; revision: string }> };
-    const alpha = config.services.find(({ key }) => key === "alpha")!;
-    const beta = config.services.find(({ key }) => key === "beta")!;
-    const updatePayload = servicePayload("Alpha updated");
-
-    const missing = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: updatePayload });
-    assert.equal(missing.statusCode, 428);
-    assert.equal((await json(missing)).error, "service_revision_required");
-    const stale = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision("0".repeat(64)), payload: updatePayload });
-    assert.equal(stale.statusCode, 409);
-    assert.equal((await json(stale)).error, "service_configuration_changed");
-    assert.deepEqual(fixture.engine.closedSessions, []);
-
-    const updated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(alpha.revision), payload: updatePayload });
+    const updated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: servicePayload("Alpha updated") });
     assert.equal(updated.statusCode, 200, updated.body);
-    const afterUpdate = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string; revision: string }> };
-    const updatedAlpha = afterUpdate.services.find(({ key }) => key === "alpha")!;
-    assert.equal(updatedAlpha.name, "Alpha updated");
-    assert.notEqual(updatedAlpha.revision, alpha.revision);
-    const repeated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(alpha.revision), payload: { ...updatePayload, name: "Must not persist" } });
-    assert.equal(repeated.statusCode, 409);
-    const afterRepeated = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
-    assert.equal(afterRepeated.services.find(({ key }) => key === "alpha")!.name, "Alpha updated");
-
-    const missingDelete = await fixture.app.inject({ method: "DELETE", url: "/api/services/beta" });
-    assert.equal(missingDelete.statusCode, 428);
-    const staleDelete = await fixture.app.inject({ method: "DELETE", url: "/api/services/beta", headers: matchRevision("0".repeat(64)) });
-    assert.equal(staleDelete.statusCode, 409);
-    const deleted = await fixture.app.inject({ method: "DELETE", url: "/api/services/beta", headers: matchRevision(beta.revision) });
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; name: string }> };
+    assert.equal(config.services.find(({ key }) => key === "alpha")!.name, "Alpha updated");
+    const deleted = await fixture.app.inject({ method: "DELETE", url: "/api/services/beta" });
     assert.equal(deleted.statusCode, 204, deleted.body);
   } finally {
     await fixture.cleanup();
@@ -219,10 +189,10 @@ test("validates models and repository ownership before replacing a Service", asy
       assert.equal(response.statusCode, 400);
       assert.equal((await json(response)).error, expected);
     }
-    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; revision: string; repositories: Array<{ id: string; alias: string; url: string }> }> };
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; repositories: Array<{ id: string; alias: string; url: string }> }> };
     const alpha = config.services.find(({ key }) => key === "alpha")!;
     const beta = config.services.find(({ key }) => key === "beta")!;
-    const crossService = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(alpha.revision), payload: {
+    const crossService = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
       name: "Must not persist",
       repositories: [{ id: beta.repositories[0]!.id, alias: "alpha", url: alpha.repositories[0]!.url }],
       deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha", baseBranch: "main" }], capabilities: [], agent: testAgent }],
@@ -241,7 +211,7 @@ test("reserves affected Issues and commits Service changes only after sessions c
     const issue = await createIssue(fixture.app, "alpha");
     const issueId = fixture.engine.enqueued[0]!;
     fixture.engine.running.delete(issueId);
-    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ revision: string; repositories: Array<{ id: string; alias: string; url: string }>; deployments: Array<{ repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }> }> }> };
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }>; deployments: Array<{ repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }> }> }> };
     const payload = {
       name: "Alpha renamed",
       description: "serialized",
@@ -253,7 +223,7 @@ test("reserves affected Issues and commits Service changes only after sessions c
     const started = new Promise<void>((resolve) => { closeStarted = resolve; });
     const gate = new Promise<void>((resolve) => { releaseClose = resolve; });
     fixture.engine.closeSessionHook = async () => { closeStarted(); await gate; };
-    const update = fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(config.services[0]!.revision), payload });
+    const update = fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
     await started;
     const message = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "must wait" } });
     assert.equal(message.statusCode, 409);
@@ -265,9 +235,8 @@ test("reserves affected Issues and commits Service changes only after sessions c
     assert.equal((await update).statusCode, 200);
     assert.equal((await during).services[0]!.name, "Alpha renamed");
 
-    const updatedRevision = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => (JSON.parse(response.body) as { services: Array<{ revision: string }> }).services[0]!.revision);
     fixture.engine.closeSessionHook = async () => { throw new Error("stop_failed"); };
-    const failed = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", headers: matchRevision(updatedRevision), payload: { ...payload, name: "Must not persist" } });
+    const failed = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, name: "Must not persist" } });
     assert.equal(failed.statusCode, 500);
     const after = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ name: string }> };
     assert.equal(after.services[0]!.name, "Alpha renamed");

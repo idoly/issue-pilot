@@ -12,7 +12,6 @@ import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
-import { prepareDevelopmentIssueRuntime } from "./development.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager } from "./project.ts";
 import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
@@ -83,7 +82,7 @@ export class WorkspaceLifecycleManager {
   private readonly engine: AgentController;
   private readonly worktrees: WorktreeManager;
   private readonly projects: IssueProjectManager;
-  private readonly prepareDevelopmentRuntime: (issue: { id: string; key: string }) => Promise<unknown>;
+  private readonly prepareDevelopmentRuntime: (issue: Pick<Issue, "id" | "key" | "type">) => Promise<unknown>;
   readonly policy: WorkspaceLifecyclePolicy;
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
@@ -96,7 +95,7 @@ export class WorkspaceLifecycleManager {
     stateRoot: string,
     engine: AgentController,
     policy: WorkspaceLifecyclePolicy = issuePilotConfig.workspace,
-    prepareRuntime?: (issue: { id: string; key: string }) => Promise<unknown>,
+    prepareRuntime?: (issue: Pick<Issue, "id" | "key" | "type">) => Promise<unknown>,
   ) {
     if (policy.highWaterBytes > 0 && policy.targetBytes >= policy.highWaterBytes) throw new Error("workspace_target_must_be_below_high_water");
     if (!Number.isSafeInteger(policy.taskConcurrency) || policy.taskConcurrency < 1) throw new Error("workspace_task_concurrency_invalid");
@@ -106,7 +105,7 @@ export class WorkspaceLifecycleManager {
     this.policy = policy;
     this.worktrees = new WorktreeManager(this.stateRoot);
     this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
-    this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => prepareDevelopmentIssueRuntime(this.database, this.stateRoot, issue, this.worktrees));
+    this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => this.projects.hydrateDevelopmentRuntime(issue));
   }
 
   start(onError: (error: unknown) => void = () => undefined): () => Promise<void> {
@@ -407,7 +406,7 @@ export class WorkspaceLifecycleManager {
 
   private async restoreDevelopmentRuntime(issue: Issue): Promise<void> {
     try {
-      await this.prepareDevelopmentRuntime({ id: issue.id, key: issue.key });
+      await this.prepareDevelopmentRuntime(issue);
     } catch (error) {
       const reason = errorMessage(error);
       await this.database.update(issueWorkspaces).set({ runtimeReady: false, lastError: reason, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));

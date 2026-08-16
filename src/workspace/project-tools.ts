@@ -242,7 +242,9 @@ export class ProjectToolBroker {
         command: command.args,
         cwd: project,
         environment: { CI: "1", ...command.environment },
-      }, { timeout: this.runtime.executionMs, ...(signal ? { signal } : {}) });
+        timeout: this.runtime.executionMs,
+        ...(signal ? { signal } : {}),
+      });
       return execution;
     });
   }

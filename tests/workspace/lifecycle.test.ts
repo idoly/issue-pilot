@@ -12,10 +12,9 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueAttachments, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
-import { prepareDevelopmentIssueRuntime, prepareDevelopmentIssueRuntimes } from "../../src/workspace/development.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceConversionRefusal, WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
-import { IssueProjectManager } from "../../src/workspace/project.ts";
+import { IssueProjectManager, prepareDevelopmentIssueRuntimes } from "../../src/workspace/project.ts";
 import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -296,7 +295,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal((await stat(durableAttachment)).mode & 0o777, 0o400);
 
-    const prepareRuntime = (candidate: { id: string; key: string }) => prepareDevelopmentIssueRuntime(database.db, root, candidate);
+    const runtimeProjects = new IssueProjectManager(database.db, root);
+    const prepareRuntime = (candidate: Pick<typeof issues.$inferSelect, "id" | "key" | "type">) => runtimeProjects.hydrateDevelopmentRuntime(candidate);
     const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
     assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
     const wrapperRoot = path.join(issueRuntimeRoot(root, issue!.key), "bin");

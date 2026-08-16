@@ -7,9 +7,9 @@ import { test } from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
+import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
 import { createPrivateSessionManager, PiSessionRuntime } from "../../src/agent/pi-session.ts";
 import type { PiModelRuntime } from "../../src/pi/models.ts";
-import { createIssuePolicy, piToolAllowlist, type IssuePolicy } from "../../src/pi/policy.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-session-"));
@@ -36,22 +36,15 @@ test("creates a private Pi session file before the first Agent prompt", async ()
   }
 });
 
-function policy(options: { writable: boolean; capability?: "db" }): IssuePolicy {
-  const capability = options.capability;
-  return createIssuePolicy({
+function context(options: { writable: boolean; capability?: "db" }): AgentSessionContext {
+  return {
     issueKey: "ISSUE-20260808-001",
-    issueType: options.writable ? "defect_fix" : "data_processing",
-    workspaceRoot: "/tmp/issue-workspace",
+    serviceKey: "orders",
+    environmentKey: options.writable ? "dev" : "prod",
     model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" },
-    service: {
-      serviceKey: "orders",
-      environmentKey: options.writable ? "dev" : "prod",
-      environmentKind: options.writable ? "dev" : "prod",
-      capabilities: capability ? [capability] : [],
-      ...(capability === "db" ? { db: { deploymentId: "deployment-1" } } : {}),
-      repositories: [{ codeAccess: options.writable ? "write" : "read", repositoryPath: "/tmp/issue-workspace/orders", baseCommit: "abc123" }],
-    },
-  });
+    capabilities: options.capability ? [options.capability] : [],
+    canModifyCode: options.writable,
+  };
 }
 
 const model: Model<"openai-responses"> = {
@@ -83,16 +76,16 @@ function sharedModelRuntime(runtime: ModelRuntime): PiModelRuntime {
 }
 
 test("limits read-only deployments to non-mutating Pi tools", () => {
-  assert.deepEqual(piToolAllowlist(policy({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "db"]);
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "db"]);
 });
 
-test("enables only Pi mutation tools for writable development policies without capabilities", () => {
-  assert.deepEqual(piToolAllowlist(policy({ writable: true })), [
+test("enables Pi mutation tools only for writable development contexts", () => {
+  assert.deepEqual(sessionToolAllowlist(context({ writable: true })), [
     "read", "bash", "edit", "write", "grep", "find", "ls",
   ]);
 });
 
-test("starts an SDK session with only policy-selected tools and explicit resources", async () => {
+test("starts an SDK session with only context-selected tools and explicit resources", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
   const workspaceRoot = join(root, "workspace");
   const sessionDirectory = join(root, "sessions");
@@ -103,17 +96,17 @@ test("starts an SDK session with only policy-selected tools and explicit resourc
   try {
     const managed = await runtime.start({
       manager,
-      policy: policy({ writable: false }),
+      context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot,
-      systemPrompt: "Issue Pilot test policy.",
+      systemPrompt: "Issue Pilot test context.",
       onEvent: () => undefined,
     });
     assert.deepEqual(refreshes, [{ providers: ["test-provider"], allowNetwork: false }]);
     assert.deepEqual(managed.session.getActiveToolNames(), ["read", "grep", "find", "ls"]);
     assert.equal(managed.session.model?.id, "test-model");
     assert.equal(managed.session.thinkingLevel, "medium");
-    assert.match(managed.session.agent.state.systemPrompt, /Issue Pilot test policy/);
+    assert.match(managed.session.agent.state.systemPrompt, /Issue Pilot test context/);
     await managed.stop();
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -125,7 +118,7 @@ test("disposes an SDK session even when abort fails during stop", async () => {
   const manager = await createPrivateSessionManager(root, root);
   const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
     manager,
-    policy: policy({ writable: false }),
+    context: context({ writable: false }),
     deploymentConfig: {},
     workspaceRoot: root,
     systemPrompt: "",
@@ -152,7 +145,7 @@ test("rejects configured models that are not currently available", async () => {
   try {
     await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime(false))).start({
       manager,
-      policy: policy({ writable: false }),
+      context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot: root,
       systemPrompt: "",

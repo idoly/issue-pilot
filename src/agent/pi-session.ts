@@ -13,18 +13,19 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-import { executeCapability, type CapabilityExecutor } from "../capabilities/broker.ts";
+import type { DeploymentConfig } from "../domain/contracts.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "../pi/models.ts";
 import { createCapabilityTools } from "../pi/tools.ts";
-import { piToolAllowlist, type IssuePolicy } from "../pi/policy.ts";
+import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
+import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 
 const isWindows = process.platform === "win32";
 const pathSeparator = isWindows ? ";" : ":";
 
 export interface StartPiSessionOptions {
   manager: SessionManager;
-  policy: IssuePolicy;
-  deploymentConfig: Record<string, unknown>;
+  context: AgentSessionContext;
+  deploymentConfig: DeploymentConfig;
   workspaceRoot: string;
   executableRoot?: string;
   systemPrompt: string;
@@ -63,9 +64,9 @@ function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
   };
 }
 
-function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unknown>, workspaceRoot: string, capabilityExecutor: CapabilityExecutor, executableRoot?: string): ToolDefinition<any, any, any>[] {
-  const tools = createCapabilityTools(policy, deploymentConfig, capabilityExecutor);
-  if (!piToolAllowlist(policy).includes("bash")) return tools;
+function sessionTools(context: AgentSessionContext, deploymentConfig: DeploymentConfig, workspaceRoot: string, toolRuntime: ToolRuntime, executableRoot?: string): ToolDefinition<any, any, any>[] {
+  const tools = createCapabilityTools(context, deploymentConfig, toolRuntime);
+  if (!sessionToolAllowlist(context).includes("bash")) return tools;
   if (!executableRoot) throw new Error("project_wrapper_root_required");
   tools.unshift(createBashToolDefinition(workspaceRoot, {
     spawnHook: (context) => ({
@@ -81,11 +82,11 @@ function sessionTools(policy: IssuePolicy, deploymentConfig: Record<string, unkn
   return tools;
 }
 
-function assertSessionState(session: AgentSession, policy: IssuePolicy, expectedSessionId: string, expectedTools: string[]) {
+function assertSessionState(session: AgentSession, context: AgentSessionContext, expectedSessionId: string, expectedTools: string[]) {
   const model = session.model;
   if (session.sessionId !== expectedSessionId) throw new Error("pi_session_id_mismatch");
-  if (!model || model.provider !== policy.model.provider || model.id !== policy.model.modelId) throw new Error("pi_session_model_mismatch");
-  if (session.thinkingLevel !== policy.model.thinkingLevel) throw new Error("pi_session_thinking_level_mismatch");
+  if (!model || model.provider !== context.model.provider || model.id !== context.model.modelId) throw new Error("pi_session_model_mismatch");
+  if (session.thinkingLevel !== context.model.thinkingLevel) throw new Error("pi_session_thinking_level_mismatch");
   const active = [...session.getActiveToolNames()].sort();
   const expected = [...expectedTools].sort();
   if (active.length !== expected.length || active.some((name, index) => name !== expected[index])) throw new Error("pi_session_tools_mismatch");
@@ -102,12 +103,12 @@ async function abortAndDispose(session: AgentSession): Promise<void> {
 export class PiSessionRuntime {
   readonly #modelRuntime: PiModelRuntime;
   readonly #ownsModelRuntime: boolean;
-  readonly #capabilityExecutor: CapabilityExecutor;
+  readonly #toolRuntime: ToolRuntime;
 
-  constructor(modelRuntime?: PiModelRuntime, capabilityExecutor: CapabilityExecutor = executeCapability) {
+  constructor(modelRuntime?: PiModelRuntime, toolRuntime: ToolRuntime = processToolRuntime) {
     this.#modelRuntime = modelRuntime ?? createPiModelRuntime();
     this.#ownsModelRuntime = modelRuntime === undefined;
-    this.#capabilityExecutor = capabilityExecutor;
+    this.#toolRuntime = toolRuntime;
   }
 
   async close(): Promise<void> {
@@ -115,11 +116,11 @@ export class PiSessionRuntime {
   }
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
-    const { policy, workspaceRoot } = options;
+    const { context, workspaceRoot } = options;
     const modelRuntime = await this.#modelRuntime.load();
-    await modelRuntime.refresh({ providers: [policy.model.provider], allowNetwork: false });
-    const model = modelRuntime.getModel(policy.model.provider, policy.model.modelId);
-    if (!model) throw new Error(`configured_model_not_found:${policy.model.provider}/${policy.model.modelId}`);
+    await modelRuntime.refresh({ providers: [context.model.provider], allowNetwork: false });
+    const model = modelRuntime.getModel(context.model.provider, context.model.modelId);
+    if (!model) throw new Error(`configured_model_not_found:${context.model.provider}/${context.model.modelId}`);
     if (!modelRuntime.getAvailableSnapshot().some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) {
       throw new Error(`configured_model_unavailable:${model.provider}/${model.id}`);
     }
@@ -144,21 +145,21 @@ export class PiSessionRuntime {
     });
     await resourceLoader.reload();
 
-    const expectedTools = piToolAllowlist(policy);
+    const expectedTools = sessionToolAllowlist(context);
     const { session } = await createAgentSession({
       cwd: workspaceRoot,
       agentDir: getAgentDir(),
       modelRuntime,
       model,
-      thinkingLevel: policy.model.thinkingLevel,
+      thinkingLevel: context.model.thinkingLevel,
       tools: expectedTools,
-      customTools: sessionTools(policy, options.deploymentConfig, workspaceRoot, this.#capabilityExecutor, options.executableRoot),
+      customTools: sessionTools(context, options.deploymentConfig, workspaceRoot, this.#toolRuntime, options.executableRoot),
       sessionManager: options.manager,
       settingsManager,
       resourceLoader,
     });
     try {
-      assertSessionState(session, policy, options.manager.getSessionId(), expectedTools);
+      assertSessionState(session, context, options.manager.getSessionId(), expectedTools);
     } catch (error) {
       await abortAndDispose(session);
       throw error;

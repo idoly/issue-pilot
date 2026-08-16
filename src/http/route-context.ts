@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { AgentEventBus } from "../agent/events.ts";
-import type { Database, DatabaseConnection } from "../db/client.ts";
+import type { DatabaseConnection } from "../db/client.ts";
 import { issues, subjects } from "../db/schema.ts";
 import { parseIssueKey } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
@@ -52,12 +52,4 @@ export async function runIssueExclusive<T>(engine: AgentController, issueIds: st
     if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
     throw error;
   }
-}
-
-export function assertIssueRunnable(issue: Pick<typeof issues.$inferSelect, "status">): void {
-  if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
-}
-
-export async function touchIssue(executor: Pick<Database, "update">, issueId: string): Promise<void> {
-  await executor.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issueId));
 }

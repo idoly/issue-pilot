@@ -9,10 +9,6 @@ export function parseIssueKey(value: string): string | undefined {
   return ISSUE_KEY.test(normalized) ? normalized : undefined;
 }
 
-export function isIssueKey(value: string): boolean {
-  return parseIssueKey(value) !== undefined;
-}
-
 export function normalizeIssueKey(value: string): string {
   const normalized = parseIssueKey(value.trim());
   if (!normalized) throw new Error("invalid_issue_key");
@@ -75,11 +71,8 @@ export interface DeploymentConfig extends CapabilityConfiguration, Record<string
   agent?: AgentConfiguration;
 }
 
-export function configuredCapabilities(config: Record<string, unknown>): CapabilityName[] {
-  return CAPABILITY_KEYS.filter((key) => {
-    const capabilityConfig = config[key];
-    return Boolean(capabilityConfig && typeof capabilityConfig === "object" && !Array.isArray(capabilityConfig));
-  });
+export function configuredCapabilities(config: DeploymentConfig): CapabilityName[] {
+  return CAPABILITY_KEYS.filter((key) => config[key] !== undefined);
 }
 
 export const ENVIRONMENT_KINDS = ["prod", "test", "dev"] as const;

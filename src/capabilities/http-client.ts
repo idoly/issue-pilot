@@ -26,6 +26,6 @@ export async function responseJson(response: Response): Promise<unknown> {
   return text ? JSON.parse(text) as unknown : null;
 }
 
-export function basicAuthHeaders(config: Record<string, unknown>): Record<string, string> {
+export function basicAuthHeaders(config: { username: string; password?: string }): Record<string, string> {
   return config.username ? { authorization: `Basic ${Buffer.from(`${config.username}:${config.password ?? ""}`).toString("base64")}` } : {};
 }

@@ -1,5 +1,5 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { IssuePolicy } from "../pi/policy.ts";
+import type { AgentSessionContext } from "./context.ts";
 
 interface RepositoryContext {
   branch: string;
@@ -74,13 +74,12 @@ export function promptWithRuntimeTime(message: string, now = new Date()): string
   return `${runtimeTimeContext(now)}\n\nUser request:\n${message}`;
 }
 
-export function agentSystemPrompt(policy: IssuePolicy): string {
-  const writable = policy.service.repositories.filter((repository) => repository.codeAccess === "write").length;
+export function agentSystemPrompt(context: AgentSessionContext): string {
   return [
     "Issue Pilot execution policy:",
-    `- Work only on issue ${policy.issueKey} in the current workspace.`,
-    `- The selected service is ${policy.service.serviceKey} in ${policy.service.environmentKey}.`,
-    `- ${writable ? `${writable} repository workspace(s) may be edited` : "All repository workspaces are read-only"}.`,
+    `- Work only on issue ${context.issueKey} in the current workspace.`,
+    `- The selected service is ${context.serviceKey} in ${context.environmentKey}.`,
+    `- ${context.canModifyCode ? "Repository workspaces may be edited" : "All repository workspaces are read-only"}.`,
     "- Treat tool availability and tool validation as hard authorization boundaries.",
     "- Never disclose connection credentials or infer access beyond the configured deployment scope.",
     "- Capability results are complete bounded evidence or explicit failures; do not claim omitted evidence.",

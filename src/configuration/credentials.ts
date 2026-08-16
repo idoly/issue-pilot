@@ -22,11 +22,11 @@ export function redactCapabilityConfiguration(configuration: CapabilityConfigura
   for (const key of CAPABILITY_KEYS) {
     const stored = configuration[key];
     if (!stored) continue;
-    const normalized = parseCapabilityConfiguration(key, stored) as Record<string, unknown>;
+    const section = stored as Record<string, unknown>;
     const credentialFields = new Set<string>(CAPABILITY_CREDENTIALS[key].fields as readonly string[]);
     redacted[key] = {
-      ...Object.fromEntries(Object.entries(normalized).filter(([field]) => !credentialFields.has(field)).map(([field, value]) => [field, structuredClone(value)])),
-      credentialConfigured: Boolean(configuredCredentialValues(key, normalized)),
+      ...Object.fromEntries(Object.entries(section).filter(([field]) => !credentialFields.has(field))),
+      credentialConfigured: Boolean(configuredCredentialValues(key, section)),
     };
   }
   return redacted as PublicCapabilityConfiguration;
@@ -48,9 +48,8 @@ function resolveCapabilityConfiguration(key: CapabilityName, value: unknown, exi
   let credentials: Record<string, string> = {};
   if (update.mode === "preserve") {
     if (Object.keys(update).length !== 1) fail("invalid_credential_update");
-    const stored = existing?.[key];
-    const normalized = stored ? parseCapabilityConfiguration(key, stored) as Record<string, unknown> : undefined;
-    credentials = normalized ? configuredCredentialValues(key, normalized) ?? fail("credential_not_configured") : fail("credential_not_configured");
+    const stored = existing?.[key] as Record<string, unknown> | undefined;
+    credentials = stored ? configuredCredentialValues(key, stored) ?? fail("credential_not_configured") : fail("credential_not_configured");
   } else if (update.mode === "replace") {
     if (Object.keys(update).length !== 2 || !("values" in update)) fail("invalid_credential_update");
     credentials = replacementCredentialValues(key, update.values);

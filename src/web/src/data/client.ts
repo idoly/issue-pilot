@@ -197,8 +197,8 @@ function appendFiles(form: FormData, files: File[]): void {
 export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
 export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(userPath(subject), "PATCH", input);
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
-export const updateService = (key: string, revision: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", headers: { "If-Match": revision }, body: JSON.stringify(input) });
-export const deleteService = (key: string, revision: string) => request<void>(servicePath(key), { method: "DELETE", headers: { "If-Match": revision } });
+export const updateService = (key: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", body: JSON.stringify(input) });
+export const deleteService = (key: string) => request<void>(servicePath(key), { method: "DELETE" });
 
 export function attachmentUrl(key: string, attachmentId: string): string {
   return issuePath(key, `/attachments/${encodeURIComponent(attachmentId)}`);

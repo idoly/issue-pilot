@@ -5,8 +5,6 @@ import path from "node:path";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { createCapabilityExecutor } from "../capabilities/broker.ts";
 import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
@@ -23,7 +21,7 @@ import {
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "../pi/models.ts";
-import { createDeploymentPolicy } from "../pi/policy.ts";
+import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
 
@@ -72,7 +70,7 @@ export class AgentEngine implements AgentController {
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
     this.publish = publish;
     this.onError = onError;
-    this.piRuntime = new PiSessionRuntime(modelRuntime, createCapabilityExecutor(tools));
+    this.piRuntime = new PiSessionRuntime(modelRuntime, tools);
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
@@ -112,8 +110,6 @@ export class AgentEngine implements AgentController {
   }
 
   async send(issueId: string, message: string): Promise<void> {
-    if (!message.trim()) throw new Error("agent_message_required");
-    if (message.length > issuePilotConfig.limits.agentMessageChars) throw new Error("invalid_agent_message");
     this.assertOpen();
     this.assertNotReserved(issueId);
     this.beginActivity(issueId);
@@ -121,7 +117,7 @@ export class AgentEngine implements AgentController {
       const [issue] = await this.database.select({ status: issues.status }).from(issues).where(eq(issues.id, issueId)).limit(1);
       if (!issue) throw new Error("issue_not_found");
       if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
-      const userMessage = message.trim();
+      const userMessage = message;
       const managed = this.sessions.get(issueId);
       if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
         if (managed) await this.stopSession(issueId);
@@ -254,16 +250,14 @@ export class AgentEngine implements AgentController {
     const attachmentPath = issueAttachmentRoot(this.stateRoot, issue.key);
     await mkdir(attachmentPath, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(attachmentPath), 0o700), chmod(attachmentPath, 0o700)]);
-    const policy = createDeploymentPolicy({
+    const context = createAgentSessionContext({
       issueKey: issue.key,
       issueType: issue.type,
-      workspaceRoot: project.workspaceRoot,
-      deploymentId: project.deployment.id,
       deploymentConfig: project.deployment.config,
       serviceKey: service.key,
       environmentKey: service.environmentKey,
       environmentKind,
-      repositories: project.repositories.map((repository) => ({ codeAccess: repository.access, repositoryPath: repository.workspacePath, baseCommit: repository.baseCommit })),
+      repositoryAccess: project.repositories.map((repository) => repository.access),
     });
     const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const manager = binding && await pathExists(binding.sessionFile)
@@ -273,11 +267,11 @@ export class AgentEngine implements AgentController {
 
     const managed = await this.piRuntime.start({
       workspaceRoot: project.workspaceRoot,
-      policy,
+      context,
       deploymentConfig: project.deployment.config,
       manager,
       ...(project.executableRoot ? { executableRoot: project.executableRoot } : {}),
-      systemPrompt: agentSystemPrompt(policy),
+      systemPrompt: agentSystemPrompt(context),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
     this.sessions.set(issue.id, managed);

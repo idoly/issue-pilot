@@ -10,7 +10,6 @@ interface ApplicationResources {
   configuration: Accessor<Config>;
   configurationLoaded: Accessor<boolean>;
   people: Accessor<Person[]>;
-  users: Accessor<Person[]>;
   currentUser: Accessor<Person | null>;
   catalogError: Accessor<string>;
   configurationError: Accessor<string>;
@@ -46,7 +45,6 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   const [configuration, setConfiguration] = createSignal<Config>(emptyConfiguration(), { ownedWrite: true });
   const [configurationLoaded, setConfigurationLoaded] = createSignal(false, { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
-  const [users, setUsers] = createSignal<Person[]>([], { ownedWrite: true });
   const [currentUser, setCurrentUser] = createSignal<Person | null>(null, { ownedWrite: true });
   const [catalogError, setCatalogError] = createSignal("", { ownedWrite: true });
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
@@ -59,7 +57,6 @@ export function ApplicationResourcesProvider(props: ParentProps) {
       const users = await loadUsers();
       if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) setCurrentUserSubject(null);
       const currentUser = await loadCurrentUser();
-      setUsers(users);
       setPeople(users);
       setCurrentUser(currentUser);
       setPeopleError("");
@@ -70,7 +67,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
     }
   };
   const selectCurrentUser = (subject: string) => {
-    const user = users().find((candidate) => candidate.subject === subject);
+    const user = people().find((candidate) => candidate.subject === subject);
     if (!user) return;
     setCurrentUserSubject(subject);
     setCurrentUser(user);
@@ -80,7 +77,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   void refreshPeople().catch(() => undefined);
 
   return (
-    <ResourcesContext value={{ catalog, configuration, configurationLoaded, people, users, currentUser, catalogError, configurationError, peopleError, refreshCatalog, refreshConfiguration, refreshPeople, selectCurrentUser }}>
+    <ResourcesContext value={{ catalog, configuration, configurationLoaded, people, currentUser, catalogError, configurationError, peopleError, refreshCatalog, refreshConfiguration, refreshPeople, selectCurrentUser }}>
       {props.children}
     </ResourcesContext>
   );

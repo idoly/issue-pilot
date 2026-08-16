@@ -327,7 +327,7 @@ Agent失败后的预期收敛：
 3. Issue Service/Environment Deployment是否存在且完整。
 4. Repository remote branch、state、path和 Git status。
 5. Runtime link、project-tool socket和Source API path验证。
-6. Capability frozen scope与当前 Deployment config是否一致。
+6. 当前 Deployment capability config是否与目标系统一致。
 7. 查询是否超时或超过 result budget。
 
 `capability_result_too_large` 不是部分成功。缩小 SQL、limit、时间范围或 target；不要无限提高预算，也不要把前 N项当成完整证据。
@@ -407,7 +407,7 @@ podman ps -a --filter label=io.issue-pilot.component=application-test
 - Deployment AccessKey仍有效。
 - DMS使用 `dms-enterprise ExecuteScript`、安全托管数据库、正确 `DbId/Logic/Tid`和 query permission。
 - DMS endpoint固定为 central，数据库 region不是配置字段。
-- SLS region/project/logstore与 frozen scope一致。
+- SLS region/project/logstore与当前 Deployment config一致。
 - 查询符合 read-only/limit/time-range contract。
 - Temp profile在调用结束后已删除。
 
@@ -527,7 +527,7 @@ Code和 database必须成对回滚。旧代码不能假定能读取已经执行�
 | Issue详情慢 | 是否错误调用 stats/deep inspection | 在 GET详情增加 `du`/Git clean |
 | Workspace无法释放 | Issue/Workspace status、root layout、Git status | `rm -rf workspaces/<key>` |
 | Released dev无代码 | Local working branch ref、bare store、runtime | 从远程同名 branch兜底 |
-| Prod/test路径越界 | Policy path是否位于 Issue runtime | 直接授权 shared checkout物理 root |
+| Prod/test路径越界 | Agent context path是否位于 Issue runtime | 直接使用 shared checkout物理 root |
 | 代码浏览器不可用 | `runtimeReady`、alias symlink、Source API stable error | 改DB flag或暴露绝对路径 |
 | 项目命令不可用 | Broker socket、application镜像PATH、内置工具版本、config/cache mode | 让wrapper接受任意命令或绝对宿主路径 |
 | Attachment写路由404 | 使用 Issue create/edit multipart | 重新调用历史 POST/DELETE route |

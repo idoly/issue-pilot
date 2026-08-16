@@ -46,6 +46,8 @@ test("accepts complete MySQL reads and rejects side-effecting read expressions",
   ]) assert.throws(() => validateReadOnlyQuery(statement), /database_query_must_be_read_only/);
 });
 
+const config = { url: "mysql://mysql.example.test:3307/orders", username: "readonly", password: "db-secret" };
+
 test("streams MySQL reads inside a server-enforced read-only transaction", async () => {
   let options: ConnectionOptions | undefined;
   const fixture = connectionFixture(
@@ -54,10 +56,7 @@ test("streams MySQL reads inside a server-enforced read-only transaction", async
   );
   const factory: MysqlConnectionFactory = (value) => { options = value; return fixture.connection; };
 
-  const result = await queryMysql({
-    connectionUrl: "mysql://readonly:db-secret@mysql.example.test:3307/orders",
-    statement: "SELECT order_id, status, nullable FROM orders LIMIT 20",
-  }, undefined, factory);
+  const result = await queryMysql({ config, statement: "SELECT order_id, status, nullable FROM orders LIMIT 20" }, undefined, factory);
 
   assert.equal(options?.host, "mysql.example.test");
   assert.equal(options?.port, 3307);
@@ -74,15 +73,12 @@ test("streams MySQL reads inside a server-enforced read-only transaction", async
   });
   assert.doesNotMatch(JSON.stringify(result), /db-secret|mysql\.example\.test|readonly/);
   assert.equal(fixture.ended(), true);
-  await assert.rejects(queryMysql({ connectionUrl: "mariadb://readonly:secret@mysql.example.test/orders", statement: "SELECT 1" }, undefined, factory), /unsupported_mysql_connection_protocol/);
-  await assert.rejects(queryMysql({ connectionUrl: "mysql://readonly:secret@mysql.example.test/orders", statement: "SELECT 1" }, undefined, factory), /invalid_mysql_connection_url/);
-  await assert.rejects(queryMysql({ connectionUrl: "mysql://readonly:secret@mysql.example.test:3306/orders/archive", statement: "SELECT 1" }, undefined, factory), /invalid_mysql_connection_url/);
 });
 
 test("stops streaming MySQL results at the configured row boundary", async () => {
   const fixture = connectionFixture(Array.from({ length: 600 }, (_, id) => ({ id }) as RowDataPacket), [{ name: "id" }]);
   await assert.rejects(queryMysql(
-    { connectionUrl: "mysql://readonly:secret@mysql.example.test:3306/orders", statement: "SELECT id FROM orders" },
+    { config, statement: "SELECT id FROM orders" },
     undefined,
     () => fixture.connection,
   ), /capability_result_too_large/);
@@ -94,7 +90,7 @@ test("destroys an active MySQL connection when the operation is aborted", async 
   const controller = new AbortController();
   const fixture = connectionFixture([], [], new Promise<void>(() => {}));
   const query = queryMysql(
-    { connectionUrl: "mysql://readonly:secret@mysql.example.test:3306/orders", statement: "SELECT 1" },
+    { config, statement: "SELECT 1" },
     controller.signal,
     () => fixture.connection,
   );

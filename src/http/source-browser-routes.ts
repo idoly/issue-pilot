@@ -1,3 +1,5 @@
+import type { FastifyRequest } from "fastify";
+
 import { ApiError } from "./input.ts";
 import { requireIssue, type ApiRouteContext } from "./route-context.ts";
 
@@ -33,63 +35,31 @@ async function sourceOperation<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+type SourceRequest = FastifyRequest<{ Params: { key: string } }>;
+type Issue = Awaited<ReturnType<typeof requireIssue>>;
+
 export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
   const { app, database, sourceBrowser } = context;
+  const register = (resource: string, operation: (issue: Issue, request: SourceRequest) => Promise<unknown>) => {
+    app.get<{ Params: { key: string } }>(`/api/issues/:key/source/${resource}`, { logLevel: "silent" }, async (request, reply) => {
+      reply.header("Cache-Control", "private, no-store");
+      const issue = await requireIssue(database, request.params.key);
+      return sourceOperation(() => operation(issue, request));
+    });
+  };
+  const repository = (request: SourceRequest) => headerValue(request.headers["x-issue-pilot-repository"], true);
+  const relativePath = (request: SourceRequest, required = false) => headerValue(request.headers["x-issue-pilot-path"], required);
 
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/repositories", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.repositories(issue));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/tree", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.tree(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-path"])));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/file", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.file(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-path"], true)));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/search", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.search(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-query"], true), {
-      caseSensitive: booleanHeader(request.headers["x-issue-pilot-case-sensitive"], true),
-      wordMatch: booleanHeader(request.headers["x-issue-pilot-word-match"], false),
-    }));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/history", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.history(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-path"])));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/commit", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.commit(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-revision"], true), headerValue(request.headers["x-issue-pilot-path"])));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/commit-file", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.commitFile(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-revision"], true), headerValue(request.headers["x-issue-pilot-path"], true)));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/diff", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.diff(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-path"])));
-  });
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/source/diff-file", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    const issue = await requireIssue(database, request.params.key);
-    return sourceOperation(() => sourceBrowser.diffFile(issue, headerValue(request.headers["x-issue-pilot-repository"], true), headerValue(request.headers["x-issue-pilot-path"], true)));
-  });
+  register("repositories", (issue) => sourceBrowser.repositories(issue));
+  register("tree", (issue, request) => sourceBrowser.tree(issue, repository(request), relativePath(request)));
+  register("file", (issue, request) => sourceBrowser.file(issue, repository(request), relativePath(request, true)));
+  register("search", (issue, request) => sourceBrowser.search(issue, repository(request), headerValue(request.headers["x-issue-pilot-query"], true), {
+    caseSensitive: booleanHeader(request.headers["x-issue-pilot-case-sensitive"], true),
+    wordMatch: booleanHeader(request.headers["x-issue-pilot-word-match"], false),
+  }));
+  register("history", (issue, request) => sourceBrowser.history(issue, repository(request), relativePath(request)));
+  register("commit", (issue, request) => sourceBrowser.commit(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request)));
+  register("commit-file", (issue, request) => sourceBrowser.commitFile(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request, true)));
+  register("diff", (issue, request) => sourceBrowser.diff(issue, repository(request), relativePath(request)));
+  register("diff-file", (issue, request) => sourceBrowser.diffFile(issue, repository(request), relativePath(request, true)));
 }

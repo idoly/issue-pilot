@@ -54,7 +54,7 @@ function AgentWorkbench(props: { issue: IssueDetail; sourceAgentOpen: boolean; s
 }
 
 function CurrentUserIdentity() {
-  const { currentUser, selectCurrentUser, users } = useApplicationResources();
+  const { currentUser, selectCurrentUser, people } = useApplicationResources();
   const name = () => currentUser()?.name || currentUser()?.subject || "本地用户";
   return (
     <div class="identity" title={`${name()} · ${currentUser()?.email ?? ""}`}>
@@ -63,8 +63,8 @@ function CurrentUserIdentity() {
         aria-label="当前用户"
         size="small"
         value={currentUser()?.subject}
-        options={users().map((user) => ({ value: user.subject, label: `${user.name} · ${user.email}` }))}
-        labelRender={(selected) => users().find((user) => user.subject === selected.value)?.email ?? selected.label}
+        options={people().map((user) => ({ value: user.subject, label: `${user.name} · ${user.email}` }))}
+        labelRender={(selected) => people().find((user) => user.subject === selected.value)?.email ?? selected.label}
         popupMatchSelectWidth={320}
         onChange={(subject) => { if (typeof subject === "string") selectCurrentUser(subject); }}
       />

@@ -243,7 +243,7 @@ infra/playwright.sh clean
 
 每次`run`只挂载一个只读测试脚本、只读Playwright Core和一个读写输出目录，启动带固定label和唯一名称的`podman run --rm`容器。容器使用host network、只读rootfs、当前UID/GID、drop all capabilities、no-new-privileges及PID/内存限制，并由Podman在300秒后硬停止；Shell退出时也会按名称强制清理。它不挂载SQLite、Deployment配置、Issue workspace、项目工具socket或Podman socket。
 
-Service/Deployment不配置或授权Playwright；IssuePolicy、Pi tool和capability broker没有浏览器入口。Agent和目标项目不能通过capability broker启动该容器。`status`发现持久application-test container时失败。
+Service/Deployment不配置或授权Playwright；AgentSessionContext和Pi tools没有浏览器入口。Agent和目标项目不能启动该容器。`status`发现持久application-test container时失败。
 
 ## Aliyun CLI runtime
 
@@ -324,7 +324,7 @@ ss -ltnp | rg ':3000'
 - SQLite启用用户可加载和切换，用户页可新增、编辑、启停；未知或停用subject被拒绝，最后一名启用用户不能停用。
 - Service/Repository/Deployment round-trip正确。
 - `/api/config` 响应带 `private, no-store`，且代理/日志不记录 body。
-- Prod/test policy只含 read tools，`workspaces/<key>` 不存在。
+- Prod/test Agent context只选择 read tools，`workspaces/<key>` 不存在。
 - Dev 创建 `hotfix-*` 或 `feature-*` 本地 branch和独立 worktree。
 - Agent stream先replay，再收到`snapshot_ready`，刷新后仍可恢复。
 - 代码浏览器可切换全部Repository、展开文件树、读取UTF-8文件、搜索和查看Git diff；不存在source write route。

@@ -49,7 +49,6 @@ export interface ServiceDeployment extends PublicCapabilityConfiguration {
 
 export interface ServiceConfiguration {
   key: string;
-  revision: string;
   name: string;
   description: string;
   deployments: ServiceDeployment[];

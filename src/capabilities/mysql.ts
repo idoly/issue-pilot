@@ -1,7 +1,8 @@
 import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type QueryError, type RowDataPacket } from "mysql2";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { capabilitySignal } from "./contracts.ts";
+import { capabilityResultText, capabilitySignal, capabilityTextResult } from "./contracts.ts";
+import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 import { validateReadOnlySql } from "./sql.ts";
 
 const limits = issuePilotConfig.limits.capability;
@@ -39,14 +40,9 @@ async function streamedRows(connection: Connection, statement: string): Promise<
   return { columns, rows };
 }
 
-export async function queryMysql(input: { connectionUrl: string; statement: string }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
-  const connectionUrl = new URL(input.connectionUrl);
-  if (connectionUrl.protocol !== "mysql:") throw new Error("unsupported_mysql_connection_protocol");
-  const database = decodeURIComponent(connectionUrl.pathname.replace(/^\//, ""));
-  if (!connectionUrl.hostname || !connectionUrl.port || !connectionUrl.username || !/^\/[^/]+$/.test(connectionUrl.pathname) || !database || database.includes("/")) throw new Error("invalid_mysql_connection_url");
-  const password = decodeURIComponent(connectionUrl.password);
-  if (/[\r\n]/.test(password)) throw new Error("invalid_mysql_password");
-
+export async function queryMysql(input: { config: CapabilityConfig<"db">; statement: string }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
+  const connectionUrl = new URL(input.config.url);
+  const database = decodeURIComponent(connectionUrl.pathname.slice(1));
   let connection: Connection | undefined;
   let destroyed = false;
   const activeSignal = capabilitySignal(signal);
@@ -60,8 +56,8 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
     connection = await connectionFactory({
       host: connectionUrl.hostname,
       port: Number(connectionUrl.port),
-      user: decodeURIComponent(connectionUrl.username),
-      password,
+      user: input.config.username,
+      password: input.config.password,
       database,
       charset: "utf8mb4",
       connectTimeout: limits.connectionMs,
@@ -84,4 +80,9 @@ export async function queryMysql(input: { connectionUrl: string; statement: stri
     activeSignal.removeEventListener("abort", abort);
     if (connection && !destroyed) await end(connection);
   }
+}
+
+export async function readMysql(config: CapabilityConfig<"db">, input: CapabilityInputs["db"], signal?: AbortSignal) {
+  const queryResult = await queryMysql({ config, statement: validateReadOnlyQuery(input.statement) }, signal);
+  return capabilityTextResult(capabilityResultText({ provider: "mysql", ...queryResult }), { provider: "mysql" });
 }

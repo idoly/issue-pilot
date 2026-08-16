@@ -1,11 +1,8 @@
-import type { IssuePolicy } from "../pi/policy.ts";
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilityResultText, capabilitySignal, capabilityTextResult } from "./contracts.ts";
 import { basicAuthHeaders, responseJson } from "./http-client.ts";
+import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 
-const limits = issuePilotConfig.limits.capability;
-
-async function httpJson(config: Record<string, unknown>, requestPath: string, signal?: AbortSignal): Promise<unknown> {
+async function httpJson(config: CapabilityConfig<"mq">, requestPath: string, signal?: AbortSignal): Promise<unknown> {
   const response = await fetch(new URL(requestPath, `http://${config.host}:${config.managementPort}`), {
     redirect: "error",
     headers: { accept: "application/json", ...basicAuthHeaders(config) },
@@ -24,13 +21,10 @@ function rabbitMqPath(action: "overview" | "queues" | "queue" | "bindings", virt
     : `/api/queues/${encodedVirtualHost}/${encodedQueue}/bindings`;
 }
 
-export async function readRabbitMq(policy: IssuePolicy, config: Record<string, unknown>, input: { action: "overview" | "queues" | "queue" | "bindings"; queue?: string }, signal?: AbortSignal) {
-  const grant = policy.service.mq;
-  if (!grant) throw new Error("mq_scope_not_granted_for_service");
-  if (config.virtualHost !== grant.virtualHost || typeof config.host !== "string" || !Number.isInteger(config.port) || !Number.isInteger(config.managementPort) || typeof config.username !== "string" || typeof config.password !== "string") throw new Error("mq_configuration_changed");
+export async function readRabbitMq(config: CapabilityConfig<"mq">, input: CapabilityInputs["mq"], signal?: AbortSignal) {
   const queue = input.queue?.trim();
-  if ((input.action === "queue" || input.action === "bindings") && (!queue || queue.length > limits.rabbitmq.queueChars || queue.includes("\0"))) throw new Error("invalid_mq_queue");
-  const requestPath = rabbitMqPath(input.action, config.virtualHost as string, queue);
+  if ((input.action === "queue" || input.action === "bindings") && (!queue || queue.includes("\0"))) throw new Error("invalid_mq_queue");
+  const requestPath = rabbitMqPath(input.action, config.virtualHost, queue);
   const response = await httpJson(config, requestPath, signal);
-  return capabilityTextResult(capabilityResultText({ action: input.action, output: response }), { deploymentId: grant.deploymentId, virtualHost: grant.virtualHost });
+  return capabilityTextResult(capabilityResultText({ action: input.action, output: response }), { virtualHost: config.virtualHost });
 }

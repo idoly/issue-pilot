@@ -53,10 +53,9 @@ Never automatically delete or rewrite evidence when state is dirty, untracked, r
 | Prod/test code | Latest fetched commit of the current Deployment base branch |
 | Conversation history | Per-Issue Pi JSONL active branch |
 | Attachment integrity | Durable file plus database path, size, and SHA-256 |
-| Capability parsing, credential-free scope, schema, and metadata | `src/capabilities/registry.ts` |
+| Capability parsing, schema, and metadata | `src/capabilities/registry.ts` |
 | Configuration credential fields, requiredness, and update states | `src/configuration/contracts.ts` |
-| Service configuration content revision | `src/configuration/revision.ts` |
-| Capability execution dispatch | `src/capabilities/broker.ts` |
+| Capability tool registration and dispatch | `src/pi/tools.ts` |
 | Generated Issue runtime and project wrappers | `src/workspace/runtime.ts` and `src/workspace/project-wrappers.ts` |
 | Read-only source browsing | `src/workspace/source-browser.ts` and `src/http/source-browser-routes.ts` |
 
@@ -70,14 +69,14 @@ Do not create a second source for any of these facts.
 | Table, column, index, trigger, or constraint | `src/db/schema.ts` plus a new migration |
 | HTTP behavior | `src/http/*-routes.ts` and focused route tests |
 | User lifecycle | `src/http/user-routes.ts`, `subjects`, and `UserManagement.tsx` |
-| Configuration DTO, credential projection/merge, revision, and snapshot projection | `src/configuration` |
+| Configuration DTO, credential projection/merge, and snapshot projection | `src/configuration` |
 | Service configuration command prepare/apply | `src/http/service-configuration.ts` |
 | Attachment transaction/store behavior | `src/http/attachment-store.ts` |
 | Agent queue, state transition, or session lifecycle | `src/agent` |
 | Model and tool authorization | `src/pi` |
 | Capability value parser | `src/capabilities/registry.ts` |
 | Configuration credential update contract | `src/configuration/contracts.ts` and `src/configuration/credentials.ts` |
-| Capability execution/client | `src/capabilities/broker.ts` and the protocol client |
+| Capability execution/client | `src/pi/tools.ts` and the protocol client |
 | Git, checkout, worktree, runtime, prepare, release, or reopen | `src/workspace` |
 | Shared serial primitive | `src/serial.ts` |
 | Web DTO/request | `src/web/src/data/client.ts` |
@@ -88,7 +87,7 @@ Do not create a second source for any of these facts.
 | Web interaction | `src/web/src/app` |
 | Container/runtime integration | `infra` |
 
-Routes coordinate managers, reservations, and transactions. They must not reimplement Git, policy, attachment storage, or capability protocols.
+Routes coordinate managers, reservations, and transactions. They must not reimplement Git, Agent authorization, attachment storage, or capability protocols.
 
 ## Required Invariants
 
@@ -109,10 +108,9 @@ Every change must preserve these rules:
 - Attachment writes happen only in Issue create/edit transactions. Attachment GET remains read-only.
 - Dirty, untracked, running, invalid-layout, changed-checkout, and unmanaged state is preserved and fails explicitly.
 - Runtime, manifests, wrappers, and immutable checkouts are generated atomically and remain rebuildable.
-- Stored Deployment passwords and AccessKeys do not enter configuration GET responses, unchanged PATCH requests, policy, system prompt, tool schema, or tool input.
-- Service PATCH/DELETE requires the full-content revision from the same configuration snapshot; stale edits fail before session close and transaction apply.
+- Stored Deployment passwords and AccessKeys do not enter configuration GET responses, unchanged PATCH requests, Agent session context, system prompt, tool schema, or tool input.
 - Capability results are Agent evidence and may enter Pi JSONL; do not confuse this with direct Deployment credential exposure.
-- Capability clients validate frozen scope, current configuration, input, timeout, and result bounds even if an earlier layer already validated them.
+- Pi tools parse capability input once with TypeBox and call protocol clients directly. Clients trust those internal types and enforce external target authorization, protocol behavior, timeout, abort, and result bounds.
 - API, migration, Git, runtime, source browser, and project-tool broker resolve the same state root.
 
 The rationale is in [Architecture](docs/ARCHITECTURE.md#必须保持的不变量).
@@ -123,7 +121,7 @@ Do not merge all synchronization into one global mutex.
 
 - `AgentEngine` serializes runs and steering per Issue.
 - Issue reservations exclude Agent enqueue/send and other destructive Issue operations.
-- Configuration reads use `scope queue -> SQLite snapshot transaction`; Service changes use `scope queue -> revision check -> Issue reservation`; Issue scope changes use `scope queue -> Issue reservation`.
+- Configuration reads use `scope queue -> SQLite snapshot transaction`; Service and Issue scope changes use `scope queue -> Issue reservation`.
 - Lifecycle release/reopen/maintenance use `lifecycle queue -> per-Issue inspection queue -> Issue reservation`.
 - Deep inspection is serialized per Issue; different Issues may inspect concurrently.
 - Git operations are serialized by resolved state root plus Repository URL hash.
@@ -151,7 +149,7 @@ A complete behavior change may require updates to:
 - Shared domain constants and types.
 - Database schema and a new migration.
 - Save-time parsing and runtime validation.
-- Manager, registry, broker, or protocol client.
+- Manager, registry, Pi tool, or protocol client.
 - HTTP DTO and Web client.
 - Web state and interaction.
 - Focused success, failure, rollback, retry, and repeated-call tests.

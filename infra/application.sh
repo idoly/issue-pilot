@@ -68,19 +68,13 @@ compose() {
   podman compose --in-pod false --no-ansi --project-name "$name" --file "$compose_manifest" "$@"
 }
 
-image_root() {
-  podman image inspect "$image" --format '{{ index .Config.Labels "io.issue-pilot.root" }}'
-}
-
-image_healthcheck() {
-  podman image inspect "$image" --format '{{if .Config.Healthcheck}}configured{{else}}missing{{end}}'
-}
-
 require_image() {
-  podman image exists "$image" || fail "Application image not found: $image"
-  actual_root=$(image_root)
-  [ "$actual_root" = "$root" ] || fail "Application image root mismatch: expected $root, got $actual_root"
-  [ "$(image_healthcheck)" = configured ] || fail "Application image healthcheck missing: $image"
+  target_image=$1
+  expected_root=$2
+  podman image exists "$target_image" || fail "Application image not found: $target_image"
+  actual_root=$(podman image inspect "$target_image" --format '{{ index .Config.Labels "io.issue-pilot.root" }}')
+  [ "$actual_root" = "$expected_root" ] || fail "Application image root mismatch: expected $expected_root, got $actual_root"
+  [ "$(podman image inspect "$target_image" --format '{{if .Config.Healthcheck}}configured{{else}}missing{{end}}')" = configured ] || fail "Application image healthcheck missing: $target_image"
 }
 
 retain_application_build_cache() {
@@ -97,7 +91,7 @@ prune_application_images() {
 prepare() {
   load_configuration
   compose --podman-build-args=--format=docker build --pull=always application
-  require_image
+  require_image "$image" "$root"
   retain_application_build_cache
   prune_application_images
 }
@@ -116,8 +110,7 @@ prepare_kubernetes() {
     --build-arg APP_ROOT=/opt/issue-pilot \
     --build-arg "TARGETARCH=$architecture" \
     "$root"
-  [ "$(podman image inspect "$target_image" --format '{{ index .Config.Labels "io.issue-pilot.root" }}')" = /opt/issue-pilot ] || fail "Portable application image root mismatch"
-  [ "$(podman image inspect "$target_image" --format '{{if .Config.Healthcheck}}configured{{else}}missing{{end}}')" = configured ] || fail "Portable application image healthcheck missing"
+  require_image "$target_image" /opt/issue-pilot
   retain_application_build_cache
   prune_application_images
 }
@@ -129,7 +122,7 @@ config() {
 
 status() {
   load_configuration
-  require_image
+  require_image "$image" "$root"
   if podman container exists "$name"; then
     running=$(podman container inspect "$name" --format '{{.State.Running}}')
     health=$(podman container inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
@@ -142,7 +135,7 @@ status() {
 
 start() {
   load_configuration
-  require_image
+  require_image "$image" "$root"
   podman container exists "$name" && fail "Application container already exists: $name"
   [ -d "$state_root" ] || fail "State root not found: $state_root"
   [ -d "$pi_root" ] || fail "Pi configuration not found: $pi_root"

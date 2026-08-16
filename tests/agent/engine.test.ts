@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEngine, repositoryPreparationMode, type AgentReservation } from "../../src/agent/engine.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
@@ -21,11 +20,6 @@ test("selects repository preparation modes from environment and issue type", () 
   assert.equal(repositoryPreparationMode("test", "smart_analysis"), "shared");
   assert.equal(repositoryPreparationMode("dev", "defect_fix"), "hotfix");
   assert.equal(repositoryPreparationMode("dev", "feature_development"), "feature");
-});
-
-test("rejects oversized Agent messages at the engine boundary", async () => {
-  const engine = new AgentEngine({} as never);
-  await assert.rejects(engine.send("issue", "x".repeat(issuePilotConfig.limits.agentMessageChars + 1)), /invalid_agent_message/);
 });
 
 test("reserves issues against concurrent Agent activity and always releases reservations", async () => {

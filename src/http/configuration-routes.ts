@@ -2,16 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
 import { loadConfiguration, loadConfigurationCatalog } from "../configuration/read.ts";
-import { loadServiceConfigurationRevision } from "../configuration/revision.ts";
 import { issues, services } from "../db/schema.ts";
 import { ApiError, optionalText, record, text } from "./input.ts";
 import { runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
-
-function requiredServiceRevision(value: string | string[] | undefined): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new ApiError(428, "service_revision_required");
-  return value;
-}
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90).replace(/-+$/g, "");
@@ -61,13 +55,12 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     return runScopeExclusive(async () => {
       const service = await findServiceByKey(request.params.key);
       if (!service) throw new ApiError(404, "service_not_found");
-      const expectedRevision = requiredServiceRevision(request.headers["if-match"]);
       const affectedIssues = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id));
       try {
         return await runIssueExclusive(engine, affectedIssues.map((issue) => issue.id), async (reservation) => {
           const input = record(request.body);
           const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
-          const prepared = await prepareServiceConfiguration({ executor: database.db, modelCatalog, serviceId: service.id, input, existingService: service, expectedRevision });
+          const prepared = await prepareServiceConfiguration({ executor: database.db, modelCatalog, serviceId: service.id, input });
           for (const issue of affectedIssues) await reservation.closeSession(issue.id);
           await database.db.transaction((transaction) => applyServiceConfiguration({ executor: transaction, serviceId: service.id, prepared, serviceUpdate }));
           return { ok: true };
@@ -83,8 +76,6 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     await runScopeExclusive(async () => {
       const service = await findServiceByKey(request.params.key);
       if (!service) throw new ApiError(404, "service_not_found");
-      const expectedRevision = requiredServiceRevision(request.headers["if-match"]);
-      if (await loadServiceConfigurationRevision(database.db, service) !== expectedRevision) throw new ApiError(409, "service_configuration_changed");
       if ((await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id)).limit(1))[0]) throw new ApiError(409, "service_is_used_by_issues");
       await database.db.delete(services).where(eq(services.id, service.id));
     });

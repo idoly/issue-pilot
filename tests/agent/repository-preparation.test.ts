@@ -11,7 +11,7 @@ import { and, eq } from "drizzle-orm";
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
-import type { IssuePolicy } from "../../src/pi/policy.ts";
+import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
@@ -149,7 +149,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
-  const policies: IssuePolicy[] = [];
+  const starts: Array<{ context: AgentSessionContext; workspaceRoot: string }> = [];
   let sessionStops = 0;
   try {
     const { source, remotes } = await createRemote(root);
@@ -181,12 +181,12 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(options: { policy: IssuePolicy }): Promise<unknown>; close(): Promise<void> };
+      piRuntime: { start(options: { context: AgentSessionContext; workspaceRoot: string }): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
       async start(options) {
-        policies.push(options.policy);
+        starts.push(options);
         return { session: {}, streaming: false, async prompt() {}, async stop() { sessionStops += 1; } };
       },
       async close() {},
@@ -206,10 +206,11 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(prodRepository!.localPath, null);
     assert.equal(prodWorkspace!.runtimeReady, true);
     assert.equal(prodSession!.workspacePath, issueRuntimeRoot(stateRoot, prodIssue!.key));
-    assert.equal(policies[0]!.service.repositories[0]!.codeAccess, "read");
+    const prodRuntimeName = repositoryWorkspaceNames(remotes).get(remotes[0])!;
+    assert.equal(starts[0]!.context.canModifyCode, false);
     assert.equal(sessionStops, 1);
-    assert.equal(path.dirname(policies[0]!.service.repositories[0]!.repositoryPath), issueRuntimeRoot(stateRoot, prodIssue!.key));
-    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", policies[0]!.service.repositories[0]!.repositoryPath, "rev-parse", "--show-toplevel"])).startsWith(".."), false);
+    assert.equal(starts[0]!.workspaceRoot, issueRuntimeRoot(stateRoot, prodIssue!.key));
+    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(starts[0]!.workspaceRoot, prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
     await assert.rejects(access(issueWorkspaceRoot(stateRoot, prodIssue!.key)));
 
     const firstProdCommit = prodRepository.commitBefore;
@@ -225,7 +226,6 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.notEqual(refreshedProdRepository.commitBefore, firstProdCommit);
     assert.equal(refreshedProdRepository.commitBefore, await git(["-C", source, "rev-parse", "prod"]));
     assert.equal(refreshedProdRepositoryByUrl.get(remotes[1])!.commitBefore, firstSecondaryCommit);
-    assert.equal(policies[1]!.service.repositories.find((repository) => repository.baseCommit === refreshedProdRepository.commitBefore)?.baseCommit, refreshedProdRepository.commitBefore);
     assert.equal(sessionStops, 2);
 
     await internal.run(devIssue!.id);
@@ -241,7 +241,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(devRepository!.localPath?.startsWith(issueWorkspaceRoot(stateRoot, devIssue!.key)), true);
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.runtimeReady, true);
-    assert.equal(policies[2]!.service.repositories[0]!.codeAccess, "write");
+    assert.equal(starts[2]!.context.canModifyCode, true);
 
     await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "prod" }).where(and(
       eq(serviceDeploymentRepositories.deploymentId, deployments[1]!.id),

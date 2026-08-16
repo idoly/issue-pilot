@@ -7,7 +7,6 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import { queryDms, validateDmsQuery } from "../../src/capabilities/dms.ts";
 import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
-import type { IssuePolicy } from "../../src/pi/policy.ts";
 
 const response = (rows: Array<Record<string, unknown>> = [{ order_id: "4300005076", status: "ready" }], wrapped = false) => ({
   RequestId: "request-1",
@@ -40,7 +39,7 @@ test("accepts only bounded read-only DMS statements", () => {
   ]) assert.throws(() => validateDmsQuery(statement), /database_query_must_be/);
 });
 
-test("queries the exact frozen DMS database through the process Aliyun CLI", async () => {
+test("queries the configured DMS database through the process Aliyun CLI", async () => {
   const runtime = { endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" };
   const calls: Array<{ command: string; args: string[]; cliArgs: string[]; options: CommandExecutionOptions; profileRoot: string; profile: Record<string, any>; profileMode: number }> = [];
   let output: unknown = response();
@@ -62,9 +61,8 @@ test("queries the exact frozen DMS database through the process Aliyun CLI", asy
     },
   };
   const tools = new ProcessToolRuntime(executor);
-  const policy = { service: { dms: { deploymentId: "deployment-prod", dbId: "123456", logic: false, tid: "987654" } } } as IssuePolicy;
   const configured = { accessKeyId: "fixture-key", accessKeySecret: "fixture-secret", dbId: "123456", logic: false, tid: "987654" };
-  const query = (statement = "SELECT order_id, status FROM orders LIMIT 20") => queryDms(tools, policy, { statement }, configured, undefined, runtime);
+  const query = (statement = "SELECT order_id, status FROM orders LIMIT 20") => queryDms(tools, { statement }, configured, undefined, runtime);
 
   const result = await query();
   assert.equal(calls[0]!.command, "aliyun");
@@ -85,12 +83,10 @@ test("queries the exact frozen DMS database through the process Aliyun CLI", asy
   const wrappedBody = JSON.parse((await query()).content[0]!.text);
   assert.deepEqual(wrappedBody.rows, [{ order_id: "4300005077", status: "wrapped" }]);
 
-  const logicalPolicy = { service: { dms: { ...policy.service.dms!, logic: true } } } as IssuePolicy;
-  await queryDms(tools, logicalPolicy, { statement: "SELECT 1 LIMIT 1" }, { ...configured, logic: true }, undefined, runtime);
+  await queryDms(tools, { statement: "SELECT 1 LIMIT 1" }, { ...configured, logic: true }, undefined, runtime);
   assert.deepEqual(calls.at(-1)!.cliArgs.slice(2, 6), ["--DbId", "123456", "--Logic", "true"]);
 
-  await assert.rejects(queryDms(tools, policy, { statement: "SELECT 1 LIMIT 1" }, { ...configured, dbId: "654321" }, undefined, runtime), /dms_configuration_changed/);
-  await assert.rejects(queryDms(tools, policy, { statement: "SELECT 1 LIMIT 1" }, configured, undefined, { ...runtime, endpoint: "dms-enterprise.cn-hangzhou.aliyuncs.com" }), /invalid_dms_runtime/);
+  await assert.rejects(queryDms(tools, { statement: "SELECT 1 LIMIT 1" }, configured, undefined, { ...runtime, endpoint: "dms-enterprise.cn-hangzhou.aliyuncs.com" }), /invalid_dms_runtime/);
   killed = true;
   await assert.rejects(query(), /dms_query_failed/);
   killed = false;

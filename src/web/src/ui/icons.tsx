@@ -9,7 +9,6 @@ import {
   ExternalLink as ExternalLinkNode,
   Eye as EyeNode,
   File as FileNode,
-  FolderClosed as FolderNode,
   FolderOpen as FolderOpenNode,
   GitBranch as GitBranchNode,
   GitCompare as GitCompareNode,
@@ -25,7 +24,6 @@ import {
   RefreshCw as RefreshCwNode,
   Search as SearchNode,
   Send as SendNode,
-  SquareTerminal as TerminalSquareNode,
   Trash2 as Trash2Node,
   UserCheck as UserCheckNode,
   UserPlus as UserPlusNode,
@@ -72,7 +70,6 @@ export const Download = createIcon(DownloadNode);
 export const ExternalLink = createIcon(ExternalLinkNode);
 export const Eye = createIcon(EyeNode);
 export const File = createIcon(FileNode);
-export const Folder = createIcon(FolderNode);
 export const FolderOpen = createIcon(FolderOpenNode);
 export const GitBranch = createIcon(GitBranchNode);
 export const GitCompare = createIcon(GitCompareNode);
@@ -88,7 +85,6 @@ export const Plus = createIcon(PlusNode);
 export const RefreshCw = createIcon(RefreshCwNode);
 export const Search = createIcon(SearchNode);
 export const Send = createIcon(SendNode);
-export const TerminalSquare = createIcon(TerminalSquareNode);
 export const Trash2 = createIcon(Trash2Node);
 export const UserCheck = createIcon(UserCheckNode);
 export const UserPlus = createIcon(UserPlusNode);

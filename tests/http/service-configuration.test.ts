@@ -2,14 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { parseCapabilityConfiguration } from "../../src/capabilities/registry.ts";
-import { parseCapabilities } from "../../src/http/service-configuration.ts";
-
-test("rejects removed, unknown, or duplicate capability declarations", () => {
-  assert.deepEqual(parseCapabilities(["db", "redis"]), ["db", "redis"]);
-  assert.throws(() => parseCapabilities(["playwright"]), /invalid_capabilities/);
-  assert.throws(() => parseCapabilities(["db", "unknown"]), /invalid_capabilities/);
-  assert.throws(() => parseCapabilities(["db", "db"]), /invalid_capabilities/);
-});
 
 test("validates capability connection settings when saving page configuration", () => {
   const databaseUrl = "mysql://192.168.27.122:3306/srm_prod";

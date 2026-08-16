@@ -54,6 +54,7 @@ import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace
 import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
+import { parseIssueKey } from "../../../domain/contracts";
 import { loadSourceRepositories } from "../data/client";
 import { getIssuePilotVscodeApi, type IssuePilotVscodeApi } from "./extension-api";
 import { registerMarkdownPreview, registerMarkdownPreviewAction, registerMarkdownPreviewCommands } from "./markdown-preview";
@@ -156,8 +157,8 @@ function renderError(message: string): void {
 }
 
 async function start(): Promise<void> {
-  const issueKey = new URL(window.location.href).searchParams.get("issue") ?? "";
-  if (!/^ISSUE-\d{8}-\d{3,}$/.test(issueKey)) throw new Error("invalid_issue_key");
+  const issueKey = parseIssueKey(new URL(window.location.href).searchParams.get("issue") ?? "");
+  if (!issueKey) throw new Error("invalid_issue_key");
   const repositories = await loadSourceRepositories(issueKey);
   if (!repositories.length) throw new Error("source_repository_not_found");
 

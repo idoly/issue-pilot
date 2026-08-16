@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ToolRuntime } from "../tool-runtime.ts";
-import type { CommandExecutionOptions, CommandExecutionResult } from "./local-exec.ts";
+import type { CommandExecutionResult } from "./local-exec.ts";
 
 export interface AliyunCliCredentials {
   accessKeyId: string;
@@ -15,12 +15,13 @@ export async function runAliyunCli(
   tools: ToolRuntime,
   profileRoot: string,
   args: string[],
-  options: CommandExecutionOptions,
+  options: { timeout?: number; signal?: AbortSignal; maxOutputBytes?: number },
 ): Promise<CommandExecutionResult> {
   return tools.run({
     command: ["aliyun", ...args],
     environment: { HOME: profileRoot, ALIBABA_CLOUD_ORIGINAL_PRODUCT_HELP: "true" },
-  }, options);
+    ...options,
+  });
 }
 
 export async function withAliyunCliProfile<Result>(

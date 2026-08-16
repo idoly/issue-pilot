@@ -1,6 +1,7 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { capabilitySignal, isNacosTarget } from "./contracts.ts";
+import { capabilityResultText, capabilitySignal, capabilityTextResult } from "./contracts.ts";
 import { boundedResponseText } from "./http-client.ts";
+import type { CapabilityConfig } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability;
 
@@ -14,8 +15,7 @@ export interface NacosConnection {
 }
 
 function nacosOrigin(value: string): string {
-  const server = new URL(value.includes("://") ? value : `http://${value}`);
-  if (!["http:", "https:"].includes(server.protocol) || !server.hostname || server.username || server.password || server.search || server.hash || !["", "/"].includes(server.pathname)) throw new Error("invalid_nacos_server");
+  const server = new URL(value);
   if (!server.port) server.port = server.protocol === "https:" ? "443" : "8848";
   return server.origin;
 }
@@ -41,12 +41,6 @@ async function nacosAccessToken(origin: string, connection: NacosConnection, sig
 }
 
 export async function readNacosConfigurations(connection: NacosConnection, signal?: AbortSignal): Promise<Array<{ dataId: string; group: string; content: string | null }>> {
-  if (!isNacosTarget(connection.group)
-    || !Array.isArray(connection.dataIds)
-    || !connection.dataIds.length
-    || connection.dataIds.length > limits.nacos.dataIds
-    || connection.dataIds.some((dataId) => !isNacosTarget(dataId))
-    || new Set(connection.dataIds).size !== connection.dataIds.length) throw new Error("invalid_nacos_configuration_target");
   const origin = nacosOrigin(connection.serverUrl);
   const activeSignal = capabilitySignal(signal);
   const accessToken = await nacosAccessToken(origin, connection, activeSignal);
@@ -73,4 +67,16 @@ export async function readNacosConfigurations(connection: NacosConnection, signa
     configurations.push({ dataId, group: connection.group, content });
   }
   return configurations;
+}
+
+export async function readNacos(config: CapabilityConfig<"nacos">, signal?: AbortSignal) {
+  const configurations = await readNacosConfigurations({
+    serverUrl: config.serverUrl,
+    namespace: config.namespace,
+    group: config.group,
+    dataIds: config.dataIds,
+    username: config.username,
+    password: config.password ?? "",
+  }, signal);
+  return capabilityTextResult(capabilityResultText({ configurations }), {});
 }
