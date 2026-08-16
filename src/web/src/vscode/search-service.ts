@@ -1,6 +1,4 @@
-import type { IEditorOverrideServices } from "@codingame/monaco-vscode-api/vscode/vs/editor/standalone/browser/standaloneServices";
-import { SyncDescriptor } from "@codingame/monaco-vscode-api/vscode/vs/platform/instantiation/common/descriptors";
-import { ISearchService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/search/common/search.service";
+import { ISearchService, SyncDescriptor, type IEditorOverrideServices } from "@codingame/monaco-vscode-api";
 import getSearchServiceOverride from "@codingame/monaco-vscode-search-service-override";
 import { SearchService } from "@codingame/monaco-vscode-search-service-override/vscode/vs/workbench/services/search/common/searchService";
 

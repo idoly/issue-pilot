@@ -52,7 +52,6 @@ import getWorkbenchServiceOverride, { registerCustomView, ViewContainerLocation 
 import getWorkingCopyServiceOverride from "@codingame/monaco-vscode-working-copy-service-override";
 import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace-trust-service-override";
 import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
-import { Position } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/layout/browser/layoutService";
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { loadSourceRepositories } from "../data/client";
@@ -245,7 +244,7 @@ async function start(): Promise<void> {
   registerMarkdownPreviewAction(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
-  layout.setPanelPosition(Position.BOTTOM);
+  await vscode.commands.executeCommand("workbench.action.positionPanelBottom");
   layout.setPanelAlignment("center");
   const auxiliaryVisible = container.clientWidth >= 700;
   layout.setPartHidden(false, Parts.PANEL_PART);
