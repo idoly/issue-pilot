@@ -40,6 +40,7 @@ load_configuration() {
   podman compose version >/dev/null 2>&1 || fail "Podman Compose provider not found"
   name=$(configuration_value runtime.application.name)
   image=$(configuration_value runtime.application.image)
+  build_cache_image="${image}-build-cache"
   stop_timeout=$(configuration_value runtime.application.stopTimeoutSeconds)
   configured_uid=$(configuration_value runtime.containerUser.uid)
   configured_gid=$(configuration_value runtime.containerUser.gid)
@@ -82,10 +83,23 @@ require_image() {
   [ "$(image_healthcheck)" = configured ] || fail "Application image healthcheck missing: $image"
 }
 
+retain_application_build_cache() {
+  build_image=$(podman images --all --filter label=io.issue-pilot.component=application-build --sort created --format '{{.ID}}' | head -n 1)
+  [ -n "$build_image" ] || fail "Application build stage not found"
+  podman image tag "$build_image" "$build_cache_image"
+}
+
+prune_application_images() {
+  podman image prune --force --filter label=io.issue-pilot.component=application-build >/dev/null
+  podman image prune --force --filter label=io.issue-pilot.component=application >/dev/null
+}
+
 prepare() {
   load_configuration
   compose --podman-build-args=--format=docker build --pull=always application
   require_image
+  retain_application_build_cache
+  prune_application_images
 }
 
 prepare_kubernetes() {
@@ -104,6 +118,8 @@ prepare_kubernetes() {
     "$root"
   [ "$(podman image inspect "$target_image" --format '{{ index .Config.Labels "io.issue-pilot.root" }}')" = /opt/issue-pilot ] || fail "Portable application image root mismatch"
   [ "$(podman image inspect "$target_image" --format '{{if .Config.Healthcheck}}configured{{else}}missing{{end}}')" = configured ] || fail "Portable application image healthcheck missing"
+  retain_application_build_cache
+  prune_application_images
 }
 
 config() {
@@ -150,6 +166,7 @@ remove() {
   running=$(podman container inspect "$name" --format '{{.State.Running}}')
   [ "$running" = false ] || fail "Application container is running: $name"
   compose down
+  prune_application_images
 }
 
 logs() {
@@ -161,8 +178,13 @@ logs() {
 clean() {
   load_configuration
   podman container exists "$name" && fail "Application container still exists: $name"
-  podman image exists "$image" || return 0
-  podman image rm "$image"
+  if podman image exists "$image"; then
+    podman image rm "$image"
+  fi
+  if podman image exists "$build_cache_image"; then
+    podman image rm "$build_cache_image"
+  fi
+  prune_application_images
 }
 
 case "${1:-}" in

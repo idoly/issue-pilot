@@ -154,7 +154,7 @@ infra/application.sh start
 infra/application.sh logs
 ```
 
-`prepare`从Containerfile中的稳定系列tag构建单一application image。`start`拒绝覆盖同名容器，通过Compose设置`on-failure:5`重启策略，并要求以下路径在容器内外完全相同：项目根、state root、`HOME`、Pi配置、npmrc/cache和Maven settings/repository。应用rootfs只读；state root与package cache读写；Pi/package manager配置只读。可选`~/.gitconfig`和`~/.ssh`只读挂载。Compose构建参数同时把镜像中UID 1000用户的passwd home设为宿主`HOME`，确保OpenSSH从该只读挂载读取known_hosts和私钥；Kubernetes镜像默认使用`/home/issue-pilot`。
+`prepare`从Containerfile中的稳定系列tag构建单一application image。新镜像通过root label和Healthcheck校验后，生命周期脚本把最新完整build stage保留为`${runtime.application.image}-build-cache`以复用`npm ci`层，再只按`io.issue-pilot.component=application|application-build` label清理本项目无tag且未被容器引用的旧final和旧build stage；`remove`释放旧运行镜像后重复该清理，`clean`同时删除命名build cache。清理不使用`--all`，不会删除有tag的Node、Maven、Ubuntu、Playwright、Keycloak或其他项目镜像。`start`拒绝覆盖同名容器，通过Compose设置`on-failure:5`重启策略，并要求以下路径在容器内外完全相同：项目根、state root、`HOME`、Pi配置、npmrc/cache和Maven settings/repository。应用rootfs只读；state root与package cache读写；Pi/package manager配置只读。可选`~/.gitconfig`和`~/.ssh`只读挂载。Compose构建参数同时把镜像中UID 1000用户的passwd home设为宿主`HOME`，确保OpenSSH从该只读挂载读取known_hosts和私钥；Kubernetes镜像默认使用`/home/issue-pilot`。
 
 停机保留容器日志供检查：
 

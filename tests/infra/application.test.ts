@@ -65,6 +65,7 @@ printf 'podman %s\n' "$*" >> "$PI_APPLICATION_LOG"
 case "$1 $2" in
   "image exists") exit 0 ;;
   "image inspect") case "$*" in *Healthcheck*) printf 'configured\n' ;; *"$PI_PORTABLE_IMAGE"*) printf '/opt/issue-pilot\n' ;; *) printf '%s\n' "$PI_APPLICATION_ROOT" ;; esac ;;
+  "images --all") printf 'fixture-build-stage\n' ;;
   "container exists") exit 1 ;;
   "run --detach") printf 'fixture-container-id\n' ;;
 esac
@@ -113,9 +114,13 @@ exit 0
     const calls = await readFile(log, "utf8");
     assert.match(calls, /podman compose --in-pod false --no-ansi --project-name issue-pilot --file .* --podman-build-args=--format=docker build --pull=always application/);
     assert.match(calls, /podman build --pull=always --format=docker --file .*Containerfile --tag registry\.example\.test\/issue-pilot:test .*--build-arg APP_ROOT=\/opt\/issue-pilot.*--build-arg TARGETARCH=amd64/);
+    assert.match(calls, /podman images --all --filter label=io\.issue-pilot\.component=application-build --sort created --format \{\{\.ID\}\}/);
+    assert.match(calls, /podman image tag fixture-build-stage localhost\/issue-pilot:0\.1\.0-node26-ubuntu2604-build-cache/);
+    assert.match(calls, /podman image prune --force --filter label=io\.issue-pilot\.component=application-build/);
+    assert.match(calls, /podman image prune --force --filter label=io\.issue-pilot\.component=application/);
     assert.match(calls, /podman compose --in-pod false --no-ansi --project-name issue-pilot --file .* up --detach --no-build application/);
-    assert.doesNotMatch(calls, /podman run --detach|--privileged|--publish/);
-    assert.match(containerfile, /FROM docker\.io\/library\/node:26-bookworm-slim AS build/);
+    assert.doesNotMatch(calls, /podman run --detach|--privileged|--publish|image prune --all/);
+    assert.match(containerfile, /FROM docker\.io\/library\/node:26-bookworm-slim AS build\n\nLABEL io\.issue-pilot\.component="application-build"/);
     assert.match(containerfile, /FROM docker\.io\/library\/maven:3\.9-eclipse-temurin-8 AS maven-tool/);
     assert.match(containerfile, /FROM docker\.io\/library\/ubuntu:26\.04/);
     assert.match(containerfile, /apt-get install .* git /);
@@ -133,6 +138,7 @@ exit 0
     assert.match(containerfile, /node_modules\/\.bin\/pi/);
     assert.match(containerfile, /HEALTHCHECK .*127\.0\.0\.1:3000\/health/);
     assert.match(containerfile, /src\/http\/production\.ts/);
+    assert.match(source, /podman image rm "\$build_cache_image"/);
     assert.doesNotMatch(source, /ISSUE_PILOT_|\$\{[A-Z_]+:-/);
   } finally {
     await rm(root, { recursive: true, force: true });
