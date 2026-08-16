@@ -1,5 +1,5 @@
 import { ConfigProvider, Layout, Segmented, Select, Skeleton, theme } from "@idoly/ant-design-solid";
-import { createEffect, createMemo, createSignal, lazy, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, lazy, Match, Show, Switch } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
 import { AgentPanel } from "./AgentPanel";
@@ -26,6 +26,23 @@ import "@idoly/ant-design-solid/tag/style.css";
 import "@idoly/ant-design-solid/switch/style.css";
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
+type AppView = "issues" | "statistics" | "configuration" | "users";
+const viewOptions: Array<{ value: AppView; label: string }> = [
+  { value: "issues", label: "工单" },
+  { value: "statistics", label: "统计" },
+  { value: "configuration", label: "配置" },
+  { value: "users", label: "用户" },
+];
+const appTheme = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    colorPrimary: "#176b5b",
+    colorPrimaryHover: "#248171",
+    colorPrimaryActive: "#105448",
+    borderRadius: "6px",
+    colorInfo: "#1677ff",
+  },
+};
 
 function AgentWorkbench(props: { issue: IssueDetail; sourceAgentOpen: boolean; sourceExpanded: boolean; sourceDetailsOpen: boolean; onCloseSource: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onRefresh: (issueKey: string) => Promise<IssueDetail>; onToggleAgent: () => void; onToggleDetails: () => void }) {
   return (
@@ -61,7 +78,7 @@ function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: num
 }
 
 export function App() {
-  const [view, setView] = createSignal<"issues" | "statistics" | "configuration" | "users">("issues", { ownedWrite: true });
+  const [view, setView] = createSignal<AppView>("issues", { ownedWrite: true });
   const [selectedId, setSelectedId] = createSignal("", { ownedWrite: true });
   const [issue, setIssue] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
@@ -119,19 +136,8 @@ export function App() {
       `--source-detail-height:${layout.auxiliary.height}px`,
     ].join(";");
   });
-  const appTheme = createMemo(() => ({
-    algorithm: theme.defaultAlgorithm,
-    token: {
-      colorPrimary: "#176b5b",
-      colorPrimaryHover: "#248171",
-      colorPrimaryActive: "#105448",
-      borderRadius: "6px",
-      colorInfo: "#1677ff",
-    },
-  }));
-
   return (
-    <ConfigProvider theme={appTheme()}>
+    <ConfigProvider theme={appTheme}>
       <ApplicationResourcesProvider>
       <Layout class="app-shell">
         <Layout.Header class="app-header">
@@ -141,26 +147,31 @@ export function App() {
               aria-label="工作台视图"
               size="small"
               value={view()}
-              options={[{ value: "issues", label: "工单" }, { value: "statistics", label: "统计" }, { value: "configuration", label: "配置" }, { value: "users", label: "用户" }]}
-              onChange={(value) => setView(value as "issues" | "statistics" | "configuration" | "users")}
+              options={viewOptions}
+              onChange={(value) => setView(value as AppView)}
             />
           </div>
           <CurrentUserIdentity />
         </Layout.Header>
         <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? " source-expanded" : ""}`} style={sourceLayoutStyle()}>
-          <Show when={view() === "issues"} fallback={view() === "statistics" ? <Statistics /> : view() === "configuration" ? <ConfigurationView /> : <UserManagement />}>
-            <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} onSelect={setSelectedId} />
-            <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
-              <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
-                {(current) => (
-                  <>
-                    <AgentWorkbench issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => setSourceExpanded(false)} onLayout={setWorkbenchLayout} onPartVisibility={(agentOpen, detailsOpen) => { setSourceAgentOpen(agentOpen); if (detailsOpen !== undefined) setSourceDetailsOpen(detailsOpen); }} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
-                    <IssueWorkspace issue={current()} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => { setWorkbenchLayout(null); setSourceAgentOpen(true); setSourceDetailsOpen(typeof window.matchMedia === "function" ? !window.matchMedia("(max-width: 600px)").matches : true); setSourceExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} />
-                  </>
-                )}
+          <Switch>
+            <Match when={view() === "issues"}>
+              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} onSelect={setSelectedId} />
+              <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
+                <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
+                  {(current) => (
+                    <>
+                      <AgentWorkbench issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => setSourceExpanded(false)} onLayout={setWorkbenchLayout} onPartVisibility={(agentOpen, detailsOpen) => { setSourceAgentOpen(agentOpen); if (detailsOpen !== undefined) setSourceDetailsOpen(detailsOpen); }} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
+                      <IssueWorkspace issue={current()} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => { setWorkbenchLayout(null); setSourceAgentOpen(true); setSourceDetailsOpen(typeof window.matchMedia === "function" ? !window.matchMedia("(max-width: 600px)").matches : true); setSourceExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} />
+                    </>
+                  )}
+                </Show>
               </Show>
-            </Show>
-          </Show>
+            </Match>
+            <Match when={view() === "statistics"}><Statistics /></Match>
+            <Match when={view() === "configuration"}><ConfigurationView /></Match>
+            <Match when={view() === "users"}><UserManagement /></Match>
+          </Switch>
         </Layout.Content>
       </Layout>
       </ApplicationResourcesProvider>
