@@ -9,6 +9,10 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 
 const execFileAsync = promisify(execFile);
+const stateTaskOptions = { concurrency: issuePilotConfig.workspace.inspectionConcurrency, stopOnError: false } as const;
+
+type DisposableSharedCheckout = { checkout: string; commit: string };
+type DisposableSharedRepository = { repositoryRoot: string; commonDirectory: string; checkouts: DisposableSharedCheckout[] };
 
 export interface RepositoryStateRecord {
   localPath: string | null;
@@ -117,37 +121,41 @@ async function removeDisposableSharedCheckouts(stateRoot: string): Promise<void>
   }
   const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
   const gitEnvironment = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
-  const disposable: Array<{ checkout: string; commit: string; commonDirectory: string }> = [];
-  const repositoryRoots: string[] = [];
+  const disposableRepositories: DisposableSharedRepository[] = [];
   for (const repositoryEntry of repositoryEntries) {
     if (!repositoryEntry.isDirectory() || !/^[0-9a-f]{20}$/.test(repositoryEntry.name)) throw new Error("shared_checkout_changed");
     const repositoryRoot = path.join(checkoutRoot, repositoryEntry.name);
-    repositoryRoots.push(repositoryRoot);
-    const expectedCommonDirectory = path.join(repositoriesRoot(stateRoot), repositoryEntry.name);
+    const commonDirectory = path.join(repositoriesRoot(stateRoot), repositoryEntry.name);
     const commitEntries = await readdir(repositoryRoot, { withFileTypes: true });
-    if (!commitEntries.length) throw new Error("shared_checkout_changed");
-    for (const commitEntry of commitEntries) {
-      if (!commitEntry.isDirectory() || !/^[0-9a-f]{40}$/.test(commitEntry.name)) throw new Error("shared_checkout_changed");
-      disposable.push({ checkout: path.join(repositoryRoot, commitEntry.name), commit: commitEntry.name, commonDirectory: expectedCommonDirectory });
-    }
+    if (!commitEntries.length || commitEntries.some((entry) => !entry.isDirectory() || !/^[0-9a-f]{40}$/.test(entry.name))) throw new Error("shared_checkout_changed");
+    disposableRepositories.push({
+      repositoryRoot,
+      commonDirectory,
+      checkouts: commitEntries.map((entry) => ({ checkout: path.join(repositoryRoot, entry.name), commit: entry.name })),
+    });
   }
+  const disposableCheckouts = disposableRepositories.flatMap(({ commonDirectory, checkouts }) =>
+    checkouts.map((checkout) => ({ ...checkout, commonDirectory }))
+  );
   try {
-    await pMap(disposable, async ({ checkout, commit, commonDirectory }) => {
+    await pMap(disposableCheckouts, async ({ checkout, commit, commonDirectory }) => {
       const [head, status, actualCommonDirectory] = await Promise.all([
         execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
         execFileAsync("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored=matching"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
         execFileAsync("git", ["-C", checkout, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
       ]);
       if (head.stdout.trim() !== commit || status.stdout.trim() || path.resolve(checkout, actualCommonDirectory.stdout.trim()) !== commonDirectory) throw new Error("shared_checkout_changed");
-    }, { concurrency: issuePilotConfig.workspace.inspectionConcurrency, stopOnError: false });
+    }, stateTaskOptions);
   } catch (error) {
     throw new Error("shared_checkout_changed", { cause: error });
   }
   try {
-    for (const { checkout, commonDirectory } of disposable) {
-      await execFileAsync("git", ["-C", commonDirectory, "worktree", "remove", checkout], { encoding: "utf8", timeout: gitOperationMs, maxBuffer: gitOutputBytes });
-    }
-    for (const repositoryRoot of repositoryRoots) await rmdir(repositoryRoot);
+    await pMap(disposableRepositories, async ({ repositoryRoot, commonDirectory, checkouts }) => {
+      for (const { checkout } of checkouts) {
+        await execFileAsync("git", ["-C", commonDirectory, "worktree", "remove", checkout], { encoding: "utf8", timeout: gitOperationMs, maxBuffer: gitOutputBytes });
+      }
+      await rmdir(repositoryRoot);
+    }, stateTaskOptions);
   } catch (error) {
     throw new Error("shared_checkout_changed", { cause: error });
   }
@@ -186,15 +194,17 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
   }
   if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
   await removeDisposableSharedCheckouts(stateRoot);
-  for (const entry of await directoryNames(managedIssuesRoot)) {
-    if (!active.has(entry.toLowerCase())) continue;
+  await pMap(await directoryNames(managedIssuesRoot), async (entry) => {
+    if (!active.has(entry.toLowerCase())) return;
     const managedIssueRoot = path.join(managedIssuesRoot, entry);
     const generatedRuntime = /^\.runtime-(?:previous-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
     const generated = (await readdir(managedIssueRoot)).filter((name) => name === "runtime" || generatedRuntime.test(name));
     await Promise.all(generated.map((name) => rm(path.join(managedIssueRoot, name), { recursive: true, force: true })));
-  }
+  }, stateTaskOptions);
   const repositoriesDirectory = repositoriesRoot(stateRoot);
-  for (const entry of await directoryNames(repositoriesDirectory)) {
-    await execFileAsync("git", ["-C", path.join(repositoriesDirectory, entry), "worktree", "prune", "--expire", "now"], { timeout: issuePilotConfig.limits.process.gitPruneMs });
-  }
+  await pMap(
+    await directoryNames(repositoriesDirectory),
+    (entry) => execFileAsync("git", ["-C", path.join(repositoriesDirectory, entry), "worktree", "prune", "--expire", "now"], { timeout: issuePilotConfig.limits.process.gitPruneMs }),
+    stateTaskOptions,
+  );
 }
