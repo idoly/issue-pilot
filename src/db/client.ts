@@ -13,7 +13,7 @@ export function openDatabase(file = applicationConfig.databaseFile) {
   closeSync(openSync(databasePath, "a", 0o600));
   chmodSync(databasePath, 0o600);
 
-  const client = createClient({ url: `file:${databasePath}` });
+  const client = createClient({ url: `file:${databasePath}`, timeout: applicationConfig.state.sqliteBusyTimeoutMs });
   return {
     client,
     db: drizzle(client, { schema }),

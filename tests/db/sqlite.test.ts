@@ -122,10 +122,12 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
   const { db, client, close } = openDatabase(file);
   try {
     await migrate(db, { migrationsFolder: resolve("drizzle") });
+    assert.deepEqual((await client.execute("pragma busy_timeout")).rows, [{ timeout: 5_000 }]);
     await db.transaction(async (transaction) => {
       await transaction.insert(subjects).values({ subject: "demo-owner", displayName: "Owner", email: "owner@example.com" });
       await transaction.insert(environments).values({ key: "test", name: "Test", kind: "test" });
     });
+    assert.deepEqual((await client.execute("pragma busy_timeout")).rows, [{ timeout: 5_000 }]);
     const [environment] = await db.select().from(environments);
     assert.ok(environment?.createdAt instanceof Date);
     const [prod] = await db.insert(environments).values({ key: "prod", name: "Prod", kind: "prod" }).returning();

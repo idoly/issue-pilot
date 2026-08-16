@@ -34,7 +34,6 @@ export async function migrateDatabase(database: DatabaseConnection): Promise<voi
 export async function openApplicationDatabase(file?: string, connect: typeof openDatabase = openDatabase): Promise<DatabaseConnection> {
   const database = connect(file);
   try {
-    await database.client.execute(`PRAGMA busy_timeout = ${issuePilotConfig.state.sqliteBusyTimeoutMs}`);
     await database.client.execute("PRAGMA journal_mode = WAL");
     await migrateDatabase(database);
     await database.client.execute("PRAGMA foreign_keys = ON");
