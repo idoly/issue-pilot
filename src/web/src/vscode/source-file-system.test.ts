@@ -22,7 +22,6 @@ const vscode = vi.hoisted(() => {
   };
 });
 
-vi.mock("@codingame/monaco-vscode-api/vscode/vs/base/common/event", () => ({ Event: { None: () => ({ dispose() {} }) } }));
 vi.mock("@codingame/monaco-vscode-files-service-override", () => vscode);
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();

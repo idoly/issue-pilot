@@ -1,21 +1,19 @@
 import DOMPurify from "dompurify";
-import { createInstance, getService } from "@codingame/monaco-vscode-api";
-import { CommandsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands";
-import { ICommandService } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands.service";
-import { SIDE_GROUP } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/editor/common/editorService";
-import { IEditorService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/editor/common/editorService.service";
+import { createInstance } from "@codingame/monaco-vscode-api";
 import {
   EditorInput,
   EditorInputCapabilities,
+  registerEditor,
   registerEditorPane,
+  RegisteredEditorPriority,
   SimpleEditorInput,
   SimpleEditorPane,
 } from "@codingame/monaco-vscode-workbench-service-override";
 import { previewCss } from "virtual:issue-pilot-markdown-preview-style";
 import * as monaco from "monaco-editor";
+import { getIssuePilotVscodeApi } from "./extension-api";
 
 const previewPaneId = "issue-pilot.markdownPreview";
-const previewInputs = new Map<string, MarkdownPreviewInput>();
 
 function resourceName(resource: monaco.Uri): string {
   const raw = resource.path.slice(resource.path.lastIndexOf("/") + 1);
@@ -65,8 +63,8 @@ class MarkdownPreviewPane extends SimpleEditorPane {
       this.content.textContent = "Markdown source unavailable";
       return { dispose() {} };
     }
-    const commandService = await getService(ICommandService);
-    const rendered = await commandService.executeCommand<string>("markdown.api.render", model.getValue());
+    const vscode = await getIssuePilotVscodeApi();
+    const rendered = await vscode.commands.executeCommand<string>("markdown.api.render", model.getValue());
     this.content.innerHTML = DOMPurify.sanitize(rendered ?? "", {
       USE_PROFILES: { html: true },
       FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
@@ -78,18 +76,29 @@ class MarkdownPreviewPane extends SimpleEditorPane {
 
 export function registerMarkdownPreview(): void {
   registerEditorPane(previewPaneId, "Markdown Preview", MarkdownPreviewPane, [MarkdownPreviewInput]);
+  registerEditor("*.md", {
+    id: previewPaneId,
+    label: "Markdown Preview",
+    priority: {
+      editor: RegisteredEditorPriority.option,
+      diff: RegisteredEditorPriority.option,
+      merge: RegisteredEditorPriority.option,
+    },
+  }, { singlePerResource: true }, {
+    async createEditorInput(input) {
+      return { editor: await createInstance(MarkdownPreviewInput, input.resource) };
+    },
+  });
 }
 
 async function openMarkdownPreview(resource: monaco.Uri): Promise<void> {
-  const key = resource.toString();
-  let input = previewInputs.get(key);
-  if (!input || input.isDisposed()) {
-    input = await createInstance(MarkdownPreviewInput, resource);
-    previewInputs.set(key, input);
-    input.onWillDispose(() => previewInputs.delete(key));
-  }
-  const editorService = await getService(IEditorService);
-  await editorService.openEditor(input, { pinned: true }, SIDE_GROUP);
+  const vscode = await getIssuePilotVscodeApi();
+  await vscode.commands.executeCommand(
+    "vscode.openWith",
+    vscode.Uri.parse(resource.toString()),
+    previewPaneId,
+    vscode.ViewColumn.Beside,
+  );
 }
 
 function markdownResource(container: HTMLElement, candidate?: unknown): monaco.Uri | undefined {
@@ -100,9 +109,10 @@ function markdownResource(container: HTMLElement, candidate?: unknown): monaco.U
   return visible?.dataset.uri ? monaco.Uri.parse(visible.dataset.uri) : undefined;
 }
 
-export function registerMarkdownPreviewCommands(container: HTMLElement): void {
+export async function registerMarkdownPreviewCommands(container: HTMLElement): Promise<void> {
+  const vscode = await getIssuePilotVscodeApi();
   for (const id of ["markdown.showPreview", "markdown.showPreviewToSide", "markdown.showLockedPreviewToSide", "markdown.reopenAsPreview", "markdown.togglePreview"]) {
-    CommandsRegistry.registerCommand(id, (_accessor, candidate?: unknown) => {
+    vscode.commands.registerCommand(id, (candidate?: unknown) => {
       const resource = markdownResource(container, candidate);
       return resource ? openMarkdownPreview(resource) : undefined;
     });

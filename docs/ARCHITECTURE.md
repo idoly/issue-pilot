@@ -223,7 +223,7 @@ Runtime在临时目录完整生成后原子替换。附件不会复制或链接�
 
 只读文件系统overlay把每个Repository alias映射为multi-root workspace，Explorer、Editor Groups/Tabs、breadcrumb、minimap和语言模式均由VS Code/Monaco提供。Source API只接受Issue key、Repository alias和相对路径，拒绝绝对路径、`..`、越界symlink、`.git`树项、binary和超限文件。Workbench文件系统调用`/repositories`、`/tree`和`/file`；LocalProcess Workbench extension通过公开`workspace.registerTextSearchProvider`调用受预算的literal `/search`，支持大小写和整词模式但不开放regex；Source Control通过公开`scm.createSourceControl`和proposed history provider API投影`/diff`、`/history`及`/commit`。Graph文件节点提供前后revision URI，专用只读revision provider通过公开`workspace.registerFileSystemProvider`按需调用`/commit-file`并打开Diff。三个主视图由父页面固定图标工具栏发送白名单view command，原生Activity Bar保持隐藏。所有history/commit仍受HEAD ancestry及输出预算限制。
 
-文件系统声明`Readonly`和`FilePermission.Readonly`，所有write/mkdir/delete/rename返回`FileWriteLocked`。Workbench不启用Terminal、本地或Node extension host、extension gallery、remote agent、保存、stage、commit、revert或任意Git命令。固定language/grammar contribution、经过剥离的GitHub Dark Default和Material Icon Theme均无可执行入口；内置`markdown-language-features`只在受控Web Worker extension host中提供`markdown.api.render`。Preview图标和Markdown Preview命令打开通过`registerEditorPane()`注册的只读Workbench Editor Pane；Pane从当前只读Monaco模型调用扩展render API，DOMPurify清洗扩展HTML后写入隔离Shadow DOM，并使用Workbench原生`DomScrollableElement`、Editor Group、Tab和关闭行为。Preview不创建浏览器Webview、内容iframe或Service Worker，不引入第二个Markdown解析器、外部资源、脚本或写接口。拖放、文件粘贴和移动时更新链接均关闭。
+文件系统声明`Readonly`和`FilePermission.Readonly`，所有write/mkdir/delete/rename返回`FileWriteLocked`。Workbench只运行固定的浏览器LocalProcess Issue Pilot extension和受控Web Worker Markdown extension，不启用Terminal、Node extension host、extension gallery、remote agent、保存、stage、commit、revert或任意Git命令。固定language/grammar contribution、经过剥离的GitHub Dark Default和Material Icon Theme均无可执行入口；内置`markdown-language-features`只提供`markdown.api.render`。Preview Pane通过上游`registerEditorPane()`和`registerEditor()`注册为可选Markdown editor，Preview图标及命令使用公开`commands.registerCommand`和`vscode.openWith`打开；Pane从当前只读Monaco模型调用扩展render API，DOMPurify清洗扩展HTML后写入隔离Shadow DOM，并使用Workbench原生`DomScrollableElement`、Editor Group、Tab和关闭行为。Preview不创建浏览器Webview、内容iframe或Service Worker，不引入第二个Markdown解析器、外部资源、脚本或写接口。拖放、文件粘贴和移动时更新链接均关闭。
 
 ## Issue 项目准备
 
@@ -417,7 +417,7 @@ API 启动顺序：
 ## 安全边界
 
 - 应用运行在可信单机，没有内置认证。
-- 内置VS Code Workbench代码浏览器只读，不启用终端、保存、本地/Node扩展host或扩展市场；唯一Web Worker扩展宿主只运行打包的Markdown功能。Source API仍会返回内部源码，必须按敏感数据保护。
+- 内置VS Code Workbench代码浏览器只读，只运行固定的浏览器LocalProcess Issue Pilot extension和Web Worker Markdown extension，不启用终端、保存、Node扩展host或扩展市场。Source API仍会返回内部源码，必须按敏感数据保护。
 - Compose只向宿主loopback发布application容器端口。任何集群或外部入口都必须由认证、授权和TLS proxy保护。
 - 项目工具Unix socket mode为`0600`；wrapper请求中的Issue和Repository路径必须由broker按SQLite重新授权。
 - 普通工作台只读取不含 Repository URL、model 和 credential 的 `/api/catalog`；配置视图按需读取 `/api/config`，其中包含可编辑 scope 和 `credentialConfigured`，但不返回已存 password、AccessKeyId 或 AccessKeySecret。

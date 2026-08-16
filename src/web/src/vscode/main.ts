@@ -42,7 +42,6 @@ import getLifecycleServiceOverride from "@codingame/monaco-vscode-lifecycle-serv
 import getLogServiceOverride from "@codingame/monaco-vscode-log-service-override";
 import getModelServiceOverride from "@codingame/monaco-vscode-model-service-override";
 import getQuickAccessServiceOverride from "@codingame/monaco-vscode-quickaccess-service-override";
-import { ICommandService } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands.service";
 import getScmServiceOverride from "@codingame/monaco-vscode-scm-service-override";
 import getStorageServiceOverride from "@codingame/monaco-vscode-storage-service-override";
 import getTextmateServiceOverride from "@codingame/monaco-vscode-textmate-service-override";
@@ -57,6 +56,7 @@ import { Position } from "@codingame/monaco-vscode-api/vscode/vs/workbench/servi
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { loadSourceRepositories } from "../data/client";
+import { getIssuePilotVscodeApi, type IssuePilotVscodeApi } from "./extension-api";
 import { registerMarkdownPreview, registerMarkdownPreviewAction, registerMarkdownPreviewCommands } from "./markdown-preview";
 import { registerSourceControls } from "./source-control";
 import { SourceFileSystemProvider } from "./source-file-system";
@@ -127,7 +127,7 @@ function observeWorkbenchParts(issueKey: string, container: HTMLElement, layout:
   observeViews();
 }
 
-function registerWorkbenchBridge(issueKey: string, commandService: ICommandService, layout: IWorkbenchLayoutService, container: HTMLElement): void {
+function registerWorkbenchBridge(issueKey: string, vscode: IssuePilotVscodeApi, layout: IWorkbenchLayoutService, container: HTMLElement): void {
   const commands = {
     explorer: "workbench.view.explorer",
     search: "workbench.view.search",
@@ -139,7 +139,7 @@ function registerWorkbenchBridge(issueKey: string, commandService: ICommandServi
     if (message?.issueKey !== issueKey) return;
     if (message.kind === "issue-pilot-workbench-view" && typeof message.view === "string" && message.view in commands && typeof message.visible === "boolean") {
       layout.setPartHidden(!message.visible, Parts.SIDEBAR_PART);
-      if (message.visible) void commandService.executeCommand(commands[message.view as keyof typeof commands]);
+      if (message.visible) void vscode.commands.executeCommand(commands[message.view as keyof typeof commands]);
       return;
     }
     if (message.kind !== "issue-pilot-workbench-parts" || typeof message.panelOpen !== "boolean" || typeof message.auxiliaryOpen !== "boolean") return;
@@ -240,8 +240,8 @@ async function start(): Promise<void> {
     },
   }, { userHome: monaco.Uri.file("/") });
 
-  const [layout, commandService] = await Promise.all([getService(IWorkbenchLayoutService), getService(ICommandService)]);
-  registerWorkbenchBridge(issueKey, commandService, layout, container);
+  const [layout, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getIssuePilotVscodeApi()]);
+  registerWorkbenchBridge(issueKey, vscode, layout, container);
   registerMarkdownPreviewAction(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
@@ -263,8 +263,8 @@ async function start(): Promise<void> {
     registerSourceSearch(issueKey, repositories),
     registerSourceControls(issueKey, repositories, provider.workspacePath),
   ]);
-  await commandService.executeCommand("markdown.api.render", "# Issue Pilot");
-  registerMarkdownPreviewCommands(container);
+  await vscode.commands.executeCommand("markdown.api.render", "# Issue Pilot");
+  await registerMarkdownPreviewCommands(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
   document.documentElement.dataset.workbenchReady = "true";

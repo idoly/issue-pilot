@@ -13,7 +13,7 @@ Issue Pilot 是可信单机应用，不是多租户服务：
 - 运行请求不携带image，也不启动工具子容器。
 - Playwright只由operator运行Issue Pilot自身浏览器测试时启动`--rm`临时容器，不属于Agent capability。
 - API没有内置authentication/authorization。
-- 代码浏览器不启用Terminal、本地/Node extension host、任意Git或文件写接口；仅打包的Markdown功能使用Web Worker extension host。
+- 代码浏览器只运行固定的浏览器LocalProcess Issue Pilot extension和打包的Web Worker Markdown extension，不启用Terminal、Node extension host、任意Git或文件写接口。
 
 推荐生产拓扑：
 
@@ -214,7 +214,7 @@ Web使用`@codingame/monaco-vscode-api`启动只读VS Code Workbench。Explorer�
 
 代码栏用三个固定图标发送白名单Explorer/Search/Source Control view command；点击另一图标时显示并切换Primary Side Bar，再次点击当前图标时收起Primary Side Bar，原生Activity Bar保持隐藏。LocalProcess Workbench extension通过公开`workspace.registerTextSearchProvider`调用literal `/search`，大小写和整词选项映射到专用boolean header，regex控件和Replace全部隐藏。Source Control通过公开`scm.createSourceControl`和proposed history provider API投影`/diff` Changes及基于`/history`、`/commit`的Graph；Graph文件使用公开`workspace.registerFileSystemProvider`注册的只读revision scheme按需调用`/commit-file`并打开前后内容Diff，不提供输入框、stage、discard、commit或任意Git命令。
 
-界面固定选择官方GitHub Dark Default和Material Icon Theme；构建只注册theme/icon静态资源，不导入Material扩展的Node main、activation event、command或configuration。打包的`markdown-language-features`只在Web Worker extension host中提供`markdown.api.render`，Workbench ready前完成预激活。标题Preview图标和Markdown Preview键盘命令打开通过`registerEditorPane()`注册的只读Editor Pane；Pane从当前只读Monaco模型调用扩展render API，DOMPurify清洗后写入隔离Shadow DOM，并复用Workbench原生Editor Group、Tab、关闭和`DomScrollableElement`。该路径不创建浏览器Webview、内容iframe或Service Worker；GitHub Dark/highlight样式随构建打包，不加载脚本或外部资源。拖放、文件粘贴和移动时更新链接均关闭。Terminal、本地/Node extension host、extension gallery、remote agent和任意Git命令不加载。
+界面固定选择官方GitHub Dark Default和Material Icon Theme；构建只注册theme/icon静态资源，不导入Material扩展的Node main、activation event、command或configuration。打包的`markdown-language-features`只在Web Worker extension host中提供`markdown.api.render`，Workbench ready前完成预激活。只读Preview Pane通过上游`registerEditorPane()`和`registerEditor()`注册为可选Markdown editor，标题Preview图标及键盘命令使用公开`commands.registerCommand`和`vscode.openWith`打开；Pane从当前只读Monaco模型调用扩展render API，DOMPurify清洗后写入隔离Shadow DOM，并复用Workbench原生Editor Group、Tab、关闭和`DomScrollableElement`。该路径不创建浏览器Webview、内容iframe或Service Worker；GitHub Dark/highlight样式随构建打包，不加载脚本或外部资源。拖放、文件粘贴和移动时更新链接均关闭。Terminal、Node extension host、extension gallery、remote agent和任意Git命令不加载。
 
 文件系统provider声明`Readonly`和`FilePermission.Readonly`，write、mkdir、delete、rename全部返回`FileWriteLocked`。API不接受绝对宿主路径。它从SQLite读取Issue Repository关系、重新推导alias，验证runtime必须是受管symlink；active dev target必须等于数据库`local_path`，read-only target必须位于合法的`git/checkouts/<hash>/<commit>`。所有最终path均realpath后再次检查Repository containment。Source route只读，不提供保存、shell、terminal或任意Git命令；Repository、path和query经百分号编码后放在专用request header而不是URL query string，响应带`private, no-store`，route关闭普通request access log，避免源码路径和搜索词进入应用或proxy URL日志。iframe用于隔离Workbench单例和生命周期，不替代外层authentication、authorization、TLS或Source API授权。
 

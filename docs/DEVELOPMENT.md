@@ -88,10 +88,12 @@ Compose application API发布在`0.0.0.0:3000`并可从本机`127.0.0.1:3000`访
 | `src/web/src/app/CodeBrowser.tsx` | VS Code Workbench iframe生命周期、Part矩形消息和固定视图工具栏 |
 | `src/web/src/app/UserManagement.tsx` | SQLite用户新增、编辑、启停和状态反馈 |
 | `src/web/src/vscode/main.ts` | Workbench service组合、固定theme和只读产品设置 |
+| `src/web/src/vscode/extension-api.ts` | 固定LocalProcess extension manifest和公开VS Code API入口 |
 | `src/web/src/vscode/workers.ts` | Editor、language、TextMate和受控Web Worker extension host工厂 |
 | `src/web/src/vscode/source-file-system.ts` | Source API到multi-root VS Code文件系统的只读映射 |
 | `src/web/src/vscode/source-search.ts` | 原生Search到预算literal Source API的provider |
 | `src/web/src/vscode/source-control.ts` | 原生SCM Changes、提交Graph和按需revision Diff的只读投影 |
+| `src/web/src/vscode/markdown-preview.ts` | 公开command/editor resolver到非Webview只读Preview Pane的映射 |
 | `src/web/vite.config.ts` | 主应用/Workbench多入口以及GitHub、Material、Markdown preview静态contribution构建 |
 | `src/web/src/app` | 页面和用户交互 |
 | `tests/http/fixture.ts` | 独立 API test fixture |
@@ -503,7 +505,7 @@ git diff --check
 | SSE/Web stream | Replay、snapshot、live、backpressure、stale generation、reconnect |
 | Capability | Save parse、scope escape、schema、client、timeout、oversize、abort |
 | Git/project/lifecycle | Real Git、dirty、missing ref、batch rollback、cold start、reopen |
-| Source browser | Multi-root alias授权、path traversal、symlink escape、binary/size、rg JSON、HEAD ancestry、commit/diff API预算、只读文件系统mutation失败、Explorer/Editor Groups/Tabs、Search逐文件progress、SCM Changes/Graph/提交文件、Markdown Preview按钮/Web Worker、Bottom Panel与Secondary Side Bar矩形对齐、窄屏详情抽屉、无Terminal/本地扩展host和水平溢出 |
+| Source browser | Multi-root alias授权、path traversal、symlink escape、binary/size、rg JSON、HEAD ancestry、commit/diff API预算、只读文件系统mutation失败、Explorer/Editor Groups/Tabs、Search逐文件progress、SCM Changes/Graph/提交文件、Markdown Preview公开`vscode.openWith`/Web Worker、Bottom Panel与Secondary Side Bar矩形对齐、窄屏详情抽屉、固定LocalProcess extension、无Terminal/Node扩展host和水平溢出 |
 | Project tools | Socket mode/protocol、DB path授权、容器argv/mount/limits、same-Issue串行 |
 | Startup/state | Fresh DB、migration、interrupted state、unmanaged/changed checkout |
 | Infra/dependency | Application multi-stage build/同源静态smoke、绝对路径label、Healthcheck、Shell status、build、audit和runtime status |

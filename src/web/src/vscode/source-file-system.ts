@@ -1,4 +1,3 @@
-import { Event } from "@codingame/monaco-vscode-api/vscode/vs/base/common/event";
 import {
   FilePermission,
   FileSystemProviderCapabilities,
@@ -17,6 +16,7 @@ import type { Uri } from "monaco-editor";
 import { errorMessage, loadSourceFile, loadSourceTree, type SourceRepository, type SourceTreeEntry } from "../data/client";
 
 const encoder = new TextEncoder();
+const noEvent = () => ({ dispose() {} });
 const directoryStat: IStat = { type: FileType.Directory, ctime: 0, mtime: 0, size: 0, permissions: FilePermission.Readonly };
 
 function providerError(message: string, code: FileSystemProviderErrorCode): FileSystemProviderError {
@@ -35,8 +35,8 @@ function sourceError(error: unknown): FileSystemProviderError {
 
 export class SourceFileSystemProvider implements IFileSystemProviderWithFileReadWriteCapability {
   readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive | FileSystemProviderCapabilities.Readonly;
-  readonly onDidChangeCapabilities = Event.None;
-  readonly onDidChangeFile: typeof Event.None = Event.None;
+  readonly onDidChangeCapabilities = noEvent;
+  readonly onDidChangeFile = noEvent;
   readonly readOnlyMessage = { value: "Issue Pilot代码工作台为只读" };
 
   private readonly repositoryByName: Map<string, SourceRepository>;

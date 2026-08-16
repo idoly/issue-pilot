@@ -384,7 +384,7 @@ heartbeat
 | Agent或工单详情与Workbench错位 | 检查iframe同源、Issue key、Part矩形消息和`ResizeObserver`；桌面应与Bottom Panel/Secondary Side Bar四边完全一致 |
 | 提交历史为空/commit 404 | 当前Repository/选中文件、commit是否为当前HEAD ancestor |
 | Commit/diff 413 | 变更文件清单、选中文件或Git输出超过预算；缩小到具体文件，不提高为无限 |
-| Markdown Preview空白或浅色不可读 | 检查`markdown.api.render`预热、`extensionHostWorkerMain` worker URL、只读Markdown模型、DOMPurify输出和打包的GitHub Dark/highlight样式；Preview应为`issue-pilot.markdownPreview` Editor Pane且不存在`iframe.webview`，不启用本地extension host |
+| Markdown Preview空白或浅色不可读 | 检查`markdown.api.render`预热、`extensionHostWorkerMain` worker URL、固定LocalProcess extension、`vscode.openWith` editor解析、只读Markdown模型、DOMPurify输出和打包的GitHub Dark/highlight样式；Preview应为`issue-pilot.markdownPreview` Editor Pane且不存在`iframe.webview`，不启用Node extension host |
 | VS Code Workbench加载失败 | 检查`vscode.html`入口、Workbench/editor/TextMate/language/extension worker、theme静态资源、CSP和浏览器console；页面应显示明确错误而不是空白区域 |
 | Wrapper报告broker unavailable | API进程、`control/project-tools.sock` mode/owner和runtime wrapper版本 |
 | Node/Maven任务失败 | 先直接检查API所在环境的`node/npm/mvn/java`版本与PATH，再查只读配置挂载、cache权限和broker timeout |
