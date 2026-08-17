@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { issuePilotConfig } from "../issue-pilot.config.ts";
 
 export interface CommandExecutionOptions {
   cwd?: string;

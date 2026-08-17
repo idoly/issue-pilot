@@ -63,6 +63,7 @@ Browser
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
 | `src/capabilities/registry.ts` | 保存时config parser、Pi input schema和tool metadata |
 | 各capability client | 外部target、协议、timeout/abort、response和result budget |
+| `src/process.ts` | 共享spawn、abort、timeout和output budget mechanism |
 | `src/tool-runtime.ts` | `npm`、`mvn`、限定Aliyun CLI命令的进程allowlist |
 | `src/serial.ts` | 通用Promise serial primitive，不拥有业务锁域 |
 

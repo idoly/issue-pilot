@@ -65,8 +65,9 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/pi/models.ts` | Shared offline Pi model runtime/catalog |
 | `src/pi/tools.ts` | TypeBox parse和direct protocol dispatch |
 | `src/capabilities/registry.ts` | Config parser、tool schema、metadata |
-| `src/capabilities/*.ts` | Protocol clients、SQL、HTTP/process helpers |
-| `src/tool-runtime.ts` | Process command allowlist和environment/HOME cleanup |
+| `src/capabilities/*.ts` | Protocol clients、SQL、HTTP和result helpers |
+| `src/process.ts` | Shared spawn、abort、timeout和output budget executor |
+| `src/tool-runtime.ts` | Authorized process command allowlist和environment/HOME cleanup |
 | `src/serial.ts` | `SerialQueue`/`KeyedSerialQueue` mechanics |
 | `src/workspace/deployment.ts` | Deployment Repository completeness/order |
 | `src/workspace/state.ts` | Repository classification、managed path/state cleanup |
@@ -291,8 +292,9 @@ elasticsearch.ts
 dms.ts + aliyun.ts
 sls.ts + aliyun.ts
 http-client.ts
-local-exec.ts
 ```
+
+底层process执行不属于capability，统一由根级`src/process.ts`拥有；`ProcessToolRuntime`在其上增加command authorization。
 
 Redis Worker隔离node-redis完整RESP materialization和heap；不要合回main event loop。Playwright不是capability。
 

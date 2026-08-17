@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { localCommandExecutor, type CommandExecutionResult, type CommandExecutor } from "./capabilities/local-exec.ts";
+import { localCommandExecutor, type CommandExecutionResult, type CommandExecutor } from "./process.ts";
 
 export interface ToolRunOptions {
   command: readonly string[];

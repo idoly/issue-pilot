@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
-import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
+import type { CommandExecutionOptions, CommandExecutor } from "../../src/process.ts";
 import { readSlsLogs } from "../../src/capabilities/sls.ts";
 
 test("returns complete SLS records through the process Aliyun CLI", async () => {

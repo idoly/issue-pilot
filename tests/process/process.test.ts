@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { executeLocalCommand } from "../../src/capabilities/local-exec.ts";
+import { executeLocalCommand } from "../../src/process.ts";
 
 test("bounds output and applies scoped environment overrides for local capability processes", async () => {
   const normal = await executeLocalCommand(process.execPath, ["-e", "process.stdout.write('ok')"]);

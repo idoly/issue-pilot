@@ -13,7 +13,7 @@ Before changing code:
    - [Deployment](docs/DEPLOYMENT.md) and [Kubernetes](docs/KUBERNETES.md) for images, processes, networking, and production topology.
    - [Runbook](docs/RUNBOOK.md) for health checks, backup, upgrade, recovery, retention, and troubleshooting.
 
-Use `README.md` as the product overview. [File Audit](docs/FILE-AUDIT.md) records the current per-file design assessment but does not replace reading the owning code.
+Use `README.md` as the product overview. [File Audit](docs/FILE-AUDIT.md) and [Module Audit](docs/MODULE-AUDIT.md) record current design assessments but do not replace reading the owning code.
 
 ## Start Safely
 
@@ -72,6 +72,8 @@ Do not create a second source for one of these facts.
 | Model catalog and tool registration | `src/pi` |
 | Capability config/input | `src/capabilities/registry.ts` |
 | Capability protocol execution | Protocol client; DMS/SLS also use `src/tool-runtime.ts` |
+| Generic child-process execution mechanics | `src/process.ts` |
+| Authorized process command/environment | `src/tool-runtime.ts` |
 | Git, checkout, worktree, runtime, release, reopen | `src/workspace` |
 | Serial primitive | `src/serial.ts` |
 | Web request/DTO | `src/web/src/data/client.ts` |

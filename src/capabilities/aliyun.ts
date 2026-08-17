@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ToolRuntime } from "../tool-runtime.ts";
-import type { CommandExecutionResult } from "./local-exec.ts";
+import type { CommandExecutionResult } from "../process.ts";
 
 export interface AliyunCliCredentials {
   accessKeyId: string;

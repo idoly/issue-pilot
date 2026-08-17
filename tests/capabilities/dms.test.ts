@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import { queryDms, validateDmsQuery } from "../../src/capabilities/dms.ts";
-import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
+import type { CommandExecutionOptions, CommandExecutor } from "../../src/process.ts";
 
 const response = (rows: Array<Record<string, unknown>> = [{ order_id: "4300005076", status: "ready" }], wrapped = false) => ({
   RequestId: "request-1",

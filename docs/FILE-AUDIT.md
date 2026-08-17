@@ -1,6 +1,6 @@
 # Issue Pilot逐文件设计审计
 
-范围：当前工作树中的226个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
+范围：当前工作树中的227个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
 
 ## 判定原则
 
@@ -15,6 +15,7 @@
 - AgentSessionContext只保留实际消费字段；Pi tool直接调用protocol client。
 - Credential parse、ToolRuntime options、ApplicationResources signal和Nacos/MySQL内部shape校验已去重。
 - 无引用helper、四个icon wrapper和不必要module export已删除。
+- 共享process executor已从capability目录移到根级owner，与command授权ToolRuntime明确分层。
 - 已发布migration、Solid testing vendor shim、Pi theme内部resource import和Workbench SearchService深路径override有明确保留理由。
 - 大型Workspace/Agent owner共享queue、rollback、transaction或authorization状态，不按行数机械拆分。
 - 零入站production文件均为application、Vite、Worker或Redis Worker入口；未发现其他dead production module。
@@ -27,17 +28,18 @@
 | `.github/workflows/ci.yml` | 36 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.gitignore` | 11 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.npmrc` | 1 | 项目构建、忽略或运行配置 | 必要registry配置 | 旧peer兼容开关已删除 | 保留单行 |
-| `AGENTS.md` | 179 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `README.md` | 145 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `AGENTS.md` | 181 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `README.md` | 146 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `deploy/kubernetes/base/kustomization.yaml` | 6 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/service-account.yaml` | 5 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/service.yaml` | 14 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/stateful-set.yaml` | 161 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `docs/ARCHITECTURE.md` | 360 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/ARCHITECTURE.md` | 361 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/CONFIGURATION.md` | 317 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEPLOYMENT.md` | 296 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/DEVELOPMENT.md` | 381 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/KUBERNETES.md` | 143 | KUBERNETES主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/MODULE-AUDIT.md` | 186 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/RUNBOOK.md` | 432 | RUNBOOK主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `drizzle/0000_schema.sql` | 302 | 已发布不可变migration：schema | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/0001_service_sort_order.sql` | 1 | 已发布不可变migration：service sort order | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
@@ -98,7 +100,6 @@
 | `src/capabilities/dms.ts` | 138 | DMS只读SQL和CLI protocol client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/elasticsearch.ts` | 28 | Elasticsearch只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/http-client.ts` | 31 | 有预算、拒绝redirect的HTTP读取primitive | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
-| `src/capabilities/local-exec.ts` | 76 | 底层spawn、abort和output budget executor | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/mysql.ts` | 88 | MySQL只读transaction和streaming client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/nacos.ts` | 82 | Nacos登录及exact Data ID读取client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/rabbitmq.ts` | 30 | RabbitMQ management只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
@@ -133,6 +134,7 @@
 | `src/http/workspace-routes.ts` | 45 | Workspace stats、转换和release routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/pi/models.ts` | 113 | 共享Pi ModelRuntime和离线可用模型快照 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/pi/tools.ts` | 49 | TypeBox解析Agent tool input并直调protocol client | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/process.ts` | 76 | 共享spawn、abort、timeout和output budget执行器 | 必要底层进程边界 | 已从capability目录移到共享根级owner | 保留，与授权ToolRuntime分层 |
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -206,7 +208,6 @@
 | `tests/agent/repository-preparation.test.ts` | 267 | agent域的repository-preparation行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/dms.test.ts` | 101 | capabilities域的dms行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/external-data.test.ts` | 200 | capabilities域的external-data行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/capabilities/local-exec.test.ts` | 18 | capabilities域的local-exec行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/mysql.test.ts` | 101 | capabilities域的mysql行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/nacos.test.ts` | 88 | capabilities域的nacos行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/sls.test.ts` | 75 | capabilities域的sls行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -230,6 +231,7 @@
 | `tests/infra/playwright.test.ts` | 58 | infra域的playwright行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/models.test.ts` | 105 | pi域的models行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/tools.test.ts` | 40 | pi域的tools行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/process/process.test.ts` | 18 | process域的process行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/tool-runtime.test.ts` | 52 | tool-runtime.test.ts域的tool-runtime行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/deployment.test.ts` | 55 | workspace域的deployment行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/generated-directory.test.ts` | 77 | workspace域的generated-directory行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

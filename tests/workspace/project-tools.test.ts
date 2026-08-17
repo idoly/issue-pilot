@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
-import type { CommandExecutionOptions, CommandExecutor } from "../../src/capabilities/local-exec.ts";
+import type { CommandExecutionOptions, CommandExecutor } from "../../src/process.ts";
 import { prepareProjectWrappers } from "../../src/workspace/project-wrappers.ts";
 import { ProjectToolBroker, type ProjectToolRuntime } from "../../src/workspace/project-tools.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";

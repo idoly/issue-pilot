@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import { test } from "node:test";
 
-import type { CommandExecutionOptions, CommandExecutor } from "../src/capabilities/local-exec.ts";
+import type { CommandExecutionOptions, CommandExecutor } from "../src/process.ts";
 import { ProcessToolRuntime } from "../src/tool-runtime.ts";
 
 const result = { stdout: "ok", stderr: "", code: 0, killed: false };

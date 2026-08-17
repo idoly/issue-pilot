@@ -4,7 +4,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { localCommandExecutor, type CommandExecutor } from "../capabilities/local-exec.ts";
+import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
 import { issueRepositoryWorkspaceNames } from "./git.ts";

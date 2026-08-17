@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
-import type { CommandExecutor } from "../../src/capabilities/local-exec.ts";
+import type { CommandExecutor } from "../../src/process.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
