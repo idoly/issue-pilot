@@ -1,487 +1,329 @@
 # 开发指南
 
-本文说明如何基于当前代码修改 Issue Pilot：从哪里读、由哪个模块拥有事实、如何跨层实现、怎样测试，以及如何避免破坏真实 state。先阅读 [架构说明](ARCHITECTURE.md)；配置字段见 [配置说明](CONFIGURATION.md)，宿主环境见 [部署说明](DEPLOYMENT.md)。
+本文说明当前代码owner、改动方法、测试和review标准。开始前阅读[架构说明](ARCHITECTURE.md)；配置字段见[配置说明](CONFIGURATION.md)，生产操作见[运维手册](RUNBOOK.md)。
 
 ## 开始前
 
-Issue Pilot 会操作真实 SQLite、Git repository、Attachment、Pi JSONL 和 dev worktree。主程序只从根目录 `issue-pilot.config.ts` 解析 `.issue-pilot`，没有环境变量 override。
+Issue Pilot会操作真实SQLite、Git、Attachment、Pi JSONL和dev worktree。主程序只从`issue-pilot.config.ts`解析当前checkout的`.issue-pilot`，没有environment override。
 
-每个任务先执行：
+每次任务先运行：
 
 ```bash
 git status --short
 ```
 
-区分已有修改和自己的工作。不要回滚无关改动，不要把项目真实 `.issue-pilot` 用作实验数据。
-
-自动测试通过以下方式隔离状态：
+不要回滚无关修改，不要用真实`.issue-pilot`做实验。Tests使用：
 
 - `buildApi({ stateRoot, databaseFile })`
-- Manager constructor 注入 temporary root
-- 临时 local Git remote
-- 临时 SQLite database
-- Fake model catalog和 Agent controller
+- Manager constructor temporary root
+- Temporary local Git remote
+- Temporary SQLite
+- Fake model catalog/Agent controller/ToolRuntime
 
-需要手工隔离服务器时使用独立项目副本，而不是临时改变当前 checkout 的真实 state 配置。
+手工隔离server必须使用单独project copy和state配置，不能改变active checkout指向的真实state。
 
-## 开发流程
+## 开发运行
 
-API不支持宿主直启。Compose和Kubernetes使用同一个application镜像；宿主只运行构建、测试和可选Vite前端：
+API只从prepared application image启动：
 
 ```bash
 npm ci
-infra/playwright.sh prepare # 仅准备Issue Pilot应用自测浏览器
 infra/application.sh config
 infra/application.sh prepare
 npm run server
 ```
 
-前端迭代时可在另一个终端启动Vite：
+Web迭代：
 
 ```bash
 npm run dev:web
 ```
 
-Compose application API发布在`0.0.0.0:3000`并可从本机`127.0.0.1:3000`访问，Vite为`0.0.0.0:4173`。VS Code Workbench代码浏览器由Vite的`vscode.html`多入口构建提供，不启动独立IDE服务。
+Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者只能在可信网络使用。Workbench由Vite/production的`vscode.html`多入口提供，没有独立IDE service。
 
-## 源码地图
+## Source map
 
-| 路径 | 当前责任 |
+| Path | Owner |
 | --- | --- |
-| `issue-pilot.config.ts` | State、空库bootstrap用户、端口、默认值、retention、runtime 和上限 |
-| `src/config.ts` | 把相对 state 配置解析成绝对路径 |
-| `src/domain/contracts.ts` | 前后端共享的 key、enum、type 和共享 predicate |
-| `src/configuration/contracts.ts` | 配置中心 catalog、脱敏 editable configuration 和 credential update 共享 DTO |
-| `src/configuration/read.ts` | Catalog 和脱敏 editable configuration projection |
-| `src/configuration/credentials.ts` | 已存 credential 脱敏及 preserve/replace/clear 合并 |
-| `src/db/schema.ts` | 当前 Drizzle schema |
-| `src/db/bootstrap.ts` | Migration、启动状态恢复和 Environment同步 |
-| `src/http/api.ts` | API装配、error mapping和启动/关闭资源生命周期 |
-| `src/http/production.ts` | application镜像唯一的API + static Web入口 |
-| `src/http/*-routes.ts` | User、配置、Issue、Agent、Attachment、Source GET、生产静态Web和Workspace routes |
-| `src/http/service-configuration.ts` | Service/Deployment request prepare 和 transaction apply |
-| `src/http/attachment-store.ts` | Attachment multipart、write、quarantine、rollback/finalize 和安全读取路径 |
-| `src/agent/engine.ts` | Issue Agent queue、reservation、状态转换和 Pi session 协调 |
-| `src/agent/context.ts` | Agent session context 和 built-in tool allowlist |
-| `src/agent/pi-session.ts` | Private JSONL、Pi SDK session、resource loader 和 tool核对 |
-| `src/agent/events.ts` | Event bus、replay projection 和 replay/live buffer |
-| `src/pi/tools.ts` | 按 session capability 名称注册TypeBox工具并直接调用protocol client |
-| `src/capabilities/registry.ts` | 配置解析、schema 和 metadata |
-| `src/capabilities/*.ts` | 独立协议 client和共享 bounded HTTP/process primitives |
-| `src/serial.ts` | `SerialQueue`、`KeyedSerialQueue` 和 `idle()` |
-| `src/tool-runtime.ts` | Capability/项目工具共用的进程命令白名单、环境收敛和临时HOME |
-| `infra/application-compose.mjs` | 从根配置和绝对宿主路径生成单application Compose模型 |
-| `src/workspace/project.ts` | Agent/cold-start/reopen 的 Issue project准备 |
-| `src/workspace/deployment.ts` | Deployment Repository完整性和顺序解析 |
-| `src/workspace/git.ts` | Bare store、checkout、worktree、batch rollback和 Repository锁 |
-| `src/workspace/state.ts` | State path、Repository分类、布局、unmanaged/shared checkout检查 |
-| `src/workspace/runtime.ts` | Issue runtime Repository link原子生成 |
-| `src/workspace/source-browser.ts` | Repository相对路径、tree/file/rg/history/commit/diff只读边界 |
-| `src/workspace/project-tools.ts` | Unix socket broker和Node/Maven结构化受限执行 |
-| `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
-| `src/web/src/data/client.ts` | Web request、共享 DTO re-export和 current-user header |
-| `src/web/src/app/agent-stream.ts` | EventSource transport state machine |
-| `src/web/src/app/conversation.ts` | Agent event纯投影 |
-| `src/web/src/app/configuration-model.ts` | Selected capability draft serializer |
-| `src/web/src/app/CodeBrowser.tsx` | VS Code Workbench iframe生命周期、Part矩形消息和固定视图工具栏 |
-| `src/web/src/app/UserManagement.tsx` | SQLite用户新增、编辑、启停和状态反馈 |
-| `src/web/src/vscode/main.ts` | Workbench service组合、固定theme和只读产品设置 |
-| `src/web/src/vscode/extension-api.ts` | 固定LocalProcess extension manifest和公开VS Code API入口 |
-| `src/web/src/vscode/workers.ts` | Editor、language、TextMate和受控Web Worker extension host工厂 |
-| `src/web/src/vscode/source-file-system.ts` | Source API到multi-root VS Code文件系统的只读映射 |
-| `src/web/src/vscode/source-search.ts` | 原生Search到预算literal Source API的provider |
-| `src/web/src/vscode/source-control.ts` | 原生SCM Changes、提交Graph和按需revision Diff的只读投影 |
-| `src/web/src/vscode/markdown-preview.ts` | 公开command/editor resolver到非Webview只读Preview Pane的映射 |
-| `src/web/vite.config.ts` | 主应用/Workbench多入口以及GitHub、Material、Markdown preview静态contribution构建 |
-| `src/web/src/app` | 页面和用户交互 |
-| `tests/http/fixture.ts` | 独立 API test fixture |
-| `infra` | 内置完整工具链的主应用镜像、自测Playwright和根配置读取 |
-| `drizzle` | 不可变 migration history |
+| `issue-pilot.config.ts` | Path、port、default、retention、image、runtime、budget |
+| `src/config.ts` | Project/state/web absolute path resolution |
+| `src/domain/contracts.ts` | Shared enum、type、predicate |
+| `src/db/schema.ts` | Current Drizzle schema |
+| `src/db/bootstrap.ts` | Migration、startup structure/recovery、bootstrap user、Environment sync |
+| `src/configuration/contracts.ts` | Catalog/config DTO、credential field/update contract |
+| `src/configuration/read.ts` | Catalog和redacted config snapshot projection |
+| `src/configuration/credentials.ts` | Redaction和`preserve\|replace\|clear` merge |
+| `src/http/api.ts` | API assembly、error mapping、startup/close resources |
+| `src/http/production.ts` | Production Web+API entry |
+| `src/http/*-routes.ts` | User、Config、Issue、Agent、Attachment GET、Source、Workspace、Web |
+| `src/http/service-configuration.ts` | Service request prepare/apply |
+| `src/http/attachment-store.ts` | Multipart、durable file、quarantine、rollback/finalize、safe GET |
+| `src/agent/engine.ts` | Run/steer queue、reservation、state和session coordination |
+| `src/agent/context.ts` | Minimal context和local tool allowlist |
+| `src/agent/pi-session.ts` | Private JSONL、Pi SDK、resource loader和tool verification |
+| `src/agent/events.ts` | Event bus、replay projection/buffer |
+| `src/pi/models.ts` | Shared offline Pi model runtime/catalog |
+| `src/pi/tools.ts` | TypeBox parse和direct protocol dispatch |
+| `src/capabilities/registry.ts` | Config parser、tool schema、metadata |
+| `src/capabilities/*.ts` | Protocol clients、SQL、HTTP/process helpers |
+| `src/tool-runtime.ts` | Process command allowlist和environment/HOME cleanup |
+| `src/serial.ts` | `SerialQueue`/`KeyedSerialQueue` mechanics |
+| `src/workspace/deployment.ts` | Deployment Repository completeness/order |
+| `src/workspace/state.ts` | Repository classification、managed path/state cleanup |
+| `src/workspace/git.ts` | Bare/fetch/checkout/worktree/batch rollback/Repository lock |
+| `src/workspace/project.ts` | Agent/cold-start/reopen project preparation |
+| `src/workspace/runtime.ts` | Atomic runtime generation |
+| `src/workspace/project-wrappers.ts` | Dev wrapper generation |
+| `src/workspace/project-tools.ts` | Unix socket、DB reauthorization、Node/Maven execution |
+| `src/workspace/source-browser.ts` | Source relative path和bounded read operations |
+| `src/workspace/lifecycle.ts` | Inspection、stats、release、reopen、maintenance |
+| `src/web/src/data/client.ts` | Web requests和DTO |
+| `src/web/src/app/ApplicationResources.tsx` | Catalog/config/user resources和latest-wins refresh |
+| `src/web/src/app/agent-stream.ts` | EventSource state machine |
+| `src/web/src/app/conversation.ts` | Pure event projection |
+| `src/web/src/app/configuration-model.ts` | Selected capability/credential intent serialization |
+| `src/web/src/app/CodeBrowser.tsx` | Workbench iframe lifecycle和parent layout bridge |
+| `src/web/src/vscode/main.ts` | Workbench services/settings/extension registration |
+| `src/web/src/vscode/source-file-system.ts` | Read-only multi-root filesystem |
+| `src/web/src/vscode/source-search.ts` | Native Search provider |
+| `src/web/src/vscode/source-control.ts` | SCM Changes/Graph/revision Diff |
+| `src/web/src/vscode/markdown-preview.ts` | Read-only Markdown editor pane |
+| `src/web/vite.config.ts` | Main/Workbench entries和static theme/icon/preview resources |
+| `infra` | Image、Compose generation、Operator scripts |
+| `deploy/kubernetes/base` | Single-replica Kustomize baseline |
+| `drizzle` | Immutable migration history |
 
-## 追踪一次请求
-
-普通 Web 请求：
+## Request flows
 
 ```text
-Web component
-  -> src/web/src/data/client.ts
-  -> src/http/*-routes.ts
-  -> boundary parser / reservation / transaction
-  -> owning manager or store
-  -> SQLite / filesystem / Git
-  -> explicit DTO
+Web -> data/client -> route boundary -> reservation/transaction -> owner -> DB/FS/Git
 ```
-
-Agent 请求：
 
 ```text
-agent-routes
-  -> AgentEngine
-  -> IssueProjectManager
-  -> createAgentSessionContext
-  -> PiSessionRuntime
-  -> AgentEventBus
-  -> SSE replay + snapshot_ready + live
-  -> AgentStreamController
-  -> conversation projection
+Agent route -> AgentEngine -> IssueProjectManager -> AgentSessionContext
+            -> PiSessionRuntime -> event bus -> SSE -> AgentStreamController
 ```
-
-Capability 请求：
 
 ```text
-Deployment save
-  -> registry parser
-  -> typed Deployment config
-  -> session capability selection
-  -> Pi tool TypeBox parse
-  -> protocol client
+Service save -> Registry config parse -> SQLite
+Pi tool -> TypeBox input parse -> protocol client(typed session config)
 ```
 
-不要在 route、Web 或 AgentEngine中重写 owning layer 的事实。
+```text
+Dev wrapper -> Unix socket -> ProjectToolBroker -> SQLite/path authorization
+            -> ProcessToolRuntime -> npm/mvn
+```
 
-## 共享 contract 与配置
+Route、Web和AgentEngine不能复制owner事实。
 
-以下事实只定义一次：
+## Shared contracts
 
-- Issue/Environment/Workspace状态、priority、type、thinking level、capability key：`src/domain/contracts.ts`
-- 可调 path、port、default、timeout、bytes、rows、image：`issue-pilot.config.ts`
-- Capability配置字段、scope、input schema和 metadata：`src/capabilities/registry.ts`
-- 配置中心 credential 字段、必需性和更新状态：`src/configuration/contracts.ts`
-- Deployment Repository完整性：`loadDeploymentRepositories()`
+只定义一次：
+
+- Business enum/predicate：`src/domain/contracts.ts`
+- Runtime config/limit：`issue-pilot.config.ts`
+- Capability config/input/metadata：`src/capabilities/registry.ts`
+- Credential field/update：`src/configuration/contracts.ts`
+- Deployment Repository join：`loadDeploymentRepositories()`
 - Repository state：`classifyRepositoryState()`
 
-修改 shared enum 时同步检查：
+修改shared enum时检查schema/default、route parser、state transition、Web option/label、DB migration和domain/HTTP/Web tests。不要在fixture或component复制string array。
 
-- Drizzle enum/default。
-- API parser和状态转换。
-- Web option/label/DTO。
-- Domain、DB、HTTP、Agent和 Web tests。
-- 已有数据库值是否需要 migration。
+## Database change
 
-不要为编译通过在 route、Web 或 test fixture中复制字符串数组。
+`src/db/schema.ts`是current model；`drizzle/*.sql`和`meta/_journal.json`是published upgrade contract。
 
-## 修改数据库
+1. 修改schema。
+2. 新增下一个连续migration。
+3. Journal末尾追加entry。
+4. Fresh temporary DB运行全部migration。
+5. 从previous schema copy运行upgrade test。
+6. Real data change先停API并创建一致backup，在隔离copy dry-run。
+7. 验证`integrity_check`、`foreign_key_check`和business invariant。
+8. 更新schema/route tests和owner doc。
 
-`src/db/schema.ts` 是当前模型。`drizzle/*.sql` 和 `_journal.json` 是从历史版本升级的顺序契约。
+Published migration不修改、重排、合并或删除。
 
-Schema change步骤：
+## HTTP change
 
-1. 修改 `src/db/schema.ts`。
-2. 新增下一个连续编号 SQL migration。
-3. 在 `_journal.json` 末尾追加匹配 entry。
-4. 在 fresh temporary database运行 migration。
-5. 从上一版本 database copy运行 upgrade test。
-6. 涉及真实数据时，在一致备份的隔离副本 dry-run。
-7. 验证 `PRAGMA integrity_check` 和 `PRAGMA foreign_key_check`。
-8. 更新当前 schema tests。
-9. 更新唯一负责该事实的文档。
+Route职责：
 
-Published migration不修改、不重排、不删除。Runtime不兼容旧文件布局不等于数据库 migration可以省略。
+1. 在HTTP边界解析`unknown`。
+2. 从`ApiRouteContext`取得owner。
+3. 验证current subject和Issue scope。
+4. 影响code、scope、Attachment、session或lifecycle时使用reservation。
+5. Config snapshot/Service/Issue scope使用scope queue。
+6. Multi-table update放在transaction。
+7. Cross-media change使用prepare/commit/rollback/finalize。
+8. 返回Web实际需要的DTO，不暴露raw row/secret/path。
+9. 同步`data/client.ts`和focused tests。
 
-每张 Issue必须有 Workspace行；`status/resolved_at` 和 Deployment scope有 API guard与 SQLite trigger。迁移前后都要验证这些不变量。
-
-## 新增或修改 HTTP API
-
-Route应完成：
-
-1. 在边界把 `unknown` 解析为明确输入。
-2. 使用 `ApiRouteContext`取得 database、engine、events和 managers。
-3. 使用 `requireIssue()`、`ensureCurrentSubject()` 等 guard。
-4. 影响 Issue code、scope、Attachment、session或 lifecycle时使用 Issue reservation。
-5. 配置 snapshot读取、Service配置或 Issue scope变化先进入 scope queue；读取顺序为 `scope -> snapshot transaction`，Service写入顺序为 `scope -> reservation`。
-6. 多表更新放在一个 transaction。
-7. 文件系统事务明确 prepare/commit/rollback/finalize。
-8. 返回 Web实际需要的 DTO，不暴露 raw row。
-9. 在 `src/web/src/data/client.ts`同步 contract/helper。
-10. 在职责对应的 HTTP test文件添加成功和失败场景。
-
-当前 route tests按域拆分：
+Lock order：
 
 ```text
+config read: scope -> snapshot transaction
+Service/Issue scope: scope -> reservation
+release/reopen: lifecycle -> inspection -> reservation
+```
+
+Current route tests：
+
+```text
+tests/http/api-startup.test.ts
 tests/http/configuration-api.test.ts
+tests/http/service-configuration.test.ts
 tests/http/issue-api.test.ts
 tests/http/attachment-api.test.ts
 tests/http/runtime-api.test.ts
-tests/http/api-startup.test.ts
-tests/http/service-configuration.test.ts
 tests/http/sse.test.ts
+tests/http/user-api.test.ts
+tests/http/web.test.ts
 ```
 
-`tests/http/fixture.ts` 每个 test创建独立 API、database和 state root。不要恢复一个跨 700+ 行、共享状态的串行 API test。
-
-当前不存在：
-
-- `POST /api/issues/:key/attachments`
-- `DELETE /api/issues/:key/attachments`
-- `POST /api/issues/:key/sync`
-
-Attachment write必须继续属于 Issue create/edit事务。若重新引入独立 route，必须先重新论证并发、metadata sync和文件事务语义。
-
-## 修改 Attachment
-
-`attachment-store.ts`拥有 durable store helper；`attachment-routes.ts`只拥有只读 GET。
+## Attachment change
 
 必须保持：
 
-- Multipart总请求、文件数、单文件和 field预算。
-- Basename规范化。
-- SHA-256在写入前计算。
-- Durable file mode `0400`，Issue/attachment directory mode受限。
-- Create failure只删除本次文件，并只 `rmdir` 本次空目录。
-- Edit delete先 quarantine，transaction rollback恢复，commit后 finalize。
-- Rollback/finalize失败返回稳定错误并保留现场。
-- GET验证直属 path、普通文件、mode、size和 hash。
+- Multipart request/file/count/field budget。
+- Basename normalization和SHA-256。
+- Durable file `0400`。
+- Create failure只删除本次文件并`rmdir`本次空root。
+- Edit delete先quarantine，transaction failure恢复，commit后finalize。
+- Cleanup failure返回stable error并保留evidence。
+- GET验证direct path、regular file、mode、size和hash。
 
-相关 tests：
+Attachment write只属于Issue create/edit。不要新增独立POST/DELETE或sync route。
 
-```text
-tests/http/attachments.test.ts
-tests/http/attachment-api.test.ts
-```
+## Agent/Pi change
 
-## 修改 Agent
+AgentEngine拥有run/steer queue、reservation、state transition、in-memory session和background cleanup。IssueProjectManager拥有code prepare。
 
-AgentEngine拥有：
+检查：
 
-- 每 Issue run queue。
-- Streaming steer queue。
-- Issue reservation和 drain。
-- Issue/Workspace状态转换。
-- In-memory Pi session。
-- Background failure cleanup。
+- Code先prepare，context后生成。
+- Prod/test path只指向Issue runtime。
+- Session file在首条visible message前创建/绑定。
+- User message只在state commit或Pi accept后写JSONL。
+- Resolved Issue不可执行。
+- Success/failure/abort/close均dispose。
+- Prod/test轮次结束关闭session，下轮刷新Deployment。
+- Existing dev保留historical base branch/workspace name。
+- Reporter/logger failure不形成unhandled rejection。
+- Shutdown拒绝new activity并drain run/reservation。
 
-`IssueProjectManager`拥有代码准备；不要把 Git prepare重新移回 AgentEngine。
+Pi JSONL是transcript事实源，不新增message table。
 
-修改时检查：
-
-- Repository先准备，Agent session context后生成。
-- Prod/test context path指向 Issue runtime link，不是 shared checkout物理 path。
-- Session file在第一条可见消息前初始化并绑定。
-- User message只有状态提交或 Pi accept成功后才写 JSONL。
-- Resolved Issue不能执行。
-- Success/failure/abort/close都 dispose session。
-- Prod/test每轮结束关闭内存 session，下轮刷新 Deployment。
-- Dev已有 Repository保留历史 base branch。
-- Background reporter/logger failure不能形成 unhandled rejection。
-- Shutdown拒绝新 activity并等待 run count和 reservation归零。
-
-Pi JSONL是 transcript事实源。不要新增消息表或用 Web状态重建历史。
-
-重点 tests：
+重点：
 
 ```text
-tests/agent/engine.test.ts
-tests/agent/pi-session.test.ts
-tests/agent/events.test.ts
-tests/agent/repository-preparation.test.ts
 tests/agent/context.test.ts
+tests/agent/engine.test.ts
+tests/agent/events.test.ts
+tests/agent/pi-session.test.ts
+tests/agent/repository-preparation.test.ts
+tests/pi/models.test.ts
 tests/pi/tools.test.ts
 ```
 
-## 修改 SSE 或 Agent Web
+## SSE/Web stream change
 
-服务端握手 contract：
-
-```text
-replay events
-snapshot_ready { agent, footer, running, issueStatus }
-live events
-```
-
-SSE route必须在 snapshot前订阅 live bus，并缓冲 snapshot期间 event。Writer必须有序、bounded并正确处理 drain/close/error。
-
-Web transport state只放在 `agent-stream.ts`：
-
-- EventSource create/close。
-- Generation失效。
-- Replay private buffer。
-- Atomic snapshot commit。
-- Reconnect timer。
-- Compaction后主动 reconnect。
-
-`conversation.ts`保持纯 event projection；`AgentPanel.tsx`负责 UI、footer、composer、scroll和 refresh。不要把 transport状态重新散回组件。
-
-测试 stale source、duplicate error、snapshot前后、Issue切换、stale refresh、compaction和 dispose：
+Contract：
 
 ```text
-src/web/src/app/agent-stream.test.ts
-src/web/src/app/AgentPanel.test.ts
+replay -> snapshot_ready { agent, footer, running, issueStatus } -> live
 ```
 
-## 修改 Git、Runtime 或 Lifecycle
+Server在snapshot前subscribe live bus并buffer。Writer必须ordered、bounded并处理drain/close/error。
 
-这些改动风险高，因为 filesystem和 Git不能由 SQLite transaction自动回滚。
+`agent-stream.ts`只拥有transport：EventSource、generation、private replay、snapshot commit、reconnect、compaction refresh。`conversation.ts`保持pure projection，`AgentPanel.tsx`只负责UI。测试stale source、snapshot边界、Issue switch、stale refresh、compaction和dispose。
 
-### Project manager边界
+## Git/runtime/lifecycle change
 
-- `IssueProjectManager.prepare()`：Agent路径。
+Filesystem/Git不受SQLite自动rollback，所有change必须明确失败阶段。
+
+### Project owner
+
+- `prepare()`：Agent round。
 - `hydrateDevelopmentRuntime()`：dev cold start。
-- `hydrateReadOnlyRuntime()`：单个prod/test runtime恢复。
-- `hydrateReadOnlyRuntimes()`：prod/test cold-start批次，按Deployment复用checkout准备。
+- `hydrateReadOnlyRuntime(s)`：read-only single/batch cold start。
 - `restoreDevelopmentWorkspace()`：released dev reopen。
 
-新入口应复用这些方法或扩展 owning manager，不要复制 prepare sequence。
+不要复制prepare sequence到Agent或Lifecycle。
 
-### Git事务
+### Git transaction
 
-- Repository操作按 `stateRoot + URL hash`串行。
-- `prepareBatch()`跟踪本次新建 worktree，finalize失败时逆序 remove。
-- `removeBatch()`先预检全部 clean，删除失败时逆序从本地 ref/commit restore。
-- Unknown root entry、missing repository、mixed state和 path mismatch都 fail closed。
+- Repository operation按`stateRoot + URL hash`串行。
+- `prepareBatch()`跟踪新worktree，finalize failure逆序remove。
+- `removeBatch()`先预检全部clean，失败逆序从local ref/commit restore。
+- Unknown root、missing repo、mixed state和path mismatch fail closed。
 
-### Runtime
+### Runtime和Lifecycle
 
-Runtime和 wrapper使用临时目录+previous目录原子替换。Writable link必须位于当前 Issue workspace；read-only target必须位于 shared checkout root。
+Runtime使用temporary+previous atomic replace。Writable target位于Issue workspace，read-only target位于checkout root。
 
-### Lifecycle与深检
+普通Issue GET不做`du`或Git clean。Deep inspection只用于stats/release/reopen/maintenance。Different Issue可并行inspection，但lifecycle operation由global queue协调。
 
-普通 Issue GET不得调用 `inspectIssue()`。深检只属于 stats、release、reopen和 maintenance。
+Release必须拒绝non-resolved/non-dev、busy、dirty/untracked、extra/missing root entry、invalid Repository state、path/name mismatch和local ref异常。
 
-锁顺序：
+## Capability change
 
-```text
-lifecycle SerialQueue
-  -> per-Issue KeyedSerialQueue
-  -> Agent Issue reservation
-```
+新增/修改通常涉及：
 
-Different Issue inspection可以并行。Stop必须等待 lifecycle queue和 inspection queue的 `idle()`。
+1. `CAPABILITY_KEYS`和`CapabilityConfiguration`。
+2. Registry parser/schema/metadata。
+3. `pi/tools.ts` dispatch。
+4. 独立protocol client。
+5. Root limits/runtime。
+6. Explicit Web form和serializer。
+7. Save round-trip、tool和client tests。
+8. [配置说明](CONFIGURATION.md)。
 
-Release继续拒绝：
+必须明确exact target、credential生命周期、allowed action、redirect、timeout、abort、row/item/byte budget和sensitive result。超限必须完整失败，除非pagination能证明完整。
 
-- 非 resolved或非 dev。
-- Agent/workspace busy。
-- Dirty/untracked worktree。
-- Root extra/missing entry。
-- Empty/mixed/invalid Repository state。
-- Path/workspace name mismatch。
-- Local branch/ref/rollback异常。
-
-重点 tests：
-
-```text
-tests/workspace/git.test.ts
-tests/workspace/state.test.ts
-tests/workspace/runtime.test.ts
-tests/workspace/read-only.test.ts
-tests/workspace/lifecycle.test.ts
-tests/agent/repository-preparation.test.ts
-```
-
-这些 tests使用真实 local Git命令和 temporary remotes。
-
-## 修改串行原语
-
-`SerialQueue`和`KeyedSerialQueue`只提供：
-
-- 保序执行。
-- 前一 operation rejection不阻塞后续项。
-- Keyed tail清理。
-- `idle()` drain。
-
-业务层决定 key和锁顺序。不要用一个 global queue替换 Agent、scope、lifecycle、inspection和 Repository锁域。
-
-修改后运行：
-
-```bash
-node --experimental-strip-types --test \
-  tests/domain/serial.test.ts \
-  tests/workspace/lifecycle.test.ts \
-  tests/workspace/git.test.ts \
-  tests/agent/engine.test.ts
-```
-
-## 新增或修改 Capability
-
-新增能力通常要更新：
-
-1. `CAPABILITY_KEYS` 和 `CapabilityConfiguration`。
-2. `registry.ts` definition：parse、scope、schema、metadata。
-3. `pi/tools.ts` direct dispatch。
-4. 独立 protocol client。
-5. Root config limits/runtime。
-6. Web显式表单。
-7. `configuration-model.ts` serializer。
-8. Configuration API round-trip和 tool/client tests。
-9. [配置说明](CONFIGURATION.md)。
-
-必须回答：
-
-- Exact target如何由Registry解析并保存在Deployment config？
-- Credential在哪里读取、传递和销毁，配置 GET 是否仍保持脱敏？
-- 新 credential 字段是否加入共享 `CAPABILITY_CREDENTIALS`，并覆盖 preserve/replace/clear 测试？
-- 哪些 action明确允许？
-- Redirect、subprocess和 temp file如何处理？
-- Timeout、rows/items/bytes预算是什么？
-- Abort如何终止活动连接或进程？
-- 超限是完整失败还是可证明完整的 pagination？
-- Result是否可能包含敏感数据并进入 Pi JSONL？
-
-Registry在保存边界生成typed config；Pi tool用TypeBox只解析一次input并直接调用protocol client。Client信任内部typed config/input，只保留外部target授权、协议语义、timeout/abort、响应解析和结果预算。Tool description不是安全边界，外部系统仍使用最小权限账号。
-
-协议 client当前按职责拆分：
+Current protocol modules按外部边界拆分：
 
 ```text
 nacos.ts
+mysql.ts + sql.ts
 redis.ts + redis-worker.ts
 rabbitmq.ts
 elasticsearch.ts
-mysql.ts + sql.ts
 dms.ts + aliyun.ts
 sls.ts + aliyun.ts
 http-client.ts
 local-exec.ts
 ```
 
-`redis.ts`保留授权、命令白名单、AbortSignal和Worker生命周期，`redis-worker.ts`仅作为node-redis协议入口。node-redis会先完整物化RESP reply再返回，Worker heap limit用于在`capabilityResultText()`字节检查之前隔离超大分配；不要把该入口合并回API主事件循环。Redis credential只通过同进程`workerData`传递，不进入argv或日志，Worker返回值只允许稳定错误码。
+Redis Worker隔离node-redis完整RESP materialization和heap；不要合回main event loop。Playwright不是capability。
 
-协议模块不保留聚合兼容barrel。Playwright不属于Agent capability；`infra/playwright.sh run`只运行operator提供的Issue Pilot应用自测脚本，不经过registry、Agent session context或Pi tools。
+## Web change
 
-## Web 开发
+- Shared enum从domain导入。
+- Request/DTO集中`data/client.ts`。
+- App resource保持latest-wins generation。
+- Capability使用explicit forms，不做generic schema form。
+- Secret不进入draft；serializer只发update intent。
+- Markdown使用`marked + DOMPurify + github-markdown-css`和bounded cache。
+- Workbench保持readonly；不启用Terminal、write、Git action或extension gallery。
+- 新flow覆盖loading、empty、success、failure、retry和stale response。
+- Desktop/mobile验证long text、dialog、list和composer无overlap。
 
-Web使用 SolidJS和 `@idoly/ant-design-solid`。
+## Test commands
 
-规则：
-
-- Shared enum从 `src/domain/contracts.ts`导入。
-- API DTO/request集中在 `src/web/src/data/client.ts`。
-- `App.tsx`负责顶层资源、当前用户和页面选择；用户CRUD只属于`UserManagement.tsx`。
-- 页面组件负责具体 interaction，不复制 transport或 serializer。
-- Capability页面保留每种能力的显式 UI，不构建万能 schema form。
-- `configuration-model.ts`只序列化 selected capability 和 credential update 意图；已存 secret 不能进入 draft 或请求 payload。
-- `ApplicationResources` 的 catalog/config refresh 使用 latest-wins generation；必须测试旧 success、旧 failure、首次失败和原地 retry。
-- Markdown使用 `marked + DOMPurify + github-markdown-css`和 bounded LRU cache。
-- Desktop/mobile都验证长文本、dialog、Repository list和 Agent composer。
-- 不提供绕过后端检查的 force delete/ignore error按钮。
-
-新增流程至少覆盖 loading、empty、success、failure、retry和 stale async response。
-
-## 测试命令
-
-### 单个后端测试
+Focused backend：
 
 ```bash
 node --experimental-strip-types --test tests/workspace/git.test.ts
 ```
 
-### 多个后端测试
+Focused Web：
 
 ```bash
-node --experimental-strip-types --test \
-  tests/domain/serial.test.ts \
-  tests/workspace/lifecycle.test.ts
-```
-
-### 单个 Web 测试
-
-```bash
-npx vitest run \
-  --config src/web/vite.config.ts \
-  --environment jsdom \
+npx vitest run --config src/web/vite.config.ts --environment jsdom \
   src/web/src/app/AgentPanel.test.ts
 ```
 
-### 完整验证
+Full：
 
 ```bash
 npm run typecheck
@@ -491,87 +333,49 @@ npm audit --omit=dev --audit-level=high
 git diff --check
 ```
 
-按风险选择范围：
-
-| 改动 | 至少覆盖 |
+| Change | Minimum coverage |
 | --- | --- |
-| 纯 Web展示 | 对应 Vitest、Web typecheck、build |
-| Shared contract | Domain、DB、HTTP和 Web |
-| User管理 | Bootstrap、active migration、API事务、当前用户刷新和管理页面 |
-| API transaction | 独立 fixture、success、conflict、rollback |
-| Attachment | Multipart limits、quarantine、rollback/finalize、GET integrity |
-| Agent/session | Queue、reservation、success、failure、steer、abort、shutdown |
-| SSE/Web stream | Replay、snapshot、live、backpressure、stale generation、reconnect |
-| Capability | Save parse、scope escape、schema、client、timeout、oversize、abort |
-| Git/project/lifecycle | Real Git、dirty、missing ref、batch rollback、cold start、reopen |
-| Source browser | Multi-root alias授权、path traversal、symlink escape、binary/size、rg JSON、HEAD ancestry、commit/diff API预算、只读文件系统mutation失败、Explorer/Editor Groups/Tabs、Search逐文件progress、SCM Changes/Graph/提交文件、Markdown Preview公开`vscode.openWith`/Web Worker、Bottom Panel与Secondary Side Bar矩形对齐、窄屏详情抽屉、固定LocalProcess extension、无Terminal/Node扩展host和水平溢出 |
-| Project tools | Socket mode/protocol、DB path授权、容器argv/mount/limits、same-Issue串行 |
-| Startup/state | Fresh DB、migration、interrupted state、unmanaged/changed checkout |
-| Infra/dependency | Application multi-stage build/同源静态smoke、绝对路径label、Healthcheck、Shell status、build、audit和runtime status |
+| Shared contract | Domain、DB、HTTP、Web |
+| User | Bootstrap、active transaction、API、Web |
+| Attachment | Limits、quarantine、rollback/finalize、GET integrity |
+| Agent/Pi | Queue、reservation、state、steer、abort、shutdown |
+| SSE | Replay/snapshot/live、backpressure、generation、reconnect |
+| Capability | Save parse、scope、schema、client、timeout、oversize、abort |
+| Git/lifecycle | Real Git、dirty、missing ref、batch rollback、cold start、reopen |
+| Source/Workbench | Alias/path/symlink/binary/budget、readonly mutation、Search/SCM/Preview |
+| Project tools | Socket protocol/mode、DB/path auth、same-Issue serial、timeout |
+| Startup | Fresh/migrated DB、interrupted state、unmanaged/changed checkout |
+| Infra | Compose/image labels、Healthcheck、Shell syntax、isolated image smoke |
 
 ## Debugging
 
-### API/SQLite
-
-优先查看 stable error code、Issue key、Deployment ID、Repository hash和 commit。不要打印 config body、Authorization、password、AccessKey或完整敏感 capability result。
-
-SQLite只读检查使用 `src/config.ts`解析的实际 database path。直接写 SQLite会绕过 reservation、file transaction和 trigger guard，只能用于停机、备份后的 operator-controlled recovery。
-
-### Git/runtime
-
-分三层检查：
-
-1. Bare repository的 remote-tracking和 local working branch ref。
-2. Worktree/checkout的 HEAD、common dir和 `git status --porcelain`。
-3. Runtime symlink、Source API realpath containment和project wrapper socket。
-
-只看 Explorer文件不足以证明 Git state正确。
-
-### Agent/SSE
-
-先检查 Pi JSONL active branch，再检查 server replay/live boundary，再检查 AgentStreamController generation和 conversation projection。不要先创建冗余数据库消息记录。
+- API/SQLite：先读stable error、Issue key、Deployment ID、Repository hash和commit。不要打印secret/body/result。
+- Git/runtime：依次检查bare refs、worktree HEAD/branch/status、runtime symlink和Source containment。
+- Agent/SSE：依次检查Pi active JSONL、server replay/live boundary、Web generation和conversation projection。
+- Direct SQLite write会绕过reservation、file transaction和trigger，只能用于停机、备份后的Operator recovery。
 
 ## Code conventions
 
-- TypeScript ESM使用显式 `.ts` import；Web按现有 bundler style保持一致。
-- 保持 strict、`noUncheckedIndexedAccess`和 `exactOptionalPropertyTypes`通过。
-- 在边界解析 `unknown`，内部使用明确类型。
-- 只为稳定事务、安全、进程、协议或复用边界创建新文件。
-- 错误码使用稳定小写标识，不用自然语言做程序分支。
-- Generated directory原子替换；durable state不使用“先删再建”。
-- 复杂失败路径明确 prepare/commit/rollback/finalize。
-- 不添加旧路径、旧状态或旧 key的自动 compatibility。
-- 不按文件长度机械拆分，也不引入通用 repository/service万能层。
+- Backend TypeScript ESM使用explicit `.ts` import；Web遵循现有bundler style。
+- 保持strict、`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`。
+- External `unknown`在HTTP/Registry/TypeBox/response边界解析一次；内部typed call不重复shape校验。
+- 新文件只用于稳定transaction、protocol、process或reusable UI boundary。
+- Error使用stable lowercase code。
+- Generated state原子替换；durable state不“先删再建”。
+- 不添加自动legacy compatibility。
+- 不按行数拆owner，不引入万能service/repository layer。
 
 ## Review checklist
 
-- 改动是否放在拥有该事实的模块？
-- 是否保留唯一事实源，没有新建重复 enum/default/schema/branch join？
-- Prod/test是否仍只读，dev是否按 Issue隔离？
-- Read-only Agent context path是否仍位于 Issue runtime？
-- Existing dev base branch、working branch和 workspace name是否保持历史？
-- Dirty、untracked、running、invalid和 unmanaged state是否仍阻止删除？
-- Attachment、Pi JSONL、本地 Issue branch和 migration history是否保留？
-- File/database跨介质更新是否有 rollback/finalize test？
-- 锁顺序是否保持，没有 global mutex或反向 acquisition？
-- 已存 Credential 是否未进入配置 GET、未轮换的 PATCH、Agent session context、prompt、tool input、日志或不必要 argv？
-- Capability result的敏感留存是否明确？
-- DTO、Web interaction和 removed route是否一致？
-- Startup、shutdown、retry、abort和 repeated call是否有确定行为？
-- 文档是否更新到唯一 owning文档？
-- Typecheck、tests、build、audit和 diff check是否按风险通过？
-
-## 文档职责
-
-| 文档 | 负责事实 |
-| --- | --- |
-| `README.md` | 产品入口、快速开始和文档导航 |
-| `ARCHITECTURE.md` | 状态、所有权、生命周期、并发和安全不变量 |
-| `CONFIGURATION.md` | 可配置字段、capability contract和 credential数据流 |
-| `DEPLOYMENT.md` | 宿主依赖、进程、容器、代理和首次验收 |
-| `KUBERNETES.md` | 单大容器StatefulSet、PVC、Secret和迁移验收 |
-| `DEVELOPMENT.md` | 模块边界、改动方法、测试和 review |
-| `RUNBOOK.md` | 日常检查、容量、备份、升级、恢复和故障 |
-| `AGENTS.md` | Coding Agent执行规则 |
-
-同一详细事实只在一个主文档完整说明，其他文档保留完成当前任务所需的摘要和链接。
+- Fact是否放在owner且只有一个source？
+- Prod/test仍readonly，dev仍Issue-isolated？
+- Existing dev history和released local branch是否保留？
+- Dirty/unmanaged evidence是否fail closed？
+- Cross-media update是否有rollback/finalize test？
+- Lock order是否正确？
+- Credential是否未进入GET/context/prompt/input/argv/log？
+- Capability result retention是否明确？
+- DTO/Web/removed route是否一致？
+- Startup/shutdown/retry/abort/repeat行为是否确定？
+- Owner doc是否更新且未复制详细事实？
+- Typecheck/test/build/audit/diff check是否按风险通过？

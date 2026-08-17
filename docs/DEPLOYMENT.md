@@ -1,150 +1,143 @@
 # 部署说明
 
-本文面向首次安装和生产部署维护者，说明统一的进程工具执行机制、Podman构建环境、反向代理、安全边界和验收步骤。状态原理见[架构说明](ARCHITECTURE.md)，业务字段见[配置说明](CONFIGURATION.md)，上线后的操作见[运维手册](RUNBOOK.md)。
+本文说明Compose生产模型、application镜像、宿主依赖、网络、proxy和首次验收。Kubernetes见[Kubernetes基线](KUBERNETES.md)，升级恢复见[运维手册](RUNBOOK.md)。
 
 ## 部署模型
 
-Issue Pilot 是可信单机应用，不是多租户服务：
+Issue Pilot是可信内部环境中的有状态单体：
 
-- 生产应用容器以同一低权限UID运行Fastify、Pi SDK、Git和capability client；SQLite和Git state保留在宿主持久目录。
-- Fastify在生产中同源提供SolidJS Web和Workbench静态资源；Vite只用于开发。
-- Web内置VS Code Workbench，通过只读文件系统overlay和Fastify Source API读取Issue runtime。
-- API只从application镜像启动；Compose和Kubernetes共用同一个`ProcessToolRuntime`和镜像PATH。
-- 运行请求不携带image，也不启动工具子容器。
-- Playwright只由operator运行Issue Pilot自身浏览器测试时启动`--rm`临时容器，不属于Agent capability。
+- 一个application容器运行Fastify、Web/Workbench、Pi、SQLite、Git managers、protocol clients和project tools。
+- SQLite、Git、Pi JSONL、Attachment和worktree共享一个state root。
+- Compose和Kubernetes使用同一image和`ProcessToolRuntime`。
+- 生产只允许一个application副本。
+- Agent不访问Podman/Kubernetes API，不创建tool container。
+- Playwright临时container只属于Operator应用验收。
 - API没有内置authentication/authorization。
-- 代码浏览器只运行固定的浏览器LocalProcess Issue Pilot extension和打包的Web Worker Markdown extension，不启用Terminal、Node extension host、任意Git或文件写接口。
-
-推荐生产拓扑：
 
 ```text
 Browser
-   |
-TLS + Authentication/Authorization Proxy
-   |
-   +-- all paths -> 0.0.0.0:3000 (Compose host publish)
-                            |
-        application container: 0.0.0.0:3000
-        Fastify + Web/Workbench + Pi/Git + Node/Maven/JDK/Aliyun CLI
-                            |
-                        SQLite/state
+  -> TLS + authentication/authorization proxy
+  -> host 0.0.0.0:3000
+  -> application container 0.0.0.0:3000
+       -> state root / Pi config / package config and cache
 ```
 
-应用容器使用bridge网络并监听容器端口，Compose只把该端口发布到宿主loopback。所有外部访问必须经过同机可信代理。`deploy/kubernetes/base`复用同一大镜像和进程工具运行时；边界见[Kubernetes基线](KUBERNETES.md)。
+Compose发布`0.0.0.0:3000`是为了WSL/Windows端口转发，不是安全边界。宿主防火墙必须限制不可信来源；外部流量必须经可信proxy。
 
-## 构建与运行工具
+## 宿主前置条件
 
-宿主只负责依赖安装、测试、镜像构建和Operator验收；API运行工具全部由application镜像提供：
+- Linux/WSL低权限专用账号，当前配置要求UID/GID `1000:1000`。
+- Node/npm用于依赖安装、测试、配置读取和image build。
+- Podman和Compose provider。
+- `~/.pi/agent`目录。
+- Owner-only `~/.npmrc`和`~/.m2/settings.xml`。
+- Owner可写且不可group/world写的`~/.npm`和`~/.m2/repository`。
+- 可选owner只读`~/.gitconfig`和`~/.ssh`。
 
-| Component | 路径或版本 |
-| --- | --- |
-| Host build Node/npm | `/usr/local/node`，用于npm、配置读取和Web构建，不作为API运行时 |
-| Application tools | Node `26`、Pi、Maven `3.9`/Temurin 8和构建时获取的Aliyun CLI latest |
-| Pi model runtime | application内项目依赖与只读挂载的`~/.pi/agent`配置 |
-| Application utilities | Git/SSH、`rg`、`curl`、`base64` |
-| Podman | 构建application镜像和运行Playwright验收需要；API工具执行不需要 |
-| Application image | `localhost/issue-pilot:0.1.0-node26-ubuntu2604`，按当前checkout绝对路径构建 |
-| Application build images | `node:26-bookworm-slim`、`maven:3.9-eclipse-temurin-8`和`ubuntu:26.04` |
-| Playwright core | `1.62.1` |
-| Playwright image | `mcr.microsoft.com/playwright:v1.62.1-noble` |
-
-项目工具broker要求运行账号拥有`~/.npmrc`、`~/.npm`、`~/.m2/settings.xml`和`~/.m2/repository`。配置文件必须由运行账号拥有且group/world权限为0，缓存目录必须由运行账号拥有且不可group/world写；配置文件只读挂载，缓存目录读写挂载；配置内容不会进入命令参数、HTTP响应或日志。
-
-快速检查：
+检查：
 
 ```bash
+id
 /usr/local/node/bin/node --version
 /usr/local/node/bin/npm --version
 podman version
 podman compose version
-infra/application.sh config
-infra/application.sh status
+stat -c '%a %U:%G %n' ~/.npmrc ~/.m2/settings.xml
+stat -c '%a %U:%G %n' ~/.npm ~/.m2/repository
 ```
 
-API工具版本只通过application镜像升级。容器中的`HOME`只保持运行账号绝对路径一致，不覆盖任何Issue Pilot配置字段。
+Project broker拒绝非owner配置、group/world-readable配置文件和group/world-writable cache。Credential内容不会进入HTTP或日志。
 
-## 安装与构建
+## Application image
 
-在固定项目目录中执行：
+`infra/images/application/Containerfile`为三阶段构建：
+
+| Stage | 内容 |
+| --- | --- |
+| `node:26-bookworm-slim` | `npm ci`、Vite build、`npm prune --omit=dev` |
+| `maven:3.9-eclipse-temurin-8` | Maven和Temurin 8 |
+| `ubuntu:26.04` | Production app、Node/npm、Maven/JDK、Aliyun CLI、Git/SSH、rg、curl |
+
+Image默认Kubernetes root为`/opt/issue-pilot`。Compose build传入当前宿主absolute project root和HOME，使image path、OCI `io.issue-pilot.root` label、SQLite local paths、Git worktree metadata和runtime symlink使用同一命名空间。
+
+Runtime rootfs只读；`/tmp`为1GiB tmpfs；state和package cache读写；Pi/npm/Maven config只读。Container使用current UID/GID、keep-id user namespace、drop all capabilities、no-new-privileges、2048 PIDs、4GiB memory和1800s stop grace period。
+
+## 安装和构建
+
+Fresh checkout先创建state和cache目录；`~/.npmrc`、`~/.m2/settings.xml`和`~/.pi/agent`必须已由Operator提供：
 
 ```bash
 npm ci
+install -d -m 0700 .issue-pilot "$HOME/.npm" "$HOME/.m2/repository"
 infra/playwright.sh prepare
 infra/application.sh config
 infra/application.sh prepare
 npm run typecheck
 npm test
 npm run build
+npm audit --omit=dev --audit-level=high
 ```
 
-准备状态：
+`prepare`：
+
+1. 从根配置生成临时Compose JSON。
+2. 使用`--pull=always`构建application。
+3. 验证image root label和Healthcheck。
+4. 保留最新完整build stage为`${image}-build-cache`。
+5. 只prune本项目label的无tag、未被container引用的旧image。
+
+它不会删除其他项目image。Running container引用的旧image会保留到container remove。
+
+检查：
 
 ```bash
 infra/application.sh status
 infra/playwright.sh status
+podman image inspect localhost/issue-pilot:0.1.0-node26-ubuntu2604
 ```
 
-预期application大镜像按当前绝对项目根构建并带Healthcheck。Playwright image应ready，且没有持久application-test容器。
+## 配置和state root
 
-## 应用配置与 state root
-
-所有运行配置都在根目录 `issue-pilot.config.ts`。应用不读取环境变量覆盖它。`src/config.ts` 根据项目根解析：
+唯一配置是`issue-pilot.config.ts`。`src/config.ts`计算：
 
 ```text
-stateRoot = <project-root>/<state.directory>
-databaseFile = <stateRoot>/<state.databaseFile>
+projectRoot = source checkout root
+stateRoot = resolve(projectRoot, state.directory)
+databaseFile = resolve(stateRoot, state.databaseFile)
+webRoot = <projectRoot>/src/web/dist
 ```
 
-默认：
+默认state为`<project>/.issue-pilot`。API、migration、Git、runtime、Source Browser和project broker必须使用同一root。
 
-```text
-stateRoot = <project-root>/.issue-pilot
-databaseFile = <project-root>/.issue-pilot/issues.db
-```
+生产project directory必须稳定。不要通过另一个working directory启动，不要在API运行时移动project/state，也不要使用环境变量尝试覆盖path。
 
-`infra/config-value.mjs`只读取根配置标量，Shell中没有第二套默认值。API、migration、Git、runtime、source browser和project-tool broker必须使用同一个state root。
+## 首次启动
 
-生产项目目录必须持久存在。升级时不能切换到一个不包含原state root的新WorkingDirectory，也不能在API运行期间移动项目、数据库或`.issue-pilot`。Application image的`io.issue-pilot.root` label和镜像内`WORKDIR`必须等于该宿主绝对项目目录；`infra/application.sh`在启动前强制核对。
-
-完整字段见 [配置说明](CONFIGURATION.md#根配置)。
-
-## 数据库初始化
-
-application API启动时执行Drizzle migration。数据库文件创建为 `0600`，启用 WAL 和配置的 busy timeout；migration 后启用 foreign keys。
-
-生产升级前仍必须停止 API 并创建一致备份。不要把自动migration当作跳过备份和隔离副本dry-run的理由。
-
-## 启动
-
-API只通过已准备的application容器启动：
+确保没有同名container：
 
 ```bash
-npm run server
+infra/application.sh status
+infra/application.sh start
+infra/application.sh logs
 ```
 
-容器在`http://127.0.0.1:3000`同源提供Web和API。前端迭代可另启`npm run dev:web`，Vite在`0.0.0.0:4173`监听并代理容器API；不能直接暴露到不可信LAN或Internet。
+`npm run server`等同于`infra/application.sh start`。`start`要求prepared image、state root、Pi config、npm/Maven config/cache存在，并拒绝覆盖existing container。
 
-## API 启动行为
+启动前application会：
 
-每次 API 启动会：
+1. 打开SQLite、migration、foreign keys和structure checks。
+2. 插入空库bootstrap user并同步Environment。
+3. 收敛interrupted Agent/Workspace状态。
+4. 拒绝unmanaged Issue/workspace。
+5. 验证generated checkout并清理runtime。
+6. 启动`0600 control/project-tools.sock`。
+7. 重建dev和已有session的read-only runtime。
+8. 执行一次Workspace maintenance。
+9. 注册HTTP route并启动timer。
 
-1. 打开数据库、执行 migration、恢复中断 Agent 状态并同步 Environment。
-2. 验证 state root 中没有 unmanaged Issue/workspace 目录。
-3. 验证 shared checkout ownership、HEAD 和 cleanliness，再受管移除可重建 checkout。
-4. 删除受管Issue runtime和中断的`.runtime-*`生成目录。
-5. 创建`0600 control/project-tools.sock`并启动broker。
-6. 重建active/released dev runtime。
-7. 为已有session的prod/test Issue fetch当前Deployment commit并重建runtime。
-8. 执行一次workspace maintenance。
-9. 注册route，并启动定时maintenance。
+任一步失败会关闭已打开资源并保留durable evidence。
 
-任一 durable-state 不变量失败会停止启动并保留现场。详细错误处理见 [运维手册](RUNBOOK.md)。
-
-## 生产应用容器
-
-主应用大镜像是唯一API入口。它在一个Ubuntu 26.04 runtime容器中提供Fastify API、静态Web/Workbench、Pi、Node 26、Maven 3.9/Temurin 8、Aliyun CLI、Git 2.48或更高版本、SSH、ripgrep和curl。Web构建依赖位于`devDependencies`，multi-stage build完成后执行`npm prune --omit=dev`。`infra/application-compose.mjs`从根配置和当前绝对路径生成只有一个application service的Compose JSON；容器不包含Podman client，也不挂rootless Podman API socket。
-
-构建宿主只需要Podman和Compose provider。准备及启动：
+## Container lifecycle
 
 ```bash
 infra/application.sh config
@@ -152,29 +145,26 @@ infra/application.sh prepare
 infra/application.sh status
 infra/application.sh start
 infra/application.sh logs
-```
-
-`prepare`从Containerfile中的稳定系列tag构建单一application image。新镜像通过root label和Healthcheck校验后，生命周期脚本把最新完整build stage保留为`${runtime.application.image}-build-cache`以复用`npm ci`层，再只按`io.issue-pilot.component=application|application-build` label清理本项目无tag且未被容器引用的旧final和旧build stage；`remove`释放旧运行镜像后重复该清理，`clean`同时删除命名build cache。清理不使用`--all`，不会删除有tag的Node、Maven、Ubuntu、Playwright、Keycloak或其他项目镜像。`start`拒绝覆盖同名容器，通过Compose设置`on-failure:5`重启策略，并要求以下路径在容器内外完全相同：项目根、state root、`HOME`、Pi配置、npmrc/cache和Maven settings/repository。应用rootfs只读；state root与package cache读写；Pi/package manager配置只读。可选`~/.gitconfig`和`~/.ssh`只读挂载。Compose构建参数同时把镜像中UID 1000用户的passwd home设为宿主`HOME`，确保OpenSSH从该只读挂载读取known_hosts和私钥；Kubernetes镜像默认使用`/home/issue-pilot`。
-
-停机保留容器日志供检查：
-
-```bash
 infra/application.sh stop
-infra/application.sh logs
 infra/application.sh remove
 ```
 
-`clean`只在容器不存在时删除application image，不删除state。project-tools Unix socket会阻止两个API实例同时启动。
+- `stop`发送SIGTERM并保留stopped container和logs。
+- Graceful close drain maintenance/inspection、Agent/reservation、Pi sessions、model runtime、project processes和SQLite。
+- `remove`只允许stopped container，随后Compose down并prune可删除的旧application images。
+- `clean`只允许container不存在；删除current application image和named build cache，不删state。
 
-应用容器使用bridge网络，Fastify按`runtime.application.listenHost`监听`0.0.0.0:3000`，Compose固定发布`0.0.0.0:3000:3000`，使WSL地址及Windows端口代理可以访问。该端口不提供独立认证边界，Windows防火墙或前置可信网关必须限制不可信来源。`ProcessToolRuntime`只允许固定工具命令、收敛进程环境并清理调用级临时HOME；不会调用Podman。npm/Maven项目脚本与API同UID运行，因此大容器不是不可信代码sandbox，也没有调用级rootfs/cgroup隔离。
+Project socket阻止第二API实例。不要用`podman run`绕过generated Compose mount和path检查。
 
-`SIGINT`/`SIGTERM`会触发graceful shutdown：停止maintenance、等待lifecycle/inspection队列和Agent reservation、停止Pi session、关闭项目工具broker并等待活动进程、关闭SQLite。Compose和Kubernetes的30分钟termination grace period覆盖当前项目工具上限。
+## Production Web和proxy
 
-## Production Web 与反向代理
+`npm run build`生成`src/web/dist`。Production API验证`index.html`和`vscode.html`后同源提供：
 
-`npm run build`输出`src/web/dist`。生产API启动时验证`index.html`和`vscode.html`存在，然后由Fastify提供静态文件：HTML使用`private, no-cache, no-store`，`assets/`中的Vite哈希资源使用一年immutable缓存，其他文件不公开。Web、Workbench和API因此天然同源。
+- HTML：`private, no-cache, no-store`
+- Hashed `assets/`：一年immutable
+- 其他文件：不公开
 
-可信网关只需把全部路径转发到loopback Fastify；Nginx核心示例：
+Nginx核心配置：
 
 ```nginx
 location / {
@@ -188,49 +178,63 @@ location / {
 }
 ```
 
-必须在这些 location 外层加入组织实际使用的 authentication、authorization、TLS 和审计策略。
+在该location外层加入组织认证、授权、TLS和审计。SSE要求禁用buffer、使用长read timeout，并保留`Cache-Control: no-cache, no-transform`和`X-Accel-Buffering: no`语义。
 
-Agent stream 使用 SSE：
+Vite：
 
-- `/api` 不能 response buffer。
-- 不能使用短 read timeout。
-- 代理应保留 `Cache-Control: no-cache, no-transform` 和 `X-Accel-Buffering: no` 语义。
+```bash
+npm run dev:web
+```
 
-## 内置代码浏览器
+默认`0.0.0.0:4173`，只用于可信开发网络。
 
-Web使用`@codingame/monaco-vscode-api`启动只读VS Code Workbench。Explorer文件系统只使用`/repositories`、`/tree`和`/file`；完整Source API仍包括：
+## Workbench和Source边界
 
-- `/repositories`返回当前runtime可见Repository alias、branch和访问模式。
-- `/tree`列出最多500项，不返回`.git`。
-- `/file`只读取2 MiB以内有效UTF-8普通文件。
-- `/search`使用literal `rg --json`，限制query、match、timeout和output。
-- `/history`返回当前HEAD最近100条commit，选择文件时按path过滤。
-- `/commit`先用`merge-base --is-ancestor`限制到当前HEAD可达commit，再返回最多500项结构化`added|modified|deleted|renamed|copied`文件清单。
-- `/commit-file`读取该commit第一父版本与提交后版本，新增、删除、重命名和root commit使用显式nullable before/after。
-- `/diff`使用`git diff --no-ext-diff --no-textconv --name-status -z`返回index到working tree的结构化文件清单。
-- `/diff-file`从Git index和受管working tree读取选中文件，新增或删除使用显式nullable before/after。
+Workbench在同源`vscode.html` iframe中运行，只注册固定LocalProcess extension、Web Worker Markdown extension、固定theme/icon/language contributions。
 
-每次打开代码浏览器都会加载独立`vscode.html` iframe，并在关闭时销毁Workbench单例。Workbench用`registerCustomView()`创建原生Agent Panel View和工单详情Secondary Side Bar View，只把两个View body矩形通过同源Issue绑定消息上报父应用；父应用继续维护SSE、草稿、输入和工单表单状态。原生标题栏保留关闭和sash resize并隐藏最大化动作，代码栏开关与Part visibility双向同步，隐藏View不销毁Agent SSE、草稿或工单状态。这里没有启用VS Code Terminal或PTY。Explorer、Editor、Graph和Markdown Preview使用VS Code原生按需显示的滚动条；工单与Agent使用同一组GitHub Dark滚动条颜色。Agent的单一滚动容器覆盖完整View body，对话、队列、运行状态、输入区和底部状态处于同一滚动流，输入区和底部状态不固定。窄屏隐藏原生右栏，通过代码栏图标打开详情抽屉。虚拟workspace和文件使用稳定`file:///issue-pilot/...` URI；VS Code原生Explorer、Editor Groups/Tabs、breadcrumb、find、goto、folding、hover和symbols直接工作。TS/JS、JSON、CSS和HTML使用Monaco standalone language worker，其他固定grammar contribution提供高亮和语言配置。
+Source API限制：
 
-代码栏用三个固定图标发送白名单Explorer/Search/Source Control view command；点击另一图标时显示并切换Primary Side Bar，再次点击当前图标时收起Primary Side Bar，原生Activity Bar保持隐藏。LocalProcess Workbench extension通过公开`workspace.registerTextSearchProvider`调用literal `/search`，大小写和整词选项映射到专用boolean header，regex控件和Replace全部隐藏。Source Control通过公开`scm.createSourceControl`和proposed history provider API投影`/diff` Changes及基于`/history`、`/commit`的Graph；Graph文件使用公开`workspace.registerFileSystemProvider`注册的只读revision scheme按需调用`/commit-file`并打开前后内容Diff，不提供输入框、stage、discard、commit或任意Git命令。
+- Repository alias来自SQLite Issue关系。
+- Runtime必须是受管symlink。
+- Active dev target等于DB `local_path`；read-only target位于managed checkout root。
+- Path经normalize和realpath双重containment。
+- Tree最多500项，file最多2MiB UTF-8。
+- Search是literal `rg --json`，最多200 matches。
+- History最多100 commits；commit必须是HEAD ancestor；change list最多500。
+- Source header中的path/query经百分号编码，response为`private,no-store`，route关闭普通access log。
 
-界面固定选择官方GitHub Dark Default和Material Icon Theme；构建只注册theme/icon静态资源，不导入Material扩展的Node main、activation event、command或configuration。打包的`markdown-language-features`只在Web Worker extension host中提供`markdown.api.render`，Workbench ready前完成预激活。只读Preview Pane通过上游`registerEditorPane()`和`registerEditor()`注册为可选Markdown editor，标题Preview图标及键盘命令使用公开`commands.registerCommand`和`vscode.openWith`打开；Pane从当前只读Monaco模型调用扩展render API，DOMPurify清洗后写入隔离Shadow DOM，并复用Workbench原生Editor Group、Tab、关闭和`DomScrollableElement`。该路径不创建浏览器Webview、内容iframe或Service Worker；GitHub Dark/highlight样式随构建打包，不加载脚本或外部资源。拖放、文件粘贴和移动时更新链接均关闭。Terminal、Node extension host、extension gallery、remote agent和任意Git命令不加载。
+没有Terminal、PTY、Node extension host、gallery、save、Source write、stage、commit、discard或任意Git route。只读Source仍返回内部代码，必须受proxy授权。
 
-文件系统provider声明`Readonly`和`FilePermission.Readonly`，write、mkdir、delete、rename全部返回`FileWriteLocked`。API不接受绝对宿主路径。它从SQLite读取Issue Repository关系、重新推导alias，验证runtime必须是受管symlink；active dev target必须等于数据库`local_path`，read-only target必须位于合法的`git/checkouts/<hash>/<commit>`。所有最终path均realpath后再次检查Repository containment。Source route只读，不提供保存、shell、terminal或任意Git命令；Repository、path和query经百分号编码后放在专用request header而不是URL query string，响应带`private, no-store`，route关闭普通request access log，避免源码路径和搜索词进入应用或proxy URL日志。iframe用于隔离Workbench单例和生命周期，不替代外层authentication、authorization、TLS或Source API授权。
+## Project tools
 
-## Node/Maven项目工具
+Writable dev runtime生成`node-project`和`maven-project`。Wrapper通过`0600`Unix socket发送versioned request；broker从SQLite重新授权Issue、Repository、workspace和project realpath。
 
-API启动Unix socket `<state>/control/project-tools.sock`，目录`0700`、socket `0600`。Writable dev runtime中的`node-project`和`maven-project` wrapper只发送Issue segment、Repository alias、相对project path、有限action和参数；broker从SQLite重新授权，客户端不能控制可执行文件、配置路径或cache路径。
+允许：
 
-Node action为npm `install|test|build|typecheck`；其他package manager、`start/dev/serve/preview`不可用，`--watch*`被broker拒绝且执行环境固定`CI=1`。Maven action为`test|verify|package`。命令统一使用application镜像中的Node 26和Maven 3.9/Temurin 8。
+```text
+npm ci|install
+npm run test|build|typecheck
+mvn test|verify|package
+```
 
-`ProcessToolRuntime`是唯一执行机制。它不接受image或任意可执行文件；broker传入已验证的真实project/config/cache路径，执行器为项目命令创建临时HOME。读写cache、30分钟timeout、abort和output预算继续生效。同一Issue串行，不同Issue可并行。API关闭会先停止接受新请求，再等待活动队列。
+Node拒绝non-npm package manager、server/watch action和`--watch*`。Execution固定`CI=1`，同Issue串行，timeout 30分钟。`ProcessToolRuntime`只使用image PATH，不调用Podman。
 
-项目命令会执行Repository脚本，并与API共享application容器OS身份，可能读取该身份可读的state、Pi配置和其他workspace。因此部署只适用于可信内部Repository，package credential必须使用仅具包读取权限、可轮换的专用身份。
+这些命令执行Repository script并与API共享UID和可读mount。只部署可信内部代码；package credential使用可轮换的read-only专用身份。
 
-## Playwright application test runtime
+## Aliyun CLI
 
-管理和执行命令：
+Image按architecture安装官方Aliyun CLI latest。Issue Pilot不读取Operator持久`~/.aliyun`。
+
+每次DMS/SLS：
+
+1. 创建temporary HOME。
+2. 写`0600 ~/.aliyun/config.json`。
+3. `ProcessToolRuntime`执行allowlisted Aliyun command。
+4. Finally递归删除temporary HOME。
+
+AccessKey不进入argv。DMS SQL、SLS query、project/logstore和time range会短暂出现在application process list。字段和最小权限见[配置说明](CONFIGURATION.md)。
+
+## Playwright application test
 
 ```bash
 infra/playwright.sh prepare
@@ -239,67 +243,32 @@ infra/playwright.sh run <test.cjs> <output-directory>
 infra/playwright.sh clean
 ```
 
-`prepare`确保全局`playwright-core`版本和browser image与根配置一致，不安装持久browser daemon。`run`只供operator执行Issue Pilot自身的桌面/窄屏回归、截图、请求审计和editor/canvas像素验收；测试脚本从`/tool/node_modules/playwright-core`加载Playwright，产物写入`/out`。
+`run`启动一个`--rm`临时browser container，挂载只读test script和Playwright Core、读写output，使用host network、readonly rootfs、current UID/GID、drop all capabilities、no-new-privileges、256 PIDs、1GiB memory和300s hard timeout。它不挂state、Issue workspace、Deployment config、project socket或Podman socket。
 
-每次`run`只挂载一个只读测试脚本、只读Playwright Core和一个读写输出目录，启动带固定label和唯一名称的`podman run --rm`容器。容器使用host network、只读rootfs、当前UID/GID、drop all capabilities、no-new-privileges及PID/内存限制，并由Podman在300秒后硬停止；Shell退出时也会按名称强制清理。它不挂载SQLite、Deployment配置、Issue workspace、项目工具socket或Podman socket。
+Service/Deployment/Agent没有Playwright入口。
 
-Service/Deployment不配置或授权Playwright；AgentSessionContext和Pi tools没有浏览器入口。Agent和目标项目不能启动该容器。`status`发现持久application-test container时失败。
+## 安全要求
 
-## Aliyun CLI runtime
-
-application镜像按目标架构安装官方Aliyun CLI latest。Issue Pilot不读取或修改operator持久`~/.aliyun`。
-
-每次DMS/SLS调用都会创建调用级临时HOME并写入`0600 ~/.aliyun/config.json`，`ProcessToolRuntime`再使用该临时HOME执行当前PATH中的`aliyun`，调用结束后在finally中递归删除。运行时只允许`dms-enterprise`和`sls`命令。DMS使用`ExecuteScript`、固定central endpoint和`--secure`；SLS使用regional log endpoint。Credential不进入argv，但SQL和SLS query仍会短暂出现在API所在环境的进程参数中。详细权限和字段见[配置说明](CONFIGURATION.md#dms)。
-
-## 安全边界
-
-### Authentication 与网络
-
-- Issue Pilot API 没有内置认证。
-- `X-Issue-Pilot-Subject` 和页面用户切换不是认证。
-- 内置代码浏览器只读但会返回内部源码；Source API与其他Issue API使用相同授权边界。
-- Compose为Windows/WSL端口转发向宿主`0.0.0.0:3000`发布application端口；宿主防火墙必须只允许可信来源。
-- 外部入口必须由可信代理执行 authentication、authorization 和 TLS，不能把该裸端口暴露到不可信LAN或Internet。
-- `/api/config` 虽已脱敏，仍包含内部 Repository、model 和 capability scope；`/api/services/*` 写请求还可能携带新 credential，配置路由必须单独授权和审计。
-- 不要直接暴露 Vite dev server 到不受信任网络。
-
-### 宿主权限
-
-Pi built-in tools不是OS sandbox。API/Pi必须使用专用低权限账号，不能以root运行。该账号能访问的文件、网络和credential都可能被Agent命令访问。
-
-Agent的Pi session和npm/Maven/Aliyun子进程都与API处于同一OS身份；不要把application container误认为Agent sandbox。生产application不持有容器管理socket。Playwright application-test容器属于operator测试边界，不为Agent提供额外隔离或能力。Source browser只读HTTP边界也不能防止同一运行身份下的恶意Agent访问其OS权限范围。
-
-### Secret 与敏感数据
-
-Deployment credential存储在 SQLite。`GET /api/config` 只返回 `credentialConfigured`，不会回传 password、AccessKeyId 或 AccessKeySecret；配置表单以 preserve/replace/clear 更新，只有 replace 写请求携带新值。禁止记录：
-
-- Config write request body和未经审查的配置 response body。
-- Authorization、Cookie 或代理 identity token。
-- Deployment password、AccessKey 或临时 profile。
-- npmrc、Maven settings或package manager请求header。
-- 包含生产数据的完整capability result或Source API response body。
-
-SQLite、backup、Pi JSONL、Attachment、源码、历史遗留的code-server data和API log都按敏感数据管理。Capability结果会进入模型上下文和Pi JSONL。
+- API无内置认证；subject switch不是认证。
+- 防火墙限制Compose host port；外部入口必须TLS/auth/authorization。
+- API/Pi使用专用non-root账号。
+- Application container不是untrusted code sandbox。
+- Source和Config API按敏感接口授权，不记录body。
+- SQLite、backup、Pi JSONL、Attachment、源码、legacy editor data和capability result都是敏感数据。
+- Deployment credential只存SQLite；Pi/npm/Maven原生credential只读挂载。
+- 不记录Authorization、Cookie、config write body、password、AccessKey、temporary profile、package auth header或完整敏感result。
 
 ## 首次业务配置
 
-服务启动后在 Web 中：
-
-1. 在用户页确认bootstrap用户，并添加需要的内部用户。
-2. 创建 Service。
-3. 添加至少一个 Repository，并设置唯一 alias。
-4. 为需要的 Environment 创建 Deployment。
-5. 为每个 Repository 设置 `baseBranch`。
-6. 选择当前可用的 Pi provider/model/thinking level。
-7. 只启用确实需要的 capability，并使用最小权限 credential。
-
-字段和权限见 [配置说明](CONFIGURATION.md)。系统不提供业务 seed。
-
-建议先创建 test `smart_analysis` Issue验证只读路径，再创建 dev Issue 验证独立 worktree。
+1. 确认bootstrap user并创建其他用户。
+2. 创建Service和至少一个Repository。
+3. 为需要的Environment创建Deployment。
+4. 为每个Repository设置base branch。
+5. 选择当前available Pi model/thinking level。
+6. 只启用必要capability并使用最小权限credential。
+7. 先创建test `smart_analysis`验证read-only，再创建dev Issue验证worktree。
 
 ## 首次验收
-
-### 服务检查
 
 ```bash
 curl -fsS http://127.0.0.1:3000/health
@@ -308,37 +277,20 @@ curl -fsS http://127.0.0.1:3000/api/users
 curl -fsS http://127.0.0.1:3000/api/workspaces/stats
 infra/application.sh status
 infra/playwright.sh status
+stat -c '%a %U:%G %n' .issue-pilot/control/project-tools.sock
 ss -ltnp | rg ':3000'
 ```
 
-预期：
+验收：
 
-- `/health` 返回 `{"ok":true}`。
-- Compose只向宿主loopback发布端口，主页和`/vscode.html`由同一入口返回。
-- Application image root label/Healthcheck正确，容器状态符合部署方式。
-- Playwright image ready，且无持久application-test container。
-- `<state>/control/project-tools.sock`存在且mode为`0600`。
-
-### Web 与业务检查
-
-- SQLite启用用户可加载和切换，用户页可新增、编辑、启停；未知或停用subject被拒绝，最后一名启用用户不能停用。
-- Service/Repository/Deployment round-trip正确。
-- `/api/config` 响应带 `private, no-store`，且代理/日志不记录 body。
-- Prod/test Agent context只选择 read tools，`workspaces/<key>` 不存在。
-- Dev 创建 `hotfix-*` 或 `feature-*` 本地 branch和独立 worktree。
-- Agent stream先replay，再收到`snapshot_ready`，刷新后仍可恢复。
-- 代码浏览器可切换全部Repository、展开文件树、读取UTF-8文件、搜索和查看Git diff；不存在source write route。
-- Attachment可读取，mode、size和SHA-256正确；不存在独立写route。
-
-### 全量 Repository 验收
-
-对已有全部 Issue，而不是只抽查一张：
-
-- 读取`/api/issues/<key>`并确认`sourceAvailable`与runtime状态一致。
-- 调用`/source/repositories`，验证每个alias link存在且realpath符合数据库Repository状态。
-- 使用 `GIT_OPTIONAL_LOCKS=0` 只读检查 HEAD、branch、`status --porcelain` 和最近 log。
-- Prod/test 为 detached checkout且 HEAD等于当前 Deployment fetched commit。
-- Active dev worktree HEAD等于本地 working branch ref。
-- Released dev runtime HEAD等于本地 working branch tip。
-
-Released dev历史 Repository集合与当前 Service不同可以合法存在；不要只按数量批量补行或改写 base branch。
+- Health为`{"ok":true}`，container healthy/restart 0。
+- Web和`vscode.html`同源可达。
+- Socket mode `0600`。
+- User CRUD和最后active user约束正确。
+- Config GET脱敏且`private,no-store`。
+- Prod/test无dev workspace且tools只读。
+- Dev创建Issue-local branch/worktree和wrapper。
+- SSE顺序为replay、`snapshot_ready`、live。
+- Source multi-root/tree/file/search/history/commit/diff只读可用。
+- Attachment mode/size/hash正确，无独立write route。
+- 对全部已有Issue核对Repository state、runtime symlink、HEAD/branch和Git clean，而不是只抽查一张。

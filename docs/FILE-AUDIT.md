@@ -1,34 +1,23 @@
 # Issue Pilot逐文件设计审计
 
-审计基线：`e328a36a66e9a5faf34b8b8b1ce92df8da57bd49`  
-范围：该基线的226个Git tracked文件；排除node_modules、src/web/dist、.issue-pilot durable state和本报告自身。
+范围：当前工作树中的226个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
 
 ## 判定原则
 
 - 只有能移除真实协调复杂度的合并才执行；不按文件数或行数机械合并。
 - HTTP、外部协议、Git/filesystem、SQLite和进程执行是实际边界，允许独立文件。
 - 已发布migration和vendor shim不是可重构业务代码。
-- 外部unknown只在Registry/HTTP解析一次；内部typed调用不重复防御。
+- 外部unknown只在Registry/HTTP/TypeBox边界解析一次；内部typed调用不重复shape校验。
 
-## 总结
+## 当前结论
 
-- 已删除旧broker、Service revision和IssuePolicy层及对应测试。
-- 已删除无引用的isIssueKey、Folder和TerminalSquare。
-- 已删除legacy-peer-deps兼容开关。
-- AgentSessionContext已缩为实际消费字段；credential存量重复parse和ToolRuntime双options层已删除。
-- Nacos/MySQL config shape重复校验已删除，validator归Registry唯一所有。
-- ApplicationResources重复people/users signal已合并。
-- workspace/development.ts与workspace/read-only.ts薄启动查询已并入project.ts；其他大文件拆分会增加事务、queue、rollback或授权协调。
-- 没有发现其他零入站生产模块；零入站项均为entrypoint、Worker、Vite入口或测试。
-
-## 后续优化
-
-基于本报告再次执行逐符号引用扫描后：
-
-- 删除`ExternalLink`、`FolderOpen`、`GitCompare`和`Minimize2`四个无引用icon wrapper。
-- 将24个仅在定义模块内部使用的type、schema、constant和class取消export，缩小后端、Web client和Workbench内部公开面。
-- 保留Knip误报的Node/Vite/Worker入口、跨模块Workbench注册函数和vendor package导出；这些项目分别由脚本、HTML、virtual module、运行时注册或第三方package contract消费。
-- 复跑TypeScript、129个后端测试、56个Web测试和生产构建，未发现行为变化。
+- Capability broker、Service revision、IssuePolicy及Workspace薄转发层已删除。
+- AgentSessionContext只保留实际消费字段；Pi tool直接调用protocol client。
+- Credential parse、ToolRuntime options、ApplicationResources signal和Nacos/MySQL内部shape校验已去重。
+- 无引用helper、四个icon wrapper和不必要module export已删除。
+- 已发布migration、Solid testing vendor shim、Pi theme内部resource import和Workbench SearchService深路径override有明确保留理由。
+- 大型Workspace/Agent owner共享queue、rollback、transaction或authorization状态，不按行数机械拆分。
+- 零入站production文件均为application、Vite、Worker或Redis Worker入口；未发现其他dead production module。
 
 ## 逐文件清单
 
@@ -38,18 +27,18 @@
 | `.github/workflows/ci.yml` | 36 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.gitignore` | 11 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.npmrc` | 1 | 项目构建、忽略或运行配置 | 必要registry配置 | 旧peer兼容开关已删除 | 保留单行 |
-| `AGENTS.md` | 193 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `README.md` | 171 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `AGENTS.md` | 179 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `README.md` | 145 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `deploy/kubernetes/base/kustomization.yaml` | 6 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/service-account.yaml` | 5 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/service.yaml` | 14 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/stateful-set.yaml` | 161 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `docs/ARCHITECTURE.md` | 445 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/CONFIGURATION.md` | 491 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/DEPLOYMENT.md` | 344 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/DEVELOPMENT.md` | 577 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/KUBERNETES.md` | 111 | KUBERNETES主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/RUNBOOK.md` | 557 | RUNBOOK主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/ARCHITECTURE.md` | 360 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/CONFIGURATION.md` | 317 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/DEPLOYMENT.md` | 296 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/DEVELOPMENT.md` | 381 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/KUBERNETES.md` | 143 | KUBERNETES主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/RUNBOOK.md` | 432 | RUNBOOK主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `drizzle/0000_schema.sql` | 302 | 已发布不可变migration：schema | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/0001_service_sort_order.sql` | 1 | 已发布不可变migration：service sort order | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/0002_simple_service_model.sql` | 7 | 已发布不可变migration：simple service model | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
@@ -109,7 +98,7 @@
 | `src/capabilities/dms.ts` | 138 | DMS只读SQL和CLI protocol client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/elasticsearch.ts` | 28 | Elasticsearch只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/http-client.ts` | 31 | 有预算、拒绝redirect的HTTP读取primitive | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
-| `src/capabilities/local-exec.ts` | 76 | 底层execFile、abort和output budget executor | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
+| `src/capabilities/local-exec.ts` | 76 | 底层spawn、abort和output budget executor | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/mysql.ts` | 88 | MySQL只读transaction和streaming client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/nacos.ts` | 82 | Nacos登录及exact Data ID读取client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/rabbitmq.ts` | 30 | RabbitMQ management只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
@@ -178,7 +167,7 @@
 | `src/web/src/test-setup.ts` | 31 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/ui/Markdown.test.tsx` | 29 | web域的Markdown行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/ui/Markdown.tsx` | 36 | 主应用Markdown渲染、净化和缓存 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/ui/icons.tsx` | 94 | lucide core IconNode到Solid组件的单一适配器 | 必要Solid适配 | 两个无用icon导出已删除 | 保留单一adapter |
+| `src/web/src/ui/icons.tsx` | 86 | lucide core IconNode到Solid组件的单一适配器 | 必要Solid适配 | 四个无引用icon wrapper已删除 | 保留单一adapter |
 | `src/web/src/ui/scrollbars.css` | 43 | 对应前端界面样式 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/extension-api.ts` | 23 | 固定LocalProcess Workbench extension注册 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/extensions.d.ts` | 7 | Vite虚拟extension模块类型声明 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
