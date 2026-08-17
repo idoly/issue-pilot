@@ -3,7 +3,6 @@ FROM docker.io/library/node:26-bookworm-slim AS build
 LABEL io.issue-pilot.component="application-build"
 WORKDIR /build
 COPY package.json package-lock.json ./
-COPY vendor ./vendor
 RUN npm ci
 COPY issue-pilot.config.ts tsconfig.json ./
 COPY drizzle ./drizzle

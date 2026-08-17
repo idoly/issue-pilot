@@ -1,12 +1,12 @@
 # Issue Pilot逐文件设计审计
 
-范围：当前工作树中的226个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
+范围：当前工作树中的219个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
 
 ## 判定原则
 
 - 只有能移除真实协调复杂度的合并才执行；不按文件数或行数机械合并。
 - HTTP、外部协议、Git/filesystem、SQLite和进程执行是实际边界，允许独立文件。
-- 已发布migration和vendor shim不是可重构业务代码。
+- 已发布migration是不可重写的升级合同；第三方依赖优先使用上游包而不是仓库内副本。
 - 外部unknown只在Registry/HTTP/TypeBox边界解析一次；内部typed调用不重复shape校验。
 
 ## 当前结论
@@ -16,7 +16,8 @@
 - Credential parse、ToolRuntime options、ApplicationResources signal和Nacos/MySQL内部shape校验已去重。
 - 无引用helper、四个icon wrapper和不必要module export已删除。
 - 共享process executor已从capability目录移到根级owner，与command授权ToolRuntime明确分层。
-- 已发布migration、Solid testing vendor shim、Pi theme内部resource import和Workbench SearchService深路径override有明确保留理由。
+- Agent Web主题已归Issue Pilot CSS所有；Solid RC已改用上游testing library并删除vendor副本。
+- 已发布migration和Workbench SearchService深路径override有明确保留理由。
 - 大型Workspace/Agent owner共享queue、rollback、transaction或authorization状态，不按行数机械拆分。
 - 零入站production文件均为application、Vite、Worker或Redis Worker入口；未发现其他dead production module。
 
@@ -39,7 +40,7 @@
 | `docs/DEPLOYMENT.md` | 296 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/KUBERNETES.md` | 143 | KUBERNETES主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/MODULE-AUDIT.md` | 183 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/MODULE-AUDIT.md` | 185 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/RUNBOOK.md` | 432 | RUNBOOK主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `drizzle/0000_schema.sql` | 302 | 已发布不可变migration：schema | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/0001_service_sort_order.sql` | 1 | 已发布不可变migration：service sort order | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
@@ -84,11 +85,11 @@
 | `infra/application-compose.mjs` | 63 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `infra/application.sh` | 194 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `infra/config-value.mjs` | 15 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `infra/images/application/Containerfile` | 53 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
+| `infra/images/application/Containerfile` | 52 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `infra/playwright.sh` | 96 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `issue-pilot.config.ts` | 119 | 应用唯一根配置事实源 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `package-lock.json` | 7684 | npm依赖解析锁文件 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `package.json` | 107 | 包、脚本和依赖清单 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `package-lock.json` | 7694 | npm依赖解析锁文件 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `package.json` | 115 | 包、脚本和依赖清单 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/agent/context.ts` | 38 | Agent session实际消费的model、tool和代码写权限上下文 | 必要session数据 | 已删除未消费scope/path/commit/deployment字段 | 保留当前扁平结构 |
 | `src/agent/engine.ts` | 361 | Issue reservation、Agent运行状态、Pi session和消息协调 | 大型但内聚的状态边界 | 拆分会新增queue/rollback/authorization协调 | 保留，不按行数拆 |
 | `src/agent/events.ts` | 116 | Agent事件发布、replay和live缓冲 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -226,7 +227,7 @@
 | `tests/http/sse.test.ts` | 121 | http域的sse行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/user-api.test.ts` | 102 | http域的user-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/web.test.ts` | 70 | http域的web行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/infra/application.test.ts` | 146 | infra域的application行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/infra/application.test.ts` | 147 | infra域的application行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/infra/playwright.test.ts` | 58 | infra域的playwright行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/models.test.ts` | 105 | pi域的models行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/tools.test.ts` | 40 | pi域的tools行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -243,10 +244,3 @@
 | `tests/workspace/source-browser.test.ts` | 125 | workspace域的source-browser行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/state.test.ts` | 166 | workspace域的state行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tsconfig.json` | 17 | 构建、主题或包元数据 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `vendor/solid-testing-library/LICENSE` | 21 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |
-| `vendor/solid-testing-library/README.md` | 14 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |
-| `vendor/solid-testing-library/dist/index.cjs` | 130 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |
-| `vendor/solid-testing-library/dist/index.d.cts` | 160 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |
-| `vendor/solid-testing-library/dist/index.d.ts` | 160 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |
-| `vendor/solid-testing-library/dist/index.js` | 106 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |
-| `vendor/solid-testing-library/package.json` | 21 | 固定的第三方Solid testing shim内容 | 必要临时第三方shim | 不是业务抽象；上游兼容Solid 2后可删除 | 保留并隔离 |

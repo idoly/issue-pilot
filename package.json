@@ -81,8 +81,8 @@
     "@codingame/monaco-vscode-xml-default-extension": "^36.0.0",
     "@codingame/monaco-vscode-yaml-default-extension": "^36.0.0",
     "@idoly/ant-design-solid": "0.2.4",
-    "@solidjs/testing-library": "file:vendor/solid-testing-library",
-    "@solidjs/web": "2.0.0-beta.29",
+    "@solidjs/testing-library": "1.0.0-beta.2",
+    "@solidjs/web": "2.0.0-rc.0",
     "@types/node": "^26.2.0",
     "dompurify": "^3.4.13",
     "github-markdown-css": "5.9.0",
@@ -91,15 +91,23 @@
     "marked": "^18.0.9",
     "material-icon-theme": "^5.37.0",
     "monaco-editor": "npm:@codingame/monaco-vscode-editor-api@^36.0.0",
-    "solid-js": "2.0.0-beta.29",
+    "solid-js": "2.0.0-rc.0",
     "typescript": "^7.0.2",
     "vite": "^8.2.1",
-    "vite-plugin-solid": "3.0.0-next.21",
+    "vite-plugin-solid": "3.0.0-next.27",
     "vitest": "^4.1.0",
     "vscode": "npm:@codingame/monaco-vscode-extension-api@^36.0.0"
   },
   "overrides": {
-    "babel-preset-solid": "2.0.0-beta.29",
+    "@idoly/ant-design-solid": {
+      "@solidjs/web": "2.0.0-rc.0",
+      "solid-js": "2.0.0-rc.0"
+    },
+    "@solidjs/testing-library": {
+      "@solidjs/web": "2.0.0-rc.0",
+      "solid-js": "2.0.0-rc.0"
+    },
+    "babel-preset-solid": "2.0.0-rc.0",
     "dompurify": "$dompurify",
     "nanoid": "3.3.18",
     "undici": "8.9.0"

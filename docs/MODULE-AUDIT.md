@@ -1,6 +1,6 @@
 # Issue Pilot模块设计审计
 
-本文按目录和功能模块审计当前实现，补充[逐文件审计](FILE-AUDIT.md)。范围包括production code、Web、infra、Kubernetes、tests、migration和vendor；排除`node_modules`、`src/web/dist`和真实`.issue-pilot`。
+本文按目录和功能模块审计当前实现，补充[逐文件审计](FILE-AUDIT.md)。范围包括production code、Web、infra、Kubernetes、tests和migration；排除`node_modules`、`src/web/dist`和真实`.issue-pilot`。
 
 ## 判定方法
 
@@ -26,6 +26,8 @@
 - 删除重复credential parse、ToolRuntime双options和Nacos/MySQL内部shape校验。
 - 删除无引用helper、icon wrapper和module export。
 - 将共享底层process executor从`src/capabilities/local-exec.ts`移动到`src/process.ts`；对应test移动到`tests/process/process.test.ts`。它服务Source Browser、ToolRuntime和Aliyun client，不属于某一种capability。
+- 将Agent Web theme收归Issue Pilot CSS，删除Pi terminal theme内部resource依赖。
+- 升级Solid runtime/compiler到`2.0.0-rc.0`，改用上游testing library并删除本地vendor shim及镜像COPY残留。
 
 ## 根共享模块
 
@@ -164,20 +166,20 @@ Workbench依赖较多不是微服务式过度设计，而是嵌入VS Code所需�
 
 Application和Playwright lifecycle不同：前者持久有状态，后者`--rm`无state挂载。合并脚本会混淆权限和cleanup。
 
-## Tests、vendor和docs
+## Tests和docs
 
 | 模块 | 作用 | 设计判断 | 重复/兼容/无用判断 | 结论 |
 | --- | --- | --- | --- | --- |
 | `tests/*` | Backend/infra real behavior regression | 按owner/domain组织 | Test fixture重复用于隔离，不进入production | 保留 |
 | Web colocated tests | Component/pure state/Workbench tests | 与source同目录便于Vite resolver | 不与backend tests强制统一目录 | 保留 |
 | `styles.css` Agent theme tokens | Agent会话颜色、字体和状态token | Web视觉事实由Issue Pilot拥有 | 已删除Pi内部theme resource依赖和runtime转换 | 保留CSS-local token |
-| `vendor/solid-testing-library` | Solid 2 beta peer metadata patch | 临时第三方shim | 上游stable仍不支持当前beta peer | 保留隔离；升级Solid后删除 |
+| Solid test toolchain | 上游testing library和Solid RC compiler/runtime | 依赖边界清晰，无本地第三方副本 | Peer metadata override集中在package manifest | 保留上游包；上游发布RC peer后删除override |
 | `docs/*` | Architecture/config/deploy/develop/runbook/audit owners | 按事实职责拆分 | README只做入口，避免重复细节 | 保留 |
 
 ## 最终判断
 
 当前架构已经没有值得删除的production中间层或zero-inbound业务模块。继续把HTTP domains、protocol clients、Git/lifecycle owner或Workbench providers合并，会减少文件数但增加共享状态、反向依赖和failure-path复杂度。
 
-仍需升级时复核的外部依赖点：Solid 2 stable和testing library peer range兼容后，删除vendor shim。Agent Web主题已归Issue Pilot CSS所有，不再跟随Pi terminal theme或依赖Pi内部resource。
+模块审计中的可执行精简项均已完成。Agent Web主题已归Issue Pilot CSS所有；Solid RC使用上游testing library，不再维护vendor副本。剩余两个package-level peer override仅修正上游尚未发布的RC metadata，待对应包声明RC兼容后直接删除。
 
 除此之外，新增抽象必须证明它减少至少一种真实复杂度：重复transaction、重复rollback、重复authorization、重复protocol parsing或重复UI state。仅为缩短文件、统一命名或让静态分析器不报entrypoint，不足以成立。

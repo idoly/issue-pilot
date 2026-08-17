@@ -129,8 +129,9 @@ exit 0
     assert.match(containerfile, /ARG APP_ROOT=\/opt\/issue-pilot/);
     assert.match(containerfile, /ARG RUNTIME_HOME=\/home\/issue-pilot/);
     assert.match(containerfile, /usermod --home "\$RUNTIME_HOME"/);
-    assert.match(containerfile, /COPY vendor \.\/vendor\nRUN npm ci/);
+    assert.match(containerfile, /COPY package\.json package-lock\.json \.\/\nRUN npm ci/);
     assert.match(containerfile, /npm prune --omit=dev/);
+    assert.doesNotMatch(containerfile, /COPY vendor/);
     assert.doesNotMatch(containerfile, /legacy-peer-deps|podman-remote|podman\.sock/);
     assert.match(containerfile, /COPY --from=maven-tool \/opt\/java\/openjdk/);
     assert.match(containerfile, /COPY --from=maven-tool \/usr\/share\/maven/);
