@@ -23,9 +23,11 @@ export interface CommandExecutor {
 
 export async function executeLocalCommand(command: string, args: string[], options: CommandExecutionOptions = {}): Promise<CommandExecutionResult> {
   return new Promise((resolve, reject) => {
+    const usesProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.environment ? { env: { ...options.environment } } : {}),
+      detached: usesProcessGroup,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -41,11 +43,22 @@ export async function executeLocalCommand(command: string, args: string[], optio
       options.signal?.removeEventListener("abort", abort);
       operation();
     };
+    const signalProcess = (signal: NodeJS.Signals) => {
+      if (!usesProcessGroup || child.pid === undefined) {
+        child.kill(signal);
+        return;
+      }
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill(signal);
+      }
+    };
     const terminate = () => {
       if (killed) return;
       killed = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), issuePilotConfig.limits.process.terminationGraceMs).unref();
+      signalProcess("SIGTERM");
+      setTimeout(() => signalProcess("SIGKILL"), issuePilotConfig.limits.process.terminationGraceMs).unref();
     };
     const abort = () => terminate();
     const timer = options.timeout ? setTimeout(terminate, options.timeout) : undefined;
