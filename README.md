@@ -141,6 +141,7 @@ git diff --check
 | [Kubernetes](docs/KUBERNETES.md) | 单副本 StatefulSet、PVC、Secret 和上线边界 |
 | [Development](docs/DEVELOPMENT.md) | Module owner、改动方法、测试和 review |
 | [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障 |
-| [File Audit](docs/FILE-AUDIT.md) | 当前tracked文件逐文件设计审计 |
+| [Comprehensive Audit](docs/COMPREHENSIVE-AUDIT.md) | 全项目架构、质量、优先级和逐文件完整审查 |
+| [File Audit](docs/FILE-AUDIT.md) | 当前tracked文件逐文件设计清单 |
 | [Module Audit](docs/MODULE-AUDIT.md) | 按目录/功能模块评估边界、重复和精简空间 |
 | [Agent Guide](AGENTS.md) | Coding Agent状态保护和完成标准 |

@@ -1,6 +1,6 @@
 # Issue Pilot逐文件设计审计
 
-范围：当前工作树中的219个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
+范围：当前工作树中的220个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
 
 ## 判定原则
 
@@ -30,12 +30,13 @@
 | `.gitignore` | 11 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.npmrc` | 1 | 项目构建、忽略或运行配置 | 必要registry配置 | 旧peer兼容开关已删除 | 保留单行 |
 | `AGENTS.md` | 181 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `README.md` | 146 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `README.md` | 147 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `deploy/kubernetes/base/kustomization.yaml` | 6 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/service-account.yaml` | 5 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/service.yaml` | 14 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `deploy/kubernetes/base/stateful-set.yaml` | 161 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `docs/ARCHITECTURE.md` | 361 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/COMPREHENSIVE-AUDIT.md` | 4068 | COMPREHENSIVE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/CONFIGURATION.md` | 317 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEPLOYMENT.md` | 296 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
