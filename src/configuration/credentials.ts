@@ -17,19 +17,15 @@ function configuredCredentialValues(key: CapabilityName, section: Record<string,
   return fields.every((field) => typeof values[field] === "string" && values[field].length > 0) ? values as Record<string, string> : undefined;
 }
 
-export function redactCapabilityConfiguration(configuration: CapabilityConfiguration): PublicCapabilityConfiguration {
-  const redacted: Record<string, unknown> = {};
+export function projectCapabilityConfiguration(configuration: CapabilityConfiguration): PublicCapabilityConfiguration {
+  const projected: Record<string, unknown> = {};
   for (const key of CAPABILITY_KEYS) {
     const stored = configuration[key];
     if (!stored) continue;
     const section = stored as Record<string, unknown>;
-    const credentialFields = new Set<string>(CAPABILITY_CREDENTIALS[key].fields as readonly string[]);
-    redacted[key] = {
-      ...Object.fromEntries(Object.entries(section).filter(([field]) => !credentialFields.has(field))),
-      credentialConfigured: Boolean(configuredCredentialValues(key, section)),
-    };
+    projected[key] = { ...section, credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
   }
-  return redacted as PublicCapabilityConfiguration;
+  return projected as PublicCapabilityConfiguration;
 }
 
 function replacementCredentialValues(key: CapabilityName, value: unknown): Record<string, string> {

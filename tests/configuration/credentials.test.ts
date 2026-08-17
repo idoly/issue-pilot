@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { CAPABILITY_CREDENTIALS } from "../../src/configuration/contracts.ts";
-import { redactCapabilityConfiguration, resolveConfiguredCapabilitySections } from "../../src/configuration/credentials.ts";
+import { projectCapabilityConfiguration, resolveConfiguredCapabilitySections } from "../../src/configuration/credentials.ts";
 import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../../src/domain/contracts.ts";
 
 const configuration: CapabilityConfiguration = {
@@ -16,21 +16,22 @@ const configuration: CapabilityConfiguration = {
 };
 
 function publicInput(key: CapabilityName, credentialUpdate: Record<string, unknown>): Record<string, unknown> {
-  const section = redactCapabilityConfiguration(configuration)[key] as Record<string, unknown>;
-  const { credentialConfigured: _credentialConfigured, ...visible } = section;
+  const section = projectCapabilityConfiguration(configuration)[key] as Record<string, unknown>;
+  const credentialFields = new Set<string>(CAPABILITY_CREDENTIALS[key].fields as readonly string[]);
+  const visible = Object.fromEntries(Object.entries(section).filter(([field]) => field !== "credentialConfigured" && !credentialFields.has(field)));
   return { ...visible, credentialUpdate };
 }
 
-test("redacts and preserves every capability credential through the shared contract", () => {
-  const redacted = redactCapabilityConfiguration(configuration);
+test("projects and preserves every capability credential through the shared contract", () => {
+  const projected = projectCapabilityConfiguration(configuration);
   for (const key of CAPABILITY_KEYS) {
-    const section = redacted[key] as Record<string, unknown>;
+    const section = projected[key] as Record<string, unknown>;
     assert.equal(section.credentialConfigured, true);
-    for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(field in section, false);
+    for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(section[field], (configuration[key] as Record<string, unknown>)[field]);
     const resolved = resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], configuration);
     assert.deepEqual(resolved[key], configuration[key]);
   }
-  assert.equal(JSON.stringify(redacted).includes("secret"), false);
+  assert.equal(JSON.stringify(projected).includes("secret"), true);
 });
 
 test("clears only optional credentials and rejects preservation without stored values", () => {

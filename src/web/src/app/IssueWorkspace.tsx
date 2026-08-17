@@ -159,7 +159,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
           </Show>
           <Show when={props.issue.status === "pending"}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
           <Show when={props.issue.status === "resolved"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
-          <Button icon={<Pencil size={15} />} disabled={isWorkspaceBusy(props.issue.workspace.status)} onClick={openEditor}>编辑工单</Button>
+          <Show when={props.issue.status !== "resolved"}><Button icon={<Pencil size={15} />} disabled={isWorkspaceBusy(props.issue.workspace.status)} onClick={openEditor}>编辑工单</Button></Show>
         </div>
       </header>
 

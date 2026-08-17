@@ -14,7 +14,7 @@
 
 应用不接受环境变量覆盖。Node和Web直接导入根配置。环境变量只用于标准进程环境，例如`HOME`，不是Issue Pilot配置override。
 
-普通工作台读取`GET /api/catalog`，只含Environment和Service可用范围。配置页按需读取`GET /api/config`，包含Repository、model、capability scope和`credentialConfigured`，不含已存password或AccessKey。两种读取均经scope queue进入SQLite snapshot transaction。
+普通工作台读取`GET /api/catalog`，只含Environment和Service可用范围。配置页按需读取`GET /api/config`，包含Repository、model、capability scope、`credentialConfigured`以及已存password和AccessKey。该接口只能在受信应用网络内访问，响应不得进入访问日志、监控或诊断附件。两种读取均经scope queue进入SQLite snapshot transaction。
 
 Service保存时，每个selected capability显式提交：
 
@@ -295,7 +295,7 @@ DMS/SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进
 Secret flow：
 
 1. SQLite保存完整typed Deployment config，是唯一业务secret事实源。
-2. Catalog不读取config JSON；Config GET脱敏为`credentialConfigured`。
+2. Catalog不读取config JSON；Config GET返回完整Deployment配置和credential。
 3. Web secret input保持空，仅发送`preserve|replace|clear`意图。
 4. API内存合并后只解析一次并transaction保存。
 5. `AgentSessionContext`、prompt、schema和tool input不含credential。
@@ -303,4 +303,4 @@ Secret flow：
 7. DMS/SLS credential写入临时profile；其他credential只传给in-process protocol client。
 8. Tool result进入model context和Pi JSONL，可能包含敏感业务数据。
 
-不得记录configuration write body、Authorization/Cookie、credential、temporary profile、package config或完整敏感tool result。Config GET虽脱敏，也不应进入普通monitoring log。
+不得记录configuration write body、Config GET响应、Authorization/Cookie、credential、temporary profile、package config或完整敏感tool result。

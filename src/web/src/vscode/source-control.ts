@@ -19,8 +19,8 @@ import type {
   Uri,
 } from "vscode";
 
-import { errorMessage, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceHistory, type SourceCommit, type SourceCommitFile, type SourceCommitFileComparison, type SourceRepository, type SourceWorkspaceFileComparison } from "../data/client";
-import { getIssuePilotVscodeApi, sourceControlRefreshCommand, type IssuePilotVscodeApi } from "./extension-api";
+import { commitSourceChanges, discardSourcePaths, errorMessage, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceHistory, stageSourcePaths, unstageSourcePaths, type SourceBlame, type SourceCommit, type SourceCommitFile, type SourceCommitFileComparison, type SourceRepository, type SourceWorkspaceFileComparison } from "../data/client";
+import { getIssuePilotVscodeApi, sourceControlCommitCommand, sourceControlDiscardCommand, sourceControlOpenChangesCommand, sourceControlOpenFileCommand, sourceControlOpenHeadCommand, sourceControlRefreshCommand, sourceControlStageCommand, sourceControlUnstageCommand, type IssuePilotVscodeApi } from "./extension-api";
 
 const sourceRevisionScheme = "issue-pilot-commit";
 const encoder = new TextEncoder();
@@ -32,6 +32,7 @@ type RevisionResource = {
   path: string;
   side: "before" | "after";
   workspace: boolean;
+  staged?: boolean;
 };
 
 class SourceRevisionFileSystemProvider implements FileSystemProvider {
@@ -50,11 +51,11 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
     };
   }
 
-  registerWorkspace(issueKey: string, repository: string, file: SourceCommitFile): { originalUri: Uri; modifiedUri: Uri } {
-    const request = { issueKey, repository, revision: "working-tree", path: file.path, workspace: true } as const;
+  registerWorkspace(issueKey: string, repository: string, file: SourceCommitFile, workingTreeUri: Uri, staged: boolean): { originalUri: Uri; modifiedUri: Uri } {
+    const request = { issueKey, repository, revision: staged ? "staged" : "working-tree", path: file.path, workspace: true, staged } as const;
     return {
       originalUri: this.resource({ ...request, side: "before" }, file.previousPath ?? file.path),
-      modifiedUri: this.resource({ ...request, side: "after" }, file.path),
+      modifiedUri: file.status === "deleted" || staged ? this.resource({ ...request, side: "after" }, file.path) : workingTreeUri,
     };
   }
 
@@ -74,7 +75,7 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
     let comparison = this.comparisons.get(key);
     if (!comparison) {
       comparison = request.workspace
-        ? loadSourceDiffFile(request.issueKey, request.repository, request.path)
+        ? loadSourceDiffFile(request.issueKey, request.repository, request.path, undefined, request.staged)
         : loadSourceCommitFile(request.issueKey, request.repository, request.revision, request.path);
       this.comparisons.set(key, comparison);
     }
@@ -118,7 +119,7 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
       scheme: sourceRevisionScheme,
       authority: "issue-pilot",
       path: `/${request.issueKey}/${request.repository}/${displayPath}`,
-      query: `revision=${request.revision}&side=${request.side}${request.workspace ? "&workspace=true" : ""}`,
+      query: `revision=${request.revision}&side=${request.side}${request.workspace ? "&workspace=true" : ""}${request.staged ? "&staged=true" : ""}`,
     });
     this.resources.set(resource.toString(), request);
     return resource;
@@ -231,24 +232,30 @@ class SourceControlHistory implements SourceControlHistoryProvider {
   }
 }
 
+type SourceControlMenuResource = SourceControlResourceState & { command?: { command: string; arguments?: unknown[] }; issuePilot?: { repository: string; path: string; staged: boolean } };
+type SourceControlMenuTarget = SourceControlMenuResource | { resourceStates?: readonly SourceControlMenuResource[] };
+
 type RegisteredSourceControl = {
   repository: SourceRepository;
   sourceControl: SourceControl;
-  group: SourceControlResourceGroup;
+  workingGroup: SourceControlResourceGroup;
+  stagedGroup: SourceControlResourceGroup;
   history: SourceControlHistory;
 };
 
-function sourceControlResources(vscode: IssuePilotVscodeApi, issueKey: string, repository: SourceRepository, root: Uri, revisionContent: SourceRevisionFileSystemProvider, files: SourceCommitFile[]): SourceControlResourceState[] {
+function sourceControlResources(vscode: IssuePilotVscodeApi, issueKey: string, repository: SourceRepository, root: Uri, revisionContent: SourceRevisionFileSystemProvider, files: SourceCommitFile[], staged: boolean): SourceControlResourceState[] {
   return files.map((file) => {
     const resourceUri = vscode.Uri.joinPath(root, file.path);
-    const comparison = revisionContent.registerWorkspace(issueKey, repository.name, file);
+    const comparison = revisionContent.registerWorkspace(issueKey, repository.name, file, resourceUri, staged);
+    const displayName = file.path.slice(file.path.lastIndexOf("/") + 1);
     return {
       resourceUri,
-      contextValue: `issue-pilot-${file.status}`,
+      contextValue: `issue-pilot-${staged ? "staged" : "working"}-${file.status}`,
+      issuePilot: { repository: repository.name, path: file.path, staged },
       command: {
         command: "vscode.diff",
         title: "打开变更",
-        arguments: [comparison.originalUri, comparison.modifiedUri, `${file.previousPath ?? file.path} ↔ ${file.path}（工作区变更）`, { preview: false }],
+        arguments: [comparison.originalUri, comparison.modifiedUri, `${displayName} (${staged ? "Index" : "Working Tree"})`, { preview: false }],
       },
       decorations: {
         iconPath: new vscode.ThemeIcon(statusIcon(file)),
@@ -274,10 +281,29 @@ function blameAge(value: string): string {
 }
 
 function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditorService, issueKey: string, repositories: SourceRepository[], workspacePath: string): void {
-  const item = vscode.window.createStatusBarItem("issue-pilot.gitBlameInformation", vscode.StatusBarAlignment.Left, 100);
+  const item = vscode.window.createStatusBarItem("issue-pilot.gitBlameInformation", vscode.StatusBarAlignment.Right, 10_000);
   item.name = "Git Blame Information";
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  let hoverDetail: SourceBlame | undefined;
+  const attachHoverBridge = () => {
+    const element = document.querySelector<HTMLElement>('[id$=".gitBlameInformation"]');
+    if (!element || element.dataset.issuePilotHoverBridge) return;
+    element.dataset.issuePilotHoverBridge = "true";
+    element.addEventListener("mouseenter", () => {
+      if (hoverTimer) clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(() => {
+        if (!hoverDetail) return;
+        const rect = element.getBoundingClientRect();
+        window.parent.postMessage({ kind: "issue-pilot-workbench-blame-hover", issueKey, visible: true, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, detail: hoverDetail }, window.location.origin);
+      }, 300);
+    });
+    element.addEventListener("mouseleave", () => {
+      if (hoverTimer) clearTimeout(hoverTimer);
+      window.parent.postMessage({ kind: "issue-pilot-workbench-blame-hover", issueKey, visible: false }, window.location.origin);
+    });
+  };
   const update = async (resource: { scheme: string; path: string; query?: string }, zeroBasedLine: number) => {
     const currentGeneration = ++generation;
     const filePrefix = `${workspacePath}/`;
@@ -288,7 +314,9 @@ function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditor
         ? resource.path.slice(workspaceRevisionPrefix.length)
         : "";
     if (!relative) {
+      hoverDetail = undefined;
       item.hide();
+      window.parent.postMessage({ kind: "issue-pilot-workbench-blame-hover", issueKey, visible: false }, window.location.origin);
       return;
     }
     const separator = relative.indexOf("/");
@@ -317,7 +345,11 @@ function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditor
       if (blame.commit) tooltip.appendMarkdown(`$(git-commit) \`${blame.commit}\`  \n`);
       tooltip.appendText(`${blame.path}:${blame.line}`);
       item.tooltip = tooltip;
+      hoverDetail = blame;
       item.show();
+      queueMicrotask(attachHoverBridge);
+      setTimeout(attachHoverBridge, 100);
+      setTimeout(attachHoverBridge, 500);
     } catch {
       if (currentGeneration === generation) item.hide();
     }
@@ -351,25 +383,38 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
   const providers: RegisteredSourceControl[] = repositories.map((repository) => {
     const root = vscode.Uri.file(`${workspacePath}/${repository.name}`);
     const sourceControl = vscode.scm.createSourceControl(`issue-pilot-${repository.name}`, repository.name, root);
-    sourceControl.inputBox.visible = false;
-    const group = sourceControl.createResourceGroup("working-tree", "工作区变更");
-    group.contextValue = "issue-pilot-readonly";
-    group.hideWhenEmpty = false;
+    sourceControl.inputBox.visible = repository.access === "write";
+    sourceControl.inputBox.placeholder = "Message (press Ctrl+Enter to commit)";
+    sourceControl.acceptInputCommand = repository.access === "write" ? { command: sourceControlCommitCommand, title: "Commit", arguments: [repository.name] } : undefined;
+    sourceControl.actionButton = repository.access === "write" ? {
+      command: { command: sourceControlCommitCommand, title: "Commit", arguments: [repository.name] },
+      enabled: true,
+    } : undefined;
+    const stagedGroup = sourceControl.createResourceGroup("staged", "Staged Changes");
+    stagedGroup.contextValue = repository.access === "write" ? "issue-pilot-staged" : "issue-pilot-readonly";
+    stagedGroup.hideWhenEmpty = true;
+    const workingGroup = sourceControl.createResourceGroup("working-tree", "Changes");
+    workingGroup.contextValue = repository.access === "write" ? "issue-pilot-working" : "issue-pilot-readonly";
+    workingGroup.hideWhenEmpty = false;
     const history = new SourceControlHistory(vscode, issueKey, repository, root, revisionContent);
     sourceControl.historyProvider = history;
     history.publishCurrentRef();
-    return { repository, sourceControl, group, history };
+    return { repository, sourceControl, workingGroup, stagedGroup, history };
   });
 
   let refreshGeneration = 0;
   const refresh = async () => {
     const generation = ++refreshGeneration;
-    await Promise.all(providers.map(async ({ repository, sourceControl, group, history }) => {
+    await Promise.all(providers.map(async ({ repository, sourceControl, workingGroup, stagedGroup, history }) => {
       try {
-        const response = await loadSourceDiff(issueKey, repository.name);
+        const [working, staged] = await Promise.all([
+          loadSourceDiff(issueKey, repository.name),
+          loadSourceDiff(issueKey, repository.name, "", undefined, true),
+        ]);
         if (generation === refreshGeneration) {
-          group.resourceStates = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, response.files);
-          sourceControl.count = response.files.length;
+          workingGroup.resourceStates = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, working.files, false);
+          stagedGroup.resourceStates = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, staged.files, true);
+          sourceControl.count = working.files.length + staged.files.length;
           history.invalidate();
         }
       } catch (error) {
@@ -379,6 +424,54 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
   };
 
   vscode.commands.registerCommand(sourceControlRefreshCommand, refresh);
+  vscode.commands.registerCommand(sourceControlOpenChangesCommand, (resource: SourceControlMenuResource) => resource.command
+    ? vscode.commands.executeCommand(resource.command.command, ...(resource.command.arguments ?? []))
+    : undefined);
+  const contextUri = (resource: SourceControlMenuResource | Uri | { sourceUri?: Uri }) => {
+    if (resource instanceof vscode.Uri) return resource;
+    if ("resourceUri" in resource && resource.resourceUri instanceof vscode.Uri) return resource.resourceUri;
+    return "sourceUri" in resource && resource.sourceUri instanceof vscode.Uri ? resource.sourceUri : undefined;
+  };
+  vscode.commands.registerCommand(sourceControlOpenFileCommand, (resource: SourceControlMenuResource | Uri | { sourceUri?: Uri }) => {
+    const uri = contextUri(resource);
+    return uri ? vscode.window.showTextDocument(uri, { preview: false }) : undefined;
+  });
+  vscode.commands.registerCommand(sourceControlOpenHeadCommand, (resource: SourceControlMenuResource) => {
+    const original = resource.command?.arguments?.[0];
+    return original instanceof vscode.Uri ? vscode.window.showTextDocument(original, { preview: false }) : undefined;
+  });
+  const resourcesFor = (target: SourceControlMenuTarget): SourceControlMenuResource[] => "resourceStates" in target && target.resourceStates ? [...target.resourceStates] : [target as SourceControlMenuResource];
+  const mutation = (target: SourceControlMenuTarget) => {
+    const resources = resourcesFor(target).filter((resource) => resource.issuePilot);
+    const repository = resources[0]?.issuePilot?.repository;
+    if (!repository || resources.some((resource) => resource.issuePilot?.repository !== repository)) return undefined;
+    return { repository, paths: resources.map((resource) => resource.issuePilot!.path) };
+  };
+  const mutateResource = async (target: SourceControlMenuTarget, operation: (repository: string, paths: string[]) => Promise<unknown>) => {
+    const selected = mutation(target);
+    if (!selected) return;
+    await operation(selected.repository, selected.paths);
+    await refresh();
+  };
+  vscode.commands.registerCommand(sourceControlStageCommand, (target: SourceControlMenuTarget) => mutateResource(target, (repository, paths) => stageSourcePaths(issueKey, repository, paths)));
+  vscode.commands.registerCommand(sourceControlUnstageCommand, (target: SourceControlMenuTarget) => mutateResource(target, (repository, paths) => unstageSourcePaths(issueKey, repository, paths)));
+  vscode.commands.registerCommand(sourceControlDiscardCommand, async (target: SourceControlMenuTarget) => {
+    const selected = mutation(target);
+    if (!selected) return;
+    const label = selected.paths.length === 1 ? selected.paths[0] : `${selected.paths.length} files`;
+    const confirmation = await vscode.window.showWarningMessage(`Discard changes in ${label}?`, { modal: true }, "Discard Changes");
+    if (confirmation !== "Discard Changes") return;
+    await discardSourcePaths(issueKey, selected.repository, selected.paths);
+    await refresh();
+  });
+  vscode.commands.registerCommand(sourceControlCommitCommand, async (repositoryName: string) => {
+    const provider = providers.find(({ repository }) => repository.name === repositoryName && repository.access === "write");
+    const message = provider?.sourceControl.inputBox.value.trim();
+    if (!provider || !message) return;
+    await commitSourceChanges(issueKey, repositoryName, message);
+    provider.sourceControl.inputBox.value = "";
+    await refresh();
+  });
   window.addEventListener("focus", () => { void refresh(); });
   await refresh();
   return refresh;

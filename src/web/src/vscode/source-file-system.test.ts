@@ -25,10 +25,10 @@ const vscode = vi.hoisted(() => {
 vi.mock("@codingame/monaco-vscode-files-service-override", () => vscode);
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
-  return { ...actual, loadSourceTree: vi.fn(), loadSourceFile: vi.fn(), saveSourceFile: vi.fn() };
+  return { ...actual, loadSourceTree: vi.fn(), loadSourceFile: vi.fn(), saveSourceFile: vi.fn(), createSourceFile: vi.fn(), createSourceDirectory: vi.fn(), deleteSourcePath: vi.fn(), renameSourcePath: vi.fn() };
 });
 
-import { loadSourceFile, loadSourceTree, saveSourceFile } from "../data/client";
+import { createSourceDirectory, createSourceFile, deleteSourcePath, loadSourceFile, loadSourceTree, renameSourcePath, saveSourceFile } from "../data/client";
 import { SourceFileSystemProvider } from "./source-file-system";
 
 const issueKey = "ISSUE-20260815-001";
@@ -44,6 +44,10 @@ describe("VS Code source filesystem", () => {
     vi.mocked(loadSourceTree).mockReset();
     vi.mocked(loadSourceFile).mockReset();
     vi.mocked(saveSourceFile).mockReset();
+    vi.mocked(createSourceFile).mockReset();
+    vi.mocked(createSourceDirectory).mockReset();
+    vi.mocked(deleteSourcePath).mockReset();
+    vi.mocked(renameSourcePath).mockReset();
   });
 
   it("projects Source API trees and files into a readonly VS Code workspace", async () => {
@@ -92,6 +96,26 @@ describe("VS Code source filesystem", () => {
 
     expect(saveSourceFile).toHaveBeenCalledWith(issueKey, "orders", "README.md", "# Updated", "a".repeat(64));
     expect(onWrite).toHaveBeenCalledOnce();
+  });
+
+  it("creates, renames, and deletes development files", async () => {
+    const writable = new SourceFileSystemProvider(issueKey, [{ ...repository, access: "write" }]);
+    const created = uri(`/issue-pilot/${issueKey}/orders/src/new.ts`);
+    const renamed = uri(`/issue-pilot/${issueKey}/orders/src/result.ts`);
+    vi.mocked(createSourceFile).mockResolvedValue({ path: "src/new.ts", content: "new\n", size: 4, sha256: "c".repeat(64) });
+    const onWrite = vi.fn();
+    writable.setOnWrite(onWrite);
+
+    await writable.mkdir(uri(`/issue-pilot/${issueKey}/orders/src`));
+    await writable.writeFile(created, new TextEncoder().encode("new\n"), { create: true, overwrite: false, unlock: false, atomic: false });
+    await writable.rename(created, renamed, { overwrite: false });
+    await writable.delete(renamed, { recursive: false, useTrash: false, atomic: false });
+
+    expect(createSourceDirectory).toHaveBeenCalledWith(issueKey, "orders", "src");
+    expect(createSourceFile).toHaveBeenCalledWith(issueKey, "orders", "src/new.ts", "new\n");
+    expect(renameSourcePath).toHaveBeenCalledWith(issueKey, "orders", "src/new.ts", "src/result.ts", false);
+    expect(deleteSourcePath).toHaveBeenCalledWith(issueKey, "orders", "src/result.ts", false);
+    expect(onWrite).toHaveBeenCalledTimes(4);
   });
 
   it("does not issue a file request when the parent tree proves the file is absent", async () => {

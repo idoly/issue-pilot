@@ -1,5 +1,5 @@
 import { Button } from "@idoly/ant-design-solid";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X } from "../ui/icons";
 
@@ -23,12 +23,25 @@ function validRect(value: unknown): value is WorkbenchPartRect {
 }
 
 type WorkbenchView = "explorer" | "search" | "source-control";
+type WorkbenchBlameHover = { left: number; bottom: number; author: string; date: string | null; subject: string; commit: string | null; path: string; line: number };
 
-export default function CodeBrowser(props: { issueKey: string; agentOpen: boolean; detailsOpen: boolean; onClose: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onToggleAgent: () => void; onToggleDetails: () => void }) {
-  const workbenchUrl = () => `/vscode.html?issue=${encodeURIComponent(props.issueKey)}`;
-  const [activeView, setActiveView] = createSignal<WorkbenchView | undefined>("explorer", { ownedWrite: true });
+function validBlameDetail(value: unknown): value is Omit<WorkbenchBlameHover, "left" | "bottom"> {
+  if (!value || typeof value !== "object") return false;
+  const detail = value as Partial<WorkbenchBlameHover>;
+  return typeof detail.author === "string" && (detail.date === null || typeof detail.date === "string") && typeof detail.subject === "string"
+    && (detail.commit === null || typeof detail.commit === "string") && typeof detail.path === "string" && Number.isSafeInteger(detail.line) && detail.line! > 0;
+}
+
+export default function CodeBrowser(props: { issueKey: string; development: boolean; agentOpen: boolean; detailsOpen: boolean; onClose: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onToggleAgent: () => void; onToggleDetails: () => void }) {
+  const initialView: WorkbenchView = untrack(() => props.development) ? "source-control" : "explorer";
+  const workbenchUrl = () => `/vscode.html?issue=${encodeURIComponent(props.issueKey)}&view=${initialView}`;
+  const [activeView, setActiveView] = createSignal<WorkbenchView | undefined>(initialView, { ownedWrite: true });
   const [frame, setFrame] = createSignal<HTMLIFrameElement | undefined>(undefined, { ownedWrite: true });
-  const [contextMenuOpen, setContextMenuOpen] = createSignal(false, { ownedWrite: true });
+  const [blameHover, setBlameHover] = createSignal<WorkbenchBlameHover | undefined>(undefined, { ownedWrite: true });
+  let blameHideTimer: ReturnType<typeof setTimeout> | undefined;
+  let blameHovering = false;
+  const cancelBlameHide = () => { if (blameHideTimer) clearTimeout(blameHideTimer); blameHideTimer = undefined; };
+  const scheduleBlameHide = () => { cancelBlameHide(); blameHideTimer = setTimeout(() => setBlameHover(undefined), 500); };
   const [workbenchReady, setWorkbenchReady] = createSignal(false, { ownedWrite: true });
   const toggleView = (view: WorkbenchView) => {
     const visible = activeView() !== view;
@@ -38,15 +51,20 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
   let removeLayoutListener = () => {};
   createEffect(frame, (currentFrame) => {
     removeLayoutListener();
-    setContextMenuOpen(false);
+    setBlameHover(undefined);
     setWorkbenchReady(false);
     if (!currentFrame) return;
     const receiveLayout = (event: MessageEvent<unknown>) => {
       if (event.origin !== window.location.origin || event.source !== currentFrame.contentWindow) return;
-      const message = event.data as { kind?: unknown; issueKey?: unknown; visible?: unknown; panel?: unknown; auxiliary?: unknown; panelVisible?: unknown; auxiliaryVisible?: unknown } | null;
+      const message = event.data as { kind?: unknown; issueKey?: unknown; visible?: unknown; rect?: unknown; detail?: unknown; panel?: unknown; auxiliary?: unknown; panelVisible?: unknown; auxiliaryVisible?: unknown } | null;
       if (message?.issueKey !== props.issueKey) return;
-      if (message.kind === "issue-pilot-workbench-context-menu" && typeof message.visible === "boolean") {
-        setContextMenuOpen(message.visible);
+      if (message.kind === "issue-pilot-workbench-blame-hover" && typeof message.visible === "boolean") {
+        if (!message.visible) {
+          if (!blameHovering) scheduleBlameHide();
+        } else if (validRect(message.rect) && validBlameDetail(message.detail)) {
+          cancelBlameHide();
+          setBlameHover({ ...message.detail, left: Math.max(12, Math.min(currentFrame.offsetLeft + currentFrame.clientWidth - 452, currentFrame.offsetLeft + message.rect.x + message.rect.width - 440)), bottom: Math.max(0, currentFrame.clientHeight - message.rect.y) });
+        }
         return;
       }
       if (message.kind !== "issue-pilot-workbench-layout" || !validRect(message.panel) || !validRect(message.auxiliary)) return;
@@ -65,13 +83,13 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
     window.addEventListener("message", receiveLayout);
     removeLayoutListener = () => window.removeEventListener("message", receiveLayout);
   });
-  onCleanup(() => removeLayoutListener());
+  onCleanup(() => { removeLayoutListener(); cancelBlameHide(); });
   createEffect(() => ({ currentFrame: frame(), issueKey: props.issueKey, panelOpen: props.agentOpen, auxiliaryOpen: props.detailsOpen }), ({ currentFrame, issueKey, panelOpen, auxiliaryOpen }) => {
     currentFrame?.contentWindow?.postMessage({ kind: "issue-pilot-workbench-parts", issueKey, panelOpen, auxiliaryOpen }, window.location.origin);
   });
 
   return (
-    <section class={`source-browser${contextMenuOpen() ? " context-menu-open" : ""}`} aria-label={`${props.issueKey} 代码浏览器`}>
+    <section class="source-browser" aria-label={`${props.issueKey} 代码浏览器`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}>
       <header class="source-browser-header source-browser-header-workbench">
         <div class="source-browser-title"><Code2 size={16} /><strong>代码</strong><small>{props.issueKey}</small></div>
         <div class="source-view-switcher" role="toolbar" aria-label="代码视图">
@@ -91,6 +109,15 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
         sandbox="allow-scripts allow-same-origin"
         referrerpolicy="no-referrer"
       />
+      <Show when={blameHover()}>{(hover) => (
+        <div class="source-blame-hover" role="tooltip" style={`left:${hover().left}px;bottom:${hover().bottom}px`} onPointerEnter={() => { blameHovering = true; cancelBlameHide(); }} onPointerLeave={() => { blameHovering = false; scheduleBlameHide(); }}>
+          <strong>{hover().author}</strong>
+          <Show when={hover().date}><time>{new Date(hover().date!).toLocaleString()}</time></Show>
+          <p>{hover().subject}</p>
+          <Show when={hover().commit}><code>{hover().commit}</code></Show>
+          <small>{hover().path}:{hover().line}</small>
+        </div>
+      )}</Show>
       <Show when={!workbenchReady()}><div class="source-workbench-loading" role="status" aria-label="代码工作台加载中"><span /></div></Show>
     </section>
   );

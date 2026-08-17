@@ -52,7 +52,9 @@ import getWorkbenchServiceOverride, { registerCustomView, ViewContainerLocation 
 import getWorkingCopyServiceOverride from "@codingame/monaco-vscode-working-copy-service-override";
 import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace-trust-service-override";
 import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
-import { IEditorService, IStatusbarService } from "@codingame/monaco-vscode-api/services";
+import { IEditorService, IStatusbarService, IViewsService } from "@codingame/monaco-vscode-api/services";
+import { Action } from "@codingame/monaco-vscode-api/vscode/vs/base/common/actions";
+import { IContextMenuService, IContextViewService } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextview/browser/contextView.service";
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { parseIssueKey } from "../../../domain/contracts";
@@ -85,27 +87,57 @@ function registerEmbeddedViews(): void {
   register("issue-pilot.details", "工单详情", ViewContainerLocation.AuxiliaryBar, detailsViewClass);
 }
 
-function observeContextMenus(issueKey: string): void {
-  let visible = false;
-  const publish = () => {
-    const menu = document.querySelector<HTMLElement>(".context-view.monaco-menu-container");
-    const next = Boolean(menu && menu.offsetParent !== null && getComputedStyle(menu).visibility !== "hidden");
-    if (next === visible) return;
-    visible = next;
-    if (next && menu) {
-      menu.style.translate = "";
-      const menuRect = menu.getBoundingClientRect();
-      const panelRect = document.querySelector<HTMLElement>(".part.panel")?.getBoundingClientRect();
-      const auxiliaryRect = document.querySelector<HTMLElement>(".part.auxiliarybar")?.getBoundingClientRect();
-      const overlaps = (left: DOMRect, right: DOMRect) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
-      const y = panelRect && overlaps(menuRect, panelRect) ? panelRect.top - menuRect.bottom - 8 : 0;
-      const moved = new DOMRect(menuRect.x, menuRect.y + y, menuRect.width, menuRect.height);
-      const x = auxiliaryRect && overlaps(moved, auxiliaryRect) ? auxiliaryRect.left - moved.right - 8 : 0;
-      if (x || y) menu.style.translate = `${x}px ${y}px`;
-    } else if (menu) menu.style.translate = "";
-    window.parent.postMessage({ kind: "issue-pilot-workbench-context-menu", issueKey, visible }, window.location.origin);
-  };
-  new MutationObserver(publish).observe(document.body, { attributes: true, childList: true, subtree: true });
+function limitContextMenus(container: HTMLElement, vscode: Awaited<ReturnType<typeof getIssuePilotVscodeApi>>, contextMenuService: IContextMenuService, contextViewService: IContextViewService): void {
+  let resourceRow: HTMLElement | undefined;
+  container.addEventListener("contextmenu", (event) => {
+    const target = event.target;
+    const resource = target instanceof Element ? target.closest<HTMLElement>(".resource, .resource-group, .history-item-change") : null;
+    if (resource) {
+      resourceRow = resource.closest<HTMLElement>(".monaco-list-row") ?? undefined;
+      if (!resource.classList.contains("resource-group") || !resourceRow) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const count = Number(resource.querySelector<HTMLElement>(".monaco-count-badge")?.textContent ?? "0");
+      const actions = [...resourceRow.querySelectorAll<HTMLElement>(".actions [aria-label]")].map((element) => {
+        const label = element.getAttribute("aria-label")!;
+        return new Action(`issue-pilot.resource-group.${label}`, label, undefined, count > 0, () => element.click());
+      });
+      contextMenuService.showContextMenu({ getAnchor: () => ({ x: event.clientX, y: event.clientY }), getActions: () => actions });
+      return;
+    }
+    resourceRow = undefined;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  container.addEventListener("click", (event) => {
+    const target = event.target;
+    const action = target instanceof Element ? target.closest<HTMLElement>(".action-menu-item") : null;
+    const label = action?.querySelector<HTMLElement>(".action-label")?.getAttribute("aria-label");
+    if (!resourceRow || !label) return;
+    if (label === "Open Changes") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      resourceRow.click();
+      contextViewService.hideContextView(false);
+      return;
+    }
+    if (label === "Open File") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const path = resourceRow.querySelector<HTMLElement>(".monaco-icon-label.file-icon")?.getAttribute("aria-label");
+      if (path?.startsWith("~/")) void vscode.window.showTextDocument(vscode.Uri.file(path.slice(1)), { preview: false });
+      contextViewService.hideContextView(false);
+      return;
+    }
+    if (!["Stage Changes", "Unstage Changes", "Discard Changes"].includes(label)) return;
+    const inlineAction = [...resourceRow.querySelectorAll<HTMLElement>(".actions [aria-label]")]
+      .find((candidate) => candidate.getAttribute("aria-label") === label);
+    if (!inlineAction) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    inlineAction.click();
+    contextViewService.hideContextView(false);
+  }, true);
 }
 
 function observeWorkbenchParts(issueKey: string, container: HTMLElement, layout: IWorkbenchLayoutService): void {
@@ -181,7 +213,9 @@ function renderError(message: string): void {
 }
 
 async function start(): Promise<void> {
-  const issueKey = parseIssueKey(new URL(window.location.href).searchParams.get("issue") ?? "");
+  const parameters = new URL(window.location.href).searchParams;
+  const issueKey = parseIssueKey(parameters.get("issue") ?? "");
+  const initialView = parameters.get("view") === "source-control" ? "source-control" : "explorer";
   if (!issueKey) throw new Error("invalid_issue_key");
   const repositories = await loadSourceRepositories(issueKey);
   if (!repositories.length) throw new Error("source_repository_not_found");
@@ -245,6 +279,7 @@ async function start(): Promise<void> {
       "workbench.startupEditor": "none",
       "workbench.statusBar.visible": true,
       "security.workspace.trust.enabled": false,
+      "scm.repositories.selectionMode": "single",
       "editor.dropIntoEditor.enabled": false,
       "editor.minimap.enabled": true,
       "editor.stickyScroll.enabled": true,
@@ -259,13 +294,13 @@ async function start(): Promise<void> {
     },
     productConfiguration: {
       nameShort: "Issue Pilot",
-      nameLong: "Issue Pilot只读代码工作台",
+      nameLong: "Issue Pilot代码工作台",
     },
   }, { userHome: monaco.Uri.file("/") });
 
-  const [layout, editorService, statusbarService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getService(IStatusbarService), getIssuePilotVscodeApi()]);
+  const [layout, editorService, statusbarService, contextMenuService, contextViewService, viewsService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getService(IStatusbarService), getService(IContextMenuService), getService(IContextViewService), getService(IViewsService), getIssuePilotVscodeApi()]);
   registerWorkbenchBridge(issueKey, vscode, layout, container);
-  observeContextMenus(issueKey);
+  limitContextMenus(container, vscode, contextMenuService, contextViewService);
   registerMarkdownPreviewAction(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
@@ -287,6 +322,8 @@ async function start(): Promise<void> {
     registerSourceControls(issueKey, repositories, provider.workspacePath, editorService),
   ]);
   provider.setOnWrite(() => { void refreshSourceControls(); });
+  await viewsService.openView("workbench.scm.repositories", false);
+  if (initialView === "source-control") await vscode.commands.executeCommand("workbench.view.scm");
   await vscode.commands.executeCommand("markdown.api.render", "# Issue Pilot");
   await registerMarkdownPreviewCommands(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);

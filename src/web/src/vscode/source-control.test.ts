@@ -31,8 +31,8 @@ const harness = vi.hoisted(() => {
     appendMarkdown(value: string) { this.value += value; return this; }
   }
 
-  const commands = new Map<string, () => Promise<void>>();
-  const statusItems: Array<{ name?: string; text?: string; tooltip?: string | MarkdownString; visible: boolean; show(): void; hide(): void }> = [];
+  const commands = new Map<string, (...args: never[]) => unknown>();
+  const statusItems: Array<{ alignment: number; priority: number; name?: string; text?: string; tooltip?: string | MarkdownString; visible: boolean; show(): void; hide(): void }> = [];
   const editorMouseListeners: Array<(event: { target: { position?: { lineNumber: number } } }) => void> = [];
   let editorModelUri = Uri.file("/");
   const editorService = {
@@ -43,7 +43,7 @@ const harness = vi.hoisted(() => {
     },
     onDidActiveEditorChange: () => new Disposable(() => undefined),
   };
-  const controls: Array<{ id: string; label: string; rootUri: Uri; inputBox: { visible: boolean }; count?: number; historyProvider?: unknown; groups: Array<{ id: string; label: string; resourceStates: unknown[]; contextValue?: string; hideWhenEmpty?: boolean }> }> = [];
+  const controls: Array<{ id: string; label: string; rootUri: Uri; inputBox: { visible: boolean; placeholder?: string; value?: string }; acceptInputCommand?: unknown; count?: number; historyProvider?: unknown; groups: Array<{ id: string; label: string; resourceStates: unknown[]; contextValue?: string; hideWhenEmpty?: boolean }> }> = [];
   const fileSystemProviders: Array<{ scheme: string; provider: unknown; options: unknown }> = [];
   const vscode = {
     Disposable,
@@ -54,15 +54,16 @@ const harness = vi.hoisted(() => {
     ThemeIcon,
     MarkdownString,
     Uri,
-    StatusBarAlignment: { Left: 1 },
+    StatusBarAlignment: { Left: 1, Right: 2 },
     window: {
-      createStatusBarItem() {
-        const item = { visible: false, show() { this.visible = true; }, hide() { this.visible = false; } };
+      showWarningMessage: vi.fn(),
+      createStatusBarItem(_id: string, alignment: number, priority: number) {
+        const item = { alignment, priority, visible: false, show() { this.visible = true; }, hide() { this.visible = false; } };
         statusItems.push(item);
         return item;
       },
     },
-    commands: { registerCommand: (id: string, command: () => Promise<void>) => { commands.set(id, command); return new Disposable(() => commands.delete(id)); } },
+    commands: { registerCommand: (id: string, command: (...args: never[]) => unknown) => { commands.set(id, command); return new Disposable(() => commands.delete(id)); }, executeCommand: vi.fn() },
     workspace: {
       registerFileSystemProvider(scheme: string, provider: unknown, options: unknown) {
         fileSystemProviders.push({ scheme, provider, options });
@@ -75,7 +76,7 @@ const harness = vi.hoisted(() => {
           id,
           label,
           rootUri,
-          inputBox: { visible: true },
+          inputBox: { visible: true, value: "" },
           count: undefined as number | undefined,
           historyProvider: undefined as unknown,
           groups: [] as Array<{ id: string; label: string; resourceStates: unknown[]; contextValue?: string; hideWhenEmpty?: boolean }>,
@@ -95,6 +96,13 @@ const harness = vi.hoisted(() => {
 
 vi.mock("./extension-api", () => ({
   sourceControlRefreshCommand: "issue-pilot.sourceControl.refresh",
+  sourceControlOpenChangesCommand: "issue-pilot.sourceControl.openChanges",
+  sourceControlOpenFileCommand: "issue-pilot.sourceControl.openFile",
+  sourceControlOpenHeadCommand: "issue-pilot.sourceControl.openHead",
+  sourceControlStageCommand: "issue-pilot.sourceControl.stage",
+  sourceControlUnstageCommand: "issue-pilot.sourceControl.unstage",
+  sourceControlDiscardCommand: "issue-pilot.sourceControl.discard",
+  sourceControlCommitCommand: "issue-pilot.sourceControl.commit",
   getIssuePilotVscodeApi: async () => harness.vscode,
 }));
 vi.mock("../data/client", async (importOriginal) => {
@@ -139,24 +147,26 @@ describe("VS Code readonly Source Control extension", () => {
       before: { path, version: "index", content: `before:${path}` },
       after: path === "src/old.ts" ? null : { path, version: "working-tree", content: `after:${path}` },
     }));
-    harness.diff
-      .mockResolvedValueOnce({ files: [{ status: "modified", path: "src/form.ts", previousPath: null }, { status: "deleted", path: "src/old.ts", previousPath: null }], truncated: false })
-      .mockResolvedValueOnce({ files: [], truncated: false });
+    harness.diff.mockImplementation(async (_key: string, repository: string, _path?: string, _signal?: AbortSignal, staged?: boolean) => ({
+      files: repository === "web" && !staged ? [{ status: "modified", path: "src/form.ts", previousPath: null }, { status: "deleted", path: "src/old.ts", previousPath: null }] : [],
+      truncated: false,
+    }));
 
     harness.setEditorModelUri(harness.vscode.Uri.file(`/issue-pilot/${issueKey}/web/src/form.ts`));
     await registerSourceControls(issueKey, repositories, `/issue-pilot/${issueKey}`, harness.editorService as never);
 
-    expect(harness.diff).toHaveBeenNthCalledWith(1, issueKey, "web");
-    expect(harness.diff).toHaveBeenNthCalledWith(2, issueKey, "api");
+    expect(harness.diff).toHaveBeenCalledWith(issueKey, "web");
+    expect(harness.diff).toHaveBeenCalledWith(issueKey, "web", "", undefined, true);
     expect(harness.controls).toHaveLength(2);
     const web = harness.controls[0]!;
-    expect(web.inputBox.visible).toBe(false);
+    expect(web.inputBox.visible).toBe(true);
     expect(web.count).toBe(2);
-    const resources = web.groups[0]!.resourceStates as Array<{ resourceUri: { path: string }; command: { command: string; arguments: Array<{ path: string; toString(): string } | string | { preview: boolean }> }; decorations: { tooltip: string } }>;
+    expect(web.groups.map((group) => group.label)).toEqual(["Staged Changes", "Changes"]);
+    const resources = web.groups[1]!.resourceStates as Array<{ resourceUri: { path: string }; command: { command: string; arguments: Array<{ path: string; toString(): string } | string | { preview: boolean }> }; decorations: { tooltip: string } }>;
     expect(resources.map((resource) => resource.decorations.tooltip)).toEqual(["修改: src/form.ts", "删除: src/old.ts"]);
     expect(resources[0]).toEqual(expect.objectContaining({ resourceUri: expect.objectContaining({ path: `/issue-pilot/${issueKey}/web/src/form.ts` }), command: expect.objectContaining({ command: "vscode.diff" }) }));
     expect(resources[1]!.command.command).toBe("vscode.diff");
-    expect(resources[0]!.command.arguments[2]).toBe("src/form.ts ↔ src/form.ts（工作区变更）");
+    expect(resources[0]!.command.arguments[2]).toBe("form.ts (Working Tree)");
 
     const historyProvider = web.historyProvider as { provideHistoryItems(options: { limit: number }): Promise<Array<{ subject: string; displayId: string }>>; provideHistoryItemChanges(id: string): Promise<Array<{ uri: { path: string }; originalUri?: { path: string }; modifiedUri?: { path: string; toString(): string } }>> };
     const history = await historyProvider.provideHistoryItems({ limit: 20 });
@@ -174,7 +184,7 @@ describe("VS Code readonly Source Control extension", () => {
     await revisionContent.readFile(changes[0]!.modifiedUri!);
     expect(harness.commitFile).toHaveBeenCalledTimes(1);
     expect(new TextDecoder().decode(await revisionContent.readFile(resources[0]!.command.arguments[0]))).toBe("before:src/form.ts");
-    expect(new TextDecoder().decode(await revisionContent.readFile(resources[0]!.command.arguments[1]))).toBe("after:src/form.ts");
+    expect(resources[0]!.command.arguments[1]).toEqual(expect.objectContaining({ scheme: "file", path: `/issue-pilot/${issueKey}/web/src/form.ts` }));
     expect(new TextDecoder().decode(await revisionContent.readFile(resources[1]!.command.arguments[1]))).toBe("");
     expect(harness.diffFile).toHaveBeenCalledTimes(2);
     expect(() => revisionContent.writeFile()).toThrow("source_read_only");
@@ -185,9 +195,18 @@ describe("VS Code readonly Source Control extension", () => {
     harness.editorMouseListeners[0]!({ target: { position: { lineNumber: 7 } } });
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(harness.blame).toHaveBeenCalledWith(issueKey, "web", "src/form.ts", 7);
-    expect(harness.statusItems[0]).toEqual(expect.objectContaining({ visible: true, name: "Git Blame Information" }));
+    expect(harness.statusItems[0]).toEqual(expect.objectContaining({ alignment: harness.vscode.StatusBarAlignment.Right, priority: 10_000, visible: true, name: "Git Blame Information" }));
     expect(harness.statusItems[0]!.text).toContain("$(git-commit) Fixture User");
     expect((harness.statusItems[0]!.tooltip as InstanceType<typeof harness.vscode.MarkdownString>).value).toContain("Explain form state");
-    expect([...harness.commands.keys()]).toEqual(["issue-pilot.sourceControl.refresh"]);
+    expect([...harness.commands.keys()]).toEqual([
+      "issue-pilot.sourceControl.refresh",
+      "issue-pilot.sourceControl.openChanges",
+      "issue-pilot.sourceControl.openFile",
+      "issue-pilot.sourceControl.openHead",
+      "issue-pilot.sourceControl.stage",
+      "issue-pilot.sourceControl.unstage",
+      "issue-pilot.sourceControl.discard",
+      "issue-pilot.sourceControl.commit",
+    ]);
   });
 });

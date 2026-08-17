@@ -12,7 +12,7 @@ export const CAPABILITY_CREDENTIALS = {
 
 type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIALS)[Key]["fields"][number];
 export type CapabilityCredentialValues<Key extends CapabilityName> = Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
-export type PublicCapabilitySection<Key extends CapabilityName> = Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialConfigured: boolean };
+export type PublicCapabilitySection<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]> & { credentialConfigured: boolean };
 export type PublicCapabilityConfiguration = { [Key in CapabilityName]?: PublicCapabilitySection<Key> };
 export type CapabilityCredentialUpdate<Key extends CapabilityName> =
   | { mode: "preserve" }

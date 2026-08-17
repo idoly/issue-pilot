@@ -5,7 +5,7 @@ import { environments, serviceDeploymentRepositories, serviceDeployments, servic
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
-import { redactCapabilityConfiguration } from "./credentials.ts";
+import { projectCapabilityConfiguration } from "./credentials.ts";
 
 type ConfigurationReader = Pick<Database, "select">;
 
@@ -79,7 +79,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
           const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();
           if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
           return {
-            ...redactCapabilityConfiguration(deploymentConfig),
+            ...projectCapabilityConfiguration(deploymentConfig),
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
             capabilities: configuredCapabilities(deploymentConfig),

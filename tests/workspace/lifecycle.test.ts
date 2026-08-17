@@ -143,7 +143,7 @@ test("shares one active Workspace statistics scan across concurrent callers", as
   });
   const internal = manager as unknown as {
     issueRows(): Promise<Array<{ issue: { id: string; key: string }; workspace: null }>>;
-    inspectLocked(issue: { id: string; key: string }, workspace: null): Promise<WorkspaceInspection>;
+    inspectLocked(issue: { id: string; key: string }, workspace: null, repositories?: unknown, knownBytes?: number): Promise<WorkspaceInspection>;
   };
   internal.issueRows = async () => [{ issue: { id: "issue-a", key: "ISSUE-20260814-001" }, workspace: null }];
   let releaseFirst!: () => void;
@@ -151,8 +151,10 @@ test("shares one active Workspace statistics scan across concurrent callers", as
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const started = new Promise<void>((resolve) => { markStarted = resolve; });
   let inspections = 0;
-  internal.inspectLocked = async (issue) => {
+  const knownMeasurements: Array<number | undefined> = [];
+  internal.inspectLocked = async (issue, _workspace, _repositories, knownBytes) => {
     inspections += 1;
+    knownMeasurements.push(knownBytes);
     if (inspections === 1) {
       markStarted();
       await firstGate;
@@ -171,6 +173,7 @@ test("shares one active Workspace statistics scan across concurrent callers", as
 
   await manager.stats();
   assert.equal(inspections, 2);
+  assert.deepEqual(knownMeasurements, [undefined, 0]);
 });
 
 test("bounds concurrent Workspace inspections while preserving Issue order", async () => {

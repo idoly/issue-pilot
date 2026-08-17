@@ -118,7 +118,7 @@ export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/a
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 
-type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match";
+type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite";
 
 function sourceResponseRecord(value: unknown, code: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
@@ -160,6 +160,15 @@ export const saveSourceFile = (key: string, repository: string, path: string, co
   body: content,
   headers: { "Content-Type": "text/plain; charset=utf-8" },
 }) as Promise<SourceFile>;
+export const createSourceFile = (key: string, repository: string, path: string, content: string) => sourceRequest(key, "file", repository, { Path: path }, undefined, { method: "POST", body: content, headers: { "Content-Type": "text/plain; charset=utf-8" } }) as Promise<SourceFile>;
+export const createSourceDirectory = (key: string, repository: string, path: string) => sourceRequest(key, "directory", repository, { Path: path }, undefined, { method: "POST" });
+export const deleteSourcePath = (key: string, repository: string, path: string, recursive: boolean) => sourceRequest(key, "path", repository, { Path: path, Recursive: String(recursive) }, undefined, { method: "DELETE" });
+export const renameSourcePath = (key: string, repository: string, path: string, destination: string, overwrite: boolean) => sourceRequest(key, "rename", repository, { Path: path, Destination: destination, Overwrite: String(overwrite) }, undefined, { method: "POST" });
+const mutateSourceGit = (key: string, repository: string, action: "stage" | "unstage" | "discard", paths: string[]) => sourceRequest(key, action, repository, {}, undefined, { method: "POST", body: JSON.stringify({ paths }), headers: { "Content-Type": "application/json" } });
+export const stageSourcePaths = (key: string, repository: string, paths: string[]) => mutateSourceGit(key, repository, "stage", paths);
+export const unstageSourcePaths = (key: string, repository: string, paths: string[]) => mutateSourceGit(key, repository, "unstage", paths);
+export const discardSourcePaths = (key: string, repository: string, paths: string[]) => mutateSourceGit(key, repository, "discard", paths);
+export const commitSourceChanges = (key: string, repository: string, message: string) => sourceRequest(key, "commit", repository, {}, undefined, { method: "POST", body: JSON.stringify({ message }), headers: { "Content-Type": "application/json" } });
 export const searchSource = (key: string, repository: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}, signal?: AbortSignal) => sourceRequest(key, "search", repository, {
   Query: query,
   "Case-Sensitive": String(options.caseSensitive ?? true),
@@ -181,15 +190,15 @@ export async function loadSourceCommitFile(key: string, repository: string, revi
   if (!before && !after) throw new Error(code);
   return { file: sourceCommitFile(response.file, code), before, after };
 }
-export async function loadSourceDiff(key: string, repository: string, path = "", signal?: AbortSignal): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
+export async function loadSourceDiff(key: string, repository: string, path = "", signal?: AbortSignal, staged = false): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
   const code = "source_diff_response_invalid";
-  const response = sourceResponseRecord(await sourceRequest(key, "diff", repository, { Path: path }, signal), code);
+  const response = sourceResponseRecord(await sourceRequest(key, "diff", repository, { Path: path, Staged: String(staged) }, signal), code);
   if (!Array.isArray(response.files) || typeof response.truncated !== "boolean") throw new Error(code);
   return { files: response.files.map((file) => sourceCommitFile(file, code)), truncated: response.truncated };
 }
-export async function loadSourceDiffFile(key: string, repository: string, path: string, signal?: AbortSignal): Promise<SourceWorkspaceFileComparison> {
+export async function loadSourceDiffFile(key: string, repository: string, path: string, signal?: AbortSignal, staged = false): Promise<SourceWorkspaceFileComparison> {
   const code = "source_diff_file_response_invalid";
-  const response = sourceResponseRecord(await sourceRequest(key, "diff-file", repository, { Path: path }, signal), code);
+  const response = sourceResponseRecord(await sourceRequest(key, "diff-file", repository, { Path: path, Staged: String(staged) }, signal), code);
   const before = sourceWorkspaceFile(response.before, code);
   const after = sourceWorkspaceFile(response.after, code);
   if (!before && !after) throw new Error(code);

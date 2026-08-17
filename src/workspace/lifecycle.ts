@@ -87,6 +87,8 @@ export class WorkspaceLifecycleManager {
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
   private statsPromise: Promise<WorkspaceStatistics> | undefined;
+  private workspaceBytesCache: { expiresAt: number; values: Map<string, number> } | undefined;
+  private readonly workspaceBytesCacheMs: number;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
 
@@ -103,6 +105,7 @@ export class WorkspaceLifecycleManager {
     this.stateRoot = path.resolve(stateRoot);
     this.engine = engine;
     this.policy = policy;
+    this.workspaceBytesCacheMs = Math.min(60_000, policy.maintenanceIntervalMs > 0 ? policy.maintenanceIntervalMs : 5_000);
     this.worktrees = new WorktreeManager(this.stateRoot);
     this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
     this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => this.projects.hydrateDevelopmentRuntime(issue));
@@ -142,11 +145,13 @@ export class WorkspaceLifecycleManager {
     if (this.statsPromise) return this.statsPromise;
     const request = this.exclusive(async () => {
       const issueRows = await this.issueRows();
+      const measuredBytes = this.workspaceBytesCache && this.workspaceBytesCache.expiresAt > Date.now() ? this.workspaceBytesCache.values : undefined;
       const inspections = await pMap(
         issueRows,
-        (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace)),
+        (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow.issue, issueRow.workspace, undefined, measuredBytes?.get(issueRow.issue.id))),
         { concurrency: this.policy.taskConcurrency, stopOnError: false },
       );
+      this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: new Map(inspections.map((workspace) => [workspace.issueId, workspace.bytes])) };
       return {
         totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
         policy: {
@@ -164,6 +169,7 @@ export class WorkspaceLifecycleManager {
   }
 
   async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {
+    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.releaseLocked(await this.issueRow(issueId), reservation),
@@ -175,6 +181,7 @@ export class WorkspaceLifecycleManager {
   }
 
   async reopenIssue(issueId: string): Promise<Issue> {
+    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation),
@@ -186,6 +193,7 @@ export class WorkspaceLifecycleManager {
   }
 
   async convertIssueToDevelopment(issueId: string): Promise<Issue> {
+    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation),
@@ -218,6 +226,7 @@ export class WorkspaceLifecycleManager {
           if (!release.alreadyReleased) {
             released.push(release);
             totalBytes = Math.max(0, totalBytes - (workspaceBytes.get(candidate.issue.id) ?? release.releasedBytes));
+            workspaceBytes.set(candidate.issue.id, 0);
           }
         } catch (error) {
           if (error instanceof WorkspaceReleaseRefusal) blocked.push({ issueKey: candidate.issue.key, reason: error.reason });
@@ -240,6 +249,7 @@ export class WorkspaceLifecycleManager {
           if (!attemptedIssues.has(candidate.issue.id)) await releaseCandidate(candidate);
         }
       }
+      this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: workspaceBytes };
       return { totalBytes, released, blocked };
     });
   }
@@ -424,9 +434,9 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  private async inspectLocked(issue: Issue, workspace: IssueWorkspace | null, knownRepositories?: IssueRepository[]): Promise<WorkspaceInspection> {
+  private async inspectLocked(issue: Issue, workspace: IssueWorkspace | null, knownRepositories?: IssueRepository[], knownBytes?: number): Promise<WorkspaceInspection> {
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
-    const bytes = await directoryBytes(workspaceRoot);
+    const bytes = knownBytes ?? await directoryBytes(workspaceRoot);
     let blockedReason: string | null = null;
     if (issue.status !== "resolved") blockedReason = "issue_not_resolved";
     else if (this.engine.isRunning(issue.id)) blockedReason = "issue_already_running";

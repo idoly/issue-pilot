@@ -97,8 +97,8 @@ User、Service、Repository、Deployment、model、branch 和完整 capability c
 - Kubernetes Service必须由带TLS/auth的可信Ingress保护。
 - Application、Pi 和项目脚本使用同一低权限 OS 身份；容器不是不可信代码 sandbox。
 - Workbench 和 Source API 会返回内部源码；开发环境还允许保存现有workspace文件，属于敏感接口。
-- `GET /api/config` 不返回已存 secret，但包含内部 Repository、model 和 scope。
-- Deployment credential 不进入配置 GET、`AgentSessionContext`、prompt、tool schema、tool input、argv 或日志；DMS/SLS 使用临时 `0600` CLI profile。
+- `GET /api/config` 返回内部 Repository、model、scope 和已存 Deployment credential，只能在受信应用网络内访问且不得记录响应。
+- Deployment credential 不进入`AgentSessionContext`、prompt、tool schema、tool input、argv或日志；DMS/SLS使用临时`0600` CLI profile。
 - Capability result 会进入模型上下文和该 Issue 的 Pi JSONL。
 - DMS SQL 和 SLS query 会短暂出现在 application 进程列表；需要隐藏 query 时必须改为 SDK 或签名 HTTP client。
 

@@ -12,6 +12,8 @@ body {
 }
 
 .monaco-workbench .editor-actions .action-item,
+.monaco-workbench .part.sidebar .composite.title .actions-container,
+.monaco-workbench .part.sidebar .pane-header .actions,
 .monaco-workbench .activitybar .global-activity,
 .monaco-workbench .action-item:has(.codicon-panel-maximize),
 .monaco-workbench .action-item:has(.codicon-auxiliarybar-maximize),
@@ -21,6 +23,8 @@ body {
 .monaco-workbench .search-view .replace-container,
 .monaco-workbench .search-view [aria-label^="Use Regular Expression"],
 .monaco-workbench .search-view [aria-label="Toggle Search Details"],
+.monaco-workbench .part.sidebar .action-item:has(.action-label.codicon-toolbar-more[aria-label="Views and More Actions..."]),
+.monaco-workbench .part.sidebar .action-item:has(.action-label.codicon-toolbar-more[aria-label="More Actions..."]),
 .context-view.monaco-menu-container .action-item:has(.action-label[aria-label="Keyboard Layout"]) {
   display: none !important;
 }

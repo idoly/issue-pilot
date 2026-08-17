@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -185,6 +185,74 @@ export class SourceBrowser {
     return this.workingFile(context, selected);
   }
 
+  async createFile(issue: IssueReference, repositoryName: string, relativePath: string, content: string): Promise<{ path: string; content: string; size: number; sha256: string }> {
+    const context = await this.writableContext(issue, repositoryName);
+    const candidate = await this.mutableDestination(context, relativePath);
+    const next = Buffer.from(content, "utf8");
+    if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+    try { await writeFile(candidate, next, { flag: "wx", mode: 0o644 }); }
+    catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+      throw error;
+    }
+    return this.workingFile(context, relativePath);
+  }
+
+  async createDirectory(issue: IssueReference, repositoryName: string, relativePath: string): Promise<void> {
+    const context = await this.writableContext(issue, repositoryName);
+    const candidate = await this.mutableDestination(context, relativePath);
+    try { await mkdir(candidate); }
+    catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+      throw error;
+    }
+  }
+
+  async deletePath(issue: IssueReference, repositoryName: string, relativePath: string, recursive: boolean): Promise<void> {
+    const context = await this.writableContext(issue, repositoryName);
+    const candidate = await this.resolvePath(context.root, relativePath);
+    if (candidate === context.root) throw new Error("invalid_source_path");
+    await rm(candidate, { recursive, force: false });
+  }
+
+  async renamePath(issue: IssueReference, repositoryName: string, relativePath: string, destinationPath: string, overwrite: boolean): Promise<void> {
+    const context = await this.writableContext(issue, repositoryName);
+    const source = await this.resolvePath(context.root, relativePath);
+    if (source === context.root) throw new Error("invalid_source_path");
+    const destination = await this.mutableDestination(context, destinationPath, overwrite);
+    if (overwrite) await rm(destination, { recursive: true, force: true });
+    await rename(source, destination);
+  }
+
+  async stage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
+    const context = await this.writableContext(issue, repositoryName);
+    await this.gitMutation(context, ["add", "-A", "--", ...this.mutablePaths(paths)], "source_stage_failed");
+  }
+
+  async unstage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
+    const context = await this.writableContext(issue, repositoryName);
+    await this.gitMutation(context, ["reset", "-q", "HEAD", "--", ...this.mutablePaths(paths)], "source_unstage_failed");
+  }
+
+  async discard(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
+    const context = await this.writableContext(issue, repositoryName);
+    const selected = this.mutablePaths(paths);
+    const tracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "ls-files", "-z", "--", ...selected], this.mutationOptions());
+    if (tracked.killed) throw new Error("source_discard_timeout");
+    if (tracked.code !== 0) throw new Error("source_discard_failed");
+    const trackedPaths = tracked.stdout.split("\0").filter(Boolean);
+    if (trackedPaths.length) await this.gitMutation(context, ["checkout", "--", ...trackedPaths], "source_discard_failed");
+    await this.gitMutation(context, ["clean", "-fd", "--", ...selected], "source_discard_failed");
+  }
+
+  async createCommit(issue: IssueReference, repositoryName: string, message: string, author: { name: string; email: string }): Promise<void> {
+    const value = message.trim();
+    if (!value || value.length > 4000 || value.includes("\0")) throw new Error("invalid_source_commit_message");
+    if (!author.name.trim() || !author.email.trim() || author.name.includes("\0") || author.email.includes("\0")) throw new Error("invalid_source_commit_author");
+    const context = await this.writableContext(issue, repositoryName);
+    await this.gitMutation(context, ["-c", `user.name=${author.name.trim()}`, "-c", `user.email=${author.email.trim()}`, "commit", "-m", value], "source_commit_failed");
+  }
+
   async search(issue: IssueReference, repositoryName: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}): Promise<{ matches: SourceSearchMatch[]; truncated: boolean }> {
     const value = query.trim();
     if (!value || value.length > issuePilotConfig.limits.sourceBrowser.searchQueryCharacters || value.includes("\0")) throw new Error("invalid_source_query");
@@ -309,11 +377,11 @@ export class SourceBrowser {
     return { file, before, after };
   }
 
-  async diff(issue: IssueReference, repositoryName: string, relativePath = ""): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
+  async diff(issue: IssueReference, repositoryName: string, relativePath = "", staged = false): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
     const context = await this.context(issue, repositoryName);
     const selected = normalizedRelativePath(relativePath);
     try {
-      const files = await this.workspaceChangedFiles(context, selected);
+      const files = await this.workspaceChangedFiles(context, selected, staged);
       const limit = issuePilotConfig.limits.sourceBrowser.changeFiles;
       return { files: files.slice(0, limit), truncated: files.length > limit };
     } catch (error) {
@@ -322,7 +390,7 @@ export class SourceBrowser {
     }
   }
 
-  async diffFile(issue: IssueReference, repositoryName: string, relativePath: string): Promise<{
+  async diffFile(issue: IssueReference, repositoryName: string, relativePath: string, staged = false): Promise<{
     file: SourceCommitFile;
     before: SourceWorkspaceFile | null;
     after: SourceWorkspaceFile | null;
@@ -331,7 +399,7 @@ export class SourceBrowser {
     const selected = sourcePath(normalizedRelativePath(relativePath));
     if (!selected) throw new Error("invalid_source_path");
     let files: SourceCommitFile[];
-    try { files = await this.workspaceChangedFiles(context, ""); }
+    try { files = await this.workspaceChangedFiles(context, "", staged); }
     catch (error) {
       if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_diff_too_large");
       throw error;
@@ -341,10 +409,10 @@ export class SourceBrowser {
     const beforePath = file.previousPath ?? file.path;
     const before = file.status === "added"
       ? null
-      : { path: beforePath, version: "index" as const, content: await this.indexFile(context, beforePath) };
+      : { path: beforePath, version: "index" as const, content: staged ? await this.revisionFile(context, "HEAD", beforePath) : await this.indexFile(context, beforePath) };
     const after = file.status === "deleted"
       ? null
-      : { path: file.path, version: "working-tree" as const, content: (await this.workingFile(context, file.path)).content };
+      : { path: file.path, version: "working-tree" as const, content: staged ? await this.indexFile(context, file.path) : (await this.workingFile(context, file.path)).content };
     return { file, before, after };
   }
 
@@ -382,13 +450,25 @@ export class SourceBrowser {
     return this.parseChangedFiles(result.stdout, "invalid_source_history_response");
   }
 
-  private async workspaceChangedFiles(context: SourceContext, selected: string): Promise<SourceCommitFile[]> {
+  private async workspaceChangedFiles(context: SourceContext, selected: string, staged: boolean): Promise<SourceCommitFile[]> {
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [
-      "-C", context.root, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C", "--", ...(selected ? [selected] : []),
+      "-C", context.root, "diff", ...(staged ? ["--cached"] : []), "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C", "--", ...(selected ? [selected] : []),
     ], this.commandOptions());
     if (result.killed) throw new Error("source_diff_timeout");
     if (result.code !== 0) throw new Error("source_diff_failed");
-    return this.parseChangedFiles(result.stdout, "invalid_source_diff_response");
+    const files = this.parseChangedFiles(result.stdout, "invalid_source_diff_response");
+    if (staged) return files;
+    const untracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [
+      "-C", context.root, "ls-files", "--others", "--exclude-standard", "-z", "--", ...(selected ? [selected] : []),
+    ], this.commandOptions());
+    if (untracked.killed) throw new Error("source_diff_timeout");
+    if (untracked.code !== 0) throw new Error("source_diff_failed");
+    const known = new Set(files.map((file) => file.path));
+    for (const rawPath of untracked.stdout.split("\0").filter(Boolean)) {
+      const filePath = sourcePath(normalizedRelativePath(rawPath));
+      if (filePath && !known.has(filePath)) files.push({ status: "added", path: filePath, previousPath: null });
+    }
+    return files;
   }
 
   private parseChangedFiles(output: string, invalidResponse: string): SourceCommitFile[] {
@@ -467,6 +547,52 @@ export class SourceBrowser {
     if (!workspace[0]?.runtimeReady) throw new Error("source_browser_unavailable");
     if (classifyRepositoryState(repositories) === "invalid") throw new Error("source_repository_state_invalid");
     return repositories;
+  }
+
+  private async writableContext(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
+    const context = await this.context(issue, repositoryName);
+    if (context.source.access !== "write") throw new Error("source_read_only");
+    return context;
+  }
+
+  private mutablePaths(paths: string[]): string[] {
+    if (!paths.length || paths.length > issuePilotConfig.limits.sourceBrowser.changeFiles) throw new Error("invalid_source_path");
+    return paths.map((value) => {
+      const selected = sourcePath(normalizedRelativePath(value));
+      if (!selected) throw new Error("invalid_source_path");
+      return selected;
+    });
+  }
+
+  private async mutableDestination(context: SourceContext, relativePath: string, allowExisting = false): Promise<string> {
+    const selected = normalizedRelativePath(relativePath);
+    if (!selected) throw new Error("invalid_source_path");
+    const candidate = path.resolve(context.root, selected);
+    if (!isInside(context.root, candidate)) throw new Error("invalid_source_path");
+    const parent = await this.resolvePath(context.root, path.dirname(selected));
+    if (path.dirname(candidate) !== parent) throw new Error("source_path_outside_repository");
+    if (!allowExisting) {
+      try { await lstat(candidate); throw new Error("source_path_exists"); }
+      catch (error) {
+        if (error instanceof Error && error.message === "source_path_exists") throw error;
+        if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+      }
+    }
+    return candidate;
+  }
+
+  private mutationOptions() {
+    return {
+      timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
+      maxOutputBytes: issuePilotConfig.limits.sourceBrowser.commandOutputBytes,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "1" } as Record<string, string>,
+    };
+  }
+
+  private async gitMutation(context: SourceContext, args: string[], failure: string, acceptedCodes = new Set([0])): Promise<void> {
+    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, ...args], this.mutationOptions());
+    if (result.killed) throw new Error(`${failure.replace(/_failed$/, "")}_timeout`);
+    if (!acceptedCodes.has(result.code)) throw new Error(failure);
   }
 
   private async context(issue: IssueReference, repositoryName: string): Promise<SourceContext> {

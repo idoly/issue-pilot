@@ -43,7 +43,7 @@ button, input, textarea { font: inherit; }
   font-weight: 800;
 }
 .brand strong { font-size: 16px; letter-spacing: 0; }
-.header-context { grid-column: 1; grid-row: 1; justify-self: end; color: #c9d2cf; font-size: 13px; }
+.header-context { grid-column: 2; grid-row: 1; justify-self: center; color: #c9d2cf; font-size: 13px; }
 .app-header .ads-segmented { background: #28332f; color: #b8c3be; }
 .app-header .ads-segmented button { color: #b8c3be; box-shadow: none; }
 .app-header .ads-segmented button:hover { color: #fff; }
@@ -305,6 +305,11 @@ button, input, textarea { font: inherit; }
 .source-browser-header-workbench > .ads-button:last-child:hover { background: #da3633; color: #fff; }
 .source-workbench-frame { width: 100%; min-width: 0; min-height: 0; flex: 1; border: 0; background: #0d1117; }
 .source-workbench-loading { position: absolute; z-index: 2; inset: 44px 0 0; display: grid; place-items: center; background: #0d1117; }
+.source-blame-hover { position: absolute; z-index: 8; display: grid; width: min(440px, calc(100% - 24px)); max-height: 260px; gap: 6px; overflow: auto; padding: 10px 12px; border: 1px solid #45484d; border-radius: 4px; background: #181b20; box-shadow: 0 8px 24px rgb(0 0 0 / 45%); color: #f0f0f0; font: 13px/1.45 "Segoe UI", var(--app-font); }
+.source-blame-hover strong, .source-blame-hover time { display: inline; }
+.source-blame-hover time { color: #9da7b3; }
+.source-blame-hover p { margin: 2px 0; white-space: pre-wrap; }
+.source-blame-hover code, .source-blame-hover small { overflow-wrap: anywhere; color: #b7c6d9; }
 .source-workbench-loading span { width: 22px; height: 22px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: source-workbench-spin 800ms linear infinite; }
 @keyframes source-workbench-spin { to { transform: rotate(360deg); } }
 .agent-panel {

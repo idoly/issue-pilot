@@ -13,7 +13,7 @@ import {
 } from "@codingame/monaco-vscode-files-service-override";
 import type { Uri } from "monaco-editor";
 
-import { errorMessage, loadSourceFile, loadSourceTree, saveSourceFile, type SourceRepository, type SourceTreeEntry } from "../data/client";
+import { createSourceDirectory, createSourceFile, deleteSourcePath, errorMessage, loadSourceFile, loadSourceTree, renameSourcePath, saveSourceFile, type SourceRepository, type SourceTreeEntry } from "../data/client";
 
 const encoder = new TextEncoder();
 const noEvent = () => ({ dispose() {} });
@@ -103,16 +103,19 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
     }
   }
 
-  async writeFile(resource: Uri, content: Uint8Array, _options: IFileWriteOptions): Promise<void> {
+  async writeFile(resource: Uri, content: Uint8Array, options: IFileWriteOptions): Promise<void> {
     const parsed = this.parseRepositoryPath(resource);
     if (this.repositoryByName.get(parsed.repository)?.access !== "write") throw providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked);
     const expectedSha256 = this.fileHashes.get(resource.path);
-    if (!expectedSha256) throw providerError("source_file_not_loaded", FileSystemProviderErrorCode.FileWriteLocked);
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(content); }
     catch { throw providerError("source_file_binary", FileSystemProviderErrorCode.FileWriteLocked); }
     try {
-      const file = await saveSourceFile(this.issueKey, parsed.repository, parsed.relativePath, text, expectedSha256);
+      const file = expectedSha256
+        ? await saveSourceFile(this.issueKey, parsed.repository, parsed.relativePath, text, expectedSha256)
+        : options.create
+          ? await createSourceFile(this.issueKey, parsed.repository, parsed.relativePath, text)
+          : (() => { throw providerError("source_file_not_loaded", FileSystemProviderErrorCode.FileWriteLocked); })();
       this.fileHashes.set(resource.path, file.sha256);
       this.onWrite();
     } catch (error) {
@@ -124,16 +127,24 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
     this.onWrite = listener;
   }
 
-  mkdir(_resource: Uri): Promise<void> {
-    return Promise.reject(providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked));
+  async mkdir(resource: Uri): Promise<void> {
+    const parsed = this.writablePath(resource);
+    try { await createSourceDirectory(this.issueKey, parsed.repository, parsed.relativePath); this.onWrite(); }
+    catch (error) { throw sourceError(error); }
   }
 
-  delete(_resource: Uri, _options: IFileDeleteOptions): Promise<void> {
-    return Promise.reject(providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked));
+  async delete(resource: Uri, options: IFileDeleteOptions): Promise<void> {
+    const parsed = this.writablePath(resource);
+    try { await deleteSourcePath(this.issueKey, parsed.repository, parsed.relativePath, options.recursive); this.fileHashes.delete(resource.path); this.onWrite(); }
+    catch (error) { throw sourceError(error); }
   }
 
-  rename(_from: Uri, _to: Uri, _options: IFileOverwriteOptions): Promise<void> {
-    return Promise.reject(providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked));
+  async rename(from: Uri, to: Uri, options: IFileOverwriteOptions): Promise<void> {
+    const source = this.writablePath(from);
+    const destination = this.writablePath(to);
+    if (source.repository !== destination.repository) throw providerError("source_path_outside_repository", FileSystemProviderErrorCode.NoPermissions);
+    try { await renameSourcePath(this.issueKey, source.repository, source.relativePath, destination.relativePath, options.overwrite); this.fileHashes.delete(from.path); this.onWrite(); }
+    catch (error) { throw sourceError(error); }
   }
 
   private parseRepositoryPath(resource: Uri): { repository: string; relativePath: string } {
@@ -145,6 +156,12 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
     const relativePath = separator < 0 ? "" : relative.slice(separator + 1);
     if (!this.repositoryByName.has(repository)) throw providerError("source_repository_not_found", FileSystemProviderErrorCode.FileNotFound);
     return { repository, relativePath };
+  }
+
+  private writablePath(resource: Uri): { repository: string; relativePath: string } {
+    const parsed = this.parseRepositoryPath(resource);
+    if (!parsed.relativePath || this.repositoryByName.get(parsed.repository)?.access !== "write") throw providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked);
+    return parsed;
   }
 
   private async directory(repository: string, relativePath: string): Promise<SourceTreeEntry[]> {

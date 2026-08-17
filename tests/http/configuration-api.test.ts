@@ -56,7 +56,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
   }
 });
 
-test("redacts stored credentials and applies explicit preserve, replace, and clear updates", async () => {
+test("returns stored credentials and applies explicit preserve, replace, and clear updates", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
@@ -90,13 +90,12 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
     const savedService = saved.services[0]!;
     const deployment = savedService.deployments[0]!;
     assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
-    assert.deepEqual(deployment.dms, { dbId: "123456", logic: true, tid: "987654", credentialConfigured: true });
+    assert.deepEqual(deployment.dms, { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: true, tid: "987654", credentialConfigured: true });
     assert.equal("playwright" in deployment, false);
-    assert.deepEqual(deployment.sls, { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialConfigured: true });
+    assert.deepEqual(deployment.sls, { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"], credentialConfigured: true });
     assert.deepEqual(deployment.es, { url: "http://es.example.test/proxy", username: "", credentialConfigured: false });
     const secrets = ["nacos-secret", "db-secret", "redis-secret", "mq-secret", "dms-key", "dms-secret", "sls-key", "sls-secret"];
-    assert.equal(secrets.some((secret) => response.body.includes(secret)), false);
-    assert.equal(response.body.includes("accessKeyId") || response.body.includes("accessKeySecret") || response.body.includes("password"), false);
+    assert.equal(secrets.every((secret) => response.body.includes(secret)), true);
 
     const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, string>>;

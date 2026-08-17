@@ -51,7 +51,7 @@ Browser
 | Owner | 责任 |
 | --- | --- |
 | `src/http` | HTTP边界、subject、reservation、transaction、SSE和static Web |
-| `src/configuration` | Catalog/config DTO、credential脱敏/合并、snapshot projection |
+| `src/configuration` | Catalog/config DTO、credential投影/合并、snapshot projection |
 | `src/agent` | 每Issue queue、reservation、context、Pi session、event和prompt |
 | `src/pi` | Model runtime和Registry-driven tool注册 |
 | `src/workspace/project.ts` | Agent/cold-start/reopen项目prepare与runtime hydration |
@@ -336,7 +336,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 - API无内置认证；所有入口需外部TLS/auth/authorization。
 - ClusterIP Service只允许通过可信TLS/auth Ingress访问。
 - Workbench和Source API返回内部代码；development write还会直接修改Issue workspace，均属于敏感接口。
-- Config GET脱敏但仍包含Repository、model和scope。
+- Config GET包含Repository、model、scope和完整Deployment credential，只允许在受信应用网络内使用且不得记录响应。
 - Credential update使用`preserve|replace|clear`，已存secret不返回浏览器。
 - Credential不进入context、prompt、tool input、argv或日志。
 - DMS/SLS临时profile包含AccessKey；query仍出现在process argv。

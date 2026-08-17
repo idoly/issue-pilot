@@ -1,12 +1,14 @@
 import type { FastifyRequest } from "fastify";
+import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { subjects } from "../db/schema.ts";
 import { ApiError } from "./input.ts";
-import { requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 const notFoundErrors = new Set(["source_repository_not_found", "source_path_not_found", "source_commit_not_found", "source_commit_file_not_found", "source_diff_file_not_found"]);
-const conflictErrors = new Set(["source_browser_unavailable", "source_repository_state_invalid", "source_runtime_invalid", "source_read_only", "source_file_changed"]);
-const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_revision", "invalid_source_line", "invalid_source_hash", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
+const conflictErrors = new Set(["source_browser_unavailable", "source_repository_state_invalid", "source_runtime_invalid", "source_read_only", "source_file_changed", "source_path_exists", "source_stage_failed", "source_unstage_failed", "source_discard_failed", "source_commit_failed"]);
+const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_revision", "invalid_source_line", "invalid_source_hash", "invalid_source_commit_message", "invalid_source_commit_author", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
 const contentErrors = new Set(["source_file_too_large", "source_file_binary", "source_commit_too_large", "source_diff_too_large"]);
 
 function headerValue(value: string | string[] | undefined, required = false): string {
@@ -37,6 +39,7 @@ async function sourceOperation<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 type SourceRequest = FastifyRequest<{ Params: { key: string } }>;
+type GitRequest = FastifyRequest<{ Params: { key: string }; Body: { paths?: unknown } }>;
 type Issue = Awaited<ReturnType<typeof requireIssue>>;
 
 export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
@@ -61,6 +64,8 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
   register("repositories", (issue) => sourceBrowser.repositories(issue));
   register("tree", (issue, request) => sourceBrowser.tree(issue, repository(request), relativePath(request)));
   register("file", (issue, request) => sourceBrowser.file(issue, repository(request), relativePath(request, true)));
+  const mutate = <T>(request: FastifyRequest<{ Params: { key: string } }>, operation: (issue: Issue) => Promise<T>) => requireIssue(database, request.params.key)
+    .then((issue) => runIssueExclusive(engine, [issue.id], () => sourceOperation(() => operation(issue))));
   app.put<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", {
     logLevel: "silent",
     bodyLimit: issuePilotConfig.limits.sourceBrowser.fileBytes,
@@ -76,6 +81,32 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
       headerValue(request.headers["x-issue-pilot-sha256"], true),
     )));
   });
+  app.post<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", { logLevel: "silent", bodyLimit: issuePilotConfig.limits.sourceBrowser.fileBytes }, (request) => {
+    if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
+    return mutate(request, (issue) => sourceBrowser.createFile(issue, repository(request), relativePath(request, true), request.body));
+  });
+  app.post<{ Params: { key: string } }>("/api/issues/:key/source/directory", { logLevel: "silent" }, (request) => mutate(request, (issue) => sourceBrowser.createDirectory(issue, repository(request), relativePath(request, true))));
+  app.delete<{ Params: { key: string } }>("/api/issues/:key/source/path", { logLevel: "silent" }, (request) => mutate(request, (issue) => sourceBrowser.deletePath(issue, repository(request), relativePath(request, true), booleanHeader(request.headers["x-issue-pilot-recursive"], false))));
+  app.post<{ Params: { key: string } }>("/api/issues/:key/source/rename", { logLevel: "silent" }, (request) => mutate(request, (issue) => sourceBrowser.renamePath(issue, repository(request), relativePath(request, true), headerValue(request.headers["x-issue-pilot-destination"], true), booleanHeader(request.headers["x-issue-pilot-overwrite"], false))));
+  const gitPaths = (request: GitRequest) => {
+    const paths = request.body?.paths;
+    if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) throw new ApiError(400, "invalid_source_request");
+    return paths as string[];
+  };
+  for (const [action, operation] of [
+    ["stage", (issue: Issue, request: GitRequest) => sourceBrowser.stage(issue, repository(request), gitPaths(request))],
+    ["unstage", (issue: Issue, request: GitRequest) => sourceBrowser.unstage(issue, repository(request), gitPaths(request))],
+    ["discard", (issue: Issue, request: GitRequest) => sourceBrowser.discard(issue, repository(request), gitPaths(request))],
+  ] as const) app.post<{ Params: { key: string }; Body: { paths?: unknown } }>(`/api/issues/:key/source/${action}`, { logLevel: "silent" }, (request) => mutate(request, (issue) => operation(issue, request)));
+  app.post<{ Params: { key: string }; Body: { message?: unknown } }>("/api/issues/:key/source/commit", { logLevel: "silent" }, async (request) => {
+    const subject = await ensureCurrentSubject(database, request);
+    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+    if (!person) throw new ApiError(400, "invalid_current_subject");
+    return mutate(request, (issue) => sourceBrowser.createCommit(issue, repository(request), typeof request.body?.message === "string" ? request.body.message : "", {
+      name: person.displayName ?? person.subject,
+      email: person.email ?? `${person.subject}@localhost`,
+    }));
+  });
   register("search", (issue, request) => sourceBrowser.search(issue, repository(request), headerValue(request.headers["x-issue-pilot-query"], true), {
     caseSensitive: booleanHeader(request.headers["x-issue-pilot-case-sensitive"], true),
     wordMatch: booleanHeader(request.headers["x-issue-pilot-word-match"], false),
@@ -84,6 +115,6 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
   register("history", (issue, request) => sourceBrowser.history(issue, repository(request), relativePath(request)));
   register("commit", (issue, request) => sourceBrowser.commit(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request)));
   register("commit-file", (issue, request) => sourceBrowser.commitFile(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request, true)));
-  register("diff", (issue, request) => sourceBrowser.diff(issue, repository(request), relativePath(request)));
-  register("diff-file", (issue, request) => sourceBrowser.diffFile(issue, repository(request), relativePath(request, true)));
+  register("diff", (issue, request) => sourceBrowser.diff(issue, repository(request), relativePath(request), booleanHeader(request.headers["x-issue-pilot-staged"], false)));
+  register("diff-file", (issue, request) => sourceBrowser.diffFile(issue, repository(request), relativePath(request, true), booleanHeader(request.headers["x-issue-pilot-staged"], false)));
 }

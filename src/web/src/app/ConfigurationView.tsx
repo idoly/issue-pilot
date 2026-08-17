@@ -232,13 +232,13 @@ export function ConfigurationView() {
       repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })),
       capabilities: [...deployment.capabilities],
       agent: deployment.agent ? { ...deployment.agent } : defaultAgent(),
-      ...(deployment.nacos ? { nacos: { ...deployment.nacos, dataIds: [...deployment.nacos.dataIds], password: "", credentialEnabled: deployment.nacos.credentialConfigured } } : {}),
-      ...(deployment.db ? { db: { ...deployment.db, password: "", credentialEnabled: true } } : {}),
-      ...(deployment.dms ? { dms: { ...deployment.dms, accessKeyId: "", accessKeySecret: "", credentialEnabled: true } } : {}),
-      ...(deployment.sls ? { sls: { ...deployment.sls, accessKeyId: "", accessKeySecret: "", logstores: [...deployment.sls.logstores], credentialEnabled: true } } : {}),
-      ...(deployment.redis ? { redis: { ...deployment.redis, password: "", credentialEnabled: deployment.redis.credentialConfigured } } : {}),
-      ...(deployment.mq ? { mq: { ...deployment.mq, password: "", credentialEnabled: true } } : {}),
-      ...(deployment.es ? { es: { ...deployment.es, password: "", credentialEnabled: deployment.es.credentialConfigured } } : {}),
+      ...(deployment.nacos ? { nacos: { ...deployment.nacos, dataIds: [...deployment.nacos.dataIds], credentialEnabled: deployment.nacos.credentialConfigured } } : {}),
+      ...(deployment.db ? { db: { ...deployment.db, credentialEnabled: true } } : {}),
+      ...(deployment.dms ? { dms: { ...deployment.dms, credentialEnabled: true } } : {}),
+      ...(deployment.sls ? { sls: { ...deployment.sls, logstores: [...deployment.sls.logstores], credentialEnabled: true } } : {}),
+      ...(deployment.redis ? { redis: { ...deployment.redis, credentialEnabled: deployment.redis.credentialConfigured } } : {}),
+      ...(deployment.mq ? { mq: { ...deployment.mq, credentialEnabled: true } } : {}),
+      ...(deployment.es ? { es: { ...deployment.es, credentialEnabled: deployment.es.credentialConfigured } } : {}),
     })).filter((deployment) => deployment.environmentKey);
     setServiceDeployments(() => deployments);
     setConfigurationError(""); setServiceOpen(true);

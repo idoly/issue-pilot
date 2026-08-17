@@ -50,7 +50,7 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/db/schema.ts` | Current Drizzle schema |
 | `src/db/bootstrap.ts` | Migration、startup structure/recovery、bootstrap user、Environment sync |
 | `src/configuration/contracts.ts` | Catalog/config DTO、credential field/update contract |
-| `src/configuration/read.ts` | Catalog和redacted config snapshot projection |
+| `src/configuration/read.ts` | Catalog和完整config snapshot projection |
 | `src/configuration/credentials.ts` | Redaction和`preserve\|replace\|clear` merge |
 | `src/http/api.ts` | API assembly、error mapping、startup/close resources |
 | `src/http/production.ts` | Production Web+API entry |

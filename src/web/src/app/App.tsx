@@ -48,7 +48,7 @@ function AgentWorkbench(props: { issue: IssueDetail; sourceAgentOpen: boolean; s
   return (
     <section class={`agent-workbench${props.sourceExpanded ? " source-open" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
       <AgentPanel issue={props.issue} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} />
-      <Show when={props.sourceExpanded}><CodeBrowser issueKey={props.issue.id} agentOpen={props.sourceAgentOpen} detailsOpen={props.sourceDetailsOpen} onClose={props.onCloseSource} onLayout={props.onLayout} onPartVisibility={props.onPartVisibility} onToggleAgent={props.onToggleAgent} onToggleDetails={props.onToggleDetails} /></Show>
+      <Show when={props.sourceExpanded}><CodeBrowser issueKey={props.issue.id} development={props.issue.environmentKey === "dev"} agentOpen={props.sourceAgentOpen} detailsOpen={props.sourceDetailsOpen} onClose={props.onCloseSource} onLayout={props.onLayout} onPartVisibility={props.onPartVisibility} onToggleAgent={props.onToggleAgent} onToggleDetails={props.onToggleDetails} /></Show>
     </section>
   );
 }
@@ -153,7 +153,7 @@ export function App() {
           </div>
           <CurrentUserIdentity />
         </Layout.Header>
-        <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()}>
+        <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
           <Switch>
             <Match when={view() === "issues"}>
               <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} onSelect={setSelectedId} />
@@ -162,7 +162,12 @@ export function App() {
                   {(current) => (
                     <>
                       <AgentWorkbench issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => setSourceExpanded(false)} onLayout={setWorkbenchLayout} onPartVisibility={(agentOpen, detailsOpen) => { setSourceAgentOpen(agentOpen); if (detailsOpen !== undefined) setSourceDetailsOpen(detailsOpen); }} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
-                      <IssueWorkspace issue={current()} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => { setWorkbenchLayout(null); setSourceAgentOpen(true); setSourceDetailsOpen(typeof window.matchMedia === "function" ? !window.matchMedia("(max-width: 600px)").matches : true); setSourceExpanded(true); }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} />
+                      <IssueWorkspace issue={current()} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => {
+                        setWorkbenchLayout(null);
+                        setSourceAgentOpen(true);
+                        setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 600px)").matches);
+                        setSourceExpanded(true);
+                      }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} />
                     </>
                   )}
                 </Show>

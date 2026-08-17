@@ -52,6 +52,7 @@ test("browses only registered Issue repository content", async () => {
         if (args.includes("--name-status")) return { code: 0, stderr: "", killed: false, stdout: "M\0src/index.ts\0R100\0README.md\0GUIDE.md\0" };
         if (args.includes("cat-file") && args.includes("-s")) return { code: 0, stderr: "", killed: false, stdout: "28\n" };
         if (args.includes("cat-file") && args.includes("blob")) return { code: 0, stderr: "", killed: false, stdout: /^(a|:)/.test(args.at(-1)!) ? "export const ready = false;\n" : "export const ready = true;\n" };
+        if (args.includes("ls-files") && !args.includes("--others")) return { code: 0, stderr: "", killed: false, stdout: "src/index.ts\0" };
         return { code: 0, stderr: "", killed: false, stdout: "" };
       },
     };
@@ -68,6 +69,16 @@ test("browses only registered Issue repository content", async () => {
     await assert.rejects(browser.writeFile(issue!, "application", "src/index.ts", "stale\n", sourceFile.sha256), /source_file_changed/);
     await assert.rejects(browser.writeFile(issue!, "application", "src/missing.ts", "new\n", savedFile.sha256), /source_path_not_found/);
     await browser.writeFile(issue!, "application", "src/index.ts", "export const ready = true;\n", savedFile.sha256);
+    await browser.createDirectory(issue!, "application", "generated");
+    await browser.createFile(issue!, "application", "generated/value.ts", "export const value = 1;\n");
+    await browser.renamePath(issue!, "application", "generated/value.ts", "generated/result.ts", false);
+    assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    await browser.deletePath(issue!, "application", "generated", true);
+    await assert.rejects(readFile(path.join(repository, "generated", "result.ts")), /ENOENT/);
+    await browser.stage(issue!, "application", ["src/index.ts"]);
+    await browser.unstage(issue!, "application", ["src/index.ts"]);
+    await browser.discard(issue!, "application", ["src/index.ts"]);
+    await browser.createCommit(issue!, "application", "Update source browser", { name: "Test User", email: "test@example.test" });
     assert.deepEqual(await browser.search(issue!, "application", "ready"), {
       matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false,
     });
@@ -122,6 +133,11 @@ test("browses only registered Issue repository content", async () => {
     assert.ok(workspaceDiffCommand.args.includes("--no-ext-diff"));
     assert.ok(workspaceDiffCommand.args.includes("--no-textconv"));
     assert.ok(commands.some(({ args }) => args.at(-1) === ":src/index.ts"));
+    assert.ok(commands.some(({ args }) => args.includes("add") && args.includes("src/index.ts")));
+    assert.ok(commands.some(({ args }) => args.includes("reset") && args.includes("HEAD")));
+    assert.ok(commands.some(({ args }) => args.includes("checkout") && args.includes("src/index.ts")));
+    assert.ok(commands.some(({ args }) => args.includes("clean") && args.includes("-fd")));
+    assert.ok(commands.some(({ args }) => args.includes("commit") && args.includes("Update source browser")));
 
     await assert.rejects(browser.file(issue!, "application", "../outside.txt"), /invalid_source_path/);
     const outside = path.join(root, "outside.txt");
@@ -144,6 +160,9 @@ test("browses only registered Issue repository content", async () => {
     await prepareIssueRuntime(root, readOnlyIssue!.key, [{ name: "application", repositoryPath: readOnlyRepository }], "read");
     const snapshot = await browser.file(readOnlyIssue!, "application", "README.md");
     await assert.rejects(browser.writeFile(readOnlyIssue!, "application", "README.md", "changed\n", snapshot.sha256), /source_read_only/);
+    await assert.rejects(browser.createFile(readOnlyIssue!, "application", "new.txt", "new\n"), /source_read_only/);
+    await assert.rejects(browser.stage(readOnlyIssue!, "application", ["README.md"]), /source_read_only/);
+    await assert.rejects(browser.createCommit(readOnlyIssue!, "application", "Not allowed", { name: "Test User", email: "test@example.test" }), /source_read_only/);
 
     await database.db.update(issueWorkspaces).set({ runtimeReady: false }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(browser.repositories(issue!), /source_browser_unavailable/);

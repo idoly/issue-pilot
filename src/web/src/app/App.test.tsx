@@ -30,7 +30,7 @@ vi.mock("../data/client", async (importOriginal) => {
     environments: [{ key: "test", name: "测试" }],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", credentialConfigured: true }, dms: { dbId: "123456", logic: false, tid: "987654", credentialConfigured: true } }],
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }, dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: false, tid: "987654", credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }],
   };
@@ -195,18 +195,6 @@ describe("issue pilot workspace", () => {
     window.dispatchEvent(new MessageEvent("message", {
       origin: window.location.origin,
       source: workbench.contentWindow,
-      data: { kind: "issue-pilot-workbench-context-menu", issueKey: "ISSUE-20260810-042", visible: true },
-    }));
-    await waitFor(() => expect(sourceBrowser.classList.contains("context-menu-open")).toBe(true));
-    window.dispatchEvent(new MessageEvent("message", {
-      origin: window.location.origin,
-      source: workbench.contentWindow,
-      data: { kind: "issue-pilot-workbench-context-menu", issueKey: "ISSUE-20260810-042", visible: false },
-    }));
-    await waitFor(() => expect(sourceBrowser.classList.contains("context-menu-open")).toBe(false));
-    window.dispatchEvent(new MessageEvent("message", {
-      origin: window.location.origin,
-      source: workbench.contentWindow,
       data: {
         kind: "issue-pilot-workbench-layout",
         issueKey: "ISSUE-20260810-042",
@@ -286,6 +274,13 @@ describe("issue pilot workspace", () => {
     expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "浏览工单代码" }));
+    const developmentSource = await waitFor(() => screen.getByRole("region", { name: "ISSUE-20260810-041 代码浏览器" }));
+    expect((within(developmentSource).getByTitle("ISSUE-20260810-041 VS Code工作台") as HTMLIFrameElement).src).toContain("view=source-control");
+    expect(within(developmentSource).getByRole("button", { name: "Source Control" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(developmentSource).getByRole("button", { name: "Agent面板" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(developmentSource).getByRole("button", { name: "工单详情" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(developmentSource).getByRole("button", { name: "关闭代码浏览器" }));
     fireEvent.click(screen.getByLabelText("当前用户"));
     fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
     await waitFor(() => expect(currentUserSelect.closest(".ads-select")?.textContent).toContain("lyz@example.test"));
@@ -359,12 +354,9 @@ describe("issue pilot workspace", () => {
     const databaseUrl = screen.getByLabelText("db url 1");
     expect(nacosServerUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("serverUrl");
     expect(databaseUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
-    expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).placeholder).toBe("已配置");
-    expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).placeholder).toBe("已配置");
-    expect((screen.getByLabelText("db password 1") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("db password 1") as HTMLInputElement).placeholder).toBe("已配置");
+    expect((screen.getByLabelText("dms accessKeyId 1") as HTMLInputElement).value).toBe("dms-key");
+    expect((screen.getByLabelText("dms accessKeySecret 1") as HTMLInputElement).value).toBe("dms-secret");
+    expect((screen.getByLabelText("db password 1") as HTMLInputElement).value).toBe("db-secret");
     expect(screen.queryByLabelText("dms region 1")).toBeNull();
     expect((screen.getByLabelText("dms dbId 1") as HTMLInputElement).value).toBe("123456");
     expect((screen.getByLabelText("dms tid 1") as HTMLInputElement).value).toBe("987654");
@@ -402,9 +394,9 @@ describe("issue pilot workspace", () => {
     expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
     expect(savedService?.deployments[0]?.agent).toEqual({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
-    expect(savedService?.deployments[0]?.db).toEqual({ url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "preserve" } });
+    expect(savedService?.deployments[0]?.db).toEqual({ url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "replace", values: { password: "db-secret" } } });
     expect(savedService?.deployments[0]?.dms).toEqual({ dbId: "123456", logic: true, tid: "987654", credentialUpdate: { mode: "replace", values: { accessKeyId: "dms-key-updated", accessKeySecret: "dms-secret-updated" } } });
-    expect(JSON.stringify(savedService)).not.toContain("db-secret");
+    expect(JSON.stringify(savedService)).toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadCatalog).toHaveBeenCalledTimes(2);
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
@@ -521,6 +513,7 @@ describe("issue pilot workspace", () => {
     source.emit("message", { id: "status-new", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
     resolveNew({ ...current, status: "resolved", workspace: { ...current.workspace, status: "ready" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
     const currentSource = EventSourceMock.instances.at(-1)!;
     const connectionCount = EventSourceMock.instances.length;
     const requestCount = getIssue.mock.calls.length;
