@@ -31,7 +31,7 @@ SQLite、bare Git、worktree metadata、Pi JSONL和Attachment存在跨介质关�
 - Pi CLI。
 - Maven 3.9和Temurin 8。
 - Git、SSH、ripgrep和curl。
-- Aliyun CLI，用于DMS/SLS。
+- Aliyun CLI `3.4.11`，从官方GitHub release下载并按架构校验SHA-256，用于DMS/SLS。
 - 已构建的Solid Web和Workbench。
 
 ## 宿主准备
@@ -93,7 +93,7 @@ install -m 0600 -o 1000 -g 1000 "$HOME/.ssh/id_ed25519" /etc/issue-pilot/.ssh/id
 install -m 0600 -o 1000 -g 1000 "$HOME/.ssh/known_hosts" /etc/issue-pilot/.ssh/known_hosts
 ```
 
-Manifest把该目录整体只读挂到`/home/issue-pilot`，再用emptyDir覆盖`.npm`和`.m2/repository`缓存。这样SSH私钥保持owner-only`0600`，无需Secret复制init container。不要把配置目录写入image、manifest、ConfigMap、environment或日志。
+Manifest把该目录整体只读挂到Node image原生HOME `/home/node`，再用emptyDir覆盖`.npm`和`.m2/repository`缓存。这样SSH私钥保持owner-only`0600`，无需Secret复制init container。不要把配置目录写入image、manifest、ConfigMap、environment或日志。
 
 Deployment capability credential仍通过API写入SQLite，不进入该目录。
 

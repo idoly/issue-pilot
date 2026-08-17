@@ -37,7 +37,7 @@ spec:
               containerPort: 3000
           env:
             - name: HOME
-              value: /home/issue-pilot
+              value: /home/node
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -78,12 +78,12 @@ spec:
             - name: tmp
               mountPath: /tmp
             - name: runtime-config
-              mountPath: /home/issue-pilot
+              mountPath: /home/node
               readOnly: true
             - name: npm-cache
-              mountPath: /home/issue-pilot/.npm
+              mountPath: /home/node/.npm
             - name: maven-cache
-              mountPath: /home/issue-pilot/.m2/repository
+              mountPath: /home/node/.m2/repository
       volumes:
         - name: state
           hostPath:

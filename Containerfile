@@ -10,43 +10,36 @@ RUN npm run build \
     && npm prune --omit=dev \
     && find src/web -mindepth 1 -maxdepth 1 ! -name dist -exec rm -rf '{}' +
 
-FROM docker.io/library/maven:3.9-eclipse-temurin-8 AS maven-tool
+FROM docker.io/library/maven:3.9-eclipse-temurin-8 AS maven
 
-FROM docker.io/library/ubuntu:26.04
+FROM docker.io/library/node:26-bookworm-slim
 
-ENV APP_ROOT=/opt/issue-pilot \
-    RUNTIME_HOME=/home/issue-pilot
-
+ARG ALIYUN_CLI_VERSION=3.4.11
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates curl git libatomic1 openssh-client ripgrep \
+    && apt-get install --yes --no-install-recommends ca-certificates curl git openssh-client ripgrep \
     && architecture="$(dpkg --print-architecture)" \
-    && case "$architecture" in amd64|arm64) ;; *) exit 1 ;; esac \
-    && runtime_user="$(getent passwd 1000 | cut -d: -f1)" \
-    && test -n "$runtime_user" \
-    && usermod --home "$RUNTIME_HOME" "$runtime_user" \
-    && curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-${architecture}.tgz" --output /tmp/aliyun-cli.tgz \
-    && tar --extract --gzip --file /tmp/aliyun-cli.tgz --directory /tmp \
+    && case "$architecture" in \
+         amd64) checksum=a7e3df497db14c10d4d7587795e9fa7849b0c51dfce02908b9de5a41fe717d5c ;; \
+         arm64) checksum=b0b6f6f7545f9472b697fc27915c8956e5a3320a6160729dcc5b4eff21435ae8 ;; \
+         *) exit 1 ;; \
+       esac \
+    && curl --fail --location --silent --show-error "https://github.com/aliyun/aliyun-cli/releases/download/v${ALIYUN_CLI_VERSION}/aliyun-cli-linux-${ALIYUN_CLI_VERSION}-${architecture}.tgz" --output /tmp/aliyun.tgz \
+    && echo "$checksum  /tmp/aliyun.tgz" | sha256sum --check - \
+    && tar --extract --gzip --file /tmp/aliyun.tgz --directory /tmp \
     && install -m 0555 /tmp/aliyun /usr/local/bin/aliyun \
-    && rm -f /tmp/aliyun /tmp/aliyun-cli.tgz \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=build /usr/local /usr/local
-COPY --from=maven-tool /opt/java/openjdk /opt/java/openjdk
-COPY --from=maven-tool /usr/share/maven /usr/share/maven
-COPY --from=build /build ${APP_ROOT}
-RUN ln -s /usr/local /usr/local/node \
-    && ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
-    && ln -s "${APP_ROOT}/node_modules/.bin/pi" /usr/local/bin/pi \
-    && install -d -m 0755 -o 1000 -g 1000 "$RUNTIME_HOME" "$RUNTIME_HOME/.pi" "$RUNTIME_HOME/.pi/agent" "$RUNTIME_HOME/.m2" "$RUNTIME_HOME/.ssh" \
-    && for file in "$RUNTIME_HOME/.npmrc" "$RUNTIME_HOME/.m2/settings.xml" "$RUNTIME_HOME/.pi/agent/auth.json" "$RUNTIME_HOME/.pi/agent/models.json" "$RUNTIME_HOME/.pi/agent/models-store.json" "$RUNTIME_HOME/.ssh/id_ed25519" "$RUNTIME_HOME/.ssh/known_hosts"; do \
-         install -m 0600 -o 1000 -g 1000 /dev/null "$file"; \
-       done
+    && rm -rf /tmp/aliyun /tmp/aliyun.tgz /var/lib/apt/lists/*
+COPY --from=maven /opt/java/openjdk /opt/java/openjdk
+COPY --from=maven /usr/share/maven /usr/share/maven
+COPY --from=build /build /opt/issue-pilot
+RUN ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
+    && ln -s /opt/issue-pilot/node_modules/.bin/pi /usr/local/bin/pi
 
-WORKDIR ${APP_ROOT}
+WORKDIR /opt/issue-pilot
 ENV NODE_ENV=production \
+    HOME=/home/node \
     JAVA_HOME=/opt/java/openjdk \
     MAVEN_HOME=/usr/share/maven \
     PATH=/opt/java/openjdk/bin:/usr/share/maven/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+USER node
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD curl --fail --silent http://127.0.0.1:3000/health >/dev/null || exit 1
-USER 1000:1000
 CMD ["node", "--experimental-strip-types", "src/http/production.ts"]
