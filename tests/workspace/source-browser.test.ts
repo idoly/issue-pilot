@@ -46,6 +46,7 @@ test("browses only registered Issue repository content", async () => {
           stdout: `${JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "export const ready = true;\n" }, line_number: 1, submatches: [{ start: 13 }] } })}\n`,
         };
         if (args.includes("log")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\x1f${"a".repeat(40)}\x1fTest User\x1f2026-08-15T08:00:00+08:00\x1fFix source browser\x1e\n` };
+        if (args.includes("blame")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} 1 1 1\nauthor Test User\nauthor-mail <test@example.test>\nauthor-time 1786752000\nauthor-tz +0800\nsummary Fix source browser\nfilename src/index.ts\n\texport const ready = true;\n` };
         if (args.includes("merge-base")) return { code: args.includes("c".repeat(40)) ? 1 : 0, stderr: "", killed: false, stdout: "" };
         if (args.includes("rev-list")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} ${"a".repeat(40)}\n` };
         if (args.includes("--name-status")) return { code: 0, stderr: "", killed: false, stdout: "M\0src/index.ts\0R100\0README.md\0GUIDE.md\0" };
@@ -63,6 +64,9 @@ test("browses only registered Issue repository content", async () => {
       matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false,
     });
     await browser.search(issue!, "application", "ready", { caseSensitive: false, wordMatch: true });
+    assert.deepEqual(await browser.blame(issue!, "application", "src/index.ts", 1), {
+      path: "src/index.ts", line: 1, commit: "b".repeat(40), shortCommit: "b".repeat(8), author: "Test User", date: "2026-08-15T00:00:00.000Z", subject: "Fix source browser",
+    });
     assert.deepEqual(await browser.history(issue!, "application"), {
       commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Test User", date: "2026-08-15T08:00:00+08:00", subject: "Fix source browser" }],
       truncated: false,
@@ -98,6 +102,8 @@ test("browses only registered Issue repository content", async () => {
     assert.ok(!searchCommands[0]!.args.includes("--ignore-case"));
     assert.ok(searchCommands[1]!.args.includes("--ignore-case"));
     assert.ok(searchCommands[1]!.args.includes("--word-regexp"));
+    const blameCommand = commands.find(({ args }) => args.includes("blame"))!;
+    assert.deepEqual(blameCommand.args.slice(-4), ["-L", "1,1", "--", "src/index.ts"]);
     const historyCommand = commands.find(({ args }) => args.includes("log"))!;
     assert.match(historyCommand.args.find((argument) => argument.startsWith("--format="))!, /%H%x1f%P/);
     const commitDiffCommand = commands.find(({ args }) => args.includes("--name-status"))!;

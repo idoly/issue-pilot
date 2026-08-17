@@ -52,6 +52,7 @@ import getWorkbenchServiceOverride, { registerCustomView, ViewContainerLocation 
 import getWorkingCopyServiceOverride from "@codingame/monaco-vscode-working-copy-service-override";
 import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace-trust-service-override";
 import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
+import { IEditorService } from "@codingame/monaco-vscode-api/services";
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { parseIssueKey } from "../../../domain/contracts";
@@ -82,6 +83,18 @@ function registerEmbeddedViews(): void {
   });
   register("issue-pilot.agent", "Agent", ViewContainerLocation.Panel, agentViewClass);
   register("issue-pilot.details", "工单详情", ViewContainerLocation.AuxiliaryBar, detailsViewClass);
+}
+
+function observeContextMenus(issueKey: string): void {
+  let visible = false;
+  const publish = () => {
+    const menu = document.querySelector<HTMLElement>(".context-view.monaco-menu-container");
+    const next = Boolean(menu && menu.offsetParent !== null && getComputedStyle(menu).visibility !== "hidden");
+    if (next === visible) return;
+    visible = next;
+    window.parent.postMessage({ kind: "issue-pilot-workbench-context-menu", issueKey, visible }, window.location.origin);
+  };
+  new MutationObserver(publish).observe(document.body, { attributes: true, childList: true, subtree: true });
 }
 
 function observeWorkbenchParts(issueKey: string, container: HTMLElement, layout: IWorkbenchLayoutService): void {
@@ -240,8 +253,9 @@ async function start(): Promise<void> {
     },
   }, { userHome: monaco.Uri.file("/") });
 
-  const [layout, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getIssuePilotVscodeApi()]);
+  const [layout, editorService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getIssuePilotVscodeApi()]);
   registerWorkbenchBridge(issueKey, vscode, layout, container);
+  observeContextMenus(issueKey);
   registerMarkdownPreviewAction(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
@@ -256,17 +270,17 @@ async function start(): Promise<void> {
     const auxiliarySize = layout.getSize(Parts.AUXILIARYBAR_PART);
     layout.resizePart(Parts.AUXILIARYBAR_PART, Math.max(280, Math.min(380, Math.round(container.clientWidth * 0.24))) - auxiliarySize.width, 0);
   }
-  observeWorkbenchParts(issueKey, container, layout);
   await Promise.all([
     materialIconThemeReady(),
     markdownFeaturesReady(),
     registerSourceSearch(issueKey, repositories),
-    registerSourceControls(issueKey, repositories, provider.workspacePath),
+    registerSourceControls(issueKey, repositories, provider.workspacePath, editorService),
   ]);
   await vscode.commands.executeCommand("markdown.api.render", "# Issue Pilot");
   await registerMarkdownPreviewCommands(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
+  observeWorkbenchParts(issueKey, container, layout);
   document.documentElement.dataset.workbenchReady = "true";
 }
 

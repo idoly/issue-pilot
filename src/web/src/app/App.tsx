@@ -153,7 +153,7 @@ export function App() {
           </div>
           <CurrentUserIdentity />
         </Layout.Header>
-        <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? " source-expanded" : ""}`} style={sourceLayoutStyle()}>
+        <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()}>
           <Switch>
             <Match when={view() === "issues"}>
               <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} onSelect={setSelectedId} />

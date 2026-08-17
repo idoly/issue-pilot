@@ -299,7 +299,7 @@ JSONL replay -> snapshot_ready -> live -> heartbeat
 | Binary/too large | 使用其他受控工具，不放宽无限 |
 | Search mismatch | Literal query、case/word headers、progress、rg budget |
 | SCM empty | `/diff`、HEAD/index/worktree、runtime target |
-| Graph/file fail | `/history`、`/commit`、`/commit-file`、HEAD ancestry |
+| Graph/file fail | `/history`、`/commit`、`/commit-file`、`/blame`、HEAD ancestry |
 | Preview fail | Markdown worker、render API、DOMPurify、fixed styles |
 | Workbench fail | `vscode.html`、workers、theme/static resources、browser console |
 | Broker unavailable | API、socket mode/owner、wrapper version |

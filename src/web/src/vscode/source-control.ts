@@ -1,3 +1,5 @@
+import type { IEditorService } from "@codingame/monaco-vscode-api/services";
+import type { editor as MonacoEditor } from "monaco-editor";
 import type {
   Disposable,
   Event,
@@ -17,7 +19,7 @@ import type {
   Uri,
 } from "vscode";
 
-import { errorMessage, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceHistory, type SourceCommit, type SourceCommitFile, type SourceCommitFileComparison, type SourceRepository } from "../data/client";
+import { errorMessage, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceHistory, type SourceCommit, type SourceCommitFile, type SourceCommitFileComparison, type SourceRepository, type SourceWorkspaceFileComparison } from "../data/client";
 import { getIssuePilotVscodeApi, sourceControlRefreshCommand, type IssuePilotVscodeApi } from "./extension-api";
 
 const sourceRevisionScheme = "issue-pilot-commit";
@@ -29,12 +31,13 @@ type RevisionResource = {
   revision: string;
   path: string;
   side: "before" | "after";
+  workspace: boolean;
 };
 
 class SourceRevisionFileSystemProvider implements FileSystemProvider {
   readonly onDidChangeFile: Event<FileChangeEvent[]>;
   private readonly resources = new Map<string, RevisionResource>();
-  private readonly comparisons = new Map<string, Promise<SourceCommitFileComparison>>();
+  private readonly comparisons = new Map<string, Promise<SourceCommitFileComparison | SourceWorkspaceFileComparison>>();
 
   constructor(private readonly vscode: IssuePilotVscodeApi) {
     this.onDidChangeFile = new vscode.EventEmitter<FileChangeEvent[]>().event;
@@ -42,8 +45,16 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
 
   register(issueKey: string, repository: string, revision: string, file: SourceCommitFile): Pick<SourceControlHistoryItemChange, "originalUri" | "modifiedUri"> {
     return {
-      originalUri: file.status === "added" ? undefined : this.resource({ issueKey, repository, revision, path: file.path, side: "before" }, file.previousPath ?? file.path),
-      modifiedUri: file.status === "deleted" ? undefined : this.resource({ issueKey, repository, revision, path: file.path, side: "after" }, file.path),
+      originalUri: file.status === "added" ? undefined : this.resource({ issueKey, repository, revision, path: file.path, side: "before", workspace: false }, file.previousPath ?? file.path),
+      modifiedUri: file.status === "deleted" ? undefined : this.resource({ issueKey, repository, revision, path: file.path, side: "after", workspace: false }, file.path),
+    };
+  }
+
+  registerWorkspace(issueKey: string, repository: string, file: SourceCommitFile): { originalUri: Uri; modifiedUri: Uri } {
+    const request = { issueKey, repository, revision: "working-tree", path: file.path, workspace: true } as const;
+    return {
+      originalUri: this.resource({ ...request, side: "before" }, file.previousPath ?? file.path),
+      modifiedUri: this.resource({ ...request, side: "after" }, file.path),
     };
   }
 
@@ -62,10 +73,12 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
     const key = `${request.issueKey}\0${request.repository}\0${request.revision}\0${request.path}`;
     let comparison = this.comparisons.get(key);
     if (!comparison) {
-      comparison = loadSourceCommitFile(request.issueKey, request.repository, request.revision, request.path);
+      comparison = request.workspace
+        ? loadSourceDiffFile(request.issueKey, request.repository, request.path)
+        : loadSourceCommitFile(request.issueKey, request.repository, request.revision, request.path);
       this.comparisons.set(key, comparison);
     }
-    let result: SourceCommitFileComparison;
+    let result: SourceCommitFileComparison | SourceWorkspaceFileComparison;
     try {
       result = await comparison;
     } catch (error) {
@@ -73,7 +86,10 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
       throw new this.vscode.FileSystemError(errorMessage(error));
     }
     const file = request.side === "before" ? result.before : result.after;
-    if (!file) throw this.vscode.FileSystemError.FileNotFound("source_commit_file_not_found");
+    if (!file) {
+      if (request.workspace) return encoder.encode("");
+      throw this.vscode.FileSystemError.FileNotFound("source_commit_file_not_found");
+    }
     return encoder.encode(file.content);
   }
 
@@ -102,7 +118,7 @@ class SourceRevisionFileSystemProvider implements FileSystemProvider {
       scheme: sourceRevisionScheme,
       authority: "issue-pilot",
       path: `/${request.issueKey}/${request.repository}/${displayPath}`,
-      query: `revision=${request.revision}&side=${request.side}`,
+      query: `revision=${request.revision}&side=${request.side}${request.workspace ? "&workspace=true" : ""}`,
     });
     this.resources.set(resource.toString(), request);
     return resource;
@@ -222,16 +238,17 @@ type RegisteredSourceControl = {
   history: SourceControlHistory;
 };
 
-function sourceControlResources(vscode: IssuePilotVscodeApi, root: Uri, files: SourceCommitFile[]): SourceControlResourceState[] {
+function sourceControlResources(vscode: IssuePilotVscodeApi, issueKey: string, repository: SourceRepository, root: Uri, revisionContent: SourceRevisionFileSystemProvider, files: SourceCommitFile[]): SourceControlResourceState[] {
   return files.map((file) => {
     const resourceUri = vscode.Uri.joinPath(root, file.path);
+    const comparison = revisionContent.registerWorkspace(issueKey, repository.name, file);
     return {
       resourceUri,
       contextValue: `issue-pilot-${file.status}`,
-      command: file.status === "deleted" ? undefined : {
-        command: "vscode.open",
-        title: "打开文件",
-        arguments: [resourceUri, { preview: false }],
+      command: {
+        command: "vscode.diff",
+        title: "打开变更",
+        arguments: [comparison.originalUri, comparison.modifiedUri, `${file.previousPath ?? file.path} ↔ ${file.path}（工作区变更）`, { preview: false }],
       },
       decorations: {
         iconPath: new vscode.ThemeIcon(statusIcon(file)),
@@ -243,8 +260,70 @@ function sourceControlResources(vscode: IssuePilotVscodeApi, root: Uri, files: S
   });
 }
 
-export async function registerSourceControls(issueKey: string, repositories: SourceRepository[], workspacePath: string): Promise<void> {
+function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditorService, issueKey: string, repositories: SourceRepository[], workspacePath: string): void {
+  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  item.name = "当前行Git信息";
+  let generation = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const update = async (resource: { scheme: string; path: string; query?: string }, zeroBasedLine: number) => {
+    const currentGeneration = ++generation;
+    const filePrefix = `${workspacePath}/`;
+    const workspaceRevisionPrefix = `/${issueKey}/`;
+    const relative = resource.scheme === "file" && resource.path.startsWith(filePrefix)
+      ? resource.path.slice(filePrefix.length)
+      : resource.scheme === sourceRevisionScheme && resource.path.startsWith(workspaceRevisionPrefix) && (resource.query?.includes("workspace=true") || resource.query?.includes("workspace%3Dtrue"))
+        ? resource.path.slice(workspaceRevisionPrefix.length)
+        : "";
+    if (!relative) {
+      item.hide();
+      return;
+    }
+    const separator = relative.indexOf("/");
+    const repository = separator < 0 ? "" : relative.slice(0, separator);
+    const filePath = separator < 0 ? "" : relative.slice(separator + 1);
+    if (!filePath || !repositories.some((candidate) => candidate.name === repository)) {
+      item.hide();
+      return;
+    }
+    try {
+      const blame = await loadSourceBlame(issueKey, repository, filePath, zeroBasedLine + 1);
+      if (currentGeneration !== generation) return;
+      const author = blame.author.slice(0, 40);
+      const subject = blame.subject.slice(0, 80);
+      item.text = blame.shortCommit
+        ? `$(git-commit) ${blame.shortCommit} ${author} · ${subject}`
+        : `$(git-commit) ${subject}`;
+      item.tooltip = blame.date
+        ? `${blame.path}:${blame.line}\n${blame.commit}\n${blame.author} · ${new Date(blame.date).toLocaleString()}\n${blame.subject}`
+        : `${blame.path}:${blame.line}\n${blame.subject}`;
+      item.show();
+    } catch {
+      if (currentGeneration === generation) item.hide();
+    }
+  };
+  const schedule = (resource: { scheme: string; path: string; query?: string }, line: number) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { void update(resource, line); }, 120);
+  };
+  const attached = new WeakSet<object>();
+  const attachActiveEditor = () => {
+    const control = editorService.activeTextEditorControl;
+    if (!control) { item.hide(); return; }
+    const editor = ("getModifiedEditor" in control ? control.getModifiedEditor() : control) as MonacoEditor.ICodeEditor;
+    if (attached.has(editor)) return;
+    attached.add(editor);
+    editor.onDidChangeCursorPosition((event) => schedule(editor.getModel()?.uri ?? { scheme: "", path: "" }, event.position.lineNumber - 1));
+    editor.onMouseMove((event) => {
+      if (event.target.position) schedule(editor.getModel()?.uri ?? { scheme: "", path: "" }, event.target.position.lineNumber - 1);
+    });
+  };
+  editorService.onDidActiveEditorChange(attachActiveEditor);
+  attachActiveEditor();
+}
+
+export async function registerSourceControls(issueKey: string, repositories: SourceRepository[], workspacePath: string, editorService: IEditorService): Promise<void> {
   const vscode = await getIssuePilotVscodeApi();
+  registerBlameStatus(vscode, editorService, issueKey, repositories, workspacePath);
   const revisionContent = new SourceRevisionFileSystemProvider(vscode);
   vscode.workspace.registerFileSystemProvider(sourceRevisionScheme, revisionContent, { isCaseSensitive: true, isReadonly: true });
 
@@ -268,7 +347,7 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
       try {
         const response = await loadSourceDiff(issueKey, repository.name);
         if (generation === refreshGeneration) {
-          group.resourceStates = sourceControlResources(vscode, sourceControl.rootUri!, response.files);
+          group.resourceStates = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, response.files);
           sourceControl.count = response.files.length;
           history.invalidate();
         }

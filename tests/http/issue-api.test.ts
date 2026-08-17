@@ -179,6 +179,13 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     assert.equal(unavailableSource.headers["cache-control"], "private, no-store");
     const malformedSourceHeader = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/source/tree`, headers: { "X-Issue-Pilot-Repository": "%" } });
     assert.equal(malformedSourceHeader.statusCode, 400);
+    const invalidBlameLine = await fixture.app.inject({
+      method: "GET",
+      url: `/api/issues/${issue.id}/source/blame`,
+      headers: { "X-Issue-Pilot-Repository": "alpha-1", "X-Issue-Pilot-Path": "src/index.ts", "X-Issue-Pilot-Line": "0" },
+    });
+    assert.equal(invalidBlameLine.statusCode, 400);
+    assert.equal((await json(invalidBlameLine)).error, "invalid_source_request");
     const invalidSearchMode = await fixture.app.inject({
       method: "GET",
       url: `/api/issues/${issue.id}/source/search`,

@@ -52,6 +52,7 @@ export interface SourceTree { path: string; entries: SourceTreeEntry[]; truncate
 export interface SourceFile { path: string; content: string; size: number }
 export interface SourceSearchMatch { path: string; line: number; column: number; preview: string }
 export interface SourceCommit { hash: string; shortHash: string; parents: string[]; author: string; date: string; subject: string }
+export interface SourceBlame { path: string; line: number; commit: string | null; shortCommit: string | null; author: string; date: string | null; subject: string }
 type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
 export interface SourceCommitFile { status: SourceCommitFileStatus; path: string; previousPath: string | null }
 interface SourceRevisionFile { path: string; revision: string; content: string }
@@ -117,7 +118,7 @@ export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/a
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 
-type SourceHeader = "Path" | "Query" | "Revision" | "Case-Sensitive" | "Word-Match";
+type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Case-Sensitive" | "Word-Match";
 
 function sourceResponseRecord(value: unknown, code: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
@@ -158,6 +159,7 @@ export const searchSource = (key: string, repository: string, query: string, opt
   "Case-Sensitive": String(options.caseSensitive ?? true),
   "Word-Match": String(options.wordMatch ?? false),
 }, signal) as Promise<{ matches: SourceSearchMatch[]; truncated: boolean }>;
+export const loadSourceBlame = (key: string, repository: string, path: string, line: number, signal?: AbortSignal) => sourceRequest(key, "blame", repository, { Path: path, Line: String(line) }, signal) as Promise<SourceBlame>;
 export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal) => sourceRequest(key, "history", repository, { Path: path }, signal) as Promise<{ commits: SourceCommit[]; truncated: boolean }>;
 export async function loadSourceCommit(key: string, repository: string, revision: string, path = "", signal?: AbortSignal): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
   const code = "source_commit_response_invalid";

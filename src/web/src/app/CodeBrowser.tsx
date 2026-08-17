@@ -1,5 +1,5 @@
 import { Button } from "@idoly/ant-design-solid";
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X } from "../ui/icons";
 
@@ -15,14 +15,6 @@ export interface WorkbenchPartLayout {
   auxiliary: WorkbenchPartRect;
 }
 
-interface WorkbenchLayoutMessage {
-  kind: "issue-pilot-workbench-layout";
-  issueKey: string;
-  panel: WorkbenchPartRect;
-  auxiliary: WorkbenchPartRect;
-  panelVisible: boolean;
-  auxiliaryVisible: boolean;
-}
 
 function validRect(value: unknown): value is WorkbenchPartRect {
   if (!value || typeof value !== "object") return false;
@@ -36,6 +28,8 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
   const workbenchUrl = () => `/vscode.html?issue=${encodeURIComponent(props.issueKey)}`;
   const [activeView, setActiveView] = createSignal<WorkbenchView | undefined>("explorer", { ownedWrite: true });
   const [frame, setFrame] = createSignal<HTMLIFrameElement | undefined>(undefined, { ownedWrite: true });
+  const [contextMenuOpen, setContextMenuOpen] = createSignal(false, { ownedWrite: true });
+  const [workbenchReady, setWorkbenchReady] = createSignal(false, { ownedWrite: true });
   const toggleView = (view: WorkbenchView) => {
     const visible = activeView() !== view;
     setActiveView(visible ? view : undefined);
@@ -44,17 +38,25 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
   let removeLayoutListener = () => {};
   createEffect(frame, (currentFrame) => {
     removeLayoutListener();
+    setContextMenuOpen(false);
+    setWorkbenchReady(false);
     if (!currentFrame) return;
     const receiveLayout = (event: MessageEvent<unknown>) => {
       if (event.origin !== window.location.origin || event.source !== currentFrame.contentWindow) return;
-      const message = event.data as Partial<WorkbenchLayoutMessage> | null;
-      if (message?.kind !== "issue-pilot-workbench-layout" || message.issueKey !== props.issueKey || !validRect(message.panel) || !validRect(message.auxiliary)) return;
+      const message = event.data as { kind?: unknown; issueKey?: unknown; visible?: unknown; panel?: unknown; auxiliary?: unknown; panelVisible?: unknown; auxiliaryVisible?: unknown } | null;
+      if (message?.issueKey !== props.issueKey) return;
+      if (message.kind === "issue-pilot-workbench-context-menu" && typeof message.visible === "boolean") {
+        setContextMenuOpen(message.visible);
+        return;
+      }
+      if (message.kind !== "issue-pilot-workbench-layout" || !validRect(message.panel) || !validRect(message.auxiliary)) return;
       const visibleRect = (rect: WorkbenchPartRect): WorkbenchPartRect => ({
         x: Math.min(rect.x, currentFrame.clientWidth) + currentFrame.offsetLeft,
         y: Math.min(rect.y, currentFrame.clientHeight) + currentFrame.offsetTop,
         width: Math.min(rect.width, Math.max(0, currentFrame.clientWidth - rect.x)),
         height: Math.min(rect.height, Math.max(0, currentFrame.clientHeight - rect.y)),
       });
+      setWorkbenchReady(true);
       props.onLayout({ panel: visibleRect(message.panel), auxiliary: visibleRect(message.auxiliary) });
       if (typeof message.panelVisible === "boolean" && typeof message.auxiliaryVisible === "boolean") {
         props.onPartVisibility(message.panelVisible, currentFrame.clientWidth < 700 ? undefined : message.auxiliaryVisible);
@@ -69,7 +71,7 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
   });
 
   return (
-    <section class="source-browser" aria-label={`${props.issueKey} 代码浏览器`}>
+    <section class={`source-browser${contextMenuOpen() ? " context-menu-open" : ""}`} aria-label={`${props.issueKey} 代码浏览器`}>
       <header class="source-browser-header source-browser-header-workbench">
         <div class="source-browser-title"><Code2 size={16} /><strong>代码</strong><small>{props.issueKey}</small></div>
         <div class="source-view-switcher" role="toolbar" aria-label="代码视图">
@@ -89,6 +91,7 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
         sandbox="allow-scripts allow-same-origin"
         referrerpolicy="no-referrer"
       />
+      <Show when={!workbenchReady()}><div class="source-workbench-loading" role="status" aria-label="代码工作台加载中"><span /></div></Show>
     </section>
   );
 }

@@ -86,7 +86,7 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/web/src/vscode/main.ts` | Workbench services/settings/extension registration |
 | `src/web/src/vscode/source-file-system.ts` | Read-only multi-root filesystem |
 | `src/web/src/vscode/source-search.ts` | Native Search provider |
-| `src/web/src/vscode/source-control.ts` | SCM Changes/Graph/revision Diff |
+| `src/web/src/vscode/source-control.ts` | SCM Changes/Graph、workspace/revision Diff和当前行blame状态 |
 | `src/web/src/vscode/markdown-preview.ts` | Read-only Markdown editor pane |
 | `src/web/vite.config.ts` | Main/Workbench entries和static theme/icon/preview resources |
 | `Containerfile` | Application image和内置project tools |

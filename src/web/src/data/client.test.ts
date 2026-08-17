@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { convertIssueToDevelopment, createIssue, createUser, deleteService, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService, updateUser } from "./client";
+import { convertIssueToDevelopment, createIssue, createUser, deleteService, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService, updateUser } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -118,6 +118,7 @@ describe("API client", () => {
         after: { path: "src/订单.ts", version: "working-tree", content: "after" },
       }), { status: 200 });
       if (url.endsWith("/source/diff")) return new Response(JSON.stringify({ files: [{ status: "modified", path: "src/订单.ts", previousPath: null }], truncated: false }), { status: 200 });
+      if (url.endsWith("/source/blame")) return new Response(JSON.stringify({ path: "src/订单.ts", line: 7, commit: "a".repeat(40), shortCommit: "a".repeat(8), author: "Fixture", date: "2026-08-15T00:00:00.000Z", subject: "Fix order" }), { status: 200 });
       return new Response(JSON.stringify({ path: "src/index.ts", content: "", size: 0 }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetch);
@@ -126,6 +127,7 @@ describe("API client", () => {
     await searchSource("ISSUE-20260810-001", "orders", "客户编号");
     await loadSourceCommit("ISSUE-20260810-001", "orders", "a".repeat(40), "src/订单.ts");
     await loadSourceCommitFile("ISSUE-20260810-001", "orders", "a".repeat(40), "src/订单.ts");
+    await loadSourceBlame("ISSUE-20260810-001", "orders", "src/订单.ts", 7);
     await loadSourceDiff("ISSUE-20260810-001", "orders", "src/订单.ts");
     await loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/订单.ts");
 
@@ -142,10 +144,12 @@ describe("API client", () => {
     expect(fetch.mock.calls[3]![0]).toBe("/api/issues/ISSUE-20260810-001/source/commit-file");
     expect((fetch.mock.calls[3]![1].headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
     expect((fetch.mock.calls[3]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
-    expect(fetch.mock.calls[4]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff");
-    expect((fetch.mock.calls[4]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
-    expect(fetch.mock.calls[5]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff-file");
+    expect(fetch.mock.calls[4]![0]).toBe("/api/issues/ISSUE-20260810-001/source/blame");
+    expect((fetch.mock.calls[4]![1].headers as Headers).get("X-Issue-Pilot-Line")).toBe("7");
+    expect(fetch.mock.calls[5]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff");
     expect((fetch.mock.calls[5]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect(fetch.mock.calls[6]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff-file");
+    expect((fetch.mock.calls[6]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
   });
 
   it("rejects stale source commit response contracts", async () => {

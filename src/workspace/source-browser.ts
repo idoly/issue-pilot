@@ -50,6 +50,16 @@ export interface SourceCommitFile {
   previousPath: string | null;
 }
 
+export interface SourceBlame {
+  path: string;
+  line: number;
+  commit: string | null;
+  shortCommit: string | null;
+  author: string;
+  date: string | null;
+  subject: string;
+}
+
 interface SourceRevisionFile {
   path: string;
   revision: string;
@@ -179,6 +189,34 @@ export class SourceBrowser {
       matches.push({ path: normalized, line: lineNumber!, column: column! + 1, preview: preview.replace(/[\r\n]+$/, "").slice(0, 1000) });
     }
     return { matches, truncated };
+  }
+
+  async blame(issue: IssueReference, repositoryName: string, relativePath: string, line: number): Promise<SourceBlame> {
+    const context = await this.context(issue, repositoryName);
+    const selected = sourcePath(normalizedRelativePath(relativePath));
+    if (!selected || !Number.isSafeInteger(line) || line < 1) throw new Error("invalid_source_line");
+    await this.resolvePath(context.root, selected);
+    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [
+      "-C", context.root, "blame", "--line-porcelain", "--root", "-L", `${line},${line}`, "--", selected,
+    ], this.commandOptions());
+    if (result.killed) throw new Error("source_blame_timeout");
+    if (result.code !== 0) throw new Error("source_blame_failed");
+    const lines = result.stdout.split("\n");
+    const hash = lines[0]?.split(" ")[0] ?? "";
+    const author = lines.find((entry) => entry.startsWith("author "))?.slice(7) ?? "";
+    const timestamp = Number(lines.find((entry) => entry.startsWith("author-time "))?.slice(12));
+    const subject = lines.find((entry) => entry.startsWith("summary "))?.slice(8) ?? "";
+    if (!/^[a-f0-9]{40}$/.test(hash) || !author || !Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > 8_640_000_000 || !subject) throw new Error("invalid_source_blame_response");
+    const committed = !/^0{40}$/.test(hash);
+    return {
+      path: selected,
+      line,
+      commit: committed ? hash : null,
+      shortCommit: committed ? hash.slice(0, 8) : null,
+      author,
+      date: committed ? new Date(timestamp * 1000).toISOString() : null,
+      subject: committed ? subject : "未提交变更",
+    };
   }
 
   async history(issue: IssueReference, repositoryName: string, relativePath = ""): Promise<{ commits: SourceCommit[]; truncated: boolean }> {

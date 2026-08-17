@@ -112,7 +112,7 @@ Web 使用以下域：
 - Agent：retry、messages 和 SSE stream
 - Attachment：只读 GET；写入只属于 Issue create/edit multipart transaction
 - Workspace：stats 和受管 release
-- Source：repositories、tree、file、search、history、commit、commit-file、diff、diff-file
+- Source：repositories、tree、file、search、blame、history、commit、commit-file、diff、diff-file
 
 不存在独立 Attachment write route、Issue sync route、Terminal、Source write route 或任意 Git command route。
 

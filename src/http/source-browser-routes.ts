@@ -5,7 +5,7 @@ import { requireIssue, type ApiRouteContext } from "./route-context.ts";
 
 const notFoundErrors = new Set(["source_repository_not_found", "source_path_not_found", "source_commit_not_found", "source_commit_file_not_found", "source_diff_file_not_found"]);
 const conflictErrors = new Set(["source_browser_unavailable", "source_repository_state_invalid", "source_runtime_invalid"]);
-const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_revision", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
+const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_revision", "invalid_source_line", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
 const contentErrors = new Set(["source_file_too_large", "source_file_binary", "source_commit_too_large", "source_diff_too_large"]);
 
 function headerValue(value: string | string[] | undefined, required = false): string {
@@ -49,6 +49,13 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
   };
   const repository = (request: SourceRequest) => headerValue(request.headers["x-issue-pilot-repository"], true);
   const relativePath = (request: SourceRequest, required = false) => headerValue(request.headers["x-issue-pilot-path"], required);
+  const line = (request: SourceRequest) => {
+    const value = headerValue(request.headers["x-issue-pilot-line"], true);
+    if (!/^[1-9][0-9]*$/.test(value)) throw new ApiError(400, "invalid_source_request");
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed)) throw new ApiError(400, "invalid_source_request");
+    return parsed;
+  };
 
   register("repositories", (issue) => sourceBrowser.repositories(issue));
   register("tree", (issue, request) => sourceBrowser.tree(issue, repository(request), relativePath(request)));
@@ -57,6 +64,7 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
     caseSensitive: booleanHeader(request.headers["x-issue-pilot-case-sensitive"], true),
     wordMatch: booleanHeader(request.headers["x-issue-pilot-word-match"], false),
   }));
+  register("blame", (issue, request) => sourceBrowser.blame(issue, repository(request), relativePath(request, true), line(request)));
   register("history", (issue, request) => sourceBrowser.history(issue, repository(request), relativePath(request)));
   register("commit", (issue, request) => sourceBrowser.commit(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request)));
   register("commit-file", (issue, request) => sourceBrowser.commitFile(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request, true)));

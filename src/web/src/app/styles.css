@@ -276,6 +276,9 @@ button, input, textarea { font: inherit; }
 .agent-workbench { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; background: #000; }
 .agent-workbench.source-open { position: relative; display: block; }
 .agent-workbench.source-open .source-browser { position: absolute; inset: 0; }
+.agent-workbench.source-open .source-browser.context-menu-open { z-index: 5; }
+.app-content.source-expanded:not(.workbench-ready) .agent-panel,
+.app-content.source-expanded:not(.workbench-ready) .source-detail-panel { visibility: hidden; }
 .agent-workbench.source-open .agent-panel {
   position: absolute;
   z-index: 3;
@@ -301,7 +304,10 @@ button, input, textarea { font: inherit; }
 .source-view-switcher .ads-button.active, .source-panel-toggle.active, .source-details-toggle.active { background: #30363d; color: #f0f6fc; }
 .source-panel-toggle, .source-details-toggle { color: #8b949e; }
 .source-browser-header-workbench > .ads-button:last-child:hover { background: #da3633; color: #fff; }
-.source-workbench-frame { width: 100%; min-width: 0; min-height: 0; flex: 1; border: 0; background: #f8f9fb; }
+.source-workbench-frame { width: 100%; min-width: 0; min-height: 0; flex: 1; border: 0; background: #0d1117; }
+.source-workbench-loading { position: absolute; z-index: 2; inset: 44px 0 0; display: grid; place-items: center; background: #0d1117; }
+.source-workbench-loading span { width: 22px; height: 22px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: source-workbench-spin 800ms linear infinite; }
+@keyframes source-workbench-spin { to { transform: rotate(360deg); } }
 .agent-panel {
   --agent-bg: #000;
   --agent-text: #d4d4d4;

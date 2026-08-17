@@ -75,7 +75,7 @@ Route不实现Git或外部协议。AgentEngine不拼Deployment Repository join�
 
 - Node 26 build stage构建Web并裁剪dev dependencies。
 - Maven 3.9/Temurin 8 stage提供Java工具链。
-- Ubuntu 26.04 runtime包含Fastify、Pi、Node/npm、Maven/JDK、Aliyun CLI、Git/SSH、ripgrep和curl。
+- Node 26 slim runtime包含Fastify、Pi、Node/npm、Maven/JDK、Aliyun CLI、Git/SSH、ripgrep和curl。
 - Fastify在容器`0.0.0.0:3000`同源提供Web、Workbench和API。
 - Kubernetes把宿主`/var/lib/issue-pilot`挂到image内`/opt/issue-pilot/.issue-pilot`；Pod通过node label固定到state所在节点。
 - Container没有Docker/Podman client/socket或ServiceAccount token，不为Agent创建工具Pod。
@@ -208,7 +208,7 @@ Source Browser重新读取SQLite关系并验证runtime symlink：
 - 只接受Repository alias和relative path。
 - 拒绝absolute、`..`、symlink escape、`.git` tree项、binary和超限文件。
 - `/search`使用literal `rg --json`。
-- History/commit必须位于current HEAD ancestry。
+- History/commit必须位于current HEAD ancestry；blame一次只读取一个合法文件行。
 - Diff只读取Git index/working tree，不提供写命令。
 
 Workbench filesystem声明Readonly，write/mkdir/delete/rename返回`FileWriteLocked`。固定LocalProcess extension提供Explorer/Search/SCM Graph；Web Worker Markdown extension只用于render。Terminal、Node extension host、gallery、save、stage、commit和revert不可用。
