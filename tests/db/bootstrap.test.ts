@@ -20,9 +20,7 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");
   assert.equal(applicationConfig.workspace.highWaterBytes, 20 * 1024 ** 3);
   assert.equal(applicationConfig.workspace.targetBytes, 16 * 1024 ** 3);
-  assert.equal(applicationConfig.runtime.application.image, "localhost/issue-pilot:0.1.0-node26-ubuntu2604");
-  assert.equal(applicationConfig.runtime.application.listenHost, "0.0.0.0");
-  assert.equal(applicationConfig.runtime.playwright.executionSeconds, 300);
+  assert.equal(applicationConfig.http.host, "0.0.0.0");
   assert.equal(applicationConfig.webRoot, join(applicationConfig.stateRoot, "..", "src", "web", "dist"));
   assert.equal(applicationConfig.limits.sourceBrowser.fileBytes, 2 * 1024 * 1024);
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);

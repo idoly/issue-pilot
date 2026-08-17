@@ -10,7 +10,7 @@ Before changing code:
 2. Read [Development](docs/DEVELOPMENT.md) for module owners, change recipes, tests, and review checks.
 3. Read the task-specific reference:
    - [Configuration](docs/CONFIGURATION.md) for Service, Deployment, model, capability, and credential behavior.
-   - [Deployment](docs/DEPLOYMENT.md) and [Kubernetes](docs/KUBERNETES.md) for images, processes, networking, and production topology.
+   - [Deployment](docs/DEPLOYMENT.md) for image, Kubernetes process, mount, networking, and production topology.
    - [Runbook](docs/RUNBOOK.md) for health checks, backup, upgrade, recovery, retention, and troubleshooting.
 
 Use `README.md` as the product overview. [Comprehensive Audit](docs/COMPREHENSIVE-AUDIT.md), [File Audit](docs/FILE-AUDIT.md), and [Module Audit](docs/MODULE-AUDIT.md) record current design assessments but do not replace reading the owning code.
@@ -37,7 +37,8 @@ Do not start, stop, migrate, copy, or call destructive routes against active sta
 
 | Fact | Source |
 | --- | --- |
-| Paths, ports, defaults, retention, images, runtime, and limits | `issue-pilot.config.ts` |
+| Paths, ports, defaults, retention, runtime, and limits | `issue-pilot.config.ts` |
+| Image, mounts, resources, and probes | `Containerfile` and `deploy/issue-pilot.yaml` |
 | Business enums and shared predicates | `src/domain/contracts.ts` |
 | Current database model | `src/db/schema.ts` |
 | Upgrade order | Immutable `drizzle/*.sql` and `drizzle/meta/_journal.json` |
@@ -82,8 +83,9 @@ Do not create a second source for one of these facts.
 | Capability form serialization | `src/web/src/app/configuration-model.ts` |
 | App resources | `src/web/src/app/ApplicationResources.tsx` |
 | Workbench | `src/web/src/vscode` and `CodeBrowser.tsx` |
-| Compose/image/operator scripts | `infra` |
-| Kubernetes baseline | `deploy/kubernetes/base` |
+| Application image | `Containerfile` |
+| Kubernetes deployment | `deploy/issue-pilot.yaml` |
+| Browser test harness | `scripts/playwright.sh` |
 
 Routes coordinate owners, reservations, and transactions. They must not reimplement Git, attachment storage, tool authorization, or external protocols.
 
@@ -162,8 +164,8 @@ Dependency, runtime, capability-security, or container changes also require:
 
 ```bash
 npm audit --omit=dev --audit-level=high
-infra/playwright.sh status
-infra/application.sh status
+scripts/playwright.sh status
+kubectl -n issue-pilot get deployment,pod,service
 ```
 
 Schema or real-state operations additionally require SQLite integrity/FK checks, file modes, Git HEAD/ref consistency, and unmanaged-directory checks. Follow [Runbook](docs/RUNBOOK.md).

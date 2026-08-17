@@ -130,7 +130,7 @@ export default defineConfig({
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 },
     },
     proxy: {
-      "/api": { target: `http://${issuePilotConfig.http.host}:${issuePilotConfig.http.port}`, ws: true },
+      "/api": { target: `http://127.0.0.1:${issuePilotConfig.http.port}`, ws: true },
     },
   },
   test: { setupFiles: ["./src/test-setup.ts"] },

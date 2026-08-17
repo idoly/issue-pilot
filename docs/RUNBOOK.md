@@ -28,9 +28,9 @@ curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:3000/api/me
 curl -fsS http://127.0.0.1:3000/api/users
 curl -fsS http://127.0.0.1:3000/api/workspaces/stats
-infra/application.sh status
-infra/playwright.sh status
-stat -c '%F %a %U:%G %n' .issue-pilot/control/project-tools.sock
+kubectl -n issue-pilot get deployment,pod,service
+scripts/playwright.sh status
+stat -c '%F %a %U:%G %n' /var/lib/issue-pilot/control/project-tools.sock
 ss -ltnp | rg ':3000'
 ```
 
@@ -43,7 +43,7 @@ ss -ltnp | rg ':3000'
 - Workspace stats完成deep inspection。
 - 没有持久application-test container。
 
-Compose实际发布`0.0.0.0:3000`。确认宿主防火墙或可信proxy限制来源，不要把裸端口暴露到不可信网络。
+ClusterIP Service只能通过可信TLS/auth Ingress访问，不要把Pod或node端口直接暴露到不可信网络。
 
 不要把`/api/config`或Service write body放入monitoring log。
 
@@ -141,10 +141,11 @@ Attachment GET会执行核心检查。独立POST/DELETE应404。
 ### Stop
 
 ```bash
-infra/application.sh stop
+kubectl -n issue-pilot scale deployment/issue-pilot --replicas=0
+kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 ```
 
-等待container完全退出。Graceful顺序：
+等待Pod完全退出。Graceful顺序：
 
 1. 停maintenance并drain lifecycle/inspection。
 2. Agent拒绝new activity并drain run/reservation。
@@ -158,23 +159,23 @@ infra/application.sh stop
 ### Start
 
 ```bash
-infra/application.sh start
-infra/application.sh status
-infra/application.sh logs
+kubectl apply -f deploy/issue-pilot.yaml
+kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=10m
+kubectl -n issue-pilot logs deployment/issue-pilot --tail=200
 ```
 
-Start要求同名container不存在。Startup执行migration、structure/recovery、unmanaged/generated checks、socket、runtime hydration和maintenance。失败时保留现场，不先删除path/ref/row。
+Startup执行migration、structure/recovery、unmanaged/generated checks、socket、runtime hydration和maintenance。失败时保留现场，不先删除path/ref/row。
 
-### Container replacement
+### Pod replacement
+
+修改manifest中的image tag/digest后执行：
 
 ```bash
-infra/application.sh stop
-infra/application.sh logs
-infra/application.sh remove
-infra/application.sh start
+kubectl apply -f deploy/issue-pilot.yaml
+kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 ```
 
-`remove`只接受stopped container，不删除state。Prepared tag可能已指向新image；stopped old container仍引用oldimage，直到remove。
+Deployment使用`Recreate`，旧Pod完全停止后才创建新Pod。hostPath state不随Pod删除。
 
 ## Unmanaged/changed generated state
 
@@ -305,8 +306,8 @@ JSONL replay -> snapshot_ready -> live -> heartbeat
 | Node/Maven fail | Image tool versions、project manifest、config/cache mode、timeout |
 
 ```bash
-infra/application.sh status
-stat -c '%F %a %U:%G %n' .issue-pilot/control/project-tools.sock
+kubectl -n issue-pilot get pod
+stat -c '%F %a %U:%G %n' /var/lib/issue-pilot/control/project-tools.sock
 podman ps -a --filter label=io.issue-pilot.component=application-test
 ```
 
@@ -338,8 +339,8 @@ Project failure output保留在worktree。不要让wrapper接受executable、con
 6. 在隔离copy运行integrity/FK/business checks。
 
 ```bash
-infra/application.sh stop
-state_root=.issue-pilot
+kubectl -n issue-pilot scale deployment/issue-pilot --replicas=0
+state_root=/var/lib/issue-pilot
 stamp=$(date +%Y%m%d%H%M%S)
 backup="$state_root/backups/$stamp"
 install -d -m 0700 "$backup"
@@ -370,23 +371,22 @@ Runtime/checkouts可重建，但保留有助调查。Backup包含secret/producti
 git fetch --all --prune
 git checkout <reviewed-commit>
 npm ci
-infra/playwright.sh prepare
-infra/application.sh config
-infra/application.sh prepare
+scripts/playwright.sh prepare
 npm run typecheck
 npm test
 npm run build
 npm audit --omit=dev --audit-level=high
-infra/application.sh stop
+podman build --pull=always -f Containerfile -t registry.example.com/issue-pilot:<version> .
+podman push registry.example.com/issue-pilot:<version>
+kubectl -n issue-pilot scale deployment/issue-pilot --replicas=0
 : "create consistent DB and required full-state backup"
 : "dry-run migrations on isolated copy and verify integrity/FK"
-npm run db:migrate
-infra/application.sh remove
-infra/application.sh start
-infra/application.sh status
+: "update deploy/issue-pilot.yaml image"
+kubectl apply -f deploy/issue-pilot.yaml
+kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 ```
 
-注意：`prepare`会把image tag移到new image，但running old container仍使用old image；只有stop/remove/start才切换。不要在active API上运行migration或复制DB。
+不要在active API上运行migration或复制DB。使用不可变image tag或digest，确保manifest和备份记录能定位同一版本。
 
 升级后验证：
 
@@ -420,7 +420,7 @@ Rollback必须code和database/state成对。旧代码不能假定可读new schem
 | Symptom | First check | Never do |
 | --- | --- | --- |
 | Startup fail | Error、DB structure、unmanaged/checkout | 删除unknown/bare store |
-| Container unhealthy | Logs、label、UID/mount/tool version | Privileged、Podman socket、second API |
+| Pod unhealthy | Logs、image、UID/mount/tool version | Privileged、container socket、second API |
 | Agent back to open | last error、model、Deployment、Git/runtime | 把credential放prompt |
 | Issue detail slow | 是否误做deep inspection | 在GET加入du/Git clean |
 | Release blocked | Status/layout/Git clean | `rm -rf workspaces` |

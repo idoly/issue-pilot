@@ -1,26 +1,19 @@
 #!/bin/sh
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 node=/usr/local/node/bin/node
 npm=/usr/local/node/bin/npm
-config_reader="$root/infra/config-value.mjs"
-
-configuration_value() {
-  "$node" --experimental-strip-types "$config_reader" "$1"
-}
+playwright_version=1.62.1
+playwright_core_root=/usr/local/node/lib/node_modules/playwright-core
+playwright_image=mcr.microsoft.com/playwright:v1.62.1-noble
+playwright_timeout=300
+playwright_pids=256
+playwright_memory=1g
 
 require_tools() {
   [ -x "$node" ] || { printf 'Executable not found: %s\n' "$node" >&2; exit 1; }
   [ -x "$npm" ] || { printf 'Executable not found: %s\n' "$npm" >&2; exit 1; }
-  [ -f "$config_reader" ] || { printf 'File not found: %s\n' "$config_reader" >&2; exit 1; }
   command -v podman >/dev/null 2>&1 || { printf 'Executable not found: podman\n' >&2; exit 1; }
-  playwright_version=$(configuration_value runtime.playwright.version)
-  playwright_core_root=$(configuration_value runtime.playwright.playwrightCoreRoot)
-  playwright_image=$(configuration_value runtime.playwright.image)
-  playwright_timeout=$(configuration_value runtime.playwright.executionSeconds)
-  playwright_pids=$(configuration_value runtime.playwright.containerPids)
-  playwright_memory=$(configuration_value runtime.playwright.containerMemory)
 }
 
 installed_version() {

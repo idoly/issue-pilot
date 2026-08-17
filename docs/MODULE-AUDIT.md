@@ -1,6 +1,6 @@
 # Issue Pilot模块设计审计
 
-本文按目录和功能模块审计当前实现，补充[逐文件审计](FILE-AUDIT.md)。范围包括production code、Web、infra、Kubernetes、tests和migration；排除`node_modules`、`src/web/dist`和真实`.issue-pilot`。
+本文按目录和功能模块审计当前实现，补充[逐文件审计](FILE-AUDIT.md)。范围包括production code、Web、Container/Kubernetes、tests和migration；排除`node_modules`、`src/web/dist`和真实`.issue-pilot`。
 
 ## 判定方法
 
@@ -33,10 +33,10 @@
 
 | 模块 | 作用 | 设计判断 | 重复/兼容/无用判断 | 结论 |
 | --- | --- | --- | --- | --- |
-| `issue-pilot.config.ts` + `src/config.ts` | 唯一runtime config和absolute path projection | 两层必要：前者可被Node/Web/infra读取，后者绑定project root | 无environment override或第二套default | 保留；禁止各模块复制config |
+| `issue-pilot.config.ts` + `src/config.ts` | 唯一application config和absolute path projection | 两层必要：前者由Node/Web共享，后者绑定project root | Image/resource只在Kubernetes manifest，不与应用配置重复 | 保留；禁止各模块复制config |
 | `src/domain/contracts.ts` | 共享enum、Issue key、Deployment config和predicate | 领域事实值得集中 | 不应吸收HTTP/capability parser | 保留小型domain contract |
 | `src/serial.ts` | Promise-tail serial和keyed serial mechanics | 去除queue实现重复，但不拥有业务锁 | 业务锁域仍独立，无global mutex | 保留 |
-| `src/process.ts` | Generic spawn、abort、timeout、output budget | 稳定OS process边界，供多个domain复用 | 原目录归属错误已修正；不含command authorization | 移动已完成，保留根级primitive |
+| `src/process.ts` | Generic spawn、abort、timeout、output budget | 稳定OS process边界，供多个domain复用 | Linux使用独立process group清理后代；不含command authorization | 保留根级primitive |
 | `src/tool-runtime.ts` | Allowlist `npm/mvn/aliyun`、environment收敛、temporary HOME | 必要application process授权边界 | 不与generic process executor或protocol client合并 | 保留；单options API已精简 |
 
 `src/process.ts`只执行明确command；`src/tool-runtime.ts`决定哪些command可执行。这两个概念分别对应mechanism和authorization，合并会让Source Browser被迫依赖project/capability allowlist，拆得更细则没有收益。
@@ -153,24 +153,21 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 
 Workbench依赖较多不是微服务式过度设计，而是嵌入VS Code所需的service/extension协议。约束是固定贡献、readonly和无Node host，不应再包一层自有IDE abstraction。
 
-## Infra和Kubernetes
+## Container和Kubernetes
 
 | 模块 | 作用 | 设计判断 | 重复/兼容/无用判断 | 结论 |
 | --- | --- | --- | --- | --- |
-| `application-compose.mjs` | Root config到single-service Compose projection | Node结构化生成避免Shell/YAML复制default | Process environment仅取HOME，不覆盖业务config | 保留 |
-| `application.sh` | Build/image/container lifecycle | Operator transaction和safety checks集中 | 不与Playwright lifecycle合并 | 保留 |
-| `playwright.sh` | Ephemeral application-test container | Operator test边界 | 不属于Agent capability | 保留 |
-| `config-value.mjs` | Shell读取root config scalar | 消除Shell第二套default | 虽小但跨语言事实桥接明确 | 保留 |
-| `Containerfile` | Single application image | Compose/Kubernetes共同artifact | 不拆tool images或sidecar | 保留 |
-| `deploy/kubernetes/base` | Single-replica StatefulSet/Service/PVC | Stateful deployment baseline | 无RBAC、tool Job或multi-replica compatibility | 保留 |
+| `Containerfile` | Node/Pi/Maven/Aliyun和application的single image | 标准multi-stage artifact，无项目build wrapper | 不拆tool images或sidecar | 保留根目录单文件 |
+| `deploy/issue-pilot.yaml` | Single-node Deployment、hostPath和Service | 当前唯一生产拓扑 | 无Kustomize、PVC/Secret abstraction、RBAC或多副本兼容 | 保留单manifest |
+| `scripts/playwright.sh` | Ephemeral browser test container | 仅Operator测试边界 | 参数由脚本拥有，不进入application config | 保留开发脚本 |
 
-Application和Playwright lifecycle不同：前者持久有状态，后者`--rm`无state挂载。合并脚本会混淆权限和cleanup。
+Compose generator、application lifecycle shell、config scalar bridge、Kustomize base和独立Kubernetes文档已删除。标准`podman build/push`与`kubectl apply`足够表达当前部署。
 
 ## Tests和docs
 
 | 模块 | 作用 | 设计判断 | 重复/兼容/无用判断 | 结论 |
 | --- | --- | --- | --- | --- |
-| `tests/*` | Backend/infra real behavior regression | 按owner/domain组织 | Test fixture重复用于隔离，不进入production | 保留 |
+| `tests/*` | Backend/deployment real behavior regression | 按owner/domain组织 | Test fixture重复用于隔离，不进入production | 保留 |
 | Web colocated tests | Component/pure state/Workbench tests | 与source同目录便于Vite resolver | 不与backend tests强制统一目录 | 保留 |
 | `styles.css` Agent theme tokens | Agent会话颜色、字体和状态token | Web视觉事实由Issue Pilot拥有 | 已删除Pi内部theme resource依赖和runtime转换 | 保留CSS-local token |
 | Solid test toolchain | 上游testing library和Solid RC compiler/runtime | 依赖边界清晰，无本地第三方副本 | Peer metadata override集中在package manifest | 保留上游包；上游发布RC peer后删除override |

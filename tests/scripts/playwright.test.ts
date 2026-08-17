@@ -7,20 +7,18 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const sourceScript = resolve("infra/playwright.sh");
-const sourceConfig = resolve("issue-pilot.config.ts");
-const sourceConfigReader = resolve("infra/config-value.mjs");
+const sourceScript = resolve("scripts/playwright.sh");
 
 test("prepares Playwright core and the browser image only for application tests", async () => {
   const root = await mkdtemp(join(tmpdir(), "playwright-tools-"));
   const bin = join(root, "bin");
-  const infra = join(root, "infra");
+  const scripts = join(root, "scripts");
   const log = join(root, "tools.log");
-  const script = join(infra, "playwright.sh");
+  const script = join(scripts, "playwright.sh");
   const browserTest = join(root, "application-test.cjs");
   const output = join(root, "output");
   try {
-    await Promise.all([mkdir(bin), mkdir(infra), mkdir(output)]);
+    await Promise.all([mkdir(bin), mkdir(scripts), mkdir(output)]);
     for (const [name, content] of [
       ["npm", "#!/bin/sh\nprintf 'npm %s\\n' \"$*\" >> \"$PI_TOOLS_LOG\"\n"],
       ["podman", "#!/bin/sh\nprintf 'podman %s\\n' \"$*\" >> \"$PI_TOOLS_LOG\"\n[ \"$1 $2\" = \"image exists\" ] && exit 1\nexit 0\n"],
@@ -28,16 +26,13 @@ test("prepares Playwright core and the browser image only for application tests"
       await writeFile(join(bin, name), content, "utf8");
       await chmod(join(bin, name), 0o700);
     }
-    const [source, configuration, configurationReader] = await Promise.all([
-      readFile(sourceScript, "utf8"), readFile(sourceConfig, "utf8"), readFile(sourceConfigReader, "utf8"),
-    ]);
+    const source = await readFile(sourceScript, "utf8");
     await Promise.all([
-      writeFile(join(root, "issue-pilot.config.ts"), configuration.replace("/usr/local/node/lib/node_modules/playwright-core", join(root, "playwright-core")), "utf8"),
-      writeFile(join(infra, "config-value.mjs"), configurationReader, "utf8"),
       writeFile(browserTest, "require('/tool/node_modules/playwright-core');\n", "utf8"),
       writeFile(script, source
         .replaceAll("/usr/local/node/bin/node", process.execPath)
-        .replaceAll("/usr/local/node/bin/npm", join(bin, "npm")), { mode: 0o700 }),
+        .replaceAll("/usr/local/node/bin/npm", join(bin, "npm"))
+        .replaceAll("/usr/local/node/lib/node_modules/playwright-core", join(root, "playwright-core")), { mode: 0o700 }),
     ]);
     const env = { PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, PI_TOOLS_LOG: log };
     await execFileAsync(script, ["prepare"], { env });
@@ -51,7 +46,7 @@ test("prepares Playwright core and the browser image only for application tests"
     assert.match(calls, new RegExp(`${browserTest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\/work\/test\\.cjs:ro,Z`));
     assert.match(calls, new RegExp(`${output.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\/out:rw,z`));
     assert.doesNotMatch(calls, /node:26|maven:|--detach|project-tools\.sock|issues\.db|\/\.issue-pilot\//);
-    assert.doesNotMatch(source, /PI_PLAYWRIGHT|\$\{[A-Z_]+:-|playwright_version=1\.62\.1|playwright_image=mcr\./);
+    assert.doesNotMatch(source, /PI_PLAYWRIGHT|\$\{[A-Z_]+:-|issue-pilot\.config|config-value/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

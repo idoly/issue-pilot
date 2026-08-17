@@ -1,6 +1,5 @@
 FROM docker.io/library/node:26-bookworm-slim AS build
 
-LABEL io.issue-pilot.component="application-build"
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -15,19 +14,17 @@ FROM docker.io/library/maven:3.9-eclipse-temurin-8 AS maven-tool
 
 FROM docker.io/library/ubuntu:26.04
 
-ARG APP_ROOT=/opt/issue-pilot
-ARG RUNTIME_HOME=/home/issue-pilot
-ARG TARGETARCH
-LABEL io.issue-pilot.component="application" \
-      io.issue-pilot.root="${APP_ROOT}"
+ENV APP_ROOT=/opt/issue-pilot \
+    RUNTIME_HOME=/home/issue-pilot
 
-RUN case "$TARGETARCH" in amd64|arm64) ;; *) exit 1 ;; esac \
-    && apt-get update \
+RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates curl git libatomic1 openssh-client ripgrep \
+    && architecture="$(dpkg --print-architecture)" \
+    && case "$architecture" in amd64|arm64) ;; *) exit 1 ;; esac \
     && runtime_user="$(getent passwd 1000 | cut -d: -f1)" \
     && test -n "$runtime_user" \
     && usermod --home "$RUNTIME_HOME" "$runtime_user" \
-    && curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-${TARGETARCH}.tgz" --output /tmp/aliyun-cli.tgz \
+    && curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-${architecture}.tgz" --output /tmp/aliyun-cli.tgz \
     && tar --extract --gzip --file /tmp/aliyun-cli.tgz --directory /tmp \
     && install -m 0555 /tmp/aliyun /usr/local/bin/aliyun \
     && rm -f /tmp/aliyun /tmp/aliyun-cli.tgz \
@@ -39,8 +36,10 @@ COPY --from=build /build ${APP_ROOT}
 RUN ln -s /usr/local /usr/local/node \
     && ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
     && ln -s "${APP_ROOT}/node_modules/.bin/pi" /usr/local/bin/pi \
-    && install -d -m 0755 "$RUNTIME_HOME" "$RUNTIME_HOME/.pi" "$RUNTIME_HOME/.pi/agent" "$RUNTIME_HOME/.m2" \
-    && touch "$RUNTIME_HOME/.npmrc" "$RUNTIME_HOME/.m2/settings.xml"
+    && install -d -m 0755 -o 1000 -g 1000 "$RUNTIME_HOME" "$RUNTIME_HOME/.pi" "$RUNTIME_HOME/.pi/agent" "$RUNTIME_HOME/.m2" "$RUNTIME_HOME/.ssh" \
+    && for file in "$RUNTIME_HOME/.npmrc" "$RUNTIME_HOME/.m2/settings.xml" "$RUNTIME_HOME/.pi/agent/auth.json" "$RUNTIME_HOME/.pi/agent/models.json" "$RUNTIME_HOME/.pi/agent/models-store.json" "$RUNTIME_HOME/.ssh/id_ed25519" "$RUNTIME_HOME/.ssh/known_hosts"; do \
+         install -m 0600 -o 1000 -g 1000 /dev/null "$file"; \
+       done
 
 WORKDIR ${APP_ROOT}
 ENV NODE_ENV=production \
@@ -49,4 +48,5 @@ ENV NODE_ENV=production \
     PATH=/opt/java/openjdk/bin:/usr/share/maven/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD curl --fail --silent http://127.0.0.1:3000/health >/dev/null || exit 1
+USER 1000:1000
 CMD ["node", "--experimental-strip-types", "src/http/production.ts"]

@@ -36,25 +36,22 @@ Browser
        protocol clients + ProcessToolRuntime
 ```
 
-Compose 和 Kubernetes 使用同一个 application 镜像。SQLite、Git、Agent 和 Web 不拆成独立服务；生产必须保持单副本。Node/Maven 项目命令由 Issue-scoped Unix socket broker重新授权，再由 application 进程中的 `ProcessToolRuntime` 执行。DMS/SLS 同样通过该执行器调用镜像 PATH 中的 Aliyun CLI。Agent 不拥有 Podman/Kubernetes API 或 Playwright 工具。
+生产只使用一个Kubernetes application Pod。SQLite、Git、Agent和Web不拆成独立服务，并保持单副本。Node/Maven项目命令由Issue-scoped Unix socket broker重新授权，再由application进程中的`ProcessToolRuntime`执行。DMS/SLS同样通过该执行器调用镜像PATH中的Aliyun CLI。Agent不拥有容器或Kubernetes API。
 
 ## 快速开始
 
-宿主需要 Node/npm、Podman 和 Compose provider。运行账号还需要只读 Pi/npm/Maven 配置及可写 npm/Maven cache，详见[部署说明](docs/DEPLOYMENT.md)。
+本地验证需要Node/npm；image构建需要Podman或Docker：
 
 ```bash
 npm ci
-install -d -m 0700 .issue-pilot "$HOME/.npm" "$HOME/.m2/repository"
-infra/playwright.sh prepare
-infra/application.sh config
-infra/application.sh prepare
 npm run typecheck
 npm test
 npm run build
-npm run server
+scripts/playwright.sh prepare
+podman build --pull=always -f Containerfile -t registry.example.com/issue-pilot:0.1.0 .
 ```
 
-生产 application 在 `http://127.0.0.1:3000/` 可访问，但 Compose 实际发布 `0.0.0.0:3000` 以支持 WSL/Windows 转发；必须用宿主防火墙或可信代理限制来源。前端迭代可另启：
+准备`/etc/issue-pilot`运行配置目录并执行`kubectl apply -f deploy/issue-pilot.yaml`即可部署，完整命令见[部署说明](docs/DEPLOYMENT.md)。生产端口只通过带TLS/auth的Ingress开放。前端迭代可另启：
 
 ```bash
 npm run dev:web
@@ -62,11 +59,11 @@ npm run dev:web
 
 Vite 默认监听 `0.0.0.0:4173` 并代理 API，只能用于可信开发网络。
 
-不要在已有 application 容器存在时再次执行 `start`。升级应按[运维手册](docs/RUNBOOK.md#升级)停止服务、创建一致备份、验证 migration 副本，再 remove/start。
+升级应按[运维手册](docs/RUNBOOK.md#升级)隔离流量、停止Pod、创建一致备份并验证migration副本。
 
 ## 配置
 
-所有运行路径、端口、默认值、retention、timeout、image 和预算来自根目录 `issue-pilot.config.ts`。应用不接受环境变量覆盖；Shell 通过 `infra/config-value.mjs` 读取同一对象。
+所有应用路径、端口、默认值、retention、timeout和budget来自根目录`issue-pilot.config.ts`。Image、资源、挂载和probe只由`deploy/issue-pilot.yaml`拥有，不在应用配置中重复。
 
 User、Service、Repository、Deployment、model、branch 和完整 capability credential 存在 SQLite。根配置的 bootstrap user 只在 `subjects` 为空时插入一次。Pi/npm/Maven 原生配置由 Operator 文件管理，不进入 SQLite。
 
@@ -97,7 +94,7 @@ User、Service、Repository、Deployment、model、branch 和完整 capability c
 
 - API 没有内置 authentication/authorization。
 - 页面用户切换和 `X-Issue-Pilot-Subject` 只选择启用用户及写入署名，不是认证。
-- Compose 发布端口必须由防火墙或带 TLS/auth 的可信 proxy 保护。
+- Kubernetes Service必须由带TLS/auth的可信Ingress保护。
 - Application、Pi 和项目脚本使用同一低权限 OS 身份；容器不是不可信代码 sandbox。
 - Workbench 和 Source API 只读，但会返回内部源码，仍属于敏感接口。
 - `GET /api/config` 不返回已存 secret，但包含内部 Repository、model 和 scope。
@@ -137,11 +134,10 @@ git diff --check
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | 状态、所有权、Git/runtime、Agent、并发和不变量 |
 | [Configuration](docs/CONFIGURATION.md) | 根配置、Service/Deployment、model、capability 和 secret 数据流 |
-| [Deployment](docs/DEPLOYMENT.md) | Compose 镜像、宿主、网络、proxy 和首次验收 |
-| [Kubernetes](docs/KUBERNETES.md) | 单副本 StatefulSet、PVC、Secret 和上线边界 |
+| [Deployment](docs/DEPLOYMENT.md) | Container image、单节点Kubernetes、网络和首次验收 |
 | [Development](docs/DEVELOPMENT.md) | Module owner、改动方法、测试和 review |
 | [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障 |
-| [Comprehensive Audit](docs/COMPREHENSIVE-AUDIT.md) | 全项目架构、质量、优先级和逐文件完整审查 |
+| [Comprehensive Audit](docs/COMPREHENSIVE-AUDIT.md) | `0e1924d`历史基线的全项目完整审查 |
 | [File Audit](docs/FILE-AUDIT.md) | 当前tracked文件逐文件设计清单 |
 | [Module Audit](docs/MODULE-AUDIT.md) | 按目录/功能模块评估边界、重复和精简空间 |
 | [Agent Guide](AGENTS.md) | Coding Agent状态保护和完成标准 |

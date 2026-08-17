@@ -77,8 +77,8 @@ Route不实现Git或外部协议。AgentEngine不拼Deployment Repository join�
 - Maven 3.9/Temurin 8 stage提供Java工具链。
 - Ubuntu 26.04 runtime包含Fastify、Pi、Node/npm、Maven/JDK、Aliyun CLI、Git/SSH、ripgrep和curl。
 - Fastify在容器`0.0.0.0:3000`同源提供Web、Workbench和API。
-- Compose把宿主绝对project root写入image label和镜像路径，以保持SQLite path、Git worktree metadata和runtime symlink命名空间一致。
-- 容器没有Podman client/socket，不为Agent创建工具容器。
+- Kubernetes把宿主`/var/lib/issue-pilot`挂到image内`/opt/issue-pilot/.issue-pilot`；Pod通过node label固定到state所在节点。
+- Container没有Docker/Podman client/socket或ServiceAccount token，不为Agent创建工具Pod。
 
 `ProcessToolRuntime`只允许：
 
@@ -333,7 +333,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 ## 安全边界
 
 - API无内置认证；所有入口需外部TLS/auth/authorization。
-- Compose发布`0.0.0.0:3000`；必须由防火墙或可信proxy限制。
+- ClusterIP Service只允许通过可信TLS/auth Ingress访问。
 - Workbench只读不等于非敏感，Source返回内部代码。
 - Config GET脱敏但仍包含Repository、model和scope。
 - Credential update使用`preserve|replace|clear`，已存secret不返回浏览器。

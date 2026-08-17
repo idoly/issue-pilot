@@ -11,7 +11,6 @@
   "license": "MIT",
   "scripts": {
     "dev:web": "vite --config src/web/vite.config.ts",
-    "server": "infra/application.sh start",
     "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test tests/**/*.test.ts && vitest run --config src/web/vite.config.ts --environment jsdom",
     "build": "vite build --config src/web/vite.config.ts",

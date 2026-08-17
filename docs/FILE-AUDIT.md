@@ -1,6 +1,6 @@
 # Issue Pilot逐文件设计审计
 
-范围：当前工作树中的220个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
+范围：当前工作树中的212个Git tracked/new文件；排除本报告自身、node_modules、src/web/dist和.issue-pilot durable state。
 
 ## 判定原则
 
@@ -15,8 +15,9 @@
 - AgentSessionContext只保留实际消费字段；Pi tool直接调用protocol client。
 - Credential parse、ToolRuntime options、ApplicationResources signal和Nacos/MySQL内部shape校验已去重。
 - 无引用helper、四个icon wrapper和不必要module export已删除。
-- 共享process executor已从capability目录移到根级owner，与command授权ToolRuntime明确分层。
-- Agent Web主题已归Issue Pilot CSS所有；Solid RC已改用上游testing library并删除vendor副本。
+- 共享process executor已从capability目录移到根级owner，并使用Linux process group清理超时命令的后代进程。
+- Compose/Kustomize部署层已收敛为根`Containerfile`和单个`deploy/issue-pilot.yaml`；Playwright移到`scripts`。
+- Agent Web主题归Issue Pilot CSS所有；Solid RC使用上游testing library，无vendor副本。
 - 已发布migration和Workbench SearchService深路径override有明确保留理由。
 - 大型Workspace/Agent owner共享queue、rollback、transaction或authorization状态，不按行数机械拆分。
 - 零入站production文件均为application、Vite、Worker或Redis Worker入口；未发现其他dead production module。
@@ -28,20 +29,16 @@
 | `.containerignore` | 7 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.github/workflows/ci.yml` | 36 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `.gitignore` | 11 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `.npmrc` | 1 | 项目构建、忽略或运行配置 | 必要registry配置 | 旧peer兼容开关已删除 | 保留单行 |
-| `AGENTS.md` | 181 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `README.md` | 147 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `deploy/kubernetes/base/kustomization.yaml` | 6 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `deploy/kubernetes/base/service-account.yaml` | 5 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `deploy/kubernetes/base/service.yaml` | 14 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `deploy/kubernetes/base/stateful-set.yaml` | 161 | 单副本Kubernetes/Kustomize部署资源 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
+| `AGENTS.md` | 183 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `Containerfile` | 52 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `README.md` | 143 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `deploy/issue-pilot.yaml` | 119 | 项目构建、忽略或运行配置 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `docs/ARCHITECTURE.md` | 361 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/COMPREHENSIVE-AUDIT.md` | 4068 | COMPREHENSIVE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/CONFIGURATION.md` | 317 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/DEPLOYMENT.md` | 296 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/CONFIGURATION.md` | 306 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/DEPLOYMENT.md` | 174 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/KUBERNETES.md` | 143 | KUBERNETES主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/MODULE-AUDIT.md` | 185 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/MODULE-AUDIT.md` | 182 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/RUNBOOK.md` | 432 | RUNBOOK主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `drizzle/0000_schema.sql` | 302 | 已发布不可变migration：schema | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/0001_service_sort_order.sql` | 1 | 已发布不可变migration：service sort order | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
@@ -83,14 +80,10 @@
 | `drizzle/0037_managed_users.sql` | 7 | 已发布不可变migration：managed users | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/0000_snapshot.json` | 2205 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/_journal.json` | 272 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
-| `infra/application-compose.mjs` | 63 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `infra/application.sh` | 194 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `infra/config-value.mjs` | 15 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `infra/images/application/Containerfile` | 52 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `infra/playwright.sh` | 96 | application镜像、Compose或Operator脚本 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `issue-pilot.config.ts` | 119 | 应用唯一根配置事实源 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `issue-pilot.config.ts` | 98 | 应用唯一根配置事实源 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `package-lock.json` | 7694 | npm依赖解析锁文件 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `package.json` | 115 | 包、脚本和依赖清单 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `package.json` | 114 | 包、脚本和依赖清单 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `scripts/playwright.sh` | 89 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/agent/context.ts` | 38 | Agent session实际消费的model、tool和代码写权限上下文 | 必要session数据 | 已删除未消费scope/path/commit/deployment字段 | 保留当前扁平结构 |
 | `src/agent/engine.ts` | 361 | Issue reservation、Agent运行状态、Pi session和消息协调 | 大型但内聚的状态边界 | 拆分会新增queue/rollback/authorization协调 | 保留，不按行数拆 |
 | `src/agent/events.ts` | 116 | Agent事件发布、replay和live缓冲 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -126,7 +119,7 @@
 | `src/http/configuration-routes.ts` | 85 | Catalog/配置/Service写入routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/http/input.ts` | 35 | HTTP unknown输入的少量fail-fast解析器 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/issue-routes.ts` | 283 | Issue创建、编辑、列表、状态和评论routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
-| `src/http/production.ts` | 7 | application镜像唯一生产入口 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/http/production.ts` | 4 | application镜像唯一生产入口 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/route-context.ts` | 55 | Route共享依赖、当前用户、Issue查找和reservation映射 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/service-configuration.ts` | 152 | Service配置边界解析和事务写入 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/source-browser-routes.ts` | 65 | Source tree/file/search/history/diff routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
@@ -136,7 +129,7 @@
 | `src/http/workspace-routes.ts` | 45 | Workspace stats、转换和release routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/pi/models.ts` | 113 | 共享Pi ModelRuntime和离线可用模型快照 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/pi/tools.ts` | 49 | TypeBox解析Agent tool input并直调protocol client | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/process.ts` | 76 | 共享spawn、abort、timeout和output budget执行器 | 必要底层进程边界 | 已从capability目录移到共享根级owner | 保留，与授权ToolRuntime分层 |
+| `src/process.ts` | 89 | 共享spawn、abort、timeout和output budget执行器 | 必要底层进程边界 | 已从capability目录移到共享根级owner | 保留，与授权ToolRuntime分层 |
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -213,8 +206,9 @@
 | `tests/capabilities/nacos.test.ts` | 88 | capabilities域的nacos行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/sls.test.ts` | 75 | capabilities域的sls行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/configuration/credentials.test.ts` | 48 | configuration域的credentials行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/db/bootstrap.test.ts` | 111 | db域的bootstrap行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/db/bootstrap.test.ts` | 109 | db域的bootstrap行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/db/sqlite.test.ts` | 211 | db域的sqlite行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/deployment/application.test.ts` | 53 | deployment域的application行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/domain/contracts.test.ts` | 33 | domain域的contracts行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/domain/serial.test.ts` | 59 | domain域的serial行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/api-startup.test.ts` | 91 | http域的api-startup行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -228,11 +222,10 @@
 | `tests/http/sse.test.ts` | 121 | http域的sse行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/user-api.test.ts` | 102 | http域的user-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/web.test.ts` | 70 | http域的web行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/infra/application.test.ts` | 147 | infra域的application行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/infra/playwright.test.ts` | 58 | infra域的playwright行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/models.test.ts` | 105 | pi域的models行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/tools.test.ts` | 40 | pi域的tools行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/process/process.test.ts` | 18 | process域的process行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/process/process.test.ts` | 45 | process域的process行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/scripts/playwright.test.ts` | 53 | scripts域的playwright行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/tool-runtime.test.ts` | 52 | tool-runtime.test.ts域的tool-runtime行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/deployment.test.ts` | 55 | workspace域的deployment行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/generated-directory.test.ts` | 77 | workspace域的generated-directory行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

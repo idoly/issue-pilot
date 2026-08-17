@@ -1,6 +1,6 @@
 # Issue Pilot全面代码审查
 
-审查基线：`0e1924d`；范围为220个Git tracked文件，排除本报告自身、`node_modules`、`src/web/dist`和真实`.issue-pilot`。本报告补充[模块审计](MODULE-AUDIT.md)和[逐文件清单](FILE-AUDIT.md)。
+审查基线：`0e1924d`；范围为220个Git tracked文件，排除本报告自身、`node_modules`、`src/web/dist`和真实`.issue-pilot`。本报告是该提交的历史审查证据；当前文件和部署结论以[模块审计](MODULE-AUDIT.md)、[逐文件清单](FILE-AUDIT.md)和[部署说明](DEPLOYMENT.md)为准。其后已落实Linux process group后代清理，并将Compose/Kustomize收敛为根`Containerfile`和单个Kubernetes manifest。
 
 ## 执行摘要
 

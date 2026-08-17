@@ -12,7 +12,7 @@ export const issuePilotConfig = Object.freeze({
   }),
   bootstrapUser: Object.freeze({ subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
   http: Object.freeze({
-    host: "127.0.0.1",
+    host: "0.0.0.0",
     port: 3000,
     logger: true,
     sseHeartbeatMs: 15_000,
@@ -40,28 +40,7 @@ export const issuePilotConfig = Object.freeze({
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
-    application: Object.freeze({
-      name: "issue-pilot",
-      image: "localhost/issue-pilot:0.1.0-node26-ubuntu2604",
-      listenHost: "0.0.0.0",
-      restartPolicy: "on-failure:5",
-      containerPids: 2_048,
-      containerMemory: "4g",
-      stopTimeoutSeconds: 1_800,
-    }),
-    playwright: Object.freeze({
-      version: "1.62.1",
-      image: "mcr.microsoft.com/playwright:v1.62.1-noble",
-      playwrightCoreRoot: "/usr/local/node/lib/node_modules/playwright-core",
-      actionTimeoutMs: 10_000,
-      navigationTimeoutMs: 20_000,
-      executionSeconds: 300,
-      containerPids: 256,
-      containerMemory: "1g",
-      viewport: Object.freeze({ width: 1280, height: 720 }),
-    }),
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
-    containerUser: Object.freeze({ uid: 1000, gid: 1000 }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
     projectTools: Object.freeze({
       node: Object.freeze({

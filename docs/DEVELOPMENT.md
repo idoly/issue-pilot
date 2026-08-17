@@ -24,13 +24,12 @@ git status --short
 
 ## 开发运行
 
-API只从prepared application image启动：
+API只从reviewed application image启动：
 
 ```bash
 npm ci
-infra/application.sh config
-infra/application.sh prepare
-npm run server
+podman build --pull=always -f Containerfile -t registry.example.com/issue-pilot:dev .
+kubectl apply -f deploy/issue-pilot.yaml
 ```
 
 Web迭代：
@@ -45,7 +44,7 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 
 | Path | Owner |
 | --- | --- |
-| `issue-pilot.config.ts` | Path、port、default、retention、image、runtime、budget |
+| `issue-pilot.config.ts` | Path、port、default、retention、runtime、budget |
 | `src/config.ts` | Project/state/web absolute path resolution |
 | `src/domain/contracts.ts` | Shared enum、type、predicate |
 | `src/db/schema.ts` | Current Drizzle schema |
@@ -90,8 +89,9 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/web/src/vscode/source-control.ts` | SCM Changes/Graph/revision Diff |
 | `src/web/src/vscode/markdown-preview.ts` | Read-only Markdown editor pane |
 | `src/web/vite.config.ts` | Main/Workbench entries和static theme/icon/preview resources |
-| `infra` | Image、Compose generation、Operator scripts |
-| `deploy/kubernetes/base` | Single-replica Kustomize baseline |
+| `Containerfile` | Application image和内置project tools |
+| `deploy/issue-pilot.yaml` | Single-node Kubernetes Deployment和Service |
+| `scripts/playwright.sh` | Operator browser test harness |
 | `drizzle` | Immutable migration history |
 
 ## Request flows
@@ -347,7 +347,7 @@ git diff --check
 | Source/Workbench | Alias/path/symlink/binary/budget、readonly mutation、Search/SCM/Preview |
 | Project tools | Socket protocol/mode、DB/path auth、same-Issue serial、timeout |
 | Startup | Fresh/migrated DB、interrupted state、unmanaged/changed checkout |
-| Infra | Compose/image labels、Healthcheck、Shell syntax、isolated image smoke |
+| Deployment | Container tools/Healthcheck、single-replica/Recreate、hostPath/probes |
 
 ## Debugging
 

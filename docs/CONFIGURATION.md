@@ -6,13 +6,13 @@
 
 | 配置 | 事实源 |
 | --- | --- |
-| Path、port、default、retention、image、timeout、budget | `issue-pilot.config.ts` |
+| Path、port、default、retention、timeout、budget | `issue-pilot.config.ts` |
+| Image、resource、mount和probe | `deploy/issue-pilot.yaml` |
 | User、Service、Repository、Deployment、branch、完整credential | SQLite |
-| Pi provider/model/auth原生配置 | Operator只读挂载的`~/.pi/agent` |
-| npm/Maven配置和cache | Operator文件/目录 |
+| Pi/npm/Maven/SSH原生配置 | Operator维护的`/etc/issue-pilot`只读目录 |
 | Agent session选择 | 每轮从实际Repository access和Deployment生成 |
 
-应用不接受环境变量覆盖。Node/Web直接导入根配置；Shell通过`infra/config-value.mjs`读取同一对象。环境变量只用于容器进程环境，例如`HOME`，不是Issue Pilot配置override。
+应用不接受环境变量覆盖。Node和Web直接导入根配置。环境变量只用于标准进程环境，例如`HOME`，不是Issue Pilot配置override。
 
 普通工作台读取`GET /api/catalog`，只含Environment和Service可用范围。配置页按需读取`GET /api/config`，包含Repository、model、capability scope和`credentialConfigured`，不含已存password或AccessKey。两种读取均经scope queue进入SQLite snapshot transaction。
 
@@ -43,7 +43,7 @@ API在内存中合并一次，由Registry解析为typed config，reservation受�
 
 | Field | 当前值 |
 | --- | ---: |
-| `http.host/port` | `127.0.0.1` / `3000` |
+| `http.host/port` | `0.0.0.0` / `3000` |
 | `http.logger` | `true` |
 | `http.sseHeartbeatMs` | `15000` |
 | `http.ssePendingBytes` | `4194304` |
@@ -52,7 +52,7 @@ API在内存中合并一次，由Registry解析为typed config，reservation受�
 | `web.markdownCacheEntries` | `512` |
 | `web.markdownCacheCharacters` | `4194304` |
 
-`http.host`是默认API listen；production entry显式使用`runtime.application.listenHost=0.0.0.0`。Compose发布host `0.0.0.0:3000`。Vite同样监听all interfaces，仅允许可信网络。
+`http.host`是application Pod的API listen地址。ClusterIP Service和Vite同样监听all interfaces，只能通过可信Ingress或开发网络访问。Vite API proxy固定连接本机`127.0.0.1:3000`。
 
 ### Workspace
 
@@ -82,25 +82,14 @@ Environment name在启动时同步。其他default用于新配置；保存后SQL
 
 | Field | 当前值 |
 | --- | --- |
-| `application.name` | `issue-pilot` |
-| `application.image` | `localhost/issue-pilot:0.1.0-node26-ubuntu2604` |
-| `application.listenHost` | `0.0.0.0` |
-| `application.restartPolicy` | `on-failure:5` |
-| `application.containerPids/memory` | `2048` / `4g` |
-| `application.stopTimeoutSeconds` | `1800` |
-| `containerUser.uid/gid` | `1000:1000` |
 | `sourceBrowser.gitExecutable/searchExecutable` | `git` / `rg` |
 | `projectTools.node` | `.npmrc`, `.npm` relative to HOME |
 | `projectTools.maven` | `.m2/settings.xml`, `.m2/repository` |
 | `projectTools.executionMs` | `1800000` |
 | `redisWorker` | old`96MiB`, young`16MiB` |
 | `dms.endpoint/cliRegion` | `dms-enterprise.aliyuncs.com` / `cn-hangzhou` |
-| `playwright.version/image` | `1.62.1` / `mcr.microsoft.com/playwright:v1.62.1-noble` |
-| `playwright.executionSeconds` | `300` |
-| `playwright.containerPids/memory` | `256` / `1g` |
-| `playwright.viewport` | `1280x720` |
 
-Application只含一个service。`ProcessToolRuntime`执行当前image PATH中的`npm`、`mvn`、`aliyun dms-enterprise`和`aliyun sls`；调用不选择image或container。Playwright配置只用于Operator应用验收，不进入Service/Deployment或Agent。
+Image、UID、memory、termination grace和probe属于Kubernetes deployment，不在应用配置中重复。`ProcessToolRuntime`执行当前image PATH中的`npm`、`mvn`、`aliyun dms-enterprise`和`aliyun sls`；调用不选择image或container。Playwright harness参数由`scripts/playwright.sh`拥有，不进入Service、Deployment或Agent。
 
 ### Limits
 
