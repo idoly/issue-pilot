@@ -10,10 +10,13 @@ test("builds one application image with the required project tools", async () =>
 
   assert.match(containerfile, /FROM docker\.io\/library\/node:26-bookworm-slim AS build/);
   assert.match(containerfile, /FROM docker\.io\/library\/maven:3\.9-eclipse-temurin-8 AS maven/);
+  assert.match(containerfile, /FROM docker\.io\/library\/debian:bookworm-slim AS git/);
   assert.equal(containerfile.match(/FROM docker\.io\/library\/node:26-bookworm-slim/g)?.length, 2);
   assert.match(containerfile, /npm ci/);
   assert.match(containerfile, /npm prune --omit=dev/);
-  assert.match(containerfile, /apt-get install .* ca-certificates curl git openssh-client ripgrep/);
+  assert.match(containerfile, /ARG GIT_VERSION=2\.53\.0/);
+  assert.match(containerfile, /git-\$\{GIT_VERSION\}\.tar\.xz/);
+  assert.match(containerfile, /COPY --from=git \/opt\/git \/opt\/git/);
   assert.match(containerfile, /ARG ALIYUN_CLI_VERSION=3\.4\.11/);
   assert.match(containerfile, /github\.com\/aliyun\/aliyun-cli\/releases\/download\/v\$\{ALIYUN_CLI_VERSION\}/);
   assert.match(containerfile, /sha256sum --check/);
