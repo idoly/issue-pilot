@@ -9,7 +9,6 @@ import { Markdown } from "../ui/Markdown";
 import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
-import { piDarkThemeStyle } from "./pi-theme";
 
 function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> }) {
   const label = () => toolLabel(props.entry);
@@ -379,7 +378,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   });
   onCleanup(() => { issueGeneration += 1; transcriptObserver?.disconnect(); discardMessageUpdates(); streamController.dispose(); });
 
-  return <section ref={panel} class="agent-panel" style={piDarkThemeStyle} aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
+  return <section ref={panel} class="agent-panel" aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
     <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
       <div class="agent-conversation" role="log" aria-live="polite">
         <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>

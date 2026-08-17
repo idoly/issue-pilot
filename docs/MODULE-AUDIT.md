@@ -131,7 +131,6 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 | ConfigurationView + `configuration-model.ts` | Explicit capability forms和payload serializer | 显式UI适合异构capability | Generic schema form会隐藏credential intent | 保留 |
 | AttachmentPreview、Statistics、UserManagement | 独立user workflows | Feature component边界清楚 | 无重复domain state | 保留 |
 | `model.ts`、`paste-editor.ts` | Pure display/edit algorithms | 有多处调用或独立edge-case tests | 不需要service class | 保留function module |
-| `pi-theme.ts` | Pi theme JSON到CSS variables | 有价值但依赖Pi内部resource | 无public browser API；复制theme会成第二事实源 | 暂留，Pi upgrade复核 |
 | `ui/Markdown.tsx`、`icons.tsx` | Shared sanitized Markdown和Solid icon adapter | UI primitive真实复用 | Dead icons已删除 | 保留 |
 
 `data/client.ts`和`ConfigurationView.tsx`是Web较大文件，但前者共享request/Source validation，后者共享同一Service draft和credential intent。当前没有可独立拥有状态的子manager；按行数拆分收益不足。
@@ -171,6 +170,7 @@ Application和Playwright lifecycle不同：前者持久有状态，后者`--rm`�
 | --- | --- | --- | --- | --- |
 | `tests/*` | Backend/infra real behavior regression | 按owner/domain组织 | Test fixture重复用于隔离，不进入production | 保留 |
 | Web colocated tests | Component/pure state/Workbench tests | 与source同目录便于Vite resolver | 不与backend tests强制统一目录 | 保留 |
+| `styles.css` Agent theme tokens | Agent会话颜色、字体和状态token | Web视觉事实由Issue Pilot拥有 | 已删除Pi内部theme resource依赖和runtime转换 | 保留CSS-local token |
 | `vendor/solid-testing-library` | Solid 2 beta peer metadata patch | 临时第三方shim | 上游stable仍不支持当前beta peer | 保留隔离；升级Solid后删除 |
 | `docs/*` | Architecture/config/deploy/develop/runbook/audit owners | 按事实职责拆分 | README只做入口，避免重复细节 | 保留 |
 
@@ -178,9 +178,6 @@ Application和Playwright lifecycle不同：前者持久有状态，后者`--rm`�
 
 当前架构已经没有值得删除的production中间层或zero-inbound业务模块。继续把HTTP domains、protocol clients、Git/lifecycle owner或Workbench providers合并，会减少文件数但增加共享状态、反向依赖和failure-path复杂度。
 
-仍需升级时复核的两个外部依赖点：
-
-1. Pi公开browser theme API出现后，替换`pi-theme.ts`内部resource import。
-2. Solid 2 stable和testing library peer range兼容后，删除vendor shim。
+仍需升级时复核的外部依赖点：Solid 2 stable和testing library peer range兼容后，删除vendor shim。Agent Web主题已归Issue Pilot CSS所有，不再跟随Pi terminal theme或依赖Pi内部resource。
 
 除此之外，新增抽象必须证明它减少至少一种真实复杂度：重复transaction、重复rollback、重复authorization、重复protocol parsing或重复UI state。仅为缩短文件、统一命名或让静态分析器不报entrypoint，不足以成立。

@@ -7,7 +7,6 @@ import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel } from "./AgentPanel";
 import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
-import { piDarkThemeStyle } from "./pi-theme";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "63ccbb08-d769-47b6-87a6-e93acea184f7", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -23,13 +22,6 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("Agent conversation state", () => {
-  it("uses the official Pi dark theme tokens", () => {
-    expect(piDarkThemeStyle).toContain("--pi-accent:#8abeb7");
-    expect(piDarkThemeStyle).toContain("--pi-tool-success-bg:#283228");
-    expect(piDarkThemeStyle).toContain("--pi-thinking-medium:#81a2be");
-    expect(piDarkThemeStyle).toContain("--pi-export-page-bg:#18181e");
-  });
-
   it("assembles Pi streaming events and replaces them with the final message", () => {
     let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
     entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
