@@ -299,6 +299,7 @@ JSONL replay -> snapshot_ready -> live -> heartbeat
 | Binary/too large | 使用其他受控工具，不放宽无限 |
 | Search mismatch | Literal query、case/word headers、progress、rg budget |
 | SCM empty | `/diff`、HEAD/index/worktree、runtime target |
+| Dev file/Git mutation fails | Environment access、Issue reservation、relative path、Source stable error和Git status |
 | Graph/file fail | `/history`、`/commit`、`/commit-file`、`/blame`、HEAD ancestry |
 | Preview fail | Markdown worker、render API、DOMPurify、fixed styles |
 | Workbench fail | `vscode.html`、workers、theme/static resources、browser console |
@@ -395,7 +396,7 @@ kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 - 全部Issue三种Repository state和runtime。
 - Attachment mode/size/hash。
 - SSE replay/`snapshot_ready`。
-- Source multi-root/tree/file/search/history/commit/diff。
+- Source multi-root/tree/file/search/history/commit/diff，以及隔离dev workspace中的file/Git mutation。
 - Capability catalog order和必要read-only smoke。
 
 Published migration/journal不可修改。

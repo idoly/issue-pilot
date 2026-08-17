@@ -1,6 +1,6 @@
 import { CapabilityConfigurationError, parseCapabilityConfiguration } from "../capabilities/registry.ts";
 import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
-import { CAPABILITY_CREDENTIALS, type PublicCapabilityConfiguration } from "./contracts.ts";
+import { CAPABILITY_CREDENTIALS, type ProjectedCapabilityConfiguration } from "./contracts.ts";
 
 function fail(code: string): never {
   throw new CapabilityConfigurationError(code);
@@ -17,7 +17,7 @@ function configuredCredentialValues(key: CapabilityName, section: Record<string,
   return fields.every((field) => typeof values[field] === "string" && values[field].length > 0) ? values as Record<string, string> : undefined;
 }
 
-export function projectCapabilityConfiguration(configuration: CapabilityConfiguration): PublicCapabilityConfiguration {
+export function projectCapabilityConfiguration(configuration: CapabilityConfiguration): ProjectedCapabilityConfiguration {
   const projected: Record<string, unknown> = {};
   for (const key of CAPABILITY_KEYS) {
     const stored = configuration[key];
@@ -25,7 +25,7 @@ export function projectCapabilityConfiguration(configuration: CapabilityConfigur
     const section = stored as Record<string, unknown>;
     projected[key] = { ...section, credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
   }
-  return projected as PublicCapabilityConfiguration;
+  return projected as ProjectedCapabilityConfiguration;
 }
 
 function replacementCredentialValues(key: CapabilityName, value: unknown): Record<string, string> {

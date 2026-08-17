@@ -1,5 +1,5 @@
 import { Button, Input, Modal, Segmented, Select, Skeleton, Switch as Toggle, TextArea } from "@idoly/ant-design-solid";
-import { createEffect, createMemo, createSignal, createStore, For, Match, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, createStore, For, Match, Show, snapshot, Switch, untrack } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CAPABILITY_CREDENTIALS } from "../../../configuration/contracts";
@@ -49,14 +49,8 @@ type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
 };
 
-function cloneDraftValue<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(cloneDraftValue) as T;
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cloneDraftValue(entry)])) as T;
-  return value;
-}
-
 function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploymentDraft {
-  return cloneDraftValue(deployment);
+  return snapshot(deployment);
 }
 
 function ServiceRepositoryEditorRow(props: {

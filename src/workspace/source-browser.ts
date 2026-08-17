@@ -161,8 +161,7 @@ export class SourceBrowser {
   }
 
   async writeFile(issue: IssueReference, repositoryName: string, relativePath: string, content: string, expectedSha256: string): Promise<{ path: string; content: string; size: number; sha256: string }> {
-    const context = await this.context(issue, repositoryName);
-    if (context.source.access !== "write") throw new Error("source_read_only");
+    const context = await this.writableContext(issue, repositoryName);
     if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_source_hash");
     const selected = normalizedRelativePath(relativePath);
     if (!selected) throw new Error("source_path_not_file");
@@ -589,10 +588,10 @@ export class SourceBrowser {
     };
   }
 
-  private async gitMutation(context: SourceContext, args: string[], failure: string, acceptedCodes = new Set([0])): Promise<void> {
+  private async gitMutation(context: SourceContext, args: string[], failure: string): Promise<void> {
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, ...args], this.mutationOptions());
     if (result.killed) throw new Error(`${failure.replace(/_failed$/, "")}_timeout`);
-    if (!acceptedCodes.has(result.code)) throw new Error(failure);
+    if (result.code !== 0) throw new Error(failure);
   }
 
   private async context(issue: IssueReference, repositoryName: string): Promise<SourceContext> {

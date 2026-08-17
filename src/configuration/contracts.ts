@@ -12,8 +12,8 @@ export const CAPABILITY_CREDENTIALS = {
 
 type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIALS)[Key]["fields"][number];
 export type CapabilityCredentialValues<Key extends CapabilityName> = Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
-export type PublicCapabilitySection<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]> & { credentialConfigured: boolean };
-export type PublicCapabilityConfiguration = { [Key in CapabilityName]?: PublicCapabilitySection<Key> };
+export type ProjectedCapabilitySection<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]> & { credentialConfigured: boolean };
+export type ProjectedCapabilityConfiguration = { [Key in CapabilityName]?: ProjectedCapabilitySection<Key> };
 export type CapabilityCredentialUpdate<Key extends CapabilityName> =
   | { mode: "preserve" }
   | { mode: "replace"; values: CapabilityCredentialValues<Key> }
@@ -40,7 +40,7 @@ export interface ConfigurationCatalog {
   services: ServiceCatalogItem[];
 }
 
-interface ServiceDeployment extends PublicCapabilityConfiguration {
+interface ServiceDeployment extends ProjectedCapabilityConfiguration {
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];

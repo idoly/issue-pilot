@@ -22,7 +22,7 @@ Service保存时，每个selected capability显式提交：
 - `replace`：提交完整新credential。
 - `clear`：只允许optional credential。
 
-API在内存中合并一次，由Registry解析为typed config，reservation受影响Issue并关闭内存session，最后在SQLite transaction提交。浏览器永远拿不到旧secret值。
+API在内存中合并一次，由Registry解析为typed config，reservation受影响Issue并关闭内存session，最后在SQLite transaction提交。Config GET会把旧secret返回受信配置页，因此编辑表单可直接回填；`preserve`仍供未携带secret的调用者使用。
 
 ## 根配置
 
@@ -296,7 +296,7 @@ Secret flow：
 
 1. SQLite保存完整typed Deployment config，是唯一业务secret事实源。
 2. Catalog不读取config JSON；Config GET返回完整Deployment配置和credential。
-3. Web secret input保持空，仅发送`preserve|replace|clear`意图。
+3. Web编辑表单回填Config GET中的secret，并通过`preserve|replace|clear`协议提交；当前页面通常发送`replace`。
 4. API内存合并后只解析一次并transaction保存。
 5. `AgentSessionContext`、prompt、schema和tool input不含credential。
 6. `createCapabilityTools()` clone session-local config并只在tool closure传给client。

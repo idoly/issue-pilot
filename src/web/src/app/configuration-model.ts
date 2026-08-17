@@ -1,7 +1,7 @@
 import { CAPABILITY_KEYS, type AgentConfiguration, type CapabilityName } from "../../../domain/contracts";
-import { CAPABILITY_CREDENTIALS, type CapabilityConfigurationInput, type CapabilityCredentialUpdate, type CapabilityCredentialValues, type PublicCapabilitySection } from "../../../configuration/contracts";
+import { CAPABILITY_CREDENTIALS, type CapabilityConfigurationInput, type CapabilityCredentialUpdate, type CapabilityCredentialValues, type ProjectedCapabilitySection } from "../../../configuration/contracts";
 
-type CapabilityCredentialDraft<Key extends CapabilityName> = PublicCapabilitySection<Key> & CapabilityCredentialValues<Key> & { credentialEnabled: boolean };
+type CapabilityCredentialDraft<Key extends CapabilityName> = ProjectedCapabilitySection<Key> & CapabilityCredentialValues<Key> & { credentialEnabled: boolean };
 type CapabilityDraftConfiguration = { [Key in CapabilityName]?: CapabilityCredentialDraft<Key> };
 
 export type DeploymentCapabilityDraft = CapabilityDraftConfiguration & {

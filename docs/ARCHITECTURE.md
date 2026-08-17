@@ -43,7 +43,7 @@ Browser
        SQLite/Drizzle
        AgentEngine -> PiSessionRuntime -> Pi JSONL
        IssueProjectManager -> WorktreeManager -> Git stores
-       SourceBrowser -> bounded filesystem/rg/Git reads
+       SourceBrowser -> bounded filesystem/rg/Git reads + dev mutations
        Pi tools -> protocol clients / ProcessToolRuntime
        ProjectToolBroker -> ProcessToolRuntime
 ```
@@ -58,7 +58,7 @@ Browser
 | `src/workspace/git.ts` | Bare store、fetch、checkout、worktree、batch rollback和Repository锁 |
 | `src/workspace/state.ts` | Repository分类、managed path和unmanaged/generated state检查 |
 | `src/workspace/runtime.ts` | Runtime原子生成 |
-| `src/workspace/source-browser.ts` | Source授权和有界只读操作 |
+| `src/workspace/source-browser.ts` | Source授权、有界读取和development文件/Git mutation |
 | `src/workspace/project-tools.ts` | Unix socket、SQLite重新授权、Node/Maven action |
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
 | `src/capabilities/registry.ts` | 保存时config parser、Pi input schema和tool metadata |
@@ -209,10 +209,10 @@ Source Browser重新读取SQLite关系并验证runtime symlink：
 - 拒绝absolute、`..`、symlink escape、`.git` tree项、binary和超限文件。
 - `/search`使用literal `rg --json`。
 - History/commit必须位于current HEAD ancestry；blame一次只读取一个合法文件行。
-- Diff读取Git index/working tree，不提供Git写命令。
-- 仅development workspace可保存已存在的普通UTF-8文件；保存携带读取时SHA-256，冲突时拒绝覆盖，并在同目录原子替换。
+- Diff读取Git index/working tree；development workspace额外允许Stage、Unstage、Discard和Commit，所有写操作经过Issue reservation。
+- Development workspace可创建、保存、删除和重命名普通文件/目录；保存既有文件携带读取时SHA-256并原子替换。Prod/test和released snapshot保持只读。
 
-Workbench filesystem根据Repository access声明权限：dev文件允许`writeFile`，prod/test保持Readonly；mkdir/delete/rename始终返回`FileWriteLocked`。固定LocalProcess extension提供Explorer/Search/SCM Graph；Web Worker Markdown extension只用于render。Terminal、Node extension host、gallery、stage、commit和revert不可用。
+Workbench filesystem根据Repository access声明权限：dev允许文件创建、保存、删除和重命名，prod/test及released snapshot保持Readonly。固定LocalProcess extension提供Explorer/Search/SCM Graph和受限Git action；Web Worker Markdown extension只用于render。Terminal、Node extension host、gallery和任意宿主命令不可用。
 
 ## Agent和Pi
 
@@ -337,7 +337,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 - ClusterIP Service只允许通过可信TLS/auth Ingress访问。
 - Workbench和Source API返回内部代码；development write还会直接修改Issue workspace，均属于敏感接口。
 - Config GET包含Repository、model、scope和完整Deployment credential，只允许在受信应用网络内使用且不得记录响应。
-- Credential update使用`preserve|replace|clear`，已存secret不返回浏览器。
+- Credential update仍使用`preserve|replace|clear`；配置页可直接回填GET返回的credential，保存时通常发送`replace`。
 - Credential不进入context、prompt、tool input、argv或日志。
 - DMS/SLS临时profile包含AccessKey；query仍出现在process argv。
 - Pi built-in tools和project scripts不是OS sandbox。
@@ -355,7 +355,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 8. Attachment只有一个`0400`durable副本，写操作只属于Issue create/edit。
 9. Runtime和checkout不成为durable事实源。
 10. Repository集合变化先prepare filesystem，再commit DB，失败可rollback。
-11. Credential不进入config GET、context、prompt、tool input、argv或日志。
+11. Credential只在SQLite、受信Config GET/保存请求和session-local protocol client中出现，不进入Agent context、prompt、tool input、process argv、日志、监控或诊断附件。
 12. Pi tool只解析一次input并直接调用protocol client。
 13. API、migration、Git、runtime、Source和project broker使用同一state root。
 14. Published migration/journal不修改、重排或删除。

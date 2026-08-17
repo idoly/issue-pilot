@@ -1,6 +1,6 @@
 # Issue Pilot模块设计审计
 
-本文按目录和功能模块审计当前实现，补充[逐文件审计](FILE-AUDIT.md)。范围包括production code、Web、Container/Kubernetes、tests和migration；排除`node_modules`、`src/web/dist`和真实`.issue-pilot`。
+本文按目录和功能模块审计当前实现，补充[逐文件审计](FILE-AUDIT.md)。范围包括production code、Web、Container/Kubernetes、tests和migration；排除`node_modules`、`src/web/dist`和真实`.issue-pilot`。本轮静态依赖图包含98个生产TypeScript模块、275条内部依赖边，未发现循环依赖或无入口业务模块。
 
 ## 判定方法
 
@@ -57,9 +57,9 @@ Bootstrap看似混合多个步骤，但它们共享“数据库打开后、API r
 
 | 模块 | 作用 | 设计判断 | 重复/兼容/无用判断 | 结论 |
 | --- | --- | --- | --- | --- |
-| `src/configuration/contracts.ts` | Catalog/config DTO和credential update protocol | 浏览器拿不到旧secret，因此`preserve/replace/clear`有真实价值 | 不是乐观revision或grant概念 | 保留 |
-| `src/configuration/credentials.ts` | Redaction、credential intent merge、单次Registry parse | Secret边界独立且可测试 | `inputRecord`与Registry同名但error type和boundary不同，抽公共helper会耦合层次 | 保留；不合并validator |
-| `src/configuration/read.ts` | Catalog和redacted config snapshot projection | 隔离raw row/secret projection | 仅被route调用不等于薄层；拥有复杂join/DTO | 保留 |
+| `src/configuration/contracts.ts` | Catalog/config DTO和credential update protocol | Config GET返回完整credential，`preserve/replace/clear`仍提供明确更新语义 | `Projected*`命名避免把含secret DTO误认为public-safe | 保留 |
+| `src/configuration/credentials.ts` | Credential projection、intent merge、单次Registry parse | Secret边界独立且可测试 | 与Registry各自保留小型record parser，避免新增万能validation层 | 保留；不合并validator |
+| `src/configuration/read.ts` | Catalog和完整config snapshot projection | 隔离raw row、join和DTO组装 | 仅被route调用不等于薄层；拥有复杂join/DTO | 保留 |
 | `src/http/service-configuration.ts` | Service request parse、model/repository validation、transaction apply | Command prepare/apply边界值得保留 | Route不应吸收配置write transaction | 保留 |
 
 已删除revision/If-Match链。当前scope queue + snapshot transaction已提供进程内一致性，再加revision token会重复协调且增加Web状态。
@@ -116,7 +116,7 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 | `runtime.ts` + `project-wrappers.ts` | Runtime links和dev wrapper生成 | 产物/lifecycle不同，共用atomic primitive即可 | 合并会混合symlink与script协议 | 保留分离 |
 | `project.ts` | Agent/cold-start/reopen project prepare | 单一project coordinator | 已吸收development/read-only薄层 | 保留 |
 | `project-tools.ts` | Unix socket、DB/path reauthorization、npm/Maven | 稳定security/process boundary | 不能并入protocol client或Pi bash | 保留 |
-| `source-browser.ts` | SQLite/runtime authorization和bounded read | 大型但同一Source security boundary | Tree/file/search/history/diff共享context/path checks | 保留 |
+| `source-browser.ts` | SQLite/runtime授权、有界读取和dev文件/Git mutation | 大型但同一Source security boundary | Tree/file/search/history/diff/mutation共享context/path checks和reservation前提 | 保留；已删除重复可写判断和未使用exit-code参数 |
 | `lifecycle.ts` | Inspection/stats/release/reopen/maintenance | 共享lifecycle/inspection queue和rollback | 拆分会产生reverse lock风险 | 保留 |
 
 `deployment.ts`、`generated-directory.ts`虽然文件较小，但各自对应可复用且可单测的稳定合同。删除它们只会把逻辑复制回大型owner。
@@ -130,7 +130,7 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 | `App.tsx` | Navigation、selection和top-level composition | App shell职责明确 | Business form不塞回App | 保留 |
 | IssueQueue/IssueWorkspace/IssueForm | Queue、detail/edit和form controls | 按user workflow拆分 | Form复用有价值，无generic form framework | 保留 |
 | AgentPanel + `agent-stream.ts` + `conversation.ts` | UI、transport state、pure event projection | 三层分别拥有UI/connection/projection | 合并会重引入stale EventSource bugs | 保留 |
-| ConfigurationView + `configuration-model.ts` | Explicit capability forms和payload serializer | 显式UI适合异构capability | Generic schema form会隐藏credential intent | 保留 |
+| ConfigurationView + `configuration-model.ts` | Explicit capability forms和payload serializer | 显式UI适合异构capability | Draft克隆复用Solid 2 `snapshot`；generic schema form会隐藏credential intent | 保留 |
 | AttachmentPreview、Statistics、UserManagement | 独立user workflows | Feature component边界清楚 | 无重复domain state | 保留 |
 | `model.ts`、`paste-editor.ts` | Pure display/edit algorithms | 有多处调用或独立edge-case tests | 不需要service class | 保留function module |
 | `ui/Markdown.tsx`、`icons.tsx` | Shared sanitized Markdown和Solid icon adapter | UI primitive真实复用 | Dead icons已删除 | 保留 |
@@ -143,15 +143,15 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 | --- | --- | --- | --- | --- |
 | `main.ts` | Workbench services/settings/extension assembly | Browser entrypoint，组合集中更清楚 | Knip zero-inbound是HTML entry误报 | 保留 |
 | `extension-api.ts` | Fixed LocalProcess extension manifest/API | 隔离唯一可执行Workbench extension | 不开放gallery或dynamic extension | 保留 |
-| `source-file-system.ts` | Access-aware multi-root filesystem | VS Code协议边界 | Dev只保存既有文件，server重复授权；其他mutation明确失败 | 保留 |
+| `source-file-system.ts` | Access-aware multi-root filesystem | VS Code协议边界 | Dev复用框架文件创建/保存/删除/重命名；server再次授权，readonly环境拒绝 | 保留 |
 | `source-search.ts` | Native Search provider | 将progress/case/word映射到Source API | 不在browser遍历tree | 保留 |
 | `search-service.ts` | Override upstream default tree traversal | 唯一深路径exception有性能/授权价值 | 上游无public hook | 暂留并锁version |
-| `source-control.ts` | SCM Changes/Graph、workspace/revision Diff和当前行blame | 共享SCM/revision cache、public EditorService和provider state | 无Git write或host command | 保留 |
+| `source-control.ts` | SCM Changes/Graph、workspace/revision Diff、dev Git action和当前行blame | 共享SCM/revision cache、public EditorService和provider state | Stage/Unstage/Discard/Commit经Source API，不开放任意Git命令 | 保留 |
 | `markdown-preview.ts` | Extension render到readonly Editor Pane | 使用upstream render避免第二Markdown parser | 不创建Webview/Service Worker | 保留 |
 | `workers.ts` | Monaco/language/extension worker factory | Worker entrypoint | Knip zero-inbound是`new URL`/Vite误报 | 保留 |
 | `vite.config.ts` | Multi-entry和static resource registration | Build-time owner | Virtual modules是必要bundler boundary | 保留 |
 
-Workbench依赖较多不是微服务式过度设计，而是嵌入VS Code所需的service/extension协议。约束是固定贡献、prod/test readonly、dev仅保存既有文件且无Node host，不应再包一层自有IDE abstraction。
+Workbench依赖较多不是微服务式过度设计，而是嵌入VS Code所需的service/extension协议。约束是固定贡献、prod/test与released snapshot readonly、dev文件/Git mutation经Source API且无Node host。`main.ts`中的少量DOM菜单桥接用于补足嵌入式Context View和父层布局限制，不扩展成自有IDE abstraction。
 
 ## Container和Kubernetes
 
@@ -175,7 +175,7 @@ Compose generator、application lifecycle shell、config scalar bridge、Kustomi
 
 ## 最终判断
 
-当前架构已经没有值得删除的production中间层或zero-inbound业务模块。继续把HTTP domains、protocol clients、Git/lifecycle owner或Workbench providers合并，会减少文件数但增加共享状态、反向依赖和failure-path复杂度。
+当前架构没有值得删除的production中间层或zero-inbound业务模块。继续把HTTP domains、protocol clients、Git/lifecycle owner或Workbench providers合并，会减少文件数但增加共享状态、反向依赖和failure-path复杂度。审计文档本身已收敛：删除重复且失真的巨型历史报告，只保留本模块判断和逐文件清单。
 
 模块审计中的可执行精简项均已完成。Agent Web主题已归Issue Pilot CSS所有；Solid RC使用上游testing library，不再维护vendor副本。剩余两个package-level peer override仅修正上游尚未发布的RC metadata，待对应包声明RC兼容后直接删除。
 

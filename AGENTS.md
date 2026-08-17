@@ -13,7 +13,7 @@ Before changing code:
    - [Deployment](docs/DEPLOYMENT.md) for image, Kubernetes process, mount, networking, and production topology.
    - [Runbook](docs/RUNBOOK.md) for health checks, backup, upgrade, recovery, retention, and troubleshooting.
 
-Use `README.md` as the product overview. [Comprehensive Audit](docs/COMPREHENSIVE-AUDIT.md), [File Audit](docs/FILE-AUDIT.md), and [Module Audit](docs/MODULE-AUDIT.md) record current design assessments but do not replace reading the owning code.
+Use `README.md` as the product overview. [File Audit](docs/FILE-AUDIT.md) and [Module Audit](docs/MODULE-AUDIT.md) record current design assessments but do not replace reading the owning code.
 
 ## Start Safely
 
@@ -104,7 +104,7 @@ Routes coordinate owners, reservations, and transactions. They must not reimplem
 - Attachment writes occur only inside Issue create/edit transactions.
 - Dirty, untracked, running, invalid-layout, changed-checkout, and unmanaged state fails explicitly and is preserved.
 - Runtime, wrappers, and immutable checkout are generated atomically and remain rebuildable.
-- Stored passwords and AccessKeys do not enter config GET, unchanged PATCH values, `AgentSessionContext`, prompt, tool schema/input, argv, or logs.
+- Config GET intentionally returns stored passwords and AccessKeys to the trusted configuration UI; those values must not enter logs, monitoring, diagnostics, `AgentSessionContext`, prompt, tool schema/input, or process arguments.
 - Pi tools parse input once with TypeBox and call protocol clients directly with typed session-local Deployment config.
 - Protocol clients still enforce external target scope, protocol semantics, timeout, abort, response validity, and result bounds.
 - API, migration, Git, runtime, Source Browser, and project-tool broker use the same state root.

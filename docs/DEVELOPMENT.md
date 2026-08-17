@@ -51,7 +51,7 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/db/bootstrap.ts` | Migration、startup structure/recovery、bootstrap user、Environment sync |
 | `src/configuration/contracts.ts` | Catalog/config DTO、credential field/update contract |
 | `src/configuration/read.ts` | Catalog和完整config snapshot projection |
-| `src/configuration/credentials.ts` | Redaction和`preserve\|replace\|clear` merge |
+| `src/configuration/credentials.ts` | 完整credential投影和`preserve\|replace\|clear` merge |
 | `src/http/api.ts` | API assembly、error mapping、startup/close resources |
 | `src/http/production.ts` | Production Web+API entry |
 | `src/http/*-routes.ts` | User、Config、Issue、Agent、Attachment GET、Source、Workspace、Web |
@@ -75,7 +75,7 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/workspace/runtime.ts` | Atomic runtime generation |
 | `src/workspace/project-wrappers.ts` | Dev wrapper generation |
 | `src/workspace/project-tools.ts` | Unix socket、DB reauthorization、Node/Maven execution |
-| `src/workspace/source-browser.ts` | Source relative path和bounded read operations |
+| `src/workspace/source-browser.ts` | Source授权、有界读取和development文件/Git mutation |
 | `src/workspace/lifecycle.ts` | Inspection、stats、release、reopen、maintenance |
 | `src/web/src/data/client.ts` | Web requests和DTO |
 | `src/web/src/app/ApplicationResources.tsx` | Catalog/config/user resources和latest-wins refresh |
@@ -84,7 +84,7 @@ Application API host publish为`0.0.0.0:3000`，Vite为`0.0.0.0:4173`。二者�
 | `src/web/src/app/configuration-model.ts` | Selected capability/credential intent serialization |
 | `src/web/src/app/CodeBrowser.tsx` | Workbench iframe lifecycle和parent layout bridge |
 | `src/web/src/vscode/main.ts` | Workbench services/settings/extension registration |
-| `src/web/src/vscode/source-file-system.ts` | Read-only multi-root filesystem |
+| `src/web/src/vscode/source-file-system.ts` | Access-aware multi-root filesystem |
 | `src/web/src/vscode/source-search.ts` | Native Search provider |
 | `src/web/src/vscode/source-control.ts` | SCM Changes/Graph、workspace/revision Diff和当前行blame状态 |
 | `src/web/src/vscode/markdown-preview.ts` | Read-only Markdown editor pane |
@@ -304,9 +304,9 @@ Redis Worker隔离node-redis完整RESP materialization和heap；不要合回main
 - Request/DTO集中`data/client.ts`。
 - App resource保持latest-wins generation。
 - Capability使用explicit forms，不做generic schema form。
-- Secret不进入draft；serializer只发update intent。
+- Config GET返回的secret只留在配置页draft；serializer通过`preserve|replace|clear`提交，不写localStorage、日志或诊断。
 - Markdown使用`marked + DOMPurify + github-markdown-css`和bounded cache。
-- Workbench仅允许dev保存已存在的UTF-8文件，prod/test保持readonly；不启用Terminal、文件创建/删除/重命名、Git action或extension gallery。
+- Workbench允许dev创建、保存、删除、重命名文件及Stage、Unstage、Discard、Commit；prod/test和released snapshot保持readonly。Terminal、extension gallery和任意宿主命令仍不启用。
 - 新flow覆盖loading、empty、success、failure、retry和stale response。
 - Desktop/mobile验证long text、dialog、list和composer无overlap。
 
@@ -344,7 +344,7 @@ git diff --check
 | SSE | Replay/snapshot/live、backpressure、generation、reconnect |
 | Capability | Save parse、scope、schema、client、timeout、oversize、abort |
 | Git/lifecycle | Real Git、dirty、missing ref、batch rollback、cold start、reopen |
-| Source/Workbench | Alias/path/symlink/binary/budget、readonly mutation、Search/SCM/Preview |
+| Source/Workbench | Alias/path/symlink/binary/budget、dev file/Git mutation、readonly refusal、Search/SCM/Preview |
 | Project tools | Socket protocol/mode、DB/path auth、same-Issue serial、timeout |
 | Startup | Fresh/migrated DB、interrupted state、unmanaged/changed checkout |
 | Deployment | Container tools/Healthcheck、single-replica/Recreate、hostPath/probes |

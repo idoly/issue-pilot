@@ -10,7 +10,7 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 - Dev 使用 Issue 专属本地 branch 和 worktree，可编辑代码并运行受限 npm/Maven action。
 - Resolved dev workspace 可受管释放；代码继续由本地 working branch 保存，并可只读浏览或 reopen。
 - 每张 Issue 持久保存 Pi JSONL、Attachment、Comment、Repository 和 Workspace 状态。
-- 内置 VS Code Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff 和 Markdown Preview；开发环境可编辑并保存现有workspace文件，测试和正式环境只读。
+- 内置 VS Code Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff 和 Markdown Preview；开发环境可创建、编辑、删除、重命名文件并执行Stage、Unstage、Discard和Commit，测试和正式环境只读。
 - Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 作为有界只读 Pi tools。
 - 用户由 SQLite 管理，支持新增、编辑、启用和停用，同时保留历史署名。
 
@@ -112,9 +112,9 @@ Web 使用以下域：
 - Agent：retry、messages 和 SSE stream
 - Attachment：只读 GET；写入只属于 Issue create/edit multipart transaction
 - Workspace：stats 和受管 release
-- Source：repositories、tree、file、search、blame、history、commit、commit-file、diff、diff-file
+- Source：repositories、tree、file/directory/path/rename、search、blame、history、commit/commit-file、diff/diff-file，以及受限stage、unstage、discard和commit
 
-不存在独立 Attachment write route、Issue sync route、Terminal或任意Git command route。Source write仅保存开发workspace中的现有UTF-8文件，不提供创建、删除、重命名、stage或commit。
+不存在独立Attachment write route、Issue sync route、Terminal或任意宿主Git命令入口。Source mutation只允许development workspace，并按Issue reservation串行；prod/test与released snapshot保持只读。
 
 ## 验证
 
@@ -137,7 +137,6 @@ git diff --check
 | [Deployment](docs/DEPLOYMENT.md) | Container image、单节点Kubernetes、网络和首次验收 |
 | [Development](docs/DEVELOPMENT.md) | Module owner、改动方法、测试和 review |
 | [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障 |
-| [Comprehensive Audit](docs/COMPREHENSIVE-AUDIT.md) | `0e1924d`历史基线的全项目完整审查 |
-| [File Audit](docs/FILE-AUDIT.md) | 当前tracked文件逐文件设计清单 |
+| [File Audit](docs/FILE-AUDIT.md) | 当前tracked文件逐文件作用与设计判断 |
 | [Module Audit](docs/MODULE-AUDIT.md) | 按目录/功能模块评估边界、重复和精简空间 |
 | [Agent Guide](AGENTS.md) | Coding Agent状态保护和完成标准 |
