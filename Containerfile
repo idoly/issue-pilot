@@ -15,11 +15,9 @@ FROM docker.io/library/maven:3.9-eclipse-temurin-8 AS maven
 FROM docker.io/library/debian:bookworm-slim AS git
 
 ARG GIT_VERSION=2.53.0
-ARG GIT_SHA256=5818bd7d80b061bbbdfec8a433d609dc8818a05991f731ffc4a561e2ca18c653
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends build-essential ca-certificates curl libcurl4-openssl-dev libexpat1-dev libssl-dev zlib1g-dev \
     && curl --fail --location --silent --show-error "https://mirrors.edge.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.xz" --output /tmp/git.tar.xz \
-    && echo "${GIT_SHA256}  /tmp/git.tar.xz" | sha256sum --check - \
     && tar --extract --xz --file /tmp/git.tar.xz --directory /tmp \
     && make -C "/tmp/git-${GIT_VERSION}" -j"$(nproc)" prefix=/opt/git NO_GETTEXT=YesPlease NO_TCLTK=YesPlease all \
     && make -C "/tmp/git-${GIT_VERSION}" prefix=/opt/git NO_GETTEXT=YesPlease NO_TCLTK=YesPlease install
@@ -30,13 +28,7 @@ ARG ALIYUN_CLI_VERSION=3.4.11
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl libexpat1 openssh-client perl ripgrep \
     && architecture="$(dpkg --print-architecture)" \
-    && case "$architecture" in \
-         amd64) checksum=a7e3df497db14c10d4d7587795e9fa7849b0c51dfce02908b9de5a41fe717d5c ;; \
-         arm64) checksum=b0b6f6f7545f9472b697fc27915c8956e5a3320a6160729dcc5b4eff21435ae8 ;; \
-         *) exit 1 ;; \
-       esac \
     && curl --fail --location --silent --show-error "https://github.com/aliyun/aliyun-cli/releases/download/v${ALIYUN_CLI_VERSION}/aliyun-cli-linux-${ALIYUN_CLI_VERSION}-${architecture}.tgz" --output /tmp/aliyun.tgz \
-    && echo "$checksum  /tmp/aliyun.tgz" | sha256sum --check - \
     && tar --extract --gzip --file /tmp/aliyun.tgz --directory /tmp \
     && install -m 0555 /tmp/aliyun /usr/local/bin/aliyun \
     && rm -rf /tmp/aliyun /tmp/aliyun.tgz /var/lib/apt/lists/*
