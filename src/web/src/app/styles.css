@@ -276,7 +276,6 @@ button, input, textarea { font: inherit; }
 .agent-workbench { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; background: #000; }
 .agent-workbench.source-open { position: relative; display: block; }
 .agent-workbench.source-open .source-browser { position: absolute; inset: 0; }
-.agent-workbench.source-open .source-browser.context-menu-open { z-index: 5; }
 .app-content.source-expanded:not(.workbench-ready) .agent-panel,
 .app-content.source-expanded:not(.workbench-ready) .source-detail-panel { visibility: hidden; }
 .agent-workbench.source-open .agent-panel {
@@ -634,6 +633,8 @@ button, input, textarea { font: inherit; }
 .deployment-capabilities .deployment-capability-option { padding-inline: 6px; }
 .deployment-capability-settings, .deployment-repositories { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px 12px 12px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
 .deployment-capability-settings label, .deployment-capability-field, .deployment-repositories label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
+.deployment-capability-field:has(.ads-switch) { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 12px; }
+.deployment-capability-field .ads-switch { flex: 0 0 auto; }
 .required-field::after { content: " *"; color: #c43832; font-weight: 700; }
 .service-deployment-row > .deployment-capability-settings, .service-deployment-row > .deployment-repositories { grid-column: 1 / -1; }
 .deployment-repositories { grid-template-columns: repeat(2, minmax(0, 1fr)); }

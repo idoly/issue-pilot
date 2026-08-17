@@ -209,9 +209,10 @@ Source Browser重新读取SQLite关系并验证runtime symlink：
 - 拒绝absolute、`..`、symlink escape、`.git` tree项、binary和超限文件。
 - `/search`使用literal `rg --json`。
 - History/commit必须位于current HEAD ancestry；blame一次只读取一个合法文件行。
-- Diff只读取Git index/working tree，不提供写命令。
+- Diff读取Git index/working tree，不提供Git写命令。
+- 仅development workspace可保存已存在的普通UTF-8文件；保存携带读取时SHA-256，冲突时拒绝覆盖，并在同目录原子替换。
 
-Workbench filesystem声明Readonly，write/mkdir/delete/rename返回`FileWriteLocked`。固定LocalProcess extension提供Explorer/Search/SCM Graph；Web Worker Markdown extension只用于render。Terminal、Node extension host、gallery、save、stage、commit和revert不可用。
+Workbench filesystem根据Repository access声明权限：dev文件允许`writeFile`，prod/test保持Readonly；mkdir/delete/rename始终返回`FileWriteLocked`。固定LocalProcess extension提供Explorer/Search/SCM Graph；Web Worker Markdown extension只用于render。Terminal、Node extension host、gallery、stage、commit和revert不可用。
 
 ## Agent和Pi
 
@@ -334,7 +335,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 
 - API无内置认证；所有入口需外部TLS/auth/authorization。
 - ClusterIP Service只允许通过可信TLS/auth Ingress访问。
-- Workbench只读不等于非敏感，Source返回内部代码。
+- Workbench和Source API返回内部代码；development write还会直接修改Issue workspace，均属于敏感接口。
 - Config GET脱敏但仍包含Repository、model和scope。
 - Credential update使用`preserve|replace|clear`，已存secret不返回浏览器。
 - Credential不进入context、prompt、tool input、argv或日志。

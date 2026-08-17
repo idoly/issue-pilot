@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { convertIssueToDevelopment, createIssue, createUser, deleteService, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService, updateUser } from "./client";
+import { convertIssueToDevelopment, createIssue, createUser, deleteService, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService, updateUser } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -150,6 +150,21 @@ describe("API client", () => {
     expect((fetch.mock.calls[5]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
     expect(fetch.mock.calls[6]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff-file");
     expect((fetch.mock.calls[6]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+  });
+
+  it("saves source text with an optimistic content hash", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ path: "src/index.ts", content: "updated\n", size: 8, sha256: "b".repeat(64) }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await saveSourceFile("ISSUE-20260810-001", "orders", "src/index.ts", "updated\n", "a".repeat(64));
+
+    const [url, init] = fetch.mock.calls[0]!;
+    const headers = init.headers as Headers;
+    expect(url).toBe("/api/issues/ISSUE-20260810-001/source/file");
+    expect(init.method).toBe("PUT");
+    expect(init.body).toBe("updated\n");
+    expect(headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(headers.get("X-Issue-Pilot-Sha256")).toBe("a".repeat(64));
   });
 
   it("rejects stale source commit response contracts", async () => {

@@ -1,4 +1,5 @@
-import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -155,8 +156,33 @@ export class SourceBrowser {
     return { path: sourcePath(parent), entries: serialized, truncated: visible.length > selected.length };
   }
 
-  async file(issue: IssueReference, repositoryName: string, relativePath: string): Promise<{ path: string; content: string; size: number }> {
+  async file(issue: IssueReference, repositoryName: string, relativePath: string): Promise<{ path: string; content: string; size: number; sha256: string }> {
     return this.workingFile(await this.context(issue, repositoryName), relativePath);
+  }
+
+  async writeFile(issue: IssueReference, repositoryName: string, relativePath: string, content: string, expectedSha256: string): Promise<{ path: string; content: string; size: number; sha256: string }> {
+    const context = await this.context(issue, repositoryName);
+    if (context.source.access !== "write") throw new Error("source_read_only");
+    if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_source_hash");
+    const selected = normalizedRelativePath(relativePath);
+    if (!selected) throw new Error("source_path_not_file");
+    const candidate = path.resolve(context.root, selected);
+    if (!isInside(context.root, candidate)) throw new Error("invalid_source_path");
+    let metadata;
+    try { metadata = await lstat(candidate); } catch (error) { missingPathError(error); }
+    if (!metadata!.isFile()) throw new Error("source_path_not_file");
+    const current = await readFile(candidate);
+    if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw new Error("source_file_changed");
+    const next = Buffer.from(content, "utf8");
+    if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+    const temporary = path.join(path.dirname(candidate), `.${path.basename(candidate)}.issue-pilot-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, next, { flag: "wx", mode: metadata!.mode & 0o777 });
+      await rename(temporary, candidate);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    return this.workingFile(context, selected);
   }
 
   async search(issue: IssueReference, repositoryName: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}): Promise<{ matches: SourceSearchMatch[]; truncated: boolean }> {
@@ -420,7 +446,7 @@ export class SourceBrowser {
     return result.stdout;
   }
 
-  private async workingFile(context: SourceContext, relativePath: string): Promise<{ path: string; content: string; size: number }> {
+  private async workingFile(context: SourceContext, relativePath: string): Promise<{ path: string; content: string; size: number; sha256: string }> {
     const file = await this.resolvePath(context.root, relativePath);
     const metadata = await stat(file);
     if (!metadata.isFile()) throw new Error("source_path_not_file");
@@ -430,7 +456,7 @@ export class SourceBrowser {
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(content); }
     catch { throw new Error("source_file_binary"); }
-    return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size: metadata.size };
+    return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size: metadata.size, sha256: createHash("sha256").update(content).digest("hex") };
   }
 
   private async repositoryRows(issue: IssueReference): Promise<RepositoryRow[]> {

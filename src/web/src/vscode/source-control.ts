@@ -260,9 +260,22 @@ function sourceControlResources(vscode: IssuePilotVscodeApi, issueKey: string, r
   });
 }
 
+function blameAge(value: string): string {
+  const elapsed = Date.now() - new Date(value).getTime();
+  const units = [
+    [365 * 24 * 60 * 60 * 1000, "year"],
+    [30 * 24 * 60 * 60 * 1000, "month"],
+    [24 * 60 * 60 * 1000, "day"],
+    [60 * 60 * 1000, "hour"],
+    [60 * 1000, "minute"],
+  ] as const;
+  const [size, unit] = units.find(([size]) => Math.abs(elapsed) >= size) ?? [1000, "second"] as const;
+  return new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" }).format(-Math.trunc(elapsed / size), unit);
+}
+
 function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditorService, issueKey: string, repositories: SourceRepository[], workspacePath: string): void {
-  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  item.name = "当前行Git信息";
+  const item = vscode.window.createStatusBarItem("issue-pilot.gitBlameInformation", vscode.StatusBarAlignment.Left, 100);
+  item.name = "Git Blame Information";
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const update = async (resource: { scheme: string; path: string; query?: string }, zeroBasedLine: number) => {
@@ -290,12 +303,20 @@ function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditor
       if (currentGeneration !== generation) return;
       const author = blame.author.slice(0, 40);
       const subject = blame.subject.slice(0, 80);
-      item.text = blame.shortCommit
-        ? `$(git-commit) ${blame.shortCommit} ${author} · ${subject}`
+      item.text = blame.shortCommit && blame.date
+        ? `$(git-commit) ${author} (${blameAge(blame.date)})`
         : `$(git-commit) ${subject}`;
-      item.tooltip = blame.date
-        ? `${blame.path}:${blame.line}\n${blame.commit}\n${blame.author} · ${new Date(blame.date).toLocaleString()}\n${blame.subject}`
-        : `${blame.path}:${blame.line}\n${blame.subject}`;
+      const tooltip = new vscode.MarkdownString("", true);
+      if (blame.date) {
+        tooltip.appendMarkdown("$(account) **");
+        tooltip.appendText(blame.author);
+        tooltip.appendMarkdown(`**, ${blameAge(blame.date)} (${new Date(blame.date).toLocaleString()})\n\n---\n\n`);
+      }
+      tooltip.appendText(blame.subject);
+      tooltip.appendMarkdown("\n\n---\n\n");
+      if (blame.commit) tooltip.appendMarkdown(`$(git-commit) \`${blame.commit}\`  \n`);
+      tooltip.appendText(`${blame.path}:${blame.line}`);
+      item.tooltip = tooltip;
       item.show();
     } catch {
       if (currentGeneration === generation) item.hide();
@@ -321,7 +342,7 @@ function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditor
   attachActiveEditor();
 }
 
-export async function registerSourceControls(issueKey: string, repositories: SourceRepository[], workspacePath: string, editorService: IEditorService): Promise<void> {
+export async function registerSourceControls(issueKey: string, repositories: SourceRepository[], workspacePath: string, editorService: IEditorService): Promise<() => Promise<void>> {
   const vscode = await getIssuePilotVscodeApi();
   registerBlameStatus(vscode, editorService, issueKey, repositories, workspacePath);
   const revisionContent = new SourceRevisionFileSystemProvider(vscode);
@@ -360,4 +381,5 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
   vscode.commands.registerCommand(sourceControlRefreshCommand, refresh);
   window.addEventListener("focus", () => { void refresh(); });
   await refresh();
+  return refresh;
 }

@@ -11,7 +11,7 @@ const extension = registerExtension({
   engines: { vscode: "*" },
   enabledApiProposals: ["scmHistoryProvider", "textSearchProvider"],
   contributes: {
-    commands: [{ command: sourceControlRefreshCommand, title: "刷新只读变更", icon: "$(refresh)" }],
+    commands: [{ command: sourceControlRefreshCommand, title: "刷新变更", icon: "$(refresh)" }],
     menus: { "scm/title": [{ command: sourceControlRefreshCommand, group: "navigation" }] },
   },
 }, ExtensionHostKind.LocalProcess, { system: true });

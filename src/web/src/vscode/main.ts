@@ -52,7 +52,7 @@ import getWorkbenchServiceOverride, { registerCustomView, ViewContainerLocation 
 import getWorkingCopyServiceOverride from "@codingame/monaco-vscode-working-copy-service-override";
 import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace-trust-service-override";
 import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
-import { IEditorService } from "@codingame/monaco-vscode-api/services";
+import { IEditorService, IStatusbarService } from "@codingame/monaco-vscode-api/services";
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { parseIssueKey } from "../../../domain/contracts";
@@ -92,6 +92,17 @@ function observeContextMenus(issueKey: string): void {
     const next = Boolean(menu && menu.offsetParent !== null && getComputedStyle(menu).visibility !== "hidden");
     if (next === visible) return;
     visible = next;
+    if (next && menu) {
+      menu.style.translate = "";
+      const menuRect = menu.getBoundingClientRect();
+      const panelRect = document.querySelector<HTMLElement>(".part.panel")?.getBoundingClientRect();
+      const auxiliaryRect = document.querySelector<HTMLElement>(".part.auxiliarybar")?.getBoundingClientRect();
+      const overlaps = (left: DOMRect, right: DOMRect) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+      const y = panelRect && overlaps(menuRect, panelRect) ? panelRect.top - menuRect.bottom - 8 : 0;
+      const moved = new DOMRect(menuRect.x, menuRect.y + y, menuRect.width, menuRect.height);
+      const x = auxiliaryRect && overlaps(moved, auxiliaryRect) ? auxiliaryRect.left - moved.right - 8 : 0;
+      if (x || y) menu.style.translate = `${x}px ${y}px`;
+    } else if (menu) menu.style.translate = "";
     window.parent.postMessage({ kind: "issue-pilot-workbench-context-menu", issueKey, visible }, window.location.origin);
   };
   new MutationObserver(publish).observe(document.body, { attributes: true, childList: true, subtree: true });
@@ -234,7 +245,6 @@ async function start(): Promise<void> {
       "workbench.startupEditor": "none",
       "workbench.statusBar.visible": true,
       "security.workspace.trust.enabled": false,
-      "files.readonlyInclude": { "**": true },
       "editor.dropIntoEditor.enabled": false,
       "editor.minimap.enabled": true,
       "editor.stickyScroll.enabled": true,
@@ -253,7 +263,7 @@ async function start(): Promise<void> {
     },
   }, { userHome: monaco.Uri.file("/") });
 
-  const [layout, editorService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getIssuePilotVscodeApi()]);
+  const [layout, editorService, statusbarService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getService(IStatusbarService), getIssuePilotVscodeApi()]);
   registerWorkbenchBridge(issueKey, vscode, layout, container);
   observeContextMenus(issueKey);
   registerMarkdownPreviewAction(container);
@@ -270,16 +280,18 @@ async function start(): Promise<void> {
     const auxiliarySize = layout.getSize(Parts.AUXILIARYBAR_PART);
     layout.resizePart(Parts.AUXILIARYBAR_PART, Math.max(280, Math.min(380, Math.round(container.clientWidth * 0.24))) - auxiliarySize.width, 0);
   }
-  await Promise.all([
+  const [, , , refreshSourceControls] = await Promise.all([
     materialIconThemeReady(),
     markdownFeaturesReady(),
     registerSourceSearch(issueKey, repositories),
     registerSourceControls(issueKey, repositories, provider.workspacePath, editorService),
   ]);
+  provider.setOnWrite(() => { void refreshSourceControls(); });
   await vscode.commands.executeCommand("markdown.api.render", "# Issue Pilot");
   await registerMarkdownPreviewCommands(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
+  statusbarService.updateEntryVisibility("status.workbench.keyboardLayout", false);
   observeWorkbenchParts(issueKey, container, layout);
   document.documentElement.dataset.workbenchReady = "true";
 }

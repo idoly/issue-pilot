@@ -49,7 +49,7 @@ export interface IssueDetail extends IssueListItem {
 export interface SourceRepository { name: string; url: string; branch: string; access: "read" | "write" }
 export interface SourceTreeEntry { name: string; path: string; type: "directory" | "file" | "symlink" | "other"; size: number | null }
 export interface SourceTree { path: string; entries: SourceTreeEntry[]; truncated: boolean }
-export interface SourceFile { path: string; content: string; size: number }
+export interface SourceFile { path: string; content: string; size: number; sha256: string }
 export interface SourceSearchMatch { path: string; line: number; column: number; preview: string }
 export interface SourceCommit { hash: string; shortHash: string; parents: string[]; author: string; date: string; subject: string }
 export interface SourceBlame { path: string; line: number; commit: string | null; shortCommit: string | null; author: string; date: string | null; subject: string }
@@ -97,7 +97,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const subject = currentUserSubject();
   if (subject) headers.set("X-Issue-Pilot-Subject", subject);
-  if (init?.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  if (init?.body !== undefined && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) throw await requestError(response);
   if (response.status === 204 || response.status === 205) return undefined as T;
@@ -118,7 +118,7 @@ export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/a
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 
-type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Case-Sensitive" | "Word-Match";
+type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match";
 
 function sourceResponseRecord(value: unknown, code: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
@@ -145,15 +145,21 @@ function sourceWorkspaceFile(value: unknown, code: string): SourceWorkspaceFile 
   return { path: file.path, version: file.version as SourceWorkspaceFile["version"], content: file.content };
 }
 
-function sourceRequest(key: string, resource: string, repository: string, values: Partial<Record<SourceHeader, string>> = {}, signal?: AbortSignal) {
-  const headers = new Headers({ "X-Issue-Pilot-Repository": encodeURIComponent(repository) });
+function sourceRequest(key: string, resource: string, repository: string, values: Partial<Record<SourceHeader, string>> = {}, signal?: AbortSignal, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("X-Issue-Pilot-Repository", encodeURIComponent(repository));
   for (const [name, value] of Object.entries(values)) if (value) headers.set(`X-Issue-Pilot-${name}`, encodeURIComponent(value));
-  return request(issuePath(key, `/source/${resource}`), { headers, ...(signal ? { signal } : {}) });
+  return request(issuePath(key, `/source/${resource}`), { ...init, headers, ...(signal ? { signal } : {}) });
 }
 
 export const loadSourceRepositories = (key: string, signal?: AbortSignal) => request<SourceRepository[]>(issuePath(key, "/source/repositories"), signal ? { signal } : undefined);
 export const loadSourceTree = (key: string, repository: string, path = "", signal?: AbortSignal) => sourceRequest(key, "tree", repository, { Path: path }, signal) as Promise<SourceTree>;
 export const loadSourceFile = (key: string, repository: string, path: string, signal?: AbortSignal) => sourceRequest(key, "file", repository, { Path: path }, signal) as Promise<SourceFile>;
+export const saveSourceFile = (key: string, repository: string, path: string, content: string, sha256: string) => sourceRequest(key, "file", repository, { Path: path, Sha256: sha256 }, undefined, {
+  method: "PUT",
+  body: content,
+  headers: { "Content-Type": "text/plain; charset=utf-8" },
+}) as Promise<SourceFile>;
 export const searchSource = (key: string, repository: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}, signal?: AbortSignal) => sourceRequest(key, "search", repository, {
   Query: query,
   "Case-Sensitive": String(options.caseSensitive ?? true),

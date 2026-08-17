@@ -10,7 +10,7 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 - Dev 使用 Issue 专属本地 branch 和 worktree，可编辑代码并运行受限 npm/Maven action。
 - Resolved dev workspace 可受管释放；代码继续由本地 working branch 保存，并可只读浏览或 reopen。
 - 每张 Issue 持久保存 Pi JSONL、Attachment、Comment、Repository 和 Workspace 状态。
-- 内置只读 VS Code Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff 和 Markdown Preview。
+- 内置 VS Code Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff 和 Markdown Preview；开发环境可编辑并保存现有workspace文件，测试和正式环境只读。
 - Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 作为有界只读 Pi tools。
 - 用户由 SQLite 管理，支持新增、编辑、启用和停用，同时保留历史署名。
 
@@ -96,7 +96,7 @@ User、Service、Repository、Deployment、model、branch 和完整 capability c
 - 页面用户切换和 `X-Issue-Pilot-Subject` 只选择启用用户及写入署名，不是认证。
 - Kubernetes Service必须由带TLS/auth的可信Ingress保护。
 - Application、Pi 和项目脚本使用同一低权限 OS 身份；容器不是不可信代码 sandbox。
-- Workbench 和 Source API 只读，但会返回内部源码，仍属于敏感接口。
+- Workbench 和 Source API 会返回内部源码；开发环境还允许保存现有workspace文件，属于敏感接口。
 - `GET /api/config` 不返回已存 secret，但包含内部 Repository、model 和 scope。
 - Deployment credential 不进入配置 GET、`AgentSessionContext`、prompt、tool schema、tool input、argv 或日志；DMS/SLS 使用临时 `0600` CLI profile。
 - Capability result 会进入模型上下文和该 Issue 的 Pi JSONL。
@@ -114,7 +114,7 @@ Web 使用以下域：
 - Workspace：stats 和受管 release
 - Source：repositories、tree、file、search、blame、history、commit、commit-file、diff、diff-file
 
-不存在独立 Attachment write route、Issue sync route、Terminal、Source write route 或任意 Git command route。
+不存在独立 Attachment write route、Issue sync route、Terminal或任意Git command route。Source write仅保存开发workspace中的现有UTF-8文件，不提供创建、删除、重命名、stage或commit。
 
 ## 验证
 

@@ -186,6 +186,14 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     });
     assert.equal(invalidBlameLine.statusCode, 400);
     assert.equal((await json(invalidBlameLine)).error, "invalid_source_request");
+    const invalidSourceWrite = await fixture.app.inject({
+      method: "PUT",
+      url: `/api/issues/${issue.id}/source/file`,
+      headers: { "X-Issue-Pilot-Repository": "alpha-1", "X-Issue-Pilot-Path": "src/index.ts", "X-Issue-Pilot-Sha256": "invalid" },
+      payload: { content: "not plain text" },
+    });
+    assert.equal(invalidSourceWrite.statusCode, 400);
+    assert.equal((await json(invalidSourceWrite)).error, "invalid_source_request");
     const invalidSearchMode = await fixture.app.inject({
       method: "GET",
       url: `/api/issues/${issue.id}/source/search`,

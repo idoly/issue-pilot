@@ -24,9 +24,15 @@ const harness = vi.hoisted(() => {
     static NoPermissions(message?: string) { return Object.assign(new FileSystemError(message), { code: "NoPermissions" }); }
   }
   class ThemeIcon { constructor(readonly id: string) {} }
+  class MarkdownString {
+    value = "";
+    constructor(value = "", readonly supportThemeIcons = false) { this.value = value; }
+    appendText(value: string) { this.value += value; return this; }
+    appendMarkdown(value: string) { this.value += value; return this; }
+  }
 
   const commands = new Map<string, () => Promise<void>>();
-  const statusItems: Array<{ name?: string; text?: string; tooltip?: string; visible: boolean; show(): void; hide(): void }> = [];
+  const statusItems: Array<{ name?: string; text?: string; tooltip?: string | MarkdownString; visible: boolean; show(): void; hide(): void }> = [];
   const editorMouseListeners: Array<(event: { target: { position?: { lineNumber: number } } }) => void> = [];
   let editorModelUri = Uri.file("/");
   const editorService = {
@@ -46,6 +52,7 @@ const harness = vi.hoisted(() => {
     FileSystemError,
     FileType: { File: 1 },
     ThemeIcon,
+    MarkdownString,
     Uri,
     StatusBarAlignment: { Left: 1 },
     window: {
@@ -178,7 +185,9 @@ describe("VS Code readonly Source Control extension", () => {
     harness.editorMouseListeners[0]!({ target: { position: { lineNumber: 7 } } });
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(harness.blame).toHaveBeenCalledWith(issueKey, "web", "src/form.ts", 7);
-    expect(harness.statusItems[0]).toEqual(expect.objectContaining({ visible: true, text: "$(git-commit) cccccccc Fixture User · Explain form state" }));
+    expect(harness.statusItems[0]).toEqual(expect.objectContaining({ visible: true, name: "Git Blame Information" }));
+    expect(harness.statusItems[0]!.text).toContain("$(git-commit) Fixture User");
+    expect((harness.statusItems[0]!.tooltip as InstanceType<typeof harness.vscode.MarkdownString>).value).toContain("Explain form state");
     expect([...harness.commands.keys()]).toEqual(["issue-pilot.sourceControl.refresh"]);
   });
 });

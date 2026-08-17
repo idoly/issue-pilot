@@ -158,7 +158,7 @@ describe("issue pilot workspace", () => {
     expect(issueQueue.isConnected && issueWorkspace.isConnected && agentRegion.isConnected).toBe(true);
     expect(document.querySelector(".app-content")?.classList.contains("workbench-ready")).toBe(false);
     expect(within(sourceBrowser).getByRole("status", { name: "代码工作台加载中" })).toBeTruthy();
-    const workbench = within(sourceBrowser).getByTitle("ISSUE-20260810-042 VS Code只读工作台") as HTMLIFrameElement;
+    const workbench = within(sourceBrowser).getByTitle("ISSUE-20260810-042 VS Code工作台") as HTMLIFrameElement;
     expect(workbench.src).toContain("/vscode.html?issue=ISSUE-20260810-042");
     expect(workbench.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
     const viewToolbar = within(sourceBrowser).getByRole("toolbar", { name: "代码视图" });

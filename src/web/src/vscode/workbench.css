@@ -20,7 +20,8 @@ body {
 .monaco-workbench .search-view .toggle-replace-button,
 .monaco-workbench .search-view .replace-container,
 .monaco-workbench .search-view [aria-label^="Use Regular Expression"],
-.monaco-workbench .search-view [aria-label="Toggle Search Details"] {
+.monaco-workbench .search-view [aria-label="Toggle Search Details"],
+.context-view.monaco-menu-container .action-item:has(.action-label[aria-label="Keyboard Layout"]) {
   display: none !important;
 }
 

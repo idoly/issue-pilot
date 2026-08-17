@@ -13,11 +13,11 @@ import {
 } from "@codingame/monaco-vscode-files-service-override";
 import type { Uri } from "monaco-editor";
 
-import { errorMessage, loadSourceFile, loadSourceTree, type SourceRepository, type SourceTreeEntry } from "../data/client";
+import { errorMessage, loadSourceFile, loadSourceTree, saveSourceFile, type SourceRepository, type SourceTreeEntry } from "../data/client";
 
 const encoder = new TextEncoder();
 const noEvent = () => ({ dispose() {} });
-const directoryStat: IStat = { type: FileType.Directory, ctime: 0, mtime: 0, size: 0, permissions: FilePermission.Readonly };
+const directoryStat = (readOnly: boolean): IStat => ({ type: FileType.Directory, ctime: 0, mtime: 0, size: 0, ...(readOnly ? { permissions: FilePermission.Readonly } : {}) });
 
 function providerError(message: string, code: FileSystemProviderErrorCode): FileSystemProviderError {
   return FileSystemProviderError.create(message, code);
@@ -29,24 +29,29 @@ function sourceError(error: unknown): FileSystemProviderError {
   if (message === "source_path_not_directory") return providerError(message, FileSystemProviderErrorCode.FileNotADirectory);
   if (message === "source_path_not_file") return providerError(message, FileSystemProviderErrorCode.FileIsADirectory);
   if (message === "source_file_too_large") return providerError(message, FileSystemProviderErrorCode.FileTooLarge);
+  if (message === "source_read_only" || message === "source_file_changed") return providerError(message, FileSystemProviderErrorCode.FileWriteLocked);
   if (message === "source_browser_unavailable" || message === "source_runtime_invalid") return providerError(message, FileSystemProviderErrorCode.Unavailable);
   return providerError(message, FileSystemProviderErrorCode.Unknown);
 }
 
 export class SourceFileSystemProvider implements IFileSystemProviderWithFileReadWriteCapability {
-  readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive | FileSystemProviderCapabilities.Readonly;
+  readonly capabilities: FileSystemProviderCapabilities;
   readonly onDidChangeCapabilities = noEvent;
   readonly onDidChangeFile = noEvent;
-  readonly readOnlyMessage = { value: "Issue Pilot代码工作台为只读" };
+  readonly readOnlyMessage = { value: "测试和正式环境代码工作台为只读" };
 
   private readonly repositoryByName: Map<string, SourceRepository>;
   private readonly directoryRequests = new Map<string, Promise<SourceTreeEntry[]>>();
+  private readonly fileHashes = new Map<string, string>();
+  private onWrite: () => void = () => undefined;
   private readonly workspaceBytes: Uint8Array;
   readonly workspacePath: string;
   readonly workspaceUriPath: string;
 
   constructor(readonly issueKey: string, repositories: SourceRepository[]) {
     this.repositoryByName = new Map(repositories.map((repository) => [repository.name, repository]));
+    this.capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive
+      | (repositories.some((repository) => repository.access === "write") ? 0 : FileSystemProviderCapabilities.Readonly);
     this.workspaceUriPath = `/issue-pilot/${issueKey}.code-workspace`;
     this.workspacePath = `/issue-pilot/${issueKey}`;
     this.workspaceBytes = encoder.encode(JSON.stringify({
@@ -60,15 +65,16 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
 
   async stat(resource: Uri): Promise<IStat> {
     if (resource.path === this.workspaceUriPath) return { type: FileType.File, ctime: 0, mtime: 0, size: this.workspaceBytes.byteLength, permissions: FilePermission.Readonly };
-    if (resource.path === "/issue-pilot" || resource.path === this.workspacePath) return directoryStat;
+    if (resource.path === "/issue-pilot") return directoryStat(true);
+    if (resource.path === this.workspacePath) return directoryStat(![...this.repositoryByName.values()].some((repository) => repository.access === "write"));
     const parsed = this.parseRepositoryPath(resource);
-    if (!parsed.relativePath) return directoryStat;
+    if (!parsed.relativePath) return directoryStat(this.repositoryByName.get(parsed.repository)?.access !== "write");
     const separator = parsed.relativePath.lastIndexOf("/");
     const parent = separator < 0 ? "" : parsed.relativePath.slice(0, separator);
     const name = separator < 0 ? parsed.relativePath : parsed.relativePath.slice(separator + 1);
     const entry = (await this.directory(parsed.repository, parent)).find((candidate) => candidate.name === name);
     if (!entry) throw providerError("source_path_not_found", FileSystemProviderErrorCode.FileNotFound);
-    return this.entryStat(entry);
+    return this.entryStat(entry, parsed.repository);
   }
 
   async readdir(resource: Uri): Promise<[string, FileType][]> {
@@ -89,14 +95,33 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
       const entry = (await this.directory(parsed.repository, parent)).find((candidate) => candidate.name === name);
       if (!entry) throw providerError("source_path_not_found", FileSystemProviderErrorCode.FileNotFound);
       if (entry.type === "directory") throw providerError("source_path_not_file", FileSystemProviderErrorCode.FileIsADirectory);
-      return encoder.encode((await loadSourceFile(this.issueKey, parsed.repository, parsed.relativePath)).content);
+      const file = await loadSourceFile(this.issueKey, parsed.repository, parsed.relativePath);
+      this.fileHashes.set(resource.path, file.sha256);
+      return encoder.encode(file.content);
     } catch (error) {
       throw error instanceof FileSystemProviderError ? error : sourceError(error);
     }
   }
 
-  writeFile(_resource: Uri, _content: Uint8Array, _options: IFileWriteOptions): Promise<void> {
-    return Promise.reject(providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked));
+  async writeFile(resource: Uri, content: Uint8Array, _options: IFileWriteOptions): Promise<void> {
+    const parsed = this.parseRepositoryPath(resource);
+    if (this.repositoryByName.get(parsed.repository)?.access !== "write") throw providerError("source_read_only", FileSystemProviderErrorCode.FileWriteLocked);
+    const expectedSha256 = this.fileHashes.get(resource.path);
+    if (!expectedSha256) throw providerError("source_file_not_loaded", FileSystemProviderErrorCode.FileWriteLocked);
+    let text: string;
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(content); }
+    catch { throw providerError("source_file_binary", FileSystemProviderErrorCode.FileWriteLocked); }
+    try {
+      const file = await saveSourceFile(this.issueKey, parsed.repository, parsed.relativePath, text, expectedSha256);
+      this.fileHashes.set(resource.path, file.sha256);
+      this.onWrite();
+    } catch (error) {
+      throw sourceError(error);
+    }
+  }
+
+  setOnWrite(listener: () => void): void {
+    this.onWrite = listener;
   }
 
   mkdir(_resource: Uri): Promise<void> {
@@ -151,7 +176,8 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
     return FileType.Unknown;
   }
 
-  private entryStat(entry: SourceTreeEntry): IStat {
-    return { type: this.entryType(entry), ctime: 0, mtime: 0, size: entry.size ?? 0, permissions: FilePermission.Readonly };
+  private entryStat(entry: SourceTreeEntry, repository: string): IStat {
+    const readOnly = this.repositoryByName.get(repository)?.access !== "write";
+    return { type: this.entryType(entry), ctime: 0, mtime: 0, size: entry.size ?? 0, ...(readOnly ? { permissions: FilePermission.Readonly } : {}) };
   }
 }

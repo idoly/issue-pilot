@@ -87,7 +87,7 @@ export default function CodeBrowser(props: { issueKey: string; agentOpen: boolea
         ref={setFrame}
         class="source-workbench-frame"
         src={workbenchUrl()}
-        title={`${props.issueKey} VS Code只读工作台`}
+        title={`${props.issueKey} VS Code工作台`}
         sandbox="allow-scripts allow-same-origin"
         referrerpolicy="no-referrer"
       />

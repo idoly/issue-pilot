@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -11,7 +11,7 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
-import { issueWorkspaceRoot } from "../../src/workspace/state.ts";
+import { issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 test("browses only registered Issue repository content", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-source-browser-"));
@@ -59,7 +59,15 @@ test("browses only registered Issue repository content", async () => {
     assert.deepEqual(await browser.repositories(issue!), [{ name: "application", url: "https://git.example.test/application.git", branch: "hotfix-issue-20260815-002", access: "write" }]);
     const tree = await browser.tree(issue!, "application");
     assert.deepEqual(tree.entries.map(({ name, type }) => ({ name, type })), [{ name: "src", type: "directory" }, { name: "README.md", type: "file" }]);
-    assert.equal((await browser.file(issue!, "application", "src/index.ts")).content, "export const ready = true;\n");
+    const sourceFile = await browser.file(issue!, "application", "src/index.ts");
+    assert.equal(sourceFile.content, "export const ready = true;\n");
+    assert.match(sourceFile.sha256, /^[a-f0-9]{64}$/);
+    const savedFile = await browser.writeFile(issue!, "application", "src/index.ts", "export const ready = false;\n", sourceFile.sha256);
+    assert.equal(savedFile.content, "export const ready = false;\n");
+    assert.equal(await readFile(path.join(repository, "src", "index.ts"), "utf8"), "export const ready = false;\n");
+    await assert.rejects(browser.writeFile(issue!, "application", "src/index.ts", "stale\n", sourceFile.sha256), /source_file_changed/);
+    await assert.rejects(browser.writeFile(issue!, "application", "src/missing.ts", "new\n", savedFile.sha256), /source_path_not_found/);
+    await browser.writeFile(issue!, "application", "src/index.ts", "export const ready = true;\n", savedFile.sha256);
     assert.deepEqual(await browser.search(issue!, "application", "ready"), {
       matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false,
     });
@@ -122,6 +130,21 @@ test("browses only registered Issue repository content", async () => {
     await assert.rejects(browser.file(issue!, "application", "outside-link"), /source_path_outside_repository/);
     await assert.rejects(browser.tree(issue!, "unknown"), /source_repository_not_found/);
     await assert.rejects(browser.commit(issue!, "application", "c".repeat(40)), /source_commit_not_found/);
+
+    const [readOnlyIssue] = await database.db.insert(issues).values({
+      key: "ISSUE-20260815-003", title: "Read source", type: "defect_fix", serviceId: service!.id, environmentId: environment.id, reporterSubject: "source-tester",
+    }).returning();
+    const readOnlyRepository = path.join(sharedCheckoutsRoot(root), "b".repeat(20), "c".repeat(40));
+    await mkdir(path.join(readOnlyRepository, ".git"), { recursive: true, mode: 0o700 });
+    await writeFile(path.join(readOnlyRepository, "README.md"), "# Snapshot\n", "utf8");
+    await database.db.insert(issueRepositories).values({
+      issueId: readOnlyIssue!.id, url: "https://git.example.test/application.git", baseBranch: "main", commitBefore: "c".repeat(40), workspaceName: "application",
+    });
+    await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });
+    await prepareIssueRuntime(root, readOnlyIssue!.key, [{ name: "application", repositoryPath: readOnlyRepository }], "read");
+    const snapshot = await browser.file(readOnlyIssue!, "application", "README.md");
+    await assert.rejects(browser.writeFile(readOnlyIssue!, "application", "README.md", "changed\n", snapshot.sha256), /source_read_only/);
+
     await database.db.update(issueWorkspaces).set({ runtimeReady: false }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(browser.repositories(issue!), /source_browser_unavailable/);
   } finally {

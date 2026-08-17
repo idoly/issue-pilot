@@ -306,7 +306,7 @@ Redis Worker隔离node-redis完整RESP materialization和heap；不要合回main
 - Capability使用explicit forms，不做generic schema form。
 - Secret不进入draft；serializer只发update intent。
 - Markdown使用`marked + DOMPurify + github-markdown-css`和bounded cache。
-- Workbench保持readonly；不启用Terminal、write、Git action或extension gallery。
+- Workbench仅允许dev保存已存在的UTF-8文件，prod/test保持readonly；不启用Terminal、文件创建/删除/重命名、Git action或extension gallery。
 - 新flow覆盖loading、empty、success、failure、retry和stale response。
 - Desktop/mobile验证long text、dialog、list和composer无overlap。
 

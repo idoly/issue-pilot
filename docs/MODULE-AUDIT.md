@@ -143,7 +143,7 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 | --- | --- | --- | --- | --- |
 | `main.ts` | Workbench services/settings/extension assembly | Browser entrypoint，组合集中更清楚 | Knip zero-inbound是HTML entry误报 | 保留 |
 | `extension-api.ts` | Fixed LocalProcess extension manifest/API | 隔离唯一可执行Workbench extension | 不开放gallery或dynamic extension | 保留 |
-| `source-file-system.ts` | Read-only multi-root filesystem | VS Code protocol边界 | Mutation明确失败，不重复server auth | 保留 |
+| `source-file-system.ts` | Access-aware multi-root filesystem | VS Code协议边界 | Dev只保存既有文件，server重复授权；其他mutation明确失败 | 保留 |
 | `source-search.ts` | Native Search provider | 将progress/case/word映射到Source API | 不在browser遍历tree | 保留 |
 | `search-service.ts` | Override upstream default tree traversal | 唯一深路径exception有性能/授权价值 | 上游无public hook | 暂留并锁version |
 | `source-control.ts` | SCM Changes/Graph、workspace/revision Diff和当前行blame | 共享SCM/revision cache、public EditorService和provider state | 无Git write或host command | 保留 |
@@ -151,7 +151,7 @@ Registry和TypeBox解析内部input/config一次；client仍必须验证network 
 | `workers.ts` | Monaco/language/extension worker factory | Worker entrypoint | Knip zero-inbound是`new URL`/Vite误报 | 保留 |
 | `vite.config.ts` | Multi-entry和static resource registration | Build-time owner | Virtual modules是必要bundler boundary | 保留 |
 
-Workbench依赖较多不是微服务式过度设计，而是嵌入VS Code所需的service/extension协议。约束是固定贡献、readonly和无Node host，不应再包一层自有IDE abstraction。
+Workbench依赖较多不是微服务式过度设计，而是嵌入VS Code所需的service/extension协议。约束是固定贡献、prod/test readonly、dev仅保存既有文件且无Node host，不应再包一层自有IDE abstraction。
 
 ## Container和Kubernetes
 
