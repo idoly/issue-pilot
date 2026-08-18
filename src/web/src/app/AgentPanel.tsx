@@ -372,7 +372,10 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   };
   createEffect(() => ({ id: props.issue.id, status: props.issue.status }), ({ id, status }, previous) => {
     setIssueStatus(status);
-    if (previous?.id === id) return;
+    if (previous?.id === id) {
+      if (previous.status === "resolved" && status === "open") connect(id);
+      return;
+    }
     issueGeneration += 1;
     connect(id, true);
   });

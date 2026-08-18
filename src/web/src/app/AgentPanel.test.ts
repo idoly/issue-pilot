@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
@@ -204,6 +205,37 @@ describe("Agent conversation state", () => {
     const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, onRefresh: async () => issue }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
     resolvedView.unmount();
+  });
+
+  it("reconnects the conversation when a resolved Issue is reopened", async () => {
+    EventSourceMock.instances.length = 0;
+    const initial = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "resolved",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const [issue, setIssue] = createSignal<IssueDetail>(initial);
+    const view = render(() => AgentPanel({ get issue() { return issue(); }, onRefresh: async () => issue() }));
+    const first = EventSourceMock.instances[0]!;
+    first.emit("open");
+    first.emit("snapshot_ready", { running: false, issueStatus: "resolved" });
+    expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
+
+    setIssue({ ...initial, status: "open" });
+
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(2));
+    expect(first.closed).toBe(true);
+    expect(first.closeCalls).toBe(1);
+    expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
+    const second = EventSourceMock.instances[1]!;
+    expect(second.url).toBe(first.url);
+    second.emit("open");
+    second.emit("snapshot_ready", { running: false, issueStatus: "open" });
+    expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
+
+    view.unmount();
+    expect(second.closed).toBe(true);
   });
 
   it("focuses the conversation and uses Enter to scroll to the latest message", () => {

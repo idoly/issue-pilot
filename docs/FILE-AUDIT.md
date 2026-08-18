@@ -1,6 +1,6 @@
 # Issue Pilot逐文件设计审计
 
-范围：本轮变更完成后的212个Git tracked文件，包括本报告；排除`node_modules`、`src/web/dist`和真实`.issue-pilot` durable state。每行给出文件作用、抽象/中间层判断、重复/兼容/无用判断和处置。
+范围：当前213个Git tracked/new文件，包括本报告；排除`node_modules`、`src/web/dist`和真实`.issue-pilot` durable state。每行给出文件作用、抽象/中间层判断、重复/兼容/无用判断和处置。
 
 ## 判定原则
 
@@ -31,10 +31,11 @@
 | `.gitignore` | 11 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `AGENTS.md` | 183 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `Containerfile` | 50 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `README.md` | 142 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `README.md` | 143 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `deploy/issue-pilot.yaml` | 119 | 项目构建、忽略或运行配置 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
+| `docs/ANT-DESIGN-SOLID-FEEDBACK.md` | 272 | Ant Design Solid实际集成问题与责任划分 | 独立上游反馈文档 | 区分框架缺陷、可选改进和应用责任，不复制项目架构合同 | 保留，随组件库升级复核 |
 | `docs/ARCHITECTURE.md` | 362 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
-| `docs/FILE-AUDIT.md` | 240 | 全部tracked文件的作用与设计处置清单 | 审计事实owner | 不再复制逐文件长篇模板；与模块审计分工 | 保留 |
+| `docs/FILE-AUDIT.md` | 241 | 全部tracked文件的作用与设计处置清单 | 审计事实owner | 不再复制逐文件长篇模板；与模块审计分工 | 保留 |
 | `docs/CONFIGURATION.md` | 306 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEPLOYMENT.md` | 174 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
@@ -133,8 +134,8 @@
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/AgentPanel.test.ts` | 379 | web域的AgentPanel行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/AgentPanel.tsx` | 402 | AgentPanel前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
+| `src/web/src/app/AgentPanel.test.ts` | 411 | AgentPanel stream、reopen和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/AgentPanel.tsx` | 405 | Agent对话、stream状态和composer | 用户功能边界 | Reopen只重连当前stream，不重建页面或新增协调层 | 保留 |
 | `src/web/src/app/App.test.tsx` | 530 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/App.tsx` | 185 | App前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
