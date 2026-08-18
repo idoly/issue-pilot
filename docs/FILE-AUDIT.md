@@ -134,8 +134,8 @@
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/AgentPanel.test.ts` | 411 | AgentPanel stream、reopen和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/AgentPanel.tsx` | 405 | Agent对话、stream状态和composer | 用户功能边界 | Reopen只重连当前stream，不重建页面或新增协调层 | 保留 |
+| `src/web/src/app/AgentPanel.test.ts` | 453 | AgentPanel stream、reopen、Repository刷新和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/AgentPanel.tsx` | 408 | Agent对话、stream状态和composer | 用户功能边界 | 只在明确lifecycle信号刷新Issue或重连stream，不新增轮询 | 保留 |
 | `src/web/src/app/App.test.tsx` | 530 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/App.tsx` | 185 | App前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -149,7 +149,7 @@
 | `src/web/src/app/Statistics.tsx` | 157 | Statistics前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/UserManagement.tsx` | 155 | UserManagement前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/agent-stream.test.ts` | 51 | web域的agent-stream行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/agent-stream.ts` | 128 | EventSource握手、重连和generation状态机 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/web/src/app/agent-stream.ts` | 131 | EventSource握手、replay lifecycle、重连和generation状态机 | 稳定transport边界 | Replay携带已发生的Agent启动事实，避免页面轮询 | 保留原位 |
 | `src/web/src/app/configuration-model.test.ts` | 54 | web域的configuration-model行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/configuration-model.ts` | 41 | 配置表单draft到credential update请求序列化 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/app/conversation.ts` | 224 | Pi事件到可见对话的纯状态投影 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |

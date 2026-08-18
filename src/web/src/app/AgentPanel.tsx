@@ -159,6 +159,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const executionRoot = () => props.issue.environmentKey === "dev"
     ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
     : `~/.issue-pilot/issues/${props.issue.id.toLowerCase()}/runtime`;
+  const developmentRepositoriesPending = () => props.issue.environmentKey === "dev"
+    && (!props.issue.repositories.length || props.issue.repositories.some((repository) => !repository.workingBranch));
   const scrollLatest = () => {
     transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
     followLatest = true;
@@ -274,16 +276,17 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (!streamError && ["agent_event_connection_failed", "agent_event_protocol_error"].includes(error())) setError("");
       else if (streamError) setError(streamError);
     },
-    onSnapshot: (payload, replay) => {
+    onSnapshot: (payload, replay, generation) => {
       setEntries(replay.entries); setFooter(payload.footer ?? emptyFooter()); setUnread(0);
       setActivity(replay.activity); setQueue(replay.queue); setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
       setProcessing(payload.running === true);
+      if (replay.agentStarted && developmentRepositoriesPending()) refreshIssue(props.issue.id, generation);
       queueMicrotask(scrollLatest);
     },
     onEvent: (envelope, generation) => {
       append(envelope);
-      if (envelope.event.type === "issue_status") refreshIssue(props.issue.id, generation);
+      if (envelope.event.type === "issue_status" || (envelope.event.type === "agent_start" && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
     },
   });
   const connect = (issueId: string, resetForIssue = false) => {

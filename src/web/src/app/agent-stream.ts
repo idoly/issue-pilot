@@ -12,12 +12,13 @@ interface AgentStreamReplay {
   entries: ConversationEntry[];
   activity: AgentActivity | null;
   queue: { steering: string[]; followUp: string[] };
+  agentStarted: boolean;
 }
 
 interface AgentStreamCallbacks {
   onConnection(connected: boolean): void;
   onError(error: "" | "agent_event_connection_failed" | "agent_event_protocol_error"): void;
-  onSnapshot(snapshot: AgentStreamSnapshot, replay: AgentStreamReplay): void;
+  onSnapshot(snapshot: AgentStreamSnapshot, replay: AgentStreamReplay, generation: number): void;
   onEvent(event: RunEvent, generation: number): void;
 }
 
@@ -49,6 +50,7 @@ export class AgentStreamController {
     let replayEntries: ConversationEntry[] = [];
     let replayActivity: AgentActivity | null = null;
     let replayQueue = { steering: [] as string[], followUp: [] as string[] };
+    let replayAgentStarted = false;
     const source = this.createEventSource(this.streamUrl(issueId));
     this.stream = source;
 
@@ -62,7 +64,7 @@ export class AgentStreamController {
       try {
         const parsed = JSON.parse(event.data) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent_event_protocol_error");
-        this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replayEntries, activity: replayActivity, queue: replayQueue });
+        this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replayEntries, activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
       } catch {
         this.callbacks.onError("agent_event_protocol_error");
@@ -79,6 +81,7 @@ export class AgentStreamController {
           const nextActivity = activityForEvent(envelope.event);
           if (nextActivity !== undefined) replayActivity = nextActivity;
           if (envelope.event.type === "queue_update") replayQueue = { steering: [...envelope.event.steering], followUp: [...envelope.event.followUp] };
+          if (envelope.event.type === "agent_start") replayAgentStarted = true;
           return;
         }
         this.callbacks.onEvent(envelope, generation);

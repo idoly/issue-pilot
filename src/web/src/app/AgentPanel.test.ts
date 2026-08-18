@@ -238,6 +238,48 @@ describe("Agent conversation state", () => {
     expect(second.closed).toBe(true);
   });
 
+  it("refreshes development repository details when Agent preparation starts live", async () => {
+    EventSourceMock.instances.length = 0;
+    const initial = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "open",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "preparing", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const prepared = { ...initial, status: "in_progress" as const, repositories: [{ name: "service", url: "git@example.test:team/service.git", baseBranch: "main", workingBranch: "feature-issue-20260810-001" }], workspace: { status: "running" as const, sourceAvailable: true } };
+    const [issue, setIssue] = createSignal<IssueDetail>(initial);
+    const onRefresh = vi.fn(async () => { setIssue(prepared); return prepared; });
+    const view = render(() => AgentPanel({ get issue() { return issue(); }, onRefresh }));
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("snapshot_ready", { running: true, issueStatus: "open" });
+    source.emit("message", event({ type: "agent_start" }, "agent-start-live"));
+
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(initial.id));
+    expect(issue().repositories[0]?.workingBranch).toBe("feature-issue-20260810-001");
+    view.unmount();
+  });
+
+  it("refreshes development repository details when Agent start is replayed", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "running", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const onRefresh = vi.fn(async () => issue);
+    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("message", event({ type: "agent_start" }, "agent-start-replay"));
+    expect(onRefresh).not.toHaveBeenCalled();
+    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(issue.id));
+    view.unmount();
+  });
+
   it("focuses the conversation and uses Enter to scroll to the latest message", () => {
     EventSourceMock.instances.length = 0;
     const issue = {
