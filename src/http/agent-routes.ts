@@ -69,8 +69,14 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
           reply.raw.destroy();
         }
       });
-      const send = (event: RunEvent) => writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+      const sent = new Set<string>();
+      const send = (event: RunEvent) => {
+        if (sent.has(event.id)) return;
+        sent.add(event.id);
+        writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+      };
       for (const event of transcript) send(event);
+      for (const event of events.replayCurrent(issue.id)) send(event);
       writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();

@@ -265,15 +265,15 @@ Agent失败预期：session abort/dispose；未resolved Issue回`open`；Workspa
 4. Repository remote branch/state/path/Git status。
 5. Runtime/socket/Source path。
 6. Capability target/config。
-7. Timeout/result budget。
+7. Timeout/result budget；`model_response_idle_timeout`表示模型流在配置窗口内没有assistant事件，确认provider/network后使用Issue retry续跑。
 
 SSE正常顺序：
 
 ```text
-JSONL replay -> snapshot_ready -> live -> heartbeat
+JSONL replay -> current run replay -> snapshot_ready -> live -> heartbeat
 ```
 
-重复/闪烁/丢消息时检查active JSONL、proxy buffering/read timeout、server backpressure、Web generation和compaction reconnect。旧`ready`不是当前握手。慢client只关闭自身。
+刷新后只缺当前正在生成的thinking/text或运行中tool时，检查server event bus的current run replay；该层是进程内临时状态，message/tool完成后由JSONL接管，API重启后不恢复。若日志出现`sse_backpressure_limit_exceeded`并持续重连，检查current message delta是否按内容块聚合，不要放宽pending-byte budget。重复/闪烁/丢消息时检查active JSONL、event ID去重、proxy buffering/read timeout、server backpressure、Web generation和compaction reconnect。旧`ready`不是当前握手。慢client只关闭自身。
 
 ## Attachment故障
 

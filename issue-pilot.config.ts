@@ -40,6 +40,7 @@ export const issuePilotConfig = Object.freeze({
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
+    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000 }),
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
     projectTools: Object.freeze({

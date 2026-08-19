@@ -13,6 +13,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { DeploymentConfig } from "../domain/contracts.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "../pi/models.ts";
 import { createCapabilityTools } from "../pi/tools.ts";
@@ -29,6 +30,7 @@ export interface StartPiSessionOptions {
   workspaceRoot: string;
   executableRoot?: string;
   systemPrompt: string;
+  modelResponseIdleMs?: number;
   onEvent: (event: JsonAgentSessionEvent) => void;
 }
 
@@ -51,6 +53,58 @@ export async function createPrivateSessionManager(cwd: string, sessionDirectory:
 }
 
 type JsonMessageUpdateEvent = Extract<JsonAgentSessionEvent, { type: "message_update" }>;
+
+export class AgentResponseWatchdog {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly activeTools = new Set<string>();
+  private readonly idleMs: number;
+  private readonly onTimeout: () => void;
+
+  constructor(idleMs: number, onTimeout: () => void) {
+    if (!Number.isSafeInteger(idleMs) || idleMs <= 0) throw new Error("invalid_model_response_idle_timeout");
+    this.idleMs = idleMs;
+    this.onTimeout = onTimeout;
+  }
+
+  start(): void {
+    this.arm();
+  }
+
+  observe(event: JsonAgentSessionEvent): void {
+    if (event.type === "agent_start") this.arm();
+    else if (event.type === "message_start" && event.message.role === "assistant") this.arm();
+    else if (event.type === "message_update") this.arm();
+    else if (event.type === "message_end") this.clear();
+    else if (event.type === "tool_execution_start") {
+      this.activeTools.add(event.toolCallId);
+      this.clear();
+    } else if (event.type === "tool_execution_end") {
+      this.activeTools.delete(event.toolCallId);
+      if (!this.activeTools.size) this.arm();
+    } else if (event.type === "agent_end" || event.type === "agent_settled") this.stop();
+  }
+
+  stop(): void {
+    this.activeTools.clear();
+    this.clear();
+  }
+
+  private arm(): void {
+    this.clear();
+    if (this.activeTools.size) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.onTimeout();
+    }, this.idleMs);
+    this.timer.unref?.();
+  }
+
+  private clear(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
 
 function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
   if (event.type !== "message_update") return event as JsonAgentSessionEvent;
@@ -164,7 +218,17 @@ export class PiSessionRuntime {
       await abortAndDispose(session);
       throw error;
     }
-    const unsubscribe = session.subscribe((event) => options.onEvent(toWireEvent(event)));
+    let rejectIdle: ((error: Error) => void) | undefined;
+    const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? issuePilotConfig.runtime.agent.modelResponseIdleMs, () => {
+      const error = new Error("model_response_idle_timeout");
+      rejectIdle?.(error);
+      void session.abort().catch(() => undefined);
+    });
+    const unsubscribe = session.subscribe((event) => {
+      const wireEvent = toWireEvent(event);
+      watchdog.observe(wireEvent);
+      options.onEvent(wireEvent);
+    });
     let stopped = false;
 
     return {
@@ -172,10 +236,16 @@ export class PiSessionRuntime {
       get streaming() {
         return session.isStreaming;
       },
-      prompt: (message) => session.prompt(message),
+      prompt: async (message) => {
+        const idle = new Promise<never>((_resolve, reject) => { rejectIdle = reject; });
+        watchdog.start();
+        try { await Promise.race([session.prompt(message), idle]); }
+        finally { rejectIdle = undefined; watchdog.stop(); }
+      },
       stop: async () => {
         if (stopped) return;
         stopped = true;
+        watchdog.stop();
         unsubscribe();
         await abortAndDispose(session);
       },

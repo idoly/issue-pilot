@@ -232,6 +232,8 @@ Workbench filesystem根据Repository access声明权限：dev允许文件创建�
 
 Resource loader禁用extension、skill、prompt template、theme、context file和宿主prompt自动发现。Issue Pilot显式提供system prompt、model和tools。
 
+Pi session在等待模型输出时应用`runtime.agent.modelResponseIdleMs`空闲watchdog；assistant增量会重置计时，tool执行期间暂停，最后一个tool结束后重新开始。超时调用SDK abort并以`model_response_idle_timeout`进入现有`open/failed`可重试恢复，不让Issue永久停在`in_progress/running`。
+
 `AgentSessionContext`只包含：
 
 - `issueKey`、`serviceKey`、`environmentKey`
@@ -269,10 +271,10 @@ GET验证直属path、普通文件、权限、size和SHA-256。不存在独立At
 SSE先订阅live bus，再读取JSONL snapshot：
 
 ```text
-Pi JSONL replay -> snapshot_ready -> buffered/live events -> heartbeat
+Pi JSONL replay -> current non-durable run replay -> snapshot_ready -> buffered/live events -> heartbeat
 ```
 
-Snapshot期间的live event进入连接私有buffer。Writer有序处理backpressure、transport close/error和pending-byte budget。慢连接只关闭自身。
+Event bus只在当前Agent运行期间保留尚未写入JSONL的assistant增量、运行中tool状态、queue和`agent_start`。同一assistant内容块的token delta合并为一个replay event，保留完整文本且避免协议元数据耗尽SSE pending-byte budget。完成的message/tool立即由JSONL接管，Issue结束或API重启即清空；它不是第二份durable conversation。Snapshot期间的live event进入连接私有buffer，并按event ID去重。Writer有序处理backpressure、transport close/error和pending-byte budget。慢连接只关闭自身。
 
 Web controller用generation失效旧EventSource/timer，握手前保存private replay，收到`snapshot_ready`后原子提交；compaction成功后重连读取新active branch。Event transport与conversation projection分离。
 

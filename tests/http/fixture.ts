@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { FastifyInstance } from "fastify";
 
+import { AgentEventBus } from "../../src/agent/events.ts";
 import { AGENT_THINKING_LEVELS, type EnvironmentKind } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
 
@@ -71,11 +72,11 @@ export interface ApiFixture {
   cleanup(): Promise<void>;
 }
 
-export async function createApiFixture(): Promise<ApiFixture> {
+export async function createApiFixture(options: { events?: AgentEventBus } = {}): Promise<ApiFixture> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
   const engine = new TestAgentController();
-  const app = await buildApi({ databaseFile, stateRoot: root, engine, modelCatalog, logger: false });
+  const app = await buildApi({ databaseFile, stateRoot: root, engine, ...(options.events ? { events: options.events } : {}), modelCatalog, logger: false });
   let stopped = false;
   const stop = async () => {
     if (stopped) return;

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
+import { AgentEventBus, type RunEvent } from "../../src/agent/events.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
@@ -32,6 +33,40 @@ test("uses snapshot_ready as the versioned Agent stream handshake", async () => 
     await reader.cancel();
     assert.match(handshake, /^event: snapshot_ready\n/);
     assert.doesNotMatch(handshake, /^event: ready\n/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("replays current non-durable Agent output before the stream snapshot", async () => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  try {
+    await createService(fixture.app, "Gamma", ["dev"]);
+    const issue = await createIssue(fixture.app, "gamma", "dev");
+    const issueId = fixture.engine.enqueued[0]!;
+    const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: "2026-08-08T00:00:00.000Z", event });
+    publish("agent-start", { type: "agent_start" });
+    publish("partial-output", {
+      type: "message_update",
+      usage: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Still working" },
+    });
+
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let payload = "";
+    while (!payload.includes("event: snapshot_ready\n")) {
+      const { done, value } = await reader.read();
+      assert.equal(done, false);
+      payload += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel();
+    assert.ok(payload.indexOf("partial-output") < payload.indexOf("event: snapshot_ready"));
+    assert.equal(payload.match(/id: partial-output\n/g)?.length, 1);
+    assert.match(payload, /Still working/);
   } finally {
     await fixture.cleanup();
   }

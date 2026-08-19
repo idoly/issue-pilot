@@ -8,7 +8,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
-import { createPrivateSessionManager, PiSessionRuntime } from "../../src/agent/pi-session.ts";
+import { AgentResponseWatchdog, createPrivateSessionManager, PiSessionRuntime } from "../../src/agent/pi-session.ts";
 import type { PiModelRuntime } from "../../src/pi/models.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
@@ -74,6 +74,20 @@ function modelRuntime(available = true, refreshes?: unknown[]): ModelRuntime {
 function sharedModelRuntime(runtime: ModelRuntime): PiModelRuntime {
   return { async load() { return runtime; }, async close() {} };
 }
+
+test("times out only while waiting for model output", async () => {
+  let timeouts = 0;
+  const watchdog = new AgentResponseWatchdog(20, () => { timeouts += 1; });
+  watchdog.start();
+  watchdog.observe({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: {} });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(timeouts, 0);
+  watchdog.observe({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: { content: [] }, isError: false });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(timeouts, 1);
+  watchdog.stop();
+  assert.throws(() => new AgentResponseWatchdog(0, () => undefined), /invalid_model_response_idle_timeout/);
+});
 
 test("limits read-only deployments to non-mutating Pi tools", () => {
   assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "db"]);

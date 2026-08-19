@@ -231,10 +231,10 @@ tests/pi/tools.test.ts
 Contract：
 
 ```text
-replay -> snapshot_ready { agent, footer, running, issueStatus } -> live
+JSONL replay -> current run replay -> snapshot_ready { agent, footer, running, issueStatus } -> live
 ```
 
-Server在snapshot前subscribe live bus并buffer。Writer必须ordered、bounded并处理drain/close/error。
+Server在snapshot前subscribe live bus并buffer。Current run replay只能包含尚未durable的message/tool增量和最新queue；同一assistant内容块的delta必须聚合，message/tool完成或Issue结束时必须释放。连接按event ID去重，Writer必须ordered、bounded并处理drain/close/error。
 
 `agent-stream.ts`只拥有transport：EventSource、generation、private replay、snapshot commit、reconnect、compaction refresh。`conversation.ts`保持pure projection，`AgentPanel.tsx`只负责UI。测试stale source、snapshot边界、Issue switch、stale refresh、compaction和dispose。
 

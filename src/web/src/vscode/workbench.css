@@ -13,7 +13,6 @@ body {
 
 .monaco-workbench .editor-actions .action-item,
 .monaco-workbench .part.sidebar .composite.title .actions-container,
-.monaco-workbench .part.sidebar .pane-header .actions,
 .monaco-workbench .activitybar .global-activity,
 .monaco-workbench .action-item:has(.codicon-panel-maximize),
 .monaco-workbench .action-item:has(.codicon-auxiliarybar-maximize),

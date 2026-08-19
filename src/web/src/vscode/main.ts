@@ -278,6 +278,7 @@ async function start(): Promise<void> {
       "workbench.activity.showAccounts": false,
       "workbench.startupEditor": "none",
       "workbench.statusBar.visible": true,
+      "workbench.view.alwaysShowHeaderActions": true,
       "security.workspace.trust.enabled": false,
       "scm.repositories.selectionMode": "single",
       "editor.dropIntoEditor.enabled": false,

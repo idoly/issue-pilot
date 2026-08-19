@@ -82,6 +82,7 @@ Environment name在启动时同步。其他default用于新配置；保存后SQL
 
 | Field | 当前值 |
 | --- | --- |
+| `agent.modelResponseIdleMs` | `300000` |
 | `sourceBrowser.gitExecutable/searchExecutable` | `git` / `rg` |
 | `projectTools.node` | `.npmrc`, `.npm` relative to HOME |
 | `projectTools.maven` | `.m2/settings.xml`, `.m2/repository` |

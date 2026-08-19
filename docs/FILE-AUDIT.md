@@ -34,9 +34,9 @@
 | `README.md` | 143 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `deploy/issue-pilot.yaml` | 119 | 项目构建、忽略或运行配置 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
 | `docs/ANT-DESIGN-SOLID-FEEDBACK.md` | 272 | Ant Design Solid实际集成问题与责任划分 | 独立上游反馈文档 | 区分框架缺陷、可选改进和应用责任，不复制项目架构合同 | 保留，随组件库升级复核 |
-| `docs/ARCHITECTURE.md` | 362 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/ARCHITECTURE.md` | 364 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/FILE-AUDIT.md` | 241 | 全部tracked文件的作用与设计处置清单 | 审计事实owner | 不再复制逐文件长篇模板；与模块审计分工 | 保留 |
-| `docs/CONFIGURATION.md` | 306 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/CONFIGURATION.md` | 307 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEPLOYMENT.md` | 174 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/MODULE-AUDIT.md` | 182 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
@@ -81,15 +81,15 @@
 | `drizzle/0037_managed_users.sql` | 7 | 已发布不可变migration：managed users | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/0000_snapshot.json` | 2205 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/_journal.json` | 272 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
-| `issue-pilot.config.ts` | 98 | 应用唯一根配置事实源 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `issue-pilot.config.ts` | 99 | 应用唯一根配置事实源 | 职责明确 | 包含模型响应空闲timeout，不由session硬编码 | 保留原位 |
 | `package-lock.json` | 7694 | npm依赖解析锁文件 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `package.json` | 114 | 包、脚本和依赖清单 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `scripts/playwright.sh` | 89 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/agent/context.ts` | 38 | Agent session实际消费的model、tool和代码写权限上下文 | 必要session数据 | 已删除未消费scope/path/commit/deployment字段 | 保留当前扁平结构 |
 | `src/agent/engine.ts` | 361 | Issue reservation、Agent运行状态、Pi session和消息协调 | 大型但内聚的状态边界 | 拆分会新增queue/rollback/authorization协调 | 保留，不按行数拆 |
-| `src/agent/events.ts` | 116 | Agent事件发布、replay和live缓冲 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/agent/events.ts` | 188 | Agent事件发布、当前运行增量replay和live缓冲 | 事件生命周期owner | Delta按内容块聚合，临时replay在durable message/tool或Issue完成后释放 | 保留原位 |
 | `src/agent/footer.ts` | 65 | 从Pi JSONL计算usage、cache和context统计 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/agent/pi-session.ts` | 184 | Pi SDK session、私有JSONL、resource loader和tool核对 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/agent/pi-session.ts` | 254 | Pi SDK session、私有JSONL、模型空闲watchdog、resource loader和tool核对 | Session runtime owner | Tool执行暂停watchdog，模型无事件超时进入可重试失败 | 保留原位 |
 | `src/agent/prompts.ts` | 139 | 初始、继续、更新时间和授权prompt构造 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/capabilities/aliyun.ts` | 52 | Aliyun CLI私有profile和调用primitive | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/contracts.ts` | 18 | Capability结果、timeout和target共享primitive | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -113,8 +113,8 @@
 | `src/db/migrate.ts` | 9 | Operator独立migration命令入口 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/db/schema.ts` | 79 | 当前Drizzle数据库模型 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/domain/contracts.ts` | 103 | 业务枚举、Issue key、Deployment config和共享状态判断 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/http/agent-routes.ts` | 98 | Agent消息、事件和重试HTTP routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
-| `src/http/api.ts` | 185 | Fastify装配、错误映射、启动和关闭生命周期 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/http/agent-routes.ts` | 104 | Agent消息、事件和重试HTTP routes | 按HTTP域拆分 | 协调JSONL、当前运行replay和live边界并按ID去重 | 保留域边界 |
+| `src/http/api.ts` | 186 | Fastify装配、错误映射、启动和关闭生命周期 | 职责明确 | Event bus支持同层依赖注入，生产默认仍由应用创建 | 保留原位 |
 | `src/http/attachment-routes.ts` | 32 | 附件完整性校验和下载route | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/http/attachment-store.ts` | 113 | 附件写入、quarantine、rollback/finalize和安全路径 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/configuration-routes.ts` | 85 | Catalog/配置/Service写入routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
@@ -134,8 +134,8 @@
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/AgentPanel.test.ts` | 453 | AgentPanel stream、reopen、Repository刷新和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/AgentPanel.tsx` | 408 | Agent对话、stream状态和composer | 用户功能边界 | 只在明确lifecycle信号刷新Issue或重连stream，不新增轮询 | 保留 |
+| `src/web/src/app/AgentPanel.test.ts` | 466 | AgentPanel stream、reopen、Repository刷新、未读计数和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/AgentPanel.tsx` | 422 | Agent对话、stream状态和composer | 用户功能边界 | 未读按新增conversation entry ID计数，token delta不重复计数 | 保留 |
 | `src/web/src/app/App.test.tsx` | 530 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/App.tsx` | 185 | App前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -170,7 +170,7 @@
 | `src/web/src/vscode/extensions.d.ts` | 7 | Vite虚拟extension模块类型声明 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/github-dark-default.LICENSE` | 21 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/github-dark-default.json` | 651 | 构建、主题或包元数据 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/vscode/main.ts` | 336 | VS Code Workbench组合、嵌入布局和菜单限制 | 框架集成owner | Context Menu优先框架service；DOM桥接限于上游嵌入缺口 | 保留原位 |
+| `src/web/src/vscode/main.ts` | 337 | VS Code Workbench组合、嵌入布局和菜单限制 | 框架集成owner | 原生view header actions保持可见；Context Menu优先框架service | 保留原位 |
 | `src/web/src/vscode/markdown-preview.test.ts` | 102 | markdown-preview Workbench集成模块 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/vscode/markdown-preview.ts` | 134 | 上游markdown.api.render到只读Preview Pane | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/search-service.ts` | 10 | 用上游SearchService阻止默认虚拟树遍历 | 必要上游例外 | 唯一深路径import；默认实现会越过服务端预算 | 保留并锁版本 |
@@ -180,7 +180,7 @@
 | `src/web/src/vscode/source-file-system.ts` | 200 | Source API到VS Code access-aware filesystem | VS Code filesystem协议owner | Dev复用框架文件操作；server再次授权不是重复校验 | 保留原位 |
 | `src/web/src/vscode/source-search.test.ts` | 82 | source-search Workbench集成模块 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/vscode/source-search.ts` | 87 | VS Code text search到预算Source API | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/vscode/workbench.css` | 82 | 对应前端界面样式 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/web/src/vscode/workbench.css` | 81 | 对应前端界面样式 | 职责明确 | 保留VS Code原生pane header actions，隐藏不适用的Workbench全局动作 | 保留原位 |
 | `src/web/src/vscode/workers.ts` | 26 | Monaco/Workbench worker工厂 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/tsconfig.json` | 17 | 构建、主题或包元数据 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/vite.config.ts` | 146 | 双入口构建及theme/icon/markdown extension资源注册 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -197,8 +197,8 @@
 | `src/workspace/state.ts` | 210 | state路径、Repository持久状态分类和布局证据保护 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `tests/agent/context.test.ts` | 34 | agent域的context行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/agent/engine.test.ts` | 239 | agent域的engine行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/agent/events.test.ts` | 161 | agent域的events行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/agent/pi-session.test.ts` | 157 | agent域的pi-session行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/agent/events.test.ts` | 205 | agent事件发布、聚合临时replay和session transcript回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/agent/pi-session.test.ts` | 171 | Pi session、tool授权和模型空闲watchdog回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/agent/prompts.test.ts` | 35 | agent域的prompts行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/agent/repository-preparation.test.ts` | 267 | agent域的repository-preparation行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/dms.test.ts` | 101 | capabilities域的dms行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -216,9 +216,9 @@
 | `tests/http/attachment-api.test.ts` | 153 | http域的attachment-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/attachments.test.ts` | 45 | http域的attachments行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/configuration-api.test.ts` | 245 | http域的configuration-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/http/fixture.ts` | 141 | http域的fixture行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/http/fixture.ts` | 142 | http域的fixture行为回归测试 | 必要回归证据 | 支持隔离event bus注入，不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/issue-api.test.ts` | 231 | http域的issue-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/http/runtime-api.test.ts` | 68 | http域的runtime-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/http/runtime-api.test.ts` | 103 | Agent stream握手、当前增量replay和重启恢复回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/service-configuration.test.ts` | 36 | http域的service-configuration行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/sse.test.ts` | 121 | http域的sse行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/user-api.test.ts` | 102 | http域的user-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

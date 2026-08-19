@@ -149,6 +149,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   let issueGeneration = 0;
   let issueRefreshId = 0;
   let followLatest = true;
+  const unreadEntryIds = new Set<string>();
   let messageUpdateFrame: number | undefined;
   let pendingMessageUpdates: Array<{ envelope: RunEvent; deltas: string[] | null }> = [];
   const pasteEditor = new PasteEditorModel();
@@ -161,10 +162,14 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     : `~/.issue-pilot/issues/${props.issue.id.toLowerCase()}/runtime`;
   const developmentRepositoriesPending = () => props.issue.environmentKey === "dev"
     && (!props.issue.repositories.length || props.issue.repositories.some((repository) => !repository.workingBranch));
+  const clearUnread = () => {
+    unreadEntryIds.clear();
+    setUnread(0);
+  };
   const scrollLatest = () => {
     transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
     followLatest = true;
-    setUnread(0);
+    clearUnread();
   };
   const observeTranscript = (element: HTMLDivElement) => {
     transcript = element;
@@ -195,10 +200,21 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setDraft(value);
     queueMicrotask(() => resizeEditor());
   };
-  const afterConversationUpdate = () => {
+  const updateConversation = (update: (current: ConversationEntry[]) => ConversationEntry[]) => {
+    let addedEntryIds: string[] = [];
+    setEntries((current) => {
+      const currentIds = new Set(current.map(({ id }) => id));
+      const next = update(current);
+      addedEntryIds = next.filter(({ id }) => !currentIds.has(id)).map(({ id }) => id);
+      return next;
+    });
     queueMicrotask(() => {
-      if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
-      else setUnread((value) => value + 1);
+      if (followLatest && transcript) {
+        transcript.scrollTop = transcript.scrollHeight;
+        return;
+      }
+      for (const id of addedEntryIds) unreadEntryIds.add(id);
+      setUnread(unreadEntryIds.size);
     });
   };
   const applyPendingMessageUpdates = () => {
@@ -211,8 +227,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (!update || !("delta" in update) || typeof update.delta !== "string") return envelope;
       return { ...envelope, event: { ...envelope.event, assistantMessageEvent: { ...update, delta: deltas.join("") } } } as RunEvent;
     });
-    setEntries((current) => updates.reduce((next, event) => applyAgentEvent(next, event), current));
-    afterConversationUpdate();
+    updateConversation((current) => updates.reduce((next, event) => applyAgentEvent(next, event), current));
   };
   const flushMessageUpdates = () => {
     if (messageUpdateFrame !== undefined) window.cancelAnimationFrame(messageUpdateFrame);
@@ -252,7 +267,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       return;
     }
     flushMessageUpdates();
-    setEntries((current) => applyAgentEvent(current, event));
+    updateConversation((current) => applyAgentEvent(current, event));
     setFooter((current) => footerAfterEvent(current, event.event));
     const type = event.event.type;
     setProcessing((current) => processingAfterEvent(current, event.event));
@@ -260,7 +275,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     if (nextActivity !== undefined) setActivity(nextActivity);
     if (type === "queue_update") setQueue({ steering: [...event.event.steering], followUp: [...event.event.followUp] });
     if (type === "issue_status") setIssueStatus(event.event.status === "complete" ? "pending" : "open");
-    afterConversationUpdate();
   };
   const refreshIssue = (issueKey: string, connectionGeneration: number) => {
     const currentRefresh = ++issueRefreshId;
@@ -277,7 +291,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       else if (streamError) setError(streamError);
     },
     onSnapshot: (payload, replay, generation) => {
-      setEntries(replay.entries); setFooter(payload.footer ?? emptyFooter()); setUnread(0);
+      setEntries(replay.entries); setFooter(payload.footer ?? emptyFooter()); clearUnread();
       setActivity(replay.activity); setQueue(replay.queue); setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
       setProcessing(payload.running === true);
@@ -292,7 +306,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const connect = (issueId: string, resetForIssue = false) => {
     if (resetForIssue) {
       discardMessageUpdates();
-      setEntries([]); setFooter(emptyFooter()); setUnread(0); setError("");
+      setEntries([]); setFooter(emptyFooter()); clearUnread(); setError("");
       setConnected(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" });
       pasteEditor.reset(); setEditorDraft(""); setSending(false);
     }
@@ -385,7 +399,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   onCleanup(() => { issueGeneration += 1; transcriptObserver?.disconnect(); discardMessageUpdates(); streamController.dispose(); });
 
   return <section ref={panel} class="agent-panel" aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
-    <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) setUnread(0); }}>
+    <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) clearUnread(); }}>
       <div class="agent-conversation" role="log" aria-live="polite">
         <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
         <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>

@@ -12,9 +12,26 @@ export interface RunEvent {
 }
 
 type RunEventListener = (event: RunEvent) => void;
+type MessageUpdateEvent = Extract<AgentWireEvent, { type: "message_update" }>;
+
+function mergeMessageUpdates(previous: RunEvent, next: RunEvent): RunEvent | undefined {
+  if (previous.event.type !== "message_update" || next.event.type !== "message_update") return undefined;
+  const previousUpdate = previous.event.assistantMessageEvent;
+  const nextUpdate = next.event.assistantMessageEvent;
+  if (!("delta" in previousUpdate) || !("delta" in nextUpdate) || typeof previousUpdate.delta !== "string" || typeof nextUpdate.delta !== "string") return undefined;
+  if (previousUpdate.type !== nextUpdate.type || previousUpdate.contentIndex !== nextUpdate.contentIndex) return undefined;
+  return {
+    ...next,
+    event: {
+      ...next.event,
+      assistantMessageEvent: { ...nextUpdate, delta: previousUpdate.delta + nextUpdate.delta },
+    } as MessageUpdateEvent,
+  };
+}
 
 export class AgentEventBus {
   private readonly listeners = new Map<string, Set<RunEventListener>>();
+  private readonly replay = new Map<string, RunEvent[]>();
   private readonly onListenerError: (error: unknown) => void;
 
   constructor(onListenerError: (error: unknown) => void = () => undefined) {
@@ -22,6 +39,7 @@ export class AgentEventBus {
   }
 
   publish(event: RunEvent): void {
+    this.updateReplay(event);
     const issueListeners = this.listeners.get(event.issueId);
     if (!issueListeners) return;
     for (const listener of [...issueListeners]) if (!this.deliver(listener, event)) issueListeners.delete(listener);
@@ -40,6 +58,10 @@ export class AgentEventBus {
     }
   }
 
+  replayCurrent(issueId: string): RunEvent[] {
+    return [...(this.replay.get(issueId) ?? [])];
+  }
+
   subscribe(issueId: string, listener: RunEventListener): () => void {
     const issueListeners = this.listeners.get(issueId) ?? new Set<RunEventListener>();
     issueListeners.add(listener);
@@ -51,6 +73,56 @@ export class AgentEventBus {
       issueListeners.delete(listener);
       if (!issueListeners.size) this.listeners.delete(issueId);
     };
+  }
+
+  private updateReplay(envelope: RunEvent): void {
+    const event = envelope.event;
+    if (event.type === "issue_status") {
+      this.replay.delete(envelope.issueId);
+      return;
+    }
+    if (event.type === "agent_start") {
+      this.replay.set(envelope.issueId, [envelope]);
+      return;
+    }
+    const current = this.replay.get(envelope.issueId);
+    if (!current) return;
+    if (event.type === "message_start") {
+      this.replay.set(envelope.issueId, [...current.filter(({ event }) => event.type !== "message_start" && event.type !== "message_update"), envelope]);
+      return;
+    }
+    if (event.type === "message_update") {
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        const merged = mergeMessageUpdates(current[index]!, envelope);
+        if (!merged) continue;
+        current[index] = merged;
+        return;
+      }
+      current.push(envelope);
+      return;
+    }
+    if (event.type === "message_end") {
+      this.replay.set(envelope.issueId, current.filter(({ event }) => event.type !== "message_start" && event.type !== "message_update"));
+      return;
+    }
+    if (event.type === "tool_execution_start") {
+      const toolCallId = event.toolCallId;
+      this.replay.set(envelope.issueId, [...current.filter(({ event }) => !("toolCallId" in event) || event.toolCallId !== toolCallId), envelope]);
+      return;
+    }
+    if (event.type === "tool_execution_update") {
+      const toolCallId = event.toolCallId;
+      this.replay.set(envelope.issueId, [...current.filter(({ event }) => event.type !== "tool_execution_update" || event.toolCallId !== toolCallId), envelope]);
+      return;
+    }
+    if (event.type === "tool_execution_end") {
+      const toolCallId = event.toolCallId;
+      this.replay.set(envelope.issueId, current.filter(({ event }) => !("toolCallId" in event) || event.toolCallId !== toolCallId));
+      return;
+    }
+    if (event.type === "queue_update") {
+      this.replay.set(envelope.issueId, [...current.filter(({ event }) => event.type !== "queue_update"), envelope]);
+    }
   }
 }
 

@@ -31,6 +31,7 @@ export interface ApiOptions {
   databaseFile?: string;
   stateRoot?: string;
   engine?: AgentController;
+  events?: AgentEventBus;
   toolRuntime?: ToolRuntime;
   logger?: boolean;
   listenHost?: string;
@@ -98,7 +99,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
     const attachmentLimits = applicationConfig.limits.attachment;
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
-    const events = new AgentEventBus((error) => app.log.error(error));
+    const events = options.events ?? new AgentEventBus((error) => app.log.error(error));
     engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.toolRuntime, sharedModelRuntime());
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);

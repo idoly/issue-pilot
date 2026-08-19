@@ -329,6 +329,14 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const scroller = view.container.querySelector(".agent-scroll") as HTMLDivElement;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent.scroll(scroller);
     source.emit("message", event({ type: "message_start", message: assistant([], "pending") }, "stream-start"));
     source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "First " } }, "stream-first"));
     source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "second" } }, "stream-second"));
@@ -339,6 +347,7 @@ describe("Agent conversation state", () => {
     frames.delete(frameId);
     scheduled(performance.now());
     await waitFor(() => expect(screen.getByText("First second")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy();
     expect(view.container.querySelector(".agent-message.assistant .agent-streaming-block")?.textContent).toBe("First second");
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")).toBeNull();
 
@@ -350,6 +359,10 @@ describe("Agent conversation state", () => {
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")?.textContent).toContain("Final response");
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
     expect(screen.queryByText("First second queued")).toBeNull();
+    expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy();
+    scroller.scrollTop = 800;
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "1 条新消息" })).toBeNull());
 
     view.unmount();
     requestFrame.mockRestore();
