@@ -7,7 +7,7 @@ import { addIssueComment, attachmentUrl, convertIssueToDevelopment, errorMessage
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
-import { AttachmentPicker, DescriptionField, bindMultipleSelectBlankToggle, issueTypesForEnvironment, selectedChoice, selectedStrings } from "./IssueForm";
+import { AttachmentPicker, DescriptionField, issueTypesForEnvironment, selectedChoice } from "./IssueForm";
 import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
@@ -35,7 +35,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
   const [editType, setEditType] = createSignal<IssueType>("smart_analysis", { ownedWrite: true });
   const [editAssignee, setEditAssignee] = createSignal<string | null>(null, { ownedWrite: true });
   const [editCc, setEditCc] = createSignal<string[]>([], { ownedWrite: true });
-  const [editCcOpen, setEditCcOpen] = createSignal(false);
   const [editService, setEditService] = createSignal("", { ownedWrite: true });
   const [editAttachments, setEditAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [removedAttachmentIds, setRemovedAttachmentIds] = createSignal<string[]>([], { ownedWrite: true });
@@ -57,7 +56,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
   createEffect(() => props.issue.id, (issueId, previousIssueId) => {
     if (previousIssueId === undefined || issueId === previousIssueId) return;
     issueGeneration += 1;
-    setEditOpen(false); setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
+    setEditOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setConversionOpen(false); setConverting(false); setConversionError("");
     setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null);
   });
@@ -82,7 +81,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
       if (issueGeneration !== generation) return;
       setRemovedAttachmentIds([]); setEditAttachments([]);
       await props.onUpdated();
-      setEditCcOpen(false); setEditOpen(false);
+      setEditOpen(false);
     } catch (error) {
       if (issueGeneration === generation) setEditError(errorMessage(error));
     } finally { if (issueGeneration === generation) setEditSaving(false); }
@@ -179,7 +178,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
         <div class="issue-branch-row">
           <code title={branchName()}>{branchName()}</code>
           <Show when={props.issue.workspace.sourceAvailable && !props.sourcePanel}>
-            <Button type="text" shape="circle" icon={<Code2 size={15} />} title="浏览工单代码" aria-label="浏览工单代码" onClick={props.onOpenSource} />
+            <Button class="icon-button" type="text" shape="circle" icon={<Code2 size={15} />} title="浏览工单代码" aria-label="浏览工单代码" onClick={props.onOpenSource} />
           </Show>
         </div>
       </section>
@@ -213,14 +212,14 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
         <p>当前工单将转到开发环境并改为缺陷修复，已有分析对话、附件和评论保持不变，转换后 Agent 将继续处理。</p>
         <Show when={conversionError()}><div class="create-error modal-form-error" role="alert">{conversionError()}</div></Show>
       </Modal>
-      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditCcOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
+      <Modal open={editOpen()} title="编辑工单" okText="保存" cancelText="取消" confirmLoading={editSaving()} okButtonProps={{ disabled: !editTitle().trim() || !editService() }} onOk={() => { void saveIssue(); }} onCancel={() => { setEditAttachments([]); setRemovedAttachmentIds([]); setEditOpen(false); }}>
         <div class="create-issue-form compact-issue-form edit-issue-form">
           <Show when={editError() || peopleError()}><div class="create-error modal-form-error" role="alert">{editError() || peopleError()}</div></Show>
           <label><span>服务</span><Select aria-label="编辑工单服务" value={editService()} onChange={(value) => { const selected = selectedChoice(value, catalog().services.map((service) => service.key)); if (selected) setEditService(selected); }} options={catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === props.issue.environmentKey)).map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setEditPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="编辑工单类型" value={editType()} onChange={(value) => { const selected = selectedChoice(value, availableIssueTypes()); if (selected) setEditType(selected); }} options={availableIssueTypes().map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
-          <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setEditCcOpen)}><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} open={editCcOpen()} onOpenChange={setEditCcOpen} onChange={(value) => setEditCc(selectedStrings(value, editCc()))} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
+          <label><span>抄送人（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} onChange={setEditCc} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
           <AttachmentPicker files={editAttachments} existingFiles={() => props.issue.attachments.filter((attachment) => !removedAttachmentIds().includes(attachment.id))} inputLabel="编辑工单选择附件" onFilesChange={(files) => setEditAttachments(files)} onRemoveExisting={(id) => { setRemovedAttachmentIds((current) => [...current, id]); setEditError(""); }} onError={(message) => setEditError(message)} />

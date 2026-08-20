@@ -91,7 +91,7 @@ const harness = vi.hoisted(() => {
       },
     },
   };
-  return { commands, controls, editorMouseListeners, editorService, fileSystemProviders, setEditorModelUri: (uri: Uri) => { editorModelUri = uri; }, statusItems, vscode, blame: vi.fn(), diff: vi.fn(), diffFile: vi.fn(), history: vi.fn(), commit: vi.fn(), commitFile: vi.fn() };
+  return { commands, controls, editorMouseListeners, editorService, fileSystemProviders, setEditorModelUri: (uri: Uri) => { editorModelUri = uri; }, statusItems, vscode, blame: vi.fn(), diff: vi.fn(), diffFile: vi.fn(), history: vi.fn(), commit: vi.fn(), commitFile: vi.fn(), discard: vi.fn() };
 });
 
 vi.mock("./extension-api", () => ({
@@ -107,7 +107,7 @@ vi.mock("./extension-api", () => ({
 }));
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
-  return { ...actual, loadSourceBlame: harness.blame, loadSourceDiff: harness.diff, loadSourceDiffFile: harness.diffFile, loadSourceHistory: harness.history, loadSourceCommit: harness.commit, loadSourceCommitFile: harness.commitFile };
+  return { ...actual, loadSourceBlame: harness.blame, loadSourceDiff: harness.diff, loadSourceDiffFile: harness.diffFile, loadSourceHistory: harness.history, loadSourceCommit: harness.commit, loadSourceCommitFile: harness.commitFile, discardSourcePaths: harness.discard };
 });
 
 import { registerSourceControls } from "./source-control";
@@ -131,6 +131,7 @@ describe("VS Code readonly Source Control extension", () => {
     harness.history.mockReset();
     harness.commit.mockReset();
     harness.commitFile.mockReset();
+    harness.discard.mockReset();
   });
 
   it("projects diff, history, and revision files through the public vscode API", async () => {
@@ -153,7 +154,8 @@ describe("VS Code readonly Source Control extension", () => {
     }));
 
     harness.setEditorModelUri(harness.vscode.Uri.file(`/issue-pilot/${issueKey}/web/src/form.ts`));
-    await registerSourceControls(issueKey, repositories, `/issue-pilot/${issueKey}`, harness.editorService as never);
+    const confirmDiscard = vi.fn(async () => false);
+    await registerSourceControls(issueKey, repositories, `/issue-pilot/${issueKey}`, harness.editorService as never, confirmDiscard);
 
     expect(harness.diff).toHaveBeenCalledWith(issueKey, "web");
     expect(harness.diff).toHaveBeenCalledWith(issueKey, "web", "", undefined, true);
@@ -208,5 +210,14 @@ describe("VS Code readonly Source Control extension", () => {
       "issue-pilot.sourceControl.discard",
       "issue-pilot.sourceControl.commit",
     ]);
+
+    const discard = harness.commands.get("issue-pilot.sourceControl.discard")!;
+    const publicResource = { resourceUri: resources[0]!.resourceUri };
+    await discard(publicResource as never);
+    expect(confirmDiscard).toHaveBeenCalledWith("src/form.ts");
+    expect(harness.discard).not.toHaveBeenCalled();
+    confirmDiscard.mockResolvedValueOnce(true);
+    await discard(publicResource as never);
+    expect(harness.discard).toHaveBeenCalledWith(issueKey, "web", ["src/form.ts"]);
   });
 });

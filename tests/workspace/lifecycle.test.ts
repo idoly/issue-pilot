@@ -408,8 +408,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_not_resolved");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
 
-    await database.db.update(issueRepositories).set({ workspaceName: "mismatched-name" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    const unmanagedRootEntry = path.join(issueWorkspaceRoot(root, issue!.key), "unmanaged-root.sql");
+    await writeFile(unmanagedRootEntry, "select 1;\n", "utf8");
+    await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_has_untracked_files");
+    await unlink(unmanagedRootEntry);
+
+    await database.db.update(issueRepositories).set({ workspaceName: "mismatched-name" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_path_does_not_match_repository");
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_path_does_not_match_repository");
     await database.db.update(issueRepositories).set({ workspaceName: "alpha" }).where(eq(issueRepositories.id, restoredRows[0]!.id));

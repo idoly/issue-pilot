@@ -33,10 +33,10 @@
 | `Containerfile` | 50 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `README.md` | 143 | 项目说明或Agent工作约定 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `deploy/issue-pilot.yaml` | 119 | 项目构建、忽略或运行配置 | 运行/部署边界 | 单镜像单副本设计，无旧runtime兼容 | 保留 |
-| `docs/ANT-DESIGN-SOLID-FEEDBACK.md` | 272 | Ant Design Solid实际集成问题与责任划分 | 独立上游反馈文档 | 区分框架缺陷、可选改进和应用责任，不复制项目架构合同 | 保留，随组件库升级复核 |
+| `docs/ANT-DESIGN-SOLID-FEEDBACK.md` | 125 | Ant Design Solid升级实测、已解决事项和上游反馈 | 独立上游反馈文档 | 记录0.3 RC源码/API核对，不复制项目架构合同 | 保留，随组件库升级复核 |
 | `docs/ARCHITECTURE.md` | 364 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/FILE-AUDIT.md` | 241 | 全部tracked文件的作用与设计处置清单 | 审计事实owner | 不再复制逐文件长篇模板；与模块审计分工 | 保留 |
-| `docs/CONFIGURATION.md` | 307 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/CONFIGURATION.md` | 306 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEPLOYMENT.md` | 174 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/MODULE-AUDIT.md` | 182 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
@@ -82,8 +82,8 @@
 | `drizzle/meta/0000_snapshot.json` | 2205 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/_journal.json` | 272 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `issue-pilot.config.ts` | 99 | 应用唯一根配置事实源 | 职责明确 | 包含模型响应空闲timeout，不由session硬编码 | 保留原位 |
-| `package-lock.json` | 7694 | npm依赖解析锁文件 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `package.json` | 114 | 包、脚本和依赖清单 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `package-lock.json` | 7692 | npm依赖解析锁文件 | 单一安装事实 | 锁定Ant Solid 0.3 RC、Monaco 36.1及更新后的传递图 | 保留原位 |
+| `package.json` | 107 | 包、脚本和直接依赖清单 | 单一包配置 | Ant Solid与Solid RC peer一致，测试库override单独保留 | 保留原位 |
 | `scripts/playwright.sh` | 89 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/agent/context.ts` | 38 | Agent session实际消费的model、tool和代码写权限上下文 | 必要session数据 | 已删除未消费scope/path/commit/deployment字段 | 保留当前扁平结构 |
 | `src/agent/engine.ts` | 361 | Issue reservation、Agent运行状态、Pi session和消息协调 | 大型但内聚的状态边界 | 拆分会新增queue/rollback/authorization协调 | 保留，不按行数拆 |
@@ -101,8 +101,8 @@
 | `src/capabilities/rabbitmq.ts` | 30 | RabbitMQ management只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/redis-worker.ts` | 43 | 隔离node-redis连接、结果和OOM的Worker入口 | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/redis.ts` | 74 | Redis worker边界和命令构造 | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
-| `src/capabilities/registry.ts` | 241 | 七类capability保存parser、tool schema和metadata | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/capabilities/sls.ts` | 76 | SLS时间窗、分页和CLI protocol client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
+| `src/capabilities/registry.ts` | 240 | 七类capability保存parser、tool schema和metadata | 职责明确 | SLS schema不设置record count输入限制 | 保留原位 |
+| `src/capabilities/sls.ts` | 73 | SLS时间窗、完整自动分页和CLI protocol client | 独立外部协议边界 | 无record count上限，统一总timeout并逐页检查result byte | 保留，不互相合并 |
 | `src/capabilities/sql.ts` | 9 | MySQL/DMS共用只读SQL lexical guard | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/config.ts` | 14 | 解析项目根、state、数据库和Web构建绝对路径 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/configuration/contracts.ts` | 73 | 后端/Web共用的Config投影DTO和credential update类型 | 必要共享合同 | 含secret类型命名为`Projected*`，避免误读为public-safe | 保留独立 |
@@ -135,18 +135,18 @@
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/app/AgentPanel.test.ts` | 466 | AgentPanel stream、reopen、Repository刷新、未读计数和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/AgentPanel.tsx` | 422 | Agent对话、stream状态和composer | 用户功能边界 | 未读按新增conversation entry ID计数，token delta不重复计数 | 保留 |
-| `src/web/src/app/App.test.tsx` | 530 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/App.tsx` | 185 | App前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
+| `src/web/src/app/AgentPanel.tsx` | 423 | Agent对话、stream状态和composer | 用户功能边界 | 未读按新增conversation entry ID计数，token delta不重复计数 | 保留 |
+| `src/web/src/app/App.test.tsx` | 561 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/App.tsx` | 188 | App组合、Ant全局样式/theme和Workbench布局 | 用户功能边界 | 使用聚合styles.css和公开Button组件defaults | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/ApplicationResources.tsx` | 88 | ApplicationResources前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/AttachmentPreview.tsx` | 150 | AttachmentPreview前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
-| `src/web/src/app/CodeBrowser.tsx` | 124 | Workbench iframe、父层布局和blame hover桥接 | 必要嵌入边界 | postMessage仅传布局/hover，不建通用iframe总线 | 保留 |
+| `src/web/src/app/CodeBrowser.tsx` | 150 | Workbench iframe、父层布局、主题和blame hover桥接 | 必要嵌入边界 | postMessage仅传受限Workbench投影，不建通用iframe总线 | 保留 |
 | `src/web/src/app/ConfigurationView.tsx` | 350 | 显式Service/Deployment/capability编辑器 | 用户功能边界 | 异构表单不做schema框架；draft克隆复用Solid `snapshot` | 保留 |
-| `src/web/src/app/IssueForm.tsx` | 89 | IssueForm前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
-| `src/web/src/app/IssueQueue.tsx` | 187 | IssueQueue前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
-| `src/web/src/app/IssueWorkspace.tsx` | 231 | IssueWorkspace前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
-| `src/web/src/app/Statistics.tsx` | 157 | Statistics前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
+| `src/web/src/app/IssueForm.tsx` | 66 | 工单描述和附件表单组件及动态Select值校验 | 用户功能边界 | 已删除旧Select DOM/shape兼容补丁 | 保留；不建通用页面框架 |
+| `src/web/src/app/IssueQueue.tsx` | 185 | 工单队列、筛选和创建交互 | 用户功能边界 | 多选Select使用类型化数组和组件自身popup状态 | 保留；不建通用页面框架 |
+| `src/web/src/app/IssueWorkspace.tsx` | 230 | 工单详情、编辑、状态和评论交互 | 用户功能边界 | 多选Select使用类型化数组和组件自身popup状态 | 保留；不建通用页面框架 |
+| `src/web/src/app/Statistics.tsx` | 159 | 工单和Workspace统计视图 | 用户功能边界 | 统计周期union由Select options贯穿value/callback | 保留；不建通用页面框架 |
 | `src/web/src/app/UserManagement.tsx` | 155 | UserManagement前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/agent-stream.test.ts` | 51 | web域的agent-stream行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/agent-stream.ts` | 131 | EventSource握手、replay lifecycle、重连和generation状态机 | 稳定transport边界 | Replay携带已发生的Agent启动事实，避免页面轮询 | 保留原位 |
@@ -157,7 +157,7 @@
 | `src/web/src/app/model.ts` | 52 | Issue显示标签、时间和文件大小纯投影 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/app/paste-editor.test.ts` | 59 | web域的paste-editor行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/paste-editor.ts` | 137 | 附件粘贴占位符的文本编辑算法 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/styles.css` | 768 | 对应前端界面样式 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/web/src/app/styles.css` | 834 | 对应前端界面样式 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/data/client.test.ts` | 195 | web域的client行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/data/client.ts` | 249 | Web DTO、HTTP client和current-user header | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/main.tsx` | 9 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -170,12 +170,12 @@
 | `src/web/src/vscode/extensions.d.ts` | 7 | Vite虚拟extension模块类型声明 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/github-dark-default.LICENSE` | 21 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/github-dark-default.json` | 651 | 构建、主题或包元数据 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/vscode/main.ts` | 337 | VS Code Workbench组合、嵌入布局和菜单限制 | 框架集成owner | 原生view header actions保持可见；Context Menu优先框架service | 保留原位 |
+| `src/web/src/vscode/main.ts` | 378 | VS Code Workbench组合、嵌入布局和菜单限制 | 框架集成owner | 原生view header actions保持可见；Context Menu优先框架service | 保留原位 |
 | `src/web/src/vscode/markdown-preview.test.ts` | 102 | markdown-preview Workbench集成模块 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/vscode/markdown-preview.ts` | 134 | 上游markdown.api.render到只读Preview Pane | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/vscode/search-service.ts` | 10 | 用上游SearchService阻止默认虚拟树遍历 | 必要上游例外 | 唯一深路径import；默认实现会越过服务端预算 | 保留并锁版本 |
-| `src/web/src/vscode/source-control.test.ts` | 212 | source-control Workbench集成模块 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/vscode/source-control.ts` | 478 | SCM Changes/Graph、Diff、blame和dev Git action | VS Code SCM协议owner | 复用SCM/History/commands，不自绘核心Git工作流 | 保留原位 |
+| `src/web/src/vscode/source-control.test.ts` | 223 | source-control Workbench集成模块 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/vscode/source-control.ts` | 494 | SCM Changes/Graph、Diff、blame和dev Git action | VS Code SCM协议owner | 复用SCM/History/commands，不自绘核心Git工作流 | 保留原位 |
 | `src/web/src/vscode/source-file-system.test.ts` | 140 | source-file-system Workbench集成模块 | 必要回归证据 | 覆盖read/write/create/delete/rename与readonly | 保留；随owner变更 |
 | `src/web/src/vscode/source-file-system.ts` | 200 | Source API到VS Code access-aware filesystem | VS Code filesystem协议owner | Dev复用框架文件操作；server再次授权不是重复校验 | 保留原位 |
 | `src/web/src/vscode/source-search.test.ts` | 82 | source-search Workbench集成模块 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -205,7 +205,7 @@
 | `tests/capabilities/external-data.test.ts` | 200 | capabilities域的external-data行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/mysql.test.ts` | 101 | capabilities域的mysql行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/nacos.test.ts` | 88 | capabilities域的nacos行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/capabilities/sls.test.ts` | 75 | capabilities域的sls行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/capabilities/sls.test.ts` | 82 | SLS无record count限制、分页、总timeout、scope和byte budget回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/configuration/credentials.test.ts` | 49 | configuration域的credentials行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/db/bootstrap.test.ts` | 109 | db域的bootstrap行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/db/sqlite.test.ts` | 211 | db域的sqlite行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -231,7 +231,7 @@
 | `tests/workspace/deployment.test.ts` | 55 | workspace域的deployment行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/generated-directory.test.ts` | 77 | workspace域的generated-directory行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/git.test.ts` | 215 | workspace域的git行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/workspace/lifecycle.test.ts` | 694 | workspace域的lifecycle行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/workspace/lifecycle.test.ts` | 699 | workspace域的lifecycle行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/project-tools.test.ts` | 155 | workspace域的project-tools行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/project-wrappers.test.ts` | 36 | workspace域的project-wrappers行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/workspace/read-only.test.ts` | 159 | workspace域的read-only行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

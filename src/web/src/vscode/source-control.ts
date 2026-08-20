@@ -374,7 +374,7 @@ function registerBlameStatus(vscode: IssuePilotVscodeApi, editorService: IEditor
   attachActiveEditor();
 }
 
-export async function registerSourceControls(issueKey: string, repositories: SourceRepository[], workspacePath: string, editorService: IEditorService): Promise<() => Promise<void>> {
+export async function registerSourceControls(issueKey: string, repositories: SourceRepository[], workspacePath: string, editorService: IEditorService, confirmDiscard: (label: string) => Promise<boolean>): Promise<() => Promise<void>> {
   const vscode = await getIssuePilotVscodeApi();
   registerBlameStatus(vscode, editorService, issueKey, repositories, workspacePath);
   const revisionContent = new SourceRevisionFileSystemProvider(vscode);
@@ -402,6 +402,7 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
     return { repository, sourceControl, workingGroup, stagedGroup, history };
   });
 
+  const resourceTargets = new Map<string, SourceControlMenuResource>();
   let refreshGeneration = 0;
   const refresh = async () => {
     const generation = ++refreshGeneration;
@@ -412,8 +413,12 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
           loadSourceDiff(issueKey, repository.name, "", undefined, true),
         ]);
         if (generation === refreshGeneration) {
-          workingGroup.resourceStates = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, working.files, false);
-          stagedGroup.resourceStates = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, staged.files, true);
+          const workingResources = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, working.files, false) as SourceControlMenuResource[];
+          const stagedResources = sourceControlResources(vscode, issueKey, repository, sourceControl.rootUri!, revisionContent, staged.files, true) as SourceControlMenuResource[];
+          workingGroup.resourceStates = workingResources;
+          stagedGroup.resourceStates = stagedResources;
+          for (const [key, resource] of resourceTargets) if (resource.issuePilot?.repository === repository.name) resourceTargets.delete(key);
+          for (const resource of [...workingResources, ...stagedResources]) resourceTargets.set(resource.resourceUri.path, resource);
           sourceControl.count = working.files.length + staged.files.length;
           history.invalidate();
         }
@@ -423,10 +428,12 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
     }));
   };
 
+  const commandResource = (resource: SourceControlMenuResource | Uri) => resource instanceof vscode.Uri ? resourceTargets.get(resource.path) : resource;
   vscode.commands.registerCommand(sourceControlRefreshCommand, refresh);
-  vscode.commands.registerCommand(sourceControlOpenChangesCommand, (resource: SourceControlMenuResource) => resource.command
-    ? vscode.commands.executeCommand(resource.command.command, ...(resource.command.arguments ?? []))
-    : undefined);
+  vscode.commands.registerCommand(sourceControlOpenChangesCommand, (resource: SourceControlMenuResource | Uri) => {
+    const target = commandResource(resource);
+    return target?.command ? vscode.commands.executeCommand(target.command.command, ...(target.command.arguments ?? [])) : undefined;
+  });
   const contextUri = (resource: SourceControlMenuResource | Uri | { sourceUri?: Uri }) => {
     if (resource instanceof vscode.Uri) return resource;
     if ("resourceUri" in resource && resource.resourceUri instanceof vscode.Uri) return resource.resourceUri;
@@ -436,16 +443,26 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
     const uri = contextUri(resource);
     return uri ? vscode.window.showTextDocument(uri, { preview: false }) : undefined;
   });
-  vscode.commands.registerCommand(sourceControlOpenHeadCommand, (resource: SourceControlMenuResource) => {
-    const original = resource.command?.arguments?.[0];
+  vscode.commands.registerCommand(sourceControlOpenHeadCommand, (resource: SourceControlMenuResource | Uri) => {
+    const original = commandResource(resource)?.command?.arguments?.[0];
     return original instanceof vscode.Uri ? vscode.window.showTextDocument(original, { preview: false }) : undefined;
   });
   const resourcesFor = (target: SourceControlMenuTarget): SourceControlMenuResource[] => "resourceStates" in target && target.resourceStates ? [...target.resourceStates] : [target as SourceControlMenuResource];
+  const mutationResource = (resource: SourceControlMenuResource) => {
+    if (resource.issuePilot) return resource.issuePilot;
+    const uri = contextUri(resource);
+    const prefix = `${workspacePath.replace(/\/$/, "")}/`;
+    if (!uri?.path.startsWith(prefix)) return undefined;
+    const [repository, ...segments] = uri.path.slice(prefix.length).split("/");
+    const relativePath = segments.join("/");
+    if (!repository || !relativePath || !repositories.some((candidate) => candidate.name === repository)) return undefined;
+    return { repository, path: relativePath, staged: false };
+  };
   const mutation = (target: SourceControlMenuTarget) => {
-    const resources = resourcesFor(target).filter((resource) => resource.issuePilot);
-    const repository = resources[0]?.issuePilot?.repository;
-    if (!repository || resources.some((resource) => resource.issuePilot?.repository !== repository)) return undefined;
-    return { repository, paths: resources.map((resource) => resource.issuePilot!.path) };
+    const resources = resourcesFor(target).map(mutationResource);
+    const repository = resources[0]?.repository;
+    if (!repository || resources.some((resource) => !resource || resource.repository !== repository)) return undefined;
+    return { repository, paths: resources.map((resource) => resource!.path) };
   };
   const mutateResource = async (target: SourceControlMenuTarget, operation: (repository: string, paths: string[]) => Promise<unknown>) => {
     const selected = mutation(target);
@@ -459,8 +476,7 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
     const selected = mutation(target);
     if (!selected) return;
     const label = selected.paths.length === 1 ? selected.paths[0] : `${selected.paths.length} files`;
-    const confirmation = await vscode.window.showWarningMessage(`Discard changes in ${label}?`, { modal: true }, "Discard Changes");
-    if (confirmation !== "Discard Changes") return;
+    if (!await confirmDiscard(label)) return;
     await discardSourcePaths(issueKey, selected.repository, selected.paths);
     await refresh();
   });

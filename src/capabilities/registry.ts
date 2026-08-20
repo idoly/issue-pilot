@@ -103,7 +103,6 @@ const capabilityInputSchemas = {
     to: Type.Optional(Type.Integer({ minimum: 1 })),
     query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars })),
     trace_id: Type.Optional(Type.String({ maxLength: limits.sls.traceIdChars })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: limits.sls.results })),
   }, { additionalProperties: false }),
 } as const;
 

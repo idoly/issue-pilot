@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { ChevronRight, ListFilter, Plus, Search } from "../ui/icons";
 import { createIssue, errorMessage, ISSUE_STATUSES, listIssues, type IssuePriority, type IssueType } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
-import { AttachmentPicker, DescriptionField, bindMultipleSelectBlankToggle, issueTypesForEnvironment, selectedChoice, selectedStrings } from "./IssueForm";
+import { AttachmentPicker, DescriptionField, issueTypesForEnvironment, selectedChoice } from "./IssueForm";
 import { priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel, typeLabel } from "./model";
 
 export function IssueQueue(props: {
@@ -64,7 +64,6 @@ export function IssueQueue(props: {
     () => ({ createOpen: createOpen(), subject: props.userSubject }),
     ({ createOpen, subject }) => { if (subject && !createOpen) setAssigneeSubject(subject); },
   );
-  const [ccOpen, setCcOpen] = createSignal(false);
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
@@ -102,7 +101,6 @@ export function IssueQueue(props: {
       }, attachments());
       setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
       props.onSelect(issue.id);
-      setCcOpen(false);
       setCreateOpen(false);
       setTitle("");
       setDescription("");
@@ -124,7 +122,7 @@ export function IssueQueue(props: {
           value={query()}
           onInput={(event) => setQuery(event.currentTarget.value)}
         />
-        <Button type="primary" shape="circle" icon={<Plus size={16} />} title="新建工单" aria-label="新建工单" onClick={() => setCreateOpen(true)} />
+        <Button class="icon-button" type="primary" shape="circle" icon={<Plus size={16} />} title="新建工单" aria-label="新建工单" onClick={() => setCreateOpen(true)} />
       </div>
       <div class="queue-filter">
         <ListFilter size={14} aria-hidden="true" />
@@ -168,14 +166,14 @@ export function IssueQueue(props: {
           </Show>
         </Show>
       </div>
-      <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => { setCcOpen(false); setCreateOpen(false); }} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
+      <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => setCreateOpen(false)} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form compact-issue-form new-issue-form">
           <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={changeEnvironment} options={catalog().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, catalog().services.map((item) => item.key)); if (selected) setService(selected); }} options={catalog().services.filter((item) => item.deployments.some((deployment) => deployment.environmentKey === environment())).map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setPriority(selected); }} options={priorityOptions} /></label>
           <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, availableIssueTypes()); if (selected) setIssueType(selected); }} options={availableIssueTypes().map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
-          <label><span>抄送人（可多选）</span><div class="multi-select-trigger" ref={(element) => bindMultipleSelectBlankToggle(element, setCcOpen)}><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} open={ccOpen()} onOpenChange={setCcOpen} onChange={(value) => setCcSubjects(selectedStrings(value, ccSubjects()))} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
+          <label><span>抄送人（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} onChange={setCcSubjects} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={description} inputLabel="工单描述" expandLabel="放大工单描述" onChange={(value) => setDescription(value)} />
           <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />

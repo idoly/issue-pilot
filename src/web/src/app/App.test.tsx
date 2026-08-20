@@ -200,9 +200,15 @@ describe("issue pilot workspace", () => {
         issueKey: "ISSUE-20260810-042",
         panel: { x: 300, y: 520, width: 700, height: 300 },
         auxiliary: { x: 1000, y: 0, width: 360, height: 820 },
+        theme: {
+          background: "#181818", foreground: "#cccccc", mutedForeground: "#999999", border: "#2b2b2b",
+          inputBackground: "#242424", inputForeground: "#f0f0f0", inputBorder: "#3c3c3c", focusBorder: "#007fd4",
+          buttonBackground: "#0e639c", buttonForeground: "#ffffff", buttonHoverBackground: "#1177bb", hoverBackground: "#2a2d2e",
+        },
       },
     }));
     await waitFor(() => expect((document.querySelector(".app-content") as HTMLElement).style.getPropertyValue("--source-panel-x")).toBe("300px"));
+    expect((document.querySelector(".app-content") as HTMLElement).style.getPropertyValue("--workbench-input-bg")).toBe("#242424");
     expect(document.querySelector(".app-content")?.classList.contains("workbench-ready")).toBe(true);
     expect(within(sourceBrowser).queryByRole("status", { name: "代码工作台加载中" })).toBeNull();
     fireEvent.click(within(sourceBrowser).getByRole("button", { name: "关闭代码浏览器" }));
@@ -492,6 +498,31 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(getIssue).toHaveBeenCalledTimes(1);
     expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042");
+  });
+
+  test("refreshes the Issue queue when an SSE event changes the selected Issue status", async () => {
+    EventSourceMock.instances.length = 0;
+    const client = await import("../data/client");
+    const getIssue = vi.mocked(client.getIssue);
+    const listIssues = vi.mocked(client.listIssues);
+    render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    const current = await getIssue.mock.results[0]!.value;
+    const pending = { ...current, status: "pending" as const, workspace: { ...current.workspace, status: "ready" as const } };
+    getIssue.mockClear();
+    listIssues.mockClear();
+    getIssue.mockResolvedValueOnce(pending);
+    listIssues.mockResolvedValueOnce([pending]);
+
+    const source = EventSourceMock.instances.at(-1)!;
+    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("message", { id: "status-complete", issueId: current.id, createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
+
+    await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
+    const queueItem = await waitFor(() => screen.getByRole("listitem"));
+    expect(queueItem.textContent).toContain("ISSUE-20260810-042");
+    expect(queueItem.textContent).toContain("待确认");
   });
 
   test("keeps the newest Issue detail when SSE refreshes finish out of order", async () => {

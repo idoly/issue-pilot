@@ -4,10 +4,12 @@ import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { listIssues, loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { fileSize, statusLabel, typeLabel } from "./model";
 
+type StatisticsPeriod = "7d" | "30d" | "90d";
+
 export function Statistics() {
   const [issues, setIssues] = createSignal<IssueListItem[]>([], { ownedWrite: true });
   const [workspaceStats, setWorkspaceStats] = createSignal<WorkspaceStats | null>(null, { ownedWrite: true });
-  const [period, setPeriod] = createSignal("30d", { ownedWrite: true });
+  const [period, setPeriod] = createSignal<StatisticsPeriod>("30d", { ownedWrite: true });
   const [issuesLoading, setIssuesLoading] = createSignal(true, { ownedWrite: true });
   const [workspaceLoading, setWorkspaceLoading] = createSignal(true, { ownedWrite: true });
   const [issuesError, setIssuesError] = createSignal("", { ownedWrite: true });
@@ -92,7 +94,7 @@ export function Statistics() {
     <main class="statistics-workspace">
       <header class="statistics-header">
         <div><span>最近 {period().replace("d", "")} 天</span><h1>工单处理统计</h1></div>
-        <Select aria-label="统计周期" value={period()} onChange={(value) => { if (value === "7d" || value === "30d" || value === "90d") setPeriod(value); }} options={[{ value: "7d", label: "最近 7 天" }, { value: "30d", label: "最近 30 天" }, { value: "90d", label: "最近 90 天" }]} />
+        <Select aria-label="统计周期" value={period()} onChange={(value) => { if (value) setPeriod(value); }} options={[{ value: "7d", label: "最近 7 天" }, { value: "30d", label: "最近 30 天" }, { value: "90d", label: "最近 90 天" }]} />
       </header>
       <Show when={!issuesLoading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
         <Show when={!issuesError()} fallback={<div class="queue-error" role="alert">{issuesError()}</div>}>

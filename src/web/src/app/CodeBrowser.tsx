@@ -10,11 +10,37 @@ export interface WorkbenchPartRect {
   height: number;
 }
 
+export interface WorkbenchTheme {
+  background: string;
+  foreground: string;
+  mutedForeground: string;
+  border: string;
+  inputBackground: string;
+  inputForeground: string;
+  inputBorder: string;
+  focusBorder: string;
+  buttonBackground: string;
+  buttonForeground: string;
+  buttonHoverBackground: string;
+  hoverBackground: string;
+}
+
 export interface WorkbenchPartLayout {
   panel: WorkbenchPartRect;
   auxiliary: WorkbenchPartRect;
+  theme: WorkbenchTheme;
 }
 
+const workbenchThemeKeys: Array<keyof WorkbenchTheme> = [
+  "background", "foreground", "mutedForeground", "border", "inputBackground", "inputForeground",
+  "inputBorder", "focusBorder", "buttonBackground", "buttonForeground", "buttonHoverBackground", "hoverBackground",
+];
+
+function validTheme(value: unknown): value is WorkbenchTheme {
+  if (!value || typeof value !== "object") return false;
+  const theme = value as Partial<WorkbenchTheme>;
+  return workbenchThemeKeys.every((key) => typeof theme[key] === "string" && theme[key]!.length <= 64 && CSS.supports("color", theme[key]!));
+}
 
 function validRect(value: unknown): value is WorkbenchPartRect {
   if (!value || typeof value !== "object") return false;
@@ -56,7 +82,7 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
     if (!currentFrame) return;
     const receiveLayout = (event: MessageEvent<unknown>) => {
       if (event.origin !== window.location.origin || event.source !== currentFrame.contentWindow) return;
-      const message = event.data as { kind?: unknown; issueKey?: unknown; visible?: unknown; rect?: unknown; detail?: unknown; panel?: unknown; auxiliary?: unknown; panelVisible?: unknown; auxiliaryVisible?: unknown } | null;
+      const message = event.data as { kind?: unknown; issueKey?: unknown; visible?: unknown; rect?: unknown; detail?: unknown; panel?: unknown; auxiliary?: unknown; panelVisible?: unknown; auxiliaryVisible?: unknown; theme?: unknown } | null;
       if (message?.issueKey !== props.issueKey) return;
       if (message.kind === "issue-pilot-workbench-blame-hover" && typeof message.visible === "boolean") {
         if (!message.visible) {
@@ -67,7 +93,7 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
         }
         return;
       }
-      if (message.kind !== "issue-pilot-workbench-layout" || !validRect(message.panel) || !validRect(message.auxiliary)) return;
+      if (message.kind !== "issue-pilot-workbench-layout" || !validRect(message.panel) || !validRect(message.auxiliary) || !validTheme(message.theme)) return;
       const visibleRect = (rect: WorkbenchPartRect): WorkbenchPartRect => ({
         x: Math.min(rect.x, currentFrame.clientWidth) + currentFrame.offsetLeft,
         y: Math.min(rect.y, currentFrame.clientHeight) + currentFrame.offsetTop,
@@ -75,7 +101,7 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
         height: Math.min(rect.height, Math.max(0, currentFrame.clientHeight - rect.y)),
       });
       setWorkbenchReady(true);
-      props.onLayout({ panel: visibleRect(message.panel), auxiliary: visibleRect(message.auxiliary) });
+      props.onLayout({ panel: visibleRect(message.panel), auxiliary: visibleRect(message.auxiliary), theme: message.theme });
       if (typeof message.panelVisible === "boolean" && typeof message.auxiliaryVisible === "boolean") {
         props.onPartVisibility(message.panelVisible, currentFrame.clientWidth < 700 ? undefined : message.auxiliaryVisible);
       }
@@ -93,13 +119,13 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
       <header class="source-browser-header source-browser-header-workbench">
         <div class="source-browser-title"><Code2 size={16} /><strong>代码</strong><small>{props.issueKey}</small></div>
         <div class="source-view-switcher" role="toolbar" aria-label="代码视图">
-          <Button class={activeView() === "explorer" ? "active" : ""} type="text" shape="circle" icon={<File size={16} />} title="Explorer" aria-label="Explorer" aria-pressed={activeView() === "explorer" ? "true" : "false"} onClick={() => toggleView("explorer")} />
-          <Button class={activeView() === "search" ? "active" : ""} type="text" shape="circle" icon={<Search size={16} />} title="Search" aria-label="Search" aria-pressed={activeView() === "search" ? "true" : "false"} onClick={() => toggleView("search")} />
-          <Button class={activeView() === "source-control" ? "active" : ""} type="text" shape="circle" icon={<GitBranch size={16} />} title="Source Control" aria-label="Source Control" aria-pressed={activeView() === "source-control" ? "true" : "false"} onClick={() => toggleView("source-control")} />
+          <Button class={`icon-button${activeView() === "explorer" ? " active" : ""}`} type="text" shape="circle" icon={<File size={16} />} title="Explorer" aria-label="Explorer" aria-pressed={activeView() === "explorer" ? "true" : "false"} onClick={() => toggleView("explorer")} />
+          <Button class={`icon-button${activeView() === "search" ? " active" : ""}`} type="text" shape="circle" icon={<Search size={16} />} title="Search" aria-label="Search" aria-pressed={activeView() === "search" ? "true" : "false"} onClick={() => toggleView("search")} />
+          <Button class={`icon-button${activeView() === "source-control" ? " active" : ""}`} type="text" shape="circle" icon={<GitBranch size={16} />} title="Source Control" aria-label="Source Control" aria-pressed={activeView() === "source-control" ? "true" : "false"} onClick={() => toggleView("source-control")} />
         </div>
-        <Button class={props.agentOpen ? "source-panel-toggle active" : "source-panel-toggle"} type="text" shape="circle" icon={<PanelBottom size={16} />} title="Agent面板" aria-label="Agent面板" aria-pressed={props.agentOpen ? "true" : "false"} onClick={props.onToggleAgent} />
-        <Button class={props.detailsOpen ? "source-details-toggle active" : "source-details-toggle"} type="text" shape="circle" icon={<PanelRight size={16} />} title="工单详情" aria-label="工单详情" aria-pressed={props.detailsOpen ? "true" : "false"} onClick={props.onToggleDetails} />
-        <Button type="text" shape="circle" icon={<X size={16} />} title="关闭代码浏览器" aria-label="关闭代码浏览器" onClick={props.onClose} />
+        <Button class={`icon-button source-panel-toggle${props.agentOpen ? " active" : ""}`} type="text" shape="circle" icon={<PanelBottom size={16} />} title="Agent面板" aria-label="Agent面板" aria-pressed={props.agentOpen ? "true" : "false"} onClick={props.onToggleAgent} />
+        <Button class={`icon-button source-details-toggle${props.detailsOpen ? " active" : ""}`} type="text" shape="circle" icon={<PanelRight size={16} />} title="工单详情" aria-label="工单详情" aria-pressed={props.detailsOpen ? "true" : "false"} onClick={props.onToggleDetails} />
+        <Button class="icon-button" type="text" shape="circle" icon={<X size={16} />} title="关闭代码浏览器" aria-label="关闭代码浏览器" onClick={props.onClose} />
       </header>
       <iframe
         ref={setFrame}

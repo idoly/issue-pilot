@@ -19,9 +19,10 @@ export async function readSlsLogs(tools: ToolRuntime, input: CapabilityInputs["s
   if (traceId && input.query?.trim()) throw new Error("invalid_sls_query");
   const searchQuery = traceId || input.query?.trim() || "*";
   if (searchQuery.includes("\0")) throw new Error("invalid_sls_query");
-  const limit = input.limit ?? limits.defaultResults;
 
   if (!configured.logstores.includes(input.logstore)) throw new Error("sls_logstore_not_granted");
+  const timeoutSignal = AbortSignal.timeout(limits.executionMs);
+  const querySignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   return withAliyunCliProfile({
     accessKeyId: configured.accessKeyId,
     accessKeySecret: configured.accessKeySecret,
@@ -39,10 +40,7 @@ export async function readSlsLogs(tools: ToolRuntime, input: CapabilityInputs["s
         "--line", String(line),
         "--offset", String(offset),
         "--reverse", "true",
-      ], {
-        timeout: limits.executionMs,
-        ...(signal ? { signal } : {}),
-      });
+      ], { timeout: limits.executionMs, signal: querySignal });
       if (execution.code !== 0) throw new Error("sls_query_failed");
       let parsed: unknown;
       try { parsed = JSON.parse(execution.stdout); } catch { throw new Error("sls_query_invalid_response"); }
@@ -50,15 +48,7 @@ export async function readSlsLogs(tools: ToolRuntime, input: CapabilityInputs["s
       return parsed;
     };
     const records: unknown[] = [];
-    while (records.length < limit) {
-      const pageSize = Math.min(limits.pageResults, limit - records.length);
-      const page = await fetchRecords(pageSize, records.length);
-      if (page.length > pageSize) throw new Error("capability_result_too_large");
-      records.push(...page);
-      if (page.length < pageSize) break;
-    }
-    if (records.length === limit && (await fetchRecords(1, limit)).length) throw new Error("capability_result_too_large");
-    const queryMetadata = {
+    const queryMetadata = () => ({
       project: configured.project,
       logstore: input.logstore,
       from,
@@ -66,11 +56,18 @@ export async function readSlsLogs(tools: ToolRuntime, input: CapabilityInputs["s
       timezone: issuePilotConfig.regional.timeZone,
       queryMode: traceId ? "trace_id_full_text" : "query",
       order: "newest_first",
-      limit,
       returnedRows: records.length,
       possiblyIncomplete: false,
-    };
-    const text = capabilityResultText({ query: queryMetadata, records });
-    return capabilityTextResult(text, { provider: "aliyun-sls", ...queryMetadata });
+    });
+    while (true) {
+      const page = await fetchRecords(limits.pageResults, records.length);
+      if (page.length > limits.pageResults) throw new Error("sls_query_invalid_response");
+      records.push(...page);
+      capabilityResultText({ query: queryMetadata(), records });
+      if (page.length < limits.pageResults) break;
+    }
+    const metadata = queryMetadata();
+    const text = capabilityResultText({ query: metadata, records });
+    return capabilityTextResult(text, { provider: "aliyun-sls", ...metadata });
   });
 }

@@ -293,14 +293,15 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     onSnapshot: (payload, replay, generation) => {
       setEntries(replay.entries); setFooter(payload.footer ?? emptyFooter()); clearUnread();
       setActivity(replay.activity); setQueue(replay.queue); setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
+      const statusChanged = Boolean(payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus) && payload.issueStatus !== props.issue.status);
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
       setProcessing(payload.running === true);
-      if (replay.agentStarted && developmentRepositoriesPending()) refreshIssue(props.issue.id, generation);
+      if (statusChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
       queueMicrotask(scrollLatest);
     },
     onEvent: (envelope, generation) => {
       append(envelope);
-      if (envelope.event.type === "issue_status" || (envelope.event.type === "agent_start" && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
+      if (envelope.event.type === "issue_status" || envelope.event.type === "agent_start") refreshIssue(props.issue.id, generation);
     },
   });
   const connect = (issueId: string, resetForIssue = false) => {

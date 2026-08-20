@@ -186,8 +186,8 @@ export class WorkspaceLifecycleManager {
       issueId,
       async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation),
       (error) => {
-        if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceRestoreRefusal(error.message);
-        throw error;
+        if (error instanceof WorkspaceRestoreRefusal) throw error;
+        throw new WorkspaceRestoreRefusal(errorMessage(error));
       },
     );
   }

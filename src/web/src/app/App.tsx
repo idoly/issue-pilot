@@ -10,20 +10,7 @@ import { IssueWorkspace } from "./IssueWorkspace";
 import { Statistics } from "./Statistics";
 import { UserManagement } from "./UserManagement";
 import type { WorkbenchPartLayout } from "./CodeBrowser";
-import "@idoly/ant-design-solid/base.css";
-import "@idoly/ant-design-solid/badge/style.css";
-import "@idoly/ant-design-solid/button/style.css";
-import "@idoly/ant-design-solid/config-provider/style.css";
-import "@idoly/ant-design-solid/checkbox/style.css";
-import "@idoly/ant-design-solid/input/style.css";
-import "@idoly/ant-design-solid/layout/style.css";
-import "@idoly/ant-design-solid/modal/style.css";
-import "@idoly/ant-design-solid/segmented/style.css";
-import "@idoly/ant-design-solid/select/style.css";
-import "@idoly/ant-design-solid/skeleton/style.css";
-import "@idoly/ant-design-solid/space/style.css";
-import "@idoly/ant-design-solid/tag/style.css";
-import "@idoly/ant-design-solid/switch/style.css";
+import "@idoly/ant-design-solid/styles.css";
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
 type AppView = "issues" | "statistics" | "configuration" | "users";
@@ -114,12 +101,16 @@ export function App() {
       });
     },
   );
-  const refreshIssue = async (issueKey: string) => {
+  const refreshIssue = async (issueKey: string, refreshQueue = false) => {
     const currentGeneration = selectionGeneration;
     const currentRefresh = (issueRefreshes.get(issueKey) ?? 0) + 1;
     issueRefreshes.set(issueKey, currentRefresh);
     const refreshed = await getIssue(issueKey);
-    if (currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey) setIssue(refreshed);
+    if (currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey) {
+      const statusChanged = issue()?.status !== refreshed.status;
+      setIssue(refreshed);
+      if (refreshQueue || statusChanged) setIssueRefreshToken((value) => value + 1);
+    }
     return refreshed;
   };
   const sourceLayoutStyle = createMemo(() => {
@@ -134,10 +125,22 @@ export function App() {
       `--source-detail-y:${layout.auxiliary.y}px`,
       `--source-detail-width:${layout.auxiliary.width}px`,
       `--source-detail-height:${layout.auxiliary.height}px`,
+      `--workbench-detail-bg:${layout.theme.background}`,
+      `--workbench-detail-fg:${layout.theme.foreground}`,
+      `--workbench-detail-muted:${layout.theme.mutedForeground}`,
+      `--workbench-detail-border:${layout.theme.border}`,
+      `--workbench-input-bg:${layout.theme.inputBackground}`,
+      `--workbench-input-fg:${layout.theme.inputForeground}`,
+      `--workbench-input-border:${layout.theme.inputBorder}`,
+      `--workbench-focus-border:${layout.theme.focusBorder}`,
+      `--workbench-button-bg:${layout.theme.buttonBackground}`,
+      `--workbench-button-fg:${layout.theme.buttonForeground}`,
+      `--workbench-button-hover-bg:${layout.theme.buttonHoverBackground}`,
+      `--workbench-hover-bg:${layout.theme.hoverBackground}`,
     ].join(";");
   });
   return (
-    <ConfigProvider theme={appTheme}>
+    <ConfigProvider theme={appTheme} button={{ autoInsertSpace: false }}>
       <ApplicationResourcesProvider>
       <Layout class="app-shell">
         <Layout.Header class="app-header">
@@ -167,7 +170,7 @@ export function App() {
                         setSourceAgentOpen(true);
                         setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 600px)").matches);
                         setSourceExpanded(true);
-                      }} onUpdated={async () => { await refreshIssue(current().id); setIssueRefreshToken((value) => value + 1); }} />
+                      }} onUpdated={async () => { await refreshIssue(current().id, true); }} />
                     </>
                   )}
                 </Show>

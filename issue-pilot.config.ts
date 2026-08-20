@@ -93,7 +93,7 @@ export const issuePilotConfig = Object.freeze({
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
       redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),
       rabbitmq: Object.freeze({ queueChars: 255 }),
-      sls: Object.freeze({ results: 200, defaultResults: 20, pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),
+      sls: Object.freeze({ pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),
     }),
   }),
 });

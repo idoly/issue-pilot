@@ -1,10 +1,8 @@
 import "./workers";
 
-import "@codingame/monaco-vscode-cpp-default-extension";
 import "@codingame/monaco-vscode-css-default-extension";
 import "@codingame/monaco-vscode-docker-default-extension";
 import "@codingame/monaco-vscode-dotenv-default-extension";
-import "@codingame/monaco-vscode-go-default-extension";
 import "@codingame/monaco-vscode-html-default-extension";
 import "@codingame/monaco-vscode-ini-default-extension";
 import "@codingame/monaco-vscode-java-default-extension";
@@ -13,8 +11,6 @@ import "@codingame/monaco-vscode-json-default-extension";
 import "@codingame/monaco-vscode-less-default-extension";
 import "@codingame/monaco-vscode-markdown-basics-default-extension";
 import { whenReady as markdownFeaturesReady } from "@codingame/monaco-vscode-markdown-language-features-default-extension";
-import "@codingame/monaco-vscode-python-default-extension";
-import "@codingame/monaco-vscode-rust-default-extension";
 import "@codingame/monaco-vscode-scss-default-extension";
 import "@codingame/monaco-vscode-shellscript-default-extension";
 import "@codingame/monaco-vscode-sql-default-extension";
@@ -32,6 +28,7 @@ import { whenReady as materialIconThemeReady } from "virtual:issue-pilot-materia
 
 import { initialize, LogLevel } from "@codingame/monaco-vscode-api";
 import getConfigurationServiceOverride, { initUserConfiguration } from "@codingame/monaco-vscode-configuration-service-override";
+import getDialogsServiceOverride from "@codingame/monaco-vscode-dialogs-service-override";
 import getEnvironmentServiceOverride from "@codingame/monaco-vscode-environment-service-override";
 import getExplorerServiceOverride from "@codingame/monaco-vscode-explorer-service-override";
 import getExtensionServiceOverride from "@codingame/monaco-vscode-extensions-service-override";
@@ -53,13 +50,14 @@ import getWorkingCopyServiceOverride from "@codingame/monaco-vscode-working-copy
 import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace-trust-service-override";
 import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
 import { IEditorService, IStatusbarService, IViewsService } from "@codingame/monaco-vscode-api/services";
-import { Action } from "@codingame/monaco-vscode-api/vscode/vs/base/common/actions";
+import { Action, ActionRunner } from "@codingame/monaco-vscode-api/vscode/vs/base/common/actions";
 import { IContextMenuService, IContextViewService } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextview/browser/contextView.service";
+import { IDialogService } from "@codingame/monaco-vscode-api/vscode/vs/platform/dialogs/common/dialogs.service";
 import { Parts } from "@codingame/monaco-vscode-workbench-service-override";
 import * as monaco from "monaco-editor";
 import { parseIssueKey } from "../../../domain/contracts";
 import { loadSourceRepositories } from "../data/client";
-import { getIssuePilotVscodeApi, type IssuePilotVscodeApi } from "./extension-api";
+import { getIssuePilotVscodeApi, sourceControlDiscardCommand, sourceControlOpenChangesCommand, sourceControlOpenFileCommand, sourceControlOpenHeadCommand, sourceControlStageCommand, sourceControlUnstageCommand, type IssuePilotVscodeApi } from "./extension-api";
 import { registerMarkdownPreview, registerMarkdownPreviewAction, registerMarkdownPreviewCommands } from "./markdown-preview";
 import { registerSourceControls } from "./source-control";
 import { SourceFileSystemProvider } from "./source-file-system";
@@ -69,6 +67,26 @@ import "./workbench.css";
 
 const agentViewClass = "issue-pilot-agent-view";
 const detailsViewClass = "issue-pilot-details-view";
+
+function workbenchTheme(container: HTMLElement) {
+  const workbench = container.matches(".monaco-workbench") ? container : container.querySelector<HTMLElement>(".monaco-workbench");
+  const style = getComputedStyle(workbench ?? container);
+  const color = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  return {
+    background: color("--vscode-sideBar-background", "#010409"),
+    foreground: color("--vscode-sideBar-foreground", "#e6edf3"),
+    mutedForeground: color("--vscode-descriptionForeground", "#8b949e"),
+    border: color("--vscode-sideBar-border", color("--vscode-panel-border", "#30363d")),
+    inputBackground: color("--vscode-input-background", "#0d1117"),
+    inputForeground: color("--vscode-input-foreground", "#e6edf3"),
+    inputBorder: color("--vscode-input-border", "#30363d"),
+    focusBorder: color("--vscode-focusBorder", "#58a6ff"),
+    buttonBackground: color("--vscode-button-background", "#238636"),
+    buttonForeground: color("--vscode-button-foreground", "#fff"),
+    buttonHoverBackground: color("--vscode-button-hoverBackground", "#2ea043"),
+    hoverBackground: color("--vscode-list-hoverBackground", "#21262d"),
+  };
+}
 
 function registerEmbeddedViews(): void {
   const register = (id: string, name: string, location: ViewContainerLocation, className: string) => registerCustomView({
@@ -87,56 +105,72 @@ function registerEmbeddedViews(): void {
   register("issue-pilot.details", "工单详情", ViewContainerLocation.AuxiliaryBar, detailsViewClass);
 }
 
-function limitContextMenus(container: HTMLElement, vscode: Awaited<ReturnType<typeof getIssuePilotVscodeApi>>, contextMenuService: IContextMenuService, contextViewService: IContextViewService): void {
-  let resourceRow: HTMLElement | undefined;
+function limitContextMenus(
+  container: HTMLElement,
+  vscode: Awaited<ReturnType<typeof getIssuePilotVscodeApi>>,
+  contextMenuService: IContextMenuService,
+  contextViewService: IContextViewService,
+): void {
+  const actionRunner = new ActionRunner();
+  let selectedResourceUri: import("vscode").Uri | undefined;
   container.addEventListener("contextmenu", (event) => {
-    const target = event.target;
-    const resource = target instanceof Element ? target.closest<HTMLElement>(".resource, .resource-group, .history-item-change") : null;
-    if (resource) {
-      resourceRow = resource.closest<HTMLElement>(".monaco-list-row") ?? undefined;
-      if (!resource.classList.contains("resource-group") || !resourceRow) return;
+    const eventTarget = event.target;
+    const row = eventTarget instanceof Element ? eventTarget.closest<HTMLElement>(".monaco-list-row") : null;
+    const resource = eventTarget instanceof Element ? eventTarget.closest<HTMLElement>(".resource, .resource-group, .history-item-change") ?? row?.querySelector<HTMLElement>(".resource, .resource-group, .history-item-change") ?? null : null;
+    if (!resource || !row) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (resource.classList.contains("resource-group")) {
+      selectedResourceUri = undefined;
       event.preventDefault();
       event.stopImmediatePropagation();
       const count = Number(resource.querySelector<HTMLElement>(".monaco-count-badge")?.textContent ?? "0");
-      const actions = [...resourceRow.querySelectorAll<HTMLElement>(".actions [aria-label]")].map((element) => {
+      const actions = [...row.querySelectorAll<HTMLElement>(".actions [aria-label]")].map((element) => {
         const label = element.getAttribute("aria-label")!;
         return new Action(`issue-pilot.resource-group.${label}`, label, undefined, count > 0, () => element.click());
       });
-      contextMenuService.showContextMenu({ getAnchor: () => ({ x: event.clientX, y: event.clientY }), getActions: () => actions });
+      contextMenuService.showContextMenu({ getAnchor: () => ({ x: event.clientX, y: event.clientY }), getActions: () => actions, actionRunner });
       return;
     }
-    resourceRow = undefined;
+    const path = row.querySelector<HTMLElement>(".monaco-icon-label.file-icon")?.getAttribute("aria-label");
+    if (!path?.startsWith("~/")) return;
+    const resourceUri = vscode.Uri.file(path.slice(1));
+    selectedResourceUri = resourceUri;
+    const staged = Boolean(row.querySelector("[aria-label='Unstage Changes']"));
     event.preventDefault();
     event.stopImmediatePropagation();
+    const commands = [
+      ["Open Changes", sourceControlOpenChangesCommand],
+      ["Open File", sourceControlOpenFileCommand],
+      ["Open File (HEAD)", sourceControlOpenHeadCommand],
+      [staged ? "Unstage Changes" : "Stage Changes", staged ? sourceControlUnstageCommand : sourceControlStageCommand],
+      ...staged ? [] : [["Discard Changes", sourceControlDiscardCommand]],
+    ] as Array<[string, string]>;
+    const actions = commands.map(([label, command]) => new Action(`issue-pilot.resource.${command}`, label, undefined, true, () => {
+      queueMicrotask(() => { void vscode.commands.executeCommand(command, resourceUri); });
+    }));
+    contextMenuService.showContextMenu({ getAnchor: () => ({ x: event.clientX, y: event.clientY }), getActions: () => actions, actionRunner });
   }, true);
-  container.addEventListener("click", (event) => {
+  container.ownerDocument.addEventListener("click", (event) => {
     const target = event.target;
-    const action = target instanceof Element ? target.closest<HTMLElement>(".action-menu-item") : null;
-    const label = action?.querySelector<HTMLElement>(".action-label")?.getAttribute("aria-label");
-    if (!resourceRow || !label) return;
-    if (label === "Open Changes") {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      resourceRow.click();
-      contextViewService.hideContextView(false);
-      return;
-    }
-    if (label === "Open File") {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const path = resourceRow.querySelector<HTMLElement>(".monaco-icon-label.file-icon")?.getAttribute("aria-label");
-      if (path?.startsWith("~/")) void vscode.window.showTextDocument(vscode.Uri.file(path.slice(1)), { preview: false });
-      contextViewService.hideContextView(false);
-      return;
-    }
-    if (!["Stage Changes", "Unstage Changes", "Discard Changes"].includes(label)) return;
-    const inlineAction = [...resourceRow.querySelectorAll<HTMLElement>(".actions [aria-label]")]
-      .find((candidate) => candidate.getAttribute("aria-label") === label);
-    if (!inlineAction) return;
+    const label = target instanceof Element ? target.closest<HTMLElement>(".action-menu-item")?.querySelector<HTMLElement>(".action-label")?.getAttribute("aria-label") : undefined;
+    const command = label ? new Map([
+      ["Open Changes", sourceControlOpenChangesCommand],
+      ["Open File", sourceControlOpenFileCommand],
+      ["Open File (HEAD)", sourceControlOpenHeadCommand],
+      ["Stage Changes", sourceControlStageCommand],
+      ["Unstage Changes", sourceControlUnstageCommand],
+      ["Discard Changes", sourceControlDiscardCommand],
+    ]).get(label) : undefined;
+    if (!command || !selectedResourceUri) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    inlineAction.click();
+    const resourceUri = selectedResourceUri;
+    selectedResourceUri = undefined;
     contextViewService.hideContextView(false);
+    queueMicrotask(() => { void vscode.commands.executeCommand(command, resourceUri); });
   }, true);
 }
 
@@ -165,6 +199,7 @@ function observeWorkbenchParts(issueKey: string, container: HTMLElement, layout:
       auxiliary: viewRect(detailsView),
       panelVisible: layout.isVisible(Parts.PANEL_PART),
       auxiliaryVisible: layout.isVisible(Parts.AUXILIARYBAR_PART),
+      theme: workbenchTheme(container),
     }, window.location.origin);
   };
   const observer = new ResizeObserver(publish);
@@ -242,6 +277,7 @@ async function start(): Promise<void> {
     ...getExtensionServiceOverride({ enableWorkerExtensionHost: true }),
     ...getFilesServiceOverride(),
     ...getConfigurationServiceOverride(),
+    ...getDialogsServiceOverride(),
     ...getStorageServiceOverride(),
     ...getLifecycleServiceOverride(),
     ...getEnvironmentServiceOverride(),
@@ -299,9 +335,8 @@ async function start(): Promise<void> {
     },
   }, { userHome: monaco.Uri.file("/") });
 
-  const [layout, editorService, statusbarService, contextMenuService, contextViewService, viewsService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getService(IStatusbarService), getService(IContextMenuService), getService(IContextViewService), getService(IViewsService), getIssuePilotVscodeApi()]);
+  const [layout, editorService, statusbarService, contextMenuService, contextViewService, dialogService, viewsService, vscode] = await Promise.all([getService(IWorkbenchLayoutService), getService(IEditorService), getService(IStatusbarService), getService(IContextMenuService), getService(IContextViewService), getService(IDialogService), getService(IViewsService), getIssuePilotVscodeApi()]);
   registerWorkbenchBridge(issueKey, vscode, layout, container);
-  limitContextMenus(container, vscode, contextMenuService, contextViewService);
   registerMarkdownPreviewAction(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
@@ -320,8 +355,14 @@ async function start(): Promise<void> {
     materialIconThemeReady(),
     markdownFeaturesReady(),
     registerSourceSearch(issueKey, repositories),
-    registerSourceControls(issueKey, repositories, provider.workspacePath, editorService),
+    registerSourceControls(issueKey, repositories, provider.workspacePath, editorService, async (label) => (await dialogService.confirm({
+      type: "warning",
+      message: `Discard changes in ${label}?`,
+      detail: "This action cannot be undone.",
+      primaryButton: "&&Discard Changes",
+    })).confirmed),
   ]);
+  limitContextMenus(container, vscode, contextMenuService, contextViewService);
   provider.setOnWrite(() => { void refreshSourceControls(); });
   await viewsService.openView("workbench.scm.repositories", false);
   if (initialView === "source-control") await vscode.commands.executeCommand("workbench.view.scm");

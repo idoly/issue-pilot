@@ -250,7 +250,7 @@ Service save -> Registry parse -> typed Deployment config -> SQLite
 Pi tool -> TypeBox input parse -> protocol client(typed session config, typed input)
 ```
 
-完整Deployment config只存在API session-local tool closure。Protocol client不重复解析内部shape，但必须限制外部target、协议、redirect、timeout、abort、response和result size。Tool result会进入Pi JSONL。
+完整Deployment config只存在API session-local tool closure。Protocol client不重复解析内部shape，但必须限制外部target、协议、redirect、timeout、abort、response和result size。SLS按服务端page size读取完整查询，不设置record count上限，但每页检查统一result byte budget。Tool result会进入Pi JSONL。
 
 ## Attachment事务
 

@@ -274,10 +274,9 @@ logstore
 from/to          # optional but must appear together
 query            # optional
 trace_id         # UUID, mutually exclusive with query
-limit            # 1..200, default 20
 ```
 
-普通query默认最近15分钟，trace默认24小时。Endpoint为`<region>.log.aliyuncs.com`。Client分页到limit后额外probe一条；仍有数据则`capability_result_too_large`，不把partial result伪装为完整。
+普通query默认最近15分钟，trace默认24小时。Endpoint为`<region>.log.aliyuncs.com`。Client按100条自动分页直到查询结果耗尽，不设置record count上限；每页后检查统一1MiB结果预算，超限整次返回`capability_result_too_large`，不把partial result伪装为完整。
 
 DMS/SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进程中的Aliyun CLI读取，finally递归删除。AccessKey不在argv；SQL/query、project、logstore和时间范围可能在process argv中。
 
@@ -291,7 +290,7 @@ DMS/SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进
 | RabbitMQ | 1MiB response |
 | Elasticsearch | 200 results / 1MiB |
 | DMS | 20k chars / 500 rows / 30s / 1MiB |
-| SLS | 200 records / 30s / 1MiB |
+| SLS | 自动分页 / 30s total / 1MiB |
 
 Secret flow：
 
