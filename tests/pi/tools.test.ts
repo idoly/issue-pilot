@@ -26,6 +26,27 @@ test("creates only context-selected SDK capability tools", () => {
   assert.match(tools[2]?.promptSnippet ?? "", /Alibaba Cloud DMS/);
 });
 
+test("projects the selected deployment SLS logstores into the session-local tool schema", async () => {
+  const slsContext: AgentSessionContext = { ...context, capabilities: ["sls"] };
+  let calls = 0;
+  const unavailable: ToolRuntime = { run: () => { calls += 1; return Promise.reject(new Error("tool_runtime_unavailable")); } };
+  const tools = createCapabilityTools(slsContext, {
+    sls: {
+      accessKeyId: "key",
+      accessKeySecret: "secret",
+      region: "cn-hangzhou",
+      project: "xhgj-zysys",
+      logstores: ["srm-api-manage", "srm-api-portal", "srm-batch", "srm-api-supplier"],
+    },
+  }, unavailable);
+  const sls = tools[0]!;
+  const schema = sls.parameters as unknown as { properties: { logstore: { enum: string[]; description: string } } };
+  assert.deepEqual(schema.properties.logstore.enum, ["srm-api-manage", "srm-api-portal", "srm-batch", "srm-api-supplier"]);
+  assert.match(schema.properties.logstore.description, /selected deployment/);
+  await assert.rejects(sls.execute("call", { logstore: "srm" }, undefined, undefined, {} as never), /invalid_sls_input/);
+  assert.equal(calls, 0);
+});
+
 test("validates Pi tool input and passes the application tool runtime directly", async () => {
   const unavailable: ToolRuntime = { run: () => Promise.reject(new Error("tool_runtime_unavailable")) };
   const tools = createCapabilityTools(context, {

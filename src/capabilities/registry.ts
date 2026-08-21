@@ -75,6 +75,13 @@ function connectionUrl(value: unknown, name: string, protocols: string[], option
   return configuredUrl;
 }
 
+const slsQueryProperties = {
+  from: Type.Optional(Type.Integer({ minimum: 0 })),
+  to: Type.Optional(Type.Integer({ minimum: 1 })),
+  query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars })),
+  trace_id: Type.Optional(Type.String({ maxLength: limits.sls.traceIdChars })),
+};
+
 const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
   db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
@@ -99,10 +106,7 @@ const capabilityInputSchemas = {
   dms: Type.Object({ statement: Type.String({ maxLength: limits.dms.queryChars }) }, { additionalProperties: false }),
   sls: Type.Object({
     logstore: Type.String({ maxLength: 63, pattern: SLS_LOGSTORE.source }),
-    from: Type.Optional(Type.Integer({ minimum: 0 })),
-    to: Type.Optional(Type.Integer({ minimum: 1 })),
-    query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars })),
-    trace_id: Type.Optional(Type.String({ maxLength: limits.sls.traceIdChars })),
+    ...slsQueryProperties,
   }, { additionalProperties: false }),
 } as const;
 
@@ -230,6 +234,15 @@ const definitions = {
 } satisfies { [Key in CapabilityName]: CapabilityDefinition<Key> };
 
 export const capabilityDefinitions: { [Key in CapabilityName]: CapabilityDefinition<Key> } = definitions;
+
+export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>): TSchema {
+  if (key !== "sls") return capabilityDefinitions[key].inputSchema;
+  const logstores = (configuration as CapabilityConfig<"sls">).logstores;
+  return Type.Object({
+    logstore: StringEnum(logstores, { description: "Exact logstore configured for the selected deployment." }),
+    ...slsQueryProperties,
+  }, { additionalProperties: false });
+}
 
 export function parseCapabilityConfiguration<Key extends CapabilityName>(key: Key, value: unknown): CapabilityConfig<Key> {
   return capabilityDefinitions[key].parseConfiguration(value);

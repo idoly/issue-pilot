@@ -98,6 +98,11 @@ vi.mock("../data/client", async (importOriginal) => {
       return structuredClone(comment);
     },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
+    updateIssueStatus: vi.fn(async (id: string, status: "open" | "resolved") => {
+      const selected = issues.find((item) => item.id === id)!;
+      selected.status = status;
+      return structuredClone(selected);
+    }),
     convertIssueToDevelopment: vi.fn(async (id: string) => {
       const selected = issues.find((item) => item.id === id)!;
       selected.environmentKey = "dev";
@@ -523,6 +528,38 @@ describe("issue pilot workspace", () => {
     const queueItem = await waitFor(() => screen.getByRole("listitem"));
     expect(queueItem.textContent).toContain("ISSUE-20260810-042");
     expect(queueItem.textContent).toContain("待确认");
+  });
+
+  test("refreshes the Issue queue immediately when a resolved Issue is reopened", async () => {
+    const client = await import("../data/client");
+    const updateIssueStatus = vi.mocked(client.updateIssueStatus);
+    const getIssue = vi.mocked(client.getIssue);
+    const listIssues = vi.mocked(client.listIssues);
+    await updateIssueStatus("ISSUE-20260810-038", "resolved");
+    render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("当前用户"));
+    fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
+    fireEvent.click(screen.getByLabelText("按状态筛选"));
+    fireEvent.click(await screen.findByText("全部工单"));
+    fireEvent.click(await screen.findByText("ISSUE-20260810-038"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy());
+    const resolvedIssue = await getIssue("ISSUE-20260810-038");
+    let resolveDetail!: (issue: typeof resolvedIssue) => void;
+    const detailRefresh = new Promise<typeof resolvedIssue>((resolve) => { resolveDetail = resolve; });
+    getIssue.mockClear();
+    listIssues.mockClear();
+    updateIssueStatus.mockClear();
+    getIssue.mockImplementationOnce(async () => detailRefresh);
+
+    fireEvent.click(screen.getByRole("button", { name: "重新打开" }));
+
+    await waitFor(() => expect(updateIssueStatus).toHaveBeenCalledWith("ISSUE-20260810-038", "open"));
+    await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
+    resolveDetail({ ...resolvedIssue, status: "open" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "编辑工单" })).toBeTruthy());
+    const queueItem = screen.getAllByRole("listitem").find((item) => item.textContent?.includes("ISSUE-20260810-038"));
+    expect(queueItem?.textContent).toContain("待处理");
   });
 
   test("keeps the newest Issue detail when SSE refreshes finish out of order", async () => {

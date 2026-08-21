@@ -105,11 +105,12 @@ export function App() {
     const currentGeneration = selectionGeneration;
     const currentRefresh = (issueRefreshes.get(issueKey) ?? 0) + 1;
     issueRefreshes.set(issueKey, currentRefresh);
+    if (refreshQueue) setIssueRefreshToken((value) => value + 1);
     const refreshed = await getIssue(issueKey);
     if (currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey) {
       const statusChanged = issue()?.status !== refreshed.status;
       setIssue(refreshed);
-      if (refreshQueue || statusChanged) setIssueRefreshToken((value) => value + 1);
+      if (!refreshQueue && statusChanged) setIssueRefreshToken((value) => value + 1);
     }
     return refreshed;
   };

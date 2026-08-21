@@ -101,7 +101,7 @@
 | `src/capabilities/rabbitmq.ts` | 30 | RabbitMQ management只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/redis-worker.ts` | 43 | 隔离node-redis连接、结果和OOM的Worker入口 | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/redis.ts` | 74 | Redis worker边界和命令构造 | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
-| `src/capabilities/registry.ts` | 240 | 七类capability保存parser、tool schema和metadata | 职责明确 | SLS schema不设置record count输入限制 | 保留原位 |
+| `src/capabilities/registry.ts` | 253 | 七类capability保存parser、tool schema和metadata | 职责明确 | SLS schema不设置record count输入限制 | 保留原位 |
 | `src/capabilities/sls.ts` | 73 | SLS时间窗、完整自动分页和CLI protocol client | 独立外部协议边界 | 无record count上限，统一总timeout并逐页检查result byte | 保留，不互相合并 |
 | `src/capabilities/sql.ts` | 9 | MySQL/DMS共用只读SQL lexical guard | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/config.ts` | 14 | 解析项目根、state、数据库和Web构建绝对路径 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -129,15 +129,15 @@
 | `src/http/web-routes.ts` | 45 | 静态Web/Workbench和SPA fallback | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/http/workspace-routes.ts` | 45 | Workspace stats、转换和release routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/pi/models.ts` | 113 | 共享Pi ModelRuntime和离线可用模型快照 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/pi/tools.ts` | 49 | TypeBox解析Agent tool input并直调protocol client | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/pi/tools.ts` | 51 | TypeBox解析Agent tool input并直调protocol client | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/process.ts` | 89 | 共享spawn、abort、timeout和output budget执行器 | 必要底层进程边界 | 已从capability目录移到共享根级owner | 保留，与授权ToolRuntime分层 |
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/app/AgentPanel.test.ts` | 466 | AgentPanel stream、reopen、Repository刷新、未读计数和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/AgentPanel.tsx` | 423 | Agent对话、stream状态和composer | 用户功能边界 | 未读按新增conversation entry ID计数，token delta不重复计数 | 保留 |
-| `src/web/src/app/App.test.tsx` | 561 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/App.tsx` | 188 | App组合、Ant全局样式/theme和Workbench布局 | 用户功能边界 | 使用聚合styles.css和公开Button组件defaults | 保留；不建通用页面框架 |
+| `src/web/src/app/App.test.tsx` | 598 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/App.tsx` | 189 | App组合、Ant全局样式/theme和Workbench布局 | 用户功能边界 | 使用聚合styles.css和公开Button组件defaults | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/ApplicationResources.tsx` | 88 | ApplicationResources前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/AttachmentPreview.tsx` | 150 | AttachmentPreview前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
@@ -224,7 +224,7 @@
 | `tests/http/user-api.test.ts` | 102 | http域的user-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/web.test.ts` | 70 | http域的web行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/models.test.ts` | 105 | pi域的models行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/pi/tools.test.ts` | 40 | pi域的tools行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/pi/tools.test.ts` | 61 | pi域的tools行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/process/process.test.ts` | 45 | process域的process行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/scripts/playwright.test.ts` | 53 | scripts域的playwright行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/tool-runtime.test.ts` | 52 | tool-runtime.test.ts域的tool-runtime行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

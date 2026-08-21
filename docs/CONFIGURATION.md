@@ -265,7 +265,7 @@ SQL复用MySQL read-only contract。`SELECT`必须以顶层`LIMIT n`结束，`1<
 
 ### SLS
 
-Config：required AccessKey，合法region/project，至少一个exact logstore。
+Config：required AccessKey，合法region/project，至少一个exact logstore。Agent session创建SLS工具时，将当前Issue所选Deployment的logstore白名单投影为`logstore`输入枚举；不得从Service key、Service name或其他Environment的配置推断名称。
 
 Input：
 
