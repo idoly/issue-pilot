@@ -1,5 +1,6 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
 
+import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { RunEvent } from "../data/client";
 
 type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown };
@@ -103,7 +104,8 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
   if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
     const index = entries.findIndex((entry) => entry.kind === "tool" && entry.toolCallId === event.toolCallId);
     const previous = index >= 0 ? entries[index] as Extract<ConversationEntry, { kind: "tool" }> : undefined;
-    const result = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
+    const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
+    const result = rawResult ? displayToolResult(rawResult) : undefined;
     const entry: ConversationEntry = {
       id: previous?.id ?? envelope.id,
       kind: "tool",
@@ -189,6 +191,22 @@ export function duration(value: number | undefined): string {
 
 export function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
   return entry.result?.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n") ?? "";
+}
+
+export function boundedText(value: string, maximumCharacters: number): string {
+  if (value.length <= maximumCharacters) return value;
+  const omitted = value.length - maximumCharacters;
+  const marker = `\n... (${omitted.toLocaleString()} characters omitted from display) ...\n`;
+  const visibleCharacters = maximumCharacters - marker.length;
+  const leadingCharacters = Math.ceil(visibleCharacters / 2);
+  return `${value.slice(0, leadingCharacters)}${marker}${value.slice(value.length - (visibleCharacters - leadingCharacters))}`;
+}
+
+function displayToolResult(result: ToolResult): ToolResult {
+  const text = result.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n");
+  const images = result.content.filter((part): part is ImageContent => part.type === "image");
+  const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
+  return { ...result, content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images] };
 }
 
 export function shellToolOutput(entry: Extract<ConversationEntry, { kind: "tool" }>): { lines: string[]; omitted: number } | undefined {

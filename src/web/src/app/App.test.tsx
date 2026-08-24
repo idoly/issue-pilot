@@ -505,6 +505,33 @@ describe("issue pilot workspace", () => {
     expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042");
   });
 
+  test("allows switching Issues while the selected Agent is working", async () => {
+    EventSourceMock.instances.length = 0;
+    render(() => <App />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
+    const source = EventSourceMock.instances.at(-1)!;
+    source.emit("open");
+    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    await waitFor(() => expect(screen.getByText("Working...")).toBeTruthy());
+    const client = await import("../data/client");
+    vi.mocked(client.sendAgentMessage).mockClear();
+    const composer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    expect(composer.disabled).toBe(false);
+    fireEvent.input(composer, { target: { value: "working期间补充信息" } });
+    await waitFor(() => expect(composer.value).toBe("working期间补充信息"));
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(client.sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", "working期间补充信息"));
+    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+    const dialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "客户导出的 CSV 缺少时区信息" })).toBeTruthy());
+    expect(source.closed).toBe(true);
+    expect(screen.getByLabelText("工单队列").querySelector(".queue-item.selected")?.textContent).toContain("ISSUE-20260810-041");
+  });
+
   test("refreshes the Issue queue when an SSE event changes the selected Issue status", async () => {
     EventSourceMock.instances.length = 0;
     const client = await import("../data/client");
@@ -558,6 +585,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
     resolveDetail({ ...resolvedIssue, status: "open" });
     await waitFor(() => expect(screen.getByRole("button", { name: "编辑工单" })).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false));
     const queueItem = screen.getAllByRole("listitem").find((item) => item.textContent?.includes("ISSUE-20260810-038"));
     expect(queueItem?.textContent).toContain("待处理");
   });

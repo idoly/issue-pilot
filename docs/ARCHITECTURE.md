@@ -274,7 +274,7 @@ SSE先订阅live bus，再读取JSONL snapshot：
 Pi JSONL replay -> current non-durable run replay -> snapshot_ready -> buffered/live events -> heartbeat
 ```
 
-Event bus只在当前Agent运行期间保留尚未写入JSONL的assistant增量、运行中tool状态、queue和`agent_start`。同一assistant内容块的token delta合并为一个replay event，保留完整文本且避免协议元数据耗尽SSE pending-byte budget。完成的message/tool立即由JSONL接管，Issue结束或API重启即清空；它不是第二份durable conversation。Snapshot期间的live event进入连接私有buffer，并按event ID去重。Writer有序处理backpressure、transport close/error和pending-byte budget。慢连接只关闭自身。
+Event bus只在当前Agent运行期间保留尚未写入JSONL的assistant增量、运行中tool状态、queue和`agent_start`。同一assistant内容块的token delta合并为一个replay event，保留完整文本且减少SSE协议元数据。完成的message/tool立即由JSONL接管，Issue结束或API重启即清空；它不是第二份durable conversation。Snapshot期间的live event进入连接私有buffer，并按event ID去重。Writer不限制pending bytes，并有序处理backpressure和transport close/error。Heartbeat使用具名SSE event；Web在静默窗口内未收到open、heartbeat、snapshot或message时主动重连，以恢复被代理隐藏的断流。Capability结果完整保留在Pi JSONL并提供给Agent；Web只对过大的tool result做首尾有界展示，避免长会话把浏览器主线程耗尽。
 
 Web controller用generation失效旧EventSource/timer，握手前保存private replay，收到`snapshot_ready`后原子提交；compaction成功后重连读取新active branch。Event transport与conversation projection分离。
 

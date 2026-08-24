@@ -36,7 +36,7 @@
 | `docs/ANT-DESIGN-SOLID-FEEDBACK.md` | 125 | Ant Design Solid升级实测、已解决事项和上游反馈 | 独立上游反馈文档 | 记录0.3 RC源码/API核对，不复制项目架构合同 | 保留，随组件库升级复核 |
 | `docs/ARCHITECTURE.md` | 364 | ARCHITECTURE主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/FILE-AUDIT.md` | 241 | 全部tracked文件的作用与设计处置清单 | 审计事实owner | 不再复制逐文件长篇模板；与模块审计分工 | 保留 |
-| `docs/CONFIGURATION.md` | 306 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
+| `docs/CONFIGURATION.md` | 307 | CONFIGURATION主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEPLOYMENT.md` | 174 | DEPLOYMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/DEVELOPMENT.md` | 383 | DEVELOPMENT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
 | `docs/MODULE-AUDIT.md` | 182 | MODULE-AUDIT主题的权威项目文档 | 文档事实owner | 与README只做层级分工 | 保留 |
@@ -81,7 +81,7 @@
 | `drizzle/0037_managed_users.sql` | 7 | 已发布不可变migration：managed users | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/0000_snapshot.json` | 2205 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
 | `drizzle/meta/_journal.json` | 272 | Drizzle migration顺序/初始schema元数据 | 必要升级合同 | 兼容代码有意保留；禁止合并改写 | 保留，不修改 |
-| `issue-pilot.config.ts` | 99 | 应用唯一根配置事实源 | 职责明确 | 包含模型响应空闲timeout，不由session硬编码 | 保留原位 |
+| `issue-pilot.config.ts` | 100 | 应用唯一根配置事实源 | 职责明确 | 包含模型响应空闲timeout，不由session硬编码 | 保留原位 |
 | `package-lock.json` | 7692 | npm依赖解析锁文件 | 单一安装事实 | 锁定Ant Solid 0.3 RC、Monaco 36.1及更新后的传递图 | 保留原位 |
 | `package.json` | 107 | 包、脚本和直接依赖清单 | 单一包配置 | Ant Solid与Solid RC peer一致，测试库override单独保留 | 保留原位 |
 | `scripts/playwright.sh` | 89 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
@@ -124,7 +124,7 @@
 | `src/http/route-context.ts` | 55 | Route共享依赖、当前用户、Issue查找和reservation映射 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/service-configuration.ts` | 152 | Service配置边界解析和事务写入 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/http/source-browser-routes.ts` | 120 | Source read、file mutation和受限Git routes | 按HTTP域拆分 | Mutation统一走Issue reservation，无额外manager | 保留域边界 |
-| `src/http/sse.ts` | 107 | SSE顺序、背压、预算和断连状态机 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/http/sse.ts` | 90 | SSE顺序、背压和断连状态机 | 职责明确 | pending bytes不设上限；transport失败显式清理 | 保留原位 |
 | `src/http/user-routes.ts` | 89 | SQLite用户增改和启停routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/http/web-routes.ts` | 45 | 静态Web/Workbench和SPA fallback | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
 | `src/http/workspace-routes.ts` | 45 | Workspace stats、转换和release routes | 按HTTP域拆分 | 没有额外manager；routes直接协调owner | 保留域边界 |
@@ -134,9 +134,9 @@
 | `src/serial.ts` | 43 | 进程内串行队列和按key串行队列 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/tool-runtime.ts` | 68 | npm/Maven/Aliyun命令白名单、环境收敛和临时HOME | 必要进程授权边界 | 双options中间层已删除 | 保留，不并入protocol client |
 | `src/web/index.html` | 13 | Vite应用入口HTML | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/AgentPanel.test.ts` | 466 | AgentPanel stream、reopen、Repository刷新、未读计数和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/AgentPanel.test.ts` | 480 | AgentPanel stream、reopen、Repository刷新、未读计数和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/AgentPanel.tsx` | 423 | Agent对话、stream状态和composer | 用户功能边界 | 未读按新增conversation entry ID计数，token delta不重复计数 | 保留 |
-| `src/web/src/app/App.test.tsx` | 598 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/App.test.tsx` | 626 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/App.tsx` | 189 | App组合、Ant全局样式/theme和Workbench布局 | 用户功能边界 | 使用聚合styles.css和公开Button组件defaults | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/ApplicationResources.tsx` | 88 | ApplicationResources前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
@@ -148,11 +148,11 @@
 | `src/web/src/app/IssueWorkspace.tsx` | 230 | 工单详情、编辑、状态和评论交互 | 用户功能边界 | 多选Select使用类型化数组和组件自身popup状态 | 保留；不建通用页面框架 |
 | `src/web/src/app/Statistics.tsx` | 159 | 工单和Workspace统计视图 | 用户功能边界 | 统计周期union由Select options贯穿value/callback | 保留；不建通用页面框架 |
 | `src/web/src/app/UserManagement.tsx` | 155 | UserManagement前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
-| `src/web/src/app/agent-stream.test.ts` | 51 | web域的agent-stream行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/agent-stream.ts` | 131 | EventSource握手、replay lifecycle、重连和generation状态机 | 稳定transport边界 | Replay携带已发生的Agent启动事实，避免页面轮询 | 保留原位 |
+| `src/web/src/app/agent-stream.test.ts` | 95 | web域的agent-stream行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `src/web/src/app/agent-stream.ts` | 154 | EventSource握手、replay lifecycle、重连和generation状态机 | 稳定transport边界 | 具名heartbeat和静默watchdog恢复proxy隐藏的断流 | 保留原位 |
 | `src/web/src/app/configuration-model.test.ts` | 54 | web域的configuration-model行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/configuration-model.ts` | 41 | 配置表单draft到credential update请求序列化 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/conversation.ts` | 224 | Pi事件到可见对话的纯状态投影 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/web/src/app/conversation.ts` | 242 | Pi事件到可见对话的纯状态投影 | 职责明确 | tool result写入Web状态前有界化，完整结果保留在Pi JSONL | 保留原位 |
 | `src/web/src/app/model.test.ts` | 18 | web域的model行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/model.ts` | 52 | Issue显示标签、时间和文件大小纯投影 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/app/paste-editor.test.ts` | 59 | web域的paste-editor行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -207,7 +207,7 @@
 | `tests/capabilities/nacos.test.ts` | 88 | capabilities域的nacos行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/capabilities/sls.test.ts` | 82 | SLS无record count限制、分页、总timeout、scope和byte budget回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/configuration/credentials.test.ts` | 49 | configuration域的credentials行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/db/bootstrap.test.ts` | 109 | db域的bootstrap行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/db/bootstrap.test.ts` | 108 | db域的bootstrap行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/db/sqlite.test.ts` | 211 | db域的sqlite行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/deployment/application.test.ts` | 57 | deployment域的application行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/domain/contracts.test.ts` | 33 | domain域的contracts行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
@@ -220,7 +220,7 @@
 | `tests/http/issue-api.test.ts` | 231 | http域的issue-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/runtime-api.test.ts` | 103 | Agent stream握手、当前增量replay和重启恢复回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/service-configuration.test.ts` | 36 | http域的service-configuration行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `tests/http/sse.test.ts` | 121 | http域的sse行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
+| `tests/http/sse.test.ts` | 106 | http域的sse行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/user-api.test.ts` | 102 | http域的user-api行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/http/web.test.ts` | 70 | http域的web行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `tests/pi/models.test.ts` | 105 | pi域的models行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

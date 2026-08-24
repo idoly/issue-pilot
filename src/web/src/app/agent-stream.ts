@@ -27,6 +27,7 @@ type EventSourceFactory = (url: string) => EventSource;
 export class AgentStreamController {
   private stream: EventSource | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private staleTimer: ReturnType<typeof setTimeout> | undefined;
   private generation = 0;
   private issueId = "";
   private disposed = false;
@@ -34,6 +35,7 @@ export class AgentStreamController {
   constructor(
     private readonly streamUrl: (issueId: string) => string,
     private readonly reconnectMs: number,
+    private readonly staleMs: number,
     private readonly callbacks: AgentStreamCallbacks,
     private readonly createEventSource: EventSourceFactory = (url) => new EventSource(url),
   ) {}
@@ -44,6 +46,7 @@ export class AgentStreamController {
     const generation = ++this.generation;
     this.closeStream();
     this.clearReconnectTimer();
+    this.clearStaleTimer();
     this.callbacks.onConnection(false);
 
     let replayComplete = false;
@@ -53,14 +56,36 @@ export class AgentStreamController {
     let replayAgentStarted = false;
     const source = this.createEventSource(this.streamUrl(issueId));
     this.stream = source;
+    const recover = () => {
+      if (!this.isCurrent(generation)) return;
+      this.generation += 1;
+      this.clearStaleTimer();
+      this.closeStream(source);
+      this.callbacks.onConnection(false);
+      this.callbacks.onError("agent_event_connection_failed");
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        if (!this.disposed && this.issueId === issueId) this.connect(issueId);
+      }, this.reconnectMs);
+    };
+    const touch = () => {
+      this.clearStaleTimer();
+      this.staleTimer = setTimeout(recover, this.staleMs);
+    };
+    touch();
 
     source.addEventListener("open", () => {
       if (!this.isCurrent(generation)) return;
+      touch();
       this.callbacks.onConnection(true);
       this.callbacks.onError("");
     });
+    source.addEventListener("heartbeat", () => {
+      if (this.isCurrent(generation)) touch();
+    });
     source.addEventListener("snapshot_ready", (event) => {
       if (!this.isCurrent(generation)) return;
+      touch();
       try {
         const parsed = JSON.parse(event.data) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent_event_protocol_error");
@@ -72,6 +97,7 @@ export class AgentStreamController {
     });
     source.addEventListener("message", (event) => {
       if (!this.isCurrent(generation)) return;
+      touch();
       try {
         const parsed = JSON.parse(event.data) as Partial<RunEvent>;
         if (!parsed.event || typeof parsed.event.type !== "string") throw new Error("agent_event_protocol_error");
@@ -92,17 +118,7 @@ export class AgentStreamController {
         this.callbacks.onError("agent_event_protocol_error");
       }
     });
-    source.addEventListener("error", () => {
-      if (!this.isCurrent(generation)) return;
-      this.generation += 1;
-      this.closeStream(source);
-      this.callbacks.onConnection(false);
-      this.callbacks.onError("agent_event_connection_failed");
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = undefined;
-        if (!this.disposed && this.issueId === issueId) this.connect(issueId);
-      }, this.reconnectMs);
-    });
+    source.addEventListener("error", recover);
   }
 
   isCurrent(generation: number): boolean {
@@ -115,6 +131,7 @@ export class AgentStreamController {
     this.generation += 1;
     this.closeStream();
     this.clearReconnectTimer();
+    this.clearStaleTimer();
   }
 
   private closeStream(target = this.stream): void {
@@ -127,5 +144,11 @@ export class AgentStreamController {
     if (!this.reconnectTimer) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+  }
+
+  private clearStaleTimer(): void {
+    if (!this.staleTimer) return;
+    clearTimeout(this.staleTimer);
+    this.staleTimer = undefined;
   }
 }

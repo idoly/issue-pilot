@@ -273,7 +273,7 @@ SSE正常顺序：
 JSONL replay -> current run replay -> snapshot_ready -> live -> heartbeat
 ```
 
-刷新后只缺当前正在生成的thinking/text或运行中tool时，检查server event bus的current run replay；该层是进程内临时状态，message/tool完成后由JSONL接管，API重启后不恢复。若日志出现`sse_backpressure_limit_exceeded`并持续重连，检查current message delta是否按内容块聚合，不要放宽pending-byte budget。重复/闪烁/丢消息时检查active JSONL、event ID去重、proxy buffering/read timeout、server backpressure、Web generation和compaction reconnect。旧`ready`不是当前握手。慢client只关闭自身。
+刷新后只缺当前正在生成的thinking/text或运行中tool时，检查server event bus的current run replay；该层是进程内临时状态，message/tool完成后由JSONL接管，API重启后不恢复。页面停留在Working但刷新后已完成时，检查具名heartbeat是否穿过proxy，以及Web静默watchdog是否重建SSE。重复/闪烁/丢消息时检查active JSONL、event ID去重、proxy buffering/read timeout、server backpressure、Web generation和compaction reconnect。旧`ready`不是当前握手。
 
 ## Attachment故障
 

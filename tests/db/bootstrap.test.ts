@@ -27,7 +27,6 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.deepEqual(applicationConfig.runtime.dms, { endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" });
   assert.deepEqual(applicationConfig.limits.capability.dms, { queryChars: 20_000, rows: 500, executionMs: 30_000 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
-  assert.equal(applicationConfig.http.ssePendingBytes, 4 * 1024 * 1024);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
   assert.equal(applicationConfig.web.host, "0.0.0.0");
   assert.equal(applicationConfig.web.markdownCacheEntries, 512);

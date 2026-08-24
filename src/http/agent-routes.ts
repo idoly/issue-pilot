@@ -62,7 +62,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       reply.hijack();
       hijacked = true;
       reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
-      const writer = createOrderedSseWriter(reply.raw, issuePilotConfig.http.ssePendingBytes, (error) => {
+      const writer = createOrderedSseWriter(reply.raw, (error) => {
         try { app.log.error(error); }
         finally {
           cleanup();
@@ -79,7 +79,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       for (const event of events.replayCurrent(issue.id)) send(event);
       writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
-      heartbeat = setInterval(() => writer.write(": heartbeat\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
+      heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
       liveEvents.activate(send);
     } catch (error) {
       cleanup();

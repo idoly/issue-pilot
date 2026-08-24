@@ -13,12 +13,10 @@ export interface OrderedSseWriter {
 
 export function createOrderedSseWriter(
   target: SseTarget,
-  maximumPendingBytes = Number.POSITIVE_INFINITY,
   onWriteFailure: (error: unknown) => void = () => undefined,
 ): OrderedSseWriter {
-  const queue: Array<{ payload: string; bytes: number }> = [];
+  const queue: string[] = [];
   const idleWaiters = new Set<() => void>();
-  let pendingBytes = 0;
   let pumping = false;
   let closed = false;
   let removeDrainListener: (() => void) | undefined;
@@ -42,7 +40,6 @@ export function createOrderedSseWriter(
     removeDrainListener = undefined;
     removeTransportListeners();
     queue.length = 0;
-    pendingBytes = 0;
     notifyIdle();
   };
   const fail = (error: unknown) => {
@@ -64,21 +61,13 @@ export function createOrderedSseWriter(
         if (target.destroyed || target.writableEnded) { close(); break; }
         const next = queue.shift()!;
         let accepted: boolean;
-        try { accepted = target.write(next.payload); }
+        try { accepted = target.write(next); }
         catch (error) { fail(error); break; }
-        if (accepted) {
-          pendingBytes -= next.bytes;
-          continue;
-        }
-        if (pendingBytes > maximumPendingBytes) {
-          fail(new Error("sse_backpressure_limit_exceeded"));
-          break;
-        }
+        if (accepted) continue;
         const removeListener = () => target.off("drain", onDrain);
         const onDrain = () => {
           removeDrainListener = undefined;
           removeListener();
-          pendingBytes -= next.bytes;
           pump();
         };
         removeDrainListener = removeListener;
@@ -91,13 +80,7 @@ export function createOrderedSseWriter(
   };
   const write = (payload: string) => {
     if (closed) return;
-    const bytes = Buffer.byteLength(payload);
-    if (pendingBytes > 0 && pendingBytes + bytes > maximumPendingBytes) {
-      fail(new Error("sse_backpressure_limit_exceeded"));
-      return;
-    }
-    pendingBytes += bytes;
-    queue.push({ payload, bytes });
+    queue.push(payload);
     pump();
   };
   const idle = () => pumping || removeDrainListener || queue.length

@@ -7,7 +7,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel } from "./AgentPanel";
-import { activityForEvent, applyAgentEvent, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
+import { activityForEvent, applyAgentEvent, boundedText, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "63ccbb08-d769-47b6-87a6-e93acea184f7", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -23,6 +23,20 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("Agent conversation state", () => {
+  it("bounds large tool output before storing it in UI state without changing the source result", () => {
+    const source = `${"a".repeat(30_000)}${"b".repeat(30_000)}`;
+    const entries = applyAgentEvent([], event({ type: "tool_execution_end", toolCallId: "call-large", toolName: "sls", result: { content: [{ type: "text", text: source }] }, isError: false }));
+    const displayed = entries[0]?.kind === "tool" ? entries[0].result?.content[0] : undefined;
+    expect(displayed?.type).toBe("text");
+    const displayedText = displayed?.type === "text" ? displayed.text : "";
+    expect(displayedText.length).toBe(issuePilotConfig.web.agentToolOutputCharacters);
+    expect(displayedText.startsWith("a".repeat(100))).toBe(true);
+    expect(displayedText.endsWith("b".repeat(100))).toBe(true);
+    expect(displayedText).toContain("20,000 characters omitted from display");
+    expect(boundedText(source, 40_000)).toBe(displayedText);
+    expect(source).toHaveLength(60_000);
+  });
+
   it("assembles Pi streaming events and replaces them with the final message", () => {
     let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
     entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));

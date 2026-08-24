@@ -284,7 +284,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId) setError("issue_refresh_failed");
     });
   };
-  const streamController = new AgentStreamController(agentStreamUrl, issuePilotConfig.web.agentStreamReconnectMs, {
+  const streamController = new AgentStreamController(agentStreamUrl, issuePilotConfig.web.agentStreamReconnectMs, issuePilotConfig.web.agentStreamStaleMs, {
     onConnection: setConnected,
     onError: (streamError) => {
       if (!streamError && ["agent_event_connection_failed", "agent_event_protocol_error"].includes(error())) setError("");

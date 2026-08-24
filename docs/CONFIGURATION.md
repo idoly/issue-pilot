@@ -46,9 +46,10 @@ API在内存中合并一次，由Registry解析为typed config，reservation受�
 | `http.host/port` | `0.0.0.0` / `3000` |
 | `http.logger` | `true` |
 | `http.sseHeartbeatMs` | `15000` |
-| `http.ssePendingBytes` | `4194304` |
 | `web.host/port` | `0.0.0.0` / `4173` |
 | `web.agentStreamReconnectMs` | `1000` |
+| `web.agentStreamStaleMs` | `45000` |
+| `web.agentToolOutputCharacters` | `40000` |
 | `web.markdownCacheEntries` | `512` |
 | `web.markdownCacheCharacters` | `4194304` |
 
