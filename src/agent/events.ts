@@ -153,7 +153,7 @@ function timestamp(value: string | undefined): string {
 
 export function sessionTranscript(manager: SessionManager, issueId: string): RunEvent[] {
   const events: RunEvent[] = [];
-  for (const entry of manager.buildContextEntries()) {
+  for (const entry of manager.getBranch()) {
     const createdAt = timestamp(entry.timestamp);
     if (entry.type === "custom") {
       if (entry.customType === "issue-pilot-user") {

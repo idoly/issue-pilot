@@ -180,8 +180,9 @@ test("calculates Pi footer totals, cache hit rate, and context usage", () => {
   });
 });
 
-test("replays the official compaction-aware session context", () => {
+test("keeps the visible active-branch transcript after context compaction", () => {
   const manager = SessionManager.inMemory("/workspace");
+  manager.appendCustomEntry("issue-pilot-user", { message: "Earlier visible request" });
   manager.appendMessage({ role: "user", content: "Old internal prompt", timestamp: Date.now() });
   manager.appendMessage({
     role: "assistant", api: "openai-responses", provider: "test", model: "test-model",
@@ -196,10 +197,14 @@ test("replays the official compaction-aware session context", () => {
   manager.appendCompaction("Earlier work summary", firstKept, 42_000);
 
   const transcript = sessionTranscript(manager, "issue-1");
-  assert.deepEqual(transcript.map(({ event }) => event.type), ["message_end", "issue_user", "message_end"]);
-  assert.equal(JSON.stringify(transcript).includes("Old answer"), false);
+  assert.deepEqual(transcript.map(({ event }) => event.type), ["issue_user", "message_end", "issue_user", "message_end", "message_end"]);
+  assert.equal(JSON.stringify(transcript).includes("Earlier visible request"), true);
+  assert.equal(JSON.stringify(transcript).includes("Old answer"), true);
+  assert.equal(JSON.stringify(transcript).includes("Latest visible request"), true);
+  assert.equal(JSON.stringify(transcript).includes("Latest answer"), true);
+  assert.equal(JSON.stringify(transcript).includes("Old internal prompt"), false);
   assert.equal(JSON.stringify(transcript).includes("Runtime-wrapped latest prompt"), false);
-  const summary = transcript[0]!.event;
+  const summary = transcript.at(-1)!.event;
   assert.ok("message" in summary && typeof summary.message === "object" && summary.message.role === "compactionSummary");
   if ("message" in summary && typeof summary.message === "object" && summary.message.role === "compactionSummary") assert.equal(summary.message.tokensBefore, 42_000);
 });
