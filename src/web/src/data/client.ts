@@ -24,6 +24,7 @@ export interface IssueListItem {
   assignee: string | null;
   assigneeSubject: string | null;
   service: { key: string; name: string };
+  environmentKey: string;
   createdAt?: string;
   updatedAt: string;
 }
@@ -42,7 +43,6 @@ export interface IssueDetail extends IssueListItem {
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   ccRecipients?: Person[];
   reporter?: Person;
-  environmentKey: string;
   comments: IssueComment[];
 }
 

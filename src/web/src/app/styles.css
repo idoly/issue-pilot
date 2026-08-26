@@ -88,8 +88,11 @@ button, input, textarea { font: inherit; }
 .issue-queue[hidden], .issue-workspace[hidden], .agent-panel[hidden] { display: none; }
 .queue-toolbar { display: grid; grid-template-columns: 1fr 32px; gap: 8px; padding: 12px; border-bottom: 1px solid #e0e4e2; }
 .icon-button { --ads-button-padding-inline: 0px; }
-.queue-filter { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 8px; padding: 8px 12px; color: #65706c; border-bottom: 1px solid #e0e4e2; }
-.queue-filter .ads-select { width: 150px; }
+.queue-filter { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 8px 12px; color: #65706c; border-bottom: 1px solid #e0e4e2; }
+.queue-filter > svg, .queue-count { margin-top: 8px; }
+.queue-filter-controls { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.queue-filter-controls .ads-select { width: 100%; min-width: 0; }
+.queue-filter-controls .ads-select:last-child { grid-column: 1 / -1; }
 .queue-count { min-width: 22px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
 .queue-list { min-height: 0; overflow-y: auto; }
 .queue-item {

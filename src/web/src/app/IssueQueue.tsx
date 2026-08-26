@@ -20,6 +20,8 @@ export function IssueQueue(props: {
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
   const [status, setStatus] = createSignal<string>("active", { ownedWrite: true });
+  const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
+  const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
   const filtered = createMemo(() => {
     const subject = props.userSubject;
     if (!subject) return [];
@@ -27,7 +29,10 @@ export function IssueQueue(props: {
     return issues().filter((issue) => {
       const assigneeMatch = issue.assigneeSubject === subject;
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
-      return assigneeMatch && statusMatch && (!term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name}`.toLowerCase().includes(term));
+      const environmentMatch = environmentFilter() === "all" || issue.environmentKey === environmentFilter();
+      const serviceMatch = serviceFilter() === "all" || issue.service.key === serviceFilter();
+      const searchMatch = !term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name} ${issue.environmentKey}`.toLowerCase().includes(term);
+      return assigneeMatch && statusMatch && environmentMatch && serviceMatch && searchMatch;
     });
   });
   let listRequest = 0;
@@ -126,16 +131,30 @@ export function IssueQueue(props: {
       </div>
       <div class="queue-filter">
         <ListFilter size={14} aria-hidden="true" />
-        <Select
-          aria-label="按状态筛选"
-          value={status()}
-          onChange={(value) => { const selected = selectedChoice(value, ["active", ...ISSUE_STATUSES, "all"] as const); if (selected) setStatus(selected); }}
-          options={[
-            { value: "active", label: "未解决" },
-            ...Object.entries(statusLabel).map(([value, label]) => ({ value, label })),
-            { value: "all", label: "全部工单" },
-          ]}
-        />
+        <div class="queue-filter-controls">
+          <Select
+            aria-label="按状态筛选"
+            value={status()}
+            onChange={(value) => { const selected = selectedChoice(value, ["active", ...ISSUE_STATUSES, "all"] as const); if (selected) setStatus(selected); }}
+            options={[
+              { value: "active", label: "未解决" },
+              ...Object.entries(statusLabel).map(([value, label]) => ({ value, label })),
+              { value: "all", label: "全部工单" },
+            ]}
+          />
+          <Select
+            aria-label="按环境筛选"
+            value={environmentFilter()}
+            onChange={(value) => { const selected = selectedChoice(value, ["all", ...catalog().environments.map((item) => item.key)]); if (selected) setEnvironmentFilter(selected); }}
+            options={[{ value: "all", label: "全部环境" }, ...catalog().environments.map((item) => ({ value: item.key, label: item.name }))]}
+          />
+          <Select
+            aria-label="按服务筛选"
+            value={serviceFilter()}
+            onChange={(value) => { const selected = selectedChoice(value, ["all", ...catalog().services.map((item) => item.key)]); if (selected) setServiceFilter(selected); }}
+            options={[{ value: "all", label: "全部服务" }, ...catalog().services.map((item) => ({ value: item.key, label: item.name }))]}
+          />
+        </div>
         <span class="queue-count">{filtered().length}</span>
       </div>
       <div class="queue-list" role="list">

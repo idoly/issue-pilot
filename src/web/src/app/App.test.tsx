@@ -20,6 +20,7 @@ vi.mock("../data/client", async (importOriginal) => {
   ];
   issues[1]!.type = "smart_analysis";
   issues[1]!.environmentKey = "prod";
+  issues[1]!.service = { key: "orders", name: "Orders" };
   issues[1]!.repositories[0]!.workingBranch = null;
   const managedUsers = [
     { subject: "fixture-user", name: "严欣", email: "owner@example.test", active: true, createdAt: now, updatedAt: now },
@@ -27,11 +28,15 @@ vi.mock("../data/client", async (importOriginal) => {
   ];
   const configuration = {
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
-    environments: [{ key: "test", name: "测试" }],
+    environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
       deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }, nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }, dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: false, tid: "987654", credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
+    }, {
+      key: "orders", name: "Orders", description: "订单服务。",
+      deployments: [{ environmentKey: "prod", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "main" }], capabilities: [], agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" } }],
+      repositories: [{ id: "orders-repository", alias: "orders", url: "git@example.com:team/orders.git" }],
     }],
   };
   return {
@@ -530,6 +535,33 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "客户导出的 CSV 缺少时区信息" })).toBeTruthy());
     expect(source.closed).toBe(true);
     expect(screen.getByLabelText("工单队列").querySelector(".queue-item.selected")?.textContent).toContain("ISSUE-20260810-041");
+  });
+
+  test("combines environment and service Issue queue filters", async () => {
+    const client = await import("../data/client");
+    const stableIssues = await client.listIssues();
+    const productionIssue = stableIssues.find((item) => item.id === "ISSUE-20260810-041")!;
+    productionIssue.environmentKey = "prod";
+    productionIssue.service = { key: "orders", name: "Orders" };
+    vi.mocked(client.listIssues).mockResolvedValueOnce(stableIssues);
+
+    render(() => <App />);
+    const queue = screen.getByLabelText("工单队列");
+    await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
+
+    fireEvent.click(within(queue).getByLabelText("按环境筛选"));
+    fireEvent.click((await screen.findAllByText("正式")).at(-1)!);
+    await waitFor(() => expect(within(queue).getByText("ISSUE-20260810-041")).toBeTruthy());
+    expect(within(queue).queryByText("ISSUE-20260810-042")).toBeNull();
+
+    fireEvent.click(within(queue).getByLabelText("按服务筛选"));
+    fireEvent.click((await screen.findAllByText("Orders")).at(-1)!);
+    await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(1));
+
+    fireEvent.click(within(queue).getByLabelText("按服务筛选"));
+    fireEvent.click((await screen.findAllByText("SRM")).at(-1)!);
+    await waitFor(() => expect(within(queue).queryAllByRole("listitem")).toHaveLength(0));
+    expect(within(queue).getByText("没有匹配的工单")).toBeTruthy();
   });
 
   test("refreshes the Issue queue when an SSE event changes the selected Issue status", async () => {

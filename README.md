@@ -9,7 +9,7 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 - Prod/test 每轮读取当前 Deployment 分支的最新 fetched commit，始终只读。
 - Dev 使用 Issue 专属本地 branch 和 worktree，可编辑代码并运行受限 npm/Maven action。
 - Resolved dev workspace 可受管释放；代码继续由本地 working branch 保存，并可只读浏览或 reopen。
-- 每张 Issue 持久保存 Pi JSONL、Attachment、Comment、Repository 和 Workspace 状态。
+- 每张 Issue 持久保存 Pi JSONL、Attachment、Comment、Repository 和 Workspace 状态；工单队列支持组合状态、环境、服务和关键词筛选。
 - 内置 VS Code Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff 和 Markdown Preview；开发环境可创建、编辑、删除、重命名文件并执行Stage、Unstage、Discard和Commit，测试和正式环境只读。
 - Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 作为有界只读 Pi tools。
 - 用户由 SQLite 管理，支持新增、编辑、启用和停用，同时保留历史署名。

@@ -99,20 +99,25 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
   const serializeIssueSummaries = async (selectedIssues: Array<typeof issues.$inferSelect>) => {
     const assigneeSubjects = [...new Set(selectedIssues.flatMap((issue) => issue.assigneeSubject ? [issue.assigneeSubject] : []))];
     const serviceIds = [...new Set(selectedIssues.map((issue) => issue.serviceId))];
-    const [assigneeRows, serviceRows] = await Promise.all([
+    const environmentIds = [...new Set(selectedIssues.map((issue) => issue.environmentId))];
+    const [assigneeRows, serviceRows, environmentRows] = await Promise.all([
       assigneeSubjects.length ? database.db.select().from(subjects).where(inArray(subjects.subject, assigneeSubjects)) : [],
       serviceIds.length ? database.db.select({ id: services.id, key: services.key, name: services.name }).from(services).where(inArray(services.id, serviceIds)) : [],
+      environmentIds.length ? database.db.select({ id: environments.id, key: environments.key }).from(environments).where(inArray(environments.id, environmentIds)) : [],
     ]);
     const assignees = new Map(assigneeRows.map((assignee) => [assignee.subject, assignee]));
     const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
+    const environmentById = new Map(environmentRows.map((environment) => [environment.id, environment]));
     return selectedIssues.map((issue) => {
       const assignee = issue.assigneeSubject ? assignees.get(issue.assigneeSubject) : undefined;
       const service = serviceById.get(issue.serviceId);
+      const environment = environmentById.get(issue.environmentId);
       if (!service) throw new Error("issue_service_not_found");
+      if (!environment) throw new Error("issue_environment_not_found");
       return {
         id: issue.key, title: issue.title, priority: issue.priority, type: issue.type, status: issue.status,
         assignee: assignee?.displayName ?? null, assigneeSubject: issue.assigneeSubject,
-        service: { key: service.key, name: service.name },
+        service: { key: service.key, name: service.name }, environmentKey: environment.key,
         createdAt: isoDate(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
       };
     });
@@ -263,7 +268,6 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       },
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),
-      environmentKey: (await database.db.select().from(environments).where(eq(environments.id, issue.environmentId)).limit(1))[0]?.key,
       comments: commentRows.map(({ comment, person }) => ({ id: comment.id, author: person.displayName ?? person.subject, body: comment.body, createdAt: comment.createdAt.toISOString() })),
     };
   });

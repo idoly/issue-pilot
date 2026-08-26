@@ -90,8 +90,9 @@ test("lists newer Issues first without letting later updates reorder them", asyn
     await database.db.update(issues).set({ createdAt: new Date("2026-08-14T01:00:00.000Z"), updatedAt: new Date("2026-08-14T01:00:00.000Z") }).where(eq(issues.key, String(newer.id)));
     await database.close();
 
-    const listed = await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string }>;
+    const listed = await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; environmentKey: string }>;
     assert.deepEqual(listed.map(({ id }) => id), [newer.id, older.id]);
+    assert.deepEqual(listed.map(({ environmentKey }) => environmentKey), ["test", "test"]);
   } finally {
     await fixture.cleanup();
   }
@@ -171,6 +172,7 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     const response = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` });
     assert.equal(response.statusCode, 200);
     const detail = await json(response);
+    assert.equal(detail.environmentKey, "test");
     assert.deepEqual(Object.keys(detail.workspace as Record<string, unknown>).sort(), ["lastError", "retryable", "sourceAvailable", "status"]);
     assert.equal("agentSession" in detail, false);
     assert.equal("scopeCandidates" in detail, false);
