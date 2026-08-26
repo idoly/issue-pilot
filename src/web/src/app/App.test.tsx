@@ -548,6 +548,10 @@ describe("issue pilot workspace", () => {
     render(() => <App />);
     const queue = screen.getByLabelText("工单队列");
     await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
+    fireEvent.click(within(queue).getByLabelText("按状态筛选"));
+    const statusOptions = await screen.findByRole("listbox");
+    expect(within(statusOptions).getAllByRole("option").map((option) => option.textContent)).toEqual(["未解决", "待确认", "已解决", "全部工单"]);
+    fireEvent.click(within(statusOptions).getByText("未解决"));
 
     fireEvent.click(within(queue).getByLabelText("按环境筛选"));
     fireEvent.click((await screen.findAllByText("正式")).at(-1)!);

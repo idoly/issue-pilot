@@ -2,10 +2,12 @@ import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "@idoly/ant-d
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { ChevronRight, ListFilter, Plus, Search } from "../ui/icons";
-import { createIssue, errorMessage, ISSUE_STATUSES, listIssues, type IssuePriority, type IssueType } from "../data/client";
+import { createIssue, errorMessage, listIssues, type IssuePriority, type IssueType } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, issueTypesForEnvironment, selectedChoice } from "./IssueForm";
 import { priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel, typeLabel } from "./model";
+
+type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
 
 export function IssueQueue(props: {
   selectedId: string;
@@ -19,7 +21,7 @@ export function IssueQueue(props: {
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
-  const [status, setStatus] = createSignal<string>("active", { ownedWrite: true });
+  const [status, setStatus] = createSignal<QueueStatusFilter>("active", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
   const filtered = createMemo(() => {
@@ -135,10 +137,11 @@ export function IssueQueue(props: {
           <Select
             aria-label="按状态筛选"
             value={status()}
-            onChange={(value) => { const selected = selectedChoice(value, ["active", ...ISSUE_STATUSES, "all"] as const); if (selected) setStatus(selected); }}
+            onChange={(value) => { const selected = selectedChoice(value, ["active", "pending", "resolved", "all"] as const); if (selected) setStatus(selected); }}
             options={[
               { value: "active", label: "未解决" },
-              ...Object.entries(statusLabel).map(([value, label]) => ({ value, label })),
+              { value: "pending", label: statusLabel.pending },
+              { value: "resolved", label: statusLabel.resolved },
               { value: "all", label: "全部工单" },
             ]}
           />
