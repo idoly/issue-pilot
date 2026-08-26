@@ -9,21 +9,21 @@ type CompletedMessage = Extract<RunEvent["event"], { type: "message_end" }>["mes
 
 export type ConversationEntry =
   | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "assistant"; blocks: Array<{ type: "text" | "thinking"; value: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string; hasToolCalls?: boolean; usage?: AssistantMessage["usage"] }
+  | { id: string; kind: "assistant"; blocks: Array<{ contentIndex: number; type: "text" | "thinking"; value: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string; hasToolCalls?: boolean; usage?: AssistantMessage["usage"] }
   | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: ToolResult }
   | { id: string; kind: "summary"; summaryType: "compaction" | "branch"; summary: string; tokensBefore?: number }
   | { id: string; kind: "custom"; label: string; blocks: DisplayBlock[] }
   | { id: string; kind: "bash"; command: string; output: string; exitCode?: number; cancelled: boolean; truncated: boolean };
 
-type AssistantBlock = { type: "text" | "thinking"; value: string };
+type AssistantBlock = { contentIndex: number; type: "text" | "thinking"; value: string };
 
 function assistantBlocks(content: AssistantMessage["content"] | undefined, fallback = ""): AssistantBlock[] {
   const blocks: AssistantBlock[] = [];
-  for (const part of content ?? []) {
-    if (part.type === "text") blocks.push({ type: "text", value: part.text });
-    else if (part.type === "thinking") blocks.push({ type: "thinking", value: part.thinking });
+  for (const [contentIndex, part] of (content ?? []).entries()) {
+    if (part.type === "text") blocks.push({ contentIndex, type: "text", value: part.text });
+    else if (part.type === "thinking") blocks.push({ contentIndex, type: "thinking", value: part.thinking });
   }
-  return blocks.length ? blocks : fallback ? [{ type: "text", value: fallback }] : [];
+  return blocks.length ? blocks : fallback ? [{ contentIndex: 0, type: "text", value: fallback }] : [];
 }
 
 function streamingAssistantIndex(entries: ConversationEntry[]): number {
@@ -87,10 +87,16 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
     const current = index >= 0 ? next[index] as Extract<ConversationEntry, { kind: "assistant" }> : { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true };
     if (!("delta" in update) || typeof update.delta !== "string" || (update.type !== "text_delta" && update.type !== "thinking_delta")) return entries;
     const blockType = update.type === "thinking_delta" ? "thinking" as const : "text" as const;
-    const blockIndex = update.contentIndex ?? 0;
+    const contentIndex = update.contentIndex ?? 0;
     const blocks = [...current.blocks];
-    const existing = blocks[blockIndex];
-    blocks[blockIndex] = existing && existing.type === blockType ? { ...existing, value: existing.value + update.delta } : { type: blockType, value: update.delta };
+    const blockIndex = blocks.findIndex((block) => block.contentIndex === contentIndex);
+    const existing = blockIndex >= 0 ? blocks[blockIndex] : undefined;
+    const block = existing && existing.type === blockType
+      ? { ...existing, value: existing.value + update.delta }
+      : { contentIndex, type: blockType, value: update.delta };
+    if (blockIndex >= 0) blocks[blockIndex] = block;
+    else blocks.push(block);
+    blocks.sort((left, right) => left.contentIndex - right.contentIndex);
     const updated = { ...current, blocks };
     if (index >= 0) next[index] = updated; else next.push(updated);
     return next;

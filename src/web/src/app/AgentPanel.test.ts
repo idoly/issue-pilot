@@ -41,10 +41,22 @@ describe("Agent conversation state", () => {
     let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
     entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
     entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "完成" } }));
-    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查完成" }], streaming: true }]);
+    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ contentIndex: 0, type: "text", value: "检查完成" }], streaming: true }]);
 
     entries = applyAgentEvent(entries, event({ type: "message_end", message: assistant([{ type: "text", text: "检查已完成" }], "stop") }));
-    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ type: "text", value: "检查已完成" }], stopReason: "stop", usage }]);
+    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [{ contentIndex: 0, type: "text", value: "检查已完成" }], stopReason: "stop", usage }]);
+  });
+
+  it("keeps sparse Pi content indexes out of the rendered block array", () => {
+    let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
+    entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 3, delta: "Visible answer" } }));
+    entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Inspecting" } }));
+    entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 3, delta: " complete" } }));
+
+    expect(entries).toEqual([{ id: "message-1", kind: "assistant", blocks: [
+      { contentIndex: 0, type: "thinking", value: "Inspecting" },
+      { contentIndex: 3, type: "text", value: "Visible answer complete" },
+    ], streaming: true }]);
   });
 
   it("keeps thinking separate from visible answer text", () => {
@@ -53,8 +65,8 @@ describe("Agent conversation state", () => {
       { type: "text", text: "Tests pass" },
     ], "stop") }, "message-1"));
     expect(entries[0]).toEqual({ id: "message-1", kind: "assistant", blocks: [
-      { type: "thinking", value: "Inspect tests" },
-      { type: "text", value: "Tests pass" },
+      { contentIndex: 0, type: "thinking", value: "Inspect tests" },
+      { contentIndex: 1, type: "text", value: "Tests pass" },
     ], stopReason: "stop", usage });
   });
 
