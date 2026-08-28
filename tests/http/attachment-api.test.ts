@@ -64,7 +64,7 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
     const issueId = fixture.engine.enqueued.at(-1)!;
     fixture.engine.running.delete(issueId);
     const created = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string }> };
-    const edit = { title: "Updated", description: "Atomic edit", priority: "p2", type: "smart_analysis", serviceKey: "alpha", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] };
+    const edit = { title: "Updated", description: "Atomic edit", priority: "p2", type: "smart_analysis", serviceKey: "alpha", environmentKey: "test", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] };
     const boundary = "replace-attachment";
     const updated = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: issueMultipart(boundary, edit, "replacement.txt", "replacement evidence") });
     assert.equal(updated.statusCode, 200, updated.body);
@@ -134,7 +134,7 @@ test("rejects oversized multipart Issue edits at the configured attachment bound
     const issue = await json(created);
     fixture.engine.running.clear();
     const boundary = "oversized-attachment";
-    const edit = { title: "Updated", description: "", priority: "p2", type: "smart_analysis", serviceKey: "alpha", assigneeSubject: null, ccSubjects: [] };
+    const edit = { title: "Updated", description: "", priority: "p2", type: "smart_analysis", serviceKey: "alpha", environmentKey: "test", assigneeSubject: null, ccSubjects: [] };
     const response = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${issue.id}`,

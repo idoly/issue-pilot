@@ -172,7 +172,11 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       const currentIssue = await requireIssue(database, issue.key);
       const [issueEnvironment] = await database.db.select({ id: environments.id, key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1);
       if (!issueEnvironment) throw new ApiError(409, "issue_scope_not_found");
-      const issueValues = await parseIssueInput(input, issueEnvironment);
+      const targetEnvironment = await findEnvironmentByKey(text(input.environmentKey, "environment_key", 100));
+      if (!targetEnvironment) throw new ApiError(400, "invalid_environment");
+      const issueValues = await parseIssueInput(input, targetEnvironment);
+      const scopeChanged = currentIssue.serviceId !== issueValues.serviceId || currentIssue.environmentId !== targetEnvironment.id;
+      if (scopeChanged && (issueEnvironment.kind === "dev" || targetEnvironment.kind === "dev")) throw new ApiError(409, "development_issue_scope_immutable");
       const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
       const removedAttachmentIdSet = new Set(removedAttachmentIds);
       const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
@@ -193,7 +197,11 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
           quarantined.push({ sourcePath, temporaryPath });
         }
         const createdAttachments = await database.db.transaction(async (transaction) => {
-          await transaction.update(issues).set({ title: issueValues.title, description: issueValues.description, priority: issueValues.priority, type: issueValues.type, serviceId: issueValues.serviceId, assigneeSubject: issueValues.assigneeSubject, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+          await transaction.update(issues).set({ title: issueValues.title, description: issueValues.description, priority: issueValues.priority, type: issueValues.type, serviceId: issueValues.serviceId, environmentId: targetEnvironment.id, assigneeSubject: issueValues.assigneeSubject, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+          if (scopeChanged) {
+            await transaction.delete(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+            await transaction.update(issueWorkspaces).set({ status: "not_created", runtimeReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+          }
           await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
           if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: issue.id, subject: recipient })));
           if (removedAttachmentIds.length) await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, removedAttachmentIds)));
@@ -212,7 +220,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       }
       await finalizeQuarantinedAttachments(quarantined);
       if (currentIssue.status !== "resolved") {
-        reservation.enqueue(issue.id, issueMetadataUpdatePrompt({ issue: { ...currentIssue, ...issueValues }, service: issueValues.service, environmentKey: issueEnvironment.key, attachments: attachmentDtos, attachmentPath: attachmentRoot }), false);
+        reservation.enqueue(issue.id, issueMetadataUpdatePrompt({ issue: { ...currentIssue, ...issueValues }, service: issueValues.service, environmentKey: targetEnvironment.key, attachments: attachmentDtos, attachmentPath: attachmentRoot }), false);
       }
       return serializeIssueSummary(await requireIssue(database, issue.key));
     }));

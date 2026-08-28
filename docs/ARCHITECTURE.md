@@ -160,6 +160,8 @@ Repository URL使用20字符SHA-256前缀。Bare store保留remote tracking refs
 
 下一轮重新读取当前Deployment，因此配置和branch更新会生效。Agent只看到Issue runtime link，不看到shared checkout物理root。
 
+Prod/test Issue可在编辑事务中切换到另一个prod/test Service/Environment scope。目标Deployment和Issue type必须有效，运行中的Issue由reservation拒绝；切换会关闭旧in-memory session、保留Pi JSONL/Attachment/Comment、清空旧只读Repository投影并使runtime失效，然后由metadata轮次从目标Deployment重建只读checkout、runtime、model和capability closure。Dev Issue不能通过普通编辑切换Service或Environment，进入dev仍使用专用转换动作。
+
 ### Active dev
 
 - `defect_fix`使用`hotfix-<issue-key>`。

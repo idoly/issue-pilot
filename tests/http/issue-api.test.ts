@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
-import { issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
 
 test("validates Issue scope, subjects, priority, and environment type", async () => {
@@ -72,6 +72,53 @@ test("serializes retries, status transitions, messages, and comments with one Is
     assert.equal(message.statusCode, 202);
     assert.equal(fixture.engine.messages.at(-1), "Check evidence");
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "" } })).statusCode, 400);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("switches read-only Issue scope and rejects development scope changes", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha", ["test", "prod"]);
+    await createService(fixture.app, "Beta", ["test", "prod"]);
+    await createService(fixture.app, "Development", ["dev"]);
+    await createService(fixture.app, "OtherDevelopment", ["dev"]);
+    const issue = await createIssue(fixture.app, "alpha", "test", "Cross-system investigation");
+    const issueId = fixture.engine.enqueued.at(-1)!;
+    fixture.engine.running.clear();
+
+    const database = openDatabase(fixture.databaseFile);
+    await database.db.insert(issueRepositories).values({ issueId, url: "https://example.test/alpha.git", baseBranch: "main", commitBefore: "a".repeat(40) });
+    await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, issueId));
+    await database.close();
+
+    const switched = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, payload: issuePayload("beta", "prod", "Continue in Beta") });
+    assert.equal(switched.statusCode, 200, switched.body);
+    assert.equal((await json(switched)).environmentKey, "prod");
+    assert.equal(((await json(switched)).service as { key: string }).key, "beta");
+    assert.equal(fixture.engine.closedSessions.at(-1), issueId);
+    assert.equal(fixture.engine.enqueued.at(-1), issueId);
+    assert.equal(fixture.engine.recordedMessages.at(-1), false);
+    assert.match(fixture.engine.messages.at(-1) ?? "", /"environmentKey": "prod"/);
+    assert.match(fixture.engine.messages.at(-1) ?? "", /"key": "beta"/);
+
+    fixture.engine.running.clear();
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { environmentKey: string; service: { key: string }; repositories: unknown[]; workspace: { status: string; sourceAvailable: boolean } };
+    assert.equal(detail.environmentKey, "prod");
+    assert.equal(detail.service.key, "beta");
+    assert.deepEqual(detail.repositories, []);
+    assert.deepEqual(detail.workspace, { status: "not_created", sourceAvailable: false, lastError: null, retryable: true });
+
+    const developmentTarget = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, payload: issuePayload("development", "dev", "Invalid conversion") });
+    assert.equal(developmentTarget.statusCode, 409);
+    assert.equal((await json(developmentTarget)).error, "development_issue_scope_immutable");
+
+    const developmentIssue = await createIssue(fixture.app, "development", "dev", "Development issue");
+    fixture.engine.running.clear();
+    const changedDevelopmentService = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${developmentIssue.id}`, payload: issuePayload("otherdevelopment", "dev", "Wrong repository") });
+    assert.equal(changedDevelopmentService.statusCode, 409);
+    assert.equal((await json(changedDevelopmentService)).error, "development_issue_scope_immutable");
   } finally {
     await fixture.cleanup();
   }

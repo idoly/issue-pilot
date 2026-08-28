@@ -271,7 +271,16 @@ describe("issue pilot workspace", () => {
     const reopenedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
     expect(within(reopenedIssueDialog).getByText("existing.csv")).toBeTruthy();
     expect(within(reopenedIssueDialog).getByText("1")).toBeTruthy();
-    fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
+    fireEvent.click(within(reopenedIssueDialog).getByLabelText("编辑工单环境"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式"));
+    await waitFor(() => expect(within(reopenedIssueDialog).getByLabelText("编辑工单类型").closest(".ads-select")?.textContent).toMatch(/数据处理|智能分析/));
+    await waitFor(() => expect(within(reopenedIssueDialog).getByLabelText("编辑工单服务").closest(".ads-select")?.textContent).toContain("Orders"));
+    fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "保存" }));
+    const scopeDialog = await waitFor(() => screen.getByRole("dialog", { name: "切换调查范围" }));
+    expect(within(scopeDialog).getByText(/Orders \/ 正式.*已有对话、附件和评论会保留/)).toBeTruthy();
+    fireEvent.click(within(scopeDialog).getByRole("button", { name: "返回编辑" }));
+    const returnedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
+    fireEvent.click(within(returnedIssueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
     fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
@@ -290,6 +299,11 @@ describe("issue pilot workspace", () => {
     expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+    const developmentEditor = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
+    expect((within(developmentEditor).getByLabelText("编辑工单环境") as HTMLButtonElement).disabled).toBe(true);
+    expect((within(developmentEditor).getByLabelText("编辑工单服务") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(developmentEditor).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "浏览工单代码" }));
     const developmentSource = await waitFor(() => screen.getByRole("region", { name: "ISSUE-20260810-041 代码浏览器" }));
     expect((within(developmentSource).getByTitle("ISSUE-20260810-041 VS Code工作台") as HTMLIFrameElement).src).toContain("view=source-control");

@@ -72,6 +72,7 @@ export interface IssueInput {
   priority: IssuePriority;
   type: IssueType;
   serviceKey: string;
+  environmentKey: string;
   assigneeSubject: string | null;
   ccSubjects: string[];
 }
@@ -227,7 +228,7 @@ export async function fetchAttachment(key: string, attachmentId: string): Promis
   return response.blob();
 }
 
-export function createIssue(input: IssueInput & { environmentKey: string }, files: File[] = []): Promise<IssueListItem> {
+export function createIssue(input: IssueInput, files: File[] = []): Promise<IssueListItem> {
   if (!files.length) return jsonRequest("/api/issues", "POST", input);
   const form = new FormData();
   form.append("issue", JSON.stringify(input));
