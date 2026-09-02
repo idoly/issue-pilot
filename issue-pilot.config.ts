@@ -69,7 +69,6 @@ export const issuePilotConfig = Object.freeze({
       fileBytes: 2 * 1024 * 1024,
       directoryEntries: 500,
       searchQueryCharacters: 200,
-      searchMatches: 200,
       historyCommits: 100,
       changeFiles: 500,
       commandMs: 5_000,

@@ -257,21 +257,19 @@ export class SourceBrowser {
     if (!value || value.length > issuePilotConfig.limits.sourceBrowser.searchQueryCharacters || value.includes("\0")) throw new Error("invalid_source_query");
     const context = await this.context(issue, repositoryName);
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.searchExecutable, [
-      "--json", "--no-config", "--hidden", "--fixed-strings", "--line-number", "--column", "--max-filesize", `${issuePilotConfig.limits.sourceBrowser.fileBytes}`,
+      "--json", "--no-config", "--hidden", "--fixed-strings", "--line-number", "--column", "--max-columns", "1000", "--max-columns-preview", "--max-filesize", `${issuePilotConfig.limits.sourceBrowser.fileBytes}`,
       ...(options.caseSensitive === false ? ["--ignore-case"] : []),
       ...(options.wordMatch === true ? ["--word-regexp"] : []),
       "--glob", "!.git", "--glob", "!.git/**", "--", value, ".",
-    ], { cwd: context.root, timeout: issuePilotConfig.limits.sourceBrowser.commandMs, maxOutputBytes: issuePilotConfig.limits.sourceBrowser.commandOutputBytes });
+    ], { cwd: context.root, timeout: issuePilotConfig.limits.sourceBrowser.commandMs, maxOutputBytes: null });
     if (result.killed) throw new Error("source_search_timeout");
     if (result.code !== 0 && result.code !== 1) throw new Error("source_search_failed");
     const matches: SourceSearchMatch[] = [];
-    let truncated = false;
     for (const line of result.stdout.split("\n")) {
       if (!line) continue;
       let event: { type?: string; data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number; submatches?: Array<{ start?: number }> } };
       try { event = JSON.parse(line) as typeof event; } catch { throw new Error("invalid_source_search_response"); }
       if (event.type !== "match") continue;
-      if (matches.length >= issuePilotConfig.limits.sourceBrowser.searchMatches) { truncated = true; break; }
       const data = event.data;
       const resultPath = data?.path?.text;
       const preview = data?.lines?.text;
@@ -281,7 +279,7 @@ export class SourceBrowser {
       const normalized = sourcePath(normalizedRelativePath(resultPath.replace(/^\.\//, "")));
       matches.push({ path: normalized, line: lineNumber!, column: column! + 1, preview: preview.replace(/[\r\n]+$/, "").slice(0, 1000) });
     }
-    return { matches, truncated };
+    return { matches, truncated: false };
   }
 
   async blame(issue: IssueReference, repositoryName: string, relativePath: string, line: number): Promise<SourceBlame> {

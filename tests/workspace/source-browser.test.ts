@@ -83,6 +83,17 @@ test("browses only registered Issue repository content", async () => {
       matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false,
     });
     await browser.search(issue!, "application", "ready", { caseSensitive: false, wordMatch: true });
+    const completeSearchBrowser = new SourceBrowser(database.db, root, {
+      async execute(_command, _args, options) {
+        assert.equal(options?.maxOutputBytes, null);
+        const matches = Array.from({ length: 250 }, (_, index) => JSON.stringify({ type: "match", data: { path: { text: `./src/result-${index}.ts` }, lines: { text: "export const ready = true;\n" }, line_number: index + 1, submatches: [{ start: 13 }] } }));
+        return { code: 0, stderr: "", killed: false, stdout: `${matches.join("\n")}\n` };
+      },
+    });
+    const completeSearch = await completeSearchBrowser.search(issue!, "application", "ready");
+    assert.equal(completeSearch.matches.length, 250);
+    assert.deepEqual(completeSearch.matches.at(-1), { path: "src/result-249.ts", line: 250, column: 14, preview: "export const ready = true;" });
+    assert.equal(completeSearch.truncated, false);
     assert.deepEqual(await browser.blame(issue!, "application", "src/index.ts", 1), {
       path: "src/index.ts", line: 1, commit: "b".repeat(40), shortCommit: "b".repeat(8), author: "Test User", date: "2026-08-15T00:00:00.000Z", subject: "Fix source browser",
     });
@@ -118,6 +129,8 @@ test("browses only registered Issue repository content", async () => {
     assert.equal(searchCommands[0]!.cwd, repository);
     assert.ok(searchCommands[0]!.args.includes("--json"));
     assert.ok(searchCommands[0]!.args.includes("--fixed-strings"));
+    assert.ok(searchCommands[0]!.args.includes("--max-columns-preview"));
+    assert.equal(searchCommands[0]!.args[searchCommands[0]!.args.indexOf("--max-columns") + 1], "1000");
     assert.ok(!searchCommands[0]!.args.includes("--ignore-case"));
     assert.ok(searchCommands[1]!.args.includes("--ignore-case"));
     assert.ok(searchCommands[1]!.args.includes("--word-regexp"));

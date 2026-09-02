@@ -15,10 +15,11 @@ test("bounds output and applies scoped environment overrides for local capabilit
     environment: { HOME: "/tmp/issue-pilot-profile", TEST_MARKER: "scoped" },
   });
   assert.equal(scoped.stdout, "/tmp/issue-pilot-profile:scoped");
-  await assert.rejects(
-    executeLocalCommand(process.execPath, ["-e", `process.stdout.write('x'.repeat(${issuePilotConfig.limits.process.commandOutputBytes + 1}))`]),
-    /command_output_too_large/,
-  );
+  const oversizedCommand = ["-e", `process.stdout.write('x'.repeat(${issuePilotConfig.limits.process.commandOutputBytes + 1}))`];
+  await assert.rejects(executeLocalCommand(process.execPath, oversizedCommand), /command_output_too_large/);
+  const unbounded = await executeLocalCommand(process.execPath, oversizedCommand, { maxOutputBytes: null });
+  assert.equal(Buffer.byteLength(unbounded.stdout), issuePilotConfig.limits.process.commandOutputBytes + 1);
+  assert.equal(unbounded.killed, false);
 });
 
 test("terminates descendant processes after the grace period", { skip: process.platform === "win32" }, async () => {
