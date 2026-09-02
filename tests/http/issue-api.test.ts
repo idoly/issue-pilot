@@ -175,7 +175,7 @@ test("generates concurrent Issue keys and refuses unmanaged state", async () => 
   }
 });
 
-test("exposes production analysis conversion as a guarded dedicated action", async () => {
+test("exposes read-only analysis conversion as a guarded dedicated action", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "ProductionOnly", ["prod"]);
@@ -202,9 +202,9 @@ test("exposes production analysis conversion as a guarded dedicated action", asy
     await pending.db.update(issues).set({ status: "pending" }).where(eq(issues.id, testIssueId));
     await pending.db.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, testIssueId));
     await pending.close();
-    const notProduction = await fixture.app.inject({ method: "POST", url: `/api/issues/${testIssue.id}/development` });
-    assert.equal(notProduction.statusCode, 409);
-    assert.equal((await json(notProduction)).error, "issue_not_convertible_to_development");
+    const missingTestDevelopmentDeployment = await fixture.app.inject({ method: "POST", url: `/api/issues/${testIssue.id}/development` });
+    assert.equal(missingTestDevelopmentDeployment.statusCode, 409);
+    assert.equal((await json(missingTestDevelopmentDeployment)).error, "issue_service_deployment_not_found");
   } finally {
     await fixture.cleanup();
   }

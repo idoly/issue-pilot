@@ -577,32 +577,32 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
   }
 });
 
-test("converts a completed production analysis to a development defect while preserving Issue evidence", async () => {
+test("converts a ready test analysis to a development defect while preserving Issue evidence", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-conversion-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
-    const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
+    const [testEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "test")).limit(1);
     const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
-    assert.ok(prodEnvironment && devEnvironment);
+    assert.ok(testEnvironment && devEnvironment);
     await database.db.insert(subjects).values({ subject: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
     const [service] = await database.db.insert(services).values({ key: "conversion-service", name: "Conversion Service" }).returning();
     const remote = await createRemote(root, "conversion");
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "conversion", url: remote }).returning();
-    const [prodDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment.id, config: {} }).returning();
+    const [testDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: testEnvironment.id, config: {} }).returning();
     const [devDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: devEnvironment.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
-      { deploymentId: prodDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
+      { deploymentId: testDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
       { deploymentId: devDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
     ]);
     const [issue] = await database.db.insert(issues).values({
       key: "ISSUE-20260814-101",
-      title: "Production analysis found a code defect",
+      title: "Test analysis found a code defect",
       description: "Preserve this analysis",
-      status: "pending",
+      status: "open",
       priority: "p1",
       type: "smart_analysis",
       serviceId: service!.id,
-      environmentId: prodEnvironment.id,
+      environmentId: testEnvironment.id,
       reporterSubject: "conversion-tester",
     }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
@@ -662,7 +662,7 @@ test("converts a completed production analysis to a development defect while pre
 
     const [rolledBackIssue] = await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1);
     const rolledBackRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(rolledBackIssue!.environmentId, prodEnvironment.id);
+    assert.equal(rolledBackIssue!.environmentId, testEnvironment.id);
     assert.equal(rolledBackIssue!.type, "smart_analysis");
     assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
     await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
@@ -674,7 +674,7 @@ test("converts a completed production analysis to a development defect while pre
     const converted = await lifecycle.convertIssueToDevelopment(issue!.id);
     assert.equal(converted.environmentId, devEnvironment.id);
     assert.equal(converted.type, "defect_fix");
-    assert.equal(converted.status, "pending");
+    assert.equal(converted.status, "open");
     const convertedRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(classifyRepositoryState(convertedRepositories), "development_workspace");
     assert.equal(convertedRepositories[0]!.workingBranch, "hotfix-issue-20260814-101");

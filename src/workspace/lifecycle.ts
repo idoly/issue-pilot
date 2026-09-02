@@ -3,7 +3,7 @@ import { rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { and, asc, eq, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import pMap from "p-map";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -256,7 +256,7 @@ export class WorkspaceLifecycleManager {
 
   private async convertLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<Issue> {
     const { issue, workspace } = issueRow;
-    if (issueRow.environmentKind !== "prod" || issue.type !== "smart_analysis" || issue.status !== "pending" || workspace?.status !== "ready") {
+    if (!["prod", "test"].includes(issueRow.environmentKind) || issue.type !== "smart_analysis" || !["open", "pending"].includes(issue.status) || workspace?.status !== "ready") {
       throw new WorkspaceConversionRefusal("issue_not_convertible_to_development");
     }
     const [developmentEnvironment] = await this.database.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
@@ -291,7 +291,7 @@ export class WorkspaceLifecycleManager {
             eq(issues.id, issue.id),
             eq(issues.environmentId, issue.environmentId),
             eq(issues.type, "smart_analysis"),
-            eq(issues.status, "pending"),
+            inArray(issues.status, ["open", "pending"]),
           )).returning();
           if (!updatedWorkspace || !converted) throw new WorkspaceConversionRefusal("issue_changed_during_conversion");
           return converted;

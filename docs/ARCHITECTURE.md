@@ -171,7 +171,7 @@ Prod/test Issue可在编辑事务中切换到另一个prod/test Service/Environm
 - Service新增Repository在下一次prepare加入；待删除worktree必须clean。
 - 完整目标集合先prepare，再finalize filesystem和DB；失败按batch rollback恢复。
 
-Prod `smart_analysis`可在`pending/ready/read_only`时通过专用动作转为dev `defect_fix`。转换保留Attachment、Comment和Pi JSONL，准备hotfix worktree/runtime后在一个transaction切换scope和Repository rows；失败恢复只读runtime。
+Prod/test `smart_analysis`可在`open|pending`、`ready`、`read_only`时通过专用动作转为dev `defect_fix`。转换保留Attachment、Comment和Pi JSONL，准备hotfix worktree/runtime后在一个transaction切换scope和Repository rows；失败恢复只读runtime。
 
 ### Released dev
 

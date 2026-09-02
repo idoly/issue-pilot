@@ -140,7 +140,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
       if (issueGeneration === generation) setConversionError(errorMessage(error));
     } finally { if (issueGeneration === generation) setConverting(false); }
   };
-  const canConvertToDevelopment = () => props.issue.environmentKey === "prod" && props.issue.type === "smart_analysis" && props.issue.status === "pending" && props.issue.workspace.status === "ready";
+  const canConvertToDevelopment = () => ["prod", "test"].includes(props.issue.environmentKey) && props.issue.type === "smart_analysis" && ["open", "pending"].includes(props.issue.status) && props.issue.workspace.status === "ready";
   const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
   const environmentName = () => catalog().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
   const availableIssueTypes = createMemo(() => issueTypesForEnvironment(editEnvironment() || props.issue.environmentKey));

@@ -565,19 +565,34 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(queue).getByLabelText("按状态筛选"));
     const statusOptions = await screen.findByRole("listbox");
     expect(within(statusOptions).getAllByRole("option").map((option) => option.textContent)).toEqual(["未解决", "待确认", "已解决", "全部工单"]);
-    fireEvent.click(within(statusOptions).getByText("未解决"));
+    fireEvent.click(within(statusOptions).getByText("全部工单"));
 
     fireEvent.click(within(queue).getByLabelText("按环境筛选"));
-    fireEvent.click((await screen.findAllByText("正式")).at(-1)!);
+    const environmentOptions = await waitFor(() => {
+      const listbox = screen.getAllByRole("listbox").find((candidate) => within(candidate).queryByText("正式"));
+      if (!listbox) throw new Error("environment options not open");
+      return listbox;
+    });
+    fireEvent.click(within(environmentOptions).getByText("正式"));
     await waitFor(() => expect(within(queue).getByText("ISSUE-20260810-041")).toBeTruthy());
     expect(within(queue).queryByText("ISSUE-20260810-042")).toBeNull();
 
     fireEvent.click(within(queue).getByLabelText("按服务筛选"));
-    fireEvent.click((await screen.findAllByText("Orders")).at(-1)!);
+    const serviceOptions = await waitFor(() => {
+      const listbox = screen.getAllByRole("listbox").find((candidate) => within(candidate).queryByText("Orders"));
+      if (!listbox) throw new Error("service options not open");
+      return listbox;
+    });
+    fireEvent.click(within(serviceOptions).getByText("Orders"));
     await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(1));
 
     fireEvent.click(within(queue).getByLabelText("按服务筛选"));
-    fireEvent.click((await screen.findAllByText("SRM")).at(-1)!);
+    const changedServiceOptions = await waitFor(() => {
+      const listbox = screen.getAllByRole("listbox").find((candidate) => within(candidate).queryByText("SRM"));
+      if (!listbox) throw new Error("changed service options not open");
+      return listbox;
+    });
+    fireEvent.click(within(changedServiceOptions).getByText("SRM"));
     await waitFor(() => expect(within(queue).queryAllByRole("listitem")).toHaveLength(0));
     expect(within(queue).getByText("没有匹配的工单")).toBeTruthy();
   });
@@ -590,7 +605,7 @@ describe("issue pilot workspace", () => {
     render(() => <App />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     const current = await getIssue.mock.results[0]!.value;
-    const pending = { ...current, status: "pending" as const, workspace: { ...current.workspace, status: "ready" as const } };
+    const pending = { ...current, type: "smart_analysis" as const, status: "pending" as const, workspace: { ...current.workspace, status: "ready" as const } };
     getIssue.mockClear();
     listIssues.mockClear();
     getIssue.mockResolvedValueOnce(pending);
@@ -602,6 +617,7 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "转开发修复" })).toBeTruthy();
     const queueItem = await waitFor(() => screen.getByRole("listitem"));
     expect(queueItem.textContent).toContain("ISSUE-20260810-042");
     expect(queueItem.textContent).toContain("待确认");

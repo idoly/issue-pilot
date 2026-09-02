@@ -24,6 +24,7 @@ export function IssueQueue(props: {
   const [status, setStatus] = createSignal<QueueStatusFilter>("active", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
+  const environmentLabel = (key: string) => catalog().environments.find((environment) => environment.key === key)?.name ?? key;
   const filtered = createMemo(() => {
     const subject = props.userSubject;
     if (!subject) return [];
@@ -169,6 +170,7 @@ export function IssueQueue(props: {
                 type="button"
                 role="listitem"
                 class={`queue-item${issue.id === props.selectedId ? " selected" : ""}`}
+                aria-current={issue.id === props.selectedId ? "true" : undefined}
                 onClick={() => props.onSelect(issue.id)}
               >
                 <span class="queue-item-topline">
@@ -176,10 +178,12 @@ export function IssueQueue(props: {
                   <Tag color={priorityColor[issue.priority]}>{issue.priority.toUpperCase()}</Tag>
                   <span class="queue-time">{relativeTime(issue.updatedAt)}</span>
                 </span>
-                <span class="queue-title">{issue.title}</span>
+                <span class="queue-title" title={issue.title}>{issue.title}</span>
                 <span class="queue-item-meta">
-                  <Badge status={statusBadge[issue.status]} text={statusLabel[issue.status]} />
-                  <span>{issue.assignee ?? "未分配"}</span>
+                  <span class="queue-status"><Badge status={statusBadge[issue.status]} text={statusLabel[issue.status]} /></span>
+                  <span class="queue-scope" title={`${issue.service.name} / ${environmentLabel(issue.environmentKey)}`}>
+                    <strong>{issue.service.name}</strong><span aria-hidden="true">/</span><span>{environmentLabel(issue.environmentKey)}</span>
+                  </span>
                 </span>
                 <ChevronRight class="queue-chevron" size={16} aria-hidden="true" />
               </button>
