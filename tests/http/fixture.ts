@@ -6,6 +6,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 
 import { AgentEventBus } from "../../src/agent/events.ts";
+import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
 import { AGENT_THINKING_LEVELS, type EnvironmentKind } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
 
@@ -21,6 +22,7 @@ export class TestAgentController {
   readonly enqueued: string[] = [];
   readonly messages: Array<string | undefined> = [];
   readonly recordedMessages: boolean[] = [];
+  readonly gitIdentities: Array<GitCommitIdentity | undefined> = [];
   readonly closedSessions: string[] = [];
   readonly running = new Set<string>();
   readonly reservations = new Set<string>();
@@ -51,9 +53,10 @@ export class TestAgentController {
     }
   }
 
-  async send(issueId: string, message: string): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity): Promise<void> {
     if (this.reservations.has(issueId)) throw new Error("issue_already_running");
     this.messages.push(message);
+    this.gitIdentities.push(gitIdentity);
     this.enqueued.push(issueId);
   }
 

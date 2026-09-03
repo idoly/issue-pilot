@@ -4,11 +4,11 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues, serviceDeployments } from "../db/schema.ts";
+import { agentSessions, issues, serviceDeployments, subjects } from "../db/schema.ts";
 import { AGENT_THINKING_LEVELS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
@@ -93,7 +93,15 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     const input = record(request.body);
     const message = text(input.message, "agent_message", issuePilotConfig.limits.agentMessageChars);
-    try { await engine.send(issue.id, message); }
+    const subject = await ensureCurrentSubject(database, request);
+    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+    if (!person) throw new ApiError(400, "invalid_current_subject");
+    try {
+      await engine.send(issue.id, message, {
+        name: person.displayName ?? person.subject,
+        email: person.email ?? `${person.subject}@localhost`,
+      });
+    }
     catch (error) {
       if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent"].includes(error.message)) throw new ApiError(409, error.message);
       throw error;

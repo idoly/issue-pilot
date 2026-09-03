@@ -8,7 +8,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
-import { AgentResponseWatchdog, createPrivateSessionManager, PiSessionRuntime } from "../../src/agent/pi-session.ts";
+import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
 import type { PiModelRuntime } from "../../src/pi/models.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
@@ -87,6 +87,17 @@ test("times out only while waiting for model output", async () => {
   assert.equal(timeouts, 1);
   watchdog.stop();
   assert.throws(() => new AgentResponseWatchdog(0, () => undefined), /invalid_model_response_idle_timeout/);
+});
+
+test("maps the current user to Git author and committer environment", () => {
+  assert.deepEqual(gitIdentityEnvironment({ name: " 严欣 ", email: " yx4821@example.test " }), {
+    GIT_AUTHOR_NAME: "严欣",
+    GIT_AUTHOR_EMAIL: "yx4821@example.test",
+    GIT_COMMITTER_NAME: "严欣",
+    GIT_COMMITTER_EMAIL: "yx4821@example.test",
+  });
+  assert.deepEqual(gitIdentityEnvironment(), {});
+  assert.throws(() => gitIdentityEnvironment({ name: "", email: "user@example.test" }), /invalid_git_commit_identity/);
 });
 
 test("limits read-only deployments to non-mutating Pi tools", () => {

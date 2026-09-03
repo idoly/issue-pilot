@@ -23,12 +23,18 @@ import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 const isWindows = process.platform === "win32";
 const pathSeparator = isWindows ? ";" : ":";
 
+export interface GitCommitIdentity {
+  name: string;
+  email: string;
+}
+
 export interface StartPiSessionOptions {
   manager: SessionManager;
   context: AgentSessionContext;
   deploymentConfig: DeploymentConfig;
   workspaceRoot: string;
   executableRoot?: string;
+  gitIdentity?: GitCommitIdentity;
   systemPrompt: string;
   modelResponseIdleMs?: number;
   onEvent: (event: JsonAgentSessionEvent) => void;
@@ -37,6 +43,7 @@ export interface StartPiSessionOptions {
 export interface ManagedPiSession {
   readonly session: AgentSession;
   readonly streaming: boolean;
+  setGitIdentity(identity: GitCommitIdentity): void;
   prompt(message: string): Promise<void>;
   stop(): Promise<void>;
 }
@@ -118,7 +125,20 @@ function toWireEvent(event: AgentSessionEvent): JsonAgentSessionEvent {
   };
 }
 
-function sessionTools(context: AgentSessionContext, deploymentConfig: DeploymentConfig, workspaceRoot: string, toolRuntime: ToolRuntime, executableRoot?: string): ToolDefinition<any, any, any>[] {
+export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<string, string> {
+  if (!identity) return {};
+  const name = identity.name.trim();
+  const email = identity.email.trim();
+  if (!name || !email || name.includes("\0") || email.includes("\0")) throw new Error("invalid_git_commit_identity");
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+  };
+}
+
+function sessionTools(context: AgentSessionContext, deploymentConfig: DeploymentConfig, workspaceRoot: string, toolRuntime: ToolRuntime, gitIdentity: () => GitCommitIdentity | undefined, executableRoot?: string): ToolDefinition<any, any, any>[] {
   const tools = createCapabilityTools(context, deploymentConfig, toolRuntime);
   if (!sessionToolAllowlist(context).includes("bash")) return tools;
   if (!executableRoot) throw new Error("project_wrapper_root_required");
@@ -130,6 +150,7 @@ function sessionTools(context: AgentSessionContext, deploymentConfig: Deployment
         AI_AGENT: "pi",
         PI_CODING_AGENT: "true",
         PATH: `${executableRoot}${pathSeparator}${context.env.PATH ?? ""}`,
+        ...gitIdentityEnvironment(gitIdentity()),
       },
     }),
   }));
@@ -200,6 +221,8 @@ export class PiSessionRuntime {
     await resourceLoader.reload();
 
     const expectedTools = sessionToolAllowlist(context);
+    let gitIdentity = options.gitIdentity;
+    gitIdentityEnvironment(gitIdentity);
     const { session } = await createAgentSession({
       cwd: workspaceRoot,
       agentDir: getAgentDir(),
@@ -207,7 +230,7 @@ export class PiSessionRuntime {
       model,
       thinkingLevel: context.model.thinkingLevel,
       tools: expectedTools,
-      customTools: sessionTools(context, options.deploymentConfig, workspaceRoot, this.#toolRuntime, options.executableRoot),
+      customTools: sessionTools(context, options.deploymentConfig, workspaceRoot, this.#toolRuntime, () => gitIdentity, options.executableRoot),
       sessionManager: options.manager,
       settingsManager,
       resourceLoader,
@@ -235,6 +258,10 @@ export class PiSessionRuntime {
       session,
       get streaming() {
         return session.isStreaming;
+      },
+      setGitIdentity: (identity) => {
+        gitIdentityEnvironment(identity);
+        gitIdentity = identity;
       },
       prompt: async (message) => {
         const idle = new Promise<never>((_resolve, reject) => { rejectIdle = reject; });

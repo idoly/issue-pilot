@@ -8,7 +8,7 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
-import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession } from "./pi-session.ts";
+import { createPrivateSessionManager, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { issueAttachmentRoot, issueSessionRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
@@ -18,6 +18,7 @@ import {
   issueWorkspaces,
   issues,
   services,
+  subjects,
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "../pi/models.ts";
@@ -32,7 +33,7 @@ export interface AgentReservation {
 
 export interface AgentController {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
-  send(issueId: string, message: string): Promise<void>;
+  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity): Promise<void>;
   isRunning(issueId: string): boolean;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
   close?(): Promise<void>;
@@ -109,7 +110,7 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  async send(issueId: string, message: string): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity): Promise<void> {
     this.assertOpen();
     this.assertNotReserved(issueId);
     this.beginActivity(issueId);
@@ -122,9 +123,10 @@ export class AgentEngine implements AgentController {
       if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
         if (managed) await this.stopSession(issueId);
         this.assertNotReserved(issueId);
-        this.schedule(issueId, () => this.run(issueId, userMessage, true));
+        this.schedule(issueId, () => this.run(issueId, userMessage, true, gitIdentity));
         return;
       }
+      if (gitIdentity) managed.setGitIdentity(gitIdentity);
       if (managed.streaming) {
         await this.steerQueue.run(issueId, async () => {
           if (this.sessions.get(issueId) !== managed || !managed.streaming) throw new Error("agent_session_changed");
@@ -218,10 +220,11 @@ export class AgentEngine implements AgentController {
     }).finally(() => this.endActivity(issueId));
   }
 
-  private async run(issueId: string, latestMessage?: string, displayMessage = false): Promise<void> {
+  private async run(issueId: string, latestMessage?: string, displayMessage = false, requestedGitIdentity?: GitCommitIdentity): Promise<void> {
     const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+    const gitIdentity = requestedGitIdentity ?? await this.gitIdentity(issue.reporterSubject);
     const currentMessage = latestMessage?.trim() || undefined;
     const [preparingWorkspace] = await this.database.update(issueWorkspaces).set({ status: "preparing", runtimeReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).returning({ issueId: issueWorkspaces.issueId });
     if (!preparingWorkspace) throw new Error("issue_workspace_missing");
@@ -271,6 +274,7 @@ export class AgentEngine implements AgentController {
       deploymentConfig: project.deployment.config,
       manager,
       ...(project.executableRoot ? { executableRoot: project.executableRoot } : {}),
+      gitIdentity,
       systemPrompt: agentSystemPrompt(context),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
@@ -293,6 +297,15 @@ export class AgentEngine implements AgentController {
     if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);
 
+  }
+
+  private async gitIdentity(subject: string): Promise<GitCommitIdentity> {
+    const [person] = await this.database.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+    if (!person) throw new Error("issue_reporter_not_found");
+    return {
+      name: person.displayName ?? person.subject,
+      email: person.email ?? `${person.subject}@localhost`,
+    };
   }
 
   private reportError(error: unknown): void {

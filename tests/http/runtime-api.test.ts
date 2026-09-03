@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus, type RunEvent } from "../../src/agent/events.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { issues, issueWorkspaces } from "../../src/db/schema.ts";
@@ -67,6 +68,28 @@ test("replays current non-durable Agent output before the stream snapshot", asyn
     assert.ok(payload.indexOf("partial-output") < payload.indexOf("event: snapshot_ready"));
     assert.equal(payload.match(/id: partial-output\n/g)?.length, 1);
     assert.match(payload, /Still working/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("uses the current user as the Agent Git commit identity", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Delta", ["dev"]);
+    const issue = await createIssue(fixture.app, "delta", "dev");
+    fixture.engine.running.clear();
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: `/api/issues/${issue.id}/agent-messages`,
+      headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+      payload: { message: "Commit the reviewed change" },
+    });
+    assert.equal(response.statusCode, 202, response.body);
+    assert.deepEqual(fixture.engine.gitIdentities.at(-1), {
+      name: issuePilotConfig.bootstrapUser.name,
+      email: issuePilotConfig.bootstrapUser.email,
+    });
   } finally {
     await fixture.cleanup();
   }
