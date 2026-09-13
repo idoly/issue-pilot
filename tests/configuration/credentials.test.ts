@@ -11,7 +11,7 @@ const configuration: CapabilityConfiguration = {
   redis: { host: "redis.example.test", port: 6379, username: "reader", password: "redis-secret", database: 0 },
   mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", password: "mq-secret", virtualHost: "/" },
   es: { url: "https://es.example.test", username: "reader", password: "es-secret" },
-  dms: { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: false },
+  dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token" },
   sls: { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "orders-test", logstores: ["application"] },
 };
 
@@ -46,4 +46,5 @@ test("clears only optional credentials and rejects preservation without stored v
     }
   }
   assert.throws(() => resolveConfiguredCapabilitySections({ db: publicInput("db", { mode: "preserve" }) }, ["db"]), /credential_not_configured/);
+  assert.throws(() => resolveConfiguredCapabilitySections({ dms: { url: "https://dms.example.test/sse", credentialUpdate: { mode: "replace", values: {} } } }, ["dms"]), /invalid_dms_authorization/);
 });

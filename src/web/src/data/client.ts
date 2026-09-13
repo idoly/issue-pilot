@@ -1,4 +1,4 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
@@ -11,6 +11,7 @@ export type Service = ServiceConfiguration;
 export type ServiceInput = ServiceConfigurationInput;
 
 export interface Person { subject: string; name: string; email: string }
+export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; instanceLabel: string; databaseId: string; databaseLabel: string }
 export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
 export interface ManagedUserInput { subject: string; name: string; email: string }
 export interface ManagedUserUpdate { name: string; email: string; active: boolean }
@@ -27,6 +28,12 @@ export interface IssueListItem {
   environmentKey: string;
   createdAt?: string;
   updatedAt: string;
+}
+
+export interface IssueExecutionItem extends IssueListItem {
+  workspaceStatus: WorkspaceStatus;
+  agentRunning: boolean;
+  resolvedAt: string | null;
 }
 
 export interface IssueComment {
@@ -115,9 +122,11 @@ export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage"
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
-export const listIssues = (signal?: AbortSignal) => request<IssueListItem[]>("/api/issues", signal ? { signal } : undefined);
+export const listIssues = (signal?: AbortSignal) => request<IssueExecutionItem[]>("/api/issues", signal ? { signal } : undefined);
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
+export const updateGlobalAgent = (input: AgentConfiguration) => request<{ ok: true }>("/api/config/agent", { method: "PUT", body: JSON.stringify(input) });
+export const resolveDmsScope = (input: { url: string; authorization: string; instanceAlias: string; schemaName: string }) => request<DmsScopeResolution>("/api/dms/scope/resolve", { method: "POST", body: JSON.stringify(input) });
 
 type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite";
 
@@ -228,21 +237,21 @@ export async function fetchAttachment(key: string, attachmentId: string): Promis
   return response.blob();
 }
 
-export function createIssue(input: IssueInput, files: File[] = []): Promise<IssueListItem> {
+export function createIssue(input: IssueInput, files: File[] = []): Promise<IssueExecutionItem> {
   if (!files.length) return jsonRequest("/api/issues", "POST", input);
   const form = new FormData();
   form.append("issue", JSON.stringify(input));
   appendFiles(form, files);
   return request("/api/issues", { method: "POST", body: form });
 }
-export function updateIssue(key: string, input: IssueInput, removedAttachmentIds: string[] = [], files: File[] = []): Promise<IssueListItem> {
+export function updateIssue(key: string, input: IssueInput, removedAttachmentIds: string[] = [], files: File[] = []): Promise<IssueExecutionItem> {
   if (!removedAttachmentIds.length && !files.length) return jsonRequest(issuePath(key), "PATCH", input);
   const form = new FormData();
   form.append("issue", JSON.stringify({ ...input, removedAttachmentIds }));
   appendFiles(form, files);
   return request(issuePath(key), { method: "PATCH", body: form });
 }
-export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueListItem>(issuePath(key, "/status"), "PATCH", { status });
+export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueExecutionItem>(issuePath(key, "/status"), "PATCH", { status });
 export const convertIssueToDevelopment = (key: string) => request<{ issueKey: string }>(issuePath(key, "/development"), { method: "POST" });
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });

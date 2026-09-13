@@ -9,7 +9,6 @@ import {
   Eye as EyeNode,
   File as FileNode,
   GitBranch as GitBranchNode,
-  ListFilter as ListFilterNode,
   MessageSquare as MessageSquareNode,
   Maximize2 as Maximize2Node,
   PanelBottom as PanelBottomNode,
@@ -66,7 +65,6 @@ export const Download = createIcon(DownloadNode);
 export const Eye = createIcon(EyeNode);
 export const File = createIcon(FileNode);
 export const GitBranch = createIcon(GitBranchNode);
-export const ListFilter = createIcon(ListFilterNode);
 export const MessageSquare = createIcon(MessageSquareNode);
 export const Maximize2 = createIcon(Maximize2Node);
 export const PanelBottom = createIcon(PanelBottomNode);

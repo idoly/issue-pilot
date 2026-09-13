@@ -4,21 +4,19 @@ import { createEffect, createMemo, createSignal, lazy, Match, Show, Switch } fro
 import { getIssue, type IssueDetail } from "../data/client";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
-import { ConfigurationView } from "./ConfigurationView";
+import { SettingsView } from "./SettingsView";
+import { OverviewView } from "./OverviewView";
 import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
-import { Statistics } from "./Statistics";
-import { UserManagement } from "./UserManagement";
 import type { WorkbenchPartLayout } from "./CodeBrowser";
 import "@idoly/ant-design-solid/styles.css";
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
-type AppView = "issues" | "statistics" | "configuration" | "users";
+type AppView = "dashboard" | "issues" | "configuration";
 const viewOptions: Array<{ value: AppView; label: string }> = [
+  { value: "dashboard", label: "首页" },
   { value: "issues", label: "工单" },
-  { value: "statistics", label: "统计" },
   { value: "configuration", label: "配置" },
-  { value: "users", label: "用户" },
 ];
 const appTheme = {
   algorithm: theme.defaultAlgorithm,
@@ -59,18 +57,19 @@ function CurrentUserIdentity() {
   );
 }
 
-function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; onSelect: (id: string) => void }) {
+function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; includeSelected: boolean; onSelect: (id: string) => void }) {
   const { currentUser } = useApplicationResources();
-  return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} hidden={props.hidden} onSelect={props.onSelect} />;
+  return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} hidden={props.hidden} includeSelected={props.includeSelected} onSelect={props.onSelect} />;
 }
 
-export function App() {
-  const [view, setView] = createSignal<AppView>("issues", { ownedWrite: true });
+export function App(props: { initialView?: AppView } = {}) {
+  const [view, setView] = createSignal<AppView>(props.initialView ?? "dashboard", { ownedWrite: true });
   const [selectedId, setSelectedId] = createSignal("", { ownedWrite: true });
   const [issue, setIssue] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
+  const [includeSelectedIssue, setIncludeSelectedIssue] = createSignal(false, { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDetailsOpen, setSourceDetailsOpen] = createSignal(true, { ownedWrite: true });
@@ -159,8 +158,9 @@ export function App() {
         </Layout.Header>
         <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
           <Switch>
+            <Match when={view() === "dashboard"}><OverviewView onSelectIssue={(issueKey) => { setIncludeSelectedIssue(true); setSelectedId(issueKey); setView("issues"); }} /></Match>
             <Match when={view() === "issues"}>
-              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} onSelect={setSelectedId} />
+              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} includeSelected={includeSelectedIssue()} onSelect={(issueKey) => { setIncludeSelectedIssue(false); setSelectedId(issueKey); }} />
               <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
                 <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                   {(current) => (
@@ -177,9 +177,7 @@ export function App() {
                 </Show>
               </Show>
             </Match>
-            <Match when={view() === "statistics"}><Statistics /></Match>
-            <Match when={view() === "configuration"}><ConfigurationView /></Match>
-            <Match when={view() === "users"}><UserManagement /></Match>
+            <Match when={view() === "configuration"}><SettingsView /></Match>
           </Switch>
         </Layout.Content>
       </Layout>

@@ -137,9 +137,13 @@ test("lists newer Issues first without letting later updates reorder them", asyn
     await database.db.update(issues).set({ createdAt: new Date("2026-08-14T01:00:00.000Z"), updatedAt: new Date("2026-08-14T01:00:00.000Z") }).where(eq(issues.key, String(newer.id)));
     await database.close();
 
-    const listed = await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; environmentKey: string }>;
+    const listed = await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; environmentKey: string; workspaceStatus: string; agentRunning: boolean; resolvedAt: string | null }>;
     assert.deepEqual(listed.map(({ id }) => id), [newer.id, older.id]);
     assert.deepEqual(listed.map(({ environmentKey }) => environmentKey), ["test", "test"]);
+    assert.deepEqual(listed.map(({ workspaceStatus, agentRunning, resolvedAt }) => ({ workspaceStatus, agentRunning, resolvedAt })), [
+      { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
+      { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
+    ]);
   } finally {
     await fixture.cleanup();
   }

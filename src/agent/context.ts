@@ -1,4 +1,4 @@
-import { configuredCapabilities, ISSUE_TYPES_BY_ENVIRONMENT, normalizeIssueKey, type AgentThinkingLevel, type DeploymentConfig, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { configuredCapabilities, ISSUE_TYPES_BY_ENVIRONMENT, normalizeIssueKey, type AgentConfiguration, type AgentThinkingLevel, type DeploymentConfig, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 
 export interface AgentSessionContext {
   issueKey: string;
@@ -20,12 +20,13 @@ export function createAgentSessionContext(input: {
   issueKey: string;
   issueType: IssueType;
   deploymentConfig: DeploymentConfig;
+  agentConfiguration: AgentConfiguration;
   serviceKey: string;
   environmentKey: string;
   environmentKind: EnvironmentKind;
   repositoryAccess: Array<"read" | "write">;
 }): AgentSessionContext {
-  const agent = input.deploymentConfig.agent!;
+  const agent = input.agentConfiguration;
   const writableIssue = input.environmentKind === "dev" && ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(input.issueType);
   return {
     issueKey: normalizeIssueKey(input.issueKey),

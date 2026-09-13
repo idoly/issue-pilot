@@ -84,6 +84,10 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
       if (event.origin !== window.location.origin || event.source !== currentFrame.contentWindow) return;
       const message = event.data as { kind?: unknown; issueKey?: unknown; visible?: unknown; rect?: unknown; detail?: unknown; panel?: unknown; auxiliary?: unknown; panelVisible?: unknown; auxiliaryVisible?: unknown; theme?: unknown } | null;
       if (message?.issueKey !== props.issueKey) return;
+      if (message.kind === "issue-pilot-workbench-ready" || message.kind === "issue-pilot-workbench-error") {
+        setWorkbenchReady(true);
+        return;
+      }
       if (message.kind === "issue-pilot-workbench-blame-hover" && typeof message.visible === "boolean") {
         if (!message.visible) {
           if (!blameHovering) scheduleBlameHide();
@@ -100,7 +104,6 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
         width: Math.min(rect.width, Math.max(0, currentFrame.clientWidth - rect.x)),
         height: Math.min(rect.height, Math.max(0, currentFrame.clientHeight - rect.y)),
       });
-      setWorkbenchReady(true);
       props.onLayout({ panel: visibleRect(message.panel), auxiliary: visibleRect(message.auxiliary), theme: message.theme });
       if (typeof message.panelVisible === "boolean" && typeof message.auxiliaryVisible === "boolean") {
         props.onPartVisibility(message.panelVisible, currentFrame.clientWidth < 700 ? undefined : message.auxiliaryVisible);

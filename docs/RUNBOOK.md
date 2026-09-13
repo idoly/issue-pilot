@@ -314,19 +314,19 @@ podman ps -a --filter label=io.issue-pilot.component=application-test
 
 Project failure output保留在worktree。不要让wrapper接受executable、config path、cache path或absolute host path。
 
-## DMS/SLS故障
+## DMS MCP/SLS故障
 
 检查：
 
-- Application image和Aliyun CLI可用。
-- Deployment AccessKey有效且最小权限。
-- DMS使用`dms-enterprise ExecuteScript`、正确DbId/Logic/Tid、安全托管和query permission。
-- DMS endpoint固定central；database region不是field。
-- SLS region/project/logstore exact匹配。
-- Query符合read-only/limit/time-range。
-- Temporary profile在调用后删除。
+- DMS Deployment Authorization是标准`Bearer <token>`且尚未过期；旧AccessKey/dbId/tid配置必须在配置页重新保存。
+- Deployment配置的DMS HTTPS SSE endpoint可达，初始GET和message POST都携带Authorization，服务端endpoint event保持同源；确认配置页输入的alias/schema解析到了目标InstanceId、DatabaseId和host:port。
+- Agent的`dms`工具只能分派到MCP `executeScript`，并由Issue Pilot限制为schema匹配的单条只读SQL；`listInstances/getDatabase`只供受信配置解析使用，其他MCP工具不向Agent开放。
+- DMS连接、list/call、abort和close均在30秒总时限内完成；arguments和result不设应用层byte limit。
+- Application image和Aliyun CLI可用于SLS。
+- SLS Deployment AccessKey有效且最小权限，region/project/logstore exact匹配。
+- SLS query符合read-only/time-range，temporary profile在调用后删除。
 
-不要依赖Operator持久`~/.aliyun`，不要打印AccessKey。SQL/SLS query会短暂出现在application process argv。
+不要记录DMS Authorization、Config GET响应、SLS AccessKey或完整敏感result。不要依赖Operator持久`~/.aliyun`；SLS query会短暂出现在application process argv。
 
 ## 一致备份
 

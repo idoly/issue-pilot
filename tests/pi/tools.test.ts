@@ -18,12 +18,15 @@ test("creates only context-selected SDK capability tools", () => {
   const tools = createCapabilityTools(context, {
     db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" },
     redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false },
+    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token" },
   });
   assert.deepEqual(tools.map((tool) => tool.name), ["db", "redis", "dms"]);
   assert.match(tools[0]?.promptSnippet ?? "", /read-only MySQL/);
   assert.match(tools[1]?.promptGuidelines?.[0] ?? "", /allowlisted read operations/);
-  assert.match(tools[2]?.promptSnippet ?? "", /Alibaba Cloud DMS/);
+  assert.match(tools[2]?.promptSnippet ?? "", /DMS executeScript/);
+  const dmsSchema = tools[2]?.parameters as unknown as { properties: Record<string, unknown>; required: string[] };
+  assert.deepEqual(Object.keys(dmsSchema.properties), ["script", "logic"]);
+  assert.deepEqual(dmsSchema.required, ["script"]);
 });
 
 test("projects the selected deployment SLS logstores into the session-local tool schema", async () => {
@@ -52,10 +55,10 @@ test("validates Pi tool input and passes the application tool runtime directly",
   const tools = createCapabilityTools(context, {
     db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" },
     redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false },
+    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token" },
   }, unavailable);
   const redis = tools.find((tool) => tool.name === "redis")!;
   const dms = tools.find((tool) => tool.name === "dms")!;
   await assert.rejects(redis.execute("call", { action: "del", key: "order" }, undefined, undefined, {} as never), /invalid_redis_input/);
-  await assert.rejects(dms.execute("call", { statement: "SELECT 1 LIMIT 1" }, undefined, undefined, {} as never), /tool_runtime_unavailable/);
+  await assert.rejects(dms.execute("call", { tool: "query_database", script: "SELECT 1" }, undefined, undefined, {} as never), /invalid_dms_input/);
 });

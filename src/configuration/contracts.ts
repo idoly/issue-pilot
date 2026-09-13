@@ -6,7 +6,7 @@ export const CAPABILITY_CREDENTIALS = {
   redis: { fields: ["password"], required: false },
   mq: { fields: ["password"], required: true },
   es: { fields: ["password"], required: false },
-  dms: { fields: ["accessKeyId", "accessKeySecret"], required: true },
+  dms: { fields: ["authorization"], required: true },
   sls: { fields: ["accessKeyId", "accessKeySecret"], required: true },
 } as const satisfies { [Key in CapabilityName]: { fields: readonly (keyof NonNullable<CapabilityConfiguration[Key]>)[]; required: boolean } };
 
@@ -44,7 +44,6 @@ interface ServiceDeployment extends ProjectedCapabilityConfiguration {
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];
-  agent: AgentConfiguration | null;
 }
 
 export interface ServiceConfiguration {
@@ -56,6 +55,7 @@ export interface ServiceConfiguration {
 }
 
 export interface Configuration extends ConfigurationCatalog {
+  agent: AgentConfiguration;
   agentModels: AgentModelOption[];
   services: ServiceConfiguration[];
 }
@@ -68,6 +68,5 @@ export interface ServiceConfigurationInput {
     environmentKey: string;
     repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
     capabilities: CapabilityName[];
-    agent: AgentConfiguration;
   }>;
 }

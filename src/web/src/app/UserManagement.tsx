@@ -118,29 +118,31 @@ export function UserManagement() {
   void load().catch(() => undefined);
 
   return (
-    <main class="user-management">
-      <header class="user-management-header">
-        <div><span>组织</span><h1>用户管理</h1></div>
-        <Button type="primary" icon={<UserPlus size={15} />} onClick={openCreate}>添加用户</Button>
-      </header>
-      <Show when={error()}>{(value) => <div class="user-management-error" role="alert">{value()}</div>}</Show>
-      <Show when={!loading()} fallback={<section class="user-management-loading"><Skeleton active paragraph={{ rows: 8 }} /></section>}>
-        <section class="user-table" aria-label="用户列表">
-          <div class="user-table-head"><span>用户</span><span>标识</span><span>状态</span><span>更新时间</span><span>操作</span></div>
-          <For each={users()} fallback={<div class="empty-band">暂无用户</div>}>{(user) => (
-            <div class="user-table-row">
-              <div class="user-cell-primary"><strong>{user.name}</strong><span>{user.email}</span></div>
-              <code>{user.subject}</code>
-              <div><Tag color={user.active ? "green" : "default"}>{user.active ? "启用" : "停用"}</Tag></div>
-              <time>{localDate(user.updatedAt)}</time>
-              <div class="user-row-actions">
-                <Button size="small" icon={<Pencil size={14} />} onClick={() => openEdit(user)}>编辑</Button>
-                <Button size="small" loading={changingSubject() === user.subject} icon={user.active ? <UserX size={14} /> : <UserCheck size={14} />} onClick={() => { void changeActive(user); }}>{user.active ? "停用" : "启用"}</Button>
+    <div class="user-management">
+      <section class="user-management-card">
+        <header class="user-management-header">
+          <div><strong>团队成员</strong><span>共 {users().length} 人 · {users().filter((user) => user.active).length} 人启用</span></div>
+          <Button type="primary" icon={<UserPlus size={15} />} onClick={openCreate}>添加用户</Button>
+        </header>
+        <Show when={error()}>{(value) => <div class="user-management-error" role="alert">{value()}</div>}</Show>
+        <Show when={!loading()} fallback={<section class="user-management-loading"><Skeleton active paragraph={{ rows: 8 }} /></section>}>
+          <section class="user-table" aria-label="用户列表">
+            <div class="user-table-head"><span>用户</span><span>登录标识</span><span>状态</span><span>最近更新</span><span>操作</span></div>
+            <For each={users()} fallback={<div class="empty-band">暂无用户</div>}>{(user) => (
+              <div class="user-table-row">
+                <div class="user-cell-primary"><span class="user-avatar" aria-hidden="true">{user.name.slice(0, 1)}</span><span class="user-cell-copy"><strong>{user.name}</strong><span>{user.email}</span></span></div>
+                <code>{user.subject}</code>
+                <div><Tag color={user.active ? "green" : "default"}>{user.active ? "启用" : "停用"}</Tag></div>
+                <time>{localDate(user.updatedAt)}</time>
+                <div class="user-row-actions">
+                  <Button size="small" icon={<Pencil size={14} />} onClick={() => openEdit(user)}>编辑</Button>
+                  <Button size="small" loading={changingSubject() === user.subject} icon={user.active ? <UserX size={14} /> : <UserCheck size={14} />} onClick={() => { void changeActive(user); }}>{user.active ? "停用" : "启用"}</Button>
+                </div>
               </div>
-            </div>
-          )}</For>
-        </section>
-      </Show>
+            )}</For>
+          </section>
+        </Show>
+      </section>
       <Modal open={modalOpen()} title={editingSubject() ? "编辑用户" : "添加用户"} okText="保存" cancelText="取消" confirmLoading={saving()} onOk={() => { void save(); }} onCancel={() => { if (!saving()) setModalOpen(false); }}>
         <div class="user-form">
           <label><span>用户标识</span><input ref={subjectInput} class="user-input" aria-label="用户标识" value={subject()} disabled={Boolean(editingSubject())} placeholder="name@example.com" onInput={(event) => setSubject(event.currentTarget.value)} /></label>
@@ -150,6 +152,6 @@ export function UserManagement() {
           <Show when={error()}>{(value) => <div class="form-error" role="alert">{value()}</div>}</Show>
         </div>
       </Modal>
-    </main>
+    </div>
   );
 }

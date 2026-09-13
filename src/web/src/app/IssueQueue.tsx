@@ -1,7 +1,7 @@
 import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
-import { ChevronRight, ListFilter, Plus, Search } from "../ui/icons";
+import { ChevronRight, Plus, Search } from "../ui/icons";
 import { createIssue, errorMessage, listIssues, type IssuePriority, type IssueType } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, issueTypesForEnvironment, selectedChoice } from "./IssueForm";
@@ -14,6 +14,7 @@ export function IssueQueue(props: {
   userSubject: string;
   refreshToken: number;
   hidden?: boolean;
+  includeSelected?: boolean;
   onSelect: (id: string) => void;
 }) {
   const { catalog, people, catalogError, peopleError } = useApplicationResources();
@@ -21,7 +22,7 @@ export function IssueQueue(props: {
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
-  const [status, setStatus] = createSignal<QueueStatusFilter>("active", { ownedWrite: true });
+  const [status, setStatus] = createSignal<QueueStatusFilter>("all", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
   const environmentLabel = (key: string) => catalog().environments.find((environment) => environment.key === key)?.name ?? key;
@@ -30,7 +31,7 @@ export function IssueQueue(props: {
     if (!subject) return [];
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
-      const assigneeMatch = issue.assigneeSubject === subject;
+      const assigneeMatch = issue.assigneeSubject === subject || (props.includeSelected && issue.id === props.selectedId);
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
       const environmentMatch = environmentFilter() === "all" || issue.environmentKey === environmentFilter();
       const serviceMatch = serviceFilter() === "all" || issue.service.key === serviceFilter();
@@ -133,7 +134,6 @@ export function IssueQueue(props: {
         <Button class="icon-button" type="primary" shape="circle" icon={<Plus size={16} />} title="新建工单" aria-label="新建工单" onClick={() => setCreateOpen(true)} />
       </div>
       <div class="queue-filter">
-        <ListFilter size={14} aria-hidden="true" />
         <div class="queue-filter-controls">
           <Select
             aria-label="按状态筛选"
@@ -147,19 +147,18 @@ export function IssueQueue(props: {
             ]}
           />
           <Select
-            aria-label="按环境筛选"
-            value={environmentFilter()}
-            onChange={(value) => { const selected = selectedChoice(value, ["all", ...catalog().environments.map((item) => item.key)]); if (selected) setEnvironmentFilter(selected); }}
-            options={[{ value: "all", label: "全部环境" }, ...catalog().environments.map((item) => ({ value: item.key, label: item.name }))]}
-          />
-          <Select
             aria-label="按服务筛选"
             value={serviceFilter()}
             onChange={(value) => { const selected = selectedChoice(value, ["all", ...catalog().services.map((item) => item.key)]); if (selected) setServiceFilter(selected); }}
             options={[{ value: "all", label: "全部服务" }, ...catalog().services.map((item) => ({ value: item.key, label: item.name }))]}
           />
+          <Select
+            aria-label="按环境筛选"
+            value={environmentFilter()}
+            onChange={(value) => { const selected = selectedChoice(value, ["all", ...catalog().environments.map((item) => item.key)]); if (selected) setEnvironmentFilter(selected); }}
+            options={[{ value: "all", label: "全部环境" }, ...catalog().environments.map((item) => ({ value: item.key, label: item.name }))]}
+          />
         </div>
-        <span class="queue-count">{filtered().length}</span>
       </div>
       <div class="queue-list" role="list">
         <Show when={!loading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 5 }} /></div>}>

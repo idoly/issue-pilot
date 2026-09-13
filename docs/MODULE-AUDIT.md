@@ -97,13 +97,13 @@ AgentEngine虽大，但run counts、reservations、sessions和shutdown必须共�
 | --- | --- | --- | --- | --- |
 | `registry.ts` | Save parser、Pi input schema、metadata | 三者围绕同一capability definition，集中有价值 | Client不再重复typed config shape | 保留Registry，不引入schema framework |
 | `contracts.ts` | Result serialization、timeout signal、Pi text result | 多client真实复用 | 不包含target policy或broker | 保留小型helper |
-| `sql.ts` | MySQL/DMS read-only lexical guard | 两个SQL入口共享安全规则 | DMS额外LIMIT留在DMS owner | 保留 |
+| `sql.ts` | MySQL/DMS read-only lexical guard | 数据库SQL安全边界 | DMS只在`executeScript`窄例外复用，不恢复旧CLI合同 | 保留 |
 | `http-client.ts` | Bounded HTTP、redirect拒绝、abort | Nacos/RabbitMQ/ES共享网络机制 | Target URL仍由各client授权 | 保留 |
-| `aliyun.ts` | Temporary profile和Aliyun invocation | DMS/SLS共享secret lifecycle | 不使用Operator profile或container adapter | 保留 |
+| `aliyun.ts` | Temporary profile和Aliyun invocation | SLS secret lifecycle | 不使用Operator profile或container adapter | 保留 |
 | Nacos/MySQL/RabbitMQ/ES/DMS/SLS clients | 各外部协议和response validation | Protocol边界值得独立 | 不互相合并成generic connector | 保留 |
 | `redis.ts` + `redis-worker.ts` | Authorization/Worker lifecycle和node-redis执行 | Worker heap隔离完整RESP materialization | Worker是entrypoint，不是dead module | 保留双文件 |
 
-Registry和TypeBox解析内部input/config一次；client仍必须验证network response、external target membership、timeout和result size。这些不是重复校验。
+Registry和TypeBox解析内部input/config一次；client仍必须验证network response、external target membership和timeout；除明确不设应用层byte limit的DMS MCP外还验证result size。这些不是重复校验。
 
 ## Workspace、Git和Source
 

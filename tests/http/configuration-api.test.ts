@@ -15,6 +15,9 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     const users = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string }>;
     assert.deepEqual(users.map(({ subject }) => subject), [issuePilotConfig.bootstrapUser.subject]);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } })).statusCode, 400);
+    const invalidDmsResolve = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", payload: { url: "http://dms.example.test/sse", authorization: "Bearer token", instanceAlias: "ORDERS-PROD", schemaName: "orders" } });
+    assert.equal(invalidDmsResolve.statusCode, 400);
+    assert.equal((await json(invalidDmsResolve)).error, "invalid_dms_url");
 
     await createService(fixture.app, "Alpha", ["test"], ["https://example.test/alpha.git", "https://example.test/alpha-shared.git"]);
     const concurrentReads = await Promise.all([
@@ -37,11 +40,13 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     assert.equal(response.headers.pragma, "no-cache");
     const config = await json(response) as {
       environments: Array<Record<string, unknown>>;
+      agent: Record<string, unknown>;
       agentModels: Array<Record<string, unknown>>;
       services: Array<{ key: string; repositories: Array<Record<string, unknown>>; deployments: Array<Record<string, unknown>> }>;
     };
     assert.deepEqual(config.environments.map(({ key }) => key).sort(), ["dev", "prod", "test"]);
     assert.equal(config.environments.some((environment) => "id" in environment || "kind" in environment), false);
+    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
     assert.deepEqual(Object.keys(config.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     const service = config.services[0]!;
     assert.equal(service.key, "alpha");
@@ -72,13 +77,12 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
         environmentKey: "test",
         repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }],
         capabilities: ["sls", "dms", "es", "mq", "redis", "db", "nacos"],
-        agent: testAgent,
         nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha.yaml"], username: "operator", credentialUpdate: replace({ password: "nacos-secret" }) },
         db: { url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: replace({ password: "db-secret" }) },
         redis: { host: "redis.example.test", port: 6379, username: "", database: 0, credentialUpdate: replace({ password: "redis-secret" }) },
         mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/", credentialUpdate: replace({ password: "mq-secret" }) },
         es: { url: "http://es.example.test/proxy", username: "", credentialUpdate: { mode: "clear" } },
-        dms: { dbId: "123456", logic: true, tid: "987654", credentialUpdate: replace({ accessKeyId: "dms-key", accessKeySecret: "dms-secret" }) },
+        dms: { url: "https://dms.example.test/sse", credentialUpdate: replace({ authorization: "Bearer dms-token" }) },
         sls: { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialUpdate: replace({ accessKeyId: "sls-key", accessKeySecret: "sls-secret" }) },
       }],
     };
@@ -90,11 +94,11 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     const savedService = saved.services[0]!;
     const deployment = savedService.deployments[0]!;
     assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
-    assert.deepEqual(deployment.dms, { accessKeyId: "dms-key", accessKeySecret: "dms-secret", dbId: "123456", logic: true, tid: "987654", credentialConfigured: true });
+    assert.deepEqual(deployment.dms, { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", credentialConfigured: true });
     assert.equal("playwright" in deployment, false);
     assert.deepEqual(deployment.sls, { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"], credentialConfigured: true });
     assert.deepEqual(deployment.es, { url: "http://es.example.test/proxy", username: "", credentialConfigured: false });
-    const secrets = ["nacos-secret", "db-secret", "redis-secret", "mq-secret", "dms-key", "dms-secret", "sls-key", "sls-secret"];
+    const secrets = ["nacos-secret", "db-secret", "redis-secret", "mq-secret", "dms-token", "sls-key", "sls-secret"];
     assert.equal(secrets.every((secret) => response.body.includes(secret)), true);
 
     const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
@@ -102,8 +106,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     sqlite.close();
     assert.equal("playwright" in stored, false);
     assert.equal(stored.db!.password, "db-secret");
-    assert.equal(stored.dms!.accessKeyId, "dms-key");
-    assert.equal(stored.dms!.accessKeySecret, "dms-secret");
+    assert.equal(stored.dms!.authorization, "Bearer dms-token");
 
     const preserve = <Value extends Record<string, unknown>>(section: Value) => {
       const { credentialUpdate: _credentialUpdate, ...configuration } = section;
@@ -118,7 +121,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
         db: preserve(originalDeployment.db),
         redis: preserve(originalDeployment.redis),
         mq: preserve(originalDeployment.mq),
-        dms: { ...preserve(originalDeployment.dms), logic: false },
+        dms: preserve(originalDeployment.dms),
         sls: preserve(originalDeployment.sls),
       }],
     };
@@ -128,8 +131,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     const preservedConfig = JSON.parse(afterPreserve.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, unknown>>;
     afterPreserve.close();
     assert.equal(preservedConfig.db!.password, "db-secret");
-    assert.equal(preservedConfig.dms!.accessKeySecret, "dms-secret");
-    assert.equal(preservedConfig.dms!.logic, false);
+    assert.equal(preservedConfig.dms!.authorization, "Bearer dms-token");
 
     const cleared = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
       ...payload,
@@ -173,7 +175,7 @@ test("updates and deletes Service configuration directly", async () => {
   }
 });
 
-test("validates models and repository ownership before replacing a Service", async () => {
+test("validates the global model and repository ownership independently", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
@@ -182,22 +184,46 @@ test("validates models and repository ownership before replacing a Service", asy
       [{ provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high" }, "agent_model_not_available"],
       [{ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off" }, "agent_thinking_level_not_supported"],
     ] as const) {
-      const invalid = servicePayload("Invalid");
-      invalid.deployments[0]!.agent = agent as never;
-      const response = await fixture.app.inject({ method: "POST", url: "/api/services", payload: invalid });
+      const response = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: agent });
       assert.equal(response.statusCode, 400);
       assert.equal((await json(response)).error, expected);
     }
+    const staleService = servicePayload("Invalid");
+    (staleService.deployments[0] as Record<string, unknown>).agent = testAgent;
+    const staleResponse = await fixture.app.inject({ method: "POST", url: "/api/services", payload: staleService });
+    assert.equal(staleResponse.statusCode, 400);
+    assert.equal((await json(staleResponse)).error, "deployment_agent_not_allowed");
     const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ key: string; repositories: Array<{ id: string; alias: string; url: string }> }> };
     const alpha = config.services.find(({ key }) => key === "alpha")!;
     const beta = config.services.find(({ key }) => key === "beta")!;
     const crossService = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
       name: "Must not persist",
       repositories: [{ id: beta.repositories[0]!.id, alias: "alpha", url: alpha.repositories[0]!.url }],
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha", baseBranch: "main" }], capabilities: [], agent: testAgent }],
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha", baseBranch: "main" }], capabilities: [] }],
     } });
     assert.equal(crossService.statusCode, 400);
     assert.equal((await json(crossService)).error, "invalid_repository");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("updates the single global model only after every affected Issue is idle", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha");
+    await createIssue(fixture.app, "alpha");
+    const issueId = fixture.engine.enqueued[0]!;
+    const blocked = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: testAgent });
+    assert.equal(blocked.statusCode, 409);
+    assert.equal((await json(blocked)).error, "global_configuration_has_running_issues");
+
+    fixture.engine.running.delete(issueId);
+    const updated = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: testAgent });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.ok(fixture.engine.closedSessions.includes(issueId));
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { agent: unknown };
+    assert.deepEqual(config.agent, testAgent);
   } finally {
     await fixture.cleanup();
   }
@@ -215,7 +241,7 @@ test("reserves affected Issues and commits Service changes only after sessions c
       name: "Alpha renamed",
       description: "serialized",
       repositories: config.services[0]!.repositories,
-      deployments: [{ environmentKey: "test", repositoryBranches: config.services[0]!.deployments[0]!.repositoryBranches, capabilities: [], agent: testAgent }],
+      deployments: [{ environmentKey: "test", repositoryBranches: config.services[0]!.deployments[0]!.repositoryBranches, capabilities: [] }],
     };
     let closeStarted!: () => void;
     let releaseClose!: () => void;

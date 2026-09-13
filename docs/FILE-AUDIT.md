@@ -93,7 +93,7 @@
 | `src/agent/prompts.ts` | 139 | 初始、继续、更新时间和授权prompt构造 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/capabilities/aliyun.ts` | 52 | Aliyun CLI私有profile和调用primitive | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/contracts.ts` | 18 | Capability结果、timeout和target共享primitive | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/capabilities/dms.ts` | 138 | DMS只读SQL和CLI protocol client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
+| `src/capabilities/dms.ts` | 239 | DMS MCP SSE、只读tool gate和实例/数据库scope | 独立外部协议边界 | Deployment target、Bearer隔离、只读executeScript窄例外、无旧CLI fallback | 保留，不互相合并 |
 | `src/capabilities/elasticsearch.ts` | 28 | Elasticsearch只读HTTP client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/http-client.ts` | 31 | 有预算、拒绝redirect的HTTP读取primitive | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
 | `src/capabilities/mysql.ts` | 88 | MySQL只读transaction和streaming client | 独立外部协议边界 | 按协议拆分值得；无兼容fallback | 保留，不互相合并 |
@@ -137,16 +137,17 @@
 | `src/web/src/app/AgentPanel.test.ts` | 480 | AgentPanel stream、reopen、Repository刷新、未读计数和交互回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/AgentPanel.tsx` | 423 | Agent对话、stream状态和composer | 用户功能边界 | 未读按新增conversation entry ID计数，token delta不重复计数 | 保留 |
 | `src/web/src/app/App.test.tsx` | 626 | App前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/app/App.tsx` | 189 | App组合、Ant全局样式/theme和Workbench布局 | 用户功能边界 | 使用聚合styles.css和公开Button组件defaults | 保留；不建通用页面框架 |
+| `src/web/src/app/App.tsx` | 193 | App组合、首页导航、Ant全局样式/theme和Workbench布局 | 用户功能边界 | 使用聚合styles.css和公开Button组件defaults | 保留；不建通用页面框架 |
 | `src/web/src/app/ApplicationResources.test.tsx` | 64 | ApplicationResources前端功能组件 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/ApplicationResources.tsx` | 88 | ApplicationResources前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/AttachmentPreview.tsx` | 150 | AttachmentPreview前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/CodeBrowser.tsx` | 150 | Workbench iframe、父层布局、主题和blame hover桥接 | 必要嵌入边界 | postMessage仅传受限Workbench投影，不建通用iframe总线 | 保留 |
-| `src/web/src/app/ConfigurationView.tsx` | 350 | 显式Service/Deployment/capability编辑器 | 用户功能边界 | 异构表单不做schema框架；draft克隆复用Solid `snapshot` | 保留 |
+| `src/web/src/app/ConfigurationView.tsx` | 415 | 显式Service/Deployment/capability编辑器及DMS级联scope选择 | 用户功能边界 | 异构表单不做schema框架；draft克隆复用Solid `snapshot` | 保留 |
+| `src/web/src/app/Dashboard.tsx` | 176 | 当前运营状态和高关注工单动态 | 用户功能边界 | 复用Issue摘要，不持久化第二套统计或状态 | 保留 |
 | `src/web/src/app/IssueForm.tsx` | 66 | 工单描述和附件表单组件及动态Select值校验 | 用户功能边界 | 已删除旧Select DOM/shape兼容补丁 | 保留；不建通用页面框架 |
 | `src/web/src/app/IssueQueue.tsx` | 185 | 工单队列、筛选和创建交互 | 用户功能边界 | 多选Select使用类型化数组和组件自身popup状态 | 保留；不建通用页面框架 |
 | `src/web/src/app/IssueWorkspace.tsx` | 230 | 工单详情、编辑、状态和评论交互 | 用户功能边界 | 多选Select使用类型化数组和组件自身popup状态 | 保留；不建通用页面框架 |
-| `src/web/src/app/Statistics.tsx` | 159 | 工单和Workspace统计视图 | 用户功能边界 | 统计周期union由Select options贯穿value/callback | 保留；不建通用页面框架 |
+| `src/web/src/app/Statistics.tsx` | 159 | 固定高度的产出、分布、团队与Workspace洞察 | 用户功能边界 | 复用Dashboard加载的Issue摘要，长列表局部滚动 | 保留；不建通用页面框架 |
 | `src/web/src/app/UserManagement.tsx` | 155 | UserManagement前端功能组件 | 用户功能边界 | 显式UI比schema-driven动态表单更清晰 | 保留；不建通用页面框架 |
 | `src/web/src/app/agent-stream.test.ts` | 95 | web域的agent-stream行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/agent-stream.ts` | 154 | EventSource握手、replay lifecycle、重连和generation状态机 | 稳定transport边界 | 具名heartbeat和静默watchdog恢复proxy隐藏的断流 | 保留原位 |
@@ -157,9 +158,9 @@
 | `src/web/src/app/model.ts` | 52 | Issue显示标签、时间和文件大小纯投影 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/app/paste-editor.test.ts` | 59 | web域的paste-editor行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
 | `src/web/src/app/paste-editor.ts` | 137 | 附件粘贴占位符的文本编辑算法 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
-| `src/web/src/app/styles.css` | 834 | 对应前端界面样式 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/web/src/app/styles.css` | 903 | 对应前端界面样式 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/data/client.test.ts` | 195 | web域的client行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |
-| `src/web/src/data/client.ts` | 249 | Web DTO、HTTP client和current-user header | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
+| `src/web/src/data/client.ts` | 260 | Web DTO、HTTP client和current-user header | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/main.tsx` | 9 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/test-setup.ts` | 31 | 项目构建、忽略或运行配置 | 职责明确 | 未发现重复校验、兼容fallback或死代码 | 保留原位 |
 | `src/web/src/ui/Markdown.test.tsx` | 29 | web域的Markdown行为回归测试 | 必要回归证据 | 测试重复不进入生产调用链 | 保留；随owner变更 |

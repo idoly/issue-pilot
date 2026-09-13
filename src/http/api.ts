@@ -3,6 +3,7 @@ import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { applicationConfig } from "../config.ts";
+import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
@@ -97,6 +98,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
     const sharedModelRuntime = () => modelRuntime ??= createPiModelRuntime();
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
+    await ensureGlobalAgentConfiguration(database.db, modelCatalog);
     const attachmentLimits = applicationConfig.limits.attachment;
     await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
     const events = options.events ?? new AgentEventBus((error) => app.log.error(error));

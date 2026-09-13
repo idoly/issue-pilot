@@ -36,7 +36,7 @@ Browser
        protocol clients + ProcessToolRuntime
 ```
 
-生产只使用一个Kubernetes application Pod。SQLite、Git、Agent和Web不拆成独立服务，并保持单副本。Node/Maven项目命令由Issue-scoped Unix socket broker重新授权，再由application进程中的`ProcessToolRuntime`执行。DMS/SLS同样通过该执行器调用镜像PATH中的Aliyun CLI。Agent不拥有容器或Kubernetes API。
+生产只使用一个Kubernetes application Pod。SQLite、Git、Agent和Web不拆成独立服务，并保持单副本。Node/Maven项目命令由Issue-scoped Unix socket broker重新授权，再由application进程中的`ProcessToolRuntime`执行。SLS通过该执行器调用镜像PATH中的Aliyun CLI；DMS由应用内MCP SSE client调用Deployment绑定数据库的`executeScript`。Agent不拥有容器或Kubernetes API。
 
 ## 快速开始
 
@@ -65,7 +65,7 @@ Vite 默认监听 `0.0.0.0:4173` 并代理 API，只能用于可信开发网络�
 
 所有应用路径、端口、默认值、retention、timeout和budget来自根目录`issue-pilot.config.ts`。Image、资源、挂载和probe只由`deploy/issue-pilot.yaml`拥有，不在应用配置中重复。
 
-User、Service、Repository、Deployment、model、branch 和完整 capability credential 存在 SQLite。根配置的 bootstrap user 只在 `subjects` 为空时插入一次。Pi/npm/Maven 原生配置由 Operator 文件管理，不进入 SQLite。
+User、Service、Repository、Deployment、branch、唯一全局Agent model和完整capability credential存在SQLite。根配置的 bootstrap user 只在 `subjects` 为空时插入一次。Pi/npm/Maven 原生配置由 Operator 文件管理，不进入 SQLite。
 
 完整字段见[配置说明](docs/CONFIGURATION.md)。
 

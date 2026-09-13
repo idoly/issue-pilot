@@ -19,11 +19,15 @@ test("validates capability connection settings when saving page configuration", 
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 70_000, username: "", database: 0 }), /invalid_redis_port/);
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 6379, username: "", database: -1 }), /invalid_redis_database/);
   assert.throws(() => parseCapabilityConfiguration("mq", { host: "mq.example.test", port: 5672, managementPort: 0, username: "reader", password: "secret", virtualHost: "/" }), /invalid_mq_management_port/);
-  assert.deepEqual(parseCapabilityConfiguration("dms", { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false, tid: "987654" }), { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false, tid: "987654" });
-  assert.deepEqual(parseCapabilityConfiguration("dms", { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: true, tid: "" }), { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: true });
-  for (const dbId of ["orders", "0", "2147483648"]) assert.throws(() => parseCapabilityConfiguration("dms", { accessKeyId: "key", accessKeySecret: "secret", dbId, logic: false }), /invalid_dms_scope/);
-  assert.throws(() => parseCapabilityConfiguration("dms", { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: "false" }), /invalid_dms_scope/);
-  assert.throws(() => parseCapabilityConfiguration("dms", { accessKeyId: "key", accessKeySecret: "secret", dbId: "123456", logic: false, tid: "9007199254740992" }), /invalid_dms_scope/);
+  assert.deepEqual(parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token" }), { url: "https://dms.example.test/sse", authorization: "Bearer token" });
+  assert.deepEqual(parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD", databaseId: "123", databaseLabel: "orders" }), { url: "https://dms.example.test/sse", authorization: "Bearer token", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD", databaseId: "123", databaseLabel: "orders" });
+  assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", databaseId: "123" }), /invalid_dms_database/);
+  for (const url of ["", "http://dms.example.test/sse", "https://user@dms.example.test/sse", "https://dms.example.test/sse?token=secret"]) {
+    assert.throws(() => parseCapabilityConfiguration("dms", { url, authorization: "Bearer token" }), /invalid_dms_url/);
+  }
+  for (const authorization of ["", "token", "Beare token", "Bearer token with spaces"]) {
+    assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization }), /invalid_dms_authorization/);
+  }
 });
 
 test("requires explicit Nacos and SLS page scopes", () => {

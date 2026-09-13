@@ -73,6 +73,7 @@ Non-zero target必须小于high-water；concurrency必须是正整数。Interval
 | --- | --- |
 | `environments` | `prod=正式`, `test=测试`, `dev=开发` |
 | `deployment.baseBranch` | `main` |
+| `dms.sseUrl` | `https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse`（新Deployment表单默认值，可编辑） |
 | `nacos.group` | `DEFAULT_GROUP` |
 | `redis` | port`6379`, database`0`, scanResults`50` |
 | `rabbitmq` | AMQP`5672`, management`15672`, vhost`/` |
@@ -89,9 +90,8 @@ Environment name在启动时同步。其他default用于新配置；保存后SQL
 | `projectTools.maven` | `.m2/settings.xml`, `.m2/repository` |
 | `projectTools.executionMs` | `1800000` |
 | `redisWorker` | old`96MiB`, young`16MiB` |
-| `dms.endpoint/cliRegion` | `dms-enterprise.aliyuncs.com` / `cn-hangzhou` |
 
-Image、UID、memory、termination grace和probe属于Kubernetes deployment，不在应用配置中重复。`ProcessToolRuntime`执行当前image PATH中的`npm`、`mvn`、`aliyun dms-enterprise`和`aliyun sls`；调用不选择image或container。Playwright harness参数由`scripts/playwright.sh`拥有，不进入Service、Deployment或Agent。
+Image、UID、memory、termination grace和probe属于Kubernetes deployment，不在应用配置中重复。`ProcessToolRuntime`执行当前image PATH中的`npm`、`mvn`和`aliyun sls`；调用不选择image或container。DMS通过application内的MCP client访问Deployment配置的HTTPS endpoint。Playwright harness参数由`scripts/playwright.sh`拥有，不进入Service、Deployment或Agent。
 
 ### Limits
 
@@ -103,7 +103,7 @@ Image、UID、memory、termination grace和probe属于Kubernetes deployment，�
 | Process output | 5MiB |
 | Git operation/output | 120s / 2MiB |
 | Disk usage | 120s |
-| Capability result | 1MiB |
+| Capability result | 1MiB（DMS MCP除外） |
 | Capability default/connection timeout | 15s / 10s |
 | Source file/tree | 2MiB / 500 entries |
 | Source query/matches | 200 chars / 200 |
@@ -162,21 +162,20 @@ Alias用于配置和显示；Issue `workspace_name`从URL basename/hash稳定分
 ```text
 Environment
 Repository branches (one per current Service Repository)
-Pi agent model
 Selected capability sections
 ```
 
-创建Issue前scope必须存在Deployment。每个`repositoryBranches[]`使用current Repository alias和non-empty base branch。Prod/test每轮读取当前branch；dev首次加入Repository时把branch写入Issue历史。
+创建Issue前scope必须存在Deployment。每个`repositoryBranches[]`使用current Repository alias和non-empty base branch。Prod/test每轮读取当前branch；dev首次加入Repository时把branch写入Issue历史。配置页的每个Deployment可独立折叠；折叠只隐藏编辑控件，不清除或提交表单状态。
 
-### Pi model
+### 全局Pi model
 
-Required字段：provider、model、thinkingLevel。Thinking level：
+SQLite `global_agent_configuration`保存唯一全局模型，所有Service和Environment共享，不允许Deployment覆盖。顶级“配置”页使用“用户 / 模型 / 服务”三个独立Tab，默认进入“服务”；三个面板保持挂载，切换时不丢失draft或弹窗状态。“模型”入口编辑required provider、model、thinkingLevel。修改时按`scope queue -> all Issue reservations`获取锁，关闭已有空闲session后提交；任一Issue正在运行时整次拒绝。Thinking level：
 
 ```text
 off, minimal, low, medium, high, xhigh, max
 ```
 
-API用共享Pi `ModelRuntime`离线刷新当前配置并验证model可用性和level。Issue Pilot不通过环境变量或远程catalog补model。
+API用共享Pi `ModelRuntime`离线刷新当前配置并验证model可用性和level。Agent启动和SSE snapshot均读取这一全局行。Issue Pilot不通过环境变量或远程catalog补model。Migration `0038`只接受旧Deployment中唯一一致的agent值，将其提升为全局行并从所有Deployment JSON删除；多个不同旧值会因singleton约束失败，不静默选择。
 
 `models.json`从Operator只读配置读取。`auth.json`和`models-store.json`复制到process-private `0700`临时目录，文件`0600`，供Pi storage实现加锁/更新；runtime close后删除。Operator修改auth/store后需重启application，明确替换当前process snapshot。
 
@@ -245,24 +244,17 @@ Config：HTTP(S) URL，可含reverse-proxy path，无credential/query/fragment�
 
 ### DMS
 
-Config：
+Config包含required HTTPS `url`、required `authorization` credential，以及作为一组出现的optional `instanceId/instanceHost/instancePort/instanceLabel/databaseId/databaseLabel`。Authorization格式必须是`Bearer <token>`。URL由每个Deployment显式配置，禁止内嵌credential、query或fragment，且不接受Agent或tool input覆盖。配置页只要求手工输入实例`alias`和数据库`schema`，不提供远程下拉。两项输入停止500ms后，受信`POST /api/dms/scope/resolve`在一个MCP session内先调用`listInstances(search_key=alias)`并要求InstanceAlias唯一精确匹配，再调用`getDatabase(host, port, schema_name)`，严格核对返回InstanceId和schema并取得DatabaseId；解析成功后才保存完整scope。旧CLI `accessKeyId/accessKeySecret/dbId/logic/tid`字段不再解析、迁移或回退；新的`instanceId/databaseId`只用于MCP scope。
 
-| Field | Rule |
-| --- | --- |
-| `accessKeyId/accessKeySecret` | Required dedicated RAM credential |
-| `dbId` | Decimal `1..2147483647` |
-| `logic` | Boolean |
-| `tid` | Optional decimal `1..9007199254740991` |
+DMS使用MCP 2024-11-05 HTTP+SSE transport：Authorization同时发送到初始SSE GET和同源message POST。Client拒绝非HTTPS target、跨源message endpoint和HTTP redirect；每次tool调用建立独立连接并在完成、失败或abort后关闭。
 
-执行固定command：
+Tool input：
 
 ```text
-aliyun dms-enterprise ExecuteScript
+{ script: "SELECT ...", logic?: boolean }
 ```
 
-Endpoint固定`dms-enterprise.aliyuncs.com`并使用`--secure`；`cliRegion`只用于临时profile。DMS DB必须接入安全托管且支持ExecuteScript。推荐RAM只授予`dms:ExecuteScript`，DMS内部只授予目标DB query权限。
-
-SQL复用MySQL read-only contract。`SELECT`必须以顶层`LIMIT n`结束，`1<=n<=500`，不接受OFFSET；`SHOW/DESCRIBE/EXPLAIN`不要求LIMIT。Result校验官方shape和RowCount，限制500 rows/1MiB/30s。
+Agent只看到一个`dms`工具，不能列出、选择或命名远端MCP工具。Client每次调用只查找schema精确包含`database_id`和`script`的`executeScript`，其他远端工具即使标记read-only也不向Agent开放。Issue Pilot由持久化Deployment scope强制注入`database_id`，Agent不能提供或覆盖；未配置完整database scope时调用失败。`script`复用单条只读SQL校验，仅允许`SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝DDL/DML、comment、multi-statement、lock和已知副作用函数。连接与调用总时限30秒；DMS script和result不应用统一1MiB budget，MCP tool error整次失败。Bearer不进入context、prompt、tool schema/input、result、details、argv或日志。
 
 ### SLS
 
@@ -279,7 +271,7 @@ trace_id         # UUID, mutually exclusive with query
 
 普通query默认最近15分钟，trace默认24小时。Endpoint为`<region>.log.aliyuncs.com`。Client按100条自动分页直到查询结果耗尽，不设置record count上限；每页后检查统一1MiB结果预算，超限整次返回`capability_result_too_large`，不把partial result伪装为完整。
 
-DMS/SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进程中的Aliyun CLI读取，finally递归删除。AccessKey不在argv；SQL/query、project、logstore和时间范围可能在process argv中。
+SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进程中的Aliyun CLI读取，finally递归删除。SLS AccessKey不在argv；query、project、logstore和时间范围可能在process argv中。DMS Bearer只作为HTTPS Authorization header传给当前Deployment授权的MCP endpoint。
 
 ## Result和secret
 
@@ -290,7 +282,7 @@ DMS/SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进
 | Redis | 100 keys / 500 results / 1MiB |
 | RabbitMQ | 1MiB response |
 | Elasticsearch | 200 results / 1MiB |
-| DMS | 20k chars / 500 rows / 30s / 1MiB |
+| DMS MCP | 30s total / arguments和result无应用层byte limit |
 | SLS | 自动分页 / 30s total / 1MiB |
 
 Secret flow：
@@ -301,7 +293,7 @@ Secret flow：
 4. API内存合并后只解析一次并transaction保存。
 5. `AgentSessionContext`、prompt、schema和tool input不含credential。
 6. `createCapabilityTools()` clone session-local config并只在tool closure传给client。
-7. DMS/SLS credential写入临时profile；其他credential只传给in-process protocol client。
+7. DMS Bearer只传给session-local MCP client；SLS credential写入临时profile；其他credential只传给in-process protocol client。
 8. Tool result进入model context和Pi JSONL，可能包含敏感业务数据。
 
 不得记录configuration write body、Config GET响应、Authorization/Cookie、credential、temporary profile、package config或完整敏感tool result。

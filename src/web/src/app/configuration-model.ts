@@ -1,4 +1,4 @@
-import { CAPABILITY_KEYS, type AgentConfiguration, type CapabilityName } from "../../../domain/contracts";
+import { CAPABILITY_KEYS, type CapabilityName } from "../../../domain/contracts";
 import { CAPABILITY_CREDENTIALS, type CapabilityConfigurationInput, type CapabilityCredentialUpdate, type CapabilityCredentialValues, type ProjectedCapabilitySection } from "../../../configuration/contracts";
 
 type CapabilityCredentialDraft<Key extends CapabilityName> = ProjectedCapabilitySection<Key> & CapabilityCredentialValues<Key> & { credentialEnabled: boolean };
@@ -6,7 +6,6 @@ type CapabilityDraftConfiguration = { [Key in CapabilityName]?: CapabilityCreden
 
 export type DeploymentCapabilityDraft = CapabilityDraftConfiguration & {
   capabilities: CapabilityName[];
-  agent: AgentConfiguration;
 };
 
 type CapabilitySerializer<Key extends CapabilityName> = (draft: CapabilityCredentialDraft<Key>) => NonNullable<CapabilityConfigurationInput[Key]>;
@@ -25,7 +24,7 @@ const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
   redis: (draft) => ({ host: draft.host.trim(), port: draft.port, username: draft.username.trim(), database: draft.database, credentialUpdate: credentialUpdate("redis", draft) }),
   mq: (draft) => ({ host: draft.host.trim(), port: draft.port, managementPort: draft.managementPort, username: draft.username.trim(), virtualHost: draft.virtualHost.trim(), credentialUpdate: credentialUpdate("mq", draft) }),
   es: (draft) => ({ url: draft.url.trim(), username: draft.credentialEnabled ? draft.username.trim() : "", credentialUpdate: credentialUpdate("es", draft) }),
-  dms: (draft) => ({ dbId: draft.dbId.trim(), logic: draft.logic, ...(draft.tid?.trim() ? { tid: draft.tid.trim() } : {}), credentialUpdate: credentialUpdate("dms", draft) }),
+  dms: (draft) => ({ url: draft.url.trim(), instanceId: draft.instanceId?.trim() ?? "", instanceHost: draft.instanceHost?.trim() ?? "", instancePort: draft.instancePort?.trim() ?? "", instanceLabel: draft.instanceLabel?.trim() ?? "", databaseId: draft.databaseId?.trim() ?? "", databaseLabel: draft.databaseLabel?.trim() ?? "", credentialUpdate: credentialUpdate("dms", draft) }),
   sls: (draft) => ({ region: draft.region.trim(), project: draft.project.trim(), logstores: [...draft.logstores], credentialUpdate: credentialUpdate("sls", draft) }),
 };
 

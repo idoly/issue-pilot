@@ -114,7 +114,6 @@ export function servicePayload(name: string, environments: EnvironmentKind[] = [
       environmentKey,
       repositoryBranches: repositories.map(({ alias }, index) => ({ repositoryAlias: alias, baseBranch: index === 0 ? (environmentKey === "dev" ? "develop" : "main") : "shared-main" })),
       capabilities: [],
-      agent: testAgent,
     })),
   };
 }

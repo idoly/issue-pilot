@@ -31,7 +31,7 @@ SQLite、bare Git、worktree metadata、Pi JSONL和Attachment存在跨介质关�
 - Pi CLI。
 - Maven 3.9和Temurin 8。
 - Git `2.53.0`、SSH、ripgrep和curl；Git从kernel.org固定版本源码包构建，以支持应用生成的relative worktree格式。
-- Aliyun CLI `3.4.11`，从官方GitHub固定版本release下载，用于DMS/SLS。
+- Aliyun CLI `3.4.11`，从官方GitHub固定版本release下载，用于SLS。DMS使用application内的MCP SSE client。
 - 已构建的Solid Web和Workbench。
 
 ## 宿主准备

@@ -2,7 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TSchema } from "typebox";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { CAPABILITY_KEYS, isDmsDatabaseId, isDmsTenantId, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
 
 const defaults = issuePilotConfig.defaults;
 const limits = issuePilotConfig.limits.capability;
@@ -103,7 +103,10 @@ const capabilityInputSchemas = {
     query: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: limits.elasticsearch.results })),
   }, { additionalProperties: false }),
-  dms: Type.Object({ statement: Type.String({ maxLength: limits.dms.queryChars }) }, { additionalProperties: false }),
+  dms: Type.Object({
+    script: Type.String({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+    logic: Type.Optional(Type.Boolean({ description: "Whether DMS should execute the statement as a logical database query." })),
+  }, { additionalProperties: false }),
   sls: Type.Object({
     logstore: Type.String({ maxLength: 63, pattern: SLS_LOGSTORE.source }),
     ...slsQueryProperties,
@@ -201,16 +204,24 @@ const definitions = {
     inputSchema: capabilityInputSchemas.dms,
     metadata: {
       label: "Query DMS Database",
-      description: "Run one bounded read-only SQL statement against the deployment's authorized Alibaba Cloud DMS database.",
-      promptSnippet: "Run one bounded read-only SQL statement through Alibaba Cloud DMS",
-      promptGuidelines: ["Use dms only for read-only production evidence. SELECT statements must end with an explicit LIMIT no greater than the configured row budget."],
+      description: "Run one read-only SQL statement through the deployment's authorized Alibaba Cloud DMS MCP executeScript tool.",
+      promptSnippet: "Run read-only SQL through Alibaba Cloud DMS executeScript",
+      promptGuidelines: ["Call dms directly with one SELECT, SHOW, DESCRIBE, or EXPLAIN statement. The deployment database is fixed and write operations are unavailable."],
     },
     parseConfiguration(value) {
       const input = inputRecord(value);
-      const dbId = requiredText(input.dbId, "dms_db_id", 10);
-      const tid = optionalText(input.tid, 16) || undefined;
-      if (!isDmsDatabaseId(dbId) || typeof input.logic !== "boolean" || (tid !== undefined && !isDmsTenantId(tid))) fail("invalid_dms_scope");
-      return { accessKeyId: requiredText(input.accessKeyId, "dms_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "dms_access_key_secret"), dbId, logic: input.logic, ...(tid === undefined ? {} : { tid }) };
+      const authorization = requiredText(input.authorization, "dms_authorization");
+      if (!/^Bearer [^\s]+$/.test(authorization)) fail("invalid_dms_authorization");
+      const instanceId = optionalText(input.instanceId, 100);
+      const instanceHost = optionalText(input.instanceHost, 255);
+      const instancePort = optionalText(input.instancePort, 10);
+      const instanceLabel = optionalText(input.instanceLabel, 1_000);
+      const databaseId = optionalText(input.databaseId, 100);
+      const databaseLabel = optionalText(input.databaseLabel, 255);
+      const scopeFields = [instanceId, instanceHost, instancePort, instanceLabel, databaseId, databaseLabel];
+      if (scopeFields.some(Boolean) && !scopeFields.every(Boolean)) fail("invalid_dms_database");
+      if (instancePort && (!/^\d{1,5}$/.test(instancePort) || Number(instancePort) < 1 || Number(instancePort) > 65_535)) fail("invalid_dms_database");
+      return { url: connectionUrl(input.url, "dms_url", ["https:"]), authorization, ...(databaseId && databaseLabel && instanceId && instanceHost && instancePort && instanceLabel ? { instanceId, instanceHost, instancePort, instanceLabel, databaseId, databaseLabel } : {}) };
     },
   },
   sls: {

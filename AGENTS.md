@@ -42,7 +42,7 @@ Do not start, stop, migrate, copy, or call destructive routes against active sta
 | Business enums and shared predicates | `src/domain/contracts.ts` |
 | Current database model | `src/db/schema.ts` |
 | Upgrade order | Immutable `drizzle/*.sql` and `drizzle/meta/_journal.json` |
-| User, Issue, Service, Deployment, Repository, Workspace, Attachment | SQLite |
+| User, Issue, Service, Deployment, Repository, Workspace, Attachment, global Agent model | SQLite |
 | Deployment Repository join and order | `src/workspace/deployment.ts` |
 | Repository state and managed paths | `src/workspace/state.ts` |
 | Issue project preparation | `src/workspace/project.ts` |
@@ -72,7 +72,7 @@ Do not create a second source for one of these facts.
 | Agent queue, reservation, state, session | `src/agent` |
 | Model catalog and tool registration | `src/pi` |
 | Capability config/input | `src/capabilities/registry.ts` |
-| Capability protocol execution | Protocol client; DMS/SLS also use `src/tool-runtime.ts` |
+| Capability protocol execution | Protocol client; SLS also uses `src/tool-runtime.ts`; DMS uses MCP SSE |
 | Generic child-process execution mechanics | `src/process.ts` |
 | Authorized process command/environment | `src/tool-runtime.ts` |
 | Git, checkout, worktree, runtime, release, reopen | `src/workspace` |
@@ -96,6 +96,7 @@ Routes coordinate owners, reservations, and transactions. They must not reimplem
 - Every Issue has exactly one Workspace row.
 - `status = resolved` if and only if `resolved_at` is non-null.
 - Every Issue scope has a matching Service/Environment Deployment.
+- Exactly one global Agent provider/model/thinking level applies to every Service and Environment; Deployment config contains no Agent override.
 - Prod/test repositories are `read_only`; active dev is `development_workspace`; released dev is `development_snapshot`.
 - Released dev restores from the local working branch, never a remote Issue-branch fallback.
 - Existing dev `base_branch` and `workspace_name` remain Issue history.
@@ -106,7 +107,7 @@ Routes coordinate owners, reservations, and transactions. They must not reimplem
 - Runtime, wrappers, and immutable checkout are generated atomically and remain rebuildable.
 - Config GET intentionally returns stored passwords and AccessKeys to the trusted configuration UI; those values must not enter logs, monitoring, diagnostics, `AgentSessionContext`, prompt, tool schema/input, or process arguments.
 - Pi tools parse input once with TypeBox and call protocol clients directly with typed session-local Deployment config.
-- Protocol clients still enforce external target scope, protocol semantics, timeout, abort, response validity, and result bounds.
+- Protocol clients still enforce external target scope, protocol semantics, timeout, abort, and response validity. Result bounds apply except where the owning capability contract explicitly omits them, currently DMS MCP.
 - API, migration, Git, runtime, Source Browser, and project-tool broker use the same state root.
 - Published migrations and journal entries are immutable.
 

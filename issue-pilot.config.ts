@@ -36,6 +36,7 @@ export const issuePilotConfig = Object.freeze({
   defaults: Object.freeze({
     environments: Object.freeze({ prod: "正式", test: "测试", dev: "开发" }),
     deployment: Object.freeze({ baseBranch: "main" }),
+    dms: Object.freeze({ sseUrl: "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse" }),
     nacos: Object.freeze({ group: "DEFAULT_GROUP" }),
     redis: Object.freeze({ port: 6379, database: 0, scanResults: 50 }),
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
@@ -55,7 +56,6 @@ export const issuePilotConfig = Object.freeze({
       }),
       executionMs: 30 * 60 * 1000,
     }),
-    dms: Object.freeze({ endpoint: "dms-enterprise.aliyuncs.com", cliRegion: "cn-hangzhou" }),
   }),
   limits: Object.freeze({
     agentMessageChars: 50_000,
@@ -88,7 +88,7 @@ export const issuePilotConfig = Object.freeze({
       timeoutMs: 15_000,
       connectionMs: 10_000,
       database: Object.freeze({ queryChars: 20_000, rows: 500 }),
-      dms: Object.freeze({ queryChars: 20_000, rows: 500, executionMs: 30_000 }),
+      dms: Object.freeze({ executionMs: 30_000 }),
       elasticsearch: Object.freeze({ results: 200 }),
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
       redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),

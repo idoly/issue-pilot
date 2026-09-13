@@ -289,7 +289,7 @@ mysql.ts + sql.ts
 redis.ts + redis-worker.ts
 rabbitmq.ts
 elasticsearch.ts
-dms.ts + aliyun.ts
+dms.ts + MCP SDK SSE transport
 sls.ts + aliyun.ts
 http-client.ts
 ```

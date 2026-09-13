@@ -54,13 +54,15 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
   const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
   const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
+  const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
+  const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
   let issueGeneration = 0;
   createEffect(() => props.issue.id, (issueId, previousIssueId) => {
     if (previousIssueId === undefined || issueId === previousIssueId) return;
     issueGeneration += 1;
     setEditOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError(""); setScopeConfirmOpen(false);
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setConversionOpen(false); setConverting(false); setConversionError("");
-    setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null);
+    setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null); setDescriptionExpanded(false);
   });
   const openEditor = () => {
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority); setEditType(props.issue.type);
@@ -166,7 +168,12 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
             <Badge status={statusBadge[props.issue.status]} text={statusLabel[props.issue.status]} />
           </div>
           <h1>{props.issue.title}</h1>
-          <Show when={props.issue.description.trim()}><div class="issue-description"><Markdown source={props.issue.description} /></div></Show>
+          <Show when={props.issue.description.trim()}>
+            <div class={`issue-description${descriptionNeedsCollapse() ? " collapsible" : ""}${descriptionExpanded() ? " expanded" : ""}`}>
+              <div class="issue-description-content"><Markdown source={props.issue.description} /></div>
+              <Show when={descriptionNeedsCollapse()}><button type="button" class="issue-description-toggle" aria-expanded={descriptionExpanded() ? "true" : "false"} onClick={() => setDescriptionExpanded((expanded) => !expanded)}>{descriptionExpanded() ? "收起描述" : "展开完整描述"}</button></Show>
+            </div>
+          </Show>
         </div>
         <div class="issue-actions">
           <Show when={canConvertToDevelopment()}><Button icon={<GitBranch size={15} />} loading={converting()} onClick={() => { setConversionError(""); setConversionOpen(true); }}>转开发修复</Button></Show>
@@ -180,12 +187,12 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
       </header>
 
       <div class="issue-facts">
-        <div><span>创建人</span><strong>{props.issue.reporter?.name ?? "-"}</strong></div>
-        <div><span>创建时间</span><strong>{localDateTime(props.issue.createdAt ?? props.issue.updatedAt)}</strong></div>
         <div><span>处理人</span><strong>{props.issue.assignee ?? "未分配"}</strong></div>
-        <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
+        <div><span>创建人</span><strong>{props.issue.reporter?.name ?? "-"}</strong></div>
         <div><span>服务</span><strong>{props.issue.service.name}</strong></div>
         <div><span>环境</span><strong>{environmentName()}</strong></div>
+        <div><span>创建时间</span><strong>{localDateTime(props.issue.createdAt ?? props.issue.updatedAt)}</strong></div>
+        <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
       </div>
       <Show when={retryError()}><div class="workspace-error" role="alert">{retryError()}</div></Show>
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>

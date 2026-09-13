@@ -27,7 +27,7 @@ function processCommand(command: readonly string[]): { command: string; args: st
   if (!command.length || command.some((argument) => argument.includes("\0"))) throw new Error("invalid_tool_configuration");
   const [executable, ...args] = command;
   if (executable === "npm" || executable === "mvn") return { command: executable, args };
-  if (executable === "aliyun" && (args[0] === "dms-enterprise" || args[0] === "sls")) return { command: executable, args };
+  if (executable === "aliyun" && args[0] === "sls") return { command: executable, args };
   throw new Error("tool_command_not_allowed");
 }
 

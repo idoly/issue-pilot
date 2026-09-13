@@ -5,6 +5,7 @@ import path from "node:path";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
+import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
@@ -253,10 +254,12 @@ export class AgentEngine implements AgentController {
     const attachmentPath = issueAttachmentRoot(this.stateRoot, issue.key);
     await mkdir(attachmentPath, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(attachmentPath), 0o700), chmod(attachmentPath, 0o700)]);
+    const agentConfiguration = await loadGlobalAgentConfiguration(this.database);
     const context = createAgentSessionContext({
       issueKey: issue.key,
       issueType: issue.type,
       deploymentConfig: project.deployment.config,
+      agentConfiguration,
       serviceKey: service.key,
       environmentKey: service.environmentKey,
       environmentKind,

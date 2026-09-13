@@ -8,7 +8,8 @@
 | --- | --- |
 | Issue | Agent、Pi session、Attachment和代码上下文的隔离单位 |
 | Service | 一组带稳定ID、alias和URL的Repository |
-| Deployment | Service在一个Environment下的branch、model和capability配置，不是发布进程 |
+| Deployment | Service在一个Environment下的branch和capability配置，不是发布进程 |
+| Global Agent Configuration | 所有Service和Environment共享的唯一Pi provider/model/thinking level |
 | Bare store | 按Repository URL共享的Git object/ref store |
 | Dev workspace | Active dev Issue的可写worktree集合 |
 | Immutable checkout | 按完整commit定址的detached可重建checkout |
@@ -62,7 +63,7 @@ Browser
 | `src/workspace/project-tools.ts` | Unix socket、SQLite重新授权、Node/Maven action |
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
 | `src/capabilities/registry.ts` | 保存时config parser、Pi input schema和tool metadata |
-| 各capability client | 外部target、协议、timeout/abort、response和result budget |
+| 各capability client | 外部target、协议、timeout/abort和response；除DMS外应用result budget |
 | `src/process.ts` | 共享spawn、abort、timeout和output budget mechanism |
 | `src/tool-runtime.ts` | `npm`、`mvn`、限定Aliyun CLI命令的进程allowlist |
 | `src/serial.ts` | 通用Promise serial primitive，不拥有业务锁域 |
@@ -85,11 +86,10 @@ Route不实现Git或外部协议。AgentEngine不拼Deployment Repository join�
 ```text
 npm ...
 mvn ...
-aliyun dms-enterprise ...
 aliyun sls ...
 ```
 
-它验证command、cwd、environment，继承有限环境变量，限制timeout/output，并在调用者未指定HOME时创建和清理临时HOME。Project broker先从SQLite重新确认Issue、Repository和真实project path。DMS/SLS用调用级临时`0600`profile指定HOME。
+它验证command、cwd、environment，继承有限环境变量，限制timeout/output，并在调用者未指定HOME时创建和清理临时HOME。Project broker先从SQLite重新确认Issue、Repository和真实project path。SLS用调用级临时`0600`profile指定HOME。DMS使用Deployment授权的HTTPS MCP SSE endpoint和Bearer凭据；每次调用建立短连接。配置解析专用流程调用`listInstances/getDatabase`绑定scope；Agent只拥有一个`dms`工具，runtime只调用schema匹配的远端`executeScript`，强制注入绑定的database ID，并在调用前把script限制为单条只读SQL。其他MCP工具不向Agent开放。
 
 项目脚本与API共享container UID和可读挂载，没有调用级rootfs/cgroup隔离。此模型只适用于可信内部Repository，不是恶意代码sandbox。
 
@@ -122,6 +122,8 @@ open -> in_progress -> pending -> resolved
 | `failed` | 准备/执行失败，可按规则retry |
 
 每张Issue恰好有一条`issue_workspaces`。`runtime_ready`只表示受管runtime已生成，不替代物理验证。
+
+首页复用`GET /api/issues`的轻量摘要，同时投影Issue状态、Workspace状态和进程内Agent running状态。页面先展示当前运营状态和完整的跨人员工单动态，失败和执行中优先、其余按最近更新时间排序，动态列表固定高度并在内部滚动；下方“运营洞察”在“产出 / 分布 / 团队 / 资源”间切换，保留周期聚合、服务与类型分布、个人处理情况和Workspace容量；资源视图把紧凑容量摘要与策略放在顶部，把主要高度留给Workspace明细，长列表只在面板内部滚动。统计与动态共享同一份Issue摘要，不重复请求或持久化第二套状态。动态项点击只切换到现有工单详情。
 
 ## Repository三态
 
@@ -160,7 +162,7 @@ Repository URL使用20字符SHA-256前缀。Bare store保留remote tracking refs
 
 下一轮重新读取当前Deployment，因此配置和branch更新会生效。Agent只看到Issue runtime link，不看到shared checkout物理root。
 
-Prod/test Issue可在编辑事务中切换到另一个prod/test Service/Environment scope。目标Deployment和Issue type必须有效，运行中的Issue由reservation拒绝；切换会关闭旧in-memory session、保留Pi JSONL/Attachment/Comment、清空旧只读Repository投影并使runtime失效，然后由metadata轮次从目标Deployment重建只读checkout、runtime、model和capability closure。Dev Issue不能通过普通编辑切换Service或Environment，进入dev仍使用专用转换动作。
+Prod/test Issue可在编辑事务中切换到另一个prod/test Service/Environment scope。目标Deployment和Issue type必须有效，运行中的Issue由reservation拒绝；切换会关闭旧in-memory session、保留Pi JSONL/Attachment/Comment、清空旧只读Repository投影并使runtime失效，然后由metadata轮次从目标Deployment重建只读checkout、runtime和capability closure，并使用当前全局model。Dev Issue不能通过普通编辑切换Service或Environment，进入dev仍使用专用转换动作。
 
 ### Active dev
 
@@ -214,7 +216,7 @@ Source Browser重新读取SQLite关系并验证runtime symlink：
 - Diff读取Git index/working tree；development workspace额外允许Stage、Unstage、Discard和Commit，所有写操作经过Issue reservation。
 - Development workspace可创建、保存、删除和重命名普通文件/目录；保存既有文件携带读取时SHA-256并原子替换。Prod/test和released snapshot保持只读。
 
-Workbench filesystem根据Repository access声明权限：dev允许文件创建、保存、删除和重命名，prod/test及released snapshot保持Readonly。固定LocalProcess extension提供Explorer/Search/SCM Graph和受限Git action；Web Worker Markdown extension只用于render。Terminal、Node extension host、gallery和任意宿主命令不可用。
+Workbench filesystem根据Repository access声明权限：dev允许文件创建、保存、删除和重命名，prod/test及released snapshot保持Readonly。固定LocalProcess extension提供Explorer/Search/SCM Graph和受限Git action；Web Worker Markdown extension只用于render。iframe以显式`ready/error/layout`消息区分启动结果和布局同步，初始化失败必须移除父页面加载遮罩并显示Workbench错误。Terminal、Node extension host、gallery和任意宿主命令不可用。
 
 ## Agent和Pi
 
@@ -252,7 +254,7 @@ Service save -> Registry parse -> typed Deployment config -> SQLite
 Pi tool -> TypeBox input parse -> protocol client(typed session config, typed input)
 ```
 
-完整Deployment config只存在API session-local tool closure。Protocol client不重复解析内部shape，但必须限制外部target、协议、redirect、timeout、abort、response和result size。SLS按服务端page size读取完整查询，不设置record count上限，但每页检查统一result byte budget。Tool result会进入Pi JSONL。
+完整Deployment config只存在API session-local tool closure。Protocol client不重复解析内部shape，但必须限制外部target、协议、redirect、timeout、abort和response；除DMS MCP外还限制result size。DMS arguments和result不设应用层byte limit。SLS按服务端page size读取完整查询，不设置record count上限，但每页检查统一result byte budget。Tool result会进入Pi JSONL。
 
 ## Attachment事务
 
@@ -343,7 +345,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 - Config GET包含Repository、model、scope和完整Deployment credential，只允许在受信应用网络内使用且不得记录响应。
 - Credential update仍使用`preserve|replace|clear`；配置页可直接回填GET返回的credential，保存时通常发送`replace`。
 - Credential不进入context、prompt、tool input、argv或日志。
-- DMS/SLS临时profile包含AccessKey；query仍出现在process argv。
+- SLS临时profile包含AccessKey，query仍出现在process argv；DMS Bearer只存在SQLite、受信配置流和session-local MCP request header。
 - Pi built-in tools和project scripts不是OS sandbox。
 - Playwright只属于Operator测试harness，不进入Service、Deployment、Agent或Pi tools。
 
@@ -360,7 +362,7 @@ DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_st
 9. Runtime和checkout不成为durable事实源。
 10. Repository集合变化先prepare filesystem，再commit DB，失败可rollback。
 11. Credential只在SQLite、受信Config GET/保存请求和session-local protocol client中出现，不进入Agent context、prompt、tool input、process argv、日志、监控或诊断附件。
-12. Pi tool只解析一次input并直接调用protocol client。
+12. Pi tool只解析一次input并直接调用protocol client；DMS Agent工具只分派到`executeScript`。
 13. API、migration、Git、runtime、Source和project broker使用同一state root。
 14. Published migration/journal不修改、重排或删除。
 15. SQLite User是唯一事实源，且至少保留一名active user。

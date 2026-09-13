@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, WORKSPACE_STATUSES, type DeploymentConfig } from "../domain/contracts.ts";
 
@@ -23,6 +24,14 @@ export const environments = sqliteTable("environments", {
 export const services = sqliteTable("services", {
   id: id(), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), ...timestamps,
 }, (table) => [uniqueIndex("services_key_unique").on(table.key)]);
+
+export const globalAgentConfiguration = sqliteTable("global_agent_configuration", {
+  id: integer("id").primaryKey(),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  thinkingLevel: text("thinking_level").notNull(),
+  ...timestamps,
+}, (table) => [check("global_agent_configuration_singleton", sql`${table.id} = 1`)]);
 
 export const serviceDeployments = sqliteTable("service_deployments", {
   id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),

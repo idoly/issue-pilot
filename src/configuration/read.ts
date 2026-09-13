@@ -1,5 +1,6 @@
 import { asc, inArray, sql } from "drizzle-orm";
 
+import { loadGlobalAgentConfiguration } from "./agent.ts";
 import type { Database } from "../db/client.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
@@ -35,7 +36,8 @@ export function loadConfigurationCatalog(database: Database): Promise<Configurat
 }
 
 async function projectConfiguration(database: ConfigurationReader, agentModels: AgentModelDefinition[]): Promise<Configuration> {
-  const [environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows] = await Promise.all([
+  const [agent, environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows] = await Promise.all([
+    loadGlobalAgentConfiguration(database),
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
     database.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
     database.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
@@ -63,6 +65,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
     branchesByDeploymentId.set(branch.deploymentId, grouped);
   }
   return {
+    agent,
     agentModels: agentModels.map(({ provider, id, thinkingLevels }) => ({ provider, id, thinkingLevels })),
     environments: environmentRows.map(({ key, name }) => ({ key, name })),
     services: serviceRows.map((service) => {
@@ -83,7 +86,6 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
             capabilities: configuredCapabilities(deploymentConfig),
-            agent: deploymentConfig.agent ?? null,
           };
         }),
         repositories: repositories.map(({ id, alias, url }) => ({ id, alias, url })),

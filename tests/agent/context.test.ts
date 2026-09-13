@@ -9,8 +9,8 @@ function context(environmentKind: "dev" | "prod", repositoryAccess: Array<"read"
   return createAgentSessionContext({
     issueKey: "ISSUE-20260804-001",
     issueType: environmentKind === "dev" ? "defect_fix" : "smart_analysis",
+    agentConfiguration: agent,
     deploymentConfig: {
-      agent,
       redis: { host: "redis.example.test", port: 6379, username: "reader", password: "secret", database: 0 },
     },
     serviceKey: "orders",

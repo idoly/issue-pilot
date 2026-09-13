@@ -100,30 +100,39 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const assigneeSubjects = [...new Set(selectedIssues.flatMap((issue) => issue.assigneeSubject ? [issue.assigneeSubject] : []))];
     const serviceIds = [...new Set(selectedIssues.map((issue) => issue.serviceId))];
     const environmentIds = [...new Set(selectedIssues.map((issue) => issue.environmentId))];
-    const [assigneeRows, serviceRows, environmentRows] = await Promise.all([
+    const issueIds = selectedIssues.map((issue) => issue.id);
+    const [assigneeRows, serviceRows, environmentRows, workspaceRows] = await Promise.all([
       assigneeSubjects.length ? database.db.select().from(subjects).where(inArray(subjects.subject, assigneeSubjects)) : [],
       serviceIds.length ? database.db.select({ id: services.id, key: services.key, name: services.name }).from(services).where(inArray(services.id, serviceIds)) : [],
       environmentIds.length ? database.db.select({ id: environments.id, key: environments.key }).from(environments).where(inArray(environments.id, environmentIds)) : [],
+      issueIds.length ? database.db.select({ issueId: issueWorkspaces.issueId, status: issueWorkspaces.status }).from(issueWorkspaces).where(inArray(issueWorkspaces.issueId, issueIds)) : [],
     ]);
     const assignees = new Map(assigneeRows.map((assignee) => [assignee.subject, assignee]));
     const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
     const environmentById = new Map(environmentRows.map((environment) => [environment.id, environment]));
+    const workspaceByIssueId = new Map(workspaceRows.map((workspace) => [workspace.issueId, workspace]));
     return selectedIssues.map((issue) => {
       const assignee = issue.assigneeSubject ? assignees.get(issue.assigneeSubject) : undefined;
       const service = serviceById.get(issue.serviceId);
       const environment = environmentById.get(issue.environmentId);
+      const workspace = workspaceByIssueId.get(issue.id);
       if (!service) throw new Error("issue_service_not_found");
       if (!environment) throw new Error("issue_environment_not_found");
+      if (!workspace) throw new Error("issue_workspace_not_found");
       return {
         id: issue.key, title: issue.title, priority: issue.priority, type: issue.type, status: issue.status,
         assignee: assignee?.displayName ?? null, assigneeSubject: issue.assigneeSubject,
         service: { key: service.key, name: service.name }, environmentKey: environment.key,
+        workspaceStatus: workspace.status, agentRunning: engine.isRunning(issue.id), resolvedAt: isoDate(issue.resolvedAt) ?? null,
         createdAt: isoDate(issue.createdAt), updatedAt: issue.updatedAt.toISOString(),
       };
     });
   };
   const serializeIssueSummary = async (issue: typeof issues.$inferSelect) => (await serializeIssueSummaries([issue]))[0]!;
-  app.get("/api/issues", async () => serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.createdAt), desc(issues.key))));
+  app.get("/api/issues", async (_request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    return serializeIssueSummaries(await database.db.select().from(issues).orderBy(desc(issues.createdAt), desc(issues.key)));
+  });
 
   app.post("/api/issues", async (request, reply) => {
     const { input, attachments: initialAttachments } = await readIssueInput(request);

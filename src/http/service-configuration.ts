@@ -4,9 +4,8 @@ import { CapabilityConfigurationError, storedCapabilitySections } from "../capab
 import { resolveConfiguredCapabilitySections } from "../configuration/credentials.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS, CAPABILITY_KEYS, ENVIRONMENT_KINDS, type AgentConfiguration, type AgentModelDefinition, type CapabilityName, type DeploymentConfig } from "../domain/contracts.ts";
-import type { AgentModelCatalog } from "../pi/models.ts";
-import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
+import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, type CapabilityName, type DeploymentConfig } from "../domain/contracts.ts";
+import { ApiError, optionalText, record, strings, text } from "./input.ts";
 
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
 
@@ -14,16 +13,6 @@ function parseCapabilities(value: unknown): CapabilityName[] {
   const capabilities = strings(value, "capabilities");
   if (new Set(capabilities).size !== capabilities.length || capabilities.some((capability) => !CAPABILITY_KEYS.includes(capability as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
   return CAPABILITY_KEYS.filter((key) => capabilities.includes(key));
-}
-
-function parseAgentConfiguration(value: unknown): AgentConfiguration {
-  if (value === undefined || value === null) throw new ApiError(400, "agent_configuration_required");
-  const input = record(value);
-  return {
-    provider: text(input.provider, "agent_provider", 200),
-    model: text(input.model, "agent_model", 500),
-    thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS),
-  };
 }
 
 function parseServiceConfigurationInput(input: Record<string, unknown>, existingConfigurationByEnvironmentKey: Map<string, DeploymentConfig>) {
@@ -38,6 +27,7 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
   const repositoryAliases = new Set(repositories.map((repository) => repository.alias));
 
   const deployments = Array.isArray(input.deployments) ? input.deployments.map(record).map((deployment) => {
+    if (deployment.agent !== undefined) throw new ApiError(400, "deployment_agent_not_allowed");
     const environmentKey = text(deployment.environmentKey, "environment_key", 100);
     const capabilities = parseCapabilities(deployment.capabilities ?? []);
     const repositoryBranches = Array.isArray(deployment.repositoryBranches) ? deployment.repositoryBranches.map(record).map((branch) => ({
@@ -55,7 +45,6 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
       environmentKey,
       repositoryBranches,
       capabilities,
-      agent: parseAgentConfiguration(deployment.agent),
       ...capabilityConfiguration,
     };
   }) : [];
@@ -64,18 +53,10 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
 }
 
 function storedDeploymentConfiguration(deployment: ReturnType<typeof parseServiceConfigurationInput>["deployments"][number]) {
-  return { agent: deployment.agent, ...storedCapabilitySections(deployment) };
+  return storedCapabilitySections(deployment);
 }
 
 type ParsedServiceConfiguration = ReturnType<typeof parseServiceConfigurationInput>;
-
-function validateConfiguredModels(availableModels: AgentModelDefinition[], deployments: ParsedServiceConfiguration["deployments"]): void {
-  for (const deployment of deployments) {
-    const model = availableModels.find((candidate) => candidate.provider === deployment.agent.provider && candidate.id === deployment.agent.model);
-    if (!model) throw new ApiError(400, "agent_model_not_available");
-    if (!model.thinkingLevels.includes(deployment.agent.thinkingLevel)) throw new ApiError(400, "agent_thinking_level_not_supported");
-  }
-}
 
 interface PreparedServiceConfiguration {
   parsed: ParsedServiceConfiguration;
@@ -84,14 +65,13 @@ interface PreparedServiceConfiguration {
   environmentsByKey: Map<string, typeof environments.$inferSelect>;
 }
 
-export async function prepareServiceConfiguration(options: { executor: DatabaseExecutor; modelCatalog: AgentModelCatalog; serviceId: string; input: Record<string, unknown> }): Promise<PreparedServiceConfiguration> {
-  const { executor, modelCatalog, serviceId } = options;
-  const [existingRepositories, existingDeployments, referencedIssues, environmentRows, availableModels] = await Promise.all([
+export async function prepareServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; input: Record<string, unknown> }): Promise<PreparedServiceConfiguration> {
+  const { executor, serviceId } = options;
+  const [existingRepositories, existingDeployments, referencedIssues, environmentRows] = await Promise.all([
     executor.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
     executor.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId)),
     executor.select({ environmentId: issues.environmentId }).from(issues).where(eq(issues.serviceId, serviceId)),
     executor.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)),
-    modelCatalog.list(),
   ]);
   const environmentsByKey = new Map(environmentRows.map((environment) => [environment.key, environment]));
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
@@ -102,7 +82,6 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
   }));
   const parsed = parseServiceConfigurationInput(options.input, existingConfigurationByEnvironmentKey);
   const { repositories: repositoriesInput, deployments: deploymentsInput } = parsed;
-  validateConfiguredModels(availableModels, deploymentsInput);
   if (deploymentsInput.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new ApiError(400, "invalid_environment");
   const existingById = new Map(existingRepositories.map((repository) => [repository.id, repository]));
   const configuredIds = repositoriesInput.flatMap((repository) => repository.id ? [repository.id] : []);

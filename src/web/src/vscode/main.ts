@@ -239,6 +239,10 @@ function registerWorkbenchBridge(issueKey: string, vscode: IssuePilotVscodeApi, 
   });
 }
 
+function reportStartup(kind: "issue-pilot-workbench-ready" | "issue-pilot-workbench-error", issueKey: string): void {
+  window.parent.postMessage({ kind, issueKey }, window.location.origin);
+}
+
 function renderError(message: string): void {
   const root = document.querySelector<HTMLElement>("#vscode-workbench");
   if (!root) return;
@@ -372,7 +376,10 @@ async function start(): Promise<void> {
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);
   statusbarService.updateEntryVisibility("status.workbench.keyboardLayout", false);
   observeWorkbenchParts(issueKey, container, layout);
-  document.documentElement.dataset.workbenchReady = "true";
+  reportStartup("issue-pilot-workbench-ready", issueKey);
 }
 
-void start().catch((error) => renderError(error instanceof Error ? error.message : String(error)));
+void start().catch((error) => {
+  renderError(error instanceof Error ? error.message : String(error));
+  reportStartup("issue-pilot-workbench-error", new URL(window.location.href).searchParams.get("issue") ?? "");
+});

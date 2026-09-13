@@ -1,11 +1,12 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues, serviceDeployments, subjects } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS, type AgentFooterStats, type AgentThinkingLevel } from "../domain/contracts.ts";
+import { agentSessions, issues, subjects } from "../db/schema.ts";
+import type { AgentFooterStats } from "../domain/contracts.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
@@ -26,14 +27,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
 
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    const [deployment] = await database.db.select({ config: serviceDeployments.config }).from(serviceDeployments)
-      .where(and(eq(serviceDeployments.serviceId, issue.serviceId), eq(serviceDeployments.environmentId, issue.environmentId))).limit(1);
-    const deploymentConfig = deployment?.config as Record<string, unknown> | undefined;
-    const configuredAgent = deploymentConfig?.agent && typeof deploymentConfig.agent === "object" ? deploymentConfig.agent as Record<string, unknown> : {};
-    const provider = typeof configuredAgent.provider === "string" && configuredAgent.provider ? configuredAgent.provider : "not-configured";
-    const model = typeof configuredAgent.model === "string" && configuredAgent.model ? configuredAgent.model : "not-configured";
-    const thinkingLevel = typeof configuredAgent.thinkingLevel === "string" && AGENT_THINKING_LEVELS.includes(configuredAgent.thinkingLevel as AgentThinkingLevel)
-      ? configuredAgent.thinkingLevel : "not-configured";
+    const { provider, model, thinkingLevel } = await loadGlobalAgentConfiguration(database.db);
     const configuredModel = (await modelCatalog.list()).find((candidate) => candidate.provider === provider && candidate.id === model);
     const contextWindow = configuredModel?.contextWindow ?? 0;
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);

@@ -10,7 +10,7 @@ import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
@@ -40,6 +40,7 @@ test("atomically switches development repository sets across preparation and fin
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
   try {
+    await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
     const { source, remotes: initialRemotes } = await createRemote(root);
     const thirdRemote = path.join(root, "tertiary.git");
     await git(["clone", "--bare", source, thirdRemote]);
@@ -53,7 +54,7 @@ test("atomically switches development repository sets across preparation and fin
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester" });
     const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
     const repositories = await database.db.insert(serviceRepositories).values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url }))).returning();
-    const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: { agent: { provider: "test-provider", model: "test-model", thinkingLevel: "medium" } } }).returning();
+    const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values(repositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
     const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-103", title: "Remove repositories", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
@@ -152,6 +153,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
   const starts: Array<{ context: AgentSessionContext; workspaceRoot: string }> = [];
   let sessionStops = 0;
   try {
+    await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
     const { source, remotes } = await createRemote(root);
     const environmentRows = await database.db.select().from(environments);
     const prod = environmentRows.find((environment) => environment.kind === "prod")!;
@@ -162,10 +164,9 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { serviceId: service!.id, alias: "orders", url: remotes[0] },
       { serviceId: service!.id, alias: "orders-secondary", url: remotes[1] },
     ]).returning();
-    const agent = { provider: "test-provider", model: "test-model", thinkingLevel: "medium" as const };
     const deployments = await database.db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: prod.id, config: { agent } },
-      { serviceId: service!.id, environmentId: dev.id, config: { agent } },
+      { serviceId: service!.id, environmentId: prod.id, config: {} },
+      { serviceId: service!.id, environmentId: dev.id, config: {} },
     ]).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
       { deploymentId: deployments[0]!.id, repositoryId: repositories[0]!.id, baseBranch: "prod" },

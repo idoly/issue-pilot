@@ -31,7 +31,9 @@ export function projectCapabilityConfiguration(configuration: CapabilityConfigur
 function replacementCredentialValues(key: CapabilityName, value: unknown): Record<string, string> {
   const input = inputRecord(value);
   const fields = CAPABILITY_CREDENTIALS[key].fields as readonly string[];
-  if (Object.keys(input).length !== fields.length || fields.some((field) => typeof input[field] !== "string" || !input[field].trim())) fail("invalid_credential_replacement");
+  if (Object.keys(input).length !== fields.length || fields.some((field) => typeof input[field] !== "string" || !input[field].trim())) {
+    fail(key === "dms" ? "invalid_dms_authorization" : "invalid_credential_replacement");
+  }
   return Object.fromEntries(fields.map((field) => [field, input[field] as string]));
 }
 

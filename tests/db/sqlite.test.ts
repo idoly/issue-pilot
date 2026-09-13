@@ -17,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-7).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -7) };
+  assert.deepEqual(journal.entries.slice(-8).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -8) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -35,7 +35,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)",
       "insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)",
       "insert into service_repositories (id, service_id, url, created_at, updated_at) values ('orders-api', 'service', 'git@example.test:team/orders-api.git', 1, 1), ('orders-web', 'service', 'https://example.test/team/orders-web.git', 1, 1)",
-      "insert into service_deployments (id, service_id, environment_id, base_branch, config, created_at, updated_at) values ('test-deployment', 'service', 'environment', 'develop', '{}', 1, 1)",
+      "insert into service_deployments (id, service_id, environment_id, base_branch, config, created_at, updated_at) values ('test-deployment', 'service', 'environment', 'develop', '{\"agent\":{\"provider\":\"enterprise-ai\",\"model\":\"engineering-model\",\"thinkingLevel\":\"high\"}}', 1, 1)",
       `insert into issues (id, key, title, service_id, environment_id, reporter_subject, version, created_at, updated_at) values ('issue', 'ISSUE-20260809-001', 'Preserved', 'service', 'environment', 'reporter', 7, ${now}, ${now})`,
       "insert into issue_repositories (id, issue_id, url, base_branch, working_branch, local_path, commit_before, created_at, updated_at) values ('issue-repository', 'issue', 'git@example.test:team/orders-api.git', 'develop', 'hotfix-issue-20260809-001', '/state/workspaces/issue-20260809-001/orders-api', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1)",
       "insert into issue_cc_recipients (issue_id, subject, created_at) values ('issue', 'recipient', 2)",
@@ -55,6 +55,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     assert.equal((await client.execute("pragma table_info('issue_cc_recipients')")).rows.some((column) => column.name === "created_at"), false);
     assert.equal((await client.execute("pragma table_info('issue_pilot_sessions')")).rows.some((column) => column.name === "pi_session_id"), false);
     assert.equal((await client.execute("pragma table_info('service_deployments')")).rows.some((column) => column.name === "base_branch"), false);
+    assert.deepEqual((await client.execute("select provider, model, thinking_level from global_agent_configuration")).rows, [{ provider: "enterprise-ai", model: "engineering-model", thinking_level: "high" }]);
+    assert.deepEqual((await client.execute("select config from service_deployments")).rows, [{ config: "{}" }]);
     assert.deepEqual((await client.execute("select name from sqlite_master where type = 'trigger' and name like '%deployment%' order by name")).rows.map((row) => row.name), [
       "issues_deployment_required_insert", "issues_deployment_required_update", "service_deployments_issues_restrict_delete", "service_deployments_issues_restrict_update",
     ]);
@@ -178,7 +180,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
     const applicationTables = await client.execute("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' and name != '__drizzle_migrations' order by name");
     assert.deepEqual(applicationTables.rows.map((row) => row.name), [
-      "environments", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_repositories",
+      "environments", "global_agent_configuration", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_repositories",
       "issue_workspaces", "issues", "service_deployment_repositories", "service_deployments", "service_repositories", "services", "subjects",
     ]);
     const issueColumns = await client.execute("pragma table_info('issues')");

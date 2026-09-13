@@ -31,7 +31,7 @@ async function runTool(tools: ToolRuntime, config: DeploymentConfig, capability:
     case "redis": return readRedis(config.redis!, parseInput("redis", inputSchema, input), signal);
     case "mq": return readRabbitMq(config.mq!, parseInput("mq", inputSchema, input), signal);
     case "es": return readElasticsearch(config.es!, parseInput("es", inputSchema, input), signal);
-    case "dms": return queryDms(tools, parseInput("dms", inputSchema, input), config.dms!, signal);
+    case "dms": return queryDms(parseInput("dms", inputSchema, input), config.dms!, signal);
     case "sls": return readSlsLogs(tools, parseInput("sls", inputSchema, input), config.sls!, signal);
   }
 }

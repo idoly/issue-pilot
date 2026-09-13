@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
+import { CapabilityConfigurationError, parseCapabilityConfiguration } from "../capabilities/registry.ts";
+import { resolveDmsScope } from "../capabilities/dms.ts";
+import { saveGlobalAgentConfiguration, validateGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { loadConfiguration, loadConfigurationCatalog } from "../configuration/read.ts";
 import { issues, services } from "../db/schema.ts";
-import { ApiError, optionalText, record, text } from "./input.ts";
+import { AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
+import { SerialQueue } from "../serial.ts";
+import { ApiError, choice, optionalText, record, text } from "./input.ts";
 import { runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
 
@@ -31,6 +36,56 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog));
   });
 
+  const draftDmsConfiguration = (input: Record<string, unknown>) => {
+    try { return parseCapabilityConfiguration("dms", { url: input.url, authorization: input.authorization }); }
+    catch (error) {
+      if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
+      throw error;
+    }
+  };
+  const dmsSearchQueue = new SerialQueue();
+  const runDmsSearch = async <Value>(operation: () => Promise<Value>) => {
+    try { return await dmsSearchQueue.run(operation); }
+    catch (error) {
+      if (error instanceof Error && /^dms_mcp_(?:connection_failed|scope_resolve_(?:unavailable|failed|invalid_response))$/.test(error.message)) throw new ApiError(502, error.message);
+      throw error;
+    }
+  };
+  app.put("/api/config/agent", async (request) => runScopeExclusive(async () => {
+    const input = record(request.body);
+    const configuration = {
+      provider: text(input.provider, "agent_provider", 200),
+      model: text(input.model, "agent_model", 500),
+      thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS),
+    };
+    try { validateGlobalAgentConfiguration(configuration, await modelCatalog.list()); }
+    catch (error) {
+      if (error instanceof Error && ["agent_model_not_available", "agent_thinking_level_not_supported"].includes(error.message)) throw new ApiError(400, error.message);
+      throw error;
+    }
+    const affectedIssues = await database.db.select({ id: issues.id }).from(issues);
+    try {
+      return await runIssueExclusive(engine, affectedIssues.map((issue) => issue.id), async (reservation) => {
+        for (const issue of affectedIssues) await reservation.closeSession(issue.id);
+        await database.db.transaction((transaction) => saveGlobalAgentConfiguration(transaction, configuration));
+        return { ok: true };
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, "global_configuration_has_running_issues");
+      throw error;
+    }
+  }));
+
+  app.post("/api/dms/scope/resolve", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const input = record(request.body);
+    return runDmsSearch(() => resolveDmsScope(
+      draftDmsConfiguration(input),
+      text(input.instanceAlias, "dms_instance_alias", 255),
+      text(input.schemaName, "dms_schema_name", 255),
+    ));
+  });
+
   app.post("/api/services", async (request, reply) => {
     const input = record(request.body);
     const name = text(input.name, "name", 200);
@@ -39,7 +94,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       const serviceId = randomUUID();
       const [existingKeys, prepared] = await Promise.all([
         database.db.select({ key: services.key }).from(services).then((rows) => new Set(rows.map(({ key }) => key))),
-        prepareServiceConfiguration({ executor: database.db, modelCatalog, serviceId, input }),
+        prepareServiceConfiguration({ executor: database.db, serviceId, input }),
       ]);
       const serviceKey = uniqueServiceKey(name, existingKeys);
       return database.db.transaction(async (transaction) => {
@@ -60,7 +115,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
         return await runIssueExclusive(engine, affectedIssues.map((issue) => issue.id), async (reservation) => {
           const input = record(request.body);
           const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
-          const prepared = await prepareServiceConfiguration({ executor: database.db, modelCatalog, serviceId: service.id, input });
+          const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input });
           for (const issue of affectedIssues) await reservation.closeSession(issue.id);
           await database.db.transaction((transaction) => applyServiceConfiguration({ executor: transaction, serviceId: service.id, prepared, serviceUpdate }));
           return { ok: true };
