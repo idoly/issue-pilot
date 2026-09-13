@@ -1,12 +1,11 @@
 import { Button, Skeleton } from "@idoly/ant-design-solid";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 
-import { listIssues, type IssueExecutionItem } from "../data/client";
+import type { IssueExecutionItem } from "../data/client";
 import { ChevronRight, RefreshCw } from "../ui/icons";
 import { useApplicationResources } from "./ApplicationResources";
 import { relativeTime } from "./model";
 
-const refreshIntervalMs = 10_000;
 type ExecutionState = "running" | "preparing" | "failed" | "pending";
 
 function executionState(issue: IssueExecutionItem): { key: ExecutionState; label: string } {
@@ -21,35 +20,16 @@ function attentionRank(issue: IssueExecutionItem): number {
   return state === "failed" ? 0 : state === "running" || state === "preparing" ? 1 : 2;
 }
 
-export function Dashboard(props: { onSelectIssue: (issueKey: string) => void; onIssues?: (issues: IssueExecutionItem[]) => void }) {
+export function Dashboard(props: {
+  issues: IssueExecutionItem[];
+  loading: boolean;
+  loadError: string;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onSelectIssue: (issueKey: string) => void;
+}) {
   const { catalog } = useApplicationResources();
-  const [issues, setIssues] = createSignal<IssueExecutionItem[]>([], { ownedWrite: true });
-  const [loading, setLoading] = createSignal(true, { ownedWrite: true });
-  const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
-  const [refreshing, setRefreshing] = createSignal(false, { ownedWrite: true });
-  let requestGeneration = 0;
-  let requestController: AbortController | undefined;
-
-  const refresh = () => {
-    const generation = ++requestGeneration;
-    requestController?.abort();
-    requestController = new AbortController();
-    setRefreshing(true);
-    void listIssues(requestController.signal).then((value) => {
-      if (generation !== requestGeneration) return;
-      setIssues(value); props.onIssues?.(value); setLoadError("");
-    }).catch((error) => {
-      if (generation !== requestGeneration || requestController?.signal.aborted) return;
-      setLoadError(error instanceof Error ? error.message : "首页数据加载失败");
-    }).finally(() => {
-      if (generation === requestGeneration) { setLoading(false); setRefreshing(false); }
-    });
-  };
-  refresh();
-  const refreshTimer = window.setInterval(refresh, refreshIntervalMs);
-  onCleanup(() => { window.clearInterval(refreshTimer); requestGeneration += 1; requestController?.abort(); });
-
-  const activeIssues = createMemo(() => issues().filter((issue) => issue.status !== "resolved"));
+  const activeIssues = createMemo(() => props.issues.filter((issue) => issue.status !== "resolved"));
   const focusIssues = createMemo(() => activeIssues()
     .sort((left, right) => attentionRank(left) - attentionRank(right) || new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()));
   const running = createMemo(() => activeIssues().filter((issue) => issue.agentRunning || issue.workspaceStatus === "running" || issue.workspaceStatus === "preparing").length);
@@ -61,10 +41,10 @@ export function Dashboard(props: { onSelectIssue: (issueKey: string) => void; on
     <section class="dashboard-workspace">
       <header class="dashboard-header">
         <div><span>每 10 秒自动刷新</span><h1>运营总览</h1></div>
-        <Button aria-label="刷新运营总览" icon={<RefreshCw size={14} />} loading={refreshing()} onClick={refresh}>刷新</Button>
+        <Button aria-label="刷新运营总览" icon={<RefreshCw size={14} />} loading={props.refreshing} onClick={props.onRefresh}>刷新</Button>
       </header>
-      <Show when={!loading()} fallback={<div class="dashboard-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
-        <Show when={!loadError()} fallback={<div class="dashboard-error" role="alert">{loadError()}</div>}>
+      <Show when={!props.loading} fallback={<div class="dashboard-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
+        <Show when={!props.loadError} fallback={<div class="dashboard-error" role="alert">{props.loadError}</div>}>
           <section class="dashboard-summary" aria-label="当前运营状态">
             <div><span>活动工单</span><strong>{activeIssues().length}</strong><small>当前所有未解决工单</small></div>
             <div><span>正在执行</span><strong>{running()}</strong><small>Agent / Workspace</small></div>

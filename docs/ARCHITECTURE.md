@@ -123,7 +123,7 @@ open -> in_progress -> pending -> resolved
 
 每张Issue恰好有一条`issue_workspaces`。`runtime_ready`只表示受管runtime已生成，不替代物理验证。
 
-首页复用`GET /api/issues`的轻量摘要，同时投影Issue状态、Workspace状态和进程内Agent running状态。页面先展示当前运营状态和完整的跨人员工单动态，失败和执行中优先、其余按最近更新时间排序，动态列表固定高度并在内部滚动；下方“运营洞察”在“产出 / 分布 / 团队 / 资源”间切换，保留周期聚合、服务与类型分布、个人处理情况和Workspace容量；资源视图把紧凑容量摘要与策略放在顶部，把主要高度留给Workspace明细，长列表只在面板内部滚动。统计与动态共享同一份Issue摘要，不重复请求或持久化第二套状态。动态项点击只切换到现有工单详情。
+首页由`OverviewView`唯一拥有`GET /api/issues`的轮询、取消和latest-wins状态，同时投影Issue状态、Workspace状态和进程内Agent running状态；`Dashboard`和`Statistics`只消费同一份Issue摘要。页面先展示当前运营状态和完整的跨人员工单动态，失败和执行中优先、其余按最近更新时间排序，动态列表固定高度并在内部滚动；下方“运营洞察”在“产出 / 分布 / 团队 / 资源”间切换，保留周期聚合、服务与类型分布、个人处理情况和Workspace容量；资源视图把紧凑容量摘要与策略放在顶部，把主要高度留给Workspace明细，长列表只在面板内部滚动。首页不重复请求或持久化第二套Issue状态，动态项点击只切换到现有工单详情。
 
 ## Repository三态
 

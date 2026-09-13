@@ -137,7 +137,4 @@ git diff --check
 | [Deployment](docs/DEPLOYMENT.md) | Container image、单节点Kubernetes、网络和首次验收 |
 | [Development](docs/DEVELOPMENT.md) | Module owner、改动方法、测试和 review |
 | [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障 |
-| [Ant Design Solid Feedback](docs/ANT-DESIGN-SOLID-FEEDBACK.md) | 组件库集成问题、框架责任和改进建议 |
-| [File Audit](docs/FILE-AUDIT.md) | 当前tracked文件逐文件作用与设计判断 |
-| [Module Audit](docs/MODULE-AUDIT.md) | 按目录/功能模块评估边界、重复和精简空间 |
 | [Agent Guide](AGENTS.md) | Coding Agent状态保护和完成标准 |

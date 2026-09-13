@@ -13,7 +13,7 @@ Before changing code:
    - [Deployment](docs/DEPLOYMENT.md) for image, Kubernetes process, mount, networking, and production topology.
    - [Runbook](docs/RUNBOOK.md) for health checks, backup, upgrade, recovery, retention, and troubleshooting.
 
-Use `README.md` as the product overview. [File Audit](docs/FILE-AUDIT.md) and [Module Audit](docs/MODULE-AUDIT.md) record current design assessments but do not replace reading the owning code.
+Use `README.md` as the product overview. Treat the owning code and the documents above as current facts; do not preserve point-in-time audit inventories as architecture contracts.
 
 ## Start Safely
 
