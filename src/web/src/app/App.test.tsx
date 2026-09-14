@@ -415,7 +415,8 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByLabelText("部署 1 仓库 srm 分支")).toBeNull();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署1" }));
     await waitFor(() => expect(within(serviceDialog).getByRole("button", { name: "收起部署1" }).getAttribute("aria-expanded")).toBe("true"));
-    expect(screen.queryByLabelText("部署 1 能力")).toBeNull();
+    expect(screen.getByLabelText("部署 1 环境").textContent).toContain("测试");
+    expect(screen.getByLabelText("部署 1 能力").textContent).toContain("nacos");
     const repositoryAliasInput = screen.getByLabelText("仓库别名 1") as HTMLInputElement;
     fireEvent.input(repositoryAliasInput, { target: { value: "srm-api" } });
     expect(repositoryAliasInput.value).toBe("srm-api");
