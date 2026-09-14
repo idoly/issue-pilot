@@ -1,75 +1,91 @@
 # Issue Pilot
 
-Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它把 Issue、Service/Deployment 配置、Git 代码上下文、Pi Agent 会话、附件和受限只读数据查询组织在一个可追踪的有状态应用中。
+Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它在一个有状态应用中统一管理 Issue、Service/Deployment 配置、Git 代码上下文、Pi Agent 会话、附件和受限的只读外部数据访问。
 
-## 能力
+## 主要能力
 
-- 一个 Service 管理一个或多个带稳定 alias 的 Git Repository。
-- 每个 Environment 配置 Repository 基线分支、Pi model 和 capability。
-- Prod/test 每轮读取当前 Deployment 分支的最新 fetched commit，始终只读。
-- Dev 使用 Issue 专属本地 branch 和 worktree，可编辑代码并运行受限 npm/Maven action。
-- Resolved dev workspace 可受管释放；代码继续由本地 working branch 保存，并可只读浏览或 reopen。
-- 每张 Issue 持久保存 Pi JSONL、Attachment、Comment、Repository 和 Workspace 状态；工单队列支持组合状态、环境、服务和关键词筛选。
-- 内置 VS Code Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff 和 Markdown Preview；开发环境可创建、编辑、删除、重命名文件并执行Stage、Unstage、Discard和Commit，测试和正式环境只读。
-- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 作为有界只读 Pi tools。
-- 用户由 SQLite 管理，支持新增、编辑、启用和停用，同时保留历史署名。
+- Service 管理一个或多个带稳定 alias 的 Git Repository。
+- Deployment 按 Environment 配置每个 Repository 的基线分支和可用 capability。
+- 所有 Service 和 Environment 共享唯一的全局 Pi provider、model 和 thinking level。
+- Prod/test 每轮使用当前 Deployment 分支最新 fetched commit，Agent 和 Workbench 均只读。
+- Dev 使用 Issue 专属本地 branch 和 worktree，可修改代码并运行受限 npm/Maven action。
+- Resolved dev workspace 可受管释放；代码由 bare store 中的本地 working branch 持久保存，可只读浏览并在 reopen 时恢复。
+- 每张 Issue 持久保存 Pi JSONL conversation、Attachment、Comment、Repository 投影和 Workspace 状态。
+- 内置 Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff、blame、history 和安全的 Markdown Preview。
+- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP 和 SLS 作为 Deployment-scoped 只读 Pi tools。
+- 用户由 SQLite 管理，停用用户不会删除历史署名。
+
+## Web 界面
+
+顶级导航只有“首页 / 工单 / 配置”：
+
+- 首页展示完整团队工单动态和“产出 / 分布 / 团队 / 资源”运营视图。
+- 工单页只展示当前登录用户作为负责人、报告人或抄送人的相关工单，并支持状态、服务、环境和关键词筛选。
+- 配置页包含“用户 / 模型 / 服务”三个保持挂载的 Tab，默认打开“服务”。
+- 服务编辑器按“代码仓库 / 环境部署 / 服务描述”组织；Deployment 折叠标题始终显示环境名和已启用 capability，展开后编辑分支、添加或移除 capability 及其参数。
 
 ## 代码模式
 
-| 场景 | 代码来源 | Agent 权限 |
+| 场景 | 代码来源 | 权限 |
 | --- | --- | --- |
-| Prod/test | 当前 Deployment 各 `baseBranch` 的最新 commit | 只读 |
+| Prod/test | 当前 Deployment 各 `baseBranch` 的最新 commit | Agent、Source 和 Workbench 只读 |
 | Active dev | `hotfix-*` 或 `feature-*` 本地 branch 的 Issue worktree | 读写，可运行受限项目命令 |
-| Released dev | Bare store 中本地 working branch tip 的 immutable checkout | 只读，可 reopen |
+| Released dev | 本地 working branch tip 的 immutable checkout | 只读，可 reopen |
 
-SQLite、Attachment、Pi JSONL、bare repository、本地 Issue branch 和 active dev worktree 是 durable state。Runtime link 和 immutable checkout 是可重建生成物。Dirty、untracked、running、结构异常或数据库未登记的状态不会被自动删除。
+Dirty、untracked、running、结构异常、changed checkout 或数据库未登记的状态不会被自动删除或猜测修复。
 
-## 运行模型
+## 运行拓扑
 
 ```text
 Browser
   -> trusted TLS/auth proxy
   -> one application container
-       Fastify + static Web/Workbench
-       AgentEngine + Pi SDK
-       SQLite + Git/workspace managers
-       protocol clients + ProcessToolRuntime
+       Fastify + static Solid Web/Workbench
+       SQLite/Drizzle
+       AgentEngine + Pi SDK + Pi JSONL
+       Git bare stores/worktrees/generated runtimes
+       protocol clients + authorized process runtime
 ```
 
-生产只使用一个Kubernetes application Pod。SQLite、Git、Agent和Web不拆成独立服务，并保持单副本。Node/Maven项目命令由Issue-scoped Unix socket broker重新授权，再由application进程中的`ProcessToolRuntime`执行。SLS通过该执行器调用镜像PATH中的Aliyun CLI；DMS由应用内MCP SSE client调用Deployment绑定数据库的`executeScript`。Agent不拥有容器或Kubernetes API。
+生产保持一个 Kubernetes Pod。应用不访问 Kubernetes API，不挂载 Docker/Podman socket，也不为 Agent 创建工具容器。项目代码仅适用于可信内部 Repository；application 进程不是恶意代码 sandbox。
 
-## 快速开始
+## 快速验证
 
-本地验证需要Node/npm；image构建需要Podman或Docker：
+需要 Node/npm：
 
 ```bash
 npm ci
 npm run typecheck
 npm test
 npm run build
-scripts/playwright.sh prepare
-podman build --pull=always -f Containerfile -t registry.example.com/issue-pilot:0.1.0 .
+npm audit --omit=dev --audit-level=high
 ```
 
-准备`/etc/issue-pilot`运行配置目录并执行`kubectl apply -f deploy/issue-pilot.yaml`即可部署，完整命令见[部署说明](docs/DEPLOYMENT.md)。生产端口只通过带TLS/auth的Ingress开放。前端迭代可另启：
+前端开发：
 
 ```bash
 npm run dev:web
 ```
 
-Vite 默认监听 `0.0.0.0:4173` 并代理 API，只能用于可信开发网络。
+Vite 默认监听 `0.0.0.0:4173` 并代理本机 API，只能用于可信开发网络。
 
-升级应按[运维手册](docs/RUNBOOK.md#升级)隔离流量、停止Pod、创建一致备份并验证migration副本。
+构建镜像：
 
-## 配置
+```bash
+podman build --pull=always -f Containerfile \
+  -t registry.example.com/issue-pilot:0.1.0 .
+```
 
-所有应用路径、端口、默认值、retention、timeout和budget来自根目录`issue-pilot.config.ts`。Image、资源、挂载和probe只由`deploy/issue-pilot.yaml`拥有，不在应用配置中重复。
+生产部署前必须准备 `/var/lib/issue-pilot`、`/etc/issue-pilot`、节点标签和可信 TLS/auth Ingress，详见[部署说明](docs/DEPLOYMENT.md)。升级前必须停机并创建一致备份，详见[运维手册](docs/RUNBOOK.md)。
 
-User、Service、Repository、Deployment、branch、唯一全局Agent model和完整capability credential存在SQLite。根配置的 bootstrap user 只在 `subjects` 为空时插入一次。Pi/npm/Maven 原生配置由 Operator 文件管理，不进入 SQLite。
+## 配置与 State
 
-完整字段见[配置说明](docs/CONFIGURATION.md)。
+应用配置不接受环境变量覆盖：
 
-## State
+- 路径、端口、默认值、retention、timeout 和 budget：`issue-pilot.config.ts`
+- User、Service、Repository、Deployment、全局 Agent model 和 capability credential：SQLite
+- Image、资源、挂载和 probe：`Containerfile` 与 `deploy/issue-pilot.yaml`
+- Pi/npm/Maven/SSH 原生配置：Operator 管理的 `/etc/issue-pilot`
 
 默认 state root：
 
@@ -88,53 +104,39 @@ User、Service、Repository、Deployment、branch、唯一全局Agent model和�
   backups/
 ```
 
-`.issue-pilot` 可能包含生产 credential、查询结果、源码、附件、Pi JSONL 和本地 branch。不要把它当作缓存，不要在 API 运行时移动或复制数据库主文件，也不要直接删除 unknown Issue/workspace、bare store 或历史 `code-server` 数据。
+`.issue-pilot` 可能包含生产凭据、业务查询结果、内部源码、附件、Pi JSONL、本地 branch 和备份。不要提交、缓存化或用作开发实验目录。
 
 ## 安全边界
 
-- API 没有内置 authentication/authorization。
-- 页面用户切换和 `X-Issue-Pilot-Subject` 只选择启用用户及写入署名，不是认证。
-- Kubernetes Service必须由带TLS/auth的可信Ingress保护。
-- Application、Pi 和项目脚本使用同一低权限 OS 身份；容器不是不可信代码 sandbox。
-- Workbench 和 Source API 会返回内部源码；开发环境还允许保存现有workspace文件，属于敏感接口。
-- `GET /api/config` 返回内部 Repository、model、scope 和已存 Deployment credential，只能在受信应用网络内访问且不得记录响应。
-- Deployment credential 不进入`AgentSessionContext`、prompt、tool schema、tool input、argv或日志；DMS/SLS使用临时`0600` CLI profile。
-- Capability result 会进入模型上下文和该 Issue 的 Pi JSONL。
-- DMS SQL 和 SLS query 会短暂出现在 application 进程列表；需要隐藏 query 时必须改为 SDK 或签名 HTTP client。
+- API 没有内置 authentication/authorization；`X-Issue-Pilot-Subject` 只选择启用用户和写入署名，不是认证。
+- ClusterIP Service 必须由带 TLS 和组织认证授权的可信 Ingress 保护。
+- `GET /api/config` 有意返回配置页需要的完整 Deployment credential；不得记录、监控或导出该响应。
+- Credential 不进入 `AgentSessionContext`、prompt、tool schema/input、日志或诊断。
+- DMS Bearer 只作为 session-local HTTPS Authorization header；SLS AccessKey 只写入调用级临时 `0600` profile。
+- Capability result 会进入模型上下文和该 Issue 的 Pi JSONL，可能包含敏感业务数据。
+- Source 和 Workbench 返回内部源码；dev mutation 会直接修改 Issue worktree，均属于敏感接口。
 
 ## API 范围
 
-Web 使用以下域：
+Web 使用以下 API 域：
 
-- User：`/api/users`、`/api/users/manage`、`/api/users/:subject`、`/api/me`
-- Configuration：`/api/catalog`、`/api/config`、`/api/services/*`
-- Issue：`/api/issues`、`/api/issues/:key`、status、comments 和 development conversion
-- Agent：retry、messages 和 SSE stream
-- Attachment：只读 GET；写入只属于 Issue create/edit multipart transaction
-- Workspace：stats 和受管 release
-- Source：repositories、tree、file/directory/path/rename、search、blame、history、commit/commit-file、diff/diff-file，以及受限stage、unstage、discard和commit
+- User：active user、current user、管理列表、创建与更新。
+- Configuration：catalog、完整 config、全局 model、DMS scope resolve、Service CRUD。
+- Issue：列表、创建、编辑、详情、状态转换和 Comment。
+- Agent：retry、message、SSE stream。
+- Attachment：完整性校验后的只读 GET；写入只属于 Issue create/edit multipart transaction。
+- Workspace：stats、analysis-to-development 转换和受管 release/reopen。
+- Source：Repository、tree、file/directory/path/rename、search、blame、history、commit、diff，以及受限 Stage、Unstage、Discard、Commit。
 
-不存在独立Attachment write route、Issue sync route、Terminal或任意宿主Git命令入口。Source mutation只允许development workspace，并按Issue reservation串行；prod/test与released snapshot保持只读。
-
-## 验证
-
-```bash
-npm run typecheck
-npm test
-npm run build
-npm audit --omit=dev --audit-level=high
-git diff --check
-```
-
-自动测试只使用临时 SQLite、state root 和 Git remote，不应接触真实 `.issue-pilot`。
+不存在独立 Attachment write route、Issue sync route、Terminal 或任意宿主 Git command endpoint。Source mutation 只允许 active development workspace，并按 Issue reservation 串行。
 
 ## 文档
 
-| 文档 | 内容 |
+| 文档 | 主题 |
 | --- | --- |
-| [Architecture](docs/ARCHITECTURE.md) | 状态、所有权、Git/runtime、Agent、并发和不变量 |
-| [Configuration](docs/CONFIGURATION.md) | 根配置、Service/Deployment、model、capability 和 secret 数据流 |
-| [Deployment](docs/DEPLOYMENT.md) | Container image、单节点Kubernetes、网络和首次验收 |
-| [Development](docs/DEVELOPMENT.md) | Module owner、改动方法、测试和 review |
-| [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障 |
-| [Agent Guide](AGENTS.md) | Coding Agent状态保护和完成标准 |
+| [Architecture](docs/ARCHITECTURE.md) | 所有权、状态、Git/runtime、Agent、并发和不变量 |
+| [Configuration](docs/CONFIGURATION.md) | 根配置、SQLite 配置、全局模型、capability 和 secret 流 |
+| [Deployment](docs/DEPLOYMENT.md) | Image、Kubernetes、挂载、网络和首次部署 |
+| [Development](docs/DEVELOPMENT.md) | Module owner、修改配方、测试和 review |
+| [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障处理 |
+| [Agent Guide](AGENTS.md) | Coding Agent 的状态保护和完成标准 |

@@ -1,144 +1,147 @@
 # 架构说明
 
-本文定义 Issue Pilot 当前状态模型、事实所有权、Git/runtime 生命周期、Agent执行、并发和安全不变量。配置字段见[配置说明](CONFIGURATION.md)，运行拓扑见[部署说明](DEPLOYMENT.md)，修改方法见[开发指南](DEVELOPMENT.md)，操作恢复见[运维手册](RUNBOOK.md)。
+本文定义 Issue Pilot 当前的事实所有权、状态模型、Git/runtime 生命周期、Agent 执行、并发和安全边界。字段和 capability 合同见[配置说明](CONFIGURATION.md)，运行拓扑见[部署说明](DEPLOYMENT.md)，修改方法见[开发指南](DEVELOPMENT.md)，生产操作见[运维手册](RUNBOOK.md)。
 
-## 术语
+## 术语与事实源
 
 | 术语 | 含义 |
 | --- | --- |
-| Issue | Agent、Pi session、Attachment和代码上下文的隔离单位 |
-| Service | 一组带稳定ID、alias和URL的Repository |
-| Deployment | Service在一个Environment下的branch和capability配置，不是发布进程 |
-| Global Agent Configuration | 所有Service和Environment共享的唯一Pi provider/model/thinking level |
-| Bare store | 按Repository URL共享的Git object/ref store |
-| Dev workspace | Active dev Issue的可写worktree集合 |
-| Immutable checkout | 按完整commit定址的detached可重建checkout |
-| Runtime | `issues/<key>/runtime`中的Repository链接和可选project wrapper |
-| AgentSessionContext | model、capability名称、标识和代码写权限的最小session上下文 |
-| Capability | Agent可调用的有界外部只读工具；Playwright不属于capability |
+| Issue | Agent、Pi session、Attachment 和代码上下文的隔离单位 |
+| Service | 一组带稳定 ID、alias 和 URL 的 Repository |
+| Deployment | Service 在一个 Environment 下的 branch 与 capability 配置，不是发布任务 |
+| Global Agent Configuration | 所有 Service/Environment 共享的唯一 Pi provider/model/thinking level |
+| Bare store | 按 Repository URL 共享的 Git object/ref store |
+| Dev workspace | Active dev Issue 的可写 worktree 集合 |
+| Immutable checkout | 按完整 commit 定址、可重建的 detached checkout |
+| Runtime | `issues/<key>/runtime` 中的 Repository link 和可选 project wrapper |
+| AgentSessionContext | model、capability 名称、标识与代码写权限的最小 session 上下文 |
+| Capability | Agent 可调用的 Deployment-scoped 外部只读工具；Playwright 不属于 capability |
 
-## 唯一事实源
-
-| 事实 | 权威来源 |
+| 事实 | 唯一来源 |
 | --- | --- |
-| User、Issue、Service、Deployment、Repository、Workspace、Attachment元数据 | SQLite |
-| Path、port、default、retention、runtime和limit | `issue-pilot.config.ts` |
-| 业务enum和共享predicate | `src/domain/contracts.ts` |
-| Dev最终代码 | Bare store中的本地working branch ref |
-| Prod/test代码 | 当前Deployment base branch最新fetched commit |
-| Conversation | 每Issue Pi JSONL active branch |
-| Attachment内容 | Durable file；DB保存object key、size、SHA-256 |
-| Runtime和wrapper | `src/workspace`生成器 |
-| Capability save parser、tool schema、metadata | `src/capabilities/registry.ts` |
-| Credential字段和update协议 | `src/configuration/contracts.ts` |
+| User、Issue、Service、Deployment、Repository、Workspace、Attachment、全局模型 | SQLite |
+| Path、port、default、retention、runtime、limit | `issue-pilot.config.ts` |
+| 业务 enum 和 predicate | `src/domain/contracts.ts` |
+| Dev 最终代码 | Bare store 中的本地 working branch ref |
+| Prod/test 代码 | 当前 Deployment base branch 的最新 fetched commit |
+| Conversation | 每 Issue 的 Pi JSONL active branch |
+| Attachment 内容 | Durable file；DB 保存 object key、size、SHA-256 |
+| Runtime、wrapper | `src/workspace` 生成器 |
+| Capability 配置、input schema、metadata | `src/capabilities/registry.ts` |
+| Credential 字段/update 协议 | `src/configuration/contracts.ts` |
 
-Runtime、checkout、页面状态和日志不能反向覆盖这些事实。
+Runtime、checkout、页面状态和日志不能反向覆盖 durable 事实。
 
-## 组件
+## 组件边界
 
 ```text
 Browser
   -> TLS/auth proxy
   -> Application container
-       Fastify routes + static Solid/Workbench
+       Fastify routes + static Solid Web/Workbench
        SQLite/Drizzle
        AgentEngine -> PiSessionRuntime -> Pi JSONL
        IssueProjectManager -> WorktreeManager -> Git stores
-       SourceBrowser -> bounded filesystem/rg/Git reads + dev mutations
-       Pi tools -> protocol clients / ProcessToolRuntime
+       SourceBrowser -> bounded filesystem/rg/Git operations
+       Pi customTools -> protocol clients / ProcessToolRuntime
        ProjectToolBroker -> ProcessToolRuntime
 ```
 
 | Owner | 责任 |
 | --- | --- |
-| `src/http` | HTTP边界、subject、reservation、transaction、SSE和static Web |
-| `src/configuration` | Catalog/config DTO、credential投影/合并、snapshot projection |
-| `src/agent` | 每Issue queue、reservation、context、Pi session、event和prompt |
-| `src/pi` | Model runtime和Registry-driven tool注册 |
-| `src/workspace/project.ts` | Agent/cold-start/reopen项目prepare与runtime hydration |
-| `src/workspace/git.ts` | Bare store、fetch、checkout、worktree、batch rollback和Repository锁 |
-| `src/workspace/state.ts` | Repository分类、managed path和unmanaged/generated state检查 |
-| `src/workspace/runtime.ts` | Runtime原子生成 |
-| `src/workspace/source-browser.ts` | Source授权、有界读取和development文件/Git mutation |
-| `src/workspace/project-tools.ts` | Unix socket、SQLite重新授权、Node/Maven action |
+| `src/http` | HTTP parsing、subject、reservation、transaction、SSE、static Web |
+| `src/configuration` | Catalog/config projection、credential merge、全局模型 |
+| `src/agent` | 每 Issue queue、reservation、state、Pi session、event、prompt |
+| `src/pi` | Model runtime 和 Registry-driven custom tool 注册 |
+| `src/workspace/project.ts` | Agent/cold-start/reopen 的代码与 runtime preparation |
+| `src/workspace/git.ts` | Bare store、fetch、checkout、worktree、batch rollback、Repository lock |
+| `src/workspace/state.ts` | Repository 分类、managed path、unmanaged/generated state 检查 |
+| `src/workspace/runtime.ts` | Runtime 原子生成 |
+| `src/workspace/source-browser.ts` | Source 授权、有界读取和 dev 文件/Git mutation |
+| `src/workspace/project-tools.ts` | Unix socket、SQLite 重新授权、Node/Maven action |
 | `src/workspace/lifecycle.ts` | 深检、stats、release、reopen、maintenance |
-| `src/capabilities/registry.ts` | 保存时config parser、Pi input schema和tool metadata |
-| 各capability client | 外部target、协议、timeout/abort和response；除DMS外应用result budget |
-| `src/process.ts` | 共享spawn、abort、timeout和output budget mechanism |
-| `src/tool-runtime.ts` | `npm`、`mvn`、限定Aliyun CLI命令的进程allowlist |
-| `src/serial.ts` | 通用Promise serial primitive，不拥有业务锁域 |
+| `src/capabilities/registry.ts` | Save parser、Pi input schema、tool metadata |
+| Capability clients | 外部 target、协议、timeout、abort、response、result contract |
+| `src/process.ts` | 通用 spawn、abort、timeout、output budget |
+| `src/tool-runtime.ts` | `npm`、`mvn`、`aliyun sls` command/environment allowlist |
+| `src/serial.ts` | Promise serial primitive；不拥有业务锁域 |
 
-Route不实现Git或外部协议。AgentEngine不拼Deployment Repository join。内部typed config/input只在边界解析一次。
+Route 不实现 Git 或外部协议；AgentEngine 不拼 Deployment Repository join；外部 `unknown` 在 HTTP、Registry、TypeBox 或 protocol response 边界解析，内部调用保持 typed。
 
-## 进程和容器
+## 数据模型
 
-生产是一个application容器：
-
-- Node 26 build stage构建Web并裁剪dev dependencies。
-- Maven 3.9/Temurin 8 stage提供Java工具链。
-- Node 26 slim runtime包含Fastify、Pi、Node/npm、Maven/JDK、Aliyun CLI、Git 2.53/SSH、ripgrep和curl；固定Git版本保证relative worktree可读。
-- Fastify在容器`0.0.0.0:3000`同源提供Web、Workbench和API。
-- Kubernetes把宿主`/var/lib/issue-pilot`挂到image内`/opt/issue-pilot/.issue-pilot`；Pod通过node label固定到state所在节点。
-- Container没有Docker/Podman client/socket或ServiceAccount token，不为Agent创建工具Pod。
-
-`ProcessToolRuntime`只允许：
+当前 SQLite 表：
 
 ```text
-npm ...
-mvn ...
-aliyun sls ...
+subjects
+environments
+services
+global_agent_configuration
+service_deployments
+service_repositories
+service_deployment_repositories
+issues
+issue_cc_recipients
+issue_repositories
+issue_attachments
+issue_comments
+issue_pilot_sessions
+issue_workspaces
 ```
 
-它验证command、cwd、environment，继承有限环境变量，限制timeout/output，并在调用者未指定HOME时创建和清理临时HOME。Project broker先从SQLite重新确认Issue、Repository和真实project path。SLS用调用级临时`0600`profile指定HOME。DMS使用Deployment授权的HTTPS MCP SSE endpoint和Bearer凭据；每次调用建立短连接。配置解析专用流程调用`listInstances/getDatabase`绑定scope；Agent只拥有一个`dms`工具，runtime只调用schema匹配的远端`executeScript`，强制注入绑定的database ID，并在调用前把script限制为单条只读SQL。其他MCP工具不向Agent开放。
+核心关系：
 
-项目脚本与API共享container UID和可读挂载，没有调用级rootfs/cgroup隔离。此模型只适用于可信内部Repository，不是恶意代码sandbox。
+- Service/Environment 至多一个 Deployment。
+- Deployment 必须覆盖 Service 当前所有 Repository，顺序由 join rows 持久化。
+- 每张 Issue 必须引用有效 Service/Environment Deployment，并恰有一条 Workspace row。
+- `global_agent_configuration.id` 固定为 `1`。
+- `status = resolved` 与 `resolved_at IS NOT NULL` 必须等价。
+- Pi conversation 不进入 message table，继续由 JSONL 持有。
 
-## Issue和Workspace状态
+## Issue 与 Workspace 状态
 
 ### Issue
 
 ```text
-open -> in_progress -> pending -> resolved
- ^          |            |          |
- +-- fail --+            +-- retry  +-- reopen -> open
+create -> open -> in_progress -> pending -> resolved
+           ^          |            |
+           +-- fail --+            +-- retry/metadata round
+resolved --reopen--> open
 ```
 
-- Create成功后为`open`并入队。
-- Agent开始时为`in_progress`，成功后为`pending`。
-- 未resolved的失败轮次回到`open`。
-- 用户执行`pending -> resolved`或`resolved -> open`。
-- Resolved Issue不能retry或接收Agent message。
-- `resolved`与`resolved_at != NULL`必须成对成立。
+- 创建成功后为 `open` 并入队。
+- Agent 开始时为 `in_progress`，成功后为 `pending`。
+- 未 resolved 的失败轮次回到 `open`。
+- 用户只执行 `pending -> resolved` 或 `resolved -> open`。
+- Resolved Issue 不能 retry 或接收 Agent message。
 
 ### Workspace
 
 | 状态 | 含义 |
 | --- | --- |
-| `not_created` | 未准备代码/session |
-| `preparing` | 准备Repository、runtime或session |
-| `running` | Pi轮次执行中 |
+| `not_created` | 尚未准备代码/session |
+| `preparing` | 正在准备 Repository、runtime 或 session |
+| `running` | Pi 轮次执行中 |
 | `ready` | 当前轮次完成 |
-| `stopped` | Dev worktree已release，snapshot可读 |
-| `failed` | 准备/执行失败，可按规则retry |
+| `stopped` | Dev worktree 已 release，snapshot 可读 |
+| `failed` | 准备或执行失败，可按规则 retry |
 
-每张Issue恰好有一条`issue_workspaces`。`runtime_ready`只表示受管runtime已生成，不替代物理验证。
+`runtime_ready` 只记录受管 runtime 已生成，读取 Source 前仍要验证物理目录和 Repository state。
 
-首页由`OverviewView`唯一拥有`GET /api/issues`的轮询、取消和latest-wins状态，同时投影Issue状态、Workspace状态和进程内Agent running状态；`Dashboard`和`Statistics`只消费同一份Issue摘要。页面先展示当前运营状态和完整的跨人员工单动态，失败和执行中优先、其余按最近更新时间排序，动态列表固定高度并在内部滚动；下方“运营洞察”在“产出 / 分布 / 团队 / 资源”间切换，保留周期聚合、服务与类型分布、个人处理情况和Workspace容量；资源视图把紧凑容量摘要与策略放在顶部，把主要高度留给Workspace明细，长列表只在面板内部滚动。首页不重复请求或持久化第二套Issue状态，动态项点击只切换到现有工单详情。
+## Repository 三态
 
-## Repository三态
-
-`classifyRepositoryState()`按整组`issue_repositories`判断：
+`classifyRepositoryState()`按整组 `issue_repositories` 判断：
 
 | 状态 | `local_path` | `working_branch` | 场景 |
 | --- | --- | --- | --- |
-| `read_only` | 全NULL | 全NULL | Prod/test |
-| `development_workspace` | 全非NULL | 全非NULL | Active dev |
-| `development_snapshot` | 全NULL | 全非NULL | Released dev |
-| `invalid` | 空、mixed或其他 | 任意 | Fail closed |
+| `read_only` | 全 NULL | 全 NULL | Prod/test |
+| `development_workspace` | 全非 NULL | 全非 NULL | Active dev |
+| `development_snapshot` | 全 NULL | 全非 NULL | Released dev |
+| `invalid` | 空组、mixed 或其他 | 任意 | Fail closed |
 
-Dev `workspace_name`是稳定历史。Active时必须等于`local_path` basename；release只清空`local_path`，不改working branch或stable name。
+Dev `workspace_name` 是稳定历史。Active 时必须等于 `local_path` basename；release 只清空 `local_path`，不改 working branch 或 workspace name。
 
-## Git布局和生命周期
+## Git 布局
 
 ```text
 .issue-pilot/git/
@@ -147,140 +150,134 @@ Dev `workspace_name`是稳定历史。Active时必须等于`local_path` basename
 .issue-pilot/workspaces/<issue-key>/<workspace-name>/
 ```
 
-Repository URL使用20字符SHA-256前缀。Bare store保留remote tracking refs、本地Issue branches、objects和worktree metadata。Immutable checkout可跨Issue复用，但使用前必须验证hash/commit层级、common dir、HEAD和clean status；异常返回`shared_checkout_changed`并保留现场。
+Repository URL 使用 SHA-256 前 20 字符。Bare store 保存 remote tracking refs、本地 Issue branches、objects 和 worktree metadata。Immutable checkout 可跨 Issue 复用，但每次使用前必须验证目录层级、common dir、HEAD 和 clean status；异常返回稳定错误并保留现场。
 
 ### Prod/test
 
-每轮：
+每轮重新读取当前 Service/Environment Deployment：
 
-1. 读取当前Service/Environment Deployment。
-2. 验证每个Service Repository恰有一个base branch。
-3. Fetch各`origin/<baseBranch>`。
-4. 创建/复用commit checkout。
-5. 原子写`read_only` Repository rows和current commit。
-6. 生成只读runtime。
+1. 验证每个 Service Repository 恰有一个 base branch。
+2. Fetch `origin/<baseBranch>`。
+3. 创建或复用 commit checkout。
+4. 原子写 `read_only` Repository rows 和 current commit。
+5. 生成只读 runtime。
+6. 从当前 Deployment capability 和全局模型创建 session。
 
-下一轮重新读取当前Deployment，因此配置和branch更新会生效。Agent只看到Issue runtime link，不看到shared checkout物理root。
-
-Prod/test Issue可在编辑事务中切换到另一个prod/test Service/Environment scope。目标Deployment和Issue type必须有效，运行中的Issue由reservation拒绝；切换会关闭旧in-memory session、保留Pi JSONL/Attachment/Comment、清空旧只读Repository投影并使runtime失效，然后由metadata轮次从目标Deployment重建只读checkout、runtime和capability closure，并使用当前全局model。Dev Issue不能通过普通编辑切换Service或Environment，进入dev仍使用专用转换动作。
+Prod/test Issue 可在编辑事务中切换到另一 prod/test scope。切换关闭旧内存 session，保留 JSONL、Attachment 和 Comment，清空旧只读 Repository 投影并使 runtime 失效。Dev scope 只能通过专用转换/reopen 流程改变。
 
 ### Active dev
 
-- `defect_fix`使用`hotfix-<issue-key>`。
-- `feature_development`使用`feature-<issue-key>`。
-- 首次Repository从当前Deployment branch创建本地branch和专属worktree。
-- Existing Repository保留Issue row中的历史`base_branch`。
-- Service新增Repository在下一次prepare加入；待删除worktree必须clean。
-- 完整目标集合先prepare，再finalize filesystem和DB；失败按batch rollback恢复。
+- `defect_fix` 使用 `hotfix-<issue-key>`。
+- `feature_development` 使用 `feature-<issue-key>`。
+- 首次 Repository 从 Deployment branch 创建本地 branch 和专属 worktree。
+- Existing Repository 保留 Issue row 中的历史 `base_branch` 与 `workspace_name`。
+- Service 新增 Repository 在后续 prepare 中加入；删除前相关 worktree 必须 clean。
+- 完整集合先 prepare，再 finalize filesystem 和 DB；失败按 batch rollback 恢复。
 
-Prod/test `smart_analysis`可在`open|pending`、`ready`、`read_only`时通过专用动作转为dev `defect_fix`。转换保留Attachment、Comment和Pi JSONL，准备hotfix worktree/runtime后在一个transaction切换scope和Repository rows；失败恢复只读runtime。
+Prod/test `smart_analysis` 在满足 idle、ready、read-only 等条件时可通过专用动作转换为 dev `defect_fix`。转换保留 Attachment、Comment 和 Pi JSONL。
 
 ### Released dev
 
-只有resolved、idle、布局完整且clean的dev workspace可release：
+只有 resolved、idle、布局完整且 clean 的 dev workspace 可 release：
 
-1. 深检DB、root和Git状态。
-2. 预检全部Repository。
-3. 受管remove各worktree。
-4. 中途失败时从本地branch原commit恢复已删除worktree。
-5. 全成功后清空`local_path`，Workspace变`stopped`。
-6. 从本地working branch tip生成immutable checkout和只读runtime。
+1. 深检 DB、root 和 Git。
+2. 预检全部 Repository。
+3. 受管移除 worktree。
+4. 中途失败时从本地 branch 原 commit 恢复已删除 worktree。
+5. 全部成功后清空 `local_path`，Workspace 变为 `stopped`。
+6. 从本地 working branch tip 生成 immutable checkout 和只读 runtime。
 
-Reopen从全部本地working branch准备worktree/runtime，再transaction更新Repository、Workspace和Issue。系统不从远程Issue branch fallback。
+Reopen 从全部本地 working branch 准备 worktree/runtime，再事务更新 Repository、Workspace 和 Issue。系统不从 remote Issue branch fallback。
 
-## Runtime、Source和项目工具
+## Runtime、Source 与项目工具
 
 ```text
 issues/<issue-key>/runtime/
   <workspace-name> -> active worktree or immutable checkout
-  bin/              # only writable dev
+  bin/              # 仅 writable dev
     node-project
     maven-project
 ```
 
-Runtime通过临时目录和previous目录原子替换，不包含Attachment。Wrapper使用versioned Unix socket request，仅发送Issue key、workspace name、relative project、action和args。Broker验证：
+Runtime 使用 temporary + previous 目录原子替换，不包含 Attachment。Wrapper 通过 versioned Unix socket 只发送 Issue key、workspace name、relative project、action 和 args。Broker 从 SQLite 重新验证 Issue、Repository、真实 project path、配置文件和 cache 权限。
 
-- Issue是dev且Repository组为`development_workspace`。
-- DB `local_path`等于预期Issue workspace path。
-- Project realpath位于Repository。
-- npmrc/Maven settings为owner-only file，cache不可group/world写。
+Source Browser：
 
-Node允许npm `install|test|build|typecheck`，拒绝其他package manager、长期server action和`--watch*`；Maven允许`test|verify|package`。同Issue串行，不同Issue可并行。
+- 只接受 Repository alias 和 relative path。
+- 拒绝 absolute、`..`、symlink escape、`.git` tree item、binary 和超限内容。
+- Search 使用 literal `rg --json`。
+- History/commit 必须位于 current HEAD ancestry。
+- Prod/test 和 released snapshot 只读。
+- Active dev 可创建、保存、删除、重命名文件/目录，并 Stage、Unstage、Discard、Commit。
+- 保存既有文件携带读取时 SHA-256，使用原子替换避免覆盖并发修改。
 
-Source Browser重新读取SQLite关系并验证runtime symlink：
+Workbench 使用 access-aware virtual filesystem 和固定 LocalProcess extension。Markdown Preview 直接使用 `marked + DOMPurify + github-markdown-css`，不依赖 extension-host render command。Iframe 通过显式 `ready/error/layout` 消息区分启动结果与布局；Terminal、Node extension host、gallery 和任意宿主命令不可用。
 
-- 只接受Repository alias和relative path。
-- 拒绝absolute、`..`、symlink escape、`.git` tree项、binary和超限文件。
-- `/search`使用literal `rg --json`。
-- History/commit必须位于current HEAD ancestry；blame一次只读取一个合法文件行。
-- Diff读取Git index/working tree；development workspace额外允许Stage、Unstage、Discard和Commit，所有写操作经过Issue reservation。
-- Development workspace可创建、保存、删除和重命名普通文件/目录；保存既有文件携带读取时SHA-256并原子替换。Prod/test和released snapshot保持只读。
-
-Workbench filesystem根据Repository access声明权限：dev允许文件创建、保存、删除和重命名，prod/test及released snapshot保持Readonly。固定LocalProcess extension提供Explorer/Search/SCM Graph和受限Git action；只读Markdown Preview Pane直接使用`marked + DOMPurify`，不依赖extension-host命令。iframe以显式`ready/error/layout`消息区分启动结果和布局同步，初始化失败必须移除父页面加载遮罩并显示Workbench错误。Terminal、Node extension host、gallery和任意宿主命令不可用。
-
-## Agent和Pi
+## Agent 与 Pi
 
 一次轮次：
 
-1. Workspace设`preparing`。
-2. 读取Issue、Service、Environment和Deployment。
-3. 关闭旧in-memory session。
-4. `IssueProjectManager`准备代码和runtime。
-5. 从实际access和typed Deployment config生成`AgentSessionContext`。
-6. 打开Pi JSONL或原子创建`0600`session file。
-7. 创建SDK session并核对ID、model、thinking level和tools。
-8. 持久化session binding。
-9. Transaction设置Issue `in_progress`、Workspace `running`。
-10. 记录可见user message并执行prompt。
-11. 成功转`pending/ready`；失败abort/dispose并转`open/failed`。
+1. Workspace 设为 `preparing`。
+2. 读取 Issue、Service、Environment、Deployment 和全局模型。
+3. 关闭旧内存 session。
+4. 准备代码和 runtime。
+5. 从实际 access 与 typed Deployment config 生成最小 `AgentSessionContext`。
+6. 打开现有 Pi JSONL 或原子创建 `0600` session file。
+7. 用 Pi SDK `customTools` 创建 session，并核对 model、thinking level、tool 集。
+8. 持久化 session binding。
+9. 事务设置 Issue `in_progress`、Workspace `running`。
+10. 记录 visible user message 并执行 prompt。
+11. 成功转 `pending/ready`；失败 abort/dispose 并转 `open/failed`。
 
-Resource loader禁用extension、skill、prompt template、theme、context file和宿主prompt自动发现。Issue Pilot显式提供system prompt、model和tools。
+Resource loader 禁用 extension、skill、prompt template、theme、context file 和宿主 prompt 自动发现。Issue Pilot 显式提供 system prompt、model 和 tools。
 
-Pi session在等待模型输出时应用`runtime.agent.modelResponseIdleMs`空闲watchdog；assistant增量会重置计时，tool执行期间暂停，最后一个tool结束后重新开始。超时调用SDK abort并以`model_response_idle_timeout`进入现有`open/failed`可重试恢复，不让Issue永久停在`in_progress/running`。
+Model output idle watchdog 只在等待模型输出时计时；assistant 增量重置计时，tool 执行暂停计时。超时以 `model_response_idle_timeout` 进入可重试失败状态。
 
-`AgentSessionContext`只包含：
+`AgentSessionContext` 只包含：
 
 - `issueKey`、`serviceKey`、`environmentKey`
 - provider、model ID、thinking level
 - capability names
 - `canModifyCode`
 
-它不包含credential、Deployment ID/config、Repository path或commit。Writable context获得`read/bash/edit/write/grep/find/ls`；其他只获得`read/grep/find/ls`。
+它不包含 credential、完整 Deployment config、Repository path 或 commit。Writable context 获得 `read/bash/edit/write/grep/find/ls`；其他 context 只有 `read/grep/find/ls`。
 
-Capability调用链：
+Capability 调用：
 
 ```text
 Service save -> Registry parse -> typed Deployment config -> SQLite
-Pi tool -> TypeBox input parse -> protocol client(typed session config, typed input)
+Pi customTool -> TypeBox input parse -> session-local typed protocol client
 ```
 
-完整Deployment config只存在API session-local tool closure。Protocol client不重复解析内部shape，但必须限制外部target、协议、redirect、timeout、abort和response；除DMS MCP外还限制result size。DMS arguments和result不设应用层byte limit。SLS按服务端page size读取完整查询，不设置record count上限，但每页检查统一result byte budget。Tool result会进入Pi JSONL。
+DMS 只注册单一 `dms` 工具，runtime 只匹配远端唯一的 `executeScript`，强制注入 Deployment DatabaseId，并验证单条只读 SQL。`listInstances/getDatabase` 只用于受信配置解析。DMS argument/result 不设置应用层 byte limit；其余 capability 按各自 budget 完整失败，不静默截断。
 
-## Attachment事务
+## Attachment 事务
 
-唯一durable文件：
+唯一 durable 文件：
 
 ```text
 issues/<issue-key>/attachments/<uuid>-<basename>
 ```
 
-Create：应用multipart budget、计算SHA-256、独占创建空Issue root、以`0400`写文件，再transaction写Issue/Workspace/CC/Attachment；失败只删除本次文件并用`rmdir`回收本次空目录。
+Create 先应用 multipart budget、计算 SHA-256、独占 claim 空 Issue root、以 `0400` 写文件，再在一个 transaction 中写 Issue/Workspace/CC/Attachment。失败只删除本次文件，并以 `rmdir` 回收本次空目录。
 
-Edit：待删除文件先rename到`.deleting` quarantine，新文件写入后transaction更新metadata/CC/Attachment；rollback恢复quarantine并删除新文件，commit后finalize删除quarantine。Cleanup失败返回稳定错误并保留证据。
+Edit 先把待删除文件 rename 到 `.deleting` quarantine，写入新文件，再 transaction 更新 metadata/CC/Attachment；rollback 恢复 quarantine 并删除新文件，commit 后 finalize 删除 quarantine。GET 验证直属路径、regular file、mode、size 和 SHA-256。不存在独立 Attachment write route。
 
-GET验证直属path、普通文件、权限、size和SHA-256。不存在独立Attachment POST/DELETE。
-
-## SSE
-
-SSE先订阅live bus，再读取JSONL snapshot：
+## SSE 与 Web 状态
 
 ```text
-Pi JSONL replay -> current non-durable run replay -> snapshot_ready -> buffered/live events -> heartbeat
+Pi JSONL replay
+  -> current non-durable run replay
+  -> snapshot_ready
+  -> buffered/live events
+  -> heartbeat
 ```
 
-Event bus只在当前Agent运行期间保留尚未写入JSONL的assistant增量、运行中tool状态、queue和`agent_start`。同一assistant内容块的token delta合并为一个replay event，保留完整文本且减少SSE协议元数据。完成的message/tool立即由JSONL接管，Issue结束或API重启即清空；它不是第二份durable conversation。页面snapshot重放Pi active branch中的完整可见transcript，不能使用仅供模型推理的compaction context替代；内部runtime user prompt仍不投影。Snapshot期间的live event进入连接私有buffer，并按event ID去重。Writer不限制pending bytes，并有序处理backpressure和transport close/error。Heartbeat使用具名SSE event；Web在静默窗口内未收到open、heartbeat、snapshot或message时主动重连，以恢复被代理隐藏的断流。Capability结果完整保留在Pi JSONL并提供给Agent；Web只对过大的tool result做首尾有界展示，避免长会话把浏览器主线程耗尽。
+Server 先订阅 live bus，再读取 snapshot。Event bus 只保留当前进程中尚未被 JSONL 接管的 assistant 增量、运行中 tool、queue 和 `agent_start`；完成后释放，API 重启不恢复。Snapshot 期间的新 event 进入连接私有 buffer，并按 event ID 去重。
 
-Web controller用generation失效旧EventSource/timer，握手前保存private replay，收到`snapshot_ready`后原子提交；compaction成功后重连读取新active branch。Event transport与conversation projection分离。Assistant流式块按Pi `contentIndex`标识和排序，不能把可能包含tool-call间隔的索引直接作为稀疏数组下标。
+Ordered writer 按顺序处理 backpressure、close 和 error；当前不设置 pending-byte 截断。Web controller 用 generation 失效旧 EventSource/timer，在 `snapshot_ready` 前保存 private replay，随后原子提交；静默超过配置窗口会重连。
+
+首页 `OverviewView` 唯一拥有 Issue 请求、轮询、取消和 latest-wins 状态，`Dashboard` 与 `Statistics` 只消费同一份摘要。配置资源由 `ApplicationResources` 统一管理。
 
 ## 并发
 
@@ -288,81 +285,78 @@ Web controller用generation失效旧EventSource/timer，握手前保存private r
 | --- | --- |
 | Agent run/steer | Issue ID |
 | Issue reservation | Issue set |
-| Scope queue | API instance |
-| Lifecycle queue | API instance |
-| Inspection queue | Issue ID |
-| Repository queue | state root + URL hash |
+| Configuration scope | API instance |
+| Lifecycle | API instance |
+| Inspection | Issue ID |
+| Repository operation | state root + URL hash |
 
-顺序：
+固定顺序：
 
 ```text
-config read: scope -> SQLite snapshot
+configuration read: scope -> SQLite snapshot
 Service/Issue scope write: scope -> reservation
 release/reopen: lifecycle -> inspection -> reservation
 ```
 
-`SerialQueue`/`KeyedSerialQueue`只复用mechanics，不能把不同业务锁域合并为global mutex。
+`SerialQueue`/`KeyedSerialQueue`只复用 mechanics，不能合并不同业务锁域。
 
-## 启动和关闭
+## 启动与关闭
 
-启动：
+启动顺序：
 
-1. 创建/打开`0600`SQLite，设置WAL/busy timeout并执行migration。
-2. 验证Issue Workspace和resolution结构。
-3. 首次插入bootstrap user；同步Environment。
-4. 收敛中断的Issue/Workspace状态。
-5. 拒绝unmanaged Issue/workspace。
-6. 验证和受管清理generated checkout/runtime。
-7. 启动`0600`project-tool socket。
-8. 重建active/released dev runtime。
-9. 为已有session的prod/test重建当前read-only runtime。
-10. 执行一次maintenance，注册route并启动timer。
+1. 创建/打开 `0600` SQLite，设置 WAL/busy timeout，执行 migration。
+2. 验证 Workspace 和 resolution 结构，首次插入 bootstrap user，同步 Environment。
+3. 收敛中断状态并拒绝 unmanaged Issue/workspace。
+4. 验证和受管清理 generated checkout/runtime。
+5. 启动 `0600` project-tool socket。
+6. 重建 active/released dev runtime 和已有 session 的 read-only runtime。
+7. 确保全局模型行存在。
+8. 执行一次 maintenance，注册 route，启动 timer。
 
-关闭：停止maintenance并drain lifecycle/inspection，拒绝新Agent activity并drain reservation，停止Pi sessions，关闭model runtime，关闭project broker并等待活动进程，最后关闭SQLite。每个cleanup都会尝试，多个失败聚合为`api_close_failed`。
+关闭会停止并 drain maintenance/lifecycle/inspection，拒绝新 Agent activity 并 drain reservation，停止 sessions，关闭 model runtime 和 project broker，最后关闭 SQLite。Cleanup 会全部尝试，多个错误聚合为稳定失败。
 
-Broker启动探测existing socket：活动socket阻止第二API；只有`ECONNREFUSED/ENOENT` stale socket可移除。关闭仅按记录的device/inode删除自己的socket。
+## Durable 与 generated 数据
 
-## 数据所有权
-
-| 数据 | Durable | 自动处理 |
+| 数据 | 类型 | 自动处理 |
 | --- | --- | --- |
-| SQLite/WAL/SHM | 是 | 不自动删除 |
-| Attachment | 是 | 只随Issue edit transaction删除 |
-| Pi JSONL | 是 | 不随workspace删除 |
-| Bare store/local branch | 是 | 不作为cache清理 |
-| Active dev worktree | 有条件 | 仅受管release |
-| Runtime/socket | 否 | 启动/prepare重建 |
-| Immutable checkout | 否 | 验证后受管重建 |
-| Backup/legacy editor data | 是/历史证据 | Operator管理 |
+| SQLite/WAL/SHM | Durable | 不自动删除 |
+| Attachment | Durable | 只随 Issue edit transaction 删除 |
+| Pi JSONL | Durable | 不随 workspace 删除 |
+| Bare store/local branch | Durable | 不作为 cache 清理 |
+| Active dev worktree | Conditionally durable | 仅受管 release |
+| Runtime/socket | Generated | 启动/prepare 重建 |
+| Immutable checkout | Generated | 验证后受管重建 |
+| Backup/legacy evidence | Operator-owned | 人工管理 |
 
-DB不存在但`issues/<key>`或`workspaces/<key>`存在时是`unmanaged_issue_state`；启动在清理生成物前失败。
+DB 不存在但 `issues/<key>` 或 `workspaces/<key>` 存在时为 `unmanaged_issue_state`；启动在清理生成物前失败。
 
 ## 安全边界
 
-- API无内置认证；所有入口需外部TLS/auth/authorization。
-- ClusterIP Service只允许通过可信TLS/auth Ingress访问。
-- Workbench和Source API返回内部代码；development write还会直接修改Issue workspace，均属于敏感接口。
-- Config GET包含Repository、model、scope和完整Deployment credential，只允许在受信应用网络内使用且不得记录响应。
-- Credential update仍使用`preserve|replace|clear`；配置页可直接回填GET返回的credential，保存时通常发送`replace`。
-- Credential不进入context、prompt、tool input、argv或日志。
-- SLS临时profile包含AccessKey，query仍出现在process argv；DMS Bearer只存在SQLite、受信配置流和session-local MCP request header。
-- Pi built-in tools和project scripts不是OS sandbox。
-- Playwright只属于Operator测试harness，不进入Service、Deployment、Agent或Pi tools。
+- API 没有内置认证；所有入口必须置于可信 TLS/auth/authorization proxy 后。
+- `X-Issue-Pilot-Subject` 只选择 active user 和提交署名，不是身份认证。
+- Config GET 有意返回完整 Deployment credential 给受信配置 UI；不得记录响应或 request body。
+- Credential 不进入 Agent context、prompt、tool schema/input、argv、日志、监控或诊断。
+- DMS Bearer 只进入 SQLite、受信配置流和 session-local HTTPS Authorization header。
+- SLS AccessKey 写入调用级临时 `0600` profile；query/scope 可能出现在 process argv。
+- Capability result 会进入模型上下文与 Pi JSONL，可能包含敏感业务数据。
+- Workbench 和 Source API 返回内部源码，dev mutation 会直接修改 Issue worktree。
+- Pi built-in tools 和项目脚本不是 OS sandbox。
 
 ## 必须保持的不变量
 
-1. Issue key为`ISSUE-YYYYMMDD-NNN...`。
-2. 每Issue恰有Workspace row，`resolved/resolved_at`成对。
-3. Issue scope有对应Deployment。
-4. Prod/test、active dev、released dev分别为三种合法Repository状态。
-5. Released dev只从本地working branch恢复。
-6. Existing dev `base_branch`和`workspace_name`是历史。
-7. Dirty、untracked、running、invalid-layout、changed-checkout和unmanaged state不自动删除。
-8. Attachment只有一个`0400`durable副本，写操作只属于Issue create/edit。
-9. Runtime和checkout不成为durable事实源。
-10. Repository集合变化先prepare filesystem，再commit DB，失败可rollback。
-11. Credential只在SQLite、受信Config GET/保存请求和session-local protocol client中出现，不进入Agent context、prompt、tool input、process argv、日志、监控或诊断附件。
-12. Pi tool只解析一次input并直接调用protocol client；DMS Agent工具只分派到`executeScript`。
-13. API、migration、Git、runtime、Source和project broker使用同一state root。
-14. Published migration/journal不修改、重排或删除。
-15. SQLite User是唯一事实源，且至少保留一名active user。
+1. Issue key 是 `ISSUE-YYYYMMDD-NNN...`。
+2. 每 Issue 恰有 Workspace row，`resolved/resolved_at` 成对。
+3. 每个 Issue scope 有对应 Deployment。
+4. 全局模型唯一，Deployment 不含模型覆盖。
+5. Prod/test、active dev、released dev 分别对应三种合法 Repository state。
+6. Released dev 只从本地 working branch 恢复。
+7. Existing dev `base_branch` 和 `workspace_name` 是历史。
+8. Unsafe/unknown filesystem 和 Git state 显式失败并保留。
+9. Attachment 只有一个 `0400` durable 副本，写入只属于 Issue create/edit。
+10. Runtime 和 checkout 不成为 durable 事实源。
+11. Repository 集合变化先 prepare filesystem，再 commit DB，并可 rollback。
+12. Credential 只存在于明确授权的数据流中。
+13. Pi tool input 只解析一次；DMS Agent 只可调用 `executeScript`。
+14. 所有 state owner 使用同一 state root。
+15. Published migration/journal 不修改、重排或删除。
+16. SQLite User 是唯一用户事实源，且至少保留一名 active user。
