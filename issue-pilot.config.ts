@@ -1,0 +1,99 @@
+const gibibyte = 1024 ** 3;
+
+export const issuePilotConfig = Object.freeze({
+  state: Object.freeze({
+    directory: ".issue-pilot",
+    databaseFile: "issues.db",
+    sqliteBusyTimeoutMs: 5_000,
+  }),
+  regional: Object.freeze({
+    locale: "zh-CN",
+    timeZone: "Asia/Shanghai",
+  }),
+  bootstrapUser: Object.freeze({ subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
+  http: Object.freeze({
+    host: "0.0.0.0",
+    port: 3000,
+    logger: true,
+    sseHeartbeatMs: 15_000,
+  }),
+  web: Object.freeze({
+    host: "0.0.0.0",
+    port: 4173,
+    agentStreamReconnectMs: 1_000,
+    agentStreamStaleMs: 45_000,
+    agentToolOutputCharacters: 40_000,
+    markdownCacheEntries: 512,
+    markdownCacheCharacters: 4 * 1024 * 1024,
+  }),
+  workspace: Object.freeze({
+    retentionMs: 7 * 24 * 60 * 60 * 1000,
+    highWaterBytes: 20 * gibibyte,
+    targetBytes: 16 * gibibyte,
+    maintenanceIntervalMs: 15 * 60 * 1000,
+    taskConcurrency: 4,
+  }),
+  defaults: Object.freeze({
+    environments: Object.freeze({ prod: "正式", test: "测试", dev: "开发" }),
+    deployment: Object.freeze({ baseBranch: "main" }),
+    dms: Object.freeze({ sseUrl: "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse" }),
+    nacos: Object.freeze({ group: "DEFAULT_GROUP" }),
+    redis: Object.freeze({ port: 6379, database: 0, scanResults: 50 }),
+    rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
+  }),
+  runtime: Object.freeze({
+    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000 }),
+    redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
+    sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
+    projectTools: Object.freeze({
+      node: Object.freeze({
+        npmConfig: ".npmrc",
+        npmCache: ".npm",
+      }),
+      maven: Object.freeze({
+        settings: ".m2/settings.xml",
+        repository: ".m2/repository",
+      }),
+      executionMs: 30 * 60 * 1000,
+    }),
+  }),
+  limits: Object.freeze({
+    agentMessageChars: 50_000,
+    attachment: Object.freeze({
+      fileBytes: 20 * 1024 * 1024,
+      requestBytes: 40 * 1024 * 1024,
+      files: 20,
+      formFieldBytes: 100_000,
+    }),
+    sourceBrowser: Object.freeze({
+      fileBytes: 2 * 1024 * 1024,
+      directoryEntries: 500,
+      searchQueryCharacters: 200,
+      historyCommits: 100,
+      changeFiles: 500,
+      commandMs: 5_000,
+      commandOutputBytes: 2 * 1024 * 1024,
+    }),
+    process: Object.freeze({
+      commandOutputBytes: 5 * 1024 * 1024,
+      terminationGraceMs: 1_000,
+      gitOperationMs: 120_000,
+      gitOutputBytes: 2 * 1024 * 1024,
+      gitPruneMs: 30_000,
+      diskUsageMs: 120_000,
+      diskUsageOutputBytes: 1024 * 1024,
+    }),
+    capability: Object.freeze({
+      resultBytes: 1024 * 1024,
+      timeoutMs: 15_000,
+      connectionMs: 10_000,
+      database: Object.freeze({ queryChars: 20_000, rows: 500 }),
+      dms: Object.freeze({ executionMs: 30_000 }),
+      elasticsearch: Object.freeze({ results: 200 }),
+      nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
+      redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),
+      rabbitmq: Object.freeze({ queueChars: 255 }),
+      sls: Object.freeze({ pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),
+    }),
+  }),
+});

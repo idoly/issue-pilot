@@ -92,6 +92,188 @@
       "when": 1785885600000,
       "tag": "0012_drop_attachment_scan_status",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1785930000000,
+      "tag": "0013_agent_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1785931800000,
+      "tag": "0014_capability_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1785932400000,
+      "tag": "0015_playwright_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1785933000000,
+      "tag": "0016_disable_unconfigured_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1785933600000,
+      "tag": "0017_sls_region",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1785934200000,
+      "tag": "0018_validate_capability_configs",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786009800000,
+      "tag": "0019_drop_deployment_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786017000000,
+      "tag": "0020_drop_issue_pilot_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1786017600000,
+      "tag": "0021_remove_legacy_agent_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1786020000000,
+      "tag": "0022_simplify_issue_statuses",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1786078000000,
+      "tag": "0023_drop_agent_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1786080000000,
+      "tag": "0024_shorten_environment_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1786081000000,
+      "tag": "0025_business_issue_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1786087200000,
+      "tag": "0026_flatten_issue_branches",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1786090800000,
+      "tag": "0027_remove_service_sort_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1786094400000,
+      "tag": "0028_remove_unused_scope_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1786211840308,
+      "tag": "0029_remove_unused_owner_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1786229580029,
+      "tag": "0030_remove_repository_kind",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1786230759440,
+      "tag": "0031_remove_unused_issue_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1786233608845,
+      "tag": "0032_remove_redundant_pi_session_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1786387200000,
+      "tag": "0033_repository_deployment_branches",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1786473600000,
+      "tag": "0034_issue_repository_workspace_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1786560000000,
+      "tag": "0035_issue_deployment_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1786646400000,
+      "tag": "0036_issue_status_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1786732800000,
+      "tag": "0037_managed_users",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1789315200000,
+      "tag": "0038_global_agent_configuration",
+      "breakpoints": true
     }
   ]
 }

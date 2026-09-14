@@ -1,12 +1,9 @@
-import { resolve } from "node:path";
-
-import { migrate } from "drizzle-orm/libsql/migrator";
-
+import { migrateDatabase } from "./bootstrap.ts";
 import { openDatabase } from "./client.ts";
 
 const database = openDatabase();
 try {
-  await migrate(database.db, { migrationsFolder: resolve("drizzle") });
+  await migrateDatabase(database);
 } finally {
-  database.close();
+  await database.close();
 }

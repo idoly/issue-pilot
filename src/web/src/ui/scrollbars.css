@@ -1,0 +1,43 @@
+:root {
+  --ip-github-scrollbar-track: #0d1117;
+  --ip-github-scrollbar-thumb: #484f58;
+  --ip-github-scrollbar-thumb-hover: #6e7681;
+  --ip-scrollbar-size: 10px;
+}
+
+.ip-scrollbar {
+  --ip-scrollbar-track: #eef1ef;
+  --ip-scrollbar-thumb: #a8b2ad;
+  --ip-scrollbar-thumb-hover: #7d8983;
+  overflow-y: scroll;
+  scrollbar-color: var(--ip-scrollbar-thumb) var(--ip-scrollbar-track);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.ip-scrollbar-dark {
+  --ip-scrollbar-track: var(--ip-github-scrollbar-track);
+  --ip-scrollbar-thumb: var(--ip-github-scrollbar-thumb);
+  --ip-scrollbar-thumb-hover: var(--ip-github-scrollbar-thumb-hover);
+}
+
+.ip-scrollbar::-webkit-scrollbar {
+  width: var(--ip-scrollbar-size);
+  height: var(--ip-scrollbar-size);
+}
+
+.ip-scrollbar::-webkit-scrollbar-track {
+  background: var(--ip-scrollbar-track);
+}
+
+.ip-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid var(--ip-scrollbar-track);
+  border-radius: 4px;
+  background: var(--ip-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.ip-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--ip-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
