@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { createInstance } from "@codingame/monaco-vscode-api";
+import { marked } from "marked";
 import {
   EditorInput,
   EditorInputCapabilities,
@@ -63,9 +64,8 @@ class MarkdownPreviewPane extends SimpleEditorPane {
       this.content.textContent = "Markdown source unavailable";
       return { dispose() {} };
     }
-    const vscode = await getIssuePilotVscodeApi();
-    const rendered = await vscode.commands.executeCommand<string>("markdown.api.render", model.getValue());
-    this.content.innerHTML = DOMPurify.sanitize(rendered ?? "", {
+    const rendered = await marked.parse(model.getValue());
+    this.content.innerHTML = DOMPurify.sanitize(rendered, {
       USE_PROFILES: { html: true },
       FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
       FORBID_ATTR: ["style", "srcdoc"],

@@ -301,7 +301,7 @@ JSONL replay -> current run replay -> snapshot_ready -> live -> heartbeat
 | SCM empty | `/diff`、HEAD/index/worktree、runtime target |
 | Dev file/Git mutation fails | Environment access、Issue reservation、relative path、Source stable error和Git status |
 | Graph/file fail | `/history`、`/commit`、`/commit-file`、`/blame`、HEAD ancestry |
-| Preview fail | Markdown worker、render API、DOMPurify、fixed styles |
+| Preview fail | Markdown model、`marked`、DOMPurify、fixed styles |
 | Workbench fail | `vscode.html`、workers、theme/static resources、browser console |
 | Broker unavailable | API、socket mode/owner、wrapper version |
 | Node/Maven fail | Image tool versions、project manifest、config/cache mode、timeout |

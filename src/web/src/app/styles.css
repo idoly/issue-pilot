@@ -777,26 +777,29 @@ button, input, textarea { font: inherit; }
 .service-form-section-header > div { display: grid; min-width: 0; gap: 2px; }
 .service-form-section-header strong { color: #303936; font-size: 13px; }
 .service-form-section-header span { color: #7a8580; font-size: 11px; }
-.service-repository-editor, .service-deployment-editor { display: grid; gap: 8px; }
+.service-repository-editor { display: grid; gap: 8px; }
+.service-deployment-editor { display: grid; gap: 0; overflow: hidden; border: 1px solid #dfe6e2; border-radius: 6px; }
 .service-repository-row { display: grid; grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
-.service-deployment-row { display: grid; grid-template-columns: 125px minmax(280px, 1fr) 30px 30px; grid-template-areas: "environment capabilities toggle delete"; align-items: end; gap: 10px 6px; padding: 12px 2px; background: #fff; }
-.service-deployment-row.collapsed { grid-template-columns: minmax(180px, 1fr) 30px 30px; grid-template-areas: "environment toggle delete"; }
-.service-deployment-row + .service-deployment-row { margin-top: 8px; }
-.service-deployment-row > label, .deployment-capabilities { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
+.service-deployment-row { display: grid; grid-template-columns: 80px minmax(0, 1fr) 30px 30px; grid-template-areas: "environment summary toggle delete"; align-items: center; gap: 8px 6px; padding: 8px 10px; background: #fff; }
+.service-deployment-row + .service-deployment-row { border-top: 1px solid #e5eae8; }
+.deployment-environment, .deployment-capabilities { display: grid; min-width: 0; gap: 3px; color: #68736e; font-size: 10px; }
 .deployment-environment { grid-area: environment; }
-.service-deployment-row > .deployment-toggle { grid-area: toggle; align-self: end; }
+.deployment-environment strong { overflow: hidden; color: #2f3b35; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.deployment-summary { min-width: 0; grid-area: summary; overflow: hidden; }
+.deployment-summary .capability-labels { min-width: 0; flex-wrap: nowrap; overflow: hidden; }
+.service-deployment-row > .deployment-toggle { grid-area: toggle; }
 .service-deployment-row > .deployment-toggle svg { transition: transform 120ms ease; transform: rotate(90deg); }
 .service-deployment-row.collapsed > .deployment-toggle svg { transform: rotate(0); }
 .service-deployment-row > .ads-button:last-child { grid-area: delete; align-self: end; }
 .service-deployment-row .ads-select { width: 100%; }
-.deployment-capabilities { grid-area: capabilities; align-self: stretch; }
+.deployment-capabilities { grid-column: 1 / -1; align-self: stretch; margin-top: 2px; }
 .deployment-capabilities > span { color: #68736e; }
 .deployment-capability-options { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; gap: 5px; }
 .deployment-capability-option { min-width: 0; height: 30px; flex: 0 0 auto; padding: 0 8px; overflow: hidden; border: 1px solid #d7dfdb; border-radius: 4px; background: #fff; color: #5c6862; font: 10px/28px var(--mono-font); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .deployment-capability-option:hover { border-color: #86aa9d; color: #176b5b; }
 .deployment-capability-option.selected { border-color: #176b5b; background: #eaf4f0; color: #176b5b; font-weight: 700; }
 .deployment-capabilities .deployment-capability-option { padding-inline: 6px; }
-.deployment-capability-settings, .deployment-repositories { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px 12px 12px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
+.deployment-capability-settings, .deployment-repositories { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 8px 10px 10px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
 .deployment-capability-settings label, .deployment-capability-field, .deployment-repositories label { display: grid; min-width: 0; gap: 5px; color: #68736e; font-size: 10px; }
 .deployment-capability-field:has(.ads-switch) { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 12px; }
 .deployment-capability-field .ads-switch { flex: 0 0 auto; }
@@ -863,9 +866,8 @@ button, input, textarea { font: inherit; }
   .service-repository-row .ads-input-affix-wrapper:first-child { grid-column: 1; }
   .service-repository-row .ads-input-affix-wrapper:nth-child(2) { grid-column: 1; }
   .service-repository-row > .ads-button { grid-column: 2; grid-row: 1 / span 2; }
-  .service-deployment-row { grid-template-columns: minmax(0, 1fr) 30px 30px; grid-template-areas: "environment toggle delete" "capabilities capabilities capabilities"; align-items: stretch; }
-  .service-deployment-row.collapsed { grid-template-columns: minmax(0, 1fr) 30px 30px; grid-template-areas: "environment toggle delete"; }
-  .service-deployment-row > .ads-button { align-self: end; justify-self: end; }
+  .service-deployment-row { grid-template-columns: 70px minmax(0, 1fr) 30px 30px; grid-template-areas: "environment summary toggle delete"; align-items: center; }
+  .service-deployment-row > .ads-button { justify-self: end; }
   .deployment-capability-options { flex-wrap: wrap; }
   .deployment-capability-settings, .deployment-repositories { grid-template-columns: minmax(0, 1fr); }
   .service-form-section-header { align-items: flex-end; }

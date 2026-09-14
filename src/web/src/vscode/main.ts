@@ -10,7 +10,6 @@ import "@codingame/monaco-vscode-javascript-default-extension";
 import "@codingame/monaco-vscode-json-default-extension";
 import "@codingame/monaco-vscode-less-default-extension";
 import "@codingame/monaco-vscode-markdown-basics-default-extension";
-import { whenReady as markdownFeaturesReady } from "@codingame/monaco-vscode-markdown-language-features-default-extension";
 import "@codingame/monaco-vscode-scss-default-extension";
 import "@codingame/monaco-vscode-shellscript-default-extension";
 import "@codingame/monaco-vscode-sql-default-extension";
@@ -355,9 +354,8 @@ async function start(): Promise<void> {
     const auxiliarySize = layout.getSize(Parts.AUXILIARYBAR_PART);
     layout.resizePart(Parts.AUXILIARYBAR_PART, Math.max(280, Math.min(380, Math.round(container.clientWidth * 0.24))) - auxiliarySize.width, 0);
   }
-  const [, , , refreshSourceControls] = await Promise.all([
+  const [, , refreshSourceControls] = await Promise.all([
     materialIconThemeReady(),
-    markdownFeaturesReady(),
     registerSourceSearch(issueKey, repositories),
     registerSourceControls(issueKey, repositories, provider.workspacePath, editorService, async (label) => (await dialogService.confirm({
       type: "warning",
@@ -370,7 +368,6 @@ async function start(): Promise<void> {
   provider.setOnWrite(() => { void refreshSourceControls(); });
   await viewsService.openView("workbench.scm.repositories", false);
   if (initialView === "source-control") await vscode.commands.executeCommand("workbench.view.scm");
-  await vscode.commands.executeCommand("markdown.api.render", "# Issue Pilot");
   await registerMarkdownPreviewCommands(container);
   layout.setPartHidden(true, Parts.TITLEBAR_PART);
   layout.setPartHidden(true, Parts.ACTIVITYBAR_PART);

@@ -415,6 +415,7 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByLabelText("部署 1 仓库 srm 分支")).toBeNull();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署1" }));
     await waitFor(() => expect(within(serviceDialog).getByRole("button", { name: "收起部署1" }).getAttribute("aria-expanded")).toBe("true"));
+    expect(screen.queryByLabelText("部署 1 能力")).toBeNull();
     const repositoryAliasInput = screen.getByLabelText("仓库别名 1") as HTMLInputElement;
     fireEvent.input(repositoryAliasInput, { target: { value: "srm-api" } });
     expect(repositoryAliasInput.value).toBe("srm-api");
@@ -450,7 +451,10 @@ describe("issue pilot workspace", () => {
     expect((screen.getByLabelText("dms Authorization 1") as HTMLInputElement).value).toBe("Bearer dms-token");
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "收起部署1" }));
     await waitFor(() => expect(screen.queryByLabelText("dms url 1")).toBeNull());
-    expect(screen.getByLabelText("部署环境 1")).toBeTruthy();
+    expect(screen.queryByLabelText("部署环境 1")).toBeNull();
+    expect(screen.getByLabelText("部署 1 环境").textContent).toContain("测试");
+    expect(screen.getByLabelText("部署 1 能力").textContent).toContain("nacos");
+    expect(screen.getByLabelText("部署 1 能力").textContent).toContain("dms");
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署1" }));
     const restoredDmsUrl = await waitFor(() => screen.getByLabelText("dms url 1") as HTMLInputElement);
     expect(restoredDmsUrl.value).toBe("https://dms.example.test/sse");

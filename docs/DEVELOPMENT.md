@@ -305,7 +305,7 @@ Redis Worker隔离node-redis完整RESP materialization和heap；不要合回main
 - App resource保持latest-wins generation。
 - Capability使用explicit forms，不做generic schema form。
 - Config GET返回的secret只留在配置页draft；serializer通过`preserve|replace|clear`提交，不写localStorage、日志或诊断。
-- Markdown使用`marked + DOMPurify + github-markdown-css`和bounded cache。
+- 主应用和Workbench Markdown Preview都使用`marked + DOMPurify + github-markdown-css`；主应用额外使用bounded cache。Workbench启动不得依赖可选extension-host render命令。
 - Workbench允许dev创建、保存、删除、重命名文件及Stage、Unstage、Discard、Commit；prod/test和released snapshot保持readonly。Terminal、extension gallery和任意宿主命令仍不启用。
 - Workbench Commit和Agent明确执行的Git commit都使用当前工单用户的姓名、邮箱作为author/committer，不使用application通用身份。
 - 新flow覆盖loading、empty、success、failure、retry和stale response。

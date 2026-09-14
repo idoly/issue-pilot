@@ -11,10 +11,8 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const require = createRequire(import.meta.url);
 const githubMarkdownDirectory = path.dirname(require.resolve("github-markdown-css/package.json"));
-const markdownFeaturesDirectory = path.dirname(require.resolve("@codingame/monaco-vscode-markdown-language-features-default-extension/package.json"));
 const markdownPreviewCss = [
   fs.readFileSync(path.join(githubMarkdownDirectory, "github-markdown-dark.css"), "utf8"),
-  fs.readFileSync(path.join(markdownFeaturesDirectory, "resources/highlight.css.txt"), "utf8"),
   "html,body{margin:0;background:#0d1117;color:#e6edf3;color-scheme:dark}body{box-sizing:border-box;padding:24px 32px}.markdown-body{max-width:none;background:transparent;color:#e6edf3}",
 ].join("\n");
 const githubThemeJson = fs.readFileSync(path.join(import.meta.dirname, "src", "vscode", "github-dark-default.json"), "utf8");

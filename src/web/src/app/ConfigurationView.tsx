@@ -1,14 +1,13 @@
-import { Button, Input, Modal, Select, Skeleton, Switch as Toggle, TextArea } from "@idoly/ant-design-solid";
+import { Button, Input, Modal, Skeleton, Switch as Toggle, TextArea } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, Show, snapshot, Switch, untrack } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CAPABILITY_CREDENTIALS } from "../../../configuration/contracts";
 import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { ChevronRight, GitBranch, Pencil, Plus, Trash2 } from "../ui/icons";
-import { createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Config, type Service } from "../data/client";
+import { createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
 import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 import { useApplicationResources } from "./ApplicationResources";
-import { selectedChoice } from "./IssueForm";
 
 function serviceSaveErrorMessage(error: unknown): string {
   const code = errorMessage(error);
@@ -79,7 +78,7 @@ function CapabilityLabels(props: { keys: CapabilityName[] }) {
 function ServiceDeploymentEditorRow(props: {
   index: number;
   deployment: ServiceDeploymentDraft;
-  environmentOptions: () => Config["environments"];
+  environmentName: string;
   repositories: () => ServiceRepositoryDraft[];
   onChange: (deployment: ServiceDeploymentDraft) => void;
   onDelete: () => void;
@@ -87,7 +86,6 @@ function ServiceDeploymentEditorRow(props: {
   // The row owns its draft after mount; parent updates are emitted through onChange, not reapplied.
   const initialDeployment = untrack(() => cloneDeploymentDraft(props.deployment));
   let currentDeployment = initialDeployment;
-  const [environmentKey, setEnvironmentKey] = createSignal(initialDeployment.environmentKey, { ownedWrite: true });
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
   const [repositoryBranches, setRepositoryBranches] = createSignal(initialDeployment.repositoryBranches, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
@@ -179,7 +177,8 @@ function ServiceDeploymentEditorRow(props: {
   };
   return (
     <div class={`service-deployment-row${expanded() ? "" : " collapsed"}`}>
-      <label class="deployment-environment"><span class="required-field">环境</span><Select aria-label={`部署环境 ${props.index + 1}`} value={environmentKey()} onChange={(value) => { const options = props.environmentOptions(); const selected = selectedChoice(value, options.map((environment) => environment.key)); if (selected) { setEnvironmentKey(selected); update({ environmentKey: selected }); } }} options={props.environmentOptions().map((environment) => ({ value: environment.key, label: environment.name }))} /></label>
+      <div class="deployment-environment" aria-label={`部署 ${props.index + 1} 环境`}><strong>{props.environmentName}</strong></div>
+      <Show when={!expanded()}><div class="deployment-summary" aria-label={`部署 ${props.index + 1} 能力`}><CapabilityLabels keys={selectedCapabilities()} /></div></Show>
       <Button class="icon-button deployment-toggle" type="text" shape="circle" icon={<ChevronRight size={15} />} title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((current) => !current)} />
       <Show when={expanded()}><div class="deployment-capabilities"><span>能力</span><div class="deployment-capability-options"><For each={capabilityOptions}>{(capability) => { const selected = () => selectedCapabilities().includes(capability.key); return <button type="button" class={`deployment-capability-option${selected() ? " selected" : ""}`} aria-pressed={selected() ? "true" : "false"} onClick={() => selected() ? removeCapability(capability.key) : addCapability(capability.key)}>{capability.key}</button>; }}</For></div></div>
       <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{repository.alias || "未命名仓库"}</span><Input aria-label={`部署 ${props.index + 1} 仓库 ${repository.alias || repository.key} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} /></label>}</For></div>
@@ -329,7 +328,7 @@ export function ConfigurationView() {
           <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">代码仓库</strong><span>别名用于环境分支配置，服务内必须唯一</span></div><Button icon={<Plus size={14} />} onClick={addServiceRepository}>添加仓库</Button></div><div class="service-repository-editor"><For each={serviceRepositories()}>{(repository, index) => <ServiceRepositoryEditorRow index={index()} repository={repository} only={serviceRepositories().length === 1} onChange={(next) => setServiceRepositories((current) => { Object.assign(repository, next); return [...current]; })} onDelete={() => deleteServiceRepository(repository)} />}</For></div></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>按仓库别名配置分支和 Pi 使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} repositories={serviceRepositories} environmentOptions={() => configuration().environments.filter((environment) => environment.key === deployment.environmentKey || !serviceDeployments.some((item) => item !== deployment && item.environmentKey === environment.key))} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>按仓库别名配置分支和 Pi 使用的外部能力</span></div><Button icon={<Plus size={14} />} disabled={!availableDeploymentEnvironments().length} onClick={addServiceDeployment}>添加部署</Button></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} repositories={serviceRepositories} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} onDelete={() => setServiceDeployments((current) => current.filter((_, itemIndex) => itemIndex !== index()))} />}</For></div></div>
           <label class="service-form-field"><span>项目描述（Markdown）</span><TextArea aria-label="项目描述" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
         </div>

@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { registerEditor, registerEditorPane, createInstance, commands, executeCommand, parseUri } = vi.hoisted(() => ({
+const { registerEditor, registerEditorPane, createInstance, commands, executeCommand, markedParse, parseUri } = vi.hoisted(() => ({
   registerEditor: vi.fn(),
   registerEditorPane: vi.fn(),
   createInstance: vi.fn(async (ctor: new (resource: unknown) => unknown, resource: unknown) => new ctor(resource)),
   commands: new Map<string, (...args: unknown[]) => unknown>(),
   executeCommand: vi.fn(),
+  markedParse: vi.fn(async () => "<h1>README</h1>"),
   parseUri: vi.fn((value: string) => ({ value })),
 }));
 
 vi.mock("dompurify", () => ({ default: { sanitize: vi.fn((value: string) => value) } }));
+vi.mock("marked", () => ({ marked: { parse: markedParse } }));
 vi.mock("virtual:issue-pilot-markdown-preview-style", () => ({ previewCss: "" }));
 vi.mock("@codingame/monaco-vscode-api", () => ({ createInstance }));
 vi.mock("@codingame/monaco-vscode-workbench-service-override", () => {
@@ -60,6 +62,7 @@ describe("Markdown preview Workbench integration", () => {
     registerEditorPane.mockClear();
     createInstance.mockClear();
     executeCommand.mockReset().mockResolvedValue(undefined);
+    markedParse.mockClear();
     parseUri.mockClear();
     commands.clear();
   });
@@ -83,6 +86,21 @@ describe("Markdown preview Workbench integration", () => {
     const factory = registerEditor.mock.calls[0][3] as { createEditorInput(input: { resource: unknown }): Promise<{ editor: { resource: unknown } }> };
     const resource = { path: "/README.md" };
     await expect(factory.createEditorInput({ resource })).resolves.toEqual({ editor: expect.objectContaining({ resource }) });
+  });
+
+  it("renders Markdown locally without depending on an extension-host command", async () => {
+    registerMarkdownPreview();
+    const Pane = registerEditorPane.mock.calls[0][2] as new () => { initialize(): HTMLElement; renderInput(input: { resource: unknown }): Promise<unknown> };
+    const pane = new Pane();
+    const host = pane.initialize();
+    const resource = monaco.Uri.parse("file:///README.md");
+    vi.mocked(monaco.editor.getModel).mockReturnValue({ getLanguageId: () => "markdown", getValue: () => "# README" } as never);
+
+    await pane.renderInput({ resource });
+
+    expect(markedParse).toHaveBeenCalledWith("# README");
+    expect(host.shadowRoot?.querySelector("article")?.innerHTML).toBe("<h1>README</h1>");
+    expect(executeCommand).not.toHaveBeenCalledWith("markdown.api.render", expect.anything());
   });
 
   it("opens preview commands through the public extension API", async () => {

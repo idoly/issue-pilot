@@ -216,7 +216,7 @@ Source Browser重新读取SQLite关系并验证runtime symlink：
 - Diff读取Git index/working tree；development workspace额外允许Stage、Unstage、Discard和Commit，所有写操作经过Issue reservation。
 - Development workspace可创建、保存、删除和重命名普通文件/目录；保存既有文件携带读取时SHA-256并原子替换。Prod/test和released snapshot保持只读。
 
-Workbench filesystem根据Repository access声明权限：dev允许文件创建、保存、删除和重命名，prod/test及released snapshot保持Readonly。固定LocalProcess extension提供Explorer/Search/SCM Graph和受限Git action；Web Worker Markdown extension只用于render。iframe以显式`ready/error/layout`消息区分启动结果和布局同步，初始化失败必须移除父页面加载遮罩并显示Workbench错误。Terminal、Node extension host、gallery和任意宿主命令不可用。
+Workbench filesystem根据Repository access声明权限：dev允许文件创建、保存、删除和重命名，prod/test及released snapshot保持Readonly。固定LocalProcess extension提供Explorer/Search/SCM Graph和受限Git action；只读Markdown Preview Pane直接使用`marked + DOMPurify`，不依赖extension-host命令。iframe以显式`ready/error/layout`消息区分启动结果和布局同步，初始化失败必须移除父页面加载遮罩并显示Workbench错误。Terminal、Node extension host、gallery和任意宿主命令不可用。
 
 ## Agent和Pi
 
