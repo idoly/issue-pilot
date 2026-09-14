@@ -434,11 +434,11 @@ describe("issue pilot workspace", () => {
       expect(screen.getByLabelText("部署 1 仓库 srm 分支")).toBe(branchInput);
       expect(branchInput.value).toBe(value);
     }
-    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["redis", "mq", "es", "sls"]);
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
     await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent).slice(-2)).toEqual(["dms", "sls"]));
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "移除 sls 能力" }));
     await waitFor(() => expect(screen.queryByLabelText("sls accessKeyId 1")).toBeNull());
     expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "nacos", "db", "dms"]);
     const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
@@ -486,10 +486,10 @@ describe("issue pilot workspace", () => {
     expect(screen.getByLabelText("es password 1")).toBeTruthy();
     expect(screen.queryByLabelText(/es clusterNodes/i)).toBeNull();
     expect(screen.queryByLabelText(/es indexes/i)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "nacos" }));
+    fireEvent.click(screen.getByRole("button", { name: "移除 nacos 能力" }));
     await waitFor(() => expect(screen.queryByLabelText("nacos serverUrl 1")).toBeNull());
     expect(screen.getByLabelText("db url 1")).toBeTruthy();
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "移除 es 能力" }));
     await waitFor(() => expect(screen.queryByLabelText("es url 1")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
     await waitFor(() => {

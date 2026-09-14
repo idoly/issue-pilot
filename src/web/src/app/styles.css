@@ -813,7 +813,9 @@ button, input, textarea { font: inherit; }
 .dms-scope-hint code { color: #176b5b; }
 .capability-labels { display: flex; min-width: 0; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; }
 .capability-labels::-webkit-scrollbar { display: none; }
-.capability-labels code { padding: 4px 8px; border: 1px solid #d7e1dd; border-radius: 4px; background: #f4f7f6; color: #38564b; font-size: 10px; }
+.capability-labels code, .deployment-summary .capability-labels button { padding: 4px 8px; border: 1px solid #d7e1dd; border-radius: 4px; background: #f4f7f6; color: #38564b; font: 10px/1.4 var(--mono-font); white-space: nowrap; }
+.deployment-summary .capability-labels button { cursor: pointer; }
+.deployment-summary .capability-labels button:hover { border-color: #86aa9d; color: #176b5b; }
 .service-form-empty { padding: 16px; border: 1px dashed #d8dfdb; border-radius: 5px; color: #7d8883; text-align: center; font-size: 12px; }
 .destructive-action { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid #ecefed; }
 
