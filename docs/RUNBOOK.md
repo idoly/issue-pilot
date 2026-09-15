@@ -250,7 +250,7 @@ curl -fsS -X DELETE \
 
 ## Agent 与 SSE
 
-Agent 失败后的预期状态：session abort/dispose；未 resolved Issue 回 `open`；Workspace 为 `failed` 并保存 `last_error`；JSONL、worktree、bare store、Attachment 保留。
+Agent 失败后的预期状态：session abort/dispose；未 resolved Issue 回 `open`；Workspace 为 `failed` 并保存 `last_error`；JSONL（包括已接受的粘贴图片）、worktree、bare store、Attachment 保留。
 
 排查顺序：
 
@@ -305,10 +305,11 @@ Project failure output 留在 worktree。不要允许 wrapper 接受 executable�
 - Deployment URL 是可达的 HTTPS SSE endpoint。
 - Authorization 是未过期的 `Bearer <token>`。
 - SSE GET 与同源 message POST 都携带 Authorization，redirect 被拒绝。
-- 配置页 alias/schema 已解析到预期 InstanceId、DatabaseId、host:port。
+- 每个 alias/schema 已解析到预期 InstanceId、DatabaseId、host:port。
+- SchemaName 和 DatabaseId 在 Deployment 内均唯一。
 - `listInstances` 与 `getDatabase` 只在受信配置解析中使用。
-- Agent 只调用唯一、schema-compatible 的 `executeScript`。
-- DatabaseId 由 Deployment scope 注入，SQL 是单条只读 statement。
+- Agent 的 schema input 只能取当前 Deployment 动态 enum，并只调用唯一、schema-compatible 的 `executeScript`。
+- 服务端把 schema 映射为 DatabaseId 并注入，SQL 是单条只读 statement。
 - 连接/list/call/close 位于 30 秒 operation timeout 内。
 
 旧 AccessKey/dbId/tid 配置不受支持，必须通过当前配置页重新保存。不要记录 Authorization、MCP request header 或完整 result。

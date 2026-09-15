@@ -87,8 +87,8 @@ describe("Agent conversation state", () => {
     expect(entries[0]).toMatchObject({ kind: "tool", toolCallId: "call-1", status: "complete", arguments: { statement: "SELECT 1" }, result: { content: [{ text: "done" }] } });
   });
 
-  it("appends visible user messages", () => {
-    expect(applyAgentEvent([], event({ type: "issue_user", message: "继续检查" }))).toMatchObject([{ kind: "user", text: "继续检查" }]);
+  it("appends visible user messages and images", () => {
+    expect(applyAgentEvent([], event({ type: "issue_user", message: "继续检查", images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] }))).toMatchObject([{ kind: "user", text: "继续检查", images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] }]);
   });
 
   it("projects official compaction, branch, custom, and bash session messages", () => {
@@ -172,6 +172,36 @@ describe("Agent conversation state", () => {
       lines: Array.from({ length: 5 }, (_, index) => `line ${index + 10}`),
       omitted: 9,
     });
+  });
+
+  it("previews pasted images and sends them as multipart Agent input", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "open",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:clipboard-image");
+    const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const fetchRequest = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 202 }));
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "clipboard.png", { type: "image/png" });
+    fireEvent.paste(editor, { clipboardData: { files: [image], getData: () => "" } });
+    expect(await screen.findByAltText("clipboard.png")).toBeTruthy();
+    expect(createObjectUrl).toHaveBeenCalledWith(image);
+    fireEvent.input(editor, { target: { value: "检查这张图片" } });
+    await waitFor(() => expect(editor.value).toBe("检查这张图片"));
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(fetchRequest).toHaveBeenCalledTimes(1));
+    const body = fetchRequest.mock.calls[0]?.[1]?.body;
+    expect(body).toBeInstanceOf(FormData);
+    expect((body as FormData).get("message")).toBe("检查这张图片");
+    expect((body as FormData).getAll("images")).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByAltText("clipboard.png")).toBeNull());
+    await waitFor(() => expect(revokeObjectUrl).toHaveBeenCalledWith("blob:clipboard-image"));
+    view.unmount();
   });
 
   it("renders the real EventSource lifecycle and active transcript", async () => {

@@ -24,7 +24,18 @@ const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
   redis: (draft) => ({ host: draft.host.trim(), port: draft.port, username: draft.username.trim(), database: draft.database, credentialUpdate: credentialUpdate("redis", draft) }),
   mq: (draft) => ({ host: draft.host.trim(), port: draft.port, managementPort: draft.managementPort, username: draft.username.trim(), virtualHost: draft.virtualHost.trim(), credentialUpdate: credentialUpdate("mq", draft) }),
   es: (draft) => ({ url: draft.url.trim(), username: draft.credentialEnabled ? draft.username.trim() : "", credentialUpdate: credentialUpdate("es", draft) }),
-  dms: (draft) => ({ url: draft.url.trim(), instanceId: draft.instanceId?.trim() ?? "", instanceHost: draft.instanceHost?.trim() ?? "", instancePort: draft.instancePort?.trim() ?? "", instanceLabel: draft.instanceLabel?.trim() ?? "", databaseId: draft.databaseId?.trim() ?? "", databaseLabel: draft.databaseLabel?.trim() ?? "", credentialUpdate: credentialUpdate("dms", draft) }),
+  dms: (draft) => ({
+    url: draft.url.trim(),
+    databases: draft.databases.map((database) => ({
+      instanceAlias: database.instanceAlias.trim(),
+      schemaName: database.schemaName.trim(),
+      instanceId: database.instanceId.trim(),
+      instanceHost: database.instanceHost.trim(),
+      instancePort: database.instancePort.trim(),
+      databaseId: database.databaseId.trim(),
+    })),
+    credentialUpdate: credentialUpdate("dms", draft),
+  }),
   sls: (draft) => ({ region: draft.region.trim(), project: draft.project.trim(), logstores: [...draft.logstores], credentialUpdate: credentialUpdate("sls", draft) }),
 };
 

@@ -75,6 +75,13 @@ function connectionUrl(value: unknown, name: string, protocols: string[], option
   return configuredUrl;
 }
 
+export function parseDmsConnectionConfiguration(value: unknown): Pick<CapabilityConfig<"dms">, "url" | "authorization"> {
+  const input = inputRecord(value);
+  const authorization = requiredText(input.authorization, "dms_authorization");
+  if (!/^Bearer [^\s]+$/.test(authorization)) fail("invalid_dms_authorization");
+  return { url: connectionUrl(input.url, "dms_url", ["https:"]), authorization };
+}
+
 const slsQueryProperties = {
   from: Type.Optional(Type.Integer({ minimum: 0 })),
   to: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -104,6 +111,7 @@ const capabilityInputSchemas = {
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: limits.elasticsearch.results })),
   }, { additionalProperties: false }),
   dms: Type.Object({
+    schema: Type.String({ minLength: 1, maxLength: 255, description: "Exact configured schema for the selected deployment." }),
     script: Type.String({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
     logic: Type.Optional(Type.Boolean({ description: "Whether DMS should execute the statement as a logical database query." })),
   }, { additionalProperties: false }),
@@ -204,24 +212,28 @@ const definitions = {
     inputSchema: capabilityInputSchemas.dms,
     metadata: {
       label: "Query DMS Database",
-      description: "Run one read-only SQL statement through the deployment's authorized Alibaba Cloud DMS MCP executeScript tool.",
-      promptSnippet: "Run read-only SQL through Alibaba Cloud DMS executeScript",
-      promptGuidelines: ["Call dms directly with one SELECT, SHOW, DESCRIBE, or EXPLAIN statement. The deployment database is fixed and write operations are unavailable."],
+      description: "Run one read-only SQL statement against a schema authorized by the deployment through Alibaba Cloud DMS MCP executeScript.",
+      promptSnippet: "Run read-only SQL against one configured DMS schema through executeScript",
+      promptGuidelines: ["Select one configured schema and submit one SELECT, SHOW, DESCRIBE, or EXPLAIN statement. Database IDs and write operations are unavailable."],
     },
     parseConfiguration(value) {
       const input = inputRecord(value);
-      const authorization = requiredText(input.authorization, "dms_authorization");
-      if (!/^Bearer [^\s]+$/.test(authorization)) fail("invalid_dms_authorization");
-      const instanceId = optionalText(input.instanceId, 100);
-      const instanceHost = optionalText(input.instanceHost, 255);
-      const instancePort = optionalText(input.instancePort, 10);
-      const instanceLabel = optionalText(input.instanceLabel, 1_000);
-      const databaseId = optionalText(input.databaseId, 100);
-      const databaseLabel = optionalText(input.databaseLabel, 255);
-      const scopeFields = [instanceId, instanceHost, instancePort, instanceLabel, databaseId, databaseLabel];
-      if (scopeFields.some(Boolean) && !scopeFields.every(Boolean)) fail("invalid_dms_database");
-      if (instancePort && (!/^\d{1,5}$/.test(instancePort) || Number(instancePort) < 1 || Number(instancePort) > 65_535)) fail("invalid_dms_database");
-      return { url: connectionUrl(input.url, "dms_url", ["https:"]), authorization, ...(databaseId && databaseLabel && instanceId && instanceHost && instancePort && instanceLabel ? { instanceId, instanceHost, instancePort, instanceLabel, databaseId, databaseLabel } : {}) };
+      const { url, authorization } = parseDmsConnectionConfiguration(input);
+      if (!Array.isArray(input.databases) || !input.databases.length || input.databases.length > limits.dms.databases) fail("invalid_dms_databases");
+      const databases = input.databases.map((value) => {
+        const database = inputRecord(value);
+        const instanceAlias = requiredText(database.instanceAlias, "dms_instance_alias", 255);
+        const schemaName = requiredText(database.schemaName, "dms_schema_name", 255);
+        const instanceId = requiredText(database.instanceId, "dms_instance_id", 100);
+        const instanceHost = requiredText(database.instanceHost, "dms_instance_host", 255);
+        const instancePort = requiredText(database.instancePort, "dms_instance_port", 10);
+        const databaseId = requiredText(database.databaseId, "dms_database_id", 100);
+        if (!/^\d{1,5}$/.test(instancePort) || Number(instancePort) < 1 || Number(instancePort) > 65_535) fail("invalid_dms_database");
+        return { instanceAlias, schemaName, instanceId, instanceHost, instancePort, databaseId };
+      });
+      if (new Set(databases.map(({ schemaName }) => schemaName)).size !== databases.length) fail("duplicate_dms_database_schema");
+      if (new Set(databases.map(({ databaseId }) => databaseId)).size !== databases.length) fail("duplicate_dms_database_id");
+      return { url, authorization, databases };
     },
   },
   sls: {
@@ -247,12 +259,22 @@ const definitions = {
 export const capabilityDefinitions: { [Key in CapabilityName]: CapabilityDefinition<Key> } = definitions;
 
 export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>): TSchema {
-  if (key !== "sls") return capabilityDefinitions[key].inputSchema;
-  const logstores = (configuration as CapabilityConfig<"sls">).logstores;
-  return Type.Object({
-    logstore: StringEnum(logstores, { description: "Exact logstore configured for the selected deployment." }),
-    ...slsQueryProperties,
-  }, { additionalProperties: false });
+  if (key === "sls") {
+    const logstores = (configuration as CapabilityConfig<"sls">).logstores;
+    return Type.Object({
+      logstore: StringEnum(logstores, { description: "Exact logstore configured for the selected deployment." }),
+      ...slsQueryProperties,
+    }, { additionalProperties: false });
+  }
+  if (key === "dms") {
+    const schemas = (configuration as CapabilityConfig<"dms">).databases.map(({ schemaName }) => schemaName);
+    return Type.Object({
+      schema: StringEnum(schemas, { description: "Exact schema configured for the selected deployment." }),
+      script: Type.String({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+      logic: Type.Optional(Type.Boolean({ description: "Whether DMS should execute the statement as a logical database query." })),
+    }, { additionalProperties: false });
+  }
+  return capabilityDefinitions[key].inputSchema;
 }
 
 export function parseCapabilityConfiguration<Key extends CapabilityName>(key: Key, value: unknown): CapabilityConfig<Key> {

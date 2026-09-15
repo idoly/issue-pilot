@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
-import { CapabilityConfigurationError, parseCapabilityConfiguration } from "../capabilities/registry.ts";
+import { CapabilityConfigurationError, parseDmsConnectionConfiguration } from "../capabilities/registry.ts";
 import { resolveDmsScope } from "../capabilities/dms.ts";
 import { saveGlobalAgentConfiguration, validateGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { loadConfiguration, loadConfigurationCatalog } from "../configuration/read.ts";
@@ -37,7 +37,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
   });
 
   const draftDmsConfiguration = (input: Record<string, unknown>) => {
-    try { return parseCapabilityConfiguration("dms", { url: input.url, authorization: input.authorization }); }
+    try { return parseDmsConnectionConfiguration({ url: input.url, authorization: input.authorization }); }
     catch (error) {
       if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
       throw error;

@@ -1,4 +1,6 @@
 import { eq } from "drizzle-orm";
+import type { FastifyRequest } from "fastify";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -11,6 +13,36 @@ import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
+
+const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+async function readAgentMessage(request: FastifyRequest): Promise<{ message: string; images: ImageContent[] }> {
+  if (!request.isMultipart()) return { message: text(record(request.body).message, "agent_message", issuePilotConfig.limits.agentMessageChars), images: [] };
+  const limits = issuePilotConfig.limits.attachment;
+  const images: ImageContent[] = [];
+  let message: string | undefined;
+  let totalBytes = 0;
+  for await (const part of request.parts()) {
+    if (part.type === "field") {
+      if (part.fieldname !== "message" || message !== undefined) throw new ApiError(400, "invalid_agent_message");
+      message = text(part.value, "agent_message", issuePilotConfig.limits.agentMessageChars);
+      continue;
+    }
+    if (part.fieldname !== "images" || !agentImageMediaTypes.has(part.mimetype) || images.length >= limits.files) throw new ApiError(400, "invalid_agent_image");
+    const chunks: Buffer[] = [];
+    let fileBytes = 0;
+    for await (const chunk of part.file) {
+      const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      fileBytes += content.length; totalBytes += content.length;
+      if (fileBytes > limits.fileBytes || totalBytes > limits.requestBytes) throw new ApiError(413, "agent_image_limit_exceeded");
+      chunks.push(content);
+    }
+    if (part.file.truncated) throw new ApiError(413, "agent_image_limit_exceeded");
+    images.push({ type: "image", mimeType: part.mimetype, data: Buffer.concat(chunks).toString("base64") });
+  }
+  if (!message) throw new ApiError(400, "invalid_agent_message");
+  return { message, images };
+}
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
   const { app, database, engine, events, modelCatalog } = context;
@@ -85,8 +117,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
-    const input = record(request.body);
-    const message = text(input.message, "agent_message", issuePilotConfig.limits.agentMessageChars);
+    const { message, images } = await readAgentMessage(request);
     const subject = await ensureCurrentSubject(database, request);
     const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
     if (!person) throw new ApiError(400, "invalid_current_subject");
@@ -94,7 +125,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       await engine.send(issue.id, message, {
         name: person.displayName ?? person.subject,
         email: person.email ?? `${person.subject}@localhost`,
-      });
+      }, images);
     }
     catch (error) {
       if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent"].includes(error.message)) throw new ApiError(409, error.message);

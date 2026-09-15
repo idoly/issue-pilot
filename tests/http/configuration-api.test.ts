@@ -82,7 +82,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
         redis: { host: "redis.example.test", port: 6379, username: "", database: 0, credentialUpdate: replace({ password: "redis-secret" }) },
         mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/", credentialUpdate: replace({ password: "mq-secret" }) },
         es: { url: "http://es.example.test/proxy", username: "", credentialUpdate: { mode: "clear" } },
-        dms: { url: "https://dms.example.test/sse", credentialUpdate: replace({ authorization: "Bearer dms-token" }) },
+        dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ALPHA-TEST", schemaName: "alpha", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialUpdate: replace({ authorization: "Bearer dms-token" }) },
         sls: { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialUpdate: replace({ accessKeyId: "sls-key", accessKeySecret: "sls-secret" }) },
       }],
     };
@@ -94,7 +94,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     const savedService = saved.services[0]!;
     const deployment = savedService.deployments[0]!;
     assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
-    assert.deepEqual(deployment.dms, { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", credentialConfigured: true });
+    assert.deepEqual(deployment.dms, { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "ALPHA-TEST", schemaName: "alpha", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialConfigured: true });
     assert.equal("playwright" in deployment, false);
     assert.deepEqual(deployment.sls, { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"], credentialConfigured: true });
     assert.deepEqual(deployment.es, { url: "http://es.example.test/proxy", username: "", credentialConfigured: false });

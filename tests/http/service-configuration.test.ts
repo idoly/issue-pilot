@@ -19,14 +19,16 @@ test("validates capability connection settings when saving page configuration", 
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 70_000, username: "", database: 0 }), /invalid_redis_port/);
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 6379, username: "", database: -1 }), /invalid_redis_database/);
   assert.throws(() => parseCapabilityConfiguration("mq", { host: "mq.example.test", port: 5672, managementPort: 0, username: "reader", password: "secret", virtualHost: "/" }), /invalid_mq_management_port/);
-  assert.deepEqual(parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token" }), { url: "https://dms.example.test/sse", authorization: "Bearer token" });
-  assert.deepEqual(parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD", databaseId: "123", databaseLabel: "orders" }), { url: "https://dms.example.test/sse", authorization: "Bearer token", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD", databaseId: "123", databaseLabel: "orders" });
-  assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", databaseId: "123" }), /invalid_dms_database/);
+  const dmsDatabase = { instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" };
+  assert.deepEqual(parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [dmsDatabase] }), { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [dmsDatabase] });
+  assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [] }), /invalid_dms_databases/);
+  assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [dmsDatabase, { ...dmsDatabase, databaseId: "456" }] }), /duplicate_dms_database_schema/);
+  assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [dmsDatabase, { ...dmsDatabase, instanceAlias: "ARCHIVE-PROD", schemaName: "archive" }] }), /duplicate_dms_database_id/);
   for (const url of ["", "http://dms.example.test/sse", "https://user@dms.example.test/sse", "https://dms.example.test/sse?token=secret"]) {
-    assert.throws(() => parseCapabilityConfiguration("dms", { url, authorization: "Bearer token" }), /invalid_dms_url/);
+    assert.throws(() => parseCapabilityConfiguration("dms", { url, authorization: "Bearer token", databases: [dmsDatabase] }), /invalid_dms_url/);
   }
   for (const authorization of ["", "token", "Beare token", "Bearer token with spaces"]) {
-    assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization }), /invalid_dms_authorization/);
+    assert.throws(() => parseCapabilityConfiguration("dms", { url: "https://dms.example.test/sse", authorization, databases: [dmsDatabase] }), /invalid_dms_authorization/);
   }
 });
 

@@ -10,9 +10,9 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 - Prod/test 每轮使用当前 Deployment 分支最新 fetched commit，Agent 和 Workbench 均只读。
 - Dev 使用 Issue 专属本地 branch 和 worktree，可修改代码并运行受限 npm/Maven action。
 - Resolved dev workspace 可受管释放；代码由 bare store 中的本地 working branch 持久保存，可只读浏览并在 reopen 时恢复。
-- 每张 Issue 持久保存 Pi JSONL conversation、Attachment、Comment、Repository 投影和 Workspace 状态。
+- 每张 Issue 持久保存 Pi JSONL conversation、Attachment、Comment、Repository 投影和 Workspace 状态；Agent 输入框可直接粘贴图片并随消息发送给模型。
 - 内置 Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff、blame、history 和安全的 Markdown Preview。
-- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP 和 SLS 作为 Deployment-scoped 只读 Pi tools。
+- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP 和 SLS 作为 Deployment-scoped 只读 Pi tools；DMS 可配置多个 schema，Agent 每次只能选择一个已授权目标。
 - 用户由 SQLite 管理，停用用户不会删除历史署名。
 
 ## Web 界面
@@ -20,7 +20,7 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 顶级导航只有“首页 / 工单 / 配置”：
 
 - 首页展示完整团队工单动态和“产出 / 分布 / 团队 / 资源”运营视图。
-- 工单页只展示当前登录用户作为负责人、报告人或抄送人的相关工单，并支持状态、服务、环境和关键词筛选。
+- 工单页左侧只展示处理人为当前登录用户的工单，并支持状态、服务、环境和关键词筛选；首页团队动态可打开跨人员工单详情，但不会把该工单注入当前用户队列。
 - 配置页包含“用户 / 模型 / 服务”三个保持挂载的 Tab，默认打开“服务”。
 - 服务编辑器按“代码仓库 / 环境部署 / 服务描述”组织；Deployment 折叠标题始终显示环境名和已启用 capability，展开后编辑分支、添加或移除 capability 及其参数。
 

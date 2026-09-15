@@ -9,7 +9,7 @@ import { relativeTime } from "./model";
 type ExecutionState = "running" | "preparing" | "failed" | "pending";
 
 function executionState(issue: IssueExecutionItem): { key: ExecutionState; label: string } {
-  if (issue.agentRunning || issue.workspaceStatus === "running") return { key: "running", label: "Agent 执行中" };
+  if (issue.agentRunning || issue.workspaceStatus === "running") return { key: "running", label: "执行中" };
   if (issue.workspaceStatus === "preparing") return { key: "preparing", label: "环境准备中" };
   if (issue.workspaceStatus === "failed") return { key: "failed", label: "执行失败" };
   return { key: "pending", label: issue.status === "pending" ? "待确认" : "待执行" };

@@ -1,7 +1,8 @@
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 
 type AgentWireEvent = JsonAgentSessionEvent
-  | { type: "issue_user"; message: string }
+  | { type: "issue_user"; message: string; images?: ImageContent[] }
   | { type: "issue_status"; status: "complete" | "error" };
 
 export interface RunEvent {
@@ -157,8 +158,11 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
     const createdAt = timestamp(entry.timestamp);
     if (entry.type === "custom") {
       if (entry.customType === "issue-pilot-user") {
-        const customData = entry.data as { message?: unknown } | undefined;
-        if (typeof customData?.message === "string") events.push({ id: entry.id, issueId, createdAt, event: { type: "issue_user", message: customData.message } });
+        const customData = entry.data as { message?: unknown; images?: unknown } | undefined;
+        if (typeof customData?.message === "string") {
+          const images = Array.isArray(customData.images) ? customData.images.filter((image): image is ImageContent => Boolean(image && typeof image === "object" && (image as { type?: unknown }).type === "image" && typeof (image as { data?: unknown }).data === "string" && typeof (image as { mimeType?: unknown }).mimeType === "string")) : [];
+          events.push({ id: entry.id, issueId, createdAt, event: { type: "issue_user", message: customData.message, ...(images.length ? { images } : {}) } });
+        }
       }
       continue;
     }

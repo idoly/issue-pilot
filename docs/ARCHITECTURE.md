@@ -226,7 +226,7 @@ Workbench 使用 access-aware virtual filesystem 和固定 LocalProcess extensio
 7. 用 Pi SDK `customTools` 创建 session，并核对 model、thinking level、tool 集。
 8. 持久化 session binding。
 9. 事务设置 Issue `in_progress`、Workspace `running`。
-10. 记录 visible user message 并执行 prompt。
+10. 记录 visible user message（含可选 Pi image content）并执行 prompt。
 11. 成功转 `pending/ready`；失败 abort/dispose 并转 `open/failed`。
 
 Resource loader 禁用 extension、skill、prompt template、theme、context file 和宿主 prompt 自动发现。Issue Pilot 显式提供 system prompt、model 和 tools。
@@ -249,7 +249,7 @@ Service save -> Registry parse -> typed Deployment config -> SQLite
 Pi customTool -> TypeBox input parse -> session-local typed protocol client
 ```
 
-DMS 只注册单一 `dms` 工具，runtime 只匹配远端唯一的 `executeScript`，强制注入 Deployment DatabaseId，并验证单条只读 SQL。`listInstances/getDatabase` 只用于受信配置解析。DMS argument/result 不设置应用层 byte limit；其余 capability 按各自 budget 完整失败，不静默截断。
+DMS 只注册单一 `dms` 工具；当前 Deployment 的 schema 动态形成 tool input enum。Runtime 将 schema 精确映射到持久化 DatabaseId，只匹配远端唯一的 `executeScript`，注入 DatabaseId 并验证单条只读 SQL。`listInstances/getDatabase` 只用于受信配置解析。DMS argument/result 不设置应用层 byte limit；其余 capability 按各自 budget 完整失败，不静默截断。
 
 ## Attachment 事务
 
@@ -266,7 +266,7 @@ Edit 先把待删除文件 rename 到 `.deleting` quarantine，写入新文件�
 ## SSE 与 Web 状态
 
 ```text
-Pi JSONL replay
+Pi JSONL replay（含用户消息中的 text/image content）
   -> current non-durable run replay
   -> snapshot_ready
   -> buffered/live events
@@ -338,7 +338,7 @@ DB 不存在但 `issues/<key>` 或 `workspaces/<key>` 存在时为 `unmanaged_is
 - Credential 不进入 Agent context、prompt、tool schema/input、argv、日志、监控或诊断。
 - DMS Bearer 只进入 SQLite、受信配置流和 session-local HTTPS Authorization header。
 - SLS AccessKey 写入调用级临时 `0600` profile；query/scope 可能出现在 process argv。
-- Capability result 会进入模型上下文与 Pi JSONL，可能包含敏感业务数据。
+- Capability result 和用户粘贴到 Agent composer 的图片会进入模型上下文与 Pi JSONL，可能包含敏感业务数据。
 - Workbench 和 Source API 返回内部源码，dev mutation 会直接修改 Issue worktree。
 - Pi built-in tools 和项目脚本不是 OS sandbox。
 

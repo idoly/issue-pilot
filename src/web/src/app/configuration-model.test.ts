@@ -10,7 +10,7 @@ const draft: DeploymentCapabilityDraft = {
   redis: { host: " redis.example.test ", port: 6379, username: " reader ", password: "redis-secret", database: 1, credentialConfigured: false, credentialEnabled: true },
   mq: { host: " mq.example.test ", port: 5672, managementPort: 15672, username: " reader ", password: "mq-secret", virtualHost: " /orders ", credentialConfigured: false, credentialEnabled: true },
   es: { url: " https://es.example.test ", username: " reader ", password: "es-secret", credentialConfigured: false, credentialEnabled: true },
-  dms: { url: " https://dms.example.test/sse ", authorization: " Bearer dms-token ", instanceId: " instance-1 ", instanceHost: " db.example.test ", instancePort: " 3306 ", instanceLabel: " SRM-PROD · db.example.test:3306 · mysql/product ", databaseId: " 123 ", databaseLabel: " orders ", credentialConfigured: false, credentialEnabled: true },
+  dms: { url: " https://dms.example.test/sse ", authorization: " Bearer dms-token ", databases: [{ instanceAlias: " ORDERS-PROD ", schemaName: " orders ", instanceId: " instance-1 ", instanceHost: " db.example.test ", instancePort: " 3306 ", databaseId: " 123 " }], credentialConfigured: false, credentialEnabled: true },
   sls: { accessKeyId: " sls-key ", accessKeySecret: "sls-secret", region: " cn-test ", project: " orders-test ", logstores: ["application"], credentialConfigured: false, credentialEnabled: true },
 };
 
@@ -25,7 +25,7 @@ describe("capability deployment serialization", () => {
       redis: { host: "redis.example.test", port: 6379, username: "reader", database: 1, credentialUpdate: replace({ password: "redis-secret" }) },
       mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/orders", credentialUpdate: replace({ password: "mq-secret" }) },
       es: { url: "https://es.example.test", username: "reader", credentialUpdate: replace({ password: "es-secret" }) },
-      dms: { url: "https://dms.example.test/sse", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD · db.example.test:3306 · mysql/product", databaseId: "123", databaseLabel: "orders", credentialUpdate: replace({ authorization: " Bearer dms-token " }) },
+      dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialUpdate: replace({ authorization: " Bearer dms-token " }) },
       sls: { region: "cn-test", project: "orders-test", logstores: ["application"], credentialUpdate: replace({ accessKeyId: " sls-key ", accessKeySecret: "sls-secret" }) },
     });
   });
@@ -47,7 +47,7 @@ describe("capability deployment serialization", () => {
       nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "", credentialUpdate: { mode: "clear" } },
     });
     expect(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] })).toEqual({
-      dms: { url: "https://dms.example.test/sse", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD · db.example.test:3306 · mysql/product", databaseId: "123", databaseLabel: "orders", credentialUpdate: replace({ authorization: " Bearer dms-token " }) },
+      dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialUpdate: replace({ authorization: " Bearer dms-token " }) },
     });
   });
 });

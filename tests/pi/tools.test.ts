@@ -18,15 +18,16 @@ test("creates only context-selected SDK capability tools", () => {
   const tools = createCapabilityTools(context, {
     db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" },
     redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token" },
+    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
   });
   assert.deepEqual(tools.map((tool) => tool.name), ["db", "redis", "dms"]);
   assert.match(tools[0]?.promptSnippet ?? "", /read-only MySQL/);
   assert.match(tools[1]?.promptGuidelines?.[0] ?? "", /allowlisted read operations/);
-  assert.match(tools[2]?.promptSnippet ?? "", /DMS executeScript/);
+  assert.match(tools[2]?.promptSnippet ?? "", /configured DMS schema through executeScript/);
   const dmsSchema = tools[2]?.parameters as unknown as { properties: Record<string, unknown>; required: string[] };
-  assert.deepEqual(Object.keys(dmsSchema.properties), ["script", "logic"]);
-  assert.deepEqual(dmsSchema.required, ["script"]);
+  assert.deepEqual(Object.keys(dmsSchema.properties), ["schema", "script", "logic"]);
+  assert.deepEqual(dmsSchema.required, ["schema", "script"]);
+  assert.deepEqual((dmsSchema.properties.schema as { enum: string[] }).enum, ["orders"]);
 });
 
 test("projects the selected deployment SLS logstores into the session-local tool schema", async () => {
@@ -55,10 +56,10 @@ test("validates Pi tool input and passes the application tool runtime directly",
   const tools = createCapabilityTools(context, {
     db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" },
     redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token" },
+    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
   }, unavailable);
   const redis = tools.find((tool) => tool.name === "redis")!;
   const dms = tools.find((tool) => tool.name === "dms")!;
   await assert.rejects(redis.execute("call", { action: "del", key: "order" }, undefined, undefined, {} as never), /invalid_redis_input/);
-  await assert.rejects(dms.execute("call", { tool: "query_database", script: "SELECT 1" }, undefined, undefined, {} as never), /invalid_dms_input/);
+  await assert.rejects(dms.execute("call", { schema: "unknown", script: "SELECT 1" }, undefined, undefined, {} as never), /invalid_dms_input/);
 });

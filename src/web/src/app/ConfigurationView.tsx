@@ -15,7 +15,10 @@ function serviceSaveErrorMessage(error: unknown): string {
     invalid_db_password: "请填写数据库密码",
     invalid_dms_url: "请填写有效的 DMS MCP HTTPS URL",
     invalid_dms_authorization: "请填写完整的 Bearer 格式 DMS MCP Authorization",
-    invalid_dms_database: "DMS 数据库选择无效，请重新选择",
+    invalid_dms_database: "DMS 数据库解析结果无效，请重新填写",
+    invalid_dms_databases: "请至少配置一个且不超过 20 个 DMS 数据库",
+    duplicate_dms_database_schema: "DMS schema 不能重复",
+    duplicate_dms_database_id: "同一个 DMS 数据库不能配置多次",
     dms_mcp_connection_failed: "无法连接 DMS MCP，请检查 URL 和 Authorization",
     dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
     dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
@@ -50,6 +53,9 @@ type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
 };
 
+type DmsDatabaseDraft = NonNullable<ServiceDeploymentDraft["dms"]>["databases"][number];
+const newDmsDatabaseDraft = (): DmsDatabaseDraft => ({ instanceAlias: "", schemaName: "", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" });
+
 function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploymentDraft {
   return snapshot(deployment);
 }
@@ -75,6 +81,54 @@ function CapabilityLabels(props: { keys: CapabilityName[] }) {
   return <div class="capability-labels"><For each={capabilities()}>{(capability) => <code>{capability.key}</code>}</For></div>;
 }
 
+function DmsDatabaseEditorRow(props: {
+  deploymentIndex: number;
+  databaseIndex: number;
+  database: DmsDatabaseDraft;
+  connection: () => { url: string; authorization: string };
+  only: boolean;
+  onChange: (database: DmsDatabaseDraft) => void;
+  onDelete: () => void;
+}) {
+  let current = { ...props.database };
+  const [database, setDatabase] = createSignal(current, { ownedWrite: true });
+  const [loading, setLoading] = createSignal(false, { ownedWrite: true });
+  const [resolveError, setResolveError] = createSignal("", { ownedWrite: true });
+  let resolveTimer: ReturnType<typeof setTimeout> | undefined;
+  let resolveGeneration = 0;
+  const emit = (next: DmsDatabaseDraft) => { current = next; setDatabase(next); props.onChange(next); };
+  const scheduleResolve = (next: DmsDatabaseDraft, connection = props.connection()) => {
+    if (resolveTimer) clearTimeout(resolveTimer);
+    const generation = ++resolveGeneration;
+    const instanceAlias = next.instanceAlias.trim();
+    const schemaName = next.schemaName.trim();
+    if (!instanceAlias || !schemaName) { setLoading(false); setResolveError(""); return; }
+    resolveTimer = setTimeout(() => {
+      if (!connection.url.trim() || !/^Bearer [^\s]+$/.test(connection.authorization.trim())) { setResolveError("请先填写有效的 URL 和 Authorization"); return; }
+      setLoading(true); setResolveError("");
+      void resolveDmsScope({ url: connection.url.trim(), authorization: connection.authorization.trim(), instanceAlias, schemaName }).then((scope) => {
+        if (generation !== resolveGeneration || current.instanceAlias.trim() !== instanceAlias || current.schemaName.trim() !== schemaName) return;
+        emit({ ...current, ...scope });
+      }).catch((error) => { if (generation === resolveGeneration) setResolveError(serviceSaveErrorMessage(error)); })
+        .finally(() => { if (generation === resolveGeneration) setLoading(false); });
+    }, 500);
+  };
+  const updateScope = (change: Partial<Pick<DmsDatabaseDraft, "instanceAlias" | "schemaName">>) => {
+    const next = { ...current, ...change, instanceId: "", instanceHost: "", instancePort: "", databaseId: "" };
+    emit(next); scheduleResolve(next);
+  };
+  createEffect(
+    () => props.connection(),
+    (connection, previous) => {
+      if (!previous || connection.url === previous.url && connection.authorization === previous.authorization) return;
+      const next = { ...current, instanceId: "", instanceHost: "", instancePort: "", databaseId: "" };
+      untrack(() => { emit(next); scheduleResolve(next, connection); });
+    },
+  );
+  onCleanup(() => { if (resolveTimer) clearTimeout(resolveTimer); resolveGeneration += 1; });
+  return <div class="dms-database-row"><label><span class="required-field">alias</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label><label><span class="required-field">schema</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label><Button class="icon-button" type="text" shape="circle" icon={<Trash2 size={13} />} title={`删除 DMS 数据库 ${props.databaseIndex}`} aria-label={`删除 DMS 数据库 ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete} /><Show when={loading()}><small class="dms-scope-hint">正在解析实例和数据库...</small></Show><Show when={database().databaseId}><small class="dms-scope-hint">已解析 · <code>InstanceId {database().instanceId}</code> · <code>DatabaseId {database().databaseId}</code> · <code>{database().instanceHost}:{database().instancePort}</code></small></Show><Show when={resolveError()}>{(message) => <div class="form-error" role="alert">{message()}</div>}</Show></div>;
+}
+
 function ServiceDeploymentEditorRow(props: {
   index: number;
   deployment: ServiceDeploymentDraft;
@@ -92,22 +146,15 @@ function ServiceDeploymentEditorRow(props: {
   const credentialState = <Key extends CapabilityName>(key: Key, configured = false) => ({ credentialConfigured: configured, credentialEnabled: CAPABILITY_CREDENTIALS[key].required || configured });
   const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: initialDeployment.nacos?.serverUrl ?? "", namespace: initialDeployment.nacos?.namespace ?? "", group: initialDeployment.nacos?.group ?? issuePilotConfig.defaults.nacos.group, dataIds: initialDeployment.nacos?.dataIds?.join(", ") ?? "", username: initialDeployment.nacos?.username ?? "", password: initialDeployment.nacos?.password ?? "", ...credentialState("nacos", initialDeployment.nacos?.credentialConfigured) }, { ownedWrite: true });
   const [dbDraft, setDbDraft] = createSignal({ url: initialDeployment.db?.url ?? "", username: initialDeployment.db?.username ?? "", password: initialDeployment.db?.password ?? "", ...credentialState("db", initialDeployment.db?.credentialConfigured) }, { ownedWrite: true });
-  let currentDmsDraft = { url: initialDeployment.dms?.url ?? issuePilotConfig.defaults.dms.sseUrl, authorization: initialDeployment.dms?.authorization ?? "", instanceId: initialDeployment.dms?.instanceId ?? "", instanceHost: initialDeployment.dms?.instanceHost ?? "", instancePort: initialDeployment.dms?.instancePort ?? "", instanceLabel: initialDeployment.dms?.instanceLabel ?? "", databaseId: initialDeployment.dms?.databaseId ?? "", databaseLabel: initialDeployment.dms?.databaseLabel ?? "", ...credentialState("dms", initialDeployment.dms?.credentialConfigured) };
+  let currentDmsDraft = { url: initialDeployment.dms?.url ?? issuePilotConfig.defaults.dms.sseUrl, authorization: initialDeployment.dms?.authorization ?? "", databases: initialDeployment.dms?.databases?.map((database) => ({ ...database })) ?? [newDmsDatabaseDraft()], ...credentialState("dms", initialDeployment.dms?.credentialConfigured) };
   const [dmsDraft, setDmsDraft] = createSignal(currentDmsDraft, { ownedWrite: true });
-  const [dmsInstanceAlias, setDmsInstanceAlias] = createSignal(initialDeployment.dms?.instanceLabel?.split(" · ", 1)[0] ?? "", { ownedWrite: true });
-  const [dmsSchemaName, setDmsSchemaName] = createSignal(initialDeployment.dms?.databaseLabel ?? "", { ownedWrite: true });
-  const [dmsDatabaseLoading, setDmsDatabaseLoading] = createSignal(false, { ownedWrite: true });
-  const [dmsDatabaseError, setDmsDatabaseError] = createSignal("", { ownedWrite: true });
-  let dmsDatabaseSearchTimer: ReturnType<typeof setTimeout> | undefined;
-  let dmsDatabaseSearchGeneration = 0;
-  let dmsDatabaseLastSearch = "";
   const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: initialDeployment.sls?.accessKeyId ?? "", accessKeySecret: initialDeployment.sls?.accessKeySecret ?? "", region: initialDeployment.sls?.region ?? "", project: initialDeployment.sls?.project ?? "", logstores: initialDeployment.sls?.logstores.join(", ") ?? "", ...credentialState("sls", initialDeployment.sls?.credentialConfigured) }, { ownedWrite: true });
   const [redisDraft, setRedisDraft] = createSignal({ host: initialDeployment.redis?.host ?? "", port: String(initialDeployment.redis?.port ?? issuePilotConfig.defaults.redis.port), username: initialDeployment.redis?.username ?? "", password: initialDeployment.redis?.password ?? "", database: String(initialDeployment.redis?.database ?? issuePilotConfig.defaults.redis.database), ...credentialState("redis", initialDeployment.redis?.credentialConfigured) }, { ownedWrite: true });
   const [mqDraft, setMqDraft] = createSignal({ host: initialDeployment.mq?.host ?? "", port: String(initialDeployment.mq?.port ?? issuePilotConfig.defaults.rabbitmq.port), managementPort: String(initialDeployment.mq?.managementPort ?? issuePilotConfig.defaults.rabbitmq.managementPort), username: initialDeployment.mq?.username ?? "", password: initialDeployment.mq?.password ?? "", virtualHost: initialDeployment.mq?.virtualHost ?? issuePilotConfig.defaults.rabbitmq.virtualHost, ...credentialState("mq", initialDeployment.mq?.credentialConfigured) }, { ownedWrite: true });
   const [esDraft, setEsDraft] = createSignal({ url: initialDeployment.es?.url ?? "", username: initialDeployment.es?.username ?? "", password: initialDeployment.es?.password ?? "", ...credentialState("es", initialDeployment.es?.credentialConfigured) }, { ownedWrite: true });
   const nacos = (value = nacosDraft()) => ({ ...value, serverUrl: value.serverUrl.trim(), namespace: value.namespace.trim(), group: value.group.trim(), dataIds: [...new Set(value.dataIds.split(",").map((item) => item.trim()).filter(Boolean))], username: value.username.trim() });
   const db = (value = dbDraft()) => ({ ...value, url: value.url.trim(), username: value.username.trim() });
-  const dms = (value = dmsDraft()) => ({ ...value, url: value.url.trim(), authorization: value.authorization.trim() });
+  const dms = (value = dmsDraft()) => ({ ...value, url: value.url.trim(), authorization: value.authorization.trim(), databases: value.databases.map((database) => ({ instanceAlias: database.instanceAlias.trim(), schemaName: database.schemaName.trim(), instanceId: database.instanceId.trim(), instanceHost: database.instanceHost.trim(), instancePort: database.instancePort.trim(), databaseId: database.databaseId.trim() })) });
   const sls = (value = slsDraft()) => ({ ...value, accessKeyId: value.accessKeyId.trim(), region: value.region.trim(), project: value.project.trim(), logstores: value.logstores.split(",").map((item) => item.trim()).filter(Boolean) });
   const redis = (value = redisDraft()) => ({ ...value, host: value.host.trim(), port: Number(value.port), username: value.username.trim(), database: Number(value.database) });
   const mq = (value = mqDraft()) => ({ ...value, host: value.host.trim(), port: Number(value.port), managementPort: Number(value.managementPort), username: value.username.trim(), virtualHost: value.virtualHost.trim() });
@@ -134,32 +181,15 @@ function ServiceDeploymentEditorRow(props: {
   const updateNacos = (change: Partial<ReturnType<typeof nacosDraft>>) => { const draft = { ...nacosDraft(), ...change }; setNacosDraft(draft); update({ nacos: nacos(draft) }); };
   const updateDb = (change: Partial<ReturnType<typeof dbDraft>>) => { const draft = { ...dbDraft(), ...change }; setDbDraft(draft); update({ db: db(draft) }); };
   const updateDms = (change: Partial<ReturnType<typeof dmsDraft>>) => { currentDmsDraft = { ...currentDmsDraft, ...change }; setDmsDraft(currentDmsDraft); update({ dms: dms(currentDmsDraft) }); };
-  const clearResolvedDms = () => updateDms({ instanceId: "", instanceHost: "", instancePort: "", instanceLabel: dmsInstanceAlias(), databaseId: "", databaseLabel: dmsSchemaName() });
-  const validDmsConnection = () => Boolean(dmsDraft().url.trim() && /^Bearer [^\s]+$/.test(dmsDraft().authorization.trim()));
-  const resolveDmsInputs = (instanceAlias: string, schemaName: string) => {
-    const normalizedAlias = instanceAlias.trim();
-    const normalizedSchema = schemaName.trim();
-    const requestKey = `${normalizedAlias}\u0000${normalizedSchema}`;
-    if (dmsDatabaseLoading() && requestKey === dmsDatabaseLastSearch) return;
-    dmsDatabaseLastSearch = requestKey;
-    if (dmsDatabaseSearchTimer) clearTimeout(dmsDatabaseSearchTimer);
-    const generation = ++dmsDatabaseSearchGeneration;
-    if (!normalizedAlias || !normalizedSchema) { setDmsDatabaseLoading(false); setDmsDatabaseError(""); return; }
-    dmsDatabaseSearchTimer = setTimeout(() => {
-      const draft = dmsDraft();
-      if (!validDmsConnection()) { setDmsDatabaseError("请先填写有效的 URL 和 Authorization"); return; }
-      setDmsDatabaseLoading(true); setDmsDatabaseError("");
-      void resolveDmsScope({ url: draft.url.trim(), authorization: draft.authorization.trim(), instanceAlias: normalizedAlias, schemaName: normalizedSchema }).then((scope) => {
-        if (generation !== dmsDatabaseSearchGeneration || `${dmsInstanceAlias().trim()}\u0000${dmsSchemaName().trim()}` !== requestKey) return;
-        updateDms(scope);
-      }).catch((error) => { if (generation === dmsDatabaseSearchGeneration) setDmsDatabaseError(serviceSaveErrorMessage(error)); })
-        .finally(() => { if (generation === dmsDatabaseSearchGeneration) setDmsDatabaseLoading(false); });
-    }, 500);
+  const addDmsDatabase = () => {
+    if (dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases) return;
+    updateDms({ databases: [...dmsDraft().databases, newDmsDatabaseDraft()] });
   };
-  onCleanup(() => {
-    if (dmsDatabaseSearchTimer) clearTimeout(dmsDatabaseSearchTimer);
-    dmsDatabaseSearchGeneration += 1;
-  });
+  const updateDmsDatabase = (database: DmsDatabaseDraft, next: DmsDatabaseDraft) => {
+    Object.assign(database, next);
+    updateDms({ databases: [...dmsDraft().databases] });
+  };
+  const removeDmsDatabase = (database: DmsDatabaseDraft) => updateDms({ databases: dmsDraft().databases.filter((candidate) => candidate !== database) });
   const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
   const updateRedis = (change: Partial<ReturnType<typeof redisDraft>>) => { const draft = { ...redisDraft(), ...change }; setRedisDraft(draft); update({ redis: redis(draft) }); };
   const updateMq = (change: Partial<ReturnType<typeof mqDraft>>) => { const draft = { ...mqDraft(), ...change }; setMqDraft(draft); update({ mq: mq(draft) }); };
@@ -185,7 +215,7 @@ function ServiceDeploymentEditorRow(props: {
       <For each={capabilityOptions.filter((capability) => selectedCapabilities().includes(capability.key))}>{(capability) => <Switch>
         <Match when={capability.key === "nacos"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>nacos</code></div><label><span class="required-field">serverUrl</span><Input aria-label={`nacos serverUrl ${props.index + 1}`} value={nacosDraft().serverUrl} onInput={(event) => { updateNacos({ serverUrl: event.currentTarget.value }); }} /></label><label><span>namespace</span><Input aria-label={`nacos namespace ${props.index + 1}`} value={nacosDraft().namespace} onInput={(event) => { updateNacos({ namespace: event.currentTarget.value }); }} /></label><label><span class="required-field">group</span><Input aria-label={`nacos group ${props.index + 1}`} value={nacosDraft().group} onInput={(event) => { updateNacos({ group: event.currentTarget.value }); }} /></label><label><span class="required-field">dataIds</span><Input aria-label={`nacos dataIds ${props.index + 1}`} placeholder="多个 Data ID 用逗号分隔" value={nacosDraft().dataIds} onInput={(event) => { updateNacos({ dataIds: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>认证</span><Toggle size="small" aria-label={`nacos 认证 ${props.index + 1}`} checked={nacosDraft().credentialEnabled} onChange={(checked) => updateNacos({ credentialEnabled: checked })} /></div><Show when={nacosDraft().credentialEnabled}><label><span class="required-field">username</span><Input aria-label={`nacos username ${props.index + 1}`} value={nacosDraft().username} onInput={(event) => { updateNacos({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><Input.Password autocomplete="off" aria-label={`nacos password ${props.index + 1}`} placeholder={nacosDraft().credentialConfigured ? "已配置" : ""} value={nacosDraft().password} onInput={(event) => { updateNacos({ password: event.currentTarget.value }); }} /></label></Show></div></Match>
         <Match when={capability.key === "db"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>db</code></div><label><span class="required-field">url</span><Input aria-label={`db url ${props.index + 1}`} value={dbDraft().url} onInput={(event) => { updateDb({ url: event.currentTarget.value }); }} /></label><label><span class="required-field">username</span><Input aria-label={`db username ${props.index + 1}`} value={dbDraft().username} onInput={(event) => { updateDb({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><Input.Password autocomplete="off" aria-label={`db password ${props.index + 1}`} placeholder={dbDraft().credentialConfigured ? "已配置" : ""} value={dbDraft().password} onInput={(event) => { updateDb({ password: event.currentTarget.value }); }} /></label></div></Match>
-        <Match when={capability.key === "dms"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>dms</code></div><label><span class="required-field">url</span><Input aria-label={`dms url ${props.index + 1}`} placeholder="https://example.com/sse" value={dmsDraft().url} onInput={(event) => { updateDms({ url: event.currentTarget.value }); clearResolvedDms(); resolveDmsInputs(dmsInstanceAlias(), dmsSchemaName()); }} /></label><label><span class="required-field">Authorization</span><Input.Password autocomplete="off" aria-label={`dms Authorization ${props.index + 1}`} placeholder={dmsDraft().credentialConfigured ? "已配置" : "Bearer token"} value={dmsDraft().authorization} onInput={(event) => { updateDms({ authorization: event.currentTarget.value }); clearResolvedDms(); resolveDmsInputs(dmsInstanceAlias(), dmsSchemaName()); }} /></label><label><span>alias</span><Input aria-label={`dms instance ${props.index + 1}`} placeholder="例如 RDS-XHGJ-MPM" value={dmsInstanceAlias()} onInput={(event) => { const alias = event.currentTarget.value; setDmsInstanceAlias(alias); clearResolvedDms(); resolveDmsInputs(alias, dmsSchemaName()); }} /></label><label><span>schema</span><Input aria-label={`dms database ${props.index + 1}`} placeholder="例如 mdm" value={dmsSchemaName()} onInput={(event) => { const schemaName = event.currentTarget.value; setDmsSchemaName(schemaName); clearResolvedDms(); resolveDmsInputs(dmsInstanceAlias(), schemaName); }} /></label><Show when={dmsDatabaseLoading()}><small class="dms-scope-hint">正在解析实例和数据库...</small></Show><Show when={dmsDraft().databaseId}><small class="dms-scope-hint">已解析 · <code>InstanceId {dmsDraft().instanceId}</code> · <code>DatabaseId {dmsDraft().databaseId}</code> · <code>{dmsDraft().instanceHost}:{dmsDraft().instancePort}</code></small></Show><Show when={dmsDatabaseError()}><div class="form-error" role="alert">{dmsDatabaseError()}</div></Show></div></Match>
+        <Match when={capability.key === "dms"}><div class="deployment-capability-settings dms-capability-settings"><div class="capability-settings-head"><code>dms</code></div><label><span class="required-field">url</span><Input aria-label={`dms url ${props.index + 1}`} placeholder="https://example.com/sse" value={dmsDraft().url} onInput={(event) => updateDms({ url: event.currentTarget.value })} /></label><label><span class="required-field">Authorization</span><Input.Password autocomplete="off" aria-label={`dms Authorization ${props.index + 1}`} placeholder={dmsDraft().credentialConfigured ? "已配置" : "Bearer token"} value={dmsDraft().authorization} onInput={(event) => updateDms({ authorization: event.currentTarget.value })} /></label><div class="dms-database-editor"><div class="dms-database-editor-head"><div><strong>数据库范围</strong><span>Agent 直接选择已授权 schema，每个 alias/schema 由后台解析</span></div><Button icon={<Plus size={13} />} disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>添加数据库</Button></div><div class="dms-database-list"><For each={dmsDraft().databases}>{(database, databaseIndex) => <DmsDatabaseEditorRow deploymentIndex={props.index + 1} databaseIndex={databaseIndex() + 1} database={database} connection={() => ({ url: dmsDraft().url, authorization: dmsDraft().authorization })} only={dmsDraft().databases.length === 1} onChange={(next) => updateDmsDatabase(database, next)} onDelete={() => removeDmsDatabase(database)} />}</For></div></div></div></Match>
         <Match when={capability.key === "redis"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>redis</code></div><label><span class="required-field">host</span><Input aria-label={`redis host ${props.index + 1}`} value={redisDraft().host} onInput={(event) => { updateRedis({ host: event.currentTarget.value }); }} /></label><label><span class="required-field">port</span><Input aria-label={`redis port ${props.index + 1}`} value={redisDraft().port} onInput={(event) => { updateRedis({ port: event.currentTarget.value }); }} /></label><label><span>username</span><Input aria-label={`redis username ${props.index + 1}`} value={redisDraft().username} onInput={(event) => { updateRedis({ username: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>密码</span><Toggle size="small" aria-label={`redis 密码 ${props.index + 1}`} checked={redisDraft().credentialEnabled} onChange={(checked) => updateRedis({ credentialEnabled: checked })} /></div><Show when={redisDraft().credentialEnabled}><label><span class="required-field">password</span><Input.Password autocomplete="off" aria-label={`redis password ${props.index + 1}`} placeholder={redisDraft().credentialConfigured ? "已配置" : ""} value={redisDraft().password} onInput={(event) => { updateRedis({ password: event.currentTarget.value }); }} /></label></Show><label><span class="required-field">database</span><Input aria-label={`redis database ${props.index + 1}`} value={redisDraft().database} onInput={(event) => { updateRedis({ database: event.currentTarget.value }); }} /></label></div></Match>
         <Match when={capability.key === "mq"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>mq</code></div><label><span class="required-field">host</span><Input aria-label={`mq host ${props.index + 1}`} value={mqDraft().host} onInput={(event) => { updateMq({ host: event.currentTarget.value }); }} /></label><label><span class="required-field">port</span><Input aria-label={`mq port ${props.index + 1}`} value={mqDraft().port} onInput={(event) => { updateMq({ port: event.currentTarget.value }); }} /></label><label><span class="required-field">managementPort</span><Input aria-label={`mq managementPort ${props.index + 1}`} value={mqDraft().managementPort} onInput={(event) => { updateMq({ managementPort: event.currentTarget.value }); }} /></label><label><span class="required-field">username</span><Input aria-label={`mq username ${props.index + 1}`} value={mqDraft().username} onInput={(event) => { updateMq({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><Input.Password autocomplete="off" aria-label={`mq password ${props.index + 1}`} placeholder={mqDraft().credentialConfigured ? "已配置" : ""} value={mqDraft().password} onInput={(event) => { updateMq({ password: event.currentTarget.value }); }} /></label><label><span class="required-field">virtualHost</span><Input aria-label={`mq virtualHost ${props.index + 1}`} value={mqDraft().virtualHost} onInput={(event) => { updateMq({ virtualHost: event.currentTarget.value }); }} /></label></div></Match>
         <Match when={capability.key === "es"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>es</code></div><label><span class="required-field">url</span><Input aria-label={`es url ${props.index + 1}`} placeholder="http://es.example.com" value={esDraft().url} onInput={(event) => { updateEs({ url: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>认证</span><Toggle size="small" aria-label={`es 认证 ${props.index + 1}`} checked={esDraft().credentialEnabled} onChange={(checked) => updateEs({ credentialEnabled: checked })} /></div><Show when={esDraft().credentialEnabled}><label><span class="required-field">username</span><Input aria-label={`es username ${props.index + 1}`} value={esDraft().username} onInput={(event) => { updateEs({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><Input.Password autocomplete="off" aria-label={`es password ${props.index + 1}`} placeholder={esDraft().credentialConfigured ? "已配置" : ""} value={esDraft().password} onInput={(event) => { updateEs({ password: event.currentTarget.value }); }} /></label></Show></div></Match>

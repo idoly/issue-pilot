@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { FastifyInstance } from "fastify";
+import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
@@ -23,6 +24,7 @@ export class TestAgentController {
   readonly messages: Array<string | undefined> = [];
   readonly recordedMessages: boolean[] = [];
   readonly gitIdentities: Array<GitCommitIdentity | undefined> = [];
+  readonly images: ImageContent[][] = [];
   readonly closedSessions: string[] = [];
   readonly running = new Set<string>();
   readonly reservations = new Set<string>();
@@ -53,10 +55,11 @@ export class TestAgentController {
     }
   }
 
-  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = []): Promise<void> {
     if (this.reservations.has(issueId)) throw new Error("issue_already_running");
     this.messages.push(message);
     this.gitIdentities.push(gitIdentity);
+    this.images.push(images);
     this.enqueued.push(issueId);
   }
 

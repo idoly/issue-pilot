@@ -65,7 +65,7 @@ function AssistantBlock(props: { block: Extract<ConversationEntry, { kind: "assi
 
 function ConversationItem(props: { entry: ConversationEntry }) {
   return <Switch>
-    <Match when={props.entry.kind === "user"}><div class="agent-message user"><Markdown source={(props.entry as Extract<ConversationEntry, { kind: "user" }>).text} /></div></Match>
+    <Match when={props.entry.kind === "user"}>{() => { const entry = props.entry as Extract<ConversationEntry, { kind: "user" }>; return <div class="agent-message user"><Markdown source={entry.text} /><For each={entry.images ?? []}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="用户粘贴的图片" />}</For></div>; }}</Match>
     <Match when={props.entry.kind === "assistant"}>{() => {
       const entry = props.entry as Extract<ConversationEntry, { kind: "assistant" }>;
       return <div class="agent-message assistant"><For each={entry.blocks}>{(block) => <AssistantBlock block={block} streaming={entry.streaming === true} />}</For><Show when={assistantNotice(entry)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div>;
@@ -136,6 +136,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [issueStatus, setIssueStatus] = createSignal<IssueStatus>(untrack(() => props.issue.status), { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [draft, setDraft] = createSignal("", { ownedWrite: true });
+  const [images, setImages] = createSignal<Array<{ file: File; url: string }>>([], { ownedWrite: true });
   const [entries, setEntries] = createSignal<ConversationEntry[]>([], { ownedWrite: true });
   const [unread, setUnread] = createSignal(0, { ownedWrite: true });
   const [activity, setActivity] = createSignal<AgentActivity | null>(null, { ownedWrite: true });
@@ -200,6 +201,14 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setDraft(value);
     queueMicrotask(() => resizeEditor());
   };
+  const discardImages = (items: Array<{ file: File; url: string }>) => {
+    for (const image of items) URL.revokeObjectURL(image.url);
+  };
+  const removeImage = (url: string) => setImages((current) => {
+    const removed = current.find((image) => image.url === url);
+    if (removed) URL.revokeObjectURL(removed.url);
+    return current.filter((image) => image.url !== url);
+  });
   const updateConversation = (update: (current: ConversationEntry[]) => ConversationEntry[]) => {
     let addedEntryIds: string[] = [];
     setEntries((current) => {
@@ -309,24 +318,26 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       discardMessageUpdates();
       setEntries([]); setFooter(emptyFooter()); clearUnread(); setError("");
       setConnected(false); setProcessing(false); setActivity(null); setQueue({ steering: [], followUp: [] }); setAgent({ provider: "", model: "", thinkingLevel: "" });
-      pasteEditor.reset(); setEditorDraft(""); setSending(false);
+      pasteEditor.reset(); setEditorDraft(""); discardImages(untrack(images)); setImages([]); setSending(false);
     }
     streamController.connect(issueId);
   };
   const submit = async () => {
     const editorText = draft();
-    const message = pasteEditor.expand(editorText).trim();
+    const pendingImages = images();
+    const message = pasteEditor.expand(editorText).trim() || (pendingImages.length ? "请分析这些图片。" : "");
     if (!message || sending() || !canSend()) return;
     const issueId = props.issue.id;
     const submitGeneration = issueGeneration;
-    setEditorDraft(""); setSending(true); setError(""); scrollLatest();
+    setEditorDraft(""); setImages([]); setSending(true); setError(""); scrollLatest();
     try {
-      await sendAgentMessage(issueId, message);
-      if (submitGeneration !== issueGeneration) return;
-      pasteEditor.reset(); setProcessing(true);
+      if (pendingImages.length) await sendAgentMessage(issueId, message, pendingImages.map(({ file }) => file));
+      else await sendAgentMessage(issueId, message);
+      if (submitGeneration !== issueGeneration) { discardImages(pendingImages); return; }
+      discardImages(pendingImages); pasteEditor.reset(); setProcessing(true);
     } catch (cause) {
-      if (submitGeneration !== issueGeneration) return;
-      setEditorDraft(editorText); setError(cause instanceof Error ? cause.message : "agent_message_failed");
+      if (submitGeneration !== issueGeneration) { discardImages(pendingImages); return; }
+      setEditorDraft(editorText); setImages(pendingImages); setError(cause instanceof Error ? cause.message : "agent_message_failed");
     } finally { if (submitGeneration === issueGeneration) setSending(false); }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {
@@ -337,10 +348,22 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   };
   const handlePaste = (event: ClipboardEvent & { currentTarget: HTMLTextAreaElement }) => {
     const textarea = event.currentTarget;
-    const edit = pasteEditor.insert(draft(), textarea.selectionStart ?? draft().length, textarea.selectionEnd ?? draft().length, event.clipboardData?.getData("text/plain") ?? "");
+    const clipboard = event.clipboardData;
+    const pastedImages = [...(clipboard?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    if (pastedImages.length) {
+      event.preventDefault();
+      const limits = issuePilotConfig.limits.attachment;
+      const current = images();
+      const accepted = pastedImages.filter((file) => ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type));
+      if (accepted.length !== pastedImages.length || current.length + accepted.length > limits.files || accepted.some((file) => file.size > limits.fileBytes) || [...current.map(({ file }) => file), ...accepted].reduce((total, file) => total + file.size, 0) > limits.requestBytes) {
+        setError("agent_image_limit_exceeded");
+        return;
+      }
+      setImages([...current, ...accepted.map((file) => ({ file, url: URL.createObjectURL(file) }))]);
+    }
+    const edit = pasteEditor.insert(draft(), textarea.selectionStart ?? draft().length, textarea.selectionEnd ?? draft().length, clipboard?.getData("text/plain") ?? "");
     if (!edit) return;
-    event.preventDefault();
-    applyEditorResult(textarea, edit);
+    event.preventDefault(); applyEditorResult(textarea, edit);
   };
   const handleEditorInput = (event: InputEvent & { currentTarget: HTMLTextAreaElement }) => {
     const textarea = event.currentTarget;
@@ -397,7 +420,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     issueGeneration += 1;
     connect(id, true);
   });
-  onCleanup(() => { issueGeneration += 1; transcriptObserver?.disconnect(); discardMessageUpdates(); streamController.dispose(); });
+  onCleanup(() => { issueGeneration += 1; transcriptObserver?.disconnect(); discardMessageUpdates(); discardImages(untrack(images)); streamController.dispose(); });
 
   return <section ref={panel} class="agent-panel" aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
     <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) clearUnread(); }}>
@@ -409,6 +432,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       <Show when={running() || activity()}><div class={`agent-working ${activity()?.tone ?? "info"}`} role="status"><i />{activity()?.text ?? "Working..."}</div></Show>
       <div class="agent-composer-gutter">
         <div class={`agent-composer thinking-${agent().thinkingLevel || "off"}`}>
+          <Show when={images().length}><div class="agent-composer-images"><For each={images()}>{(image) => <figure><img src={image.url} alt={image.file.name || "待发送图片"} /><button type="button" aria-label={`移除图片 ${image.file.name || "未命名"}`} onClick={() => removeImage(image.url)}>×</button></figure>}</For></div></Show>
           <textarea ref={editor} rows={1} aria-label="发送给 Agent" value={draft()} disabled={sending() || !canSend()} onInput={handleEditorInput} onPaste={handlePaste} onSelect={protectPasteSelection} onKeyDown={handleEditorKeyDown} />
         </div>
       </div>

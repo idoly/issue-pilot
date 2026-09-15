@@ -252,7 +252,7 @@ sls.ts + aliyun.ts
 http-client.ts
 ```
 
-DMS Agent tool 只能调用 `executeScript`；`listInstances/getDatabase` 只属于受信配置解析。Redis Worker 的 heap 隔离不能合回主 event loop。Playwright 不是 capability。
+DMS Agent tool 只能调用 `executeScript`；schema input 必须从当前 Deployment 的已配置 schema 动态生成 enum，并在服务端映射为 DatabaseId。`listInstances/getDatabase` 只属于受信配置解析。Redis Worker 的 heap 隔离不能合回主 event loop。Playwright 不是 capability。
 
 ## Web 与 Workbench change
 
@@ -262,6 +262,7 @@ DMS Agent tool 只能调用 `executeScript`；`listInstances/getDatabase` 只属
 - Homepage Issue state 只由 `OverviewView` 拥有。
 - Capability 使用 explicit form，不生成 generic schema form。
 - Config secret 只留在配置页 draft，不写 localStorage、日志或诊断。
+- Agent composer 粘贴图片使用 multipart，服务端转换为 Pi `ImageContent`；图片随 visible user event 和 Pi JSONL replay 展示，不写 Attachment store 或新增独立 Attachment route。
 - 配置的三个 panel 保持挂载；切换 Tab 不能丢 draft/modal。
 - Deployment 折叠标题在展开前后保持“环境名 + 已启用 capability”同一行；展开区只列未启用 capability，不能重复完整 active 列表。
 - 主应用与 Workbench Markdown Preview 使用 `marked + DOMPurify + github-markdown-css`；Workbench 启动不得依赖 optional extension-host render command。

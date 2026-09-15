@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 
+import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -44,7 +45,7 @@ export interface ManagedPiSession {
   readonly session: AgentSession;
   readonly streaming: boolean;
   setGitIdentity(identity: GitCommitIdentity): void;
-  prompt(message: string): Promise<void>;
+  prompt(message: string, images?: ImageContent[]): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -263,10 +264,10 @@ export class PiSessionRuntime {
         gitIdentityEnvironment(identity);
         gitIdentity = identity;
       },
-      prompt: async (message) => {
+      prompt: async (message, images = []) => {
         const idle = new Promise<never>((_resolve, reject) => { rejectIdle = reject; });
         watchdog.start();
-        try { await Promise.race([session.prompt(message), idle]); }
+        try { await Promise.race([session.prompt(message, images.length ? { images } : undefined), idle]); }
         finally { rejectIdle = undefined; watchdog.stop(); }
       },
       stop: async () => {

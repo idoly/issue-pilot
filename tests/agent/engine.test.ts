@@ -118,6 +118,7 @@ test("does not record queued user messages after an issue becomes resolved", asy
 test("serializes streaming messages and records only accepted steering", async () => {
   const records: string[] = [];
   const steers: string[] = [];
+  const steeredImages: unknown[] = [];
   let releaseFirst!: () => void;
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
@@ -128,8 +129,8 @@ test("serializes streaming messages and records only accepted steering", async (
     streaming: true,
     session: {
       sessionManager: { appendCustomEntry(_type: string, value: { message: string }) { records.push(value.message); } },
-      async steer(message: string) {
-        steers.push(message);
+      async steer(message: string, images?: unknown[]) {
+        steers.push(message); steeredImages.push(images);
         call += 1;
         if (call === 1) await firstGate;
         if (call === 2) throw new Error("steer_failed");
@@ -138,10 +139,11 @@ test("serializes streaming messages and records only accepted steering", async (
     async stop() {},
   });
 
-  const first = engine.send("issue-1", "first");
+  const first = engine.send("issue-1", "first", undefined, [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
   const second = engine.send("issue-1", "second");
   await waitFor(() => steers.length === 1);
   assert.equal(steers[0]?.includes("first"), true);
+  assert.deepEqual(steeredImages[0], [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
   assert.equal(records.length, 0);
   releaseFirst();
   await first;

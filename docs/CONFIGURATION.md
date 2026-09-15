@@ -78,6 +78,7 @@ Environment name 在启动时同步。DMS URL 只用于新 Deployment 表单，�
 | --- | ---: |
 | Agent model response idle | 300000 ms |
 | Agent message | 50000 chars |
+| Agent clipboard image | 复用 multipart file/request/count：20 MiB / 40 MiB / 20 |
 | Attachment file/request/count | 20 MiB / 40 MiB / 20 |
 | Multipart field | 100000 bytes |
 | Process output | 5 MiB |
@@ -257,35 +258,42 @@ Config：HTTP(S) URL，可含 reverse-proxy path，无 credential/query/fragment
 
 ### DMS MCP
 
-配置页只显示并接受：
+每个 Deployment 共享一份 DMS connection，并授权 1..20 个 schema：
 
 ```text
 url
 Authorization
-alias
-schema
+databases[]
+  instanceAlias
+  schemaName
+  instanceId       # 后台解析
+  instanceHost     # 后台解析
+  instancePort     # 后台解析
+  databaseId       # 后台解析
 ```
 
 - URL required、HTTPS、无 embedded credential/query/fragment，可按 Deployment 编辑。
 - Authorization required，格式严格为 `Bearer <token>`。
-- 用户不填写 host、port、InstanceId 或 DatabaseId。
-- alias/schema 停止输入约 500 ms 后调用 `POST /api/dms/scope/resolve`。
+- `schemaName` 在 Deployment 内唯一；同名 schema 不能跨实例重复配置。
+- 解析后的 DatabaseId 也必须唯一。
+- 用户只填写 alias 和 schema，不填写额外名称、host、port、InstanceId 或 DatabaseId。
+- 每行 alias/schema 停止输入约 500 ms 后独立调用 `POST /api/dms/scope/resolve`。
 - API 在同一短生命周期 MCP session 中调用唯一、read-only 的 `listInstances` 和 `getDatabase`。
 - `listInstances(search_key=alias)` 必须按 `InstanceAlias` 唯一精确匹配。
 - `getDatabase(host, port, schema_name)` 必须返回相同 InstanceId 与 schema。
-- 只有完整核对后才保存 `instanceId/instanceHost/instancePort/instanceLabel/databaseId/databaseLabel`。
+- 所有数据库都完整解析后才允许保存。
 
-旧 `accessKeyId/accessKeySecret/dbId/logic/tid` 配置不解析、不迁移、不兼容、不回退。
+旧 Aliyun CLI `accessKeyId/accessKeySecret/dbId/logic/tid` 配置仍不解析、不迁移、不兼容、不回退。Migration `0039_dms_database_targets` 把当前 MCP 单数据库合同提升为 `databases[]`；遇到不完整的当前 scope 会显式失败，不猜测目标。`0040_dms_schema_selector` 删除过渡数组中的冗余 name，使 schema 成为唯一 Agent selector。运行时不保留单目标 JSON 兼容路径。
 
 Transport 使用 MCP SDK `SSEClientTransport`。Authorization 同时用于初始 SSE GET 和同源 message POST。Client 只允许 HTTPS、拒绝 redirect、拒绝跨源 message endpoint，并在完成、失败或 abort 后关闭连接。
 
 Agent tool input：
 
 ```json
-{ "script": "SELECT ...", "logic": false }
+{ "schema": "xhgj_oms", "script": "SELECT ...", "logic": false }
 ```
 
-`logic` optional。Agent 只看到一个 `dms` custom tool，不能列出、选择或命名远端工具。Runtime 只接受唯一且 schema 包含 required `database_id`/`script` 的 `executeScript`，并由服务器注入持久化 DatabaseId。SQL 只允许单条 `SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝 DDL/DML、comment、multi-statement、lock 和已知副作用函数。连接与调用共享 30 秒 operation signal；DMS script/result 不应用 1 MiB 应用层限制。
+`schema` required，并由当前 Deployment 的 `databases[].schemaName` 动态生成 enum；`logic` optional。Agent 只看到一个 `dms` custom tool，不能提交 DatabaseId、列出远端工具或调用 scope resolve 工具。Runtime 把 schema 精确映射到持久化 DatabaseId，只接受唯一且 schema 包含 required `database_id`/`script` 的 `executeScript`，并由服务器注入 DatabaseId。SQL 只允许单条 `SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝 DDL/DML、comment、multi-statement、lock 和已知副作用函数。一次调用只选择一个数据库；连接与调用共享 30 秒 operation signal；DMS script/result 不应用 1 MiB 应用层限制。
 
 ### SLS
 

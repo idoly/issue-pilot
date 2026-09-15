@@ -100,12 +100,12 @@ Routes coordinate owners, reservations, and transactions. They must not reimplem
 - Existing dev `base_branch` and `workspace_name` remain Issue history.
 - Writable dependencies and outputs are not shared across Issues.
 - Each Attachment has one durable `0400` copy and no runtime copy/link.
-- Attachment writes occur only in Issue create/edit transactions.
+- Attachment writes occur only in Issue create/edit transactions. Clipboard images sent to Agent are Pi message content persisted in JSONL, not Attachment objects.
 - Unsafe or unknown filesystem/Git state fails explicitly and remains evidence.
 - Runtime, wrappers, and immutable checkouts are generated atomically and remain rebuildable.
 - Config GET intentionally returns stored credentials to the trusted configuration UI. Credentials must not enter logs, monitoring, diagnostics, Agent context, prompt, tool schema/input, or process arguments.
 - Pi tools parse input once with TypeBox and invoke typed protocol clients directly.
-- DMS Agent access is one `dms` tool that can dispatch only to MCP `executeScript`; DatabaseId is server-injected and SQL is read-only.
+- DMS Agent access is one `dms` tool. Its schema input is an enum of the current Deployment's configured schemas; the server maps the schema to DatabaseId, injects it into MCP `executeScript`, and enforces read-only SQL.
 - API, migration, Git, runtime, Source Browser, and project-tool broker use one state root.
 - Published migrations and journal entries are immutable.
 

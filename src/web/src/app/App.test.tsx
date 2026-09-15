@@ -33,7 +33,7 @@ vi.mock("../data/client", async (importOriginal) => {
     environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }, dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", credentialConfigured: true } }],
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }, dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }, {
       key: "orders", name: "Orders", description: "订单服务。",
@@ -63,7 +63,7 @@ vi.mock("../data/client", async (importOriginal) => {
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     updateGlobalAgent: vi.fn(async (agent) => { configuration.agent = { ...agent }; return { ok: true as const }; }),
     listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
-    resolveDmsScope: vi.fn(async () => ({ instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD · db.example.test:3306 · mysql/product", databaseId: "123", databaseLabel: "srm" })),
+    resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({ instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1", instanceHost: `${input.schemaName}.db.example.test`, instancePort: "3306", databaseId: input.schemaName === "mdm" ? "456" : "123" })),
     loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
       totalBytes: 4 * 1024 ** 3 + 2048,
       policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
@@ -139,7 +139,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "运营总览" })).toBeTruthy());
     const attention = await waitFor(() => screen.getByRole("region", { name: "团队工单动态" }));
     expect(within(attention).getByText("执行失败")).toBeTruthy();
-    expect(within(attention).getByText("Agent 执行中")).toBeTruthy();
+    expect(within(attention).getByText("执行中")).toBeTruthy();
     expect(screen.getByLabelText("当前运营状态").textContent).toContain("正在执行1");
     expect(screen.getByLabelText("当前运营状态").textContent).toContain("执行失败1");
     expect(within(attention).getByText("刘宜展")).toBeTruthy();
@@ -147,7 +147,10 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(attention).getByText("批量审批偶发超时").closest("button")!);
     await waitFor(() => expect(screen.getByRole("heading", { name: "批量审批偶发超时" })).toBeTruthy());
     expect(screen.getByRole("radio", { name: "工单" }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByLabelText("工单队列").querySelector(".queue-item.selected")?.textContent).toContain("ISSUE-20260810-038");
+    const personalQueue = screen.getByLabelText("工单队列");
+    expect(within(personalQueue).queryByText("ISSUE-20260810-038")).toBeNull();
+    expect(personalQueue.querySelector(".queue-item.selected")).toBeNull();
+    expect(within(personalQueue).getByText("ISSUE-20260810-042")).toBeTruthy();
   });
 
   test("keeps every active Issue in the scrollable team activity list", async () => {
@@ -464,10 +467,10 @@ describe("issue pilot workspace", () => {
     fireEvent.input(screen.getByLabelText("dms Authorization 1"), { target: { value: "Bearer dms-token-updated" } });
     const client = await import("../data/client");
     vi.mocked(client.resolveDmsScope).mockClear();
-    const dmsAliasInput = screen.getByLabelText("dms instance 1") as HTMLInputElement;
+    const dmsAliasInput = screen.getByLabelText("dms instance 1-1") as HTMLInputElement;
     fireEvent.input(dmsAliasInput, { target: { value: "SRM-PROD" } });
     await waitFor(() => expect(dmsAliasInput.value).toBe("SRM-PROD"));
-    fireEvent.input(screen.getByLabelText("dms database 1"), { target: { value: "srm" } });
+    fireEvent.input(screen.getByLabelText("dms database 1-1"), { target: { value: "srm" } });
     await waitFor(() => expect(client.resolveDmsScope).toHaveBeenCalledWith({
       url: "https://dms-updated.example.test/sse",
       authorization: "Bearer dms-token-updated",
@@ -475,6 +478,16 @@ describe("issue pilot workspace", () => {
       schemaName: "srm",
     }), { timeout: 2_000 });
     await waitFor(() => expect(within(serviceDialog).getByText("DatabaseId 123")).toBeTruthy());
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "添加数据库" }));
+    fireEvent.input(await screen.findByLabelText("dms instance 1-2"), { target: { value: "MPM-PROD" } });
+    fireEvent.input(screen.getByLabelText("dms database 1-2"), { target: { value: "mdm" } });
+    await waitFor(() => expect(client.resolveDmsScope).toHaveBeenCalledWith({
+      url: "https://dms-updated.example.test/sse",
+      authorization: "Bearer dms-token-updated",
+      instanceAlias: "MPM-PROD",
+      schemaName: "mdm",
+    }), { timeout: 2_000 });
+    await waitFor(() => expect(within(serviceDialog).getByText("DatabaseId 456")).toBeTruthy());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
     const esUrl = await waitFor(() => screen.getByLabelText("es url 1"));
     expect(esUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
@@ -502,7 +515,10 @@ describe("issue pilot workspace", () => {
     expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
     expect(savedService?.deployments[0]?.db).toEqual({ url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "replace", values: { password: "db-secret" } } });
-    expect(savedService?.deployments[0]?.dms).toEqual({ url: "https://dms-updated.example.test/sse", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "SRM-PROD · db.example.test:3306 · mysql/product", databaseId: "123", databaseLabel: "srm", credentialUpdate: { mode: "replace", values: { authorization: "Bearer dms-token-updated" } } });
+    expect(savedService?.deployments[0]?.dms).toEqual({ url: "https://dms-updated.example.test/sse", databases: [
+      { instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "srm.db.example.test", instancePort: "3306", databaseId: "123" },
+      { instanceAlias: "MPM-PROD", schemaName: "mdm", instanceId: "instance-2", instanceHost: "mdm.db.example.test", instancePort: "3306", databaseId: "456" },
+    ], credentialUpdate: { mode: "replace", values: { authorization: "Bearer dms-token-updated" } } });
     expect(JSON.stringify(savedService)).toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadCatalog).toHaveBeenCalledTimes(2);
