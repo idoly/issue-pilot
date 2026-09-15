@@ -14,7 +14,7 @@ export function IssueQueue(props: {
   userSubject: string;
   refreshToken: number;
   hidden?: boolean;
-  includeSelected?: boolean;
+  keepExternalSelection?: boolean;
   onSelect: (id: string) => void;
 }) {
   const { catalog, people, catalogError, peopleError } = useApplicationResources();
@@ -31,7 +31,7 @@ export function IssueQueue(props: {
     if (!subject) return [];
     const term = query().trim().toLowerCase();
     return issues().filter((issue) => {
-      const assigneeMatch = issue.assigneeSubject === subject || (props.includeSelected && issue.id === props.selectedId);
+      const assigneeMatch = issue.assigneeSubject === subject;
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
       const environmentMatch = environmentFilter() === "all" || issue.environmentKey === environmentFilter();
       const serviceMatch = serviceFilter() === "all" || issue.service.key === serviceFilter();
@@ -55,9 +55,9 @@ export function IssueQueue(props: {
     });
   });
   createEffect(
-    () => ({ loading: loading(), selectedId: props.selectedId, visible: filtered() }),
-    ({ loading, selectedId, visible }) => {
-      if (!loading && !visible.some((issue) => issue.id === selectedId)) props.onSelect(visible[0]?.id ?? "");
+    () => ({ loading: loading(), selectedId: props.selectedId, visible: filtered(), keepExternalSelection: props.keepExternalSelection }),
+    ({ loading, selectedId, visible, keepExternalSelection }) => {
+      if (!loading && !keepExternalSelection && !visible.some((issue) => issue.id === selectedId)) props.onSelect(visible[0]?.id ?? "");
     },
   );
   const [createOpen, setCreateOpen] = createSignal(false, { ownedWrite: true });

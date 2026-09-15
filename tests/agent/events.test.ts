@@ -121,7 +121,7 @@ test("retains only the current non-durable Agent state for reconnecting clients"
 
 test("replays the visible transcript from the active Pi session branch", () => {
   const manager = SessionManager.inMemory("/workspace");
-  manager.appendCustomEntry("issue-pilot-user", { message: "Inspect the database" });
+  manager.appendCustomEntry("issue-pilot-user", { message: "Inspect the database", images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] });
   manager.appendMessage({ role: "user", content: "Internal runtime prompt", timestamp: Date.now() });
   manager.appendMessage({
     role: "assistant",
@@ -151,6 +151,7 @@ test("replays the visible transcript from the active Pi session branch", () => {
   const userEvent = transcript[0]!.event;
   assert.ok("message" in userEvent);
   assert.equal(userEvent.message, "Inspect the database");
+  assert.deepEqual("images" in userEvent ? userEvent.images : undefined, [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
   assert.equal(transcript.some(({ event }) => JSON.stringify(event).includes("Internal runtime prompt")), false);
   const assistantEvent = transcript[1]!.event;
   assert.ok("message" in assistantEvent);

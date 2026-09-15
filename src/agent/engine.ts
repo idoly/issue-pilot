@@ -3,6 +3,7 @@ import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq, inArray, ne } from "drizzle-orm";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
@@ -34,7 +35,7 @@ export interface AgentReservation {
 
 export interface AgentController {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
-  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity): Promise<void>;
+  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[]): Promise<void>;
   isRunning(issueId: string): boolean;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
   close?(): Promise<void>;
@@ -111,7 +112,7 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = []): Promise<void> {
     this.assertOpen();
     this.assertNotReserved(issueId);
     this.beginActivity(issueId);
@@ -124,15 +125,15 @@ export class AgentEngine implements AgentController {
       if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming)) {
         if (managed) await this.stopSession(issueId);
         this.assertNotReserved(issueId);
-        this.schedule(issueId, () => this.run(issueId, userMessage, true, gitIdentity));
+        this.schedule(issueId, () => this.run(issueId, userMessage, true, gitIdentity, images));
         return;
       }
       if (gitIdentity) managed.setGitIdentity(gitIdentity);
       if (managed.streaming) {
         await this.steerQueue.run(issueId, async () => {
           if (this.sessions.get(issueId) !== managed || !managed.streaming) throw new Error("agent_session_changed");
-          await managed.session.steer(promptWithRuntimeTime(userMessage));
-          try { await this.recordUserMessage(issueId, managed, userMessage); }
+          await managed.session.steer(promptWithRuntimeTime(userMessage), images);
+          try { await this.recordUserMessage(issueId, managed, userMessage, images); }
           catch (error) {
             try { await this.stopSession(issueId); }
             catch (stopError) { throw new AggregateError([error, stopError], "agent_message_record_failed"); }
@@ -140,7 +141,7 @@ export class AgentEngine implements AgentController {
           }
         });
       } else {
-        this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage));
+        this.schedule(issueId, () => this.promptExisting(issueId, managed, userMessage, images));
       }
     } finally {
       this.endActivity(issueId);
@@ -221,7 +222,7 @@ export class AgentEngine implements AgentController {
     }).finally(() => this.endActivity(issueId));
   }
 
-  private async run(issueId: string, latestMessage?: string, displayMessage = false, requestedGitIdentity?: GitCommitIdentity): Promise<void> {
+  private async run(issueId: string, latestMessage?: string, displayMessage = false, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = []): Promise<void> {
     const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
@@ -290,13 +291,13 @@ export class AgentEngine implements AgentController {
       set: { sessionFile, workspacePath: project.workspaceRoot, updatedAt: new Date() },
     });
     await this.markRunning(issue.id, project.runtimeReady);
-    if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage);
+    if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage, images);
 
     const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: path.relative(project.workspaceRoot, repository.workspacePath), readOnly: repository.access === "read" }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage)
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
-    await managed.prompt(prompt);
+    await managed.prompt(prompt, images);
     if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);
 
@@ -325,15 +326,15 @@ export class AgentEngine implements AgentController {
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event });
   }
 
-  private async recordUserMessage(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
-    managed.session.sessionManager.appendCustomEntry("issue-pilot-user", { message });
-    this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message } });
+  private async recordUserMessage(issueId: string, managed: ManagedPiSession, message: string, images: ImageContent[] = []): Promise<void> {
+    managed.session.sessionManager.appendCustomEntry("issue-pilot-user", { message, ...(images.length ? { images } : {}) });
+    this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message, ...(images.length ? { images } : {}) } });
   }
 
-  private async promptExisting(issueId: string, managed: ManagedPiSession, message: string): Promise<void> {
+  private async promptExisting(issueId: string, managed: ManagedPiSession, message: string, images: ImageContent[] = []): Promise<void> {
     await this.markRunning(issueId);
-    await this.recordUserMessage(issueId, managed, message);
-    await managed.prompt(promptWithRuntimeTime(message));
+    await this.recordUserMessage(issueId, managed, message, images);
+    await managed.prompt(promptWithRuntimeTime(message), images);
     await this.finalizeRun(issueId);
   }
 

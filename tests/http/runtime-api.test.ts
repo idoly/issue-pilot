@@ -95,6 +95,29 @@ test("uses the current user as the Agent Git commit identity", async () => {
   }
 });
 
+test("accepts clipboard images as bounded Pi image content", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Images", ["dev"]);
+    const issue = await createIssue(fixture.app, "images", "dev");
+    fixture.engine.running.clear();
+    const boundary = "issue-pilot-agent-image";
+    const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="message"\r\n\r\n请检查截图\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="images"; filename="clipboard.png"\r\nContent-Type: image/png\r\n\r\n`),
+      image,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload });
+    assert.equal(response.statusCode, 202, response.body);
+    assert.equal(fixture.engine.messages.at(-1), "请检查截图");
+    assert.deepEqual(fixture.engine.images.at(-1), [{ type: "image", mimeType: "image/png", data: image.toString("base64") }]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("recovers interrupted Agent state after an API restart", async () => {
   const fixture = await createApiFixture();
   try {

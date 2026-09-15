@@ -25,7 +25,7 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.limits.sourceBrowser.fileBytes, 2 * 1024 * 1024);
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
   assert.equal(applicationConfig.defaults.dms.sseUrl, "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse");
-  assert.deepEqual(applicationConfig.limits.capability.dms, { executionMs: 30_000 });
+  assert.deepEqual(applicationConfig.limits.capability.dms, { executionMs: 30_000, databases: 20 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
   assert.equal(applicationConfig.web.host, "0.0.0.0");

@@ -8,7 +8,7 @@ type DisplayBlock = { type: "text"; value: string } | { type: "image"; data: str
 type CompletedMessage = Extract<RunEvent["event"], { type: "message_end" }>["message"];
 
 export type ConversationEntry =
-  | { id: string; kind: "user"; text: string }
+  | { id: string; kind: "user"; text: string; images?: ImageContent[] }
   | { id: string; kind: "assistant"; blocks: Array<{ contentIndex: number; type: "text" | "thinking"; value: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string; hasToolCalls?: boolean; usage?: AssistantMessage["usage"] }
   | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: ToolResult }
   | { id: string; kind: "summary"; summaryType: "compaction" | "branch"; summary: string; tokensBefore?: number }
@@ -75,7 +75,7 @@ function applyCompletedMessage(entries: ConversationEntry[], envelope: RunEvent,
 
 export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent): ConversationEntry[] {
   const event = envelope.event;
-  if (event.type === "issue_user" && typeof event.message === "string") return [...entries, { id: envelope.id, kind: "user", text: event.message }];
+  if (event.type === "issue_user" && typeof event.message === "string") return [...entries, { id: envelope.id, kind: "user", text: event.message, ...(event.images?.length ? { images: event.images } : {}) }];
   if (event.type === "message_start" && typeof event.message === "object" && event.message?.role === "assistant") {
     return [...entries, { id: envelope.id, kind: "assistant", blocks: [], streaming: true }];
   }
@@ -134,6 +134,9 @@ export function panelError(error: string): string {
     agent_event_connection_failed: "事件连接中断，正在自动重连",
     agent_event_protocol_error: "收到无法识别的 Agent 事件",
     agent_message_failed: "消息发送失败，请重试",
+    invalid_agent_image: "只能粘贴 PNG、JPEG、GIF 或 WebP 图片",
+    agent_image_limit_exceeded: "图片数量或大小超过 multipart 限制",
+    attachment_limit_exceeded: "图片数量或大小超过 multipart 限制",
     agent_abort_failed: "无法中止当前处理",
     issue_refresh_failed: "工单状态刷新失败，等待下次连接重试",
   };

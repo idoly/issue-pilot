@@ -1,27 +1,25 @@
 # 运维手册
 
-本文面向运行中的Issue Pilot，说明健康检查、state核对、Workspace容量、备份、升级、恢复和故障处理。首次安装见[部署说明](DEPLOYMENT.md)，状态原理见[架构说明](ARCHITECTURE.md)。
+本文面向运行中的 Issue Pilot，说明健康检查、state 核对、Workspace 容量、备份、升级、恢复和故障处理。首次安装见[部署说明](DEPLOYMENT.md)，状态原理见[架构说明](ARCHITECTURE.md)。
 
-## State分类
+## State 分类
 
 | Data | Durable | 处理 |
 | --- | --- | --- |
-| `issues.db`、WAL、SHM | 是 | 停API后一致backup/restore |
-| `issues/<key>/attachments` | 是 | 只随Issue edit transaction删除 |
-| `issues/<key>/agent` | 是 | 保留Pi JSONL和sidecar |
-| `git/repositories` | 是 | 保留objects、local branch和worktree metadata |
-| `workspaces/<key>` | 有条件 | 只通过受管release回收 |
-| `issues/<key>/runtime` | 否 | Startup/prepare重建 |
+| `issues.db`、WAL、SHM | 是 | 停 API 后一致 backup/restore |
+| `issues/<key>/attachments` | 是 | 只随 Issue edit transaction 删除 |
+| `issues/<key>/agent` | 是 | 保留 Pi JSONL 与 sidecar |
+| `git/repositories` | 是 | 保留 objects、local branches、worktree metadata |
+| `workspaces/<key>` | 有条件 | 只通过受管 release 回收 |
+| `issues/<key>/runtime` | 否 | Startup/prepare 重建 |
 | `git/checkouts` | 否 | 验证后受管重建 |
-| `control/project-tools.sock` | 否 | API lifecycle管理 |
-| `backups` | 是 | Operator管理 |
-| Legacy `code-server` data | 历史证据 | 当前代码不读；按backup/retention人工处理 |
+| `control/project-tools.sock` | 否 | API lifecycle 管理 |
+| `backups` | 是 | Operator 管理 |
+| Legacy editor data | 历史证据 | 当前代码不读；人工归档/保留 |
 
-不要对state root、unknown Issue/workspace、bare store或legacy editor data执行`rm -rf`。
+不要对 state root、unknown Issue/workspace、bare store 或 legacy evidence 执行递归删除。
 
 ## 日常检查
-
-### Service
 
 ```bash
 curl -fsS http://127.0.0.1:3000/health
@@ -29,6 +27,7 @@ curl -fsS http://127.0.0.1:3000/api/me
 curl -fsS http://127.0.0.1:3000/api/users
 curl -fsS http://127.0.0.1:3000/api/workspaces/stats
 kubectl -n issue-pilot get deployment,pod,service
+kubectl -n issue-pilot logs deployment/issue-pilot --tail=200
 scripts/playwright.sh status
 stat -c '%F %a %U:%G %n' /var/lib/issue-pilot/control/project-tools.sock
 ss -ltnp | rg ':3000'
@@ -36,20 +35,18 @@ ss -ltnp | rg ':3000'
 
 预期：
 
-- Health为`{"ok":true}`。
-- Application running/healthy，restart count符合预期。
-- Web、`vscode.html`和API同源可达。
-- Project socket是owner `0600`。
-- Workspace stats完成deep inspection。
-- 没有持久application-test container。
+- Health 为 `{"ok":true}`。
+- Deployment 1 replica，Pod healthy，restart count 符合预期。
+- Web、`vscode.html` 和 API 同源可达。
+- Project socket 是 owner-only `0600`。
+- Workspace stats 能完成 deep inspection。
+- 没有持久 application-test container。
 
-ClusterIP Service只能通过可信TLS/auth Ingress访问，不要把Pod或node端口直接暴露到不可信网络。
+ClusterIP 只能通过可信 TLS/auth Ingress 访问。不要将 `/api/config`、Service write body 或 Source body 放入 monitoring。
 
-不要把`/api/config`或Service write body放入monitoring log。
+### 日志
 
-### Logs
-
-关注：
+重点关注：
 
 - Startup blocked runtime。
 - `unmanaged_issue_state`、`shared_checkout_changed`。
@@ -57,20 +54,20 @@ ClusterIP Service只能通过可信TLS/auth Ingress访问，不要把Pod或node�
 - Workspace release/restore rollback failure。
 - Attachment rollback/finalize failure。
 - Capability timeout、invalid response、result too large。
-- SSE backpressure/transport failure。
+- SSE transport/backpressure failure。
 
-允许记录stable error、Issue key、Deployment ID、Repository hash、commit、bounded count/duration。禁止记录config body、password、AccessKey、Authorization、Cookie、temporary profile、package auth、Source body、Pi JSONL或完整敏感result。
+允许记录 stable error、Issue key、Deployment ID、Repository hash、commit、bounded count/duration。禁止记录 Config response/body、password、AccessKey、Authorization、Cookie、temporary profile、package auth、Source body、Pi JSONL 或完整敏感 result。
 
-## Database检查
+## Database 检查
 
-API停止后，或使用可信只读connection：
+API 停止后，或使用可信只读 connection：
 
 ```sql
 PRAGMA integrity_check;
 PRAGMA foreign_key_check;
 ```
 
-预期`ok`和0 rows。业务不变量：
+预期 `ok` 和 0 rows。业务检查：
 
 ```sql
 -- Missing Workspace
@@ -92,23 +89,29 @@ LEFT JOIN service_deployments
  AND service_deployments.environment_id = issues.environment_id
 WHERE service_deployments.id IS NULL;
 
+-- Global model singleton
+SELECT id, provider, model, thinking_level
+FROM global_agent_configuration;
+
 -- At least one active user
-SELECT count(*) AS active_users FROM subjects WHERE active = 1;
+SELECT count(*) AS active_users
+FROM subjects
+WHERE active = 1;
 ```
 
-前三项0 rows，active users大于0。Migration trigger阻止新异常，但partial restore后仍要检查。
+前三个查询应无异常 rows；global model 应只有 `id=1` 一行；active users 必须大于 0。
 
-## Issue、Git和runtime
+## Issue、Git 与 runtime
 
-普通`GET /api/issues/:key`是shallow read，不做`du`或Git clean。容量/releasability使用`/api/workspaces/stats`。
+普通 `GET /api/issues/:key` 是 shallow read，不执行 `du` 或 Git clean。容量和 releasability 使用 `/api/workspaces/stats`。
 
 | Scenario | DB state | Physical expectation |
 | --- | --- | --- |
-| Prod/test | `read_only` | 无dev workspace；runtime到detached checkout |
-| Active dev | `development_workspace` | `local_path`在Issue root；basename等于workspace name；HEAD等于local branch |
-| Released dev | `development_snapshot` | `local_path=NULL`；working branch保留；runtime HEAD等于local branch tip |
+| Prod/test | `read_only` | 无 dev workspace；runtime 指向 detached checkout |
+| Active dev | `development_workspace` | `local_path` 位于 Issue workspace；HEAD 等于 local branch |
+| Released dev | `development_snapshot` | `local_path=NULL`；working branch 保留；runtime HEAD 等于 local branch tip |
 
-只读Git检查：
+只读 Git 检查：
 
 ```bash
 GIT_OPTIONAL_LOCKS=0 git -C <path> rev-parse HEAD
@@ -117,26 +120,24 @@ GIT_OPTIONAL_LOCKS=0 git -C <path> status --porcelain
 GIT_OPTIONAL_LOCKS=0 git -C <path> log -1 --oneline
 ```
 
-Immutable checkout branch为空正常，HEAD必须等于目录commit。Active dev branch必须等于DB working branch。
+Immutable checkout 的 branch 为空是正常情况，HEAD 必须等于目录 commit。Active dev branch 必须等于 DB working branch。
 
-`sourceAvailable`应与`runtimeReady`和runtime目录一致。Source repositories返回的每个alias都必须是受管symlink：active dev target等于DB local path；read-only target位于`git/checkouts/<hash>/<commit>`。
+Source repositories 返回的 alias 必须映射到受管 runtime symlink：active dev target 等于 DB local path；read-only target 位于 `git/checkouts/<hash>/<commit>`。Released dev 的历史 Repository 集合可与 current Service 不同，不要自动补 rows、改 base branch 或 rename workspace。
 
-Released dev的历史Repository集合可与current Service不同。不要按数量补row、改base branch或重命名workspace。
+## Attachment 检查
 
-## Attachment检查
+每个 Attachment 必须：
 
-核对每个DB Attachment：
+- 位于对应 Issue attachment root 的直属路径。
+- 是 regular file。
+- Mode 为 `0400`，或至少 group/world 权限为 0。
+- Size、SHA-256 与 DB 一致，且不超过 20 MiB。
+- Runtime 中无 copy/link。
+- 没有未调查的 `.deleting` quarantine。
 
-- 位于对应Issue attachment root直属路径。
-- Regular file，mode`0400`或至少group/world为0。
-- Size与DB一致且不超过20MiB。
-- SHA-256一致。
-- Runtime没有copy/link。
-- 没有未调查的`.deleting`quarantine。
+Attachment GET 会执行核心完整性检查。独立 POST/DELETE 应为 404。
 
-Attachment GET会执行核心检查。独立POST/DELETE应404。
-
-## 启动和关闭
+## 启动与关闭
 
 ### Stop
 
@@ -145,16 +146,16 @@ kubectl -n issue-pilot scale deployment/issue-pilot --replicas=0
 kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 ```
 
-等待Pod完全退出。Graceful顺序：
+等待 Pod 完全退出。Graceful 顺序：
 
-1. 停maintenance并drain lifecycle/inspection。
-2. Agent拒绝new activity并drain run/reservation。
+1. 停止 maintenance 并 drain lifecycle/inspection。
+2. Agent 拒绝新 activity 并 drain run/reservation。
 3. Stop all Pi sessions。
 4. Close model runtime。
-5. Close project broker并等待active process。
+5. Close project broker 并等待 active process。
 6. Close SQLite。
 
-多个failure会聚合，但后续cleanup继续尝试。确认socket移除后才能复制DB、移动project或切换release。
+确认 Pod 与 socket 消失后，才能复制 database、移动 project 或切换 release。
 
 ### Start
 
@@ -164,66 +165,64 @@ kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=10m
 kubectl -n issue-pilot logs deployment/issue-pilot --tail=200
 ```
 
-Startup执行migration、structure/recovery、unmanaged/generated checks、socket、runtime hydration和maintenance。失败时保留现场，不先删除path/ref/row。
+Startup 执行 migration、结构/recovery、unmanaged/generated checks、socket、runtime hydration、global model initialization 和 maintenance。失败时保留 path/ref/row，不先删除现场。
 
 ### Pod replacement
-
-修改manifest中的image tag/digest后执行：
 
 ```bash
 kubectl apply -f deploy/issue-pilot.yaml
 kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 ```
 
-Deployment使用`Recreate`，旧Pod完全停止后才创建新Pod。hostPath state不随Pod删除。
+Deployment 使用 `Recreate`，旧 Pod 完全停止后才创建新 Pod。hostPath state 不随 Pod 删除。
 
-## Unmanaged/changed generated state
+## Unmanaged 与 changed generated state
 
 ### `unmanaged_issue_state`
 
-DB没有Issue，但`issues/<key>`或`workspaces/<key>`存在。
+DB 没有 Issue，但 `issues/<key>` 或 `workspaces/<key>` 存在：
 
-1. 保持API停止。
-2. 备份DB、unknown directory和bare store。
-3. 检查Attachment、Pi JSONL、Git status和local branch。
-4. 若DB应包含Issue，恢复matching DB/state。
-5. 若目录确属外部遗留，人工归档到state root外，不直接删除。
-6. 再启动并完整验收。
+1. 保持 API 停止。
+2. 备份 DB、unknown directory 和 bare store。
+3. 检查 Attachment、Pi JSONL、Git status 和 local branch。
+4. 若 DB 应包含 Issue，恢复 matching DB/state。
+5. 若目录确属外部遗留，人工归档到 state root 外。
+6. 重新启动并完整验收。
 
-Startup在清理runtime/checkouts前拒绝unmanaged state。
+Startup 在清理 runtime/checkouts 前拒绝 unmanaged state。
 
 ### `shared_checkout_changed`
 
-Immutable checkout的hash/commit层级、common dir、HEAD或clean status不匹配。
+Immutable checkout 的 hash/commit 层级、common dir、HEAD 或 clean status 不匹配：
 
-1. 停API并保留checkout/bare/log。
-2. 用只读Git检查common dir、HEAD、modified/untracked/ignored。
-3. 判断异常内容是否是证据。
-4. Bare store/local branches不可删除。
-5. 调查后由Operator归档或修复generated checkout metadata。
+1. 停 API，保留 checkout、bare store 和 log。
+2. 只读检查 common dir、HEAD、modified/untracked/ignored。
+3. 判断异常内容是否为证据。
+4. 不删除 bare store 或 local branch。
+5. 调查后由 Operator 归档或修复 generated checkout metadata。
 
-系统不会强删changed checkout。
+系统不会强制删除 changed checkout。
 
-## Workspace容量
+## Workspace 容量与 release
 
-当前：retention 7天、high-water 20GiB、target 16GiB、interval 15分钟、concurrency 4。值来自根配置，修改后重启。Interval 0只禁timer，startup仍maintenance一次。
+当前策略由根配置定义：retention 7 天、high-water 20 GiB、target 16 GiB、interval 15 分钟、concurrency 4。
 
 ```bash
 curl -fsS http://127.0.0.1:3000/api/workspaces/stats
 ```
 
-Stats执行`du -sk`、layout和Git clean检查，可能较慢。Per-Issue inspection串行，不同Issue并行；stats/release/reopen/maintenance受lifecycle global queue协调。
+Stats 执行 `du -sk`、layout 和 Git clean 检查，可能较慢。Per-Issue inspection 串行，不同 Issue 可并行；stats/release/reopen/maintenance 由 lifecycle global queue 协调。
 
-自动release只选择resolved dev，并要求：
+自动 release 只选择 resolved dev，并要求：
 
-- 无Agent activity/reservation。
-- Workspace非preparing/running。
-- Repository组为`development_workspace`。
-- Root只有登记Repository目录。
-- Workspace name/local path/root一致。
-- 全部worktree clean。
+- 无 Agent activity/reservation。
+- Workspace 非 preparing/running。
+- Repository 组是 `development_workspace`。
+- Root 只有登记的 Repository 目录。
+- Workspace name、local path、root 一致。
+- 所有 worktree clean。
 
-Retention先释放过期项；若仍超过high-water，按最近活动从旧到新释放到target。中途remove失败会从local branch原commit恢复。
+Retention 先释放过期项；如果仍超过 high-water，再按最近活动由旧到新释放到 target。中途 remove 失败会从 local branch 原 commit 恢复。
 
 Manual release：
 
@@ -232,112 +231,125 @@ curl -fsS -X DELETE \
   http://127.0.0.1:3000/api/issues/ISSUE-YYYYMMDD-NNN/workspace
 ```
 
-无force。Prod/test、non-resolved、dirty、busy或invalid返回conflict。
+不存在 force。Prod/test、non-resolved、dirty、busy 或 invalid 状态会拒绝。
 
-Reopen从local working branches准备全部worktree/runtime后transaction更新。`workspace_restore_cleanup_failed`表示cleanup不完整，应停止重试并保留evidence。
-
-### 常见错误
+常见拒绝：
 
 | Error | Action |
 | --- | --- |
-| `issue_not_resolved` | 完成业务状态，不force |
-| `issue_already_running` / `workspace_busy` | 等待或正常停止Agent |
-| `workspace_has_changes` | 检查并提交/人工归档，不删除 |
-| `workspace_has_untracked_files` | 核对root unknown entry所有权 |
-| `workspace_repository_missing` | 备份remaining state/ref，调查partial deletion |
-| `development_repository_state_invalid` | 保留DB/path，不猜测mixed state |
-| `workspace_path_does_not_match_repository` | 不移动目录；恢复matching version或人工修复 |
-| `repository_workspace_name_conflict` | 核对URL集合和历史stable name |
-| `workspace_release_rollback_failed` | 停maintenance，备份DB/workspace/bare |
-| `workspace_restore_cleanup_failed` | 停止retry，保留全部evidence |
-| `issue_deployment_required` | 恢复/补齐合法Deployment，不绕trigger |
-| `issue_workspace_missing` | 调查partial DB restore，不自动补row |
+| `issue_not_resolved` | 完成业务状态，不 force |
+| `issue_already_running` / `workspace_busy` | 等待或正常停止 Agent |
+| `workspace_has_changes` | 检查、提交或人工归档，不删除 |
+| `workspace_has_untracked_files` | 核对 unknown entry 所有权 |
+| `workspace_repository_missing` | 备份剩余 state/ref，调查 partial deletion |
+| `development_repository_state_invalid` | 保留 DB/path，不猜测 mixed state |
+| `workspace_path_does_not_match_repository` | 不移动目录；恢复 matching version |
+| `repository_workspace_name_conflict` | 核对 URL 集合与历史 workspace name |
+| `workspace_release_rollback_failed` | 停 maintenance，备份 DB/workspace/bare |
+| `workspace_restore_cleanup_failed` | 停止 retry，保留 evidence |
 
-## Agent和SSE
+## Agent 与 SSE
 
-Agent失败预期：session abort/dispose；未resolved Issue回`open`；Workspace`failed`并记录`last_error`；JSONL/worktree/bare/Attachment保留。
+Agent 失败后的预期状态：session abort/dispose；未 resolved Issue 回 `open`；Workspace 为 `failed` 并保存 `last_error`；JSONL（包括已接受的粘贴图片）、worktree、bare store、Attachment 保留。
 
-排查：
+排查顺序：
 
-1. `last_error`和structured log。
-2. Pi model/auth readiness。
-3. Deployment完整性。
-4. Repository remote branch/state/path/Git status。
-5. Runtime/socket/Source path。
+1. Stable `last_error` 和 structured log。
+2. 全局 provider/model/thinking level 与 Pi auth/model catalog。
+3. Deployment/Repository completeness。
+4. Remote branch、Git state、path、runtime。
+5. Project broker/socket。
 6. Capability target/config。
-7. Timeout/result budget；`model_response_idle_timeout`表示模型流在配置窗口内没有assistant事件，确认provider/network后使用Issue retry续跑。
+7. Timeout/result budget。
 
-SSE正常顺序：
+`model_response_idle_timeout` 表示模型在配置窗口内没有 assistant event；确认 provider/network 后用 Issue retry 续跑。
+
+SSE 正常顺序：
 
 ```text
 JSONL replay -> current run replay -> snapshot_ready -> live -> heartbeat
 ```
 
-刷新后只缺当前正在生成的thinking/text或运行中tool时，检查server event bus的current run replay；该层是进程内临时状态，message/tool完成后由JSONL接管，API重启后不恢复。页面停留在Working但刷新后已完成时，检查具名heartbeat是否穿过proxy，以及Web静默watchdog是否重建SSE。重复/闪烁/丢消息时检查active JSONL、event ID去重、proxy buffering/read timeout、server backpressure、Web generation和compaction reconnect。旧`ready`不是当前握手。
+刷新后缺当前 thinking/text/tool 时检查进程内 current-run replay；完成内容由 JSONL 接管，API 重启不会恢复未 durable 增量。页面停留 Working 时检查具名 heartbeat、proxy buffering/read timeout、Web stale watchdog、event ID 去重和 generation。
 
-## Attachment故障
-
-| Error | Action |
-| --- | --- |
-| `attachment_limit_exceeded` | 缩小request，不改为unbounded |
-| `insecure_issue_attachment_file` | 停读，核对DB/path/type/mode/size |
-| `attachment_integrity_check_failed` | 保留file/DB，调查修改来源 |
-| `attachment_rollback_failed` | 停止edit，备份attachment root/DB |
-| `attachment_finalize_failed` | DB已commit，保留quarantine供Operator处理 |
-| `issue_state_rollback_failed` | 核对DB无Issue，保留unknown root |
-| `issue_update_rollback_failed` | 保留DB/new/quarantine evidence |
-
-不要在线手工rename/delete`.deleting`。
-
-## Source和project tools
+## Source、Workbench 与 project tools
 
 | Problem | Check |
 | --- | --- |
-| No code button | `runtimeReady`、last error、Repository state/runtime |
-| `source_runtime_invalid` | Alias symlink和target是否匹配DB/checkout root |
+| 无代码按钮 | `runtimeReady`、last error、Repository state/runtime |
+| `source_runtime_invalid` | Alias symlink 与 target 是否匹配 DB/checkout |
 | Path escape | Symlink containment，保留现场 |
-| Binary/too large | 使用其他受控工具，不放宽无限 |
-| Search mismatch | Literal query、case/word headers、progress、rg budget |
+| Binary/too large | 使用其他受控工具，不改为 unbounded |
+| Search mismatch | Literal query、case/word header、rg budget |
 | SCM empty | `/diff`、HEAD/index/worktree、runtime target |
-| Dev file/Git mutation fails | Environment access、Issue reservation、relative path、Source stable error和Git status |
+| Dev mutation fails | Access、Issue reservation、relative path、Git status |
 | Graph/file fail | `/history`、`/commit`、`/commit-file`、`/blame`、HEAD ancestry |
-| Preview fail | Markdown model、`marked`、DOMPurify、fixed styles |
-| Workbench fail | `vscode.html`、workers、theme/static resources、browser console |
+| Preview fail | Markdown model、`marked`、DOMPurify、preview stylesheet |
+| Workbench loading/error | `vscode.html`、worker/static resources、显式 ready/error 消息、console |
 | Broker unavailable | API、socket mode/owner、wrapper version |
-| Node/Maven fail | Image tool versions、project manifest、config/cache mode、timeout |
+| Node/Maven fail | Image versions、manifest、config/cache mode、timeout |
 
 ```bash
-kubectl -n issue-pilot get pod
 stat -c '%F %a %U:%G %n' /var/lib/issue-pilot/control/project-tools.sock
-podman ps -a --filter label=io.issue-pilot.component=application-test
+scripts/playwright.sh status
 ```
 
-Project failure output保留在worktree。不要让wrapper接受executable、config path、cache path或absolute host path。
+Project failure output 留在 worktree。不要允许 wrapper 接受 executable、absolute path、config path 或 cache path。
 
-## DMS MCP/SLS故障
+## DMS MCP 与 SLS
+
+### DMS
 
 检查：
 
-- DMS Deployment Authorization是标准`Bearer <token>`且尚未过期；旧AccessKey/dbId/tid配置必须在配置页重新保存。
-- Deployment配置的DMS HTTPS SSE endpoint可达，初始GET和message POST都携带Authorization，服务端endpoint event保持同源；确认配置页输入的alias/schema解析到了目标InstanceId、DatabaseId和host:port。
-- Agent的`dms`工具只能分派到MCP `executeScript`，并由Issue Pilot限制为schema匹配的单条只读SQL；`listInstances/getDatabase`只供受信配置解析使用，其他MCP工具不向Agent开放。
-- DMS连接、list/call、abort和close均在30秒总时限内完成；arguments和result不设应用层byte limit。
-- Application image和Aliyun CLI可用于SLS。
-- SLS Deployment AccessKey有效且最小权限，region/project/logstore exact匹配。
-- SLS query符合read-only/time-range，temporary profile在调用后删除。
+- Deployment URL 是可达的 HTTPS SSE endpoint。
+- Authorization 是未过期的 `Bearer <token>`。
+- SSE GET 与同源 message POST 都携带 Authorization，redirect 被拒绝。
+- 每个 alias/schema 已解析到预期 InstanceId、DatabaseId、host:port。
+- SchemaName 和 DatabaseId 在 Deployment 内均唯一。
+- `listInstances` 与 `getDatabase` 只在受信配置解析中使用。
+- Agent 的 schema input 只能取当前 Deployment 动态 enum，并只调用唯一、schema-compatible 的 `executeScript`。
+- 服务端把 schema 映射为 DatabaseId 并注入，SQL 是单条只读 statement。
+- 连接/list/call/close 位于 30 秒 operation timeout 内。
 
-不要记录DMS Authorization、Config GET响应、SLS AccessKey或完整敏感result。不要依赖Operator持久`~/.aliyun`；SLS query会短暂出现在application process argv。
+旧 AccessKey/dbId/tid 配置不受支持，必须通过当前配置页重新保存。不要记录 Authorization、MCP request header 或完整 result。
+
+### SLS
+
+检查：
+
+- Image 中 Aliyun CLI 可执行。
+- Deployment AccessKey 有效且最小权限。
+- Region/project/logstore exact 匹配。
+- Query/time range 符合合同。
+- Temporary HOME/profile 在调用后删除。
+
+SLS AccessKey 不进入 argv；query、project、logstore 与时间可能短暂出现在 application process list。
+
+## Attachment 故障
+
+| Error | Action |
+| --- | --- |
+| `attachment_limit_exceeded` | 缩小 request，不改成 unbounded |
+| `insecure_issue_attachment_file` | 停止读取，核对 DB/path/type/mode/size |
+| `attachment_integrity_check_failed` | 保留 file/DB，调查修改来源 |
+| `attachment_rollback_failed` | 停止 edit，备份 attachment root/DB |
+| `attachment_finalize_failed` | DB 已 commit，保留 quarantine |
+| `issue_state_rollback_failed` | 核对 DB 无 Issue，保留 unknown root |
+| `issue_update_rollback_failed` | 保留 DB/new/quarantine evidence |
+
+不要在线手工 rename/delete `.deleting`。
 
 ## 一致备份
 
 ### Database
 
-1. Stop API并等待container完全退出。
-2. 从根配置确认state/database path。
-3. 创建`0700`backup directory。
-4. 复制同一时点的DB、WAL、SHM文件组。
-5. 文件设`0600`。
-6. 在隔离copy运行integrity/FK/business checks。
+1. Stop API，等待 Pod 完全退出。
+2. 从根配置确认 state/database path。
+3. 创建 `0700` backup directory。
+4. 复制同一时点 DB、WAL、SHM 文件组。
+5. 文件 mode 设为 `0600`。
+6. 在隔离 copy 运行 integrity/FK/business checks。
 
 ```bash
 kubectl -n issue-pilot scale deployment/issue-pilot --replicas=0
@@ -353,18 +365,16 @@ done
 chmod 0600 "$backup"/*
 ```
 
-即使API停止后WAL通常checkpoint，也按现存文件组复制。
-
 ### Full state
 
-High-risk upgrade/recovery还要保存matching：
+高风险升级/恢复还需保存 matching：
 
-- `issues/` Attachment和Pi JSONL。
-- `git/repositories/` objects/local branches/worktree metadata。
+- `issues/` 中的 Attachment 和 Pi JSONL。
+- `git/repositories/` 的 objects、local branches、worktree metadata。
 - Active dev `workspaces/`。
-- Root config和reviewed code commit。
+- Root config、manifest、image digest 和 reviewed code commit。
 
-Runtime/checkouts可重建，但保留有助调查。Backup包含secret/production data，不上传普通artifact store。
+Runtime/checkouts 可重建，但保留副本有助调查。Backup 包含 credential、源码和 production data，不能上传普通 artifact store。
 
 ## Upgrade
 
@@ -377,57 +387,56 @@ npm run typecheck
 npm test
 npm run build
 npm audit --omit=dev --audit-level=high
-podman build --pull=always -f Containerfile -t registry.example.com/issue-pilot:<version> .
+podman build --pull=always -f Containerfile \
+  -t registry.example.com/issue-pilot:<version> .
 podman push registry.example.com/issue-pilot:<version>
 kubectl -n issue-pilot scale deployment/issue-pilot --replicas=0
-: "create consistent DB and required full-state backup"
-: "dry-run migrations on isolated copy and verify integrity/FK"
+: "create consistent DB and full-state backup"
+: "dry-run migrations on an isolated copy"
 : "update deploy/issue-pilot.yaml image"
 kubectl apply -f deploy/issue-pilot.yaml
 kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 ```
 
-不要在active API上运行migration或复制DB。使用不可变image tag或digest，确保manifest和备份记录能定位同一版本。
-
 升级后验证：
 
-- Service/network和container restart count。
+- Service/network、Pod restart count、probe。
 - DB integrity/FK/business invariant/file mode。
-- 全部Issue三种Repository state和runtime。
+- 全局模型 singleton 与 catalog。
+- 全部 Issue Repository state 和 runtime。
 - Attachment mode/size/hash。
-- SSE replay/`snapshot_ready`。
-- Source multi-root/tree/file/search/history/commit/diff，以及隔离dev workspace中的file/Git mutation。
-- Capability catalog order和必要read-only smoke。
+- SSE replay/`snapshot_ready`/heartbeat。
+- Source tree/file/search/history/commit/diff。
+- 隔离 dev workspace 的 file/Git mutation 和 project wrapper。
+- 必要 capability 的最小只读 smoke。
 
-Published migration/journal不可修改。
+Published migration/journal 不可修改。
 
-## Restore和rollback
+## Restore 与 rollback
 
-Restore：
-
-1. 保持API停止。
-2. 另存current failed state供调查。
-3. 恢复matching DB/WAL/SHM。
-4. 恢复matching Attachment、JSONL、bare store和active worktree。
-5. 保持owner、directory`0700`、file mode。
-6. 启动matching code/schema。
-7. 遇到unmanaged state时重新判断backup时点，不删newer evidence。
+1. 保持 API 停止。
+2. 另存 current failed state 供调查。
+3. 恢复 matching DB/WAL/SHM。
+4. 恢复 matching Attachment、JSONL、bare store、active worktree。
+5. 保持 owner、directory `0700`、file mode。
+6. 启动 matching code/schema。
+7. 遇到 unmanaged state 时重新判断 backup 时点，不删除 newer evidence。
 8. 完整验收。
 
-Rollback必须code和database/state成对。旧代码不能假定可读new schema。只恢复DB而不恢复matching filesystem会造成unmanaged state、missing Attachment/JSONL或Git ref mismatch。
+Rollback 必须 code 与 database/state 成对。只恢复 DB 而不恢复 matching filesystem 会产生 unmanaged state、missing Attachment/JSONL 或 Git ref mismatch。
 
 ## 快速决策
 
 | Symptom | First check | Never do |
 | --- | --- | --- |
-| Startup fail | Error、DB structure、unmanaged/checkout | 删除unknown/bare store |
-| Pod unhealthy | Logs、image、UID/mount/tool version | Privileged、container socket、second API |
-| Agent back to open | last error、model、Deployment、Git/runtime | 把credential放prompt |
-| Issue detail slow | 是否误做deep inspection | 在GET加入du/Git clean |
-| Release blocked | Status/layout/Git clean | `rm -rf workspaces` |
-| Released code missing | Local branch ref/bare/runtime | Remote branch fallback |
-| Source unavailable | runtimeReady/symlink/stable error | 改DB flag/暴露host path |
-| Attachment write 404 | Use Issue multipart edit | 恢复独立write route |
-| Capability too large | Narrow query/range/limit | Silent truncation/unbounded limit |
-| Config 409 | Running/reserved Issue和references | Direct DB bypass |
-| User cannot deactivate | Last active user | Delete historical subject |
+| Startup fail | Error、DB structure、unmanaged/checkout | 删除 unknown/bare store |
+| Pod unhealthy | Logs、image、UID/mount/tool version | Privileged、socket、second API |
+| Agent 回到 open | Last error、model、Deployment、Git/runtime | 把 credential 放 prompt |
+| Issue detail 慢 | 是否误做 deep inspection | 在 GET 加 `du`/Git clean |
+| Release blocked | Status、layout、Git clean | `rm -rf workspaces` |
+| Released code missing | Local branch ref、bare/runtime | Remote branch fallback |
+| Source unavailable | runtimeReady、symlink、stable error | 改 DB flag、暴露 host path |
+| Attachment write 404 | 使用 Issue multipart edit | 恢复独立 write route |
+| Capability too large | 缩小 query/range/limit | Silent truncation |
+| Config 409 | Running/reserved Issue、references | Direct DB bypass |
+| User 无法停用 | 是否最后一个 active user | 删除历史 subject |

@@ -57,9 +57,9 @@ function CurrentUserIdentity() {
   );
 }
 
-function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; includeSelected: boolean; onSelect: (id: string) => void }) {
+function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; keepExternalSelection: boolean; onSelect: (id: string) => void }) {
   const { currentUser } = useApplicationResources();
-  return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} hidden={props.hidden} includeSelected={props.includeSelected} onSelect={props.onSelect} />;
+  return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} hidden={props.hidden} keepExternalSelection={props.keepExternalSelection} onSelect={props.onSelect} />;
 }
 
 export function App(props: { initialView?: AppView } = {}) {
@@ -69,7 +69,7 @@ export function App(props: { initialView?: AppView } = {}) {
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
-  const [includeSelectedIssue, setIncludeSelectedIssue] = createSignal(false, { ownedWrite: true });
+  const [keepExternalSelection, setKeepExternalSelection] = createSignal(false, { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDetailsOpen, setSourceDetailsOpen] = createSignal(true, { ownedWrite: true });
@@ -158,9 +158,9 @@ export function App(props: { initialView?: AppView } = {}) {
         </Layout.Header>
         <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
           <Switch>
-            <Match when={view() === "dashboard"}><OverviewView onSelectIssue={(issueKey) => { setIncludeSelectedIssue(true); setSelectedId(issueKey); setView("issues"); }} /></Match>
+            <Match when={view() === "dashboard"}><OverviewView onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setSelectedId(issueKey); setView("issues"); }} /></Match>
             <Match when={view() === "issues"}>
-              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} includeSelected={includeSelectedIssue()} onSelect={(issueKey) => { setIncludeSelectedIssue(false); setSelectedId(issueKey); }} />
+              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} keepExternalSelection={keepExternalSelection()} onSelect={(issueKey) => { setKeepExternalSelection(false); setSelectedId(issueKey); }} />
               <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
                 <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                   {(current) => (

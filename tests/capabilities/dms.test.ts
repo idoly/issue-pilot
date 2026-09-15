@@ -3,7 +3,11 @@ import { test } from "node:test";
 
 import { connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
 
-const configured = { url: "https://dms.example.test/sse", authorization: "Bearer fixture-token" };
+const configured = {
+  url: "https://dms.example.test/sse",
+  authorization: "Bearer fixture-token",
+  databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }],
+};
 const readOnlyTool = {
   name: "query_database",
   description: "Query a database without changing it",
@@ -108,7 +112,7 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
     assert.deepEqual((await session.listTools(AbortSignal.timeout(5_000))).map(({ name }) => name), ["query_database", "listInstances", "searchDatabase", "getDatabase"]);
     assert.deepEqual(await session.callTool("query_database", { sql: "SELECT 1" }, AbortSignal.timeout(5_000)), { content: [{ type: "text", text: "ok" }] });
     await session.close();
-    assert.deepEqual(await resolveDmsScope(configured, "ORDERS-PROD", "orders"), { instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "ORDERS-PROD · db.example.test:3306 · mysql/product", databaseId: "123", databaseLabel: "orders" });
+    assert.deepEqual(await resolveDmsScope(configured, "ORDERS-PROD", "orders"), { instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" });
     assert.deepEqual(toolCalls.at(-1), { name: "getDatabase", arguments: { host: "db.example.test", port: "3306", schema_name: "orders", sid: null } });
     assert.equal(requests.filter(({ method }) => method === "GET").length, 2);
     assert.equal(requests.every(({ method }) => method === "GET" || method === "POST"), true);
@@ -122,10 +126,9 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
 
 test("calls only MCP executeScript and binds it to the configured deployment database", async () => {
   const fixture = fixtureSession({ async listTools() { return [readOnlyTool, executeScriptTool]; } });
-  const scoped = { ...configured, databaseId: "456", databaseLabel: "orders" };
-  const result = await queryDms({ script: "SELECT COUNT(*) FROM suppliers;", logic: false }, scoped, undefined, fixture.connect);
+  const result = await queryDms({ schema: "orders", script: "SELECT COUNT(*) FROM suppliers;", logic: false }, configured, undefined, fixture.connect);
 
-  assert.deepEqual(fixture.calls, [{ name: "executeScript", args: { database_id: "456", script: "SELECT COUNT(*) FROM suppliers", logic: false }, aborted: false }]);
+  assert.deepEqual(fixture.calls, [{ name: "executeScript", args: { database_id: "123", script: "SELECT COUNT(*) FROM suppliers", logic: false }, aborted: false }]);
   assert.deepEqual(result.details, { provider: "aliyun-dms-mcp", tool: "executeScript" });
   assert.equal(JSON.parse(result.content[0]!.text).result.content[0].text, '[{"id":1}]');
   assert.doesNotMatch(JSON.stringify(result), /fixture-token/);
@@ -133,34 +136,32 @@ test("calls only MCP executeScript and binds it to the configured deployment dat
 });
 
 test("rejects writes, multiple statements, missing scope, and unavailable executeScript", async () => {
-  const scoped = { ...configured, databaseId: "456", databaseLabel: "orders" };
   const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; } });
-  await assert.rejects(queryDms({ script: "UPDATE suppliers SET active = 1" }, scoped, undefined, fixture.connect), /database_query_must_be_read_only/);
-  await assert.rejects(queryDms({ script: "SELECT 1; SELECT 2" }, scoped, undefined, fixture.connect), /database_query_must_be_one_statement_without_comments/);
-  await assert.rejects(queryDms({ script: "SELECT 1" }, configured, undefined, fixture.connect), /dms_database_not_configured/);
+  await assert.rejects(queryDms({ schema: "orders", script: "UPDATE suppliers SET active = 1" }, configured, undefined, fixture.connect), /database_query_must_be_read_only/);
+  await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1; SELECT 2" }, configured, undefined, fixture.connect), /database_query_must_be_one_statement_without_comments/);
+  await assert.rejects(queryDms({ schema: "unknown", script: "SELECT 1" }, configured, undefined, fixture.connect), /dms_database_not_authorized/);
 
   const unavailable = fixtureSession({ async listTools() { return [readOnlyTool]; } });
-  await assert.rejects(queryDms({ script: "SELECT 1" }, scoped, undefined, unavailable.connect), /dms_mcp_execute_script_unavailable/);
+  await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, unavailable.connect), /dms_mcp_execute_script_unavailable/);
   const ambiguous = fixtureSession({ async listTools() { return [executeScriptTool, executeScriptTool]; } });
-  await assert.rejects(queryDms({ script: "SELECT 1" }, scoped, undefined, ambiguous.connect), /dms_mcp_execute_script_unavailable/);
+  await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, ambiguous.connect), /dms_mcp_execute_script_unavailable/);
   assert.equal(fixture.calls.length, 0);
   assert.equal(unavailable.calls.length, 0);
   assert.equal(ambiguous.calls.length, 0);
 });
 
 test("handles MCP errors, unbounded SQL and results, and abort", async () => {
-  const scoped = { ...configured, databaseId: "456", databaseLabel: "orders" };
   const failure = fixtureSession({ async listTools() { return [executeScriptTool]; }, async callTool() { return { isError: true, content: [{ type: "text", text: "denied" }] }; } });
-  await assert.rejects(queryDms({ script: "SELECT 1" }, scoped, undefined, failure.connect), /dms_mcp_tool_failed/);
+  await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, failure.connect), /dms_mcp_tool_failed/);
 
   const largeValue = "x".repeat(1_100_000);
   const unbounded = fixtureSession({ async listTools() { return [executeScriptTool]; }, async callTool(name, args, signal) { return { content: [{ type: "text", text: JSON.stringify({ name, args, aborted: signal.aborted, value: largeValue }) }] }; } });
-  const result = await queryDms({ script: `SELECT '${largeValue}'` }, scoped, undefined, unbounded.connect);
+  const result = await queryDms({ schema: "orders", script: `SELECT '${largeValue}'` }, configured, undefined, unbounded.connect);
   assert.ok(result.content[0]!.text.length > 1_100_000);
 
   const controller = new AbortController();
   controller.abort(new Error("cancelled"));
   const aborted = fixtureSession({ async listTools(signal) { throw signal.reason; } });
-  await assert.rejects(queryDms({ script: "SELECT 1" }, scoped, controller.signal, aborted.connect), /cancelled/);
+  await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, controller.signal, aborted.connect), /cancelled/);
   assert.equal(aborted.closes(), 1);
 });

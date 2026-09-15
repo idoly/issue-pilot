@@ -88,7 +88,7 @@ export const issuePilotConfig = Object.freeze({
       timeoutMs: 15_000,
       connectionMs: 10_000,
       database: Object.freeze({ queryChars: 20_000, rows: 500 }),
-      dms: Object.freeze({ executionMs: 30_000 }),
+      dms: Object.freeze({ executionMs: 30_000, databases: 20 }),
       elasticsearch: Object.freeze({ results: 200 }),
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
       redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),

@@ -11,7 +11,7 @@ export type Service = ServiceConfiguration;
 export type ServiceInput = ServiceConfigurationInput;
 
 export interface Person { subject: string; name: string; email: string }
-export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; instanceLabel: string; databaseId: string; databaseLabel: string }
+export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; databaseId: string }
 export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
 export interface ManagedUserInput { subject: string; name: string; email: string }
 export interface ManagedUserUpdate { name: string; email: string; active: boolean }
@@ -255,5 +255,11 @@ export const updateIssueStatus = (key: string, status: "open" | "resolved") => j
 export const convertIssueToDevelopment = (key: string) => request<{ issueKey: string }>(issuePath(key, "/development"), { method: "POST" });
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
-export const sendAgentMessage = (key: string, message: string) => jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
+export function sendAgentMessage(key: string, message: string, images: File[] = []): Promise<void> {
+  if (!images.length) return jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
+  const form = new FormData();
+  form.append("message", message);
+  for (const image of images) form.append("images", image, image.name);
+  return request<void>(issuePath(key, "/agent-messages"), { method: "POST", body: form });
+}
 export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

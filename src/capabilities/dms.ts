@@ -21,7 +21,9 @@ export interface DmsMcpSession {
   close(): Promise<void>;
 }
 
-export type ConnectDmsMcp = (configured: CapabilityConfig<"dms">, signal: AbortSignal) => Promise<DmsMcpSession>;
+type DmsConnectionConfiguration = Pick<CapabilityConfig<"dms">, "url" | "authorization">;
+
+export type ConnectDmsMcp = (configured: DmsConnectionConfiguration, signal: AbortSignal) => Promise<DmsMcpSession>;
 
 function operationSignal(signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(limits.executionMs);
@@ -127,12 +129,10 @@ export interface DmsScopeResolution {
   instanceId: string;
   instanceHost: string;
   instancePort: string;
-  instanceLabel: string;
   databaseId: string;
-  databaseLabel: string;
 }
 
-export async function resolveDmsScope(configured: CapabilityConfig<"dms">, instanceAlias: string, schemaName: string, signal?: AbortSignal): Promise<DmsScopeResolution> {
+export async function resolveDmsScope(configured: DmsConnectionConfiguration, instanceAlias: string, schemaName: string, signal?: AbortSignal): Promise<DmsScopeResolution> {
   const boundedSignal = operationSignal(signal);
   const session = await connectDmsMcp(configured, boundedSignal);
   try {
@@ -160,14 +160,7 @@ export async function resolveDmsScope(configured: CapabilityConfig<"dms">, insta
     const resolvedInstanceId = typeof database.InstanceId === "number" && Number.isSafeInteger(database.InstanceId) ? String(database.InstanceId) : typeof database.InstanceId === "string" ? database.InstanceId.trim() : "";
     const resolvedSchema = typeof database.SchemaName === "string" ? database.SchemaName.trim() : "";
     if (!databaseId || resolvedInstanceId !== instanceId || resolvedSchema !== normalizedSchema) throw new Error("dms_mcp_scope_resolve_invalid_response");
-    return {
-      instanceId,
-      instanceHost,
-      instancePort,
-      instanceLabel: `${normalizedAlias} · ${instanceHost}:${instancePort} · ${instanceType}/${environment}`,
-      databaseId,
-      databaseLabel: resolvedSchema,
-    };
+    return { instanceId, instanceHost, instancePort, databaseId };
   } finally {
     await session.close();
   }
@@ -179,13 +172,14 @@ export async function queryDms(
   signal?: AbortSignal,
   connect: ConnectDmsMcp = connectDmsMcp,
 ) {
-  if (!configured.databaseId) throw new Error("dms_database_not_configured");
+  const database = configured.databases.find(({ schemaName }) => schemaName === input.schema);
+  if (!database) throw new Error("dms_database_not_authorized");
   const boundedSignal = operationSignal(signal);
   const session = await connect(configured, boundedSignal);
   try {
     const tool = uniqueTool(await session.listTools(boundedSignal), "executeScript", isReadOnlyScriptTool);
     if (!tool) throw new Error("dms_mcp_execute_script_unavailable");
-    const result = await session.callTool(tool.name, executeScriptArguments(input, configured.databaseId), boundedSignal);
+    const result = await session.callTool(tool.name, executeScriptArguments(input, database.databaseId), boundedSignal);
     if (result && typeof result === "object" && "isError" in result && result.isError === true) throw new Error("dms_mcp_tool_failed");
     return capabilityTextResult(JSON.stringify({ tool: tool.name, result }, null, 2), { provider: "aliyun-dms-mcp", tool: tool.name });
   } finally {

@@ -17,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-8).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -8) };
+  assert.deepEqual(journal.entries.slice(-10).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -10) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -74,6 +74,59 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     await assert.rejects(client.execute("insert into issue_cc_recipients (issue_id, subject) values ('issue', 'recipient')"));
     await assert.rejects(client.execute("insert into issue_cc_recipients (issue_id, subject) values ('missing', 'recipient')"));
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
+  } finally {
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("migrates each configured DMS database into the explicit target collection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-dms-target-migration-"));
+  const file = join(root, "issues.db");
+  const migrations = join(root, "migrations");
+  const migrationSource = resolve("drizzle");
+  const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -2) };
+  await mkdir(join(migrations, "meta"), { recursive: true });
+  await Promise.all([
+    writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
+    ...previousJournal.entries.map(({ tag }) => copyFile(join(migrationSource, `${tag}.sql`), join(migrations, `${tag}.sql`))),
+  ]);
+  const { db, client, close } = openDatabase(file);
+  try {
+    await migrate(db, { migrationsFolder: migrations });
+    await client.execute("insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)");
+    await client.execute("insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)");
+    const previousDms = { url: "https://dms.example.test/sse", authorization: "Bearer token", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", instanceLabel: "ORDERS-PROD · db.example.test:3306 · mysql/product", databaseId: "123", databaseLabel: "orders" };
+    await client.execute({ sql: "insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', ?, 1, 1)", args: [JSON.stringify({ dms: previousDms })] });
+    await migrate(db, { migrationsFolder: migrationSource });
+    const [row] = (await client.execute("select config from service_deployments where id = 'deployment'")).rows;
+    assert.deepEqual(JSON.parse(String(row!.config)), { dms: { url: previousDms.url, authorization: previousDms.authorization, databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] } });
+    assert.equal((await client.execute("select count(*) count from sqlite_master where name = '_dms_database_targets_guard'")).rows[0]!.count, 0);
+  } finally {
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to guess an incomplete DMS database scope during migration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-invalid-dms-target-migration-"));
+  const file = join(root, "issues.db");
+  const migrations = join(root, "migrations");
+  const migrationSource = resolve("drizzle");
+  const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -2) };
+  await mkdir(join(migrations, "meta"), { recursive: true });
+  await Promise.all([writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)), ...previousJournal.entries.map(({ tag }) => copyFile(join(migrationSource, `${tag}.sql`), join(migrations, `${tag}.sql`)))]);
+  const { db, client, close } = openDatabase(file);
+  try {
+    await migrate(db, { migrationsFolder: migrations });
+    await client.execute("insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)");
+    await client.execute("insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)");
+    await client.execute({ sql: "insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', ?, 1, 1)", args: [JSON.stringify({ dms: { url: "https://dms.example.test/sse", authorization: "Bearer token" } })] });
+    await assert.rejects(migrate(db, { migrationsFolder: migrationSource }), /CHECK constraint failed/);
+    assert.equal((await client.execute("select count(*) count from __drizzle_migrations")).rows[0]!.count, previousJournal.entries.length);
+    assert.deepEqual(JSON.parse(String((await client.execute("select config from service_deployments")).rows[0]!.config)), { dms: { url: "https://dms.example.test/sse", authorization: "Bearer token" } });
   } finally {
     await close();
     await rm(root, { recursive: true, force: true });

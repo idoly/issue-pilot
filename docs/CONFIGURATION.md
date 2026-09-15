@@ -1,224 +1,238 @@
 # 配置说明
 
-本文定义当前根配置、SQLite业务配置、Service/Deployment、Pi model、七种capability和credential数据流。状态生命周期见[架构说明](ARCHITECTURE.md)，运行环境见[部署说明](DEPLOYMENT.md)。
+本文定义当前根配置、SQLite 业务配置、Service/Deployment、全局 Pi model、七种 capability 和 credential 数据流。状态生命周期见[架构说明](ARCHITECTURE.md)，运行环境见[部署说明](DEPLOYMENT.md)。
 
 ## 配置来源
 
 | 配置 | 事实源 |
 | --- | --- |
 | Path、port、default、retention、timeout、budget | `issue-pilot.config.ts` |
-| Image、resource、mount和probe | `deploy/issue-pilot.yaml` |
-| User、Service、Repository、Deployment、branch、完整credential | SQLite |
-| Pi/npm/Maven/SSH原生配置 | Operator维护的`/etc/issue-pilot`只读目录 |
-| Agent session选择 | 每轮从实际Repository access和Deployment生成 |
+| User、Service、Repository、Deployment、branch、全局模型、credential | SQLite |
+| Image、resource、mount、probe | `Containerfile`、`deploy/issue-pilot.yaml` |
+| Pi/npm/Maven/SSH 原生配置 | Operator 管理的 `/etc/issue-pilot` |
+| Agent session 选择 | 每轮从全局模型、实际 Repository access、Deployment capability 生成 |
 
-应用不接受环境变量覆盖。Node和Web直接导入根配置。环境变量只用于标准进程环境，例如`HOME`，不是Issue Pilot配置override。
+应用不接受环境变量覆盖。环境变量只用于标准进程环境，例如 `HOME`，不能改变 Issue Pilot state root、端口或业务默认值。
 
-普通工作台读取`GET /api/catalog`，只含Environment和Service可用范围。配置页按需读取`GET /api/config`，包含Repository、model、capability scope、`credentialConfigured`以及已存password和AccessKey。该接口只能在受信应用网络内访问，响应不得进入访问日志、监控或诊断附件。两种读取均经scope queue进入SQLite snapshot transaction。
-
-Service保存时，每个selected capability显式提交：
-
-- `preserve`：保留同Service/Environment现有credential。
-- `replace`：提交完整新credential。
-- `clear`：只允许optional credential。
-
-API在内存中合并一次，由Registry解析为typed config，reservation受影响Issue并关闭内存session，最后在SQLite transaction提交。Config GET会把旧secret返回受信配置页，因此编辑表单可直接回填；`preserve`仍供未携带secret的调用者使用。
+`GET /api/catalog` 只返回 Environment 和 Service 可用范围。配置页按需读取 `GET /api/config`，后者包含 Repository、全局 model、capability scope、`credentialConfigured` 和已存 credential。两个接口都使用 `Cache-Control: private, no-store`，并经 scope queue 读取一致 SQLite snapshot。Config 响应只能进入受信配置 UI，不得写入日志、监控或诊断附件。
 
 ## 根配置
 
-### State和区域
+### State 与区域
 
 | Field | 当前值 | 作用 |
 | --- | --- | --- |
-| `state.directory` | `.issue-pilot` | 相对project root的state root |
-| `state.databaseFile` | `issues.db` | 相对state root的SQLite文件 |
+| `state.directory` | `.issue-pilot` | 相对 project root 的 state root |
+| `state.databaseFile` | `issues.db` | 相对 state root 的 SQLite 文件 |
 | `state.sqliteBusyTimeoutMs` | `5000` | libSQL busy timeout |
 | `regional.locale` | `zh-CN` | Web locale |
-| `regional.timeZone` | `Asia/Shanghai` | Issue key日期和Agent时间上下文 |
-| `bootstrapUser` | 根配置中的subject/name/email | 仅`subjects`为空时插入一次 |
+| `regional.timeZone` | `Asia/Shanghai` | Issue key 日期与 Agent 时间上下文 |
+| `bootstrapUser` | 根配置中的 subject/name/email | 仅 `subjects` 为空时插入一次 |
 
-已有User不会被bootstrap配置覆盖。未传subject header时API选择最早创建的active user；显式header只能选择active subject。该header不是认证。
+已有 User 不会被 bootstrap 配置覆盖。未提供 subject header 时 API 选择最早创建的 active user；显式 `X-Issue-Pilot-Subject` 也只能选择 active user。该 header 不是认证。
 
-### HTTP和Web
+### HTTP 与 Web
 
 | Field | 当前值 |
 | --- | ---: |
-| `http.host/port` | `0.0.0.0` / `3000` |
+| `http.host` / `port` | `0.0.0.0` / `3000` |
 | `http.logger` | `true` |
 | `http.sseHeartbeatMs` | `15000` |
-| `web.host/port` | `0.0.0.0` / `4173` |
+| `web.host` / `port` | `0.0.0.0` / `4173` |
 | `web.agentStreamReconnectMs` | `1000` |
 | `web.agentStreamStaleMs` | `45000` |
 | `web.agentToolOutputCharacters` | `40000` |
 | `web.markdownCacheEntries` | `512` |
 | `web.markdownCacheCharacters` | `4194304` |
 
-`http.host`是application Pod的API listen地址。ClusterIP Service和Vite同样监听all interfaces，只能通过可信Ingress或开发网络访问。Vite API proxy固定连接本机`127.0.0.1:3000`。
+Vite API proxy 固定连接本机 `127.0.0.1:3000`。API 和 Vite 都监听所有接口，只能用于可信网络。
 
 ### Workspace
 
 | Field | 当前值 |
 | --- | ---: |
-| `retentionMs` | `604800000`，7天 |
-| `highWaterBytes` | `21474836480`，20GiB |
-| `targetBytes` | `17179869184`，16GiB |
-| `maintenanceIntervalMs` | `900000`，15分钟 |
+| `retentionMs` | `604800000`（7 天） |
+| `highWaterBytes` | `21474836480`（20 GiB） |
+| `targetBytes` | `17179869184`（16 GiB） |
+| `maintenanceIntervalMs` | `900000`（15 分钟） |
 | `taskConcurrency` | `4` |
 
-Non-zero target必须小于high-water；concurrency必须是正整数。Interval为0只禁用timer，启动仍执行一次maintenance。
+Non-zero target 必须小于 high-water；concurrency 必须为正整数。Interval 设为 0 只禁用周期 timer，启动时仍执行一次 maintenance。
 
 ### Defaults
 
 | Field | 当前值 |
 | --- | --- |
-| `environments` | `prod=正式`, `test=测试`, `dev=开发` |
+| `environments` | `prod=正式`、`test=测试`、`dev=开发` |
 | `deployment.baseBranch` | `main` |
-| `dms.sseUrl` | `https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse`（新Deployment表单默认值，可编辑） |
+| `dms.sseUrl` | `https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse` |
 | `nacos.group` | `DEFAULT_GROUP` |
-| `redis` | port`6379`, database`0`, scanResults`50` |
-| `rabbitmq` | AMQP`5672`, management`15672`, vhost`/` |
+| `redis` | port `6379`、database `0`、scanResults `50` |
+| `rabbitmq` | AMQP `5672`、management `15672`、vhost `/` |
 
-Environment name在启动时同步。其他default用于新配置；保存后SQLite是事实源。
+Environment name 在启动时同步。DMS URL 只用于新 Deployment 表单，可编辑；已保存 Deployment 不会被默认值覆盖。
 
-### Runtime
-
-| Field | 当前值 |
-| --- | --- |
-| `agent.modelResponseIdleMs` | `300000` |
-| `sourceBrowser.gitExecutable/searchExecutable` | `git` / `rg` |
-| `projectTools.node` | `.npmrc`, `.npm` relative to HOME |
-| `projectTools.maven` | `.m2/settings.xml`, `.m2/repository` |
-| `projectTools.executionMs` | `1800000` |
-| `redisWorker` | old`96MiB`, young`16MiB` |
-
-Image、UID、memory、termination grace和probe属于Kubernetes deployment，不在应用配置中重复。`ProcessToolRuntime`执行当前image PATH中的`npm`、`mvn`和`aliyun sls`；调用不选择image或container。DMS通过application内的MCP client访问Deployment配置的HTTPS endpoint。Playwright harness参数由`scripts/playwright.sh`拥有，不进入Service、Deployment或Agent。
-
-### Limits
+### Runtime 与 limits
 
 | Boundary | 当前值 |
 | --- | ---: |
-| Agent message | 50,000 chars |
-| Attachment file/request/count | 20MiB / 40MiB / 20 |
-| Multipart field | 100,000 bytes |
-| Process output | 5MiB |
-| Git operation/output | 120s / 2MiB |
-| Disk usage | 120s |
-| Capability result | 1MiB（DMS MCP除外） |
-| Capability default/connection timeout | 15s / 10s |
-| Source file/tree | 2MiB / 500 entries |
-| Source query/matches | 200 chars / 200 |
-| Source history/changes | 100 commits / 500 files |
-| Source command/output | 5s / 2MiB |
+| Agent model response idle | 300000 ms |
+| Agent message | 50000 chars |
+| Agent clipboard image | 复用 multipart file/request/count：20 MiB / 40 MiB / 20 |
+| Attachment file/request/count | 20 MiB / 40 MiB / 20 |
+| Multipart field | 100000 bytes |
+| Process output | 5 MiB |
+| Git operation/output | 120 s / 2 MiB |
+| Disk usage | 120 s / 1 MiB output |
+| Capability default/connection timeout | 15 s / 10 s |
+| Capability result | 1 MiB，DMS MCP 除外 |
+| Source file/tree | 2 MiB / 500 entries |
+| Source query/history/changes | 200 chars / 100 commits / 500 files |
+| Source command/output | 5 s / 2 MiB |
 | Project action | 30 minutes |
+| Redis Worker heap | old 96 MiB / young 16 MiB |
+
+Source executables 为 `git` 与 `rg`。Project tool 原生配置/cache 相对 `HOME`：Node 使用 `.npmrc`、`.npm`；Maven 使用 `.m2/settings.xml`、`.m2/repository`。
 
 ## User
 
-SQLite `subjects`字段：
+SQLite `subjects` 规则：
 
 | Field | Rule |
 | --- | --- |
 | `subject` | 创建后不可变；1..255；字母数字、`.`、`_`、`@`、`+`、`-` |
-| `name` | Required，最多100 chars |
-| `email` | Required，最多254 chars，转小写 |
-| `active` | Active user可被选择、创建/编辑Issue和作为assignee/CC |
+| `name` | Required，最多 100 chars |
+| `email` | Required，最多 254 chars，保存为小写 |
+| `active` | Active user 可选择、创建/编辑 Issue 并作为 assignee/CC |
 
-停用不删除row和历史关系。Transaction拒绝停用最后一名active user。`/api/users`只返回active users；`/api/users/manage`返回全部。
+停用不会删除 row 或历史关系。Transaction 拒绝停用最后一名 active user。`/api/users` 只返回 active user，`/api/users/manage` 返回全部。
 
-## Environment和Issue type
+## Environment 与 Issue type
 
 | Environment | Issue types | Repository mode |
 | --- | --- | --- |
-| `prod` | `data_processing`, `smart_analysis` | Read-only current Deployment commit |
+| `prod` | `data_processing`、`smart_analysis` | Read-only current Deployment commit |
 | `test` | `smart_analysis` | Read-only current Deployment commit |
-| `dev` | `defect_fix`, `feature_development` | Issue-local writable branch/worktree |
+| `dev` | `defect_fix`、`feature_development` | Issue-local writable branch/worktree |
 
-Web过滤选项，API再次验证。Prod/test不能通过直接API调用获得write access。
+Web 过滤输入，API 使用同一 domain contract 再次验证。Prod/test 不能通过直接 API 调用获得写权限。
 
-## Service和Repository
+## Service、Repository 与 Deployment
 
-Service：
+### Service
 
-- `name` required，最多200 chars。
-- `description` optional。
-- `key`创建时从name生成并保证唯一，后续rename不改变。
-- 至少一个Repository。
-- 每Environment最多一个Deployment。
+- `name` required，最多 200 chars。
+- `description` optional Markdown。
+- `key` 创建时从 name 生成并保证唯一，后续 rename 不改变 key。
+- 至少一个 Repository。
+- 每个 Environment 最多一个 Deployment。
+- 被 Issue 引用的 Service 不能删除。
+- 编辑时 reservation 全部关联 Issue；running/reserved Issue 或 session close 失败会阻止提交。
 
-被Issue引用的Service不能删除。编辑时reservation全部关联Issue；running/reserved Issue或session close失败会阻止提交。
+### Repository
 
-Repository：
+- `alias` 在 Service 内唯一，最多 100 chars。
+- `url` 在 Service 内唯一。
+- Create 不接受 client-supplied ID；edit ID 必须属于当前 Service。
+- 每个 Deployment 必须恰好覆盖 Service 当前全部 Repository。
 
-- `alias`在Service内唯一，最多100 chars。
-- `url`在Service内唯一。
-- Create不接受client-supplied ID；edit ID必须属于当前Service。
-- 每个Deployment必须恰好覆盖Service当前全部Repository。
+Alias 用于配置和展示；Issue `workspace_name` 从 URL basename/hash 稳定分配，不随 alias rename 移动。Existing dev 保留历史 base branch/workspace name；新增 Repository 使用当前 Deployment branch；待删除 dev worktree 必须 clean。
 
-Alias用于配置和显示；Issue `workspace_name`从URL basename/hash稳定分配，不随alias rename移动。Existing dev保留历史base branch和workspace name；新增Repository使用当前Deployment branch；待删除dev worktree必须clean。Released dev保持历史集合直到reopen，不在后台自动补齐。
+### Deployment
 
-## Deployment
-
-一个Deployment包含：
+一个 Deployment 包含：
 
 ```text
 Environment
-Repository branches (one per current Service Repository)
+Repository branches, one per current Service Repository
 Selected capability sections
 ```
 
-创建Issue前scope必须存在Deployment。每个`repositoryBranches[]`使用current Repository alias和non-empty base branch。Prod/test每轮读取当前branch；dev首次加入Repository时把branch写入Issue历史。配置页的每个Deployment可独立折叠；折叠只隐藏编辑控件，不清除或提交表单状态。
+创建 Issue 前，目标 Service/Environment 必须已有 Deployment。每个 `repositoryBranches[]` 使用 current Repository alias 和 non-empty base branch。Prod/test 每轮读取当前 branch；dev 首次加入 Repository 时将 branch 固化为 Issue 历史。
 
-### 全局Pi model
+服务编辑器中的 Deployment：
 
-SQLite `global_agent_configuration`保存唯一全局模型，所有Service和Environment共享，不允许Deployment覆盖。顶级“配置”页使用“用户 / 模型 / 服务”三个独立Tab，默认进入“服务”；三个面板保持挂载，切换时不丢失draft或弹窗状态。“模型”入口编辑required provider、model、thinkingLevel。修改时按`scope queue -> all Issue reservations`获取锁，关闭已有空闲session后提交；任一Issue正在运行时整次拒绝。Thinking level：
+- 添加时只从尚未配置的 Environment 中选择；加入后 Environment 身份固定，不再使用行内下拉框。
+- 折叠标题在桌面和移动端始终用一行显示环境名、已启用 capability、展开和删除控件。
+- 折叠前后标题内容和位置保持一致。
+- 已启用 capability 可从标题直接移除。
+- 展开区的“添加能力”只列出尚未启用的 capability，不重复列出已启用项。
+- 展开区继续编辑 Repository branch 和各 capability 参数；折叠不会清除 draft。
+
+## 全局 Pi model
+
+SQLite `global_agent_configuration` 保存唯一全局模型，所有 Service 和 Environment 共享，Deployment 不允许包含 Agent override。
+
+配置页“模型”Tab 编辑：
+
+```text
+provider
+model
+thinkingLevel
+```
+
+Thinking level：
 
 ```text
 off, minimal, low, medium, high, xhigh, max
 ```
 
-API用共享Pi `ModelRuntime`离线刷新当前配置并验证model可用性和level。Agent启动和SSE snapshot均读取这一全局行。Issue Pilot不通过环境变量或远程catalog补model。Migration `0038`只接受旧Deployment中唯一一致的agent值，将其提升为全局行并从所有Deployment JSON删除；多个不同旧值会因singleton约束失败，不静默选择。
+保存流程按 `scope queue -> all Issue reservations` 获取锁，关闭已有空闲 session 后事务提交。任一 Issue 正在运行时整次返回 `global_configuration_has_running_issues`，不会中断当前执行。
 
-`models.json`从Operator只读配置读取。`auth.json`和`models-store.json`复制到process-private `0700`临时目录，文件`0600`，供Pi storage实现加锁/更新；runtime close后删除。Operator修改auth/store后需重启application，明确替换当前process snapshot。
+`PiAgentModelCatalog` 从 Operator 的 Pi model 配置离线列出可用模型，保存时验证 provider/model 与 thinking level。首次启动若 singleton 缺失，选择 catalog 第一项，优先使用 `medium`。Published migration `0038_global_agent_configuration` 将旧 Deployment 中唯一一致的模型提升为 singleton；多个不同旧值不会被静默选择。
+
+Pi 原生文件由 Operator 提供：
+
+- `models.json` 只读读取。
+- `auth.json`、`models-store.json` 复制到 process-private `0700` 临时目录，文件 `0600`，供 Pi storage 使用。
+- Operator 更新这些文件后需重启 application，以创建新的 process snapshot。
 
 ## Built-in Pi tools
 
-| 实际Repository access | Tools |
+| 实际 Repository access | Tools |
 | --- | --- |
-| 至少一个且全部write | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` |
+| 至少一个且全部 write | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` |
 | 其他 | `read`, `grep`, `find`, `ls` |
 
-Writable runtime PATH提供：
+Writable runtime PATH 提供：
 
 ```text
 node-project <project> install|test|build|typecheck
 maven-project <project> test|verify|package
 ```
 
-Node仅支持npm。Server/watch action不可用；wrapper和broker验证project path。
+Node 只支持 npm。Server/watch action、任意 executable、absolute host path 和自定义 config/cache path 不可用。
 
-## Capability共同合同
+## Capability 通用合同
 
-固定key/order：
+固定 key/order：
 
 ```text
 nacos, db, redis, mq, es, dms, sls
 ```
 
-Registry保存时解析external unknown并生成typed config。Pi tool使用Registry TypeBox schema解析一次input，然后直接调用protocol client。Client信任内部shape，但限制外部target、redirect、timeout、abort、response和result。超限整次失败，不静默截断。
+Service 保存时，每个 selected capability 显式提交 credential intent：
+
+- `preserve`：保留同 Service/Environment 现有 credential。
+- `replace`：提交完整新 credential。
+- `clear`：只允许 optional credential。
+
+API 在内存中合并一次，由 Registry 解析为 typed config，再在 reservation 和 transaction 内保存。Pi custom tool 使用 Registry TypeBox schema 解析一次 input，然后调用 session-local protocol client。超限整次失败，不把 partial result 伪装成完整结果。
 
 ### Nacos
 
 Config：
 
-- `serverUrl`为HTTP(S) root origin，无credential/query/fragment。
-- `namespace`可空，最多255。
-- `group`和去重后的1..50个`dataIds`只含字母数字、`.`、`_`、`-`，每项最多255。
-- username/password同时为空或同时填写。
+- `serverUrl` 为 HTTP(S) root origin，无 credential/query/fragment。
+- `namespace` 可空，最多 255。
+- `group` 和去重后的 1..50 个 `dataIds` 只含字母数字、`.`、`_`、`-`，每项最多 255。
+- username/password 同时为空或同时填写。
 
-Tool input为空对象。调用读取全部exact Data ID；404返回`content:null`。Login response和总内容受budget限制。
+Tool input 是空对象。调用读取全部 exact Data ID；404 返回 `content:null`。Login response 和总内容受 budget 限制。
 
 ### MySQL (`db`)
 
-Config：`mysql://host:port/database`，显式port和单段database，无URL credential/query/fragment；username/password required。
+Config：`mysql://host:port/database`，显式 port、单段 database、无 URL credential/query/fragment；username/password required。
 
 Input：
 
@@ -226,74 +240,99 @@ Input：
 { "statement": "SELECT ..." }
 ```
 
-最多20,000 chars，单statement，无comment。允许`SELECT/SHOW/DESCRIBE/DESC/EXPLAIN`，拒绝write、lock、multi-statement、file/variable output、`EXPLAIN ANALYZE`和已知副作用函数。Client执行`START TRANSACTION READ ONLY`，stream最多500 rows/1MiB，最后rollback；abort销毁connection。DB账号仍须只读。
+最多 20000 chars，单 statement，无 comment。允许 `SELECT/SHOW/DESCRIBE/DESC/EXPLAIN`；拒绝 write、lock、multi-statement、file/variable output、`EXPLAIN ANALYZE` 和已知副作用函数。Client 在 server-enforced read-only transaction 中 stream，最多 500 rows/1 MiB，最后 rollback；abort 销毁 connection。数据库账号仍必须是只读账号。
 
 ### Redis
 
-Config：host，port 1..65535，optional username/password，database 0..1,000,000。
+Config：host、port 1..65535、optional username/password、database 0..1000000。
 
-Actions：`get,mget,hget,hgetall,type,ttl,scan`。Key/field/pattern最多1024 chars，mget最多100 keys，结果最多500。node-redis在heap受限Worker中执行；arbitrary command不可用。
+Actions：`get,mget,hget,hgetall,type,ttl,scan`。Key/field/pattern 最多 1024 chars，mget 最多 100 keys，结果最多 500。node-redis 在 heap-limited Worker 中运行，不能执行 arbitrary command。
 
 ### RabbitMQ (`mq`)
 
-Config：host，AMQP port，management port，required username/password，virtualHost。Actions：`overview,queues,queue,bindings`；后两者require queue。只访问Management HTTP API，不建立producer/consumer，不follow redirect。
+Config：host、AMQP port、management port、required username/password、virtualHost。Actions：`overview,queues,queue,bindings`；后两者 require queue。只访问 Management HTTP API，不创建 producer/consumer，不 follow redirect。
 
 ### Elasticsearch (`es`)
 
-Config：HTTP(S) URL，可含reverse-proxy path，无credential/query/fragment；username/password同时为空或填写。Actions：`search,count,mapping`。Search query为object，limit 1..200；不follow redirect。
+Config：HTTP(S) URL，可含 reverse-proxy path，无 credential/query/fragment；username/password 同时为空或填写。Actions：`search,count,mapping`。Search query 为 object，limit 1..200；不 follow redirect。
 
-### DMS
+### DMS MCP
 
-Config包含required HTTPS `url`、required `authorization` credential，以及作为一组出现的optional `instanceId/instanceHost/instancePort/instanceLabel/databaseId/databaseLabel`。Authorization格式必须是`Bearer <token>`。URL由每个Deployment显式配置，禁止内嵌credential、query或fragment，且不接受Agent或tool input覆盖。配置页只要求手工输入实例`alias`和数据库`schema`，不提供远程下拉。两项输入停止500ms后，受信`POST /api/dms/scope/resolve`在一个MCP session内先调用`listInstances(search_key=alias)`并要求InstanceAlias唯一精确匹配，再调用`getDatabase(host, port, schema_name)`，严格核对返回InstanceId和schema并取得DatabaseId；解析成功后才保存完整scope。旧CLI `accessKeyId/accessKeySecret/dbId/logic/tid`字段不再解析、迁移或回退；新的`instanceId/databaseId`只用于MCP scope。
-
-DMS使用MCP 2024-11-05 HTTP+SSE transport：Authorization同时发送到初始SSE GET和同源message POST。Client拒绝非HTTPS target、跨源message endpoint和HTTP redirect；每次tool调用建立独立连接并在完成、失败或abort后关闭。
-
-Tool input：
+每个 Deployment 共享一份 DMS connection，并授权 1..20 个 schema：
 
 ```text
-{ script: "SELECT ...", logic?: boolean }
+url
+Authorization
+databases[]
+  instanceAlias
+  schemaName
+  instanceId       # 后台解析
+  instanceHost     # 后台解析
+  instancePort     # 后台解析
+  databaseId       # 后台解析
 ```
 
-Agent只看到一个`dms`工具，不能列出、选择或命名远端MCP工具。Client每次调用只查找schema精确包含`database_id`和`script`的`executeScript`，其他远端工具即使标记read-only也不向Agent开放。Issue Pilot由持久化Deployment scope强制注入`database_id`，Agent不能提供或覆盖；未配置完整database scope时调用失败。`script`复用单条只读SQL校验，仅允许`SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝DDL/DML、comment、multi-statement、lock和已知副作用函数。连接与调用总时限30秒；DMS script和result不应用统一1MiB budget，MCP tool error整次失败。Bearer不进入context、prompt、tool schema/input、result、details、argv或日志。
+- URL required、HTTPS、无 embedded credential/query/fragment，可按 Deployment 编辑。
+- Authorization required，格式严格为 `Bearer <token>`。
+- `schemaName` 在 Deployment 内唯一；同名 schema 不能跨实例重复配置。
+- 解析后的 DatabaseId 也必须唯一。
+- 用户只填写 alias 和 schema，不填写额外名称、host、port、InstanceId 或 DatabaseId。
+- 每行 alias/schema 停止输入约 500 ms 后独立调用 `POST /api/dms/scope/resolve`。
+- API 在同一短生命周期 MCP session 中调用唯一、read-only 的 `listInstances` 和 `getDatabase`。
+- `listInstances(search_key=alias)` 必须按 `InstanceAlias` 唯一精确匹配。
+- `getDatabase(host, port, schema_name)` 必须返回相同 InstanceId 与 schema。
+- 所有数据库都完整解析后才允许保存。
+
+旧 Aliyun CLI `accessKeyId/accessKeySecret/dbId/logic/tid` 配置仍不解析、不迁移、不兼容、不回退。Migration `0039_dms_database_targets` 把当前 MCP 单数据库合同提升为 `databases[]`；遇到不完整的当前 scope 会显式失败，不猜测目标。`0040_dms_schema_selector` 删除过渡数组中的冗余 name，使 schema 成为唯一 Agent selector。运行时不保留单目标 JSON 兼容路径。
+
+Transport 使用 MCP SDK `SSEClientTransport`。Authorization 同时用于初始 SSE GET 和同源 message POST。Client 只允许 HTTPS、拒绝 redirect、拒绝跨源 message endpoint，并在完成、失败或 abort 后关闭连接。
+
+Agent tool input：
+
+```json
+{ "schema": "xhgj_oms", "script": "SELECT ...", "logic": false }
+```
+
+`schema` required，并由当前 Deployment 的 `databases[].schemaName` 动态生成 enum；`logic` optional。Agent 只看到一个 `dms` custom tool，不能提交 DatabaseId、列出远端工具或调用 scope resolve 工具。Runtime 把 schema 精确映射到持久化 DatabaseId，只接受唯一且 schema 包含 required `database_id`/`script` 的 `executeScript`，并由服务器注入 DatabaseId。SQL 只允许单条 `SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝 DDL/DML、comment、multi-statement、lock 和已知副作用函数。一次调用只选择一个数据库；连接与调用共享 30 秒 operation signal；DMS script/result 不应用 1 MiB 应用层限制。
 
 ### SLS
 
-Config：required AccessKey，合法region/project，至少一个exact logstore。Agent session创建SLS工具时，将当前Issue所选Deployment的logstore白名单投影为`logstore`输入枚举；不得从Service key、Service name或其他Environment的配置推断名称。
+Config：required AccessKey、合法 region/project、至少一个 exact logstore。Session 创建 SLS tool 时把当前 Deployment logstore 白名单投影为 input enum。
 
 Input：
 
 ```text
 logstore
-from/to          # optional but must appear together
+from/to          # optional，必须同时出现
 query            # optional
-trace_id         # UUID, mutually exclusive with query
+trace_id         # UUID，与 query 互斥
 ```
 
-普通query默认最近15分钟，trace默认24小时。Endpoint为`<region>.log.aliyuncs.com`。Client按100条自动分页直到查询结果耗尽，不设置record count上限；每页后检查统一1MiB结果预算，超限整次返回`capability_result_too_large`，不把partial result伪装为完整。
+普通 query 默认最近 15 分钟，trace 默认 24 小时。Client 以 100 条/page 自动读取到耗尽，不设置 record-count 上限；每页后检查统一 1 MiB result budget，超限整次失败。
 
-SLS每次创建临时HOME和`0600 ~/.aliyun/config.json`，由application进程中的Aliyun CLI读取，finally递归删除。SLS AccessKey不在argv；query、project、logstore和时间范围可能在process argv中。DMS Bearer只作为HTTPS Authorization header传给当前Deployment授权的MCP endpoint。
+每次调用创建临时 HOME 与 `0600 ~/.aliyun/config.json`，由 Aliyun CLI 读取，finally 删除。AccessKey 不在 argv；query、project、logstore 和时间范围可能出现在 application process argv。
 
-## Result和secret
+## Result 与 secret
 
-| Capability | 主要budget |
+| Capability | 主要 budget |
 | --- | --- |
-| Nacos | 50 Data IDs / 1MiB |
-| MySQL | 20k chars / 500 rows / 1MiB |
-| Redis | 100 keys / 500 results / 1MiB |
-| RabbitMQ | 1MiB response |
-| Elasticsearch | 200 results / 1MiB |
-| DMS MCP | 30s total / arguments和result无应用层byte limit |
-| SLS | 自动分页 / 30s total / 1MiB |
+| Nacos | 50 Data IDs / 1 MiB |
+| MySQL | 20k chars / 500 rows / 1 MiB |
+| Redis | 100 keys / 500 results / 1 MiB |
+| RabbitMQ | 1 MiB response |
+| Elasticsearch | 200 results / 1 MiB |
+| DMS MCP | 30 s / argument 和 result 无应用层 byte limit |
+| SLS | 自动分页 / 30 s / 1 MiB |
 
 Secret flow：
 
-1. SQLite保存完整typed Deployment config，是唯一业务secret事实源。
-2. Catalog不读取config JSON；Config GET返回完整Deployment配置和credential。
-3. Web编辑表单回填Config GET中的secret，并通过`preserve|replace|clear`协议提交；当前页面通常发送`replace`。
-4. API内存合并后只解析一次并transaction保存。
-5. `AgentSessionContext`、prompt、schema和tool input不含credential。
-6. `createCapabilityTools()` clone session-local config并只在tool closure传给client。
-7. DMS Bearer只传给session-local MCP client；SLS credential写入临时profile；其他credential只传给in-process protocol client。
-8. Tool result进入model context和Pi JSONL，可能包含敏感业务数据。
+1. SQLite 保存完整 typed Deployment config。
+2. Catalog 不读取 config JSON；Config GET 返回完整配置与 credential。
+3. 配置页 draft 回填 secret，并通过 `preserve|replace|clear` 提交。
+4. API 合并、解析后 transaction 保存。
+5. Agent context、prompt、tool schema/input 不含 credential。
+6. `createCapabilityTools()` clone session-local config，只在 tool closure 传给 client。
+7. DMS Bearer 只作为 HTTPS Authorization header；SLS credential 只进入临时 profile；其他 credential 只进入 in-process client。
+8. Tool result 进入 model context 和 Pi JSONL，可能包含敏感业务数据。
 
-不得记录configuration write body、Config GET响应、Authorization/Cookie、credential、temporary profile、package config或完整敏感tool result。
+不得记录 Config GET response、configuration write body、Authorization/Cookie、credential、temporary profile、package auth 或完整敏感 tool result。
