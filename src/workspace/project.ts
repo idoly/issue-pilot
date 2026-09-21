@@ -48,6 +48,10 @@ export interface PreparedDevelopmentConversion {
   runtimeRoot: string;
 }
 
+export interface PreparedDevelopmentScopeMigration extends PreparedDevelopmentConversion {
+  removedRepositories: IssueRepository[];
+}
+
 type IssueRepositoryWriter = Pick<Database, "insert" | "delete">;
 type IssueRepositoryReplacement = Pick<IssueRepository, "url" | "baseBranch" | "workingBranch" | "localPath" | "workspaceName" | "commitBefore">;
 
@@ -306,6 +310,80 @@ export class IssueProjectManager {
       try { await this.hydrateReadOnlyRuntime(issue); }
       catch (caught) { cleanupFailed = true; recoveryError = caught; }
       if (cleanupFailed) throw new Error("workspace_conversion_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_conversion_cleanup_failed") });
+      throw error;
+    }
+  }
+
+  async migrateDevelopmentScope<T>(
+    issue: ProjectIssue,
+    target: { serviceId: string; environmentId: string },
+    finalize: (migration: PreparedDevelopmentScopeMigration) => Promise<T>,
+  ): Promise<T> {
+    const [{ repositories }, existingRepositories] = await Promise.all([
+      loadDeploymentRepositories(this.database, target),
+      this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
+    ]);
+    if (classifyRepositoryState(existingRepositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
+    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
+    if (!await pathExists(workspaceRoot)) throw new Error("workspace_missing");
+    await assertManagedIssueWorkspaceLayout(workspaceRoot, existingRepositories.map((repository) => repository.localPath!));
+
+    const existingByUrl = new Map(existingRepositories.map((repository) => [repository.url, repository]));
+    const existingNames = issueRepositoryWorkspaceNames(existingRepositories);
+    const targetUrls = new Set(repositories.map(({ repository }) => repository.url));
+    const removedRepositories = existingRepositories.filter((repository) => !targetUrls.has(repository.url));
+    for (const repository of removedRepositories) await this.worktrees.assertClean(repository.url, repository.localPath!);
+
+    const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url), existingNames);
+    const mode = developmentWorktreeMode(issue.type);
+    try {
+      return await this.worktrees.prepareBatch({
+        worktrees: repositories.map(({ repository, baseBranch }) => {
+          const existing = existingByUrl.get(repository.url);
+          return {
+            issueKey: issue.key,
+            workspaceName: names.get(repository.url)!,
+            url: repository.url,
+            baseBranch: existing?.baseBranch ?? baseBranch,
+            mode,
+            ...(existing?.workingBranch ? { workingBranch: existing.workingBranch } : {}),
+            ...(existing?.localPath ? { existingWorkspacePath: existing.localPath } : {}),
+            ...(existing?.commitBefore ? { existingBaseCommit: existing.commitBefore } : {}),
+          };
+        }),
+        finalize: async (prepared) => {
+          await assertManagedIssueWorkspaceLayout(workspaceRoot, [
+            ...prepared.map(({ workspacePath }) => workspacePath),
+            ...removedRepositories.map(({ localPath }) => localPath!),
+          ]);
+          const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({
+            name: names.get(repositories[index]!.repository.url)!,
+            repositoryPath: worktree.workspacePath,
+          })), "write");
+          await prepareProjectWrappers(runtimeRoot);
+          const complete = () => finalize({ prepared, repositories, existingRepositories, removedRepositories, names, runtimeRoot });
+          if (!removedRepositories.length) return complete();
+          let result: T | undefined;
+          await this.worktrees.removeBatch({
+            issueKey: issue.key,
+            mode,
+            worktrees: removedRepositories.map((repository) => ({
+              workspaceName: existingNames.get(repository.url)!,
+              url: repository.url,
+              workingBranch: repository.workingBranch!,
+              workspacePath: repository.localPath!,
+            })),
+            finalize: async () => { result = await complete(); },
+          });
+          return result!;
+        },
+      });
+    } catch (error) {
+      let cleanupFailed = error instanceof WorktreeRollbackFailure;
+      let recoveryError: unknown;
+      try { await this.hydrateDevelopmentRuntime(issue); }
+      catch (caught) { cleanupFailed = true; recoveryError = caught; }
+      if (cleanupFailed) throw new Error("workspace_scope_migration_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_scope_migration_cleanup_failed") });
       throw error;
     }
   }

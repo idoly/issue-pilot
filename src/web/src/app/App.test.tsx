@@ -9,8 +9,8 @@ vi.mock("../data/client", async (importOriginal) => {
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
     workspaceStatus: retryable ? "failed" : status === "in_progress" ? "running" : "ready", agentRunning: status === "in_progress", resolvedAt: status === "resolved" ? now : null,
-    assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
-    service, createdAt: now, updatedAt: now, repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], relatedIssues: [], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: (id === "ISSUE-20260810-038" ? "second-user" : "fixture-user") as string | null,
+    service, createdAt: now, updatedAt: now, repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], relatedIssues: [], scopeTransitions: [] as Array<Record<string, unknown>>, comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
   });
@@ -37,7 +37,10 @@ vi.mock("../data/client", async (importOriginal) => {
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }, {
       key: "orders", name: "Orders", description: "订单服务。",
-      deployments: [{ environmentKey: "prod", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "main" }], capabilities: [] }],
+      deployments: [
+        { environmentKey: "prod", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "main" }], capabilities: [] },
+        { environmentKey: "dev", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "develop" }], capabilities: [] },
+      ],
       repositories: [{ id: "orders-repository", alias: "orders", url: "git@example.com:team/orders.git" }],
     }],
   };
@@ -63,6 +66,20 @@ vi.mock("../data/client", async (importOriginal) => {
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     updateGlobalAgent: vi.fn(async (agent) => { configuration.agent = { ...agent }; return { ok: true as const }; }),
     listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
+    createIssue: vi.fn(async (input: { title: string; description: string; priority: string; workMode: string; serviceKey: string; assigneeSubject: string | null; ccSubjects: string[]; relatedIssueKeys?: string[] }) => {
+      const created = issue("ISSUE-20260810-043", input.title, "open");
+      created.description = input.description;
+      created.priority = input.priority;
+      created.type = "smart_analysis";
+      created.environmentKey = "prod";
+      created.service = configuration.services.find((candidate) => candidate.key === input.serviceKey) ?? created.service;
+      created.assigneeSubject = input.assigneeSubject;
+      issues.unshift(created);
+      return structuredClone(created);
+    }),
+    listIssuePins: vi.fn(async (_signal?: AbortSignal) => [] as string[]),
+    setIssuePinned: vi.fn(async (_id: string, _pinned: boolean) => undefined),
+    updateIssueRelatedIssues: vi.fn(async (_id: string, _relatedIssueKeys: string[]) => undefined),
     resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({ instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1", instanceHost: `${input.schemaName}.db.example.test`, instancePort: "3306", databaseId: input.schemaName === "mdm" ? "456" : "123" })),
     loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
       totalBytes: 4 * 1024 ** 3 + 2048,
@@ -112,11 +129,38 @@ vi.mock("../data/client", async (importOriginal) => {
       selected.status = status;
       return structuredClone(selected);
     }),
-    convertIssueToDevelopment: vi.fn(async (id: string) => {
+    planIssueScopeTransition: vi.fn(async (id: string, target: { serviceKey: string; workMode: string }) => {
       const selected = issues.find((item) => item.id === id)!;
-      selected.environmentKey = "dev";
-      selected.type = "defect_fix";
-      selected.repositories[0]!.workingBranch = `hotfix-${id.toLowerCase()}`;
+      return {
+        planHash: `sha256:${"a".repeat(64)}`,
+        expectedIssueUpdatedAt: selected.updatedAt,
+        action: target.workMode === "development_fix" ? "convert_to_development" as const : "rebind_read_only" as const,
+        current: { service: selected.service, workMode: selected.environmentKey === "prod" ? "production_analysis" as const : "test_analysis" as const, repositoryAccess: "read" as const },
+        target: { service: selected.service, workMode: target.workMode, repositoryAccess: target.workMode === "development_fix" ? "write" as const : "read" as const },
+        repositories: { retained: [{ name: "orders", url: selected.repositories[0]!.url, baseBranch: selected.repositories[0]!.baseBranch }], added: [], removed: [] },
+        branch: target.workMode === "development_fix" ? `hotfix-${id.toLowerCase()}` : null,
+        session: { closeCurrent: true, preserveConversation: true as const },
+        preserved: ["attachments", "comments", "conversation"] as ["attachments", "comments", "conversation"],
+        warnings: [],
+      };
+    }),
+    applyIssueScopeTransition: vi.fn(async (id: string, target: { serviceKey: string; workMode: string }) => {
+      const selected = issues.find((item) => item.id === id)!;
+      const fromService = structuredClone(selected.service);
+      const fromWorkMode = actual.issueWorkMode(selected.environmentKey as "prod" | "test" | "dev", selected.type as Parameters<typeof actual.issueWorkMode>[1])!;
+      if (target.workMode === "development_fix") {
+        selected.environmentKey = "dev";
+        selected.type = "defect_fix";
+        selected.repositories[0]!.workingBranch = `hotfix-${id.toLowerCase()}`;
+      }
+      selected.scopeTransitions.push({
+        id: "transition-1", action: "convert_to_development",
+        from: { service: fromService, workMode: fromWorkMode },
+        to: { service: structuredClone(selected.service), workMode: target.workMode },
+        repositories: { retained: [selected.repositories[0]!.url], added: [], removed: [] },
+        planHash: `sha256:${"a".repeat(64)}`,
+        actor: { subject: "fixture-user", name: "严欣" }, createdAt: now,
+      });
       return { issueKey: id };
     }),
     fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
@@ -151,6 +195,24 @@ describe("issue pilot workspace", () => {
     expect(within(personalQueue).queryByText("ISSUE-20260810-038")).toBeNull();
     expect(personalQueue.querySelector(".queue-item.selected")).toBeNull();
     expect(within(personalQueue).getByText("ISSUE-20260810-042")).toBeTruthy();
+  });
+
+  test("pins personal queue Issues above the existing queue order", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.setIssuePinned).mockClear();
+    render(() => <App />);
+
+    fireEvent.click(await screen.findByRole("radio", { name: "工单" }));
+    const queue = await screen.findByLabelText("工单队列");
+    await waitFor(() => expect(within(queue).getAllByRole("listitem")[0]?.textContent).toContain("ISSUE-20260810-042"));
+
+    fireEvent.click(within(queue).getByRole("button", { name: "固定 ISSUE-20260810-041" }));
+    await waitFor(() => expect(within(queue).getAllByRole("listitem")[0]?.textContent).toContain("ISSUE-20260810-041"));
+    expect(client.setIssuePinned).toHaveBeenCalledWith("ISSUE-20260810-041", true);
+
+    fireEvent.click(within(queue).getByRole("button", { name: "取消固定 ISSUE-20260810-041" }));
+    await waitFor(() => expect(within(queue).getAllByRole("listitem")[0]?.textContent).toContain("ISSUE-20260810-042"));
+    expect(client.setIssuePinned).toHaveBeenCalledWith("ISSUE-20260810-041", false);
   });
 
   test("scrolls a dashboard Issue detail into view on a narrow screen", async () => {
@@ -210,22 +272,44 @@ describe("issue pilot workspace", () => {
     const queue = screen.getByLabelText("工单队列");
     fireEvent.click(within(queue).getByRole("button", { name: "新建工单" }));
     const dialog = await screen.findByRole("dialog", { name: "新建工单" });
-    expect(within(dialog).queryByLabelText("关联开发工单")).toBeNull();
-    fireEvent.click(within(dialog).getByLabelText("工单环境"));
-    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式"));
     await waitFor(() => expect(within(dialog).getByLabelText("关联开发工单")).toBeTruthy());
-    fireEvent.click(within(dialog).getByLabelText("工单类型"));
-    fireEvent.click(within(await screen.findByRole("listbox")).getByText("数据处理"));
+    fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式数据处理"));
     await waitFor(() => expect(within(dialog).queryByLabelText("关联开发工单")).toBeNull());
 
-    fireEvent.click(within(dialog).getByLabelText("工单类型"));
-    fireEvent.click(within(await screen.findByRole("listbox")).getByText("智能分析"));
+    fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式问题调查"));
     const relationSelect = await waitFor(() => within(dialog).getByLabelText("关联开发工单"));
     fireEvent.click(relationSelect);
     const options = await screen.findByRole("listbox");
     expect(within(options).getByText(/ISSUE-20260810-038 · 批量审批偶发超时 · SRM/)).toBeTruthy();
     fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
     await waitFor(() => expect(relationSelect.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
+  });
+
+  test("updates related development Issues from a production investigation", async () => {
+    const client = await import("../data/client");
+    const loadedIssues = await client.listIssues();
+    const developmentIssue = loadedIssues.find((issue) => issue.id === "ISSUE-20260810-038")!;
+    developmentIssue.environmentKey = "dev";
+    developmentIssue.workspaceStatus = "ready";
+    developmentIssue.agentRunning = false;
+    vi.mocked(client.listIssues).mockResolvedValueOnce(loadedIssues).mockResolvedValueOnce(loadedIssues);
+    render(() => <App initialView="issues" />);
+
+    const queue = await waitFor(() => screen.getByLabelText("工单队列"));
+    fireEvent.click(await waitFor(() => within(queue).getByText("ISSUE-20260810-041")));
+    const editButton = await waitFor(() => screen.getByRole("button", { name: "编辑关联" }));
+    fireEvent.click(editButton);
+    const dialog = await screen.findByRole("dialog", { name: "编辑关联开发工单" });
+    const selector = await waitFor(() => within(dialog).getByLabelText("编辑关联开发工单"));
+    fireEvent.click(selector);
+    const options = await screen.findByRole("listbox");
+    fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
+    await waitFor(() => expect(selector.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
+    await waitFor(() => expect(client.updateIssueRelatedIssues).toHaveBeenCalledWith("ISSUE-20260810-041", ["ISSUE-20260810-038"]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑关联开发工单" })).toBeNull());
   });
 
   test("collapses and expands a long Issue description", async () => {
@@ -390,38 +474,47 @@ describe("issue pilot workspace", () => {
     const reopenedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
     expect(within(reopenedIssueDialog).getByText("existing.csv")).toBeTruthy();
     expect(within(reopenedIssueDialog).getByText("1")).toBeTruthy();
-    fireEvent.click(within(reopenedIssueDialog).getByLabelText("编辑工单环境"));
-    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式"));
-    await waitFor(() => expect(within(reopenedIssueDialog).getByLabelText("编辑工单类型").closest(".ads-select")?.textContent).toMatch(/数据处理|智能分析/));
-    await waitFor(() => expect(within(reopenedIssueDialog).getByLabelText("编辑工单服务").closest(".ads-select")?.textContent).toContain("Orders"));
-    fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "保存" }));
-    const scopeDialog = await waitFor(() => screen.getByRole("dialog", { name: "切换调查范围" }));
-    expect(within(scopeDialog).getByText(/Orders \/ 正式.*已有对话、附件和评论会保留/)).toBeTruthy();
-    fireEvent.click(within(scopeDialog).getByRole("button", { name: "返回编辑" }));
-    const returnedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
-    fireEvent.click(within(returnedIssueDialog).getByRole("button", { name: "取消" }));
+    expect(within(reopenedIssueDialog).queryByLabelText("编辑工单环境")).toBeNull();
+    expect(within(reopenedIssueDialog).queryByLabelText("编辑工单服务")).toBeNull();
+    expect(within(reopenedIssueDialog).queryByLabelText("编辑工单类型")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "切换调查范围" })).toBeNull();
+    fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
     fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
     fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     const issueActions = document.querySelector(".issue-actions");
     expect(issueActions).toBeTruthy();
-    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["转开发修复", "确认解决", "编辑工单"]);
-    fireEvent.click(screen.getByRole("button", { name: "转开发修复" }));
-    const conversionDialog = await waitFor(() => screen.getByRole("dialog", { name: "转开发修复" }));
-    expect(within(conversionDialog).getByText(/已有分析对话、附件和评论保持不变，转换后 Agent 将继续处理/)).toBeTruthy();
-    fireEvent.click(within(conversionDialog).getByRole("button", { name: "确认转换" }));
+    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["变更处理范围", "确认解决", "编辑工单"]);
+    fireEvent.click(screen.getByRole("button", { name: "变更处理范围" }));
+    const scopeDialog = await waitFor(() => screen.getByRole("dialog", { name: "变更处理范围" }));
+    fireEvent.click(within(scopeDialog).getByLabelText("目标处理方式"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("开发缺陷修复"));
+    await waitFor(() => expect(within(scopeDialog).getByLabelText("目标处理方式").closest(".ads-select")?.textContent).toContain("开发缺陷修复"));
+    fireEvent.click(within(scopeDialog).getByRole("button", { name: "预检变更" }));
+    await waitFor(() => expect(within(scopeDialog).getByRole("region", { name: "范围变更预览" })).toBeTruthy());
+    expect(within(scopeDialog).getByText(/hotfix-issue-20260810-041/)).toBeTruthy();
+    fireEvent.click(within(scopeDialog).getByRole("button", { name: "确认变更" }));
     const clientAfterConversion = await import("../data/client");
-    await waitFor(() => expect(clientAfterConversion.convertIssueToDevelopment).toHaveBeenCalledWith("ISSUE-20260810-041"));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "转开发修复" })).toBeNull());
-    expect(screen.queryByRole("button", { name: "转开发修复" })).toBeNull();
-    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["确认解决", "编辑工单"]);
+    await waitFor(() => expect(clientAfterConversion.applyIssueScopeTransition).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "变更处理范围" })).toBeNull());
+    expect(screen.getByRole("button", { name: "变更处理范围" })).toBeTruthy();
+    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["创建正式跟进", "变更处理范围", "确认解决", "编辑工单"]);
+    fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
+    const followUpDialog = await waitFor(() => screen.getByRole("dialog", { name: "创建正式跟进工单" }));
+    expect((within(followUpDialog).getByLabelText("正式跟进标题") as HTMLInputElement).value).toBe("【正式跟进】客户导出的 CSV 缺少时区信息");
+    expect(within(followUpDialog).getByText(/附件不会复制/)).toBeTruthy();
+    fireEvent.click(within(followUpDialog).getByRole("button", { name: "取消" }));
+    const scopeHistory = screen.getByRole("heading", { name: "处理范围历史" }).closest("section")!;
+    expect(scopeHistory.textContent).toContain("Orders · 正式问题调查 → Orders · 开发缺陷修复");
+    expect(scopeHistory.textContent).toContain("严欣");
     expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const developmentEditor = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
-    expect((within(developmentEditor).getByLabelText("编辑工单环境") as HTMLButtonElement).disabled).toBe(true);
-    expect((within(developmentEditor).getByLabelText("编辑工单服务") as HTMLButtonElement).disabled).toBe(true);
+    expect(within(developmentEditor).queryByLabelText("编辑工单环境")).toBeNull();
+    expect(within(developmentEditor).queryByLabelText("编辑工单服务")).toBeNull();
+    expect(within(developmentEditor).queryByLabelText("编辑工单类型")).toBeNull();
     fireEvent.click(within(developmentEditor).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "浏览工单代码" }));
     const developmentSource = await waitFor(() => screen.getByRole("region", { name: "ISSUE-20260810-041 代码浏览器" }));
@@ -782,7 +875,7 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
-    expect(screen.getByRole("button", { name: "转开发修复" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "变更处理范围" })).toBeTruthy();
     const queueItem = await waitFor(() => screen.getByRole("listitem"));
     expect(queueItem.textContent).toContain("ISSUE-20260810-042");
     expect(queueItem.textContent).toContain("待确认");

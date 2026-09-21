@@ -64,6 +64,7 @@ Vite 监听 `0.0.0.0:4173` 并代理本机 3000 API，只能用于可信开发�
 | `src/workspace/project-tools.ts` | Unix socket、DB reauthorization、Node/Maven execution |
 | `src/workspace/source-browser.ts` | Source authorization、bounded reads、dev file/Git mutation |
 | `src/workspace/lifecycle.ts` | Inspection、stats、release、reopen、maintenance |
+| `src/workspace/scope-transition.ts` | Scope transition plan/hash、支持矩阵和 apply |
 | `src/web/src/data/client.ts` | Web request 与 DTO |
 | `src/web/src/app/ApplicationResources.tsx` | Catalog/config/user shared resource 与 latest-wins refresh |
 | `src/web/src/app/OverviewView.tsx` | Homepage Issue request、polling、abort、latest-wins state |
@@ -111,14 +112,14 @@ Route、Web 和 AgentEngine 不复制 owner 事实。
 
 以下内容只定义一次：
 
-- Business enum/predicate：`src/domain/contracts.ts`
+- Business enum/predicate 与 Issue work mode 映射：`src/domain/contracts.ts`
 - Runtime config/limit：`issue-pilot.config.ts`
 - Capability config/input/metadata：`src/capabilities/registry.ts`
 - Credential field/update：`src/configuration/contracts.ts`
 - Deployment Repository join：`loadDeploymentRepositories()`
 - Repository state：`classifyRepositoryState()`
 
-修改 shared enum 时检查 schema/default、route parser、state transition、Web option/label、migration 和 domain/HTTP/Web tests。不要在 fixture 或 component 复制 string array。
+修改 shared enum 或 work mode 映射时检查 schema/default、route parser、state transition、Web option/label、migration 和 domain/HTTP/Web tests。Issue 创建只接收 work mode，普通 metadata edit 不得重新接入 Service/Environment/type。不要在 fixture 或 component 复制 string array。
 
 ## Database change
 
@@ -143,11 +144,12 @@ Route 只负责：
 2. 从 `ApiRouteContext` 获取 owner。
 3. 验证 current subject 和 Issue scope。
 4. 对 code、scope、Attachment、session、lifecycle mutation 使用 reservation。
-5. Config snapshot/Service/Issue scope 使用 scope queue。
-6. Multi-table update 使用 transaction。
-7. Cross-media update 使用 prepare/commit/rollback/finalize。
-8. 返回 Web 实际需要的 DTO，不暴露 raw row、内部 path 或无关 secret。
-9. 同步 `data/client.ts` 与 focused tests。
+5. Config snapshot/Service/Issue scope 与关联集合替换使用 scope queue。
+6. Multi-table update 使用 transaction；关联集合替换还必须 reservation 目标、旧关联和新关联 Issue，并让新上下文重新入队准备。
+7. Scope change 使用 `scope-transition` plan/apply，并在 reservation 内重新计算 hash；成功 mutation 与 append-only audit 必须同事务提交。
+8. Cross-media update 使用 prepare/commit/rollback/finalize。
+9. 返回 Web 实际需要的 DTO，不暴露 raw row、内部 path 或无关 secret。
+10. 同步 `data/client.ts` 与 focused tests。
 
 Lock order：
 

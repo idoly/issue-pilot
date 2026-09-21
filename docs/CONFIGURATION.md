@@ -108,15 +108,21 @@ SQLite `subjects` 规则：
 
 停用不会删除 row 或历史关系。Transaction 拒绝停用最后一名 active user。`/api/users` 只返回 active user，`/api/users/manage` 返回全部。
 
-## Environment 与 Issue type
+## Issue work mode、Environment 与 Issue type
 
-| Environment | Issue types | Repository mode |
-| --- | --- | --- |
-| `prod` | `data_processing`、`smart_analysis` | Read-only current Deployment commit |
-| `test` | `smart_analysis` | Read-only current Deployment commit |
-| `dev` | `defect_fix`、`feature_development` | Issue-local writable branch/worktree |
+新建 Issue 只提交一个处理方式和 Service。Work mode 是共享 Domain 映射，不单独存入 SQLite：
 
-Web 过滤输入，API 使用同一 domain contract 再次验证。Prod/test 不能通过直接 API 调用获得写权限。
+| Work mode | Environment | Issue type | Repository mode |
+| --- | --- | --- | --- |
+| `production_data` | `prod` | `data_processing` | Read-only current Deployment commit |
+| `production_analysis` | `prod` | `smart_analysis` | Read-only current Deployment commit |
+| `test_analysis` | `test` | `smart_analysis` | Read-only current Deployment commit |
+| `development_fix` | `dev` | `defect_fix` | Issue-local writable hotfix branch/worktree |
+| `development_feature` | `dev` | `feature_development` | Issue-local writable feature branch/worktree |
+
+Web 只展示至少有一个 Service 配置对应 Deployment 的处理方式，并按目标 Environment 过滤 Service。API 使用同一 Domain 映射重新解析；旧 `environmentKey + type` 创建合同被拒绝，不能通过直接调用获得非法组合或写权限。普通 Issue edit 只接受 metadata、CC 和 Attachment；Scope 使用独立的无状态 plan/apply，apply 必须提交匹配当前 `updatedAt` 的 SHA-256 plan。Active dev 只允许保持当前 branch mode 跨 Service；成功 Apply 原子写入 Scope history，失败和 no-op 不写。Dev 到 prod/test 不原地迁移；“创建正式跟进”固定创建 `production_analysis`，复用标准创建与 related Issue 校验。
+
+活动中的正式问题调查可在详情中编辑关联开发工单，最多仍为 20 个。保存时 API reservation 正式工单以及旧、新关联集合，重新验证 Workspace、runtime、Repository snapshot 和 Pi session；有实际变化时关闭当前 Agent session、事务化更新关系并重新入队。普通 metadata PATCH、resolved 工单和其他 work mode 不能修改关联。
 
 ## Service、Repository 与 Deployment
 

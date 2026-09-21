@@ -180,7 +180,11 @@ export function App(props: { initialView?: AppView } = {}) {
                         setSourceAgentOpen(true);
                         setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 600px)").matches);
                         setSourceExpanded(true);
-                      }} onUpdated={async () => { await refreshIssue(current().id, true); }} />
+                      }} onUpdated={async () => { await refreshIssue(current().id, true); }} onCreatedFollowUp={(issueKey) => {
+                        setIssueRefreshToken((value) => value + 1);
+                        setKeepExternalSelection(false);
+                        setSelectedId(issueKey);
+                      }} />
                     </>
                   )}
                 </Show>

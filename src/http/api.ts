@@ -13,6 +13,7 @@ import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } fro
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { prepareDevelopmentIssueRuntimes, prepareReadOnlyIssueRuntimes } from "../workspace/project.ts";
+import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import { ProjectToolBroker } from "../workspace/project-tools.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
 import { pruneState } from "../workspace/state.ts";
@@ -140,7 +141,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     });
 
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);
-    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, sourceBrowser, runScopeExclusive };
+    const scopeTransitions = new IssueScopeTransitionManager(database.db, engine, workspaces);
+    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive };
     app.get("/health", async () => ({ ok: true }));
     registerUserRoutes(routeContext);
     registerConfigurationRoutes(routeContext);

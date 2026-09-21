@@ -295,6 +295,20 @@
       "when": 1789747200000,
       "tag": "0041_related_issues",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1790035200000,
+      "tag": "0042_issue_pins",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1790121600000,
+      "tag": "0043_issue_scope_transitions",
+      "breakpoints": true
     }
   ]
 }

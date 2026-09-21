@@ -1,10 +1,10 @@
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type WorkspaceStatus } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES_BY_ENVIRONMENT, errorMessage, isWorkspaceBusy };
+export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
 export type { AgentConfiguration, CapabilityName } from "../../../domain/contracts";
-export type { AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType };
+export type { AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
 export type Service = ServiceConfiguration;
@@ -43,12 +43,25 @@ export interface IssueComment {
   createdAt: string;
 }
 
+export interface IssueScopeTransitionHistoryItem {
+  id: string;
+  action: "rebind_read_only" | "convert_to_development" | "migrate_development";
+  from: { service: { key: string; name: string }; workMode: IssueWorkMode };
+  to: { service: { key: string; name: string }; workMode: IssueWorkMode };
+  repositories: { retained: string[]; added: string[]; removed: string[] };
+  planHash: string;
+  actor: { subject: string; name: string };
+  createdAt: string;
+}
+
 export interface IssueDetail extends IssueListItem {
   description: string;
+  agentRunning?: boolean;
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   relatedIssues?: IssueExecutionItem[];
+  scopeTransitions?: IssueScopeTransitionHistoryItem[];
   ccRecipients?: Person[];
   reporter?: Person;
   comments: IssueComment[];
@@ -68,21 +81,40 @@ interface SourceWorkspaceFile { path: string; version: "index" | "working-tree";
 export interface SourceCommitFileComparison { file: SourceCommitFile; before: SourceRevisionFile | null; after: SourceRevisionFile | null }
 export interface SourceWorkspaceFileComparison { file: SourceCommitFile; before: SourceWorkspaceFile | null; after: SourceWorkspaceFile | null }
 
+export interface IssueScopeTransitionPlan {
+  planHash: string;
+  expectedIssueUpdatedAt: string;
+  action: "none" | "rebind_read_only" | "convert_to_development" | "migrate_development";
+  current: { service: { key: string; name: string }; workMode: IssueWorkMode; repositoryAccess: "read" | "write" };
+  target: { service: { key: string; name: string }; workMode: IssueWorkMode; repositoryAccess: "read" | "write" };
+  repositories: {
+    retained: Array<{ name: string; url: string; baseBranch: string }>;
+    added: Array<{ name: string; url: string; baseBranch: string }>;
+    removed: Array<{ name: string; url: string; baseBranch: string }>;
+  };
+  branch: string | null;
+  session: { closeCurrent: boolean; preserveConversation: true };
+  preserved: ["attachments", "comments", "conversation"];
+  warnings: string[];
+}
+
 export interface WorkspaceStats {
   totalBytes: number;
   policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
   workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
 
-export interface IssueInput {
+export interface IssueMetadataInput {
   title: string;
   description: string;
   priority: IssuePriority;
-  type: IssueType;
-  serviceKey: string;
-  environmentKey: string;
   assigneeSubject: string | null;
   ccSubjects: string[];
+}
+
+export interface IssueCreateInput extends IssueMetadataInput {
+  workMode: IssueWorkMode;
+  serviceKey: string;
   relatedIssueKeys?: string[];
 }
 
@@ -125,6 +157,9 @@ export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
 export const listIssues = (signal?: AbortSignal) => request<IssueExecutionItem[]>("/api/issues", signal ? { signal } : undefined);
+export const listIssuePins = (signal?: AbortSignal) => request<string[]>("/api/issue-pins", signal ? { signal } : undefined);
+export const setIssuePinned = (key: string, pinned: boolean) => request<void>(issuePath(key, "/pin"), { method: pinned ? "PUT" : "DELETE" });
+export const updateIssueRelatedIssues = (key: string, relatedIssueKeys: string[]) => request<void>(issuePath(key, "/related-issues"), { method: "PUT", body: JSON.stringify({ relatedIssueKeys }) });
 export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 export const updateGlobalAgent = (input: AgentConfiguration) => request<{ ok: true }>("/api/config/agent", { method: "PUT", body: JSON.stringify(input) });
@@ -239,14 +274,14 @@ export async function fetchAttachment(key: string, attachmentId: string): Promis
   return response.blob();
 }
 
-export function createIssue(input: IssueInput, files: File[] = []): Promise<IssueExecutionItem> {
+export function createIssue(input: IssueCreateInput, files: File[] = []): Promise<IssueExecutionItem> {
   if (!files.length) return jsonRequest("/api/issues", "POST", input);
   const form = new FormData();
   form.append("issue", JSON.stringify(input));
   appendFiles(form, files);
   return request("/api/issues", { method: "POST", body: form });
 }
-export function updateIssue(key: string, input: IssueInput, removedAttachmentIds: string[] = [], files: File[] = []): Promise<IssueExecutionItem> {
+export function updateIssue(key: string, input: IssueMetadataInput, removedAttachmentIds: string[] = [], files: File[] = []): Promise<IssueExecutionItem> {
   if (!removedAttachmentIds.length && !files.length) return jsonRequest(issuePath(key), "PATCH", input);
   const form = new FormData();
   form.append("issue", JSON.stringify({ ...input, removedAttachmentIds }));
@@ -254,7 +289,8 @@ export function updateIssue(key: string, input: IssueInput, removedAttachmentIds
   return request(issuePath(key), { method: "PATCH", body: form });
 }
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueExecutionItem>(issuePath(key, "/status"), "PATCH", { status });
-export const convertIssueToDevelopment = (key: string) => request<{ issueKey: string }>(issuePath(key, "/development"), { method: "POST" });
+export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }) => jsonRequest<IssueScopeTransitionPlan>(issuePath(key, "/scope-transition/plan"), "POST", target);
+export const applyIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, plan: Pick<IssueScopeTransitionPlan, "expectedIssueUpdatedAt" | "planHash">) => jsonRequest<{ issueKey: string }>(issuePath(key, "/scope-transition/apply"), "POST", { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
 export const addIssueComment = (key: string, body: string) => jsonRequest<IssueComment>(issuePath(key, "/comments"), "POST", { body });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export function sendAgentMessage(key: string, message: string, images: File[] = []): Promise<void> {

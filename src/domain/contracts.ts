@@ -74,6 +74,28 @@ export const ISSUE_TYPES_BY_ENVIRONMENT: Record<EnvironmentKind, readonly IssueT
   dev: ["defect_fix", "feature_development"],
 };
 
+export const ISSUE_WORK_MODES = ["production_data", "production_analysis", "test_analysis", "development_fix", "development_feature"] as const;
+export type IssueWorkMode = typeof ISSUE_WORK_MODES[number];
+
+const ISSUE_SCOPE_BY_WORK_MODE: Record<IssueWorkMode, { environmentKind: EnvironmentKind; issueType: IssueType; repositoryAccess: "read" | "write" }> = {
+  production_data: { environmentKind: "prod", issueType: "data_processing", repositoryAccess: "read" },
+  production_analysis: { environmentKind: "prod", issueType: "smart_analysis", repositoryAccess: "read" },
+  test_analysis: { environmentKind: "test", issueType: "smart_analysis", repositoryAccess: "read" },
+  development_fix: { environmentKind: "dev", issueType: "defect_fix", repositoryAccess: "write" },
+  development_feature: { environmentKind: "dev", issueType: "feature_development", repositoryAccess: "write" },
+};
+
+export function issueScopeForWorkMode(workMode: IssueWorkMode): Readonly<{ environmentKind: EnvironmentKind; issueType: IssueType; repositoryAccess: "read" | "write" }> {
+  return ISSUE_SCOPE_BY_WORK_MODE[workMode];
+}
+
+export function issueWorkMode(environmentKind: EnvironmentKind, issueType: IssueType): IssueWorkMode | undefined {
+  return ISSUE_WORK_MODES.find((workMode) => {
+    const scope = ISSUE_SCOPE_BY_WORK_MODE[workMode];
+    return scope.environmentKind === environmentKind && scope.issueType === issueType;
+  });
+}
+
 export const ISSUE_STATUSES = ["open", "in_progress", "pending", "resolved"] as const;
 export type IssueStatus = typeof ISSUE_STATUSES[number];
 

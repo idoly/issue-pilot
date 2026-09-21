@@ -1,5 +1,5 @@
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { ISSUE_PRIORITIES, type IssuePriority, type IssueStatus, type IssueType } from "../data/client";
+import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode } from "../data/client";
 
 export const priorityColor: Record<IssuePriority, string> = { p0: "red", p1: "volcano", p2: "blue", p3: "default" };
 const priorityLabel: Record<IssuePriority, string> = { p0: "P0 · 紧急", p1: "P1 · 高", p2: "P2 · 中", p3: "P3 · 低" };
@@ -23,6 +23,16 @@ export const typeLabel: Record<IssueType, string> = {
   defect_fix: "缺陷修复",
   feature_development: "功能开发",
 };
+
+export const workModeLabel: Record<IssueWorkMode, string> = {
+  production_data: "正式数据处理",
+  production_analysis: "正式问题调查",
+  test_analysis: "测试问题调查",
+  development_fix: "开发缺陷修复",
+  development_feature: "开发功能开发",
+};
+
+export const workModeOptions = ISSUE_WORK_MODES.map((value) => ({ value, label: workModeLabel[value] }));
 
 const dateFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, {
   timeZone: issuePilotConfig.regional.timeZone,

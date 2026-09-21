@@ -1,11 +1,11 @@
 import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "@idoly/ant-design-solid";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
-import { ChevronRight, Plus, Search } from "../ui/icons";
-import { createIssue, errorMessage, listIssues, type IssuePriority, type IssueType } from "../data/client";
+import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
+import { createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
-import { AttachmentPicker, DescriptionField, issueTypesForEnvironment, selectedChoice } from "./IssueForm";
-import { priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel, typeLabel } from "./model";
+import { AttachmentPicker, DescriptionField, selectedChoice } from "./IssueForm";
+import { priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
 
 type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
 
@@ -21,6 +21,9 @@ export function IssueQueue(props: {
   const [issues, setIssues] = createSignal<Awaited<ReturnType<typeof listIssues>>>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
+  const [pinError, setPinError] = createSignal("", { ownedWrite: true });
+  const [pinnedIssueKeys, setPinnedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
+  const [pinningIssueKey, setPinningIssueKey] = createSignal("", { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
   const [status, setStatus] = createSignal<QueueStatusFilter>("all", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
@@ -30,6 +33,7 @@ export function IssueQueue(props: {
     const subject = props.userSubject;
     if (!subject) return [];
     const term = query().trim().toLowerCase();
+    const pinned = new Set(pinnedIssueKeys());
     return issues().filter((issue) => {
       const assigneeMatch = issue.assigneeSubject === subject;
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
@@ -37,8 +41,21 @@ export function IssueQueue(props: {
       const serviceMatch = serviceFilter() === "all" || issue.service.key === serviceFilter();
       const searchMatch = !term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name} ${issue.environmentKey}`.toLowerCase().includes(term);
       return assigneeMatch && statusMatch && environmentMatch && serviceMatch && searchMatch;
-    });
+    }).sort((left, right) => Number(pinned.has(right.id)) - Number(pinned.has(left.id)));
   });
+  const togglePinned = async (issueKey: string) => {
+    const pinned = pinnedIssueKeys().includes(issueKey);
+    setPinningIssueKey(issueKey);
+    setPinError("");
+    try {
+      await setIssuePinned(issueKey, !pinned);
+      setPinnedIssueKeys((current) => pinned ? current.filter((key) => key !== issueKey) : [...current, issueKey]);
+    } catch (error) {
+      setPinError(errorMessage(error));
+    } finally {
+      setPinningIssueKey("");
+    }
+  };
   let listRequest = 0;
   createEffect(() => props.refreshToken, () => {
     const currentRequest = ++listRequest;
@@ -54,6 +71,22 @@ export function IssueQueue(props: {
       if (currentRequest === listRequest) setLoading(false);
     });
   });
+  let pinRequest = 0;
+  createEffect(() => props.userSubject, (subject) => {
+    const currentRequest = ++pinRequest;
+    setPinError("");
+    if (!subject) {
+      setPinnedIssueKeys([]);
+      return;
+    }
+    void listIssuePins().then((pinned) => {
+      if (currentRequest === pinRequest) setPinnedIssueKeys(pinned);
+    }).catch((error) => {
+      if (currentRequest !== pinRequest) return;
+      setPinnedIssueKeys([]);
+      setPinError(errorMessage(error));
+    });
+  });
   createEffect(
     () => ({ loading: loading(), selectedId: props.selectedId, visible: filtered(), keepExternalSelection: props.keepExternalSelection }),
     ({ loading, selectedId, visible, keepExternalSelection }) => {
@@ -64,9 +97,8 @@ export function IssueQueue(props: {
   const [title, setTitle] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
   const [service, setService] = createSignal("", { ownedWrite: true });
-  const [environment, setEnvironment] = createSignal("", { ownedWrite: true });
+  const [workMode, setWorkMode] = createSignal<IssueWorkMode>("production_analysis", { ownedWrite: true });
   const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
-  const [issueType, setIssueType] = createSignal<IssueType>("smart_analysis", { ownedWrite: true });
   const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(null, { ownedWrite: true });
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
   const [relatedIssueKeys, setRelatedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
@@ -77,28 +109,28 @@ export function IssueQueue(props: {
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
-  const availableIssueTypes = createMemo(() => issueTypesForEnvironment(environment()));
-  const canRelateDevelopmentIssues = createMemo(() => environment() === "prod" && issueType() === "smart_analysis");
+  const availableWorkModes = createMemo(() => workModeOptions.filter((option) => {
+    const environmentKind = issueScopeForWorkMode(option.value).environmentKind;
+    return catalog().services.some((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === environmentKind));
+  }));
+  const availableServices = createMemo(() => {
+    const environmentKind = issueScopeForWorkMode(workMode()).environmentKind;
+    return catalog().services.filter((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === environmentKind));
+  });
+  const canRelateDevelopmentIssues = createMemo(() => workMode() === "production_analysis");
   const relatedIssueOptions = createMemo(() => issues()
     .filter((issue) => issue.environmentKey === "dev" && !issue.agentRunning && ["ready", "stopped"].includes(issue.workspaceStatus))
     .map((issue) => ({ value: issue.id, label: `${issue.id} · ${issue.title} · ${issue.service.name}` })));
   createEffect(() => canRelateDevelopmentIssues(), (allowed) => { if (!allowed) setRelatedIssueKeys([]); });
-  const changeEnvironment = (value: unknown) => {
-    const environmentKey = selectedChoice(value, catalog().environments.map((environment) => environment.key));
-    if (!environmentKey) return;
-    const allowedTypes = issueTypesForEnvironment(environmentKey);
-    setEnvironment(environmentKey);
-    setService("");
-    if (!allowedTypes.includes(issueType())) setIssueType(allowedTypes[0] ?? "smart_analysis");
-  };
-  createEffect(() => ({ currentEnvironment: environment(), catalog: catalog() }), ({ currentEnvironment, catalog }) => {
-    const selectedEnvironment = catalog.environments.some((environment) => environment.key === currentEnvironment) ? currentEnvironment : catalog.environments[0]?.key ?? "";
-    setEnvironment(selectedEnvironment);
-    const allowedTypes = issueTypesForEnvironment(selectedEnvironment);
-    setIssueType((current) => allowedTypes.includes(current) ? current : allowedTypes[0] ?? "smart_analysis");
-    const availableServices = catalog.services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === selectedEnvironment));
-    setService((current) => availableServices.some((service) => service.key === current) ? current : availableServices[0]?.key ?? "");
-  });
+  createEffect(
+    () => ({ currentMode: workMode(), modes: availableWorkModes(), services: catalog().services }),
+    ({ currentMode, modes, services }) => {
+      const selectedMode = modes.some(({ value }) => value === currentMode) ? currentMode : modes[0]?.value ?? "production_analysis";
+      if (selectedMode !== currentMode) setWorkMode(selectedMode);
+      const compatibleServices = services.filter((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === issueScopeForWorkMode(selectedMode).environmentKind));
+      setService((current) => compatibleServices.some((candidate) => candidate.key === current) ? current : compatibleServices[0]?.key ?? "");
+    },
+  );
   const submitIssue = async () => {
     if (!title().trim() || !service()) return;
     setSaving(true);
@@ -108,11 +140,10 @@ export function IssueQueue(props: {
         title: title().trim(),
         description: description().trim(),
         priority: priority(),
-        type: issueType(),
+        workMode: workMode(),
         assigneeSubject: assigneeSubject(),
         ccSubjects: ccSubjects(),
         serviceKey: service(),
-        environmentKey: environment(),
         relatedIssueKeys: canRelateDevelopmentIssues() ? relatedIssueKeys() : [],
       }, attachments());
       setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
@@ -171,40 +202,52 @@ export function IssueQueue(props: {
       <div class="queue-list" role="list">
         <Show when={!loading()} fallback={<div class="queue-loading"><Skeleton active paragraph={{ rows: 5 }} /></div>}>
           <Show when={!loadError() && !catalogError()} fallback={<div class="queue-error" role="alert">{loadError() || catalogError()}</div>}>
+          <Show when={pinError()}><div class="queue-action-error" role="alert">{pinError()}</div></Show>
           <For each={filtered()} fallback={<div class="queue-empty">没有匹配的工单</div>}>
-            {(issue) => (
-              <button
-                type="button"
-                role="listitem"
-                class={`queue-item${issue.id === props.selectedId ? " selected" : ""}`}
-                aria-current={issue.id === props.selectedId ? "true" : undefined}
-                onClick={() => props.onSelect(issue.id)}
-              >
-                <span class="queue-item-topline">
-                  <span class="issue-key">{issue.id}</span>
-                  <Tag color={priorityColor[issue.priority]}>{issue.priority.toUpperCase()}</Tag>
-                  <span class="queue-time">{relativeTime(issue.updatedAt)}</span>
-                </span>
-                <span class="queue-title" title={issue.title}>{issue.title}</span>
-                <span class="queue-item-meta">
-                  <span class="queue-status"><Badge status={statusBadge[issue.status]} text={statusLabel[issue.status]} /></span>
-                  <span class="queue-scope" title={`${issue.service.name} / ${environmentLabel(issue.environmentKey)}`}>
-                    <strong>{issue.service.name}</strong><span aria-hidden="true">/</span><span>{environmentLabel(issue.environmentKey)}</span>
+            {(issue) => {
+              const pinned = () => pinnedIssueKeys().includes(issue.id);
+              return (
+                <div
+                  role="listitem"
+                  tabindex={0}
+                  class={`queue-item${issue.id === props.selectedId ? " selected" : ""}${pinned() ? " pinned" : ""}`}
+                  aria-current={issue.id === props.selectedId ? "true" : undefined}
+                  onClick={() => props.onSelect(issue.id)}
+                  onKeyDown={(event) => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); props.onSelect(issue.id); } }}
+                >
+                  <span class="queue-item-topline">
+                    <span class="issue-key">{issue.id}</span>
+                    <Tag color={priorityColor[issue.priority]}>{issue.priority.toUpperCase()}</Tag>
+                    <span class="queue-time">{relativeTime(issue.updatedAt)}</span>
                   </span>
-                </span>
-                <ChevronRight class="queue-chevron" size={16} aria-hidden="true" />
-              </button>
-            )}
+                  <span class="queue-title" title={issue.title}>{issue.title}</span>
+                  <span class="queue-item-meta">
+                    <span class="queue-status"><Badge status={statusBadge[issue.status]} text={statusLabel[issue.status]} /></span>
+                    <span class="queue-scope" title={`${issue.service.name} / ${environmentLabel(issue.environmentKey)}`}>
+                      <strong>{issue.service.name}</strong><span aria-hidden="true">/</span><span>{environmentLabel(issue.environmentKey)}</span>
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    class={`queue-pin${pinned() ? " pinned" : ""}`}
+                    aria-label={`${pinned() ? "取消固定" : "固定"} ${issue.id}`}
+                    title={pinned() ? "取消固定" : "固定到顶部"}
+                    disabled={pinningIssueKey() === issue.id}
+                    onClick={(event) => { event.stopPropagation(); void togglePinned(issue.id); }}
+                  ><Pin size={14} aria-hidden="true" /></button>
+                  <ChevronRight class="queue-chevron" size={16} aria-hidden="true" />
+                </div>
+              );
+            }}
           </For>
           </Show>
         </Show>
       </div>
       <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => setCreateOpen(false)} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form compact-issue-form new-issue-form">
-          <label><span>环境</span><Select aria-label="工单环境" value={environment()} onChange={changeEnvironment} options={catalog().environments.map((item) => ({ value: item.key, label: item.name }))} /></label>
-          <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, catalog().services.map((item) => item.key)); if (selected) setService(selected); }} options={catalog().services.filter((item) => item.deployments.some((deployment) => deployment.environmentKey === environment())).map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>处理方式</span><Select aria-label="工单处理方式" value={workMode()} onChange={(value) => { const selected = selectedChoice(value, availableWorkModes().map((option) => option.value)); if (selected) setWorkMode(selected); }} options={availableWorkModes()} /></label>
+          <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, availableServices().map((item) => item.key)); if (selected) setService(selected); }} options={availableServices().map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setPriority(selected); }} options={priorityOptions} /></label>
-          <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, availableIssueTypes()); if (selected) setIssueType(selected); }} options={availableIssueTypes().map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} onChange={setCcSubjects} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <Show when={canRelateDevelopmentIssues()}><label><span>关联工单（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="关联开发工单" value={relatedIssueKeys()} onChange={setRelatedIssueKeys} options={relatedIssueOptions()} /></div></label></Show>

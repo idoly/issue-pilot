@@ -8,6 +8,7 @@ import { issues, subjects } from "../db/schema.ts";
 import { parseIssueKey } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import type { WorkspaceLifecycleManager } from "../workspace/lifecycle.ts";
+import type { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import type { SourceBrowser } from "../workspace/source-browser.ts";
 import { ApiError } from "./input.ts";
 
@@ -19,6 +20,7 @@ export interface ApiRouteContext {
   modelCatalog: AgentModelCatalog;
   events: AgentEventBus;
   workspaces: WorkspaceLifecycleManager;
+  scopeTransitions: IssueScopeTransitionManager;
   sourceBrowser: SourceBrowser;
   runScopeExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }

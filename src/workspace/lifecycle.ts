@@ -9,7 +9,7 @@ import pMap from "p-map";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { Database } from "../db/client.ts";
-import { agentSessions, environments, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
+import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
@@ -61,9 +61,11 @@ class WorkspaceRefusal extends Error {
 export class WorkspaceReleaseRefusal extends WorkspaceRefusal {}
 export class WorkspaceRestoreRefusal extends WorkspaceRefusal {}
 export class WorkspaceConversionRefusal extends WorkspaceRefusal {}
+export class WorkspaceScopeMigrationRefusal extends WorkspaceRefusal {}
 
 type Issue = typeof issues.$inferSelect;
 type IssueWorkspace = typeof issueWorkspaces.$inferSelect;
+type TransitionAudit = (writer: Pick<Database, "insert">, now: Date) => Promise<void>;
 type IssueRepository = typeof issueRepositories.$inferSelect;
 type IssueRow = { issue: Issue; workspace: IssueWorkspace | null; environmentKind: typeof environments.$inferSelect.kind };
 
@@ -192,14 +194,28 @@ export class WorkspaceLifecycleManager {
     );
   }
 
-  async convertIssueToDevelopment(issueId: string): Promise<Issue> {
+  async convertIssueToDevelopment(issueId: string, expectedIssueUpdatedAt?: string, recordTransition?: TransitionAudit): Promise<Issue> {
     this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
-      async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation),
+      async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation, expectedIssueUpdatedAt, recordTransition),
       (error) => {
         if (error instanceof WorkspaceConversionRefusal) throw error;
         throw new WorkspaceConversionRefusal(errorMessage(error));
+      },
+    );
+  }
+
+  async migrateDevelopmentIssueScope(issueId: string, target: { serviceId: string; environmentId: string }, expectedIssueUpdatedAt: string, recordTransition?: TransitionAudit): Promise<Issue> {
+    this.workspaceBytesCache = undefined;
+    return this.withIssueReservation(
+      issueId,
+      async (reservation) => this.migrateDevelopmentScopeLocked(await this.issueRow(issueId), target, expectedIssueUpdatedAt, reservation, recordTransition),
+      (error) => {
+        if (error instanceof WorkspaceScopeMigrationRefusal) throw error;
+        const message = errorMessage(error);
+        if (message === "workspace_has_changes") throw new WorkspaceScopeMigrationRefusal("scope_transition_removed_repository_changed");
+        throw new WorkspaceScopeMigrationRefusal(message);
       },
     );
   }
@@ -254,8 +270,77 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  private async convertLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<Issue> {
+  private async migrateDevelopmentScopeLocked(
+    issueRow: IssueRow,
+    target: { serviceId: string; environmentId: string },
+    expectedIssueUpdatedAt: string,
+    reservation: AgentReservation,
+    recordTransition?: TransitionAudit,
+  ): Promise<Issue> {
     const { issue, workspace } = issueRow;
+    if (issue.updatedAt.toISOString() !== expectedIssueUpdatedAt) throw new WorkspaceScopeMigrationRefusal("scope_transition_plan_stale");
+    const [targetEnvironment] = await this.database.select().from(environments).where(eq(environments.id, target.environmentId)).limit(1);
+    if (
+      issueRow.environmentKind !== "dev"
+      || targetEnvironment?.kind !== "dev"
+      || !["defect_fix", "feature_development"].includes(issue.type)
+      || !["open", "pending"].includes(issue.status)
+      || workspace?.status !== "ready"
+    ) throw new WorkspaceScopeMigrationRefusal("issue_not_migratable_between_development_scopes");
+
+    await reservation.closeSession(issue.id);
+    try {
+      const migrated = await this.projects.migrateDevelopmentScope(issue, target, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+        return this.database.transaction(async (transaction) => {
+          const now = new Date();
+          const targetUrls = repositories.map(({ repository }) => repository.url);
+          for (const [index, { repository }] of repositories.entries()) {
+            const worktree = prepared[index]!;
+            const existing = existingRepositories.find(({ url }) => url === repository.url);
+            const state = {
+              baseBranch: worktree.baseBranch,
+              workingBranch: worktree.workingBranch,
+              localPath: worktree.workspacePath,
+              workspaceName: names.get(repository.url)!,
+              commitBefore: existing?.commitBefore ?? worktree.baseCommit,
+            };
+            await transaction.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...state }).onConflictDoUpdate({
+              target: [issueRepositories.issueId, issueRepositories.url],
+              set: { ...state, updatedAt: now },
+            });
+          }
+          const issueFilter = eq(issueRepositories.issueId, issue.id);
+          if (existingRepositories.some(({ url }) => !targetUrls.includes(url))) {
+            await transaction.delete(issueRepositories).where(targetUrls.length ? and(issueFilter, notInArray(issueRepositories.url, targetUrls)) : issueFilter);
+          }
+          await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
+          await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
+          const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
+            .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
+          const [updated] = await transaction.update(issues).set({ serviceId: target.serviceId, environmentId: target.environmentId, updatedAt: now }).where(and(
+            eq(issues.id, issue.id),
+            eq(issues.serviceId, issue.serviceId),
+            eq(issues.environmentId, issue.environmentId),
+            eq(issues.type, issue.type),
+            eq(issues.updatedAt, new Date(expectedIssueUpdatedAt)),
+            inArray(issues.status, ["open", "pending"]),
+          )).returning();
+          if (!updatedWorkspace || !updated) throw new WorkspaceScopeMigrationRefusal("scope_transition_plan_stale");
+          await recordTransition?.(transaction, now);
+          return updated;
+        });
+      });
+      reservation.enqueue(issue.id);
+      return migrated;
+    } catch (error) {
+      if (error instanceof WorkspaceScopeMigrationRefusal) throw error;
+      throw error;
+    }
+  }
+
+  private async convertLocked(issueRow: IssueRow, reservation: AgentReservation, expectedIssueUpdatedAt?: string, recordTransition?: TransitionAudit): Promise<Issue> {
+    const { issue, workspace } = issueRow;
+    if (expectedIssueUpdatedAt && issue.updatedAt.toISOString() !== expectedIssueUpdatedAt) throw new WorkspaceConversionRefusal("scope_transition_plan_stale");
     if (!["prod", "test"].includes(issueRow.environmentKind) || issue.type !== "smart_analysis" || !["open", "pending"].includes(issue.status) || workspace?.status !== "ready") {
       throw new WorkspaceConversionRefusal("issue_not_convertible_to_development");
     }
@@ -285,6 +370,7 @@ export class WorkspaceLifecycleManager {
             await transaction.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, targetUrls)));
           }
           await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
+          await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
           const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
             .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
           const [converted] = await transaction.update(issues).set({ environmentId: developmentEnvironment.id, type: "defect_fix", updatedAt: now }).where(and(
@@ -294,6 +380,7 @@ export class WorkspaceLifecycleManager {
             inArray(issues.status, ["open", "pending"]),
           )).returning();
           if (!updatedWorkspace || !converted) throw new WorkspaceConversionRefusal("issue_changed_during_conversion");
+          await recordTransition?.(transaction, now);
           return converted;
         });
       });

@@ -15,6 +15,7 @@ import {
   PanelRight as PanelRightNode,
   Paperclip as PaperclipNode,
   Pencil as PencilNode,
+  Pin as PinNode,
   Plus as PlusNode,
   RefreshCw as RefreshCwNode,
   Search as SearchNode,
@@ -71,6 +72,7 @@ export const PanelBottom = createIcon(PanelBottomNode);
 export const PanelRight = createIcon(PanelRightNode);
 export const Paperclip = createIcon(PaperclipNode);
 export const Pencil = createIcon(PencilNode);
+export const Pin = createIcon(PinNode);
 export const Plus = createIcon(PlusNode);
 export const RefreshCw = createIcon(RefreshCwNode);
 export const Search = createIcon(SearchNode);

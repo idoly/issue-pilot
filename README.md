@@ -122,10 +122,10 @@ Web 使用以下 API 域：
 
 - User：active user、current user、管理列表、创建与更新。
 - Configuration：catalog、完整 config、全局 model、DMS scope resolve、Service CRUD。
-- Issue：列表、创建、编辑、详情、状态转换和 Comment。
+- Issue：用户级固定个人队列、创建、正式跟进、关联开发工单管理、编辑、详情、状态转换和 Comment。
 - Agent：retry、message、SSE stream。
 - Attachment：完整性校验后的只读 GET；写入只属于 Issue create/edit multipart transaction。
-- Workspace：stats、analysis-to-development 转换和受管 release/reopen。
+- Workspace：stats、带审计历史的无状态 Scope Transition plan/apply 和受管 release/reopen。
 - Source：Repository、tree、file/directory/path/rename、search、blame、history、commit、diff，以及受限 Stage、Unstage、Discard、Commit。
 
 不存在独立 Attachment write route、Issue sync route、Terminal 或任意宿主 Git command endpoint。Source mutation 只允许 active development workspace，并按 Issue reservation 串行。

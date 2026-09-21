@@ -17,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-11).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -11) };
+  assert.deepEqual(journal.entries.slice(-13).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -13) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -235,7 +235,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
     const applicationTables = await client.execute("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' and name != '__drizzle_migrations' order by name");
     assert.deepEqual(applicationTables.rows.map((row) => row.name), [
-      "environments", "global_agent_configuration", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_relations", "issue_repositories",
+      "environments", "global_agent_configuration", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_pins", "issue_relations", "issue_repositories", "issue_scope_transitions",
       "issue_workspaces", "issues", "service_deployment_repositories", "service_deployments", "service_repositories", "services", "subjects",
     ]);
     const issueColumns = await client.execute("pragma table_info('issues')");
@@ -258,6 +258,13 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     ]);
     const relationColumns = await client.execute("pragma table_info('issue_relations')");
     assert.deepEqual(relationColumns.rows.map((column) => column.name), ["issue_id", "related_issue_id", "created_at"]);
+    const pinColumns = await client.execute("pragma table_info('issue_pins')");
+    assert.deepEqual(pinColumns.rows.map((column) => column.name), ["subject", "issue_id", "created_at"]);
+    const transitionColumns = await client.execute("pragma table_info('issue_scope_transitions')");
+    assert.deepEqual(transitionColumns.rows.map((column) => column.name), [
+      "id", "issue_id", "actor_subject", "action", "from_service_key", "from_service_name", "from_work_mode",
+      "to_service_key", "to_service_name", "to_work_mode", "plan_hash", "repositories", "created_at",
+    ]);
     const workspaceColumns = await client.execute("pragma table_info('issue_workspaces')");
     assert.deepEqual(workspaceColumns.rows.map((column) => column.name), ["issue_id", "status", "runtime_ready", "last_error", "created_at", "updated_at"]);
     const sessionColumns = await client.execute("pragma table_info('issue_pilot_sessions')");

@@ -8,7 +8,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
-import { AGENT_THINKING_LEVELS, type EnvironmentKind } from "../../src/domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
 
 export const testAgent = { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" as const };
@@ -127,17 +127,19 @@ export async function createService(app: FastifyInstance, name: string, environm
   return json(response);
 }
 
-export function issuePayload(serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
+export function issueMetadataPayload(title = "Test issue") {
   return {
     title,
     description: "Investigate the issue",
     priority: "p1",
-    type: environmentKey === "dev" ? "defect_fix" : "smart_analysis",
-    environmentKey,
-    serviceKey,
     assigneeSubject: null,
     ccSubjects: [],
   };
+}
+
+export function issuePayload(serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
+  const workMode: IssueWorkMode = environmentKey === "dev" ? "development_fix" : environmentKey === "prod" ? "production_analysis" : "test_analysis";
+  return { ...issueMetadataPayload(title), workMode, serviceKey };
 }
 
 export async function createIssue(app: FastifyInstance, serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {

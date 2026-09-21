@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, WORKSPACE_STATUSES, type DeploymentConfig } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type DeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -73,6 +73,31 @@ export const issueRelations = sqliteTable("issue_relations", {
   index("issue_relations_issue_idx").on(table.issueId, table.createdAt),
   index("issue_relations_related_idx").on(table.relatedIssueId),
 ]);
+
+export const issuePins = sqliteTable("issue_pins", {
+  subject: text("subject").notNull().references(() => subjects.subject, { onDelete: "cascade" }),
+  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  primaryKey({ name: "issue_pins_pk", columns: [table.subject, table.issueId] }),
+  index("issue_pins_subject_created_idx").on(table.subject, table.createdAt),
+]);
+
+export const issueScopeTransitions = sqliteTable("issue_scope_transitions", {
+  id: id(),
+  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  actorSubject: text("actor_subject").notNull().references(() => subjects.subject),
+  action: text("action").notNull(),
+  fromServiceKey: text("from_service_key").notNull(),
+  fromServiceName: text("from_service_name").notNull(),
+  fromWorkMode: text("from_work_mode", { enum: ISSUE_WORK_MODES }).$type<IssueWorkMode>().notNull(),
+  toServiceKey: text("to_service_key").notNull(),
+  toServiceName: text("to_service_name").notNull(),
+  toWorkMode: text("to_work_mode", { enum: ISSUE_WORK_MODES }).$type<IssueWorkMode>().notNull(),
+  planHash: text("plan_hash").notNull(),
+  repositories: json<{ retained: string[]; added: string[]; removed: string[] }>("repositories").notNull(),
+  createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
+}, (table) => [index("issue_scope_transitions_issue_created_idx").on(table.issueId, table.createdAt)]);
 
 export const issueRepositories = sqliteTable("issue_repositories", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), url: text("url").notNull(), baseBranch: text("base_branch").notNull(),
