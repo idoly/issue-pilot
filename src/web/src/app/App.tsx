@@ -70,10 +70,12 @@ export function App(props: { initialView?: AppView } = {}) {
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
   const [keepExternalSelection, setKeepExternalSelection] = createSignal(false, { ownedWrite: true });
+  const [dashboardTarget, setDashboardTarget] = createSignal("", { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDetailsOpen, setSourceDetailsOpen] = createSignal(true, { ownedWrite: true });
   const [workbenchLayout, setWorkbenchLayout] = createSignal<WorkbenchPartLayout | null>(null, { ownedWrite: true });
+  let issueWorkspace: HTMLElement | undefined;
   let selectionGeneration = 0;
   const issueRefreshes = new Map<string, number>();
   createEffect(
@@ -100,6 +102,13 @@ export function App(props: { initialView?: AppView } = {}) {
       });
     },
   );
+  createEffect(() => ({ current: issue()?.id, target: dashboardTarget(), currentView: view() }), ({ current, target, currentView }) => {
+    if (!target || current !== target || currentView !== "issues") return;
+    setDashboardTarget("");
+    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches) {
+      window.requestAnimationFrame(() => issueWorkspace?.scrollIntoView({ block: "start" }));
+    }
+  });
   const refreshIssue = async (issueKey: string, refreshQueue = false) => {
     const currentGeneration = selectionGeneration;
     const currentRefresh = (issueRefreshes.get(issueKey) ?? 0) + 1;
@@ -158,15 +167,15 @@ export function App(props: { initialView?: AppView } = {}) {
         </Layout.Header>
         <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
           <Switch>
-            <Match when={view() === "dashboard"}><OverviewView onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setSelectedId(issueKey); setView("issues"); }} /></Match>
+            <Match when={view() === "dashboard"}><OverviewView onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setDashboardTarget(issueKey); setSelectedId(issueKey); setView("issues"); }} /></Match>
             <Match when={view() === "issues"}>
-              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} keepExternalSelection={keepExternalSelection()} onSelect={(issueKey) => { setKeepExternalSelection(false); setSelectedId(issueKey); }} />
+              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} keepExternalSelection={keepExternalSelection()} onSelect={(issueKey) => { setDashboardTarget(""); setKeepExternalSelection(false); setSelectedId(issueKey); }} />
               <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
                 <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                   {(current) => (
                     <>
                       <AgentWorkbench issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => setSourceExpanded(false)} onLayout={setWorkbenchLayout} onPartVisibility={(agentOpen, detailsOpen) => { setSourceAgentOpen(agentOpen); if (detailsOpen !== undefined) setSourceDetailsOpen(detailsOpen); }} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
-                      <IssueWorkspace issue={current()} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => {
+                      <IssueWorkspace issue={current()} elementRef={(element) => { issueWorkspace = element; }} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => {
                         setWorkbenchLayout(null);
                         setSourceAgentOpen(true);
                         setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 600px)").matches);

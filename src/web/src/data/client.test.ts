@@ -19,12 +19,14 @@ describe("API client", () => {
       environmentKey: "test",
       assigneeSubject: null,
       ccSubjects: [],
+      relatedIssueKeys: ["ISSUE-20260809-099"],
     }, [file]);
 
     const [, init] = fetch.mock.calls[0]!;
     expect(init.method).toBe("POST");
     expect(init.body).toBeInstanceOf(FormData);
     expect((init.body as FormData).get("issue")).toContain('"title":"Investigate"');
+    expect(JSON.parse(String((init.body as FormData).get("issue"))).relatedIssueKeys).toEqual(["ISSUE-20260809-099"]);
     const submittedFile = (init.body as FormData).get("files") as File;
     expect(submittedFile.name).toBe("evidence.txt");
     expect(submittedFile.type).toBe("text/plain");

@@ -63,6 +63,17 @@ export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
   issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), subject: text("subject").notNull().references(() => subjects.subject),
 }, (table) => [uniqueIndex("issue_cc_recipient_unique").on(table.issueId, table.subject)]);
 
+export const issueRelations = sqliteTable("issue_relations", {
+  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  relatedIssueId: text("related_issue_id").notNull().references(() => issues.id),
+  createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  check("issue_relations_not_self", sql`${table.issueId} <> ${table.relatedIssueId}`),
+  uniqueIndex("issue_relation_unique").on(table.issueId, table.relatedIssueId),
+  index("issue_relations_issue_idx").on(table.issueId, table.createdAt),
+  index("issue_relations_related_idx").on(table.relatedIssueId),
+]);
+
 export const issueRepositories = sqliteTable("issue_repositories", {
   id: id(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), url: text("url").notNull(), baseBranch: text("base_branch").notNull(),
   workingBranch: text("working_branch"), localPath: text("local_path"), workspaceName: text("workspace_name"), commitBefore: text("commit_before"), ...timestamps,

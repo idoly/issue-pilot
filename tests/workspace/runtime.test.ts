@@ -65,6 +65,19 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     await writeFile(path.join(writableRuntime, "orders", "created-through-runtime.txt"), "writable\n", "utf8");
     assert.equal(await readFile(path.join(worktree, "created-through-runtime.txt"), "utf8"), "writable\n");
 
+    const conversation = path.join(root, "related-session.jsonl");
+    await writeFile(conversation, "{\"type\":\"session\"}\n", "utf8");
+    const relatedRuntime = await prepareIssueRuntime(root, readOnlyIssue, [{ name: "orders", repositoryPath: checkout }], "read", [{
+      key: "ISSUE-20260809-099",
+      metadata: { key: "ISSUE-20260809-099", title: "Earlier development" },
+      conversationPath: conversation,
+      repositories: [{ name: "orders", repositoryPath: checkout }],
+    }]);
+    const relatedRoot = path.join(relatedRuntime, "related-issues", "issue-20260809-099");
+    assert.deepEqual(JSON.parse(await readFile(path.join(relatedRoot, "issue.json"), "utf8")), { key: "ISSUE-20260809-099", title: "Earlier development" });
+    assert.equal(await readFile(path.join(relatedRoot, "conversation.jsonl"), "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal((await lstat(path.join(relatedRoot, "repositories", "orders"))).isSymbolicLink(), true);
+
     await assert.rejects(
       prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"),
       /repository_workspace_outside_issue_root/,

@@ -69,6 +69,7 @@ export function IssueQueue(props: {
   const [issueType, setIssueType] = createSignal<IssueType>("smart_analysis", { ownedWrite: true });
   const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(null, { ownedWrite: true });
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
+  const [relatedIssueKeys, setRelatedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
   createEffect(
     () => ({ createOpen: createOpen(), subject: props.userSubject }),
     ({ createOpen, subject }) => { if (subject && !createOpen) setAssigneeSubject(subject); },
@@ -77,6 +78,11 @@ export function IssueQueue(props: {
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
   const availableIssueTypes = createMemo(() => issueTypesForEnvironment(environment()));
+  const canRelateDevelopmentIssues = createMemo(() => environment() === "prod" && issueType() === "smart_analysis");
+  const relatedIssueOptions = createMemo(() => issues()
+    .filter((issue) => issue.environmentKey === "dev" && !issue.agentRunning && ["ready", "stopped"].includes(issue.workspaceStatus))
+    .map((issue) => ({ value: issue.id, label: `${issue.id} · ${issue.title} · ${issue.service.name}` })));
+  createEffect(() => canRelateDevelopmentIssues(), (allowed) => { if (!allowed) setRelatedIssueKeys([]); });
   const changeEnvironment = (value: unknown) => {
     const environmentKey = selectedChoice(value, catalog().environments.map((environment) => environment.key));
     if (!environmentKey) return;
@@ -107,6 +113,7 @@ export function IssueQueue(props: {
         ccSubjects: ccSubjects(),
         serviceKey: service(),
         environmentKey: environment(),
+        relatedIssueKeys: canRelateDevelopmentIssues() ? relatedIssueKeys() : [],
       }, attachments());
       setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
       props.onSelect(issue.id);
@@ -114,6 +121,7 @@ export function IssueQueue(props: {
       setTitle("");
       setDescription("");
       setAttachments([]);
+      setRelatedIssueKeys([]);
     } catch (error) {
       setCreateError(errorMessage(error));
     } finally {
@@ -199,6 +207,7 @@ export function IssueQueue(props: {
           <label><span>类型</span><Select aria-label="工单类型" value={issueType()} onChange={(value) => { const selected = selectedChoice(value, availableIssueTypes()); if (selected) setIssueType(selected); }} options={availableIssueTypes().map((value) => ({ value, label: typeLabel[value] }))} /></label>
           <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} onChange={setCcSubjects} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
+          <Show when={canRelateDevelopmentIssues()}><label><span>关联工单（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="关联开发工单" value={relatedIssueKeys()} onChange={setRelatedIssueKeys} options={relatedIssueOptions()} /></div></label></Show>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={description} inputLabel="工单描述" expandLabel="放大工单描述" onChange={(value) => setDescription(value)} />
           <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />

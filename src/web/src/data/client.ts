@@ -48,6 +48,7 @@ export interface IssueDetail extends IssueListItem {
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
+  relatedIssues?: IssueExecutionItem[];
   ccRecipients?: Person[];
   reporter?: Person;
   comments: IssueComment[];
@@ -82,6 +83,7 @@ export interface IssueInput {
   environmentKey: string;
   assigneeSubject: string | null;
   ccSubjects: string[];
+  relatedIssueKeys?: string[];
 }
 
 const currentUserStorageKey = "issue-pilot.current-user";

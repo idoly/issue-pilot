@@ -59,6 +59,7 @@ export const issuePilotConfig = Object.freeze({
   }),
   limits: Object.freeze({
     agentMessageChars: 50_000,
+    relatedIssues: 20,
     attachment: Object.freeze({
       fileBytes: 20 * 1024 * 1024,
       requestBytes: 40 * 1024 * 1024,

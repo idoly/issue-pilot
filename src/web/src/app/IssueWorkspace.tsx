@@ -26,7 +26,7 @@ function localDateTime(value: string, includeYear = true): string {
   return (includeYear ? issueDateTimeFormat : commentDateTimeFormat).format(new Date(value));
 }
 
-export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void> }) {
+export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (element: HTMLElement) => void; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void> }) {
   const { catalog, people, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
@@ -158,7 +158,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
     if (!services.some((service) => service.key === editService())) setEditService(services[0]?.key ?? "");
   };
   return (
-    <section class={`issue-workspace ip-scrollbar${props.sourcePanel ? ` ip-scrollbar-dark source-detail-panel${props.sourcePanelOpen ? " details-open" : ""}` : ""}`} hidden={props.hidden}>
+    <section ref={props.elementRef} class={`issue-workspace ip-scrollbar${props.sourcePanel ? ` ip-scrollbar-dark source-detail-panel${props.sourcePanelOpen ? " details-open" : ""}` : ""}`} hidden={props.hidden}>
       <header class="issue-header">
         <div class="issue-heading">
           <div class="issue-heading-meta">
@@ -197,6 +197,14 @@ export function IssueWorkspace(props: { issue: IssueDetail; hidden?: boolean; so
       <Show when={retryError()}><div class="workspace-error" role="alert">{retryError()}</div></Show>
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
       <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{props.issue.workspace.lastError}</div></Show>
+      <Show when={(props.issue.relatedIssues ?? []).length}>
+        <section class="repository-band" aria-labelledby="related-issues-title">
+          <div class="band-title"><MessageSquare size={16} /><h2 id="related-issues-title">关联工单</h2><span>{props.issue.relatedIssues?.length ?? 0}</span></div>
+          <div class="issue-attachment-list">
+            <For each={props.issue.relatedIssues ?? []}>{(relatedIssue) => <div class="issue-attachment-row"><GitBranch size={15} /><span><strong>{relatedIssue.id}</strong><small>{relatedIssue.title} · {relatedIssue.service.name} / {relatedIssue.environmentKey}</small></span></div>}</For>
+          </div>
+        </section>
+      </Show>
       <section class="repository-band" aria-labelledby="repositories-title">
         <div class="band-title"><GitBranch size={16} /><h2 id="repositories-title">代码分支</h2></div>
         <div class="issue-branch-row">

@@ -78,6 +78,7 @@ Environment name 在启动时同步。DMS URL 只用于新 Deployment 表单，�
 | --- | ---: |
 | Agent model response idle | 300000 ms |
 | Agent message | 50000 chars |
+| 正式智能分析关联工单 | 最多 20 个已有开发工单 |
 | Agent clipboard image | 复用 multipart file/request/count：20 MiB / 40 MiB / 20 |
 | Attachment file/request/count | 20 MiB / 40 MiB / 20 |
 | Multipart field | 100000 bytes |

@@ -10,7 +10,7 @@ vi.mock("../data/client", async (importOriginal) => {
     id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
     workspaceStatus: retryable ? "failed" : status === "in_progress" ? "running" : "ready", agentRunning: status === "in_progress", resolvedAt: status === "resolved" ? now : null,
     assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
-    service, createdAt: now, updatedAt: now, repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
+    service, createdAt: now, updatedAt: now, repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], relatedIssues: [], comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
   });
@@ -153,6 +153,27 @@ describe("issue pilot workspace", () => {
     expect(within(personalQueue).getByText("ISSUE-20260810-042")).toBeTruthy();
   });
 
+  test("scrolls a dashboard Issue detail into view on a narrow screen", async () => {
+    const originalMatchMedia = window.matchMedia;
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({ matches: true })) });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    try {
+      render(() => <App />);
+
+      const attention = await waitFor(() => screen.getByRole("region", { name: "团队工单动态" }));
+      fireEvent.click(within(attention).getByText("批量审批偶发超时").closest("button")!);
+
+      await waitFor(() => expect(screen.getByRole("heading", { name: "批量审批偶发超时" })).toBeTruthy());
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" }));
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: originalMatchMedia });
+      if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+      else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
+
   test("keeps every active Issue in the scrollable team activity list", async () => {
     const client = await import("../data/client");
     const [base] = await client.listIssues();
@@ -169,6 +190,42 @@ describe("issue pilot workspace", () => {
 
     const attention = await waitFor(() => screen.getByRole("region", { name: "团队工单动态" }));
     expect(within(attention).getAllByRole("listitem")).toHaveLength(12);
+  });
+
+  test("shows related development Issue selection only for production smart analysis", async () => {
+    const client = await import("../data/client");
+    const catalog = await client.loadCatalog();
+    const loadedIssues = await client.listIssues();
+    const developmentIssue = loadedIssues.find((issue) => issue.id === "ISSUE-20260810-038")!;
+    developmentIssue.environmentKey = "dev";
+    developmentIssue.workspaceStatus = "ready";
+    developmentIssue.agentRunning = false;
+    vi.mocked(client.loadCatalog).mockResolvedValueOnce({
+      environments: [...catalog.environments, { key: "dev", name: "开发" }],
+      services: catalog.services.map((service) => service.key === "orders" ? { ...service, deployments: [...service.deployments, { environmentKey: "dev" }] } : service),
+    });
+    vi.mocked(client.listIssues).mockResolvedValueOnce(loadedIssues);
+    render(() => <App initialView="issues" />);
+
+    const queue = screen.getByLabelText("工单队列");
+    fireEvent.click(within(queue).getByRole("button", { name: "新建工单" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建工单" });
+    expect(within(dialog).queryByLabelText("关联开发工单")).toBeNull();
+    fireEvent.click(within(dialog).getByLabelText("工单环境"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式"));
+    await waitFor(() => expect(within(dialog).getByLabelText("关联开发工单")).toBeTruthy());
+    fireEvent.click(within(dialog).getByLabelText("工单类型"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("数据处理"));
+    await waitFor(() => expect(within(dialog).queryByLabelText("关联开发工单")).toBeNull());
+
+    fireEvent.click(within(dialog).getByLabelText("工单类型"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("智能分析"));
+    const relationSelect = await waitFor(() => within(dialog).getByLabelText("关联开发工单"));
+    fireEvent.click(relationSelect);
+    const options = await screen.findByRole("listbox");
+    expect(within(options).getByText(/ISSUE-20260810-038 · 批量审批偶发超时 · SRM/)).toBeTruthy();
+    fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
+    await waitFor(() => expect(relationSelect.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
   });
 
   test("collapses and expands a long Issue description", async () => {

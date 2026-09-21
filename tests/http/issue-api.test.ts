@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
-import { issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { agentSessions, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
 
 test("validates Issue scope, subjects, priority, and environment type", async () => {
@@ -25,6 +25,47 @@ test("validates Issue scope, subjects, priority, and environment type", async ()
       assert.equal((await json(response)).error, expected);
     }
     assert.deepEqual(await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)), []);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("creates production smart-analysis Issues with related development context", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Orders", ["prod", "dev"]);
+    const development = await createIssue(fixture.app, "orders", "dev", "Implemented fix");
+    const developmentId = fixture.engine.enqueued.at(-1)!;
+    fixture.engine.running.clear();
+    const workspacePath = path.join(fixture.root, "workspaces", String(development.id).toLowerCase(), "orders");
+    const sessionRoot = path.join(fixture.root, "issues", String(development.id).toLowerCase(), "agent");
+    const sessionFile = path.join(sessionRoot, "session.jsonl");
+    await mkdir(sessionRoot, { recursive: true });
+    await writeFile(sessionFile, "{\"type\":\"session\"}\n", { mode: 0o600 });
+    const database = openDatabase(fixture.databaseFile);
+    await database.db.insert(issueRepositories).values({ issueId: developmentId, url: "https://example.test/orders.git", baseBranch: "develop", workingBranch: `hotfix-${String(development.id).toLowerCase()}`, localPath: workspacePath, workspaceName: "orders", commitBefore: "a".repeat(40) });
+    await database.db.insert(agentSessions).values({ issueId: developmentId, sessionFile, workspacePath: path.dirname(workspacePath) });
+    await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, developmentId));
+    await database.close();
+
+    const payload = { ...issuePayload("orders", "prod", "Production regression"), relatedIssueKeys: [development.id] };
+    const response = await fixture.app.inject({ method: "POST", url: "/api/issues", payload });
+    assert.equal(response.statusCode, 201, response.body);
+    const created = await json(response);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((result) => JSON.parse(result.body)) as { relatedIssues: Array<{ id: string; title: string; environmentKey: string }> };
+    assert.deepEqual(detail.relatedIssues.map(({ id, title, environmentKey }) => ({ id, title, environmentKey })), [{ id: development.id, title: "Implemented fix", environmentKey: "dev" }]);
+
+    const persisted = openDatabase(fixture.databaseFile);
+    assert.deepEqual((await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId), [developmentId]);
+    await persisted.close();
+
+    fixture.engine.running.clear();
+    const disallowed = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, type: "data_processing" } });
+    assert.equal(disallowed.statusCode, 400);
+    assert.equal((await json(disallowed)).error, "related_issues_not_allowed");
+    const nonDevelopment = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, relatedIssueKeys: [created.id] } });
+    assert.equal(nonDevelopment.statusCode, 400);
+    assert.equal((await json(nonDevelopment)).error, "invalid_related_issues");
   } finally {
     await fixture.cleanup();
   }

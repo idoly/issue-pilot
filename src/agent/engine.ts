@@ -295,8 +295,8 @@ export class AgentEngine implements AgentController {
 
     const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: path.relative(project.workspaceRoot, repository.workspacePath), readOnly: repository.access === "read" }));
     const prompt = hadMessages
-      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage)
-      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
+      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys)
+      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, relatedIssueKeys: project.relatedIssueKeys, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
     await managed.prompt(prompt, images);
     if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);

@@ -82,6 +82,7 @@ service_repositories
 service_deployment_repositories
 issues
 issue_cc_recipients
+issue_relations
 issue_repositories
 issue_attachments
 issue_comments
@@ -94,6 +95,7 @@ issue_workspaces
 - Service/Environment 至多一个 Deployment。
 - Deployment 必须覆盖 Service 当前所有 Repository，顺序由 join rows 持久化。
 - 每张 Issue 必须引用有效 Service/Environment Deployment，并恰有一条 Workspace row。
+- `issue_relations` 保存正式环境智能分析工单在创建时选择的开发工单；同一目标不重复且不能关联自身。
 - `global_agent_configuration.id` 固定为 `1`。
 - `status = resolved` 与 `resolved_at IS NOT NULL` 必须等价。
 - Pi conversation 不进入 message table，继续由 JSONL 持有。
@@ -165,6 +167,8 @@ Repository URL 使用 SHA-256 前 20 字符。Bare store 保存 remote tracking 
 
 Prod/test Issue 可在编辑事务中切换到另一 prod/test scope。切换关闭旧内存 session，保留 JSONL、Attachment 和 Comment，清空旧只读 Repository 投影并使 runtime 失效。Dev scope 只能通过专用转换/reopen 流程改变。
 
+新建 `prod + smart_analysis` 工单可选择最多 20 个已有开发工单。创建在 scope queue 内同时 reservation 新工单与全部关联工单，只接受空闲、Workspace `ready|stopped`、runtime 已就绪、Repository 状态为 active dev 或 released snapshot 且 Pi session 文件存在的目标。关联关系写入同一 SQLite transaction；其他环境或类型拒绝非空关联输入。
+
 ### Active dev
 
 - `defect_fix` 使用 `hotfix-<issue-key>`。
@@ -194,12 +198,17 @@ Reopen 从全部本地 working branch 准备 worktree/runtime，再事务更新 
 ```text
 issues/<issue-key>/runtime/
   <workspace-name> -> active worktree or immutable checkout
+  related-issues/   # 仅有关联工单的只读调查上下文
+    <related-key>/
+      issue.json
+      conversation.jsonl -> 关联工单 Pi JSONL
+      repositories/<workspace-name> -> local branch immutable checkout
   bin/              # 仅 writable dev
     node-project
     maven-project
 ```
 
-Runtime 使用 temporary + previous 目录原子替换，不包含 Attachment。Wrapper 通过 versioned Unix socket 只发送 Issue key、workspace name、relative project、action 和 args。Broker 从 SQLite 重新验证 Issue、Repository、真实 project path、配置文件和 cache 权限。
+Runtime 使用 temporary + previous 目录原子替换，不包含 Attachment。关联开发代码始终从 bare store 的本地 working branch ref 创建 immutable checkout，不挂载可写 worktree，因此不包含未提交修改；每轮 prepare 和 API 冷启动会重建这些链接。`issue.json` 明确记录 branch/commit，关联对话链接到受管 Issue session root 下的当前 Pi JSONL。Wrapper 通过 versioned Unix socket 只发送 Issue key、workspace name、relative project、action 和 args。Broker 从 SQLite 重新验证 Issue、Repository、真实 project path、配置文件和 cache 权限。
 
 Source Browser：
 
@@ -221,7 +230,7 @@ Workbench 使用 access-aware virtual filesystem 和固定 LocalProcess extensio
 2. 读取 Issue、Service、Environment、Deployment 和全局模型。
 3. 关闭旧内存 session。
 4. 准备代码和 runtime。
-5. 从实际 access 与 typed Deployment config 生成最小 `AgentSessionContext`。
+5. 从实际 access 与 typed Deployment config 生成最小 `AgentSessionContext`；若有关系，生成关联工单只读 metadata/branch/conversation 上下文。
 6. 打开现有 Pi JSONL 或原子创建 `0600` session file。
 7. 用 Pi SDK `customTools` 创建 session，并核对 model、thinking level、tool 集。
 8. 持久化 session binding。
@@ -360,3 +369,4 @@ DB 不存在但 `issues/<key>` 或 `workspaces/<key>` 存在时为 `unmanaged_is
 14. 所有 state owner 使用同一 state root。
 15. Published migration/journal 不修改、重排或删除。
 16. SQLite User 是唯一用户事实源，且至少保留一名 active user。
+17. 关联开发工单代码只来自本地 working branch immutable checkout；关联 metadata、conversation 和 Repository 对当前工单只读。
