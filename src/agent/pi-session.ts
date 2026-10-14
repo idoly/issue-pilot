@@ -16,9 +16,11 @@ import {
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { DeploymentConfig } from "../domain/contracts.ts";
+import { IssueOutputStore } from "../outputs/store.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "../pi/models.ts";
 import { createCapabilityTools } from "../pi/tools.ts";
 import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
+import { createOutputTool } from "./output-tool.ts";
 import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
 
 const isWindows = process.platform === "win32";
@@ -36,6 +38,7 @@ export interface StartPiSessionOptions {
   workspaceRoot: string;
   executableRoot?: string;
   gitIdentity?: GitCommitIdentity;
+  outputStore?: IssueOutputStore;
   systemPrompt: string;
   modelResponseIdleMs?: number;
   onEvent: (event: JsonAgentSessionEvent) => void;
@@ -139,8 +142,12 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
   };
 }
 
-function sessionTools(context: AgentSessionContext, deploymentConfig: DeploymentConfig, workspaceRoot: string, toolRuntime: ToolRuntime, gitIdentity: () => GitCommitIdentity | undefined, executableRoot?: string): ToolDefinition<any, any, any>[] {
-  const tools = createCapabilityTools(context, deploymentConfig, toolRuntime);
+function sessionTools(context: AgentSessionContext, deploymentConfig: DeploymentConfig, workspaceRoot: string, toolRuntime: ToolRuntime, gitIdentity: () => GitCommitIdentity | undefined, outputStore?: IssueOutputStore, executableRoot?: string): ToolDefinition<any, any, any>[] {
+  const tools = createCapabilityTools(context, deploymentConfig, toolRuntime, outputStore);
+  if (context.canWriteOutputs) {
+    if (!outputStore) throw new Error("issue_output_store_required");
+    tools.unshift(createOutputTool(outputStore));
+  }
   if (!sessionToolAllowlist(context).includes("bash")) return tools;
   if (!executableRoot) throw new Error("project_wrapper_root_required");
   tools.unshift(createBashToolDefinition(workspaceRoot, {
@@ -231,7 +238,7 @@ export class PiSessionRuntime {
       model,
       thinkingLevel: context.model.thinkingLevel,
       tools: expectedTools,
-      customTools: sessionTools(context, options.deploymentConfig, workspaceRoot, this.#toolRuntime, () => gitIdentity, options.executableRoot),
+      customTools: sessionTools(context, options.deploymentConfig, workspaceRoot, this.#toolRuntime, () => gitIdentity, options.outputStore, options.executableRoot),
       sessionManager: options.manager,
       settingsManager,
       resourceLoader,

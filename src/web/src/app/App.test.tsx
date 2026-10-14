@@ -33,7 +33,7 @@ vi.mock("../data/client", async (importOriginal) => {
     environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{
       key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }, dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialConfigured: true } }],
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { databases: [{ url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }] }, dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }, {
       key: "orders", name: "Orders", description: "订单服务。",
@@ -254,7 +254,7 @@ describe("issue pilot workspace", () => {
     expect(within(attention).getAllByRole("listitem")).toHaveLength(12);
   });
 
-  test("shows related development Issue selection only for production smart analysis", async () => {
+  test("shows all related Issue candidates only for production smart analysis", async () => {
     const client = await import("../data/client");
     const catalog = await client.loadCatalog();
     const loadedIssues = await client.listIssues();
@@ -266,28 +266,31 @@ describe("issue pilot workspace", () => {
       environments: [...catalog.environments, { key: "dev", name: "开发" }],
       services: catalog.services.map((service) => service.key === "orders" ? { ...service, deployments: [...service.deployments, { environmentKey: "dev" }] } : service),
     });
-    vi.mocked(client.listIssues).mockResolvedValueOnce(loadedIssues);
+    vi.mocked(client.listIssues).mockResolvedValueOnce(loadedIssues).mockResolvedValueOnce(loadedIssues);
     render(() => <App initialView="issues" />);
 
     const queue = screen.getByLabelText("工单队列");
     fireEvent.click(within(queue).getByRole("button", { name: "新建工单" }));
     const dialog = await screen.findByRole("dialog", { name: "新建工单" });
-    await waitFor(() => expect(within(dialog).getByLabelText("关联开发工单")).toBeTruthy());
+    await waitFor(() => expect(within(dialog).getByLabelText("关联工单")).toBeTruthy());
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
     fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式数据处理"));
-    await waitFor(() => expect(within(dialog).queryByLabelText("关联开发工单")).toBeNull());
+    await waitFor(() => expect(within(dialog).queryByLabelText("关联工单")).toBeNull());
 
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
     fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式问题调查"));
-    const relationSelect = await waitFor(() => within(dialog).getByLabelText("关联开发工单"));
+    const relationSelect = await waitFor(() => within(dialog).getByLabelText("关联工单"));
     fireEvent.click(relationSelect);
     const options = await screen.findByRole("listbox");
-    expect(within(options).getByText(/ISSUE-20260810-038 · 批量审批偶发超时 · SRM/)).toBeTruthy();
-    fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
+    expect(within(options).getByText("ISSUE-20260810-038")).toBeTruthy();
+    expect(within(options).getByText("ISSUE-20260810-041")).toBeTruthy();
+    expect(within(options).getByText("批量审批偶发超时")).toBeTruthy();
+    expect(within(options).getAllByText("SRM").length).toBeGreaterThan(0);
+    fireEvent.click(within(options).getByText("ISSUE-20260810-038"));
     await waitFor(() => expect(relationSelect.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
   });
 
-  test("updates related development Issues from a production investigation", async () => {
+  test("updates related Issues from a production investigation", async () => {
     const client = await import("../data/client");
     const loadedIssues = await client.listIssues();
     const developmentIssue = loadedIssues.find((issue) => issue.id === "ISSUE-20260810-038")!;
@@ -301,15 +304,17 @@ describe("issue pilot workspace", () => {
     fireEvent.click(await waitFor(() => within(queue).getByText("ISSUE-20260810-041")));
     const editButton = await waitFor(() => screen.getByRole("button", { name: "编辑关联" }));
     fireEvent.click(editButton);
-    const dialog = await screen.findByRole("dialog", { name: "编辑关联开发工单" });
-    const selector = await waitFor(() => within(dialog).getByLabelText("编辑关联开发工单"));
+    const dialog = await screen.findByRole("dialog", { name: "编辑关联工单" });
+    const selector = await waitFor(() => within(dialog).getByLabelText("编辑关联工单"));
     fireEvent.click(selector);
     const options = await screen.findByRole("listbox");
     fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
     await waitFor(() => expect(selector.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
+    fireEvent.click(within(dialog).getByText(/保存后当前 Agent session/));
+    expect(selector.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038");
     fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
     await waitFor(() => expect(client.updateIssueRelatedIssues).toHaveBeenCalledWith("ISSUE-20260810-041", ["ISSUE-20260810-038"]));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑关联开发工单" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑关联工单" })).toBeNull());
   });
 
   test("collapses and expands a long Issue description", async () => {
@@ -492,7 +497,10 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(await screen.findByRole("listbox")).getByText("开发缺陷修复"));
     await waitFor(() => expect(within(scopeDialog).getByLabelText("目标处理方式").closest(".ads-select")?.textContent).toContain("开发缺陷修复"));
     fireEvent.click(within(scopeDialog).getByRole("button", { name: "预检变更" }));
-    await waitFor(() => expect(within(scopeDialog).getByRole("region", { name: "范围变更预览" })).toBeTruthy());
+    const scopePreview = await waitFor(() => within(scopeDialog).getByRole("region", { name: "范围变更预览" }));
+    expect(scopePreview.classList.contains("scope-transition-preview")).toBe(true);
+    expect(scopePreview.querySelectorAll(".scope-transition-repository").length).toBeGreaterThan(0);
+    expect(scopePreview.querySelector(".issue-attachment-row")).toBeNull();
     expect(within(scopeDialog).getByText(/hotfix-issue-20260810-041/)).toBeTruthy();
     fireEvent.click(within(scopeDialog).getByRole("button", { name: "确认变更" }));
     const clientAfterConversion = await import("../data/client");
@@ -596,7 +604,7 @@ describe("issue pilot workspace", () => {
     expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "nacos", "db", "dms"]);
     const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
     expect((screen.getByLabelText("nacos dataIds 1") as HTMLInputElement).value).toBe("srm-test.yaml, srm-shared.yaml");
-    const databaseUrl = screen.getByLabelText("db url 1");
+    const databaseUrl = screen.getByLabelText("db url 1-1");
     expect(nacosServerUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("serverUrl");
     expect(databaseUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
     const dmsUrl = screen.getByLabelText("dms url 1") as HTMLInputElement;
@@ -613,7 +621,11 @@ describe("issue pilot workspace", () => {
     const restoredDmsUrl = await waitFor(() => screen.getByLabelText("dms url 1") as HTMLInputElement);
     expect(restoredDmsUrl.value).toBe("https://dms.example.test/sse");
     fireEvent.input(restoredDmsUrl, { target: { value: "https://dms-updated.example.test/sse" } });
-    expect((screen.getByLabelText("db password 1") as HTMLInputElement).value).toBe("db-secret");
+    expect((screen.getByLabelText("db password 1-1") as HTMLInputElement).value).toBe("db-secret");
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "添加 MySQL 数据库" }));
+    fireEvent.input(await screen.findByLabelText("db url 1-2"), { target: { value: "mysql://analytics.example.test:3306/srm_report" } });
+    fireEvent.input(screen.getByLabelText("db username 1-2"), { target: { value: "reporter" } });
+    fireEvent.input(screen.getByLabelText("db password 1-2"), { target: { value: "report-secret" } });
     fireEvent.input(screen.getByLabelText("dms Authorization 1"), { target: { value: "Bearer dms-token-updated" } });
     const client = await import("../data/client");
     vi.mocked(client.resolveDmsScope).mockClear();
@@ -628,7 +640,7 @@ describe("issue pilot workspace", () => {
       schemaName: "srm",
     }), { timeout: 2_000 });
     await waitFor(() => expect(within(serviceDialog).getByText("DatabaseId 123")).toBeTruthy());
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "添加数据库" }));
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "添加 DMS 数据库" }));
     fireEvent.input(await screen.findByLabelText("dms instance 1-2"), { target: { value: "MPM-PROD" } });
     fireEvent.input(screen.getByLabelText("dms database 1-2"), { target: { value: "mdm" } });
     await waitFor(() => expect(client.resolveDmsScope).toHaveBeenCalledWith({
@@ -651,7 +663,7 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByLabelText(/es indexes/i)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "移除 nacos 能力" }));
     await waitFor(() => expect(screen.queryByLabelText("nacos serverUrl 1")).toBeNull());
-    expect(screen.getByLabelText("db url 1")).toBeTruthy();
+    expect(screen.getByLabelText("db url 1-1")).toBeTruthy();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "移除 es 能力" }));
     await waitFor(() => expect(screen.queryByLabelText("es url 1")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
@@ -664,7 +676,10 @@ describe("issue pilot workspace", () => {
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
     expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
-    expect(savedService?.deployments[0]?.db).toEqual({ url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "replace", values: { password: "db-secret" } } });
+    expect(savedService?.deployments[0]?.db).toEqual({ databases: [
+      { url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "replace", values: { password: "db-secret" } } },
+      { url: "mysql://analytics.example.test:3306/srm_report", username: "reporter", credentialUpdate: { mode: "replace", values: { password: "report-secret" } } },
+    ] });
     expect(savedService?.deployments[0]?.dms).toEqual({ url: "https://dms-updated.example.test/sse", databases: [
       { instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "srm.db.example.test", instancePort: "3306", databaseId: "123" },
       { instanceAlias: "MPM-PROD", schemaName: "mdm", instanceId: "instance-2", instanceHost: "mdm.db.example.test", instancePort: "3306", databaseId: "456" },

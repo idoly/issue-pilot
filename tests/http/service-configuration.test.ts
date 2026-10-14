@@ -5,16 +5,20 @@ import { parseCapabilityConfiguration } from "../../src/capabilities/registry.ts
 
 test("validates capability connection settings when saving page configuration", () => {
   const databaseUrl = "mysql://192.168.27.122:3306/srm_prod";
-  assert.deepEqual(parseCapabilityConfiguration("db", { url: databaseUrl, username: "reader", password: "secret" }), {
-    url: databaseUrl, username: "reader", password: "secret",
+  const db = (url: string, database = {}) => ({ databases: [{ url, username: "reader", password: "secret", ...database }] });
+  assert.deepEqual(parseCapabilityConfiguration("db", db(databaseUrl)), {
+    databases: [{ url: databaseUrl, username: "reader", password: "secret" }],
   });
-  assert.throws(() => parseCapabilityConfiguration("db", { url: `${databaseUrl}?useSSL=false`, username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("db", { url: "mysql://db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("db", { url: "mysql://db.example.test:3306/orders/archive", username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("db", { url: "mysql://db.example.test:3306/orders%2Farchive", username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("db", { url: "jdbc:mysql://db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("db", { url: "mariadb://db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
-  assert.throws(() => parseCapabilityConfiguration("db", { url: "mysql://hidden:secret@db.example.test/orders", username: "reader", password: "secret" }), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", { databases: [] }), /invalid_db_databases/);
+  assert.throws(() => parseCapabilityConfiguration("db", db(`${databaseUrl}?useSSL=false`)), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", db("mysql://db.example.test/orders")), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", db("mysql://db.example.test:3306/orders/archive")), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", db("mysql://db.example.test:3306/orders%2Farchive")), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", db("jdbc:mysql://db.example.test/orders")), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", db("mariadb://db.example.test/orders")), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", db("mysql://hidden:secret@db.example.test/orders")), /invalid_db_url/);
+  assert.throws(() => parseCapabilityConfiguration("db", { databases: [db(databaseUrl).databases[0], db("mysql://archive.example.test:3306/srm_prod").databases[0]] }), /duplicate_db_database/);
+  assert.throws(() => parseCapabilityConfiguration("db", { databases: [db(databaseUrl).databases[0], db(databaseUrl, { username: "other" }).databases[0]] }), /duplicate_db_url/);
   assert.throws(() => parseCapabilityConfiguration("es", { url: "https://es.example.test", username: "reader", password: "" }), /invalid_es_credentials/);
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 70_000, username: "", database: 0 }), /invalid_redis_port/);
   assert.throws(() => parseCapabilityConfiguration("redis", { host: "redis.example.test", port: 6379, username: "", database: -1 }), /invalid_redis_database/);

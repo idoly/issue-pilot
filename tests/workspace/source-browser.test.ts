@@ -37,10 +37,10 @@ test("browses only registered Issue repository content", async () => {
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
 
-    const commands: Array<{ command: string; args: string[]; cwd?: string }> = [];
+    const commands: Array<{ command: string; args: string[]; cwd?: string; maxOutputBytes?: number | null }> = [];
     const executor: CommandExecutor = {
       async execute(command, args, options) {
-        commands.push({ command, args, ...(options?.cwd ? { cwd: options.cwd } : {}) });
+        commands.push({ command, args, ...(options?.cwd ? { cwd: options.cwd } : {}), ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}) });
         if (command === "rg") return {
           code: 0, stderr: "", killed: false,
           stdout: `${JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "export const ready = true;\n" }, line_number: 1, submatches: [{ start: 13 }] } })}\n`,
@@ -73,6 +73,10 @@ test("browses only registered Issue repository content", async () => {
     await browser.createFile(issue!, "application", "generated/value.ts", "export const value = 1;\n");
     await browser.renamePath(issue!, "application", "generated/value.ts", "generated/result.ts", false);
     assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    const largeSource = "x".repeat(2 * 1024 * 1024 + 1);
+    const largeFile = await browser.createFile(issue!, "application", "generated/large.txt", largeSource);
+    assert.equal(largeFile.size, Buffer.byteLength(largeSource));
+    assert.equal((await browser.file(issue!, "application", "generated/large.txt")).content.length, largeSource.length);
     await browser.deletePath(issue!, "application", "generated", true);
     await assert.rejects(readFile(path.join(repository, "generated", "result.ts")), /ENOENT/);
     await browser.stage(issue!, "application", ["src/index.ts"]);
@@ -130,6 +134,7 @@ test("browses only registered Issue repository content", async () => {
     assert.ok(searchCommands[0]!.args.includes("--json"));
     assert.ok(searchCommands[0]!.args.includes("--fixed-strings"));
     assert.ok(searchCommands[0]!.args.includes("--max-columns-preview"));
+    assert.ok(!searchCommands[0]!.args.includes("--max-filesize"));
     assert.equal(searchCommands[0]!.args[searchCommands[0]!.args.indexOf("--max-columns") + 1], "1000");
     assert.ok(!searchCommands[0]!.args.includes("--ignore-case"));
     assert.ok(searchCommands[1]!.args.includes("--ignore-case"));
@@ -141,7 +146,7 @@ test("browses only registered Issue repository content", async () => {
     const commitDiffCommand = commands.find(({ args }) => args.includes("--name-status"))!;
     assert.ok(commitDiffCommand.args.includes("--no-ext-diff"));
     assert.ok(commitDiffCommand.args.includes("--no-textconv"));
-    assert.ok(commands.some(({ args }) => args.includes("cat-file") && args.includes("blob")));
+    assert.ok(commands.some(({ args, maxOutputBytes }) => args.includes("cat-file") && args.includes("blob") && maxOutputBytes === null));
     const workspaceDiffCommand = commands.find(({ args }) => args.includes("diff") && args.includes("--name-status") && !args.includes("a".repeat(40)))!;
     assert.ok(workspaceDiffCommand.args.includes("--no-ext-diff"));
     assert.ok(workspaceDiffCommand.args.includes("--no-textconv"));

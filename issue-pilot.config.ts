@@ -23,6 +23,7 @@ export const issuePilotConfig = Object.freeze({
     agentStreamReconnectMs: 1_000,
     agentStreamStaleMs: 45_000,
     agentToolOutputCharacters: 40_000,
+    outputPreviewBytes: 20 * 1024 * 1024,
     markdownCacheEntries: 512,
     markdownCacheCharacters: 4 * 1024 * 1024,
   }),
@@ -60,14 +61,12 @@ export const issuePilotConfig = Object.freeze({
   limits: Object.freeze({
     agentMessageChars: 50_000,
     relatedIssues: 20,
-    attachment: Object.freeze({
+    agentImage: Object.freeze({
       fileBytes: 20 * 1024 * 1024,
       requestBytes: 40 * 1024 * 1024,
       files: 20,
-      formFieldBytes: 100_000,
     }),
     sourceBrowser: Object.freeze({
-      fileBytes: 2 * 1024 * 1024,
       directoryEntries: 500,
       searchQueryCharacters: 200,
       historyCommits: 100,
@@ -88,7 +87,7 @@ export const issuePilotConfig = Object.freeze({
       resultBytes: 1024 * 1024,
       timeoutMs: 15_000,
       connectionMs: 10_000,
-      database: Object.freeze({ queryChars: 20_000, rows: 500 }),
+      database: Object.freeze({ queryChars: 20_000, databases: 20 }),
       dms: Object.freeze({ executionMs: 30_000, databases: 20 }),
       elasticsearch: Object.freeze({ results: 200 }),
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),

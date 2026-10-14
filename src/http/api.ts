@@ -100,8 +100,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const sharedModelRuntime = () => modelRuntime ??= createPiModelRuntime();
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
     await ensureGlobalAgentConfiguration(database.db, modelCatalog);
-    const attachmentLimits = applicationConfig.limits.attachment;
-    await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
+    await app.register(multipart, { limits: { fileSize: Infinity, files: Infinity, fields: Infinity, parts: Infinity, fieldSize: Infinity } });
     const events = options.events ?? new AgentEventBus((error) => app.log.error(error));
     engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.toolRuntime, sharedModelRuntime());
     const scopeQueue = new SerialQueue();
@@ -114,8 +113,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
     app.setErrorHandler((error, _request, reply) => {
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
-      const errorCode = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
-      if (["FST_REQ_FILE_TOO_LARGE", "FST_FILES_LIMIT", "FST_PARTS_LIMIT", "FST_FIELDS_LIMIT"].includes(errorCode)) return reply.code(413).send({ error: "attachment_limit_exceeded" });
       const errorMessages: string[] = [];
       const seenCauses = new Set<unknown>();
       let cause: unknown = error;

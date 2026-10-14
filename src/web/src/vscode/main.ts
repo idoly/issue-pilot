@@ -270,6 +270,8 @@ async function start(): Promise<void> {
     "workbench.layoutControl.enabled": false,
     "workbench.secondarySideBar.defaultVisibility": "visible",
     "workbench.editor.editorActionsLocation": "default",
+    "workbench.editorLargeFileConfirmation": Number.MAX_SAFE_INTEGER,
+    "diffEditor.maxFileSize": 0,
     "window.commandCenter": false,
   }));
   const container = document.querySelector<HTMLElement>("#vscode-workbench");
@@ -316,7 +318,9 @@ async function start(): Promise<void> {
       "workbench.activityBar.location": "default",
       "workbench.activity.showAccounts": false,
       "workbench.startupEditor": "none",
+      "workbench.editorLargeFileConfirmation": Number.MAX_SAFE_INTEGER,
       "workbench.statusBar.visible": true,
+      "diffEditor.maxFileSize": 0,
       "workbench.view.alwaysShowHeaderActions": true,
       "security.workspace.trust.enabled": false,
       "scm.repositories.selectionMode": "single",

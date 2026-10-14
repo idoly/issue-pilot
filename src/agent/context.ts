@@ -7,13 +7,14 @@ export interface AgentSessionContext {
   model: { provider: string; modelId: string; thinkingLevel: AgentThinkingLevel };
   capabilities: ReturnType<typeof configuredCapabilities>;
   canModifyCode: boolean;
+  canWriteOutputs: boolean;
 }
 
 export function sessionToolAllowlist(context: AgentSessionContext): string[] {
   const localTools = context.canModifyCode
     ? ["read", "bash", "edit", "write", "grep", "find", "ls"]
     : ["read", "grep", "find", "ls"];
-  return [...localTools, ...context.capabilities];
+  return [...localTools, ...(context.canWriteOutputs ? ["output"] : []), ...context.capabilities];
 }
 
 export function createAgentSessionContext(input: {
@@ -35,5 +36,6 @@ export function createAgentSessionContext(input: {
     model: { provider: agent.provider, modelId: agent.model, thinkingLevel: agent.thinkingLevel },
     capabilities: configuredCapabilities(input.deploymentConfig),
     canModifyCode: writableIssue && input.repositoryAccess.length > 0 && input.repositoryAccess.every((access) => access === "write"),
+    canWriteOutputs: input.environmentKind === "prod" && input.issueType === "data_processing",
   };
 }

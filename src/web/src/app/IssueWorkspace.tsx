@@ -2,12 +2,13 @@ import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { CheckCircle2, Code2, Download, Eye, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Send } from "../ui/icons";
-import { addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
+import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Send } from "../ui/icons";
+import { addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
+import { OutputPreview } from "./OutputPreview";
 import { AttachmentPreview } from "./AttachmentPreview";
-import { AttachmentPicker, DescriptionField, selectedChoice } from "./IssueForm";
+import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
 import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workModeLabel, workModeOptions } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
@@ -65,6 +66,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
   const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
   const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
+  const [previewOutput, setPreviewOutput] = createSignal<IssueDetail["outputs"][number] | null>(null, { ownedWrite: true });
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
@@ -76,7 +78,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setScopeOpen(false); setScopePlan(null); setScopePlanning(false); setScopeApplying(false); setScopeError("");
     setFollowUpOpen(false); setFollowUpSaving(false); setFollowUpError("");
     setRelatedOpen(false); setRelatedKeys([]); setRelatedCandidates([]); setRelatedLoading(false); setRelatedSaving(false); setRelatedError("");
-    setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null); setDescriptionExpanded(false);
+    setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null); setPreviewOutput(null); setDescriptionExpanded(false);
   });
   const openEditor = () => {
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority);
@@ -139,6 +141,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     finally { if (issueGeneration === generation) setStatusSaving(false); }
   };
   const currentWorkMode = () => issueWorkMode(props.issue.environmentKey as "prod" | "test" | "dev", props.issue.type);
+  const outputs = () => props.issue.outputs ?? [];
   const availableScopeModes = createMemo(() => workModeOptions.filter(({ value }) => {
     if (props.issue.environmentKey === "dev" && value !== currentWorkMode()) return false;
     const environmentKind = issueScopeForWorkMode(value).environmentKind;
@@ -216,12 +219,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   };
   const canCreateFollowUp = () => props.issue.environmentKey === "dev" && !props.issue.agentRunning && ["ready", "stopped"].includes(props.issue.workspace.status) && props.issue.workspace.sourceAvailable && productionServices().length > 0;
   const canEditRelatedIssues = () => currentWorkMode() === "production_analysis" && props.issue.status !== "resolved";
-  const relatedOptions = createMemo(() => {
-    const selected = new Set((props.issue.relatedIssues ?? []).map(({ id }) => id));
-    return relatedCandidates()
-      .filter((candidate) => candidate.environmentKey === "dev" && (selected.has(candidate.id) || (!candidate.agentRunning && ["ready", "stopped"].includes(candidate.workspaceStatus))))
-      .map((candidate) => ({ value: candidate.id, label: `${candidate.id} · ${candidate.title}` }));
-  });
+  const selectableRelatedIssues = createMemo(() => relatedCandidates().filter((candidate) => candidate.id !== props.issue.id));
   const openRelatedEditor = async () => {
     setRelatedKeys((props.issue.relatedIssues ?? []).map(({ id }) => id));
     setRelatedError(""); setRelatedOpen(true); setRelatedLoading(true);
@@ -310,7 +308,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         <section class="repository-band" aria-labelledby="related-issues-title">
           <div class="band-title"><MessageSquare size={16} /><h2 id="related-issues-title">关联工单</h2><span>{props.issue.relatedIssues?.length ?? 0}</span><Show when={canEditRelatedIssues()}><Button type="text" icon={<Pencil size={14} />} disabled={Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status)} onClick={() => { void openRelatedEditor(); }}>编辑关联</Button></Show></div>
           <div class="issue-attachment-list">
-            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联开发工单</div>}>{(relatedIssue) => <div class="issue-attachment-row"><GitBranch size={15} /><span><strong>{relatedIssue.id}</strong><small>{relatedIssue.title} · {relatedIssue.service.name} / {relatedIssue.environmentKey}</small></span></div>}</For>
+            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>{(relatedIssue) => <div class="issue-attachment-row"><GitBranch size={15} /><span><strong>{relatedIssue.id}</strong><small>{relatedIssue.title} · {relatedIssue.service.name} / {relatedIssue.environmentKey}</small></span></div>}</For>
           </div>
         </section>
       </Show>
@@ -323,6 +321,17 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           </Show>
         </div>
       </section>
+
+      <Show when={currentWorkMode() === "production_data" || outputs().length}>
+        <section class="attachment-band" aria-labelledby="outputs-title">
+          <div class="band-title"><File size={16} /><h2 id="outputs-title">成果文件</h2><span>{outputs().length}</span></div>
+          <div class="issue-attachment-list">
+            <For each={outputs()} fallback={<div class="empty-band">Agent 尚未生成成果文件</div>}>
+              {(output) => <div class="issue-attachment-row"><File size={15} /><button type="button" class="attachment-preview-trigger" aria-label={`预览 ${output.fileName}`} onClick={() => setPreviewOutput(output)}><span><strong>{output.fileName}</strong><small>{fileSize(output.size)} · {localDateTime(output.updatedAt, false)}</small></span><Eye size={15} /></button><a class="attachment-download-link" href={outputUrl(props.issue.id, output.fileName)} download={output.fileName} title={`下载 ${output.fileName}`} aria-label={`下载 ${output.fileName}`}><Download size={15} /></a></div>}
+            </For>
+          </div>
+        </section>
+      </Show>
 
       <section class="attachment-band" aria-labelledby="attachments-title">
         <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
@@ -348,11 +357,12 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           <div class="comment-actions"><Show when={commentError()}><span class="comment-error" role="alert">{commentError()}</span></Show><Button type="primary" icon={<Send size={14} />} loading={commentSaving()} disabled={!commentBody().trim()} onClick={() => { void submitComment(); }}>发布评论</Button></div>
         </div>
       </section>
+      <OutputPreview issueKey={props.issue.id} output={previewOutput()} onClose={() => setPreviewOutput(null)} />
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
-      <Modal open={relatedOpen()} title="编辑关联开发工单" okText="保存关联" cancelText="取消" confirmLoading={relatedSaving()} cancelButtonProps={{ disabled: relatedSaving() }} okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }} onOk={() => { void saveRelatedIssues(); }} onCancel={() => { if (!relatedSaving()) setRelatedOpen(false); }}>
-        <div class="create-issue-form compact-issue-form">
-          <label><span>关联开发工单（最多 {issuePilotConfig.limits.relatedIssues} 个）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="编辑关联开发工单" loading={relatedLoading()} value={relatedKeys()} onChange={setRelatedKeys} options={relatedOptions()} /></div></label>
-          <p>保存后当前 Agent session 会关闭，并使用所选工单的已提交分支快照和 Pi 对话重建只读上下文；附件不会复制。</p>
+      <Modal open={relatedOpen()} title="编辑关联工单" okText="保存关联" cancelText="取消" confirmLoading={relatedSaving()} cancelButtonProps={{ disabled: relatedSaving() }} okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }} onOk={() => { void saveRelatedIssues(); }} onCancel={() => { if (!relatedSaving()) setRelatedOpen(false); }}>
+        <div class="create-issue-form related-issue-form">
+          <label><span>关联工单（{selectableRelatedIssues().length} 个可选，最多选择 {issuePilotConfig.limits.relatedIssues} 个）</span><RelatedIssueSelect candidates={selectableRelatedIssues()} value={relatedKeys()} loading={relatedLoading()} inputLabel="编辑关联工单" onChange={setRelatedKeys} /></label>
+          <p>保存后当前 Agent session 会关闭，并以所选工单的 metadata 和可用 Pi 对话重建只读上下文；只有具备本地开发分支的工单会附带代码快照，附件不会复制。</p>
           <Show when={relatedError()}><div class="create-error modal-form-error" role="alert">{relatedError()}</div></Show>
         </div>
       </Modal>
@@ -378,16 +388,16 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
             resetScopePlan();
           }} options={availableScopeModes()} /></label>
           <label><span>目标服务</span><Select aria-label="目标服务" value={scopeService()} onChange={(value) => { const selected = selectedChoice(value, availableScopeServices().map((service) => service.key)); if (selected) { setScopeService(selected); resetScopePlan(); } }} options={availableScopeServices().map((service) => ({ value: service.key, label: service.name }))} /></label>
-          <Show when={scopePlan()}>{(plan) => <section class="repository-band" aria-label="范围变更预览">
+          <Show when={scopePlan()}>{(plan) => <section class="repository-band scope-transition-preview" aria-label="范围变更预览">
             <div class="band-title"><GitBranch size={16} /><h2>{workModeLabel[plan().current.workMode]} → {workModeLabel[plan().target.workMode]}</h2></div>
-            <div class="issue-attachment-list">
-              <For each={plan().repositories.retained}>{(repository) => <div class="issue-attachment-row"><span><strong>保留 · {repository.name}</strong><small>{repository.baseBranch}</small></span></div>}</For>
-              <For each={plan().repositories.added}>{(repository) => <div class="issue-attachment-row"><span><strong>新增 · {repository.name}</strong><small>{repository.baseBranch}</small></span></div>}</For>
-              <For each={plan().repositories.removed}>{(repository) => <div class="issue-attachment-row"><span><strong>移除 · {repository.name}</strong><small>{repository.baseBranch}</small></span></div>}</For>
-              <Show when={plan().branch}><div class="issue-attachment-row"><span><strong>分支</strong><small>{plan().branch}</small></span></div></Show>
+            <div class="scope-transition-repositories">
+              <For each={plan().repositories.retained}>{(repository) => <div class="scope-transition-repository"><strong>保留 · {repository.name}</strong><small>{repository.baseBranch}</small></div>}</For>
+              <For each={plan().repositories.added}>{(repository) => <div class="scope-transition-repository"><strong>新增 · {repository.name}</strong><small>{repository.baseBranch}</small></div>}</For>
+              <For each={plan().repositories.removed}>{(repository) => <div class="scope-transition-repository"><strong>移除 · {repository.name}</strong><small>{repository.baseBranch}</small></div>}</For>
+              <Show when={plan().branch}><div class="scope-transition-repository"><strong>分支</strong><small>{plan().branch}</small></div></Show>
             </div>
             <p>已有对话、附件和评论将保留；{plan().session.closeCurrent ? "当前 Agent session 将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
-            <Show when={plan().warnings.includes("related_issues_will_be_removed")}><p>关联开发工单将在离开正式问题调查时移除。</p></Show>
+            <Show when={plan().warnings.includes("related_issues_will_be_removed")}><p>关联工单将在离开正式问题调查时移除。</p></Show>
           </section>}</Show>
           <Show when={scopeError()}><div class="create-error modal-form-error" role="alert">{scopeError()}</div></Show>
         </div>

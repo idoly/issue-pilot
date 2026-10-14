@@ -166,27 +166,38 @@ export class IssueProjectManager {
         .from(issues)
         .innerJoin(services, eq(services.id, issues.serviceId))
         .innerJoin(environments, eq(environments.id, issues.environmentId))
-        .innerJoin(agentSessions, eq(agentSessions.issueId, issues.id))
+        .leftJoin(agentSessions, eq(agentSessions.issueId, issues.id))
         .where(eq(issues.id, relation.relatedIssueId))
         .limit(1);
-      if (!related || related.environment.kind !== "dev") throw new Error("related_issue_context_unavailable");
-      const repositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, related.issue.id));
-      if (!["development_workspace", "development_snapshot"].includes(classifyRepositoryState(repositoryRows))) throw new Error("related_issue_context_unavailable");
-      const names = issueRepositoryWorkspaceNames(repositoryRows);
+      if (!related) throw new Error("related_issue_context_unavailable");
       const repositories = [];
       const repositoryMetadata = [];
-      for (const repository of repositoryRows) {
-        if (!repository.workingBranch) throw new Error("related_issue_context_unavailable");
-        const snapshot = await this.worktrees.prepareBranchSnapshot({ url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch });
-        const name = names.get(repository.url)!;
-        repositories.push({ name, repositoryPath: snapshot.workspacePath });
-        repositoryMetadata.push({ name, url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch, commit: snapshot.baseCommit });
+      if (related.environment.kind === "dev") {
+        const repositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, related.issue.id));
+        if (["development_workspace", "development_snapshot"].includes(classifyRepositoryState(repositoryRows))) {
+          const names = issueRepositoryWorkspaceNames(repositoryRows);
+          try {
+            for (const repository of repositoryRows) {
+              const snapshot = await this.worktrees.prepareBranchSnapshot({ url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch! });
+              const name = names.get(repository.url)!;
+              repositories.push({ name, repositoryPath: snapshot.workspacePath });
+              repositoryMetadata.push({ name, url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch!, commit: snapshot.baseCommit });
+            }
+          } catch (error) {
+            if (!(error instanceof Error) || !["repository_cache_not_found", "working_branch_not_found"].includes(error.message)) throw error;
+            repositories.length = 0;
+            repositoryMetadata.length = 0;
+          }
+        }
       }
-      const conversationPath = path.resolve(related.session.sessionFile);
-      if (path.dirname(conversationPath) !== issueSessionRoot(this.stateRoot, related.issue.key) || !await pathExists(conversationPath)) throw new Error("related_issue_context_unavailable");
+      let conversationPath: string | undefined;
+      if (related.session) {
+        const candidate = path.resolve(related.session.sessionFile);
+        if (path.dirname(candidate) === issueSessionRoot(this.stateRoot, related.issue.key) && await pathExists(candidate)) conversationPath = candidate;
+      }
       relatedIssues.push({
         key: related.issue.key,
-        conversationPath,
+        ...(conversationPath ? { conversationPath } : {}),
         repositories,
         metadata: {
           key: related.issue.key,
@@ -198,8 +209,10 @@ export class IssueProjectManager {
           service: { key: related.service.key, name: related.service.name },
           environmentKey: related.environment.key,
           repositories: repositoryMetadata,
-          conversationFile: "conversation.jsonl",
-          note: "Repository links are read-only snapshots of local Issue branch refs. Uncommitted worktree changes are not included.",
+          ...(conversationPath ? { conversationFile: "conversation.jsonl" } : {}),
+          note: repositories.length
+            ? "Repository links are read-only snapshots of local development Issue branch refs. Uncommitted worktree changes are not included."
+            : "No local development branch snapshot is available for this related Issue.",
         },
       });
     }

@@ -28,7 +28,6 @@ function sourceError(error: unknown): FileSystemProviderError {
   if (message === "source_path_not_found" || message === "source_repository_not_found") return providerError(message, FileSystemProviderErrorCode.FileNotFound);
   if (message === "source_path_not_directory") return providerError(message, FileSystemProviderErrorCode.FileNotADirectory);
   if (message === "source_path_not_file") return providerError(message, FileSystemProviderErrorCode.FileIsADirectory);
-  if (message === "source_file_too_large") return providerError(message, FileSystemProviderErrorCode.FileTooLarge);
   if (message === "source_read_only" || message === "source_file_changed") return providerError(message, FileSystemProviderErrorCode.FileWriteLocked);
   if (message === "source_browser_unavailable" || message === "source_runtime_invalid") return providerError(message, FileSystemProviderErrorCode.Unavailable);
   return providerError(message, FileSystemProviderErrorCode.Unknown);

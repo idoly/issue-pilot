@@ -6,7 +6,7 @@ import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./conf
 const draft: DeploymentCapabilityDraft = {
   capabilities: [...CAPABILITY_KEYS],
   nacos: { serverUrl: " https://nacos.example.test ", namespace: " test ", group: " DEFAULT_GROUP ", dataIds: ["orders.yaml"], username: " reader ", password: "nacos-secret", credentialConfigured: false, credentialEnabled: true },
-  db: { url: " mysql://db.example.test:3306/orders ", username: " reader ", password: "db-secret", credentialConfigured: false, credentialEnabled: true },
+  db: { databases: [{ url: " mysql://db.example.test:3306/orders ", username: " reader ", password: "db-secret", credentialConfigured: false, credentialEnabled: true }] },
   redis: { host: " redis.example.test ", port: 6379, username: " reader ", password: "redis-secret", database: 1, credentialConfigured: false, credentialEnabled: true },
   mq: { host: " mq.example.test ", port: 5672, managementPort: 15672, username: " reader ", password: "mq-secret", virtualHost: " /orders ", credentialConfigured: false, credentialEnabled: true },
   es: { url: " https://es.example.test ", username: " reader ", password: "es-secret", credentialConfigured: false, credentialEnabled: true },
@@ -21,7 +21,7 @@ describe("capability deployment serialization", () => {
     expect(Object.keys(serializeCapabilityDraft(draft))).toEqual(CAPABILITY_KEYS);
     expect(serializeCapabilityDraft(draft)).toEqual({
       nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "reader", credentialUpdate: replace({ password: "nacos-secret" }) },
-      db: { url: "mysql://db.example.test:3306/orders", username: "reader", credentialUpdate: replace({ password: "db-secret" }) },
+      db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", credentialUpdate: replace({ password: "db-secret" }) }] },
       redis: { host: "redis.example.test", port: 6379, username: "reader", database: 1, credentialUpdate: replace({ password: "redis-secret" }) },
       mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/orders", credentialUpdate: replace({ password: "mq-secret" }) },
       es: { url: "https://es.example.test", username: "reader", credentialUpdate: replace({ password: "es-secret" }) },
@@ -33,12 +33,18 @@ describe("capability deployment serialization", () => {
   it("preserves configured credentials without placing their values in the request", () => {
     const existing = structuredClone(draft);
     for (const key of CAPABILITY_KEYS) {
+      if (key === "db") {
+        existing.db!.databases[0]!.credentialConfigured = true;
+        existing.db!.databases[0]!.password = "";
+        continue;
+      }
       const section = existing[key]! as Record<string, unknown>;
       section.credentialConfigured = true;
       for (const field of ["password", "accessKeyId", "accessKeySecret", "authorization"]) if (field in section) section[field] = "";
     }
     const serialized = serializeCapabilityDraft(existing);
-    for (const key of CAPABILITY_KEYS) expect(serialized[key]?.credentialUpdate).toEqual({ mode: "preserve" });
+    for (const key of CAPABILITY_KEYS.filter((key) => key !== "db")) expect((serialized[key] as { credentialUpdate?: unknown } | undefined)?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(serialized.db?.databases[0]?.credentialUpdate).toEqual({ mode: "preserve" });
     expect(JSON.stringify(serialized)).not.toMatch(/secret|accessKeyId|accessKeySecret|authorization|password/);
   });
 

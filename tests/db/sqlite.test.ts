@@ -17,8 +17,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-13).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -13) };
+  assert.deepEqual(journal.entries.slice(-14).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, -14) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -135,6 +135,58 @@ test("refuses to guess an incomplete DMS database scope during migration", async
   }
 });
 
+test("migrates each native MySQL configuration into an explicit target collection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-db-target-migration-"));
+  const file = join(root, "issues.db");
+  const migrations = join(root, "migrations");
+  const migrationSource = resolve("drizzle");
+  const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
+  const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "0044_db_database_targets");
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, migrationIndex) };
+  await mkdir(join(migrations, "meta"), { recursive: true });
+  await Promise.all([writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)), ...previousJournal.entries.map(({ tag }) => copyFile(join(migrationSource, `${tag}.sql`), join(migrations, `${tag}.sql`)))]);
+  const { db, client, close } = openDatabase(file);
+  try {
+    await migrate(db, { migrationsFolder: migrations });
+    await client.execute("insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)");
+    await client.execute("insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)");
+    const previousDb = { url: "mysql://db.example.test:3306/orders", username: "reader", password: "db-secret" };
+    await client.execute({ sql: "insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', ?, 1, 1)", args: [JSON.stringify({ db: previousDb })] });
+    await migrate(db, { migrationsFolder: migrationSource });
+    const [row] = (await client.execute("select config from service_deployments where id = 'deployment'")).rows;
+    assert.deepEqual(JSON.parse(String(row!.config)), { db: { databases: [previousDb] } });
+    assert.equal((await client.execute("select count(*) count from sqlite_master where name = '_db_database_targets_guard'")).rows[0]!.count, 0);
+  } finally {
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to migrate an incomplete native MySQL configuration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-invalid-db-target-migration-"));
+  const file = join(root, "issues.db");
+  const migrations = join(root, "migrations");
+  const migrationSource = resolve("drizzle");
+  const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
+  const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "0044_db_database_targets");
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, migrationIndex) };
+  await mkdir(join(migrations, "meta"), { recursive: true });
+  await Promise.all([writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)), ...previousJournal.entries.map(({ tag }) => copyFile(join(migrationSource, `${tag}.sql`), join(migrations, `${tag}.sql`)))]);
+  const { db, client, close } = openDatabase(file);
+  try {
+    await migrate(db, { migrationsFolder: migrations });
+    await client.execute("insert into environments (id, key, name, kind, created_at, updated_at) values ('environment', 'test', 'Test', 'test', 1, 1)");
+    await client.execute("insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)");
+    await client.execute({ sql: "insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', ?, 1, 1)", args: [JSON.stringify({ db: { url: "mysql://db.example.test:3306/orders", username: "reader" } })] });
+    await assert.rejects(migrate(db, { migrationsFolder: migrationSource }), /CHECK constraint failed/);
+    assert.equal((await client.execute("select count(*) count from __drizzle_migrations")).rows[0]!.count, previousJournal.entries.length);
+    assert.deepEqual(JSON.parse(String((await client.execute("select config from service_deployments")).rows[0]!.config)), { db: { url: "mysql://db.example.test:3306/orders", username: "reader" } });
+  } finally {
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("refuses to install resolution triggers over inconsistent Issue state", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-resolution-migration-"));
   const file = join(root, "issues.db");
@@ -190,7 +242,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const [prod] = await db.insert(environments).values({ key: "prod", name: "Prod", kind: "prod" }).returning();
     const [service] = await db.insert(services).values({ key: "orders", name: "Orders", description: "" }).returning();
     const [repository] = await db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: "git@example.test:orders.git" }).returning();
-    const [testDeployment] = await db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: { db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" } } }).returning();
+    const [testDeployment] = await db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: { db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] } } }).returning();
     await assert.rejects(client.execute({
       sql: "insert into issues (id, key, title, reporter_subject, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
       args: ["invalid-scope", "ISSUE-20260805-001", "Invalid scope", "demo-owner", environment!.id, Date.now(), Date.now()],

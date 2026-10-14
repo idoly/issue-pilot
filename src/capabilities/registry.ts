@@ -89,9 +89,18 @@ const slsQueryProperties = {
   trace_id: Type.Optional(Type.String({ maxLength: limits.sls.traceIdChars })),
 };
 
+const databaseOutputSchema = Type.Object({
+  fileName: Type.String({ minLength: 1, maxLength: 255, description: "Durable Issue output file name." }),
+  format: StringEnum(["csv", "jsonl"] as const),
+}, { additionalProperties: false });
+
 const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
-  db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
+  db: Type.Object({
+    database: Type.String({ minLength: 1, maxLength: 255, description: "Exact database configured for the selected deployment." }),
+    statement: Type.String({ maxLength: limits.database.queryChars }),
+    output: Type.Optional(databaseOutputSchema),
+  }, { additionalProperties: false }),
   redis: Type.Object({
     action: StringEnum(["get", "mget", "hget", "hgetall", "type", "ttl", "scan"] as const),
     key: Type.Optional(Type.String({ maxLength: limits.redis.keyChars })),
@@ -150,18 +159,25 @@ const definitions = {
     inputSchema: capabilityInputSchemas.db,
     metadata: {
       label: "Query Database",
-      description: "Run one read-only SQL statement against the selected deployment database.",
-      promptSnippet: "Run one bounded read-only MySQL statement",
-      promptGuidelines: ["Use db only for read-only SQL evidence and request the complete bounded result."],
+      description: "Run one read-only SQL statement against a database authorized by the selected deployment.",
+      promptSnippet: "Run one bounded read-only MySQL statement against a configured database",
+      promptGuidelines: ["Select one configured database and use db only for read-only SQL evidence with a complete bounded result."],
     },
     parseConfiguration(value) {
       const input = inputRecord(value);
-      const url = connectionUrl(input.url, "db_url", ["mysql:"]);
-      const parsed = new URL(url);
-      let database = "";
-      try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { return fail("invalid_db_url"); }
-      if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) fail("invalid_db_url");
-      return { url, username: requiredText(input.username, "db_username", 500), password: requiredText(input.password, "db_password") };
+      if (!Array.isArray(input.databases) || !input.databases.length || input.databases.length > limits.database.databases) fail("invalid_db_databases");
+      const databases = input.databases.map((value) => {
+        const databaseInput = inputRecord(value);
+        const url = connectionUrl(databaseInput.url, "db_url", ["mysql:"]);
+        const parsed = new URL(url);
+        let database = "";
+        try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { return fail("invalid_db_url"); }
+        if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) fail("invalid_db_url");
+        return { url, database, username: requiredText(databaseInput.username, "db_username", 500), password: requiredText(databaseInput.password, "db_password") };
+      });
+      if (new Set(databases.map(({ url }) => url)).size !== databases.length) fail("duplicate_db_url");
+      if (new Set(databases.map(({ database }) => database)).size !== databases.length) fail("duplicate_db_database");
+      return { databases: databases.map(({ url, username, password }) => ({ url, username, password })) };
     },
   },
   redis: {
@@ -258,7 +274,15 @@ const definitions = {
 
 export const capabilityDefinitions: { [Key in CapabilityName]: CapabilityDefinition<Key> } = definitions;
 
-export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>): TSchema {
+export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>, options: { outputEnabled?: boolean } = {}): TSchema {
+  if (key === "db") {
+    const databases = (configuration as CapabilityConfig<"db">).databases.map(({ url }) => decodeURIComponent(new URL(url).pathname.slice(1)));
+    return Type.Object({
+      database: StringEnum(databases, { description: "Exact database configured for the selected deployment." }),
+      statement: Type.String({ maxLength: limits.database.queryChars }),
+      ...(options.outputEnabled ? { output: Type.Optional(databaseOutputSchema) } : {}),
+    }, { additionalProperties: false });
+  }
   if (key === "sls") {
     const logstores = (configuration as CapabilityConfig<"sls">).logstores;
     return Type.Object({

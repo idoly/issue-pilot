@@ -1,0 +1,53 @@
+import { render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { fetchOutput, type IssueDetail } from "../data/client";
+import { OutputPreview } from "./OutputPreview";
+
+const output = { fileName: "report.md", size: 100, updatedAt: "2026-10-02T00:00:00Z" };
+
+describe("output preview", () => {
+  it("renders Markdown safely and keeps the full-file download link", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('# Results\n<script>alert(1)</script>\nDone')));
+    const view = render(() => <OutputPreview issueKey="ISSUE-1" output={output} onClose={() => {}} />);
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeTruthy();
+    expect(view.baseElement.querySelector(".output-markdown-preview script")).toBeNull();
+    expect(screen.getByRole("link", { name: "下载文件" }).getAttribute("href")).toBe("/api/issues/ISSUE-1/outputs/report.md");
+  });
+
+  it("cancels a closed preview and ignores a response that arrives after closing", async () => {
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+    const [selected, setSelected] = createSignal<IssueDetail["outputs"][number] | null>(output, { ownedWrite: true });
+    render(() => <OutputPreview issueKey="ISSUE-1" output={selected()} onClose={() => setSelected(null)} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const signal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
+    setSelected(null);
+    await waitFor(() => expect(signal.aborted).toBe(true));
+    finish(new Response("late content"));
+    await Promise.resolve();
+    expect(screen.queryByText("late content")).toBeNull();
+  });
+
+  it("refuses oversized files without requesting their contents", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <OutputPreview issueKey="ISSUE-1" output={{ ...output, size: issuePilotConfig.web.outputPreviewBytes + 1 }} onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "文件过大，请下载查看完整内容");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("previews text larger than the previous 2 MiB limit", async () => {
+    const content = "a".repeat(3 * 1024 * 1024);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(content)));
+    await expect(fetchOutput("ISSUE-1", "report.txt")).resolves.toBe(content);
+  });
+
+  it("rejects a streamed file that grows beyond the preview limit", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array(issuePilotConfig.web.outputPreviewBytes + 1))));
+    await expect(fetchOutput("ISSUE-1", "report.txt")).rejects.toThrow("文件过大");
+  });
+});

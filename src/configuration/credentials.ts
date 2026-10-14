@@ -22,6 +22,12 @@ export function projectCapabilityConfiguration(configuration: CapabilityConfigur
   for (const key of CAPABILITY_KEYS) {
     const stored = configuration[key];
     if (!stored) continue;
+    if (key === "db") {
+      projected.db = {
+        databases: configuration.db!.databases.map((database) => ({ ...database, credentialConfigured: Boolean(database.password) })),
+      };
+      continue;
+    }
     const section = stored as Record<string, unknown>;
     projected[key] = { ...section, credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
   }
@@ -37,7 +43,36 @@ function replacementCredentialValues(key: CapabilityName, value: unknown): Recor
   return Object.fromEntries(fields.map((field) => [field, input[field] as string]));
 }
 
+function resolveDbConfiguration(value: unknown, existing: CapabilityConfiguration | undefined): NonNullable<CapabilityConfiguration["db"]> {
+  const input = inputRecord(value);
+  if (Object.keys(input).some((field) => field !== "databases") || !Array.isArray(input.databases)) fail("invalid_db_databases");
+  const existingByUrl = new Map(existing?.db?.databases.map((database) => [database.url, database]));
+  const databases = input.databases.map((value) => {
+    const database = inputRecord(value);
+    if ("password" in database || Object.keys(database).some((field) => !["url", "username", "credentialUpdate"].includes(field))) fail("credential_fields_not_allowed");
+    const url = typeof database.url === "string" ? database.url : "";
+    const update = inputRecord(database.credentialUpdate);
+    let password = "";
+    if (update.mode === "preserve") {
+      if (Object.keys(update).length !== 1) fail("invalid_credential_update");
+      password = existingByUrl.get(url)?.password ?? fail("credential_not_configured");
+    } else if (update.mode === "replace") {
+      if (Object.keys(update).length !== 2 || !("values" in update)) fail("invalid_credential_update");
+      const values = inputRecord(update.values);
+      if (Object.keys(values).length !== 1 || typeof values.password !== "string" || !values.password.trim()) fail("invalid_db_password");
+      password = values.password;
+    } else if (update.mode === "clear") {
+      fail("credential_required");
+    } else {
+      fail("invalid_credential_update");
+    }
+    return { url, username: database.username, password };
+  });
+  return parseCapabilityConfiguration("db", { databases });
+}
+
 function resolveCapabilityConfiguration(key: CapabilityName, value: unknown, existing: CapabilityConfiguration | undefined): NonNullable<CapabilityConfiguration[CapabilityName]> {
+  if (key === "db") return resolveDbConfiguration(value, existing);
   const input = inputRecord(value);
   const credentialFields = CAPABILITY_CREDENTIALS[key].fields as readonly string[];
   if (credentialFields.some((field) => field in input)) fail("credential_fields_not_allowed");

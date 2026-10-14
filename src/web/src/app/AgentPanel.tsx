@@ -327,6 +327,10 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const pendingImages = images();
     const message = pasteEditor.expand(editorText).trim() || (pendingImages.length ? "请分析这些图片。" : "");
     if (!message || sending() || !canSend()) return;
+    if (message.length > issuePilotConfig.limits.agentMessageChars) {
+      setError(`消息共 ${message.length.toLocaleString()} 字符，超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`);
+      return;
+    }
     const issueId = props.issue.id;
     const submitGeneration = issueGeneration;
     setEditorDraft(""); setImages([]); setSending(true); setError(""); scrollLatest();
@@ -337,7 +341,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       discardImages(pendingImages); pasteEditor.reset(); setProcessing(true);
     } catch (cause) {
       if (submitGeneration !== issueGeneration) { discardImages(pendingImages); return; }
-      setEditorDraft(editorText); setImages(pendingImages); setError(cause instanceof Error ? cause.message : "agent_message_failed");
+      setEditorDraft(editorText); setImages(pendingImages); setError(cause instanceof Error && cause.message === "agent_message_too_long" ? `消息超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。` : cause instanceof Error && cause.message === "invalid_agent_message" ? "消息内容无效，请输入文字后重新发送。" : cause instanceof Error ? cause.message : "agent_message_failed");
     } finally { if (submitGeneration === issueGeneration) setSending(false); }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {
@@ -352,7 +356,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const pastedImages = [...(clipboard?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (pastedImages.length) {
       event.preventDefault();
-      const limits = issuePilotConfig.limits.attachment;
+      const limits = issuePilotConfig.limits.agentImage;
       const current = images();
       const accepted = pastedImages.filter((file) => ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type));
       if (accepted.length !== pastedImages.length || current.length + accepted.length > limits.files || accepted.some((file) => file.size > limits.fileBytes) || [...current.map(({ file }) => file), ...accepted].reduce((total, file) => total + file.size, 0) > limits.requestBytes) {

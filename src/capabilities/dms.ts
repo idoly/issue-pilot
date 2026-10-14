@@ -47,29 +47,48 @@ function sameOriginFetch(origin: string, signal: AbortSignal) {
   };
 }
 
-export const connectDmsMcp: ConnectDmsMcp = async (configured, signal) => {
+export async function connectDmsMcp(configured: DmsConnectionConfiguration, signal: AbortSignal, firstHandshakeMs = 12_000): Promise<DmsMcpSession> {
   const target = new URL(configured.url);
   if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash) throw new Error("invalid_dms_mcp_target");
   const headers = { Authorization: configured.authorization };
-  const restrictedFetch = sameOriginFetch(target.origin, signal);
-  const transport = new SSEClientTransport(target, {
-    fetch: restrictedFetch,
-    requestInit: { headers },
-  });
-  const client = new Client({ name: "issue-pilot", version: "0.1.0" });
-  try {
-    await Promise.race([client.connect(transport), abortPromise(signal)]);
-  } catch {
-    await transport.close().catch(() => undefined);
-    throw new Error("dms_mcp_connection_failed");
+  let client: Client | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const handshakeController = new AbortController();
+    const handshakeTimer = attempt === 0 ? setTimeout(() => handshakeController.abort(new DOMException("DMS handshake timed out", "TimeoutError")), firstHandshakeMs) : undefined;
+    handshakeTimer?.unref();
+    const attemptSignal = AbortSignal.any([signal, handshakeController.signal]);
+    const transport = new SSEClientTransport(target, {
+      fetch: sameOriginFetch(target.origin, attemptSignal),
+      requestInit: { headers },
+    });
+    const candidate = new Client({ name: "issue-pilot", version: "0.1.0" });
+    try {
+      await Promise.race([candidate.connect(transport), abortPromise(attemptSignal)]);
+      if (signal.aborted) throw signal.reason;
+      client = candidate;
+      break;
+    } catch {
+      await transport.close().catch(() => undefined);
+      if (signal.aborted) {
+        if (signal.reason instanceof Error && signal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
+        throw signal.reason instanceof Error ? signal.reason : new Error("dms_mcp_aborted");
+      }
+      if (attempt === 0 && attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") continue;
+      if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
+      throw new Error("dms_mcp_connection_failed");
+    } finally {
+      clearTimeout(handshakeTimer);
+    }
   }
+  if (!client) throw new Error("dms_mcp_timeout");
+  const connectedClient = client;
   return {
     async listTools(requestSignal) {
       const tools: DmsMcpTool[] = [];
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const result = await client.listTools(cursor ? { cursor } : undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
+        const result = await connectedClient.listTools(cursor ? { cursor } : undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
         tools.push(...result.tools as DmsMcpTool[]);
         cursor = result.nextCursor;
         if (cursor && (cursor.length > 1024 || cursors.has(cursor))) throw new Error("dms_mcp_invalid_cursor");
@@ -78,11 +97,11 @@ export const connectDmsMcp: ConnectDmsMcp = async (configured, signal) => {
       return tools;
     },
     async callTool(name, args, requestSignal) {
-      return client.callTool({ name, arguments: args }, undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
+      return connectedClient.callTool({ name, arguments: args }, undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
     },
-    close: () => client.close(),
+    close: () => connectedClient.close(),
   };
-};
+}
 
 function isReadOnlyScriptTool(tool: DmsMcpTool): boolean {
   if (tool.name !== "executeScript") return false;

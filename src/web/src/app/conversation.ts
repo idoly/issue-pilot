@@ -136,7 +136,6 @@ export function panelError(error: string): string {
     agent_message_failed: "消息发送失败，请重试",
     invalid_agent_image: "只能粘贴 PNG、JPEG、GIF 或 WebP 图片",
     agent_image_limit_exceeded: "图片数量或大小超过 multipart 限制",
-    attachment_limit_exceeded: "图片数量或大小超过 multipart 限制",
     agent_abort_failed: "无法中止当前处理",
     issue_refresh_failed: "工单状态刷新失败，等待下次连接重试",
   };

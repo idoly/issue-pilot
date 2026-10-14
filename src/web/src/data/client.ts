@@ -1,3 +1,4 @@
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
@@ -60,6 +61,7 @@ export interface IssueDetail extends IssueListItem {
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
   attachments: Array<{ id: string; fileName: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
+  outputs: Array<{ fileName: string; size: number; updatedAt: string }>;
   relatedIssues?: IssueExecutionItem[];
   scopeTransitions?: IssueScopeTransitionHistoryItem[];
   ccRecipients?: Person[];
@@ -266,6 +268,33 @@ export const deleteService = (key: string) => request<void>(servicePath(key), { 
 
 export function attachmentUrl(key: string, attachmentId: string): string {
   return issuePath(key, `/attachments/${encodeURIComponent(attachmentId)}`);
+}
+
+export function outputUrl(key: string, fileName: string): string {
+  return issuePath(key, `/outputs/${encodeURIComponent(fileName)}`);
+}
+
+export async function fetchOutput(key: string, fileName: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(outputUrl(key, fileName), { ...(signal ? { signal } : {}) });
+  if (!response.ok) throw await requestError(response);
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > issuePilotConfig.web.outputPreviewBytes) throw new Error("文件过大，请下载查看完整内容");
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 export async function fetchAttachment(key: string, attachmentId: string): Promise<Blob> {

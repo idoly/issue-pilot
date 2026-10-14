@@ -131,7 +131,7 @@ Source repositories 返回的 alias 必须映射到受管 runtime symlink：acti
 - 位于对应 Issue attachment root 的直属路径。
 - 是 regular file。
 - Mode 为 `0400`，或至少 group/world 权限为 0。
-- Size、SHA-256 与 DB 一致，且不超过 20 MiB。
+- Size、SHA-256 与 DB 一致；Attachment 不设应用层大小上限。
 - Runtime 中无 copy/link。
 - 没有未调查的 `.deleting` quarantine。
 
@@ -310,6 +310,7 @@ Project failure output 留在 worktree。不要允许 wrapper 接受 executable�
 - `listInstances` 与 `getDatabase` 只在受信配置解析中使用。
 - Agent 的 schema input 只能取当前 Deployment 动态 enum，并只调用唯一、schema-compatible 的 `executeScript`。
 - 服务端把 schema 映射为 DatabaseId 并注入，SQL 是单条只读 statement。
+- 首次 SSE handshake 的 12 秒计时器在连接完成后清除，仅 handshake 超时允许重建连接一次；不能让 handshake deadline 中断已建立的 SSE 或后续 tool 请求。
 - 连接/list/call/close 位于 30 秒 operation timeout 内。
 
 旧 AccessKey/dbId/tid 配置不受支持，必须通过当前配置页重新保存。不要记录 Authorization、MCP request header 或完整 result。
@@ -330,7 +331,6 @@ SLS AccessKey 不进入 argv；query、project、logstore 与时间可能短暂�
 
 | Error | Action |
 | --- | --- |
-| `attachment_limit_exceeded` | 缩小 request，不改成 unbounded |
 | `insecure_issue_attachment_file` | 停止读取，核对 DB/path/type/mode/size |
 | `attachment_integrity_check_failed` | 保留 file/DB，调查修改来源 |
 | `attachment_rollback_failed` | 停止 edit，备份 attachment root/DB |

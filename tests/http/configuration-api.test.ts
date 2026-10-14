@@ -3,7 +3,25 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { loadConfigurationCatalog } from "../../src/configuration/read.ts";
+import { openDatabase } from "../../src/db/client.ts";
 import { createApiFixture, createIssue, createService, json, servicePayload, testAgent } from "./fixture.ts";
+
+test("configuration snapshots do not block Workspace writes", async () => {
+  const fixture = await createApiFixture();
+  const connection = openDatabase(fixture.databaseFile);
+  try {
+    await createService(fixture.app, "Snapshot", ["dev"]);
+    await createIssue(fixture.app, "snapshot", "dev");
+    fixture.engine.running.clear();
+    // The snapshot begins before the write, and must hold no writer lock across awaits.
+    const snapshot = loadConfigurationCatalog(connection.db);
+    const update = connection.client.execute("update issue_workspaces set status = 'preparing', runtime_ready = 0 returning issue_id");
+    const [catalog, result] = await Promise.all([snapshot, update]);
+    assert.equal(catalog.services.length, 1);
+    assert.equal(result.rows.length, 1);
+  } finally { connection.close(); await fixture.cleanup(); }
+});
 
 test("projects bootstrap user, environments, models, repositories, and deployments without internal fields", async () => {
   const fixture = await createApiFixture();
@@ -78,7 +96,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
         repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }],
         capabilities: ["sls", "dms", "es", "mq", "redis", "db", "nacos"],
         nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha.yaml"], username: "operator", credentialUpdate: replace({ password: "nacos-secret" }) },
-        db: { url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: replace({ password: "db-secret" }) },
+        db: { databases: [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: replace({ password: "db-secret" }) }] },
         redis: { host: "redis.example.test", port: 6379, username: "", database: 0, credentialUpdate: replace({ password: "redis-secret" }) },
         mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/", credentialUpdate: replace({ password: "mq-secret" }) },
         es: { url: "http://es.example.test/proxy", username: "", credentialUpdate: { mode: "clear" } },
@@ -94,6 +112,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     const savedService = saved.services[0]!;
     const deployment = savedService.deployments[0]!;
     assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
+    assert.deepEqual(deployment.db, { databases: [{ url: "mysql://db.example.test:3306/alpha", username: "reader", password: "db-secret", credentialConfigured: true }] });
     assert.deepEqual(deployment.dms, { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "ALPHA-TEST", schemaName: "alpha", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialConfigured: true });
     assert.equal("playwright" in deployment, false);
     assert.deepEqual(deployment.sls, { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "alpha-test", logstores: ["application"], credentialConfigured: true });
@@ -105,7 +124,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, string>>;
     sqlite.close();
     assert.equal("playwright" in stored, false);
-    assert.equal(stored.db!.password, "db-secret");
+    assert.equal((stored.db!.databases as unknown as Array<{ password: string }>)[0]!.password, "db-secret");
     assert.equal(stored.dms!.authorization, "Bearer dms-token");
 
     const preserve = <Value extends Record<string, unknown>>(section: Value) => {
@@ -118,7 +137,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
       deployments: [{
         ...originalDeployment,
         nacos: preserve(originalDeployment.nacos),
-        db: preserve(originalDeployment.db),
+        db: { databases: originalDeployment.db.databases.map((database) => preserve(database)) },
         redis: preserve(originalDeployment.redis),
         mq: preserve(originalDeployment.mq),
         dms: preserve(originalDeployment.dms),
@@ -130,7 +149,7 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     const afterPreserve = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     const preservedConfig = JSON.parse(afterPreserve.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, unknown>>;
     afterPreserve.close();
-    assert.equal(preservedConfig.db!.password, "db-secret");
+    assert.equal((preservedConfig.db!.databases as Array<{ password: string }>)[0]!.password, "db-secret");
     assert.equal(preservedConfig.dms!.authorization, "Bearer dms-token");
 
     const cleared = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
@@ -145,11 +164,11 @@ test("returns stored credentials and applies explicit preserve, replace, and cle
     for (const [section, error] of [
       [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "clear" } }, "credential_required"],
       [{ url: "mysql://db.example.test:3306/alpha", username: "reader", password: "forbidden", credentialUpdate: { mode: "preserve" } }, "credential_fields_not_allowed"],
-      [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "replace", values: { password: "" } } }, "invalid_credential_replacement"],
+      [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "replace", values: { password: "" } } }, "invalid_db_password"],
     ] as const) {
       const invalid = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
         ...payload,
-        deployments: [{ ...payload.deployments[0], capabilities: ["db"], db: section }],
+        deployments: [{ ...payload.deployments[0], capabilities: ["db"], db: { databases: [section] } }],
       } });
       assert.equal(invalid.statusCode, 400);
       assert.equal((await json(invalid)).error, error);

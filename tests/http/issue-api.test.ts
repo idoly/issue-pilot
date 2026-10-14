@@ -43,7 +43,7 @@ test("creates each Issue work mode and rejects ambiguous scope input", async () 
   }
 });
 
-test("creates production smart-analysis Issues with related development context", async () => {
+test("creates production smart-analysis Issues with related context", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Orders", ["prod", "dev"]);
@@ -77,10 +77,6 @@ test("creates production smart-analysis Issues with related development context"
     const disallowed = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, workMode: "production_data" } });
     assert.equal(disallowed.statusCode, 400);
     assert.equal((await json(disallowed)).error, "related_issues_not_allowed");
-    const nonDevelopment = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, relatedIssueKeys: [created.id] } });
-    assert.equal(nonDevelopment.statusCode, 400);
-    assert.equal((await json(nonDevelopment)).error, "invalid_related_issues");
-
     fixture.engine.running.clear();
     const enqueueCount = fixture.engine.enqueued.length;
     const unchanged = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: [development.id] } });
@@ -115,6 +111,27 @@ test("creates production smart-analysis Issues with related development context"
     assert.equal(tooMany.statusCode, 400);
     assert.equal((await json(tooMany)).error, "related_issue_limit_exceeded");
     await persisted.close();
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("allows production investigations to relate Issues without development branches or sessions", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Orders", ["prod", "test"]);
+    const related = await createIssue(fixture.app, "orders", "test", "Test environment evidence");
+    fixture.engine.running.clear();
+
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      payload: { ...issuePayload("orders", "prod", "Production investigation"), relatedIssueKeys: [related.id] },
+    });
+    assert.equal(response.statusCode, 201, response.body);
+    const created = await json(response);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((result) => JSON.parse(result.body)) as { relatedIssues: Array<{ id: string; environmentKey: string }> };
+    assert.deepEqual(detail.relatedIssues.map(({ id, environmentKey }) => ({ id, environmentKey })), [{ id: related.id, environmentKey: "test" }]);
   } finally {
     await fixture.cleanup();
   }
@@ -393,6 +410,14 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     });
     assert.equal(invalidSourceWrite.statusCode, 400);
     assert.equal((await json(invalidSourceWrite)).error, "invalid_source_request");
+    const largeSourceWrite = await fixture.app.inject({
+      method: "PUT",
+      url: `/api/issues/${issue.id}/source/file`,
+      headers: { "Content-Type": "text/plain", "X-Issue-Pilot-Repository": "alpha-1", "X-Issue-Pilot-Path": "src/index.ts", "X-Issue-Pilot-Sha256": "a".repeat(64) },
+      payload: "x".repeat(2 * 1024 * 1024 + 1),
+    });
+    assert.equal(largeSourceWrite.statusCode, 409);
+    assert.equal((await json(largeSourceWrite)).error, "source_browser_unavailable");
     const invalidSearchMode = await fixture.app.inject({
       method: "GET",
       url: `/api/issues/${issue.id}/source/search`,

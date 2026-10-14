@@ -126,7 +126,7 @@ test("serves only verified attachment files and exposes no independent write rou
   }
 });
 
-test("rejects oversized multipart Issue edits at the configured attachment boundary", async () => {
+test("streams Issue attachments larger than the former application limit", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
@@ -145,8 +145,9 @@ test("rejects oversized multipart Issue edits at the configured attachment bound
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ]),
     });
-    assert.equal(response.statusCode, 413);
-    assert.equal((await json(response)).error, "attachment_limit_exceeded");
+    assert.equal(response.statusCode, 200, response.body);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((current) => JSON.parse(current.body)) as { attachments: Array<{ fileName: string; size: number }> };
+    assert.deepEqual(detail.attachments.map(({ fileName, size }) => ({ fileName, size })), [{ fileName: "oversized.bin", size: 20 * 1024 * 1024 + 1 }]);
   } finally {
     await fixture.cleanup();
   }

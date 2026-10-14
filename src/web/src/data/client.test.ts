@@ -107,7 +107,7 @@ describe("API client", () => {
     expect(fetch).toHaveBeenCalledWith("/api/issue-pins", expect.objectContaining({ signal: controller.signal }));
   });
 
-  it("replaces an Issue's related development Issues", async () => {
+  it("replaces an Issue's related Issues", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
 

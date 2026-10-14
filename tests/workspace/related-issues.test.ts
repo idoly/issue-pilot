@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -27,7 +27,7 @@ async function createRemote(root: string): Promise<string> {
   return remote;
 }
 
-test("adds related development branch snapshots and conversations to a production analysis runtime", async () => {
+test("adds available metadata, conversations, and development snapshots to a production analysis runtime", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-related-runtime-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
@@ -42,11 +42,12 @@ test("adds related development branch snapshots and conversations to a productio
       { serviceId: service!.id, environmentId: dev!.id, config: {} },
     ]).returning();
     await database.db.insert(serviceDeploymentRepositories).values(deployments.map((deployment) => ({ deploymentId: deployment.id, repositoryId: repository!.id, baseBranch: "main" })));
-    const [development, production] = await database.db.insert(issues).values([
+    const [development, relatedProduction, production] = await database.db.insert(issues).values([
       { key: "ISSUE-20260918-101", title: "Development fix", description: "Fix the regression", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" },
-      { key: "ISSUE-20260918-102", title: "Production regression", description: "Investigate with the earlier fix", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
+      { key: "ISSUE-20260918-102", title: "Earlier production evidence", description: "No development branch or conversation", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
+      { key: "ISSUE-20260918-103", title: "Production regression", description: "Investigate with related evidence", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
     ]).returning();
-    await database.db.insert(issueWorkspaces).values([{ issueId: development!.id }, { issueId: production!.id }]);
+    await database.db.insert(issueWorkspaces).values([{ issueId: development!.id }, { issueId: relatedProduction!.id }, { issueId: production!.id }]);
 
     const projects = new IssueProjectManager(database.db, root);
     const preparedDevelopment = await projects.prepare(development!, "dev");
@@ -62,10 +63,13 @@ test("adds related development branch snapshots and conversations to a productio
     await writeFile(sessionFile, "{\"type\":\"custom\",\"customType\":\"issue-pilot-user\",\"data\":{\"message\":\"check the contract\"}}\n", { mode: 0o600 });
     await database.db.insert(agentSessions).values({ issueId: development!.id, sessionFile, workspacePath: preparedDevelopment.workspaceRoot });
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, development!.id));
-    await database.db.insert(issueRelations).values({ issueId: production!.id, relatedIssueId: development!.id });
+    await database.db.insert(issueRelations).values([
+      { issueId: production!.id, relatedIssueId: development!.id },
+      { issueId: production!.id, relatedIssueId: relatedProduction!.id },
+    ]);
 
     const preparedProduction = await projects.prepare(production!, "prod");
-    assert.deepEqual(preparedProduction.relatedIssueKeys, [development!.key]);
+    assert.deepEqual(preparedProduction.relatedIssueKeys.sort(), [development!.key, relatedProduction!.key].sort());
     const relatedRoot = path.join(issueRuntimeRoot(root, production!.key), "related-issues", development!.key.toLowerCase());
     assert.equal(await readFile(path.join(relatedRoot, "repositories", "remote", "README.md"), "utf8"), "committed development fix\n");
     assert.match(await readFile(path.join(relatedRoot, "conversation.jsonl"), "utf8"), /check the contract/);
@@ -73,6 +77,14 @@ test("adds related development branch snapshots and conversations to a productio
     assert.equal(metadata.key, development!.key);
     assert.match(metadata.repositories[0]!.workingBranch, /^hotfix-issue-20260918-101$/);
     assert.match(metadata.repositories[0]!.commit, /^[0-9a-f]{40}$/);
+    const metadataOnlyRoot = path.join(issueRuntimeRoot(root, production!.key), "related-issues", relatedProduction!.key.toLowerCase());
+    const metadataOnly = JSON.parse(await readFile(path.join(metadataOnlyRoot, "issue.json"), "utf8")) as { key: string; repositories: unknown[]; conversationFile?: string; note: string };
+    assert.equal(metadataOnly.key, relatedProduction!.key);
+    assert.deepEqual(metadataOnly.repositories, []);
+    assert.equal(metadataOnly.conversationFile, undefined);
+    assert.match(metadataOnly.note, /No local development branch snapshot/);
+    assert.deepEqual(await readdir(path.join(metadataOnlyRoot, "repositories")), []);
+    await assert.rejects(readFile(path.join(metadataOnlyRoot, "conversation.jsonl"), "utf8"), (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT");
     assert.equal(await readFile(path.join(preparedProduction.runtimeRoot, "remote", "README.md"), "utf8"), "production baseline\n");
   } finally {
     await database.close();

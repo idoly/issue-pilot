@@ -22,9 +22,11 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.workspace.targetBytes, 16 * 1024 ** 3);
   assert.equal(applicationConfig.http.host, "0.0.0.0");
   assert.equal(applicationConfig.webRoot, join(applicationConfig.stateRoot, "..", "src", "web", "dist"));
-  assert.equal(applicationConfig.limits.sourceBrowser.fileBytes, 2 * 1024 * 1024);
+  assert.equal("fileBytes" in applicationConfig.limits.sourceBrowser, false);
   assert.equal(applicationConfig.limits.relatedIssues, 20);
+  assert.deepEqual(applicationConfig.limits.agentImage, { fileBytes: 20 * 1024 * 1024, requestBytes: 40 * 1024 * 1024, files: 20 });
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
+  assert.deepEqual(applicationConfig.limits.capability.database, { queryChars: 20_000, databases: 20 });
   assert.equal(applicationConfig.defaults.dms.sseUrl, "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse");
   assert.deepEqual(applicationConfig.limits.capability.dms, { executionMs: 30_000, databases: 20 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);

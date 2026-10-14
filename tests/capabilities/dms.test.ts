@@ -72,6 +72,7 @@ function fixtureSession(overrides: Partial<DmsMcpSession> = {}) {
 test("uses Authorization for both sides of the MCP SSE protocol", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ method: string; url: string; authorization: string | null; redirect?: RequestRedirect }> = [];
+  const requestSignals: AbortSignal[] = [];
   const toolCalls: Array<{ name?: string; arguments?: Record<string, unknown> }> = [];
   const encoder = new TextEncoder();
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -79,6 +80,7 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : input.toString();
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (init?.signal) requestSignals.push(init.signal);
     requests.push({ method, url, authorization: new Headers(init?.headers).get("authorization"), ...(init?.redirect ? { redirect: init.redirect } : {}) });
     if (method === "GET") {
       const body = new ReadableStream<Uint8Array>({
@@ -108,7 +110,9 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
     return new Response(null, { status: 202 });
   };
   try {
-    const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000));
+    const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), 20);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(requestSignals.every((signal) => !signal.aborted), true, "successful handshake must cancel its timeout without aborting the SSE session");
     assert.deepEqual((await session.listTools(AbortSignal.timeout(5_000))).map(({ name }) => name), ["query_database", "listInstances", "searchDatabase", "getDatabase"]);
     assert.deepEqual(await session.callTool("query_database", { sql: "SELECT 1" }, AbortSignal.timeout(5_000)), { content: [{ type: "text", text: "ok" }] });
     await session.close();
@@ -119,6 +123,67 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
     assert.equal(requests.every(({ authorization }) => authorization === configured.authorization), true);
     assert.equal(requests.every(({ redirect }) => redirect === "error"), true);
     assert.equal(requests.every(({ url }) => new URL(url).origin === "https://dms.example.test"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("reports an MCP SSE handshake timeout separately from connection failures", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (signal?.aborted) reject(signal.reason);
+    else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  try {
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(25)), /dms_mcp_timeout/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("retries a stalled SSE handshake once without repeating tool calls", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  let gets = 0;
+  let posts = 0;
+  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+  globalThis.fetch = async (input, init) => {
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (method === "GET") {
+      gets += 1;
+      if (gets === 1) return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+      });
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+          controller.enqueue(encoder.encode("event: endpoint\ndata: /messages?session=retry\n\n"));
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    posts += 1;
+    const request = JSON.parse(String(init?.body)) as { id: number; method: string };
+    if (request.method === "initialize") stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } })}\n\n`));
+    return new Response(null, { status: 202 });
+  };
+  try {
+    const session = await connectDmsMcp(configured, AbortSignal.timeout(1_000), 20);
+    await session.close();
+    assert.equal(gets, 2);
+    assert.ok(posts >= 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("does not retry an SSE authorization failure", async () => {
+  const originalFetch = globalThis.fetch;
+  let gets = 0;
+  globalThis.fetch = async () => { gets += 1; return new Response(null, { status: 403 }); };
+  try {
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000), 20), /dms_mcp_connection_failed/);
+    assert.equal(gets, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

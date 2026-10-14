@@ -78,16 +78,17 @@ Environment name 在启动时同步。DMS URL 只用于新 Deployment 表单，�
 | --- | ---: |
 | Agent model response idle | 300000 ms |
 | Agent message | 50000 chars |
-| 正式智能分析关联工单 | 最多 20 个已有开发工单 |
-| Agent clipboard image | 复用 multipart file/request/count：20 MiB / 40 MiB / 20 |
-| Attachment file/request/count | 20 MiB / 40 MiB / 20 |
-| Multipart field | 100000 bytes |
+| 正式智能分析关联工单 | 最多 20 个其他工单；Environment/type 不限 |
+| Agent clipboard image | 20 MiB / 40 MiB / 20；这是 Pi message image 的独立保护，不适用于 Attachment |
+| Attachment file/request/count | 应用层不限制；上传先流式写入临时文件 |
+| Issue multipart metadata | `issue` JSON 仍最多 100000 bytes |
 | Process output | 5 MiB |
 | Git operation/output | 120 s / 2 MiB |
 | Disk usage | 120 s / 1 MiB output |
 | Capability default/connection timeout | 15 s / 10 s |
+| Native MySQL targets | 每个 Deployment 最多 20 个 |
 | Capability result | 1 MiB，DMS MCP 除外 |
-| Source file/tree | 2 MiB / 500 entries |
+| Source file/tree | no application file-size limit / 500 entries |
 | Source query/history/changes | 200 chars / 100 commits / 500 files |
 | Source command/output | 5 s / 2 MiB |
 | Project action | 30 minutes |
@@ -114,7 +115,7 @@ SQLite `subjects` 规则：
 
 | Work mode | Environment | Issue type | Repository mode |
 | --- | --- | --- | --- |
-| `production_data` | `prod` | `data_processing` | Read-only current Deployment commit |
+| `production_data` | `prod` | `data_processing` | Read-only current Deployment commit + writable durable Issue outputs |
 | `production_analysis` | `prod` | `smart_analysis` | Read-only current Deployment commit |
 | `test_analysis` | `test` | `smart_analysis` | Read-only current Deployment commit |
 | `development_fix` | `dev` | `defect_fix` | Issue-local writable hotfix branch/worktree |
@@ -122,7 +123,7 @@ SQLite `subjects` 规则：
 
 Web 只展示至少有一个 Service 配置对应 Deployment 的处理方式，并按目标 Environment 过滤 Service。API 使用同一 Domain 映射重新解析；旧 `environmentKey + type` 创建合同被拒绝，不能通过直接调用获得非法组合或写权限。普通 Issue edit 只接受 metadata、CC 和 Attachment；Scope 使用独立的无状态 plan/apply，apply 必须提交匹配当前 `updatedAt` 的 SHA-256 plan。Active dev 只允许保持当前 branch mode 跨 Service；成功 Apply 原子写入 Scope history，失败和 no-op 不写。Dev 到 prod/test 不原地迁移；“创建正式跟进”固定创建 `production_analysis`，复用标准创建与 related Issue 校验。
 
-活动中的正式问题调查可在详情中编辑关联开发工单，最多仍为 20 个。保存时 API reservation 正式工单以及旧、新关联集合，重新验证 Workspace、runtime、Repository snapshot 和 Pi session；有实际变化时关闭当前 Agent session、事务化更新关系并重新入队。普通 metadata PATCH、resolved 工单和其他 work mode 不能修改关联。
+活动中的正式问题调查可在详情中编辑关联工单，最多仍为 20 个。目标可以来自任意 Environment/type；Agent 始终获得只读 metadata，有受管 Pi session 时获得 conversation，只有具备本地开发 branch 的目标才附带 immutable 代码快照。保存时 API reservation 正式工单以及旧、新关联集合；有实际变化时关闭当前 Agent session、事务化更新关系并重新入队。普通 metadata PATCH、resolved 工单和其他 work mode 不能修改关联。
 
 ## Service、Repository 与 Deployment
 
@@ -239,15 +240,26 @@ Tool input 是空对象。调用读取全部 exact Data ID；404 返回 `content
 
 ### MySQL (`db`)
 
-Config：`mysql://host:port/database`，显式 port、单段 database、无 URL credential/query/fragment；username/password required。
+每个 Deployment 授权 1..20 个数据库，每个目标独立配置连接与凭据：
+
+```text
+databases[]
+  url       # mysql://host:port/database
+  username
+  password
+```
+
+URL 必须包含显式 port 和单段 database，不允许 embedded credential、query 或 fragment。URL 路径中的 database 名在当前 Deployment 内唯一，并直接作为 Agent selector；相同 URL 也不能重复。每行 username/password required，凭据独立执行 `preserve/replace`，不在目标间共享。
 
 Input：
 
 ```json
-{ "statement": "SELECT ..." }
+{ "database": "orders", "statement": "SELECT ..." }
 ```
 
-最多 20000 chars，单 statement，无 comment。允许 `SELECT/SHOW/DESCRIBE/DESC/EXPLAIN`；拒绝 write、lock、multi-statement、file/variable output、`EXPLAIN ANALYZE` 和已知副作用函数。Client 在 server-enforced read-only transaction 中 stream，最多 500 rows/1 MiB，最后 rollback；abort 销毁 connection。数据库账号仍必须是只读账号。
+`database` 由当前 Deployment 的 URL database 名动态生成 enum；Runtime 精确映射到该行 URL 和凭据，Agent 不能提交任意连接地址。SQL 最多 20000 chars，单 statement，无 comment。允许 `SELECT/SHOW/DESCRIBE/DESC/EXPLAIN`；拒绝 write、lock、multi-statement、file/variable output、`EXPLAIN ANALYZE` 和已知副作用函数。普通调用在 server-enforced read-only transaction 中 stream，完整返回查询结果，不设应用层 row/byte limit，最后 rollback；大结果会占用进程内存、Pi 上下文和 JSONL 空间。仅 `production_data` 可提交可选 `output: { fileName, format: "csv"|"jsonl" }`，此时 rows 直接流式写入当前 Issue 的 durable output，不进入模型上下文且不设应用层 row/byte limit；成功 rollback 后才原子发布文件，失败或 abort 清理临时文件。数据库账号仍必须是只读账号。
+
+Migration `0044_db_database_targets` 将旧 `{url,username,password}` 合同提升为单元素 `databases[]`；不完整旧配置会使 migration 显式失败，不猜测或丢弃凭据。运行时不保留旧单目标兼容路径。
 
 ### Redis
 
@@ -300,7 +312,7 @@ Agent tool input：
 { "schema": "xhgj_oms", "script": "SELECT ...", "logic": false }
 ```
 
-`schema` required，并由当前 Deployment 的 `databases[].schemaName` 动态生成 enum；`logic` optional。Agent 只看到一个 `dms` custom tool，不能提交 DatabaseId、列出远端工具或调用 scope resolve 工具。Runtime 把 schema 精确映射到持久化 DatabaseId，只接受唯一且 schema 包含 required `database_id`/`script` 的 `executeScript`，并由服务器注入 DatabaseId。SQL 只允许单条 `SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝 DDL/DML、comment、multi-statement、lock 和已知副作用函数。一次调用只选择一个数据库；连接与调用共享 30 秒 operation signal；DMS script/result 不应用 1 MiB 应用层限制。
+`schema` required，并由当前 Deployment 的 `databases[].schemaName` 动态生成 enum；`logic` optional。Agent 只看到一个 `dms` custom tool，不能提交 DatabaseId、列出远端工具或调用 scope resolve 工具。Runtime 把 schema 精确映射到持久化 DatabaseId，只接受唯一且 schema 包含 required `database_id`/`script` 的 `executeScript`，并由服务器注入 DatabaseId。SQL 只允许单条 `SELECT/SHOW/DESCRIBE/EXPLAIN`，拒绝 DDL/DML、comment、multi-statement、lock 和已知副作用函数。一次调用只选择一个数据库；连接与调用共享 30 秒 operation signal；首次 SSE 握手等待 12 秒仍无响应时关闭旧连接，仅重试一次握手并使用剩余总预算。403、协议错误和 `executeScript` 不重试；DMS script/result 不应用 1 MiB 应用层限制。
 
 ### SLS
 
@@ -324,7 +336,7 @@ trace_id         # UUID，与 query 互斥
 | Capability | 主要 budget |
 | --- | --- |
 | Nacos | 50 Data IDs / 1 MiB |
-| MySQL | 20k chars / 500 rows / 1 MiB |
+| MySQL | 20 targets / 20k chars / result 无应用层 row/byte limit |
 | Redis | 100 keys / 500 results / 1 MiB |
 | RabbitMQ | 1 MiB response |
 | Elasticsearch | 200 results / 1 MiB |
@@ -335,7 +347,7 @@ Secret flow：
 
 1. SQLite 保存完整 typed Deployment config。
 2. Catalog 不读取 config JSON；Config GET 返回完整配置与 credential。
-3. 配置页 draft 回填 secret，并通过 `preserve|replace|clear` 提交。
+3. 配置页 draft 回填 secret，并通过 `preserve|replace|clear` 提交；MySQL 对每个数据库目标独立执行该协议。
 4. API 合并、解析后 transaction 保存。
 5. Agent context、prompt、tool schema/input 不含 credential。
 6. `createCapabilityTools()` clone session-local config，只在 tool closure 传给 client。

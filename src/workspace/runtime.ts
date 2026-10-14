@@ -19,7 +19,7 @@ export interface IssueRuntimeRepository {
 export interface RelatedIssueRuntime {
   key: string;
   metadata: Record<string, unknown>;
-  conversationPath: string;
+  conversationPath?: string;
   repositories: IssueRuntimeRepository[];
 }
 
@@ -97,7 +97,7 @@ export async function prepareIssueRuntime(
         const repositoryRoot = path.join(relatedIssueRoot, "repositories");
         await mkdir(repositoryRoot, { recursive: true, mode: 0o700 });
         await writeFile(path.join(relatedIssueRoot, "issue.json"), `${JSON.stringify(relatedIssue.metadata, null, 2)}\n`, { encoding: "utf8", mode: 0o400 });
-        await symlink(path.relative(relatedIssueRoot, relatedIssue.conversationPath), path.join(relatedIssueRoot, "conversation.jsonl"), "file");
+        if (relatedIssue.conversationPath) await symlink(path.relative(relatedIssueRoot, relatedIssue.conversationPath), path.join(relatedIssueRoot, "conversation.jsonl"), "file");
         const relatedNames = new Set<string>();
         for (const repository of relatedIssue.repositories) {
           if (!/^[a-z0-9._-]+$/.test(repository.name) || relatedNames.has(repository.name)) throw new Error("invalid_runtime_repository_name");

@@ -27,6 +27,7 @@
 | Prod/test 代码 | 当前 Deployment base branch 的最新 fetched commit |
 | Conversation | 每 Issue 的 Pi JSONL active branch |
 | Attachment 内容 | Durable file；DB 保存 object key、size、SHA-256 |
+| 正式数据处理成果文件 | 每 Issue `outputs/` 受管文件树 |
 | Runtime、wrapper | `src/workspace` 生成器 |
 | Capability 配置、input schema、metadata | `src/capabilities/registry.ts` |
 | Credential 字段/update 协议 | `src/configuration/contracts.ts` |
@@ -101,7 +102,7 @@ issue_workspaces
 - 每张 Issue 必须引用有效 Service/Environment Deployment，并恰有一条 Workspace row。
 - 新建请求只接受 `workMode + serviceKey`；Domain 映射原子生成 Environment/type，`issues` 当前字段仍是唯一事实源。
 - 普通 Issue edit 只修改 metadata、CC 和 Attachment，拒绝 Service、Environment、type、work mode 与关联关系字段。
-- `issue_relations` 保存正式环境智能分析工单选择的开发工单；同一目标不重复且不能关联自身，创建后只能通过专用关联接口替换。
+- `issue_relations` 保存正式环境智能分析工单选择的关联工单；目标可来自任意 Environment/type，同一目标不重复且不能关联自身，创建后只能通过专用关联接口替换。
 - `issue_pins` 保存用户级个人队列固定项；固定只影响该用户的左侧排序，不改变 Issue 本身或团队动态。
 - `issue_scope_transitions` 是成功 Scope Apply 的 append-only 轻量审计，保存操作者、前后 Service/work mode、plan hash 和 Repository URL 差异；当前 `issues` 字段仍是 Scope 唯一事实源。
 - `global_agent_configuration.id` 固定为 `1`。
@@ -175,9 +176,9 @@ Repository URL 使用 SHA-256 前 20 字符。Bare store 保存 remote tracking 
 
 普通 edit 不改变 Issue scope，因此不会重绑 Deployment、删除 Repository 投影或重建 runtime。Scope 变更统一使用无状态的 plan/apply：plan 返回当前 `updatedAt`、Repository 差集和 SHA-256，apply 在 scope queue 与 Issue reservation 内重新计算并拒绝 stale plan。当前支持 prod/test read-only 之间重绑、同 Service 的 `smart_analysis -> development_fix`，以及保持 branch mode 的 active dev 跨 Service 迁移；其他转换显式拒绝，不由 metadata API 隐式执行。离开 `production_analysis` 时关联关系会在同一事务移除。成功 mutation 与 `issue_scope_transitions` 审计在同一 SQLite transaction 提交；no-op、stale、拒绝和失败不会写 history。
 
-新建 `production_analysis` work mode 工单可选择最多 20 个已有开发工单。创建在 scope queue 内同时 reservation 新工单与全部关联工单，只接受空闲、Workspace `ready|stopped`、runtime 已就绪、Repository 状态为 active dev 或 released snapshot 且 Pi session 文件存在的目标。关联关系写入同一 SQLite transaction；其他环境或类型拒绝非空关联输入。
+新建 `production_analysis` work mode 工单可选择最多 20 个其他工单，目标可来自任意 Environment/type。创建在 scope queue 内同时 reservation 新工单与全部关联工单，关联关系写入同一 SQLite transaction；其他来源 work mode 拒绝非空关联输入。关联上下文始终生成只读 `issue.json`；存在受管 Pi session 时附带 `conversation.jsonl`，仅当目标是开发工单且拥有有效本地 working branch 时，才从该 ref 创建 immutable Repository snapshot。缺少 session 或开发 branch 不阻止关联。
 
-活动中的 `production_analysis` 还可通过专用 `PUT /api/issues/:key/related-issues` 替换关联集合。更新遵循 scope queue → 目标/旧关联/新关联 Issue reservation，锁内重新校验所有开发上下文；集合未变化时幂等返回。实际变化先关闭当前 session，再在一个 transaction 中按差集更新关系、将 runtime 标记为待重建并更新 Issue version，随后重新入队。这样下一轮 Agent 只会看到新集合，运行中的任一相关 Issue、失效 snapshot/session 或 resolved 正式工单都会阻止更新。
+活动中的 `production_analysis` 还可通过专用 `PUT /api/issues/:key/related-issues` 替换关联集合。更新遵循 scope queue → 目标/旧关联/新关联 Issue reservation，并拒绝关联自身；集合未变化时幂等返回。实际变化先关闭当前 session，再在一个 transaction 中按差集更新关系、将 runtime 标记为待重建并更新 Issue version，随后重新入队。这样下一轮 Agent 只会看到新集合；变更关系时运行中的任一相关 Issue 会由 reservation 明确阻止。
 
 ### Active dev
 
@@ -210,22 +211,24 @@ Reopen 从全部本地 working branch 准备 worktree/runtime，再事务更新 
 ```text
 issues/<issue-key>/runtime/
   <workspace-name> -> active worktree or immutable checkout
-  related-issues/   # 仅有关联工单的只读调查上下文
+  related-issues/   # 关联工单的只读调查上下文
     <related-key>/
       issue.json
-      conversation.jsonl -> 关联工单 Pi JSONL
-      repositories/<workspace-name> -> local branch immutable checkout
+      conversation.jsonl -> 可选；存在受管 Pi JSONL 时生成
+      repositories/<workspace-name> -> 可选；local development branch immutable checkout
   bin/              # 仅 writable dev
     node-project
     maven-project
 ```
 
-Runtime 使用 temporary + previous 目录原子替换，不包含 Attachment。关联开发代码始终从 bare store 的本地 working branch ref 创建 immutable checkout，不挂载可写 worktree，因此不包含未提交修改；每轮 prepare 和 API 冷启动会重建这些链接。`issue.json` 明确记录 branch/commit，关联对话链接到受管 Issue session root 下的当前 Pi JSONL。Wrapper 通过 versioned Unix socket 只发送 Issue key、workspace name、relative project、action 和 args。Broker 从 SQLite 重新验证 Issue、Repository、真实 project path、配置文件和 cache 权限。
+`production_data` 的成果文件位于 `issues/<issue-key>/outputs/`，不属于 generated runtime；retry、Scope 重建和冷启动不会删除。Agent 只能通过专用 `output` tool 原子写入或追加，HTTP 只提供列出和 attachment-style 下载，不能写入。Repository snapshot 仍保持只读。
+
+Runtime 使用 temporary + previous 目录原子替换，不包含 Attachment 或成果文件。每个关联目标始终有 `issue.json`；关联开发代码只从 bare store 的本地 working branch ref 创建 immutable checkout，不挂载可写 worktree，因此不包含未提交修改；无开发 branch 时 Repository 目录保持为空。存在受管 Pi session 时，关联对话链接到该 Issue session root 下的当前 Pi JSONL；不存在时不生成链接。每轮 prepare 和 API 冷启动会重建这些资源。Wrapper 通过 versioned Unix socket 只发送 Issue key、workspace name、relative project、action 和 args。Broker 从 SQLite 重新验证 Issue、Repository、真实 project path、配置文件和 cache 权限。
 
 Source Browser：
 
 - 只接受 Repository alias 和 relative path。
-- 拒绝 absolute、`..`、symlink escape、`.git` tree item、binary 和超限内容。
+- 拒绝 absolute、`..`、symlink escape、`.git` tree item 和 binary；源码文件本身不设应用层大小限制。
 - Search 使用 literal `rg --json`。
 - History/commit 必须位于 current HEAD ancestry。
 - Prod/test 和 released snapshot 只读。
@@ -260,8 +263,9 @@ Model output idle watchdog 只在等待模型输出时计时；assistant 增量�
 - provider、model ID、thinking level
 - capability names
 - `canModifyCode`
+- `canWriteOutputs`
 
-它不包含 credential、完整 Deployment config、Repository path 或 commit。Writable context 获得 `read/bash/edit/write/grep/find/ls`；其他 context 只有 `read/grep/find/ls`。
+它不包含 credential、完整 Deployment config、Repository path 或 commit。Writable dev context 获得 `read/bash/edit/write/grep/find/ls`；普通只读 context 只有 `read/grep/find/ls`；`prod + data_processing` 额外获得隔离的 `output` tool，但不获得 Repository mutation tool。
 
 Capability 调用：
 
@@ -270,7 +274,7 @@ Service save -> Registry parse -> typed Deployment config -> SQLite
 Pi customTool -> TypeBox input parse -> session-local typed protocol client
 ```
 
-DMS 只注册单一 `dms` 工具；当前 Deployment 的 schema 动态形成 tool input enum。Runtime 将 schema 精确映射到持久化 DatabaseId，只匹配远端唯一的 `executeScript`，注入 DatabaseId 并验证单条只读 SQL。`listInstances/getDatabase` 只用于受信配置解析。DMS argument/result 不设置应用层 byte limit；其余 capability 按各自 budget 完整失败，不静默截断。
+Native MySQL 只注册单一 `db` 工具；当前 Deployment 各 URL 路径中的 database 名动态形成 input enum，Runtime 将 selector 精确映射到该目标独立的 URL/username/password。DMS 同样只注册单一 `dms` 工具；当前 Deployment 的 schema 动态形成 tool input enum。Runtime 将 schema 精确映射到持久化 DatabaseId，只匹配远端唯一的 `executeScript`，注入 DatabaseId 并验证单条只读 SQL。`listInstances/getDatabase` 只用于受信配置解析。DMS argument/result 不设置应用层 byte limit；其余 capability 按各自 budget 完整失败，不静默截断。
 
 ## Attachment 事务
 
@@ -280,9 +284,11 @@ DMS 只注册单一 `dms` 工具；当前 Deployment 的 schema 动态形成 too
 issues/<issue-key>/attachments/<uuid>-<basename>
 ```
 
-Create 先应用 multipart budget、计算 SHA-256、独占 claim 空 Issue root、以 `0400` 写文件，再在一个 transaction 中写 Issue/Workspace/CC/Attachment。失败只删除本次文件，并以 `rmdir` 回收本次空目录。
+Attachment 不设应用层文件大小、request 总量或数量上限。Multipart 文件边接收边写入进程临时目录并计算 SHA-256，不在内存中聚合；临时文件不是 Attachment object，无论成功或失败都会清理。
 
-Edit 先把待删除文件 rename 到 `.deleting` quarantine，写入新文件，再 transaction 更新 metadata/CC/Attachment；rollback 恢复 quarantine 并删除新文件，commit 后 finalize 删除 quarantine。GET 验证直属路径、regular file、mode、size 和 SHA-256。不存在独立 Attachment write route。
+Create 独占 claim 空 Issue root，在 transaction 中把 staged 文件复制为 `0400` durable 文件并写 Issue/Workspace/CC/Attachment。失败只删除本次 durable 文件，并以 `rmdir` 回收本次空目录。
+
+Edit 先把待删除文件 rename 到 `.deleting` quarantine，在 transaction 中复制 staged 文件并更新 metadata/CC/Attachment；rollback 恢复 quarantine 并删除新 durable 文件，commit 后 finalize 删除 quarantine。GET 验证直属路径、regular file、mode、size 和 SHA-256。不存在独立 Attachment write route。
 
 ## SSE 与 Web 状态
 
@@ -357,7 +363,7 @@ DB 不存在但 `issues/<key>` 或 `workspaces/<key>` 存在时为 `unmanaged_is
 - `X-Issue-Pilot-Subject` 只选择 active user 和提交署名，不是身份认证。
 - Config GET 有意返回完整 Deployment credential 给受信配置 UI；不得记录响应或 request body。
 - Credential 不进入 Agent context、prompt、tool schema/input、argv、日志、监控或诊断。
-- DMS Bearer 只进入 SQLite、受信配置流和 session-local HTTPS Authorization header。
+- Native MySQL 每个目标的独立密码只进入 SQLite、受信配置流和 session-local client；DMS Bearer 只进入 SQLite、受信配置流和 session-local HTTPS Authorization header。
 - SLS AccessKey 写入调用级临时 `0600` profile；query/scope 可能出现在 process argv。
 - Capability result 和用户粘贴到 Agent composer 的图片会进入模型上下文与 Pi JSONL，可能包含敏感业务数据。
 - Workbench 和 Source API 返回内部源码，dev mutation 会直接修改 Issue worktree。
@@ -378,8 +384,8 @@ DB 不存在但 `issues/<key>` 或 `workspaces/<key>` 存在时为 `unmanaged_is
 11. Runtime 和 checkout 不成为 durable 事实源。
 12. Repository 集合变化先 prepare filesystem，再 commit DB，并可 rollback。
 13. Credential 只存在于明确授权的数据流中。
-14. Pi tool input 只解析一次；DMS Agent 只可调用 `executeScript`。
+14. Pi tool input 只解析一次；native MySQL database selector 和 DMS schema selector 都必须由当前 Deployment 白名单生成，DMS Agent 只可调用 `executeScript`。
 15. 所有 state owner 使用同一 state root。
 16. Published migration/journal 不修改、重排或删除。
 17. SQLite User 是唯一用户事实源，且至少保留一名 active user。
-18. 关联开发工单代码只来自本地 working branch immutable checkout；关联 metadata、conversation 和 Repository 对当前工单只读。
+18. 关联工单始终提供只读 metadata；conversation 按受管 session 可用性提供，开发代码只来自本地 working branch immutable checkout，所有关联证据对当前工单只读。

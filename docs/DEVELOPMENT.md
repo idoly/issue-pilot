@@ -44,6 +44,7 @@ Vite 监听 `0.0.0.0:4173` 并代理本机 3000 API，只能用于可信开发�
 | `src/http/*-routes.ts` | HTTP boundary 与 route coordination |
 | `src/http/service-configuration.ts` | Service request prepare/apply |
 | `src/http/attachment-store.ts` | Multipart durable file、quarantine、rollback/finalize、safe GET |
+| `src/outputs/store.ts` | production_data durable output、atomic write/append、safe list/download |
 | `src/agent/engine.ts` | Run/steer queue、reservation、state、session coordination |
 | `src/agent/context.ts` | Minimal context 与 local tool allowlist |
 | `src/agent/pi-session.ts` | Private JSONL、Pi SDK、resource loader、tool verification |
@@ -151,6 +152,8 @@ Route 只负责：
 9. 返回 Web 实际需要的 DTO，不暴露 raw row、内部 path 或无关 secret。
 10. 同步 `data/client.ts` 与 focused tests。
 
+Config snapshot 使用 libSQL `read` transaction；Drizzle 的默认 transaction 会取得写锁，不能用于这些只读投影，否则与 Agent Workspace 更新并发时会阻塞写入。
+
 Lock order：
 
 ```text
@@ -254,7 +257,7 @@ sls.ts + aliyun.ts
 http-client.ts
 ```
 
-DMS Agent tool 只能调用 `executeScript`；schema input 必须从当前 Deployment 的已配置 schema 动态生成 enum，并在服务端映射为 DatabaseId。`listInstances/getDatabase` 只属于受信配置解析。Redis Worker 的 heap 隔离不能合回主 event loop。Playwright 不是 capability。
+Native MySQL 的 database input 必须从当前 Deployment 的已配置 URL 路径动态生成 enum，并在服务端映射到该目标独立的 URL/username/password。DMS Agent tool 只能调用 `executeScript`；schema input 必须从当前 Deployment 的已配置 schema 动态生成 enum，并在服务端映射为 DatabaseId。`listInstances/getDatabase` 只属于受信配置解析。Redis Worker 的 heap 隔离不能合回主 event loop。Playwright 不是 capability。
 
 ## Web 与 Workbench change
 
@@ -265,12 +268,16 @@ DMS Agent tool 只能调用 `executeScript`；schema input 必须从当前 Deplo
 - Capability 使用 explicit form，不生成 generic schema form。
 - Config secret 只留在配置页 draft，不写 localStorage、日志或诊断。
 - Agent composer 粘贴图片使用 multipart，服务端转换为 Pi `ImageContent`；图片随 visible user event 和 Pi JSONL replay 展示，不写 Attachment store 或新增独立 Attachment route。
+- Agent 消息发送前按展开后的粘贴文本校验 `limits.agentMessageChars`，超限保留草稿并提示分段发送；API 对 JSON 和 multipart 的超长文字统一返回 `agent_message_too_long`，空内容或非法格式仍返回 `invalid_agent_message`。
 - 配置的三个 panel 保持挂载；切换 Tab 不能丢 draft/modal。
 - Deployment 折叠标题在展开前后保持“环境名 + 已启用 capability”同一行；展开区只列未启用 capability，不能重复完整 active 列表。
 - 主应用与 Workbench Markdown Preview 使用 `marked + DOMPurify + github-markdown-css`；Workbench 启动不得依赖 optional extension-host render command。
 - Workbench dev 可创建、保存、删除、重命名文件并执行 Stage/Unstage/Discard/Commit；其他模式只读。
 - Workbench/Agent Git commit 使用当前工单用户姓名和邮箱。
+- `production_data` 只能通过专用 `output` tool 写每 Issue 成果区；不得因此开放 Repository mutation tool。MySQL 大结果通过只读 transaction 直接 stream 为 CSV/JSONL，失败或 abort 不发布临时文件。
+- 成果文件点击文件名打开只读预览，CSV/SQL/JSONL 等以文本展示，JSON 自动排版，Markdown 使用共享的安全渲染器；下载仍返回完整文件。预览按根配置 `web.outputPreviewBytes` 限制为 20 MiB，超限完整失败、不显示截断内容；关闭、切换工单或重试会取消旧请求并忽略过期响应。
 - 新 flow 覆盖 loading、empty、success、failure、retry、stale response。
+- 服务工单量图表的服务名列保持 64–96 px，柱条占据剩余宽度；计数与滚动条之间保留 16 px 间距，长服务名使用省略展示。
 - Desktop/mobile 验证 long text、dialog、list、composer 和横向 overflow。
 
 ## Test commands
@@ -302,7 +309,7 @@ git diff --check
 | --- | --- |
 | Shared contract | Domain、DB、HTTP、Web |
 | User | Bootstrap、active transaction、API、Web |
-| Attachment | Limits、quarantine、rollback/finalize、GET integrity |
+| Attachment | Unbounded streaming staging、quarantine、rollback/finalize、GET integrity |
 | Agent/Pi | Queue、reservation、state、steer、abort、shutdown |
 | SSE | Replay/snapshot/live、backpressure、generation、reconnect |
 | Capability | Save parse、scope、schema、client、timeout、oversize、abort |

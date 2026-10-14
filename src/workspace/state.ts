@@ -65,6 +65,10 @@ export function issueAttachmentRoot(stateRoot: string, issueKey: string): string
   return path.join(issueRoot(stateRoot, issueKey), "attachments");
 }
 
+export function issueOutputRoot(stateRoot: string, issueKey: string): string {
+  return path.join(issueRoot(stateRoot, issueKey), "outputs");
+}
+
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
   const root = issueRoot(stateRoot, issueKey);
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });

@@ -1,7 +1,9 @@
+import { drizzle } from "drizzle-orm/libsql";
 import { asc, inArray, sql } from "drizzle-orm";
 
 import { loadGlobalAgentConfiguration } from "./agent.ts";
 import type { Database } from "../db/client.ts";
+import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
@@ -31,8 +33,19 @@ async function projectConfigurationCatalog(database: ConfigurationReader): Promi
   };
 }
 
+async function readSnapshot<T>(database: Database, project: (reader: ConfigurationReader) => Promise<T>): Promise<T> {
+  const client = new Proxy(database.$client, {
+    get(target, property) {
+      if (property === "transaction") return () => target.transaction("read");
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return drizzle(client, { schema }).transaction((transaction) => project(transaction));
+}
+
 export function loadConfigurationCatalog(database: Database): Promise<ConfigurationCatalog> {
-  return database.transaction((transaction) => projectConfigurationCatalog(transaction));
+  return readSnapshot(database, projectConfigurationCatalog);
 }
 
 async function projectConfiguration(database: ConfigurationReader, agentModels: AgentModelDefinition[]): Promise<Configuration> {
@@ -96,5 +109,5 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
 
 export async function loadConfiguration(database: Database, modelCatalog: AgentModelCatalog): Promise<Configuration> {
   const agentModels = await modelCatalog.list();
-  return database.transaction((transaction) => projectConfiguration(transaction, agentModels));
+  return readSnapshot(database, (reader) => projectConfiguration(reader, agentModels));
 }

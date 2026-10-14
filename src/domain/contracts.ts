@@ -48,7 +48,7 @@ export interface AgentFooterStats {
 
 export interface CapabilityConfiguration {
   nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string };
-  db?: { url: string; username: string; password: string };
+  db?: { databases: Array<{ url: string; username: string; password: string }> };
   dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   redis?: { host: string; port: number; username: string; password?: string; database: number };

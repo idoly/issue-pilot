@@ -8,18 +8,26 @@ export const CAPABILITY_CREDENTIALS = {
   es: { fields: ["password"], required: false },
   dms: { fields: ["authorization"], required: true },
   sls: { fields: ["accessKeyId", "accessKeySecret"], required: true },
-} as const satisfies { [Key in CapabilityName]: { fields: readonly (keyof NonNullable<CapabilityConfiguration[Key]>)[]; required: boolean } };
+} as const;
 
 type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIALS)[Key]["fields"][number];
-export type CapabilityCredentialValues<Key extends CapabilityName> = Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
-export type ProjectedCapabilitySection<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]> & { credentialConfigured: boolean };
-export type ProjectedCapabilityConfiguration = { [Key in CapabilityName]?: ProjectedCapabilitySection<Key> };
+export type CapabilityCredentialValues<Key extends CapabilityName> = Key extends "db"
+  ? { password: string }
+  : Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
 export type CapabilityCredentialUpdate<Key extends CapabilityName> =
   | { mode: "preserve" }
   | { mode: "replace"; values: CapabilityCredentialValues<Key> }
   | { mode: "clear" };
+type DbConfiguration = NonNullable<CapabilityConfiguration["db"]>;
+type DbConfigurationTarget = DbConfiguration["databases"][number];
+export type ProjectedCapabilitySection<Key extends CapabilityName> = Key extends "db"
+  ? { databases: Array<DbConfigurationTarget & { credentialConfigured: boolean }> }
+  : NonNullable<CapabilityConfiguration[Key]> & { credentialConfigured: boolean };
+export type ProjectedCapabilityConfiguration = { [Key in CapabilityName]?: ProjectedCapabilitySection<Key> };
 export type CapabilityConfigurationInput = {
-  [Key in CapabilityName]?: Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialUpdate: CapabilityCredentialUpdate<Key> };
+  [Key in CapabilityName]?: Key extends "db"
+    ? { databases: Array<Omit<DbConfigurationTarget, "password"> & { credentialUpdate: CapabilityCredentialUpdate<"db"> }> }
+    : Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialUpdate: CapabilityCredentialUpdate<Key> };
 };
 
 export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;

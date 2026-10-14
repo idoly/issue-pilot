@@ -8,6 +8,7 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
+import { IssueOutputStore } from "../outputs/store.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
@@ -279,6 +280,7 @@ export class AgentEngine implements AgentController {
       manager,
       ...(project.executableRoot ? { executableRoot: project.executableRoot } : {}),
       gitIdentity,
+      ...(context.canWriteOutputs ? { outputStore: new IssueOutputStore(this.stateRoot, issue.key) } : {}),
       systemPrompt: agentSystemPrompt(context),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });

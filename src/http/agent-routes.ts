@@ -16,16 +16,21 @@ import { createOrderedSseWriter } from "./sse.ts";
 
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
+function agentMessageText(value: unknown): string {
+  if (typeof value === "string" && value.length > issuePilotConfig.limits.agentMessageChars) throw new ApiError(400, "agent_message_too_long");
+  return text(value, "agent_message", issuePilotConfig.limits.agentMessageChars);
+}
+
 async function readAgentMessage(request: FastifyRequest): Promise<{ message: string; images: ImageContent[] }> {
-  if (!request.isMultipart()) return { message: text(record(request.body).message, "agent_message", issuePilotConfig.limits.agentMessageChars), images: [] };
-  const limits = issuePilotConfig.limits.attachment;
+  if (!request.isMultipart()) return { message: agentMessageText(record(request.body).message), images: [] };
+  const limits = issuePilotConfig.limits.agentImage;
   const images: ImageContent[] = [];
   let message: string | undefined;
   let totalBytes = 0;
   for await (const part of request.parts()) {
     if (part.type === "field") {
       if (part.fieldname !== "message" || message !== undefined) throw new ApiError(400, "invalid_agent_message");
-      message = text(part.value, "agent_message", issuePilotConfig.limits.agentMessageChars);
+      message = agentMessageText(part.value);
       continue;
     }
     if (part.fieldname !== "images" || !agentImageMediaTypes.has(part.mimetype) || images.length >= limits.files) throw new ApiError(400, "invalid_agent_image");

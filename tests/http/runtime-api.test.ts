@@ -95,6 +95,27 @@ test("uses the current user as the Agent Git commit identity", async () => {
   }
 });
 
+test("reports oversized Agent text distinctly for JSON and multipart requests", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Long messages", ["dev"]);
+    const issue = await createIssue(fixture.app, "long-messages", "dev");
+    fixture.engine.running.clear();
+    const initialMessageCount = fixture.engine.messages.length;
+    const message = "a".repeat(issuePilotConfig.limits.agentMessageChars + 1);
+    const boundary = "long-agent-message";
+    for (const input of [
+      { payload: { message } },
+      { headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: `--${boundary}\r\nContent-Disposition: form-data; name="message"\r\n\r\n${message}\r\n--${boundary}--\r\n` },
+    ]) {
+      const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, ...input });
+      assert.equal(response.statusCode, 400);
+      assert.deepEqual(JSON.parse(response.body), { error: "agent_message_too_long" });
+    }
+    assert.equal(fixture.engine.messages.length, initialMessageCount);
+  } finally { await fixture.cleanup(); }
+});
+
 test("accepts clipboard images as bounded Pi image content", async () => {
   const fixture = await createApiFixture();
   try {

@@ -173,7 +173,6 @@ export class SourceBrowser {
     const current = await readFile(candidate);
     if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw new Error("source_file_changed");
     const next = Buffer.from(content, "utf8");
-    if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
     const temporary = path.join(path.dirname(candidate), `.${path.basename(candidate)}.issue-pilot-${randomUUID()}.tmp`);
     try {
       await writeFile(temporary, next, { flag: "wx", mode: metadata!.mode & 0o777 });
@@ -188,7 +187,6 @@ export class SourceBrowser {
     const context = await this.writableContext(issue, repositoryName);
     const candidate = await this.mutableDestination(context, relativePath);
     const next = Buffer.from(content, "utf8");
-    if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
     try { await writeFile(candidate, next, { flag: "wx", mode: 0o644 }); }
     catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
@@ -257,7 +255,7 @@ export class SourceBrowser {
     if (!value || value.length > issuePilotConfig.limits.sourceBrowser.searchQueryCharacters || value.includes("\0")) throw new Error("invalid_source_query");
     const context = await this.context(issue, repositoryName);
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.searchExecutable, [
-      "--json", "--no-config", "--hidden", "--fixed-strings", "--line-number", "--column", "--max-columns", "1000", "--max-columns-preview", "--max-filesize", `${issuePilotConfig.limits.sourceBrowser.fileBytes}`,
+      "--json", "--no-config", "--hidden", "--fixed-strings", "--line-number", "--column", "--max-columns", "1000", "--max-columns-preview",
       ...(options.caseSensitive === false ? ["--ignore-case"] : []),
       ...(options.wordMatch === true ? ["--word-regexp"] : []),
       "--glob", "!.git", "--glob", "!.git/**", "--", value, ".",
@@ -413,7 +411,7 @@ export class SourceBrowser {
     return { file, before, after };
   }
 
-  private commandOptions(maxOutputBytes = issuePilotConfig.limits.sourceBrowser.commandOutputBytes) {
+  private commandOptions(maxOutputBytes: number | null = issuePilotConfig.limits.sourceBrowser.commandOutputBytes) {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes,
@@ -509,14 +507,7 @@ export class SourceBrowser {
     if (size.code !== 0) throw new Error(commandError);
     const bytes = Number(size.stdout.trim());
     if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error(invalidResponse);
-    if (bytes > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
-    let result;
-    try {
-      result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "cat-file", "blob", object], this.commandOptions(issuePilotConfig.limits.sourceBrowser.fileBytes + 4096));
-    } catch (error) {
-      if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_file_too_large");
-      throw error;
-    }
+    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "cat-file", "blob", object], this.commandOptions(null));
     if (result.killed) throw new Error(timeoutError);
     if (result.code !== 0) throw new Error(commandError);
     if (result.stdout.includes("\0") || result.stdout.includes("\ufffd")) throw new Error("source_file_binary");
@@ -527,7 +518,6 @@ export class SourceBrowser {
     const file = await this.resolvePath(context.root, relativePath);
     const metadata = await stat(file);
     if (!metadata.isFile()) throw new Error("source_path_not_file");
-    if (metadata.size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
     const content = await readFile(file);
     if (content.subarray(0, Math.min(content.length, 8192)).includes(0)) throw new Error("source_file_binary");
     let text: string;

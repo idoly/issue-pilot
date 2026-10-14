@@ -12,7 +12,7 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 - Resolved dev workspace 可受管释放；代码由 bare store 中的本地 working branch 持久保存，可只读浏览并在 reopen 时恢复。
 - 每张 Issue 持久保存 Pi JSONL conversation、Attachment、Comment、Repository 投影和 Workspace 状态；Agent 输入框可直接粘贴图片并随消息发送给模型。
 - 内置 Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff、blame、history 和安全的 Markdown Preview。
-- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP 和 SLS 作为 Deployment-scoped 只读 Pi tools；DMS 可配置多个 schema，Agent 每次只能选择一个已授权目标。
+- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP 和 SLS 作为 Deployment-scoped 只读 Pi tools；MySQL 与 DMS 均可配置多个数据库，Agent 每次只能选择一个已授权目标。
 - 用户由 SQLite 管理，停用用户不会删除历史署名。
 
 ## Web 界面
@@ -122,7 +122,7 @@ Web 使用以下 API 域：
 
 - User：active user、current user、管理列表、创建与更新。
 - Configuration：catalog、完整 config、全局 model、DMS scope resolve、Service CRUD。
-- Issue：用户级固定个人队列、创建、正式跟进、关联开发工单管理、编辑、详情、状态转换和 Comment。
+- Issue：用户级固定个人队列、创建、正式跟进、通用关联工单管理、编辑、详情、状态转换和 Comment。
 - Agent：retry、message、SSE stream。
 - Attachment：完整性校验后的只读 GET；写入只属于 Issue create/edit multipart transaction。
 - Workspace：stats、带审计历史的无状态 Scope Transition plan/apply 和受管 release/reopen。
