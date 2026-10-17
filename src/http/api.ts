@@ -9,7 +9,7 @@ import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import { issues } from "../db/schema.ts";
-import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../pi/models.ts";
+import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../agent/model-runtime.ts";
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { prepareDevelopmentIssueRuntimes, prepareReadOnlyIssueRuntimes } from "../workspace/project.ts";
@@ -116,6 +116,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(error));
 
     app.setErrorHandler((error, _request, reply) => {
+      if (error && typeof error === "object" && "code" in error && error.code === "FST_ERR_CTP_INVALID_JSON_BODY") return reply.code(400).send({ error: "invalid_json" });
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
       const errorMessages: string[] = [];
       const seenCauses = new Set<unknown>();

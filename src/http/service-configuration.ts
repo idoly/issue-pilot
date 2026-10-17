@@ -8,7 +8,7 @@ import { ApiError, optionalText, record, strings, text } from "./input.ts";
 
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
 
-export function parseServiceDeployment(deployment: Record<string, unknown>, repositoryAliases: Set<string>, existing: StoredDeploymentConfig | undefined, mcpIds: ReadonlySet<string>) {
+function parseServiceDeployment(deployment: Record<string, unknown>, repositoryAliases: Set<string>, existing: StoredDeploymentConfig | undefined, mcpIds: ReadonlySet<string>) {
   if (deployment.agent !== undefined) throw new ApiError(400, "deployment_agent_not_allowed");
   const selected = strings(deployment.capabilities ?? [], "capabilities");
   if (new Set(selected).size !== selected.length || selected.some(key => !CAPABILITY_KEYS.includes(key as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
@@ -78,7 +78,7 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
   return { parsed, existingRepositories, existingDeployments, environmentsByKey };
 }
 
-export async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: string, environmentId: string, existing: typeof serviceDeployments.$inferSelect | undefined, input: ReturnType<typeof parseServiceDeployment>, repositories: Map<string, { id: string }>) {
+async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: string, environmentId: string, existing: typeof serviceDeployments.$inferSelect | undefined, input: ReturnType<typeof parseServiceDeployment>, repositories: Map<string, { id: string }>) {
   const values = { config: input.config, updatedAt: new Date() };
   const [saved] = existing
     ? await executor.update(serviceDeployments).set(values).where(eq(serviceDeployments.id, existing.id)).returning()

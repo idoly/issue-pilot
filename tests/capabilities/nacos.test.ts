@@ -3,7 +3,8 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { readNacosConfigurations, type NacosConnection } from "../../src/capabilities/nacos.ts";
+import { readNacos } from "../../src/capabilities/nacos.ts";
+import type { CapabilityConfig } from "../../src/capabilities/registry.ts";
 
 async function nacosServer(): Promise<{
   origin: string;
@@ -47,7 +48,7 @@ async function nacosServer(): Promise<{
   };
 }
 
-function connection(serverUrl: string, dataIds = ["orders.yaml", "orders-shared.yaml"]): NacosConnection {
+function connection(serverUrl: string, dataIds = ["orders.yaml", "orders-shared.yaml"]): CapabilityConfig<"nacos"> {
   return {
     serverUrl,
     namespace: "managed-space",
@@ -62,7 +63,8 @@ test("reads exact Nacos Data IDs over one authenticated bounded HTTP session", a
   const server = await nacosServer();
   try {
     const configured = connection(server.origin);
-    const configurations = await readNacosConfigurations(configured);
+    const result = await readNacos(configured);
+    const { configurations } = JSON.parse(result.content[0]!.text);
     assert.deepEqual(configurations, [
       { dataId: "orders.yaml", group: "MANAGED_GROUP", content: "spring:\n  datasource:\n    password: business-secret\n" },
       { dataId: "orders-shared.yaml", group: "MANAGED_GROUP", content: null },
@@ -81,7 +83,7 @@ test("reads exact Nacos Data IDs over one authenticated bounded HTTP session", a
 test("rejects oversized Nacos responses", async () => {
   const server = await nacosServer();
   try {
-    await assert.rejects(readNacosConfigurations(connection(server.origin, ["oversized.yaml"])), /capability_result_too_large/);
+    await assert.rejects(readNacos(connection(server.origin, ["oversized.yaml"])), /capability_result_too_large/);
   } finally {
     await server.close();
   }

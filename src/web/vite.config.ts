@@ -1,113 +1,37 @@
 /// <reference types="vitest/config" />
 
-import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-
+import { createReadStream, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { defineConfig, type Plugin } from "vite";
 import solidPlugin from "@solidjs/vite-plugin";
-
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const require = createRequire(import.meta.url);
-const githubMarkdownDirectory = path.dirname(require.resolve("github-markdown-css/package.json"));
-const markdownPreviewCss = [
-  fs.readFileSync(path.join(githubMarkdownDirectory, "github-markdown-dark.css"), "utf8"),
-  "html,body{margin:0;background:#0d1117;color:#e6edf3;color-scheme:dark}body{box-sizing:border-box;padding:24px 32px}.markdown-body{max-width:none;background:transparent;color:#e6edf3}",
-].join("\n");
-const githubThemeJson = fs.readFileSync(path.join(import.meta.dirname, "src", "vscode", "github-dark-default.json"), "utf8");
-const githubThemeUrl = `data:application/json;base64,${Buffer.from(githubThemeJson).toString("base64")}`;
-const materialThemeDirectory = path.dirname(require.resolve("material-icon-theme/package.json"));
-const materialThemeManifest = require(path.join(materialThemeDirectory, "package.json")) as Record<string, unknown>;
-const materialIconsPath = path.join(materialThemeDirectory, "dist/material-icons.json");
-const materialIcons = require(materialIconsPath) as { iconDefinitions: Record<string, { iconPath: string }> };
-const materialIconPaths = [...new Set(Object.values(materialIcons.iconDefinitions).map(({ iconPath }) => iconPath))].map((iconPath) => {
-  const absolutePath = path.resolve(path.dirname(materialIconsPath), iconPath);
-  if (!absolutePath.startsWith(`${materialThemeDirectory}${path.sep}`)) throw new Error(`material_icon_path_outside_package:${iconPath}`);
-  return { extensionPath: path.relative(materialThemeDirectory, absolutePath).replaceAll(path.sep, "/"), absolutePath };
-});
-const githubThemeModule = "virtual:issue-pilot-github-dark-default";
-const materialThemeModule = "virtual:issue-pilot-material-icon-theme";
-const markdownStyleModule = "virtual:issue-pilot-markdown-preview-style";
-const resolvedGithubThemeModule = `\0${githubThemeModule}`;
-const resolvedMaterialThemeModule = `\0${materialThemeModule}`;
-const resolvedMarkdownStyleModule = `\0${markdownStyleModule}`;
+const materialRoot = path.dirname(require.resolve("material-icon-theme/package.json"));
+const materialVersion = (require("material-icon-theme/package.json") as { version: string }).version;
+const iconRoot = path.join(materialRoot, "icons");
+const iconFiles = readdirSync(iconRoot).filter(name => name.endsWith(".svg"));
+const iconNames = new Set(iconFiles);
+const iconPrefix = `assets/editor-icons-${materialVersion}/`;
+const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The editor uses the unchanged font distributed in @codingame/monaco-vscode-api 36.2.7, from https://github.com/microsoft/vscode/tree/main/src/vs/base/browser/ui/codicons; the matching icon names and code points are kept with the font.\n${readFileSync(path.resolve("src/web/src/app/editor-codicons.LICENSE"), "utf8")}`;
 
-function githubThemePlugin(): Plugin {
+function editorIconAssets(): Plugin {
   return {
-    name: "issue-pilot-github-theme",
-    resolveId(id) {
-      return id === githubThemeModule ? resolvedGithubThemeModule : undefined;
+    name: "editor-icon-assets",
+    configureServer(server) {
+      server.middlewares.use("/assets/editor-icon-licenses.txt", (_request, response) => { response.setHeader("Content-Type", "text/plain; charset=utf-8"); response.end(iconLicenses); });
+      server.middlewares.use(`/${iconPrefix}`, (request, response, next) => {
+        let name: string;
+        try { name = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname.slice(1)); } catch { return next(); }
+        if (!iconNames.has(name)) return next();
+        response.setHeader("Content-Type", "image/svg+xml");
+        createReadStream(path.join(iconRoot, name)).on("error", next).pipe(response);
+      });
     },
-    load(id) {
-      if (id !== resolvedGithubThemeModule) return undefined;
-      const manifest = {
-        name: "issue-pilot-github-dark-default",
-        publisher: "issue-pilot",
-        version: "1.0.0",
-        displayName: "GitHub Dark Default",
-        engines: { vscode: "*" },
-        categories: ["Themes"],
-        contributes: {
-          themes: [{ label: "GitHub Dark Default", uiTheme: "vs-dark", path: "./themes/dark-default.json" }],
-        },
-      };
-      return `
-import { registerExtension } from "@codingame/monaco-vscode-api/extensions";
-const { registerFileUrl } = registerExtension(${JSON.stringify(manifest)}, undefined, { system: true });
-registerFileUrl("themes/dark-default.json", ${JSON.stringify(githubThemeUrl)}, { mimeType: "application/json", size: ${githubThemeJson.length} });
-`;
-    },
-  };
-}
-
-function markdownStylePlugin(): Plugin {
-  return {
-    name: "issue-pilot-markdown-preview-style",
-    resolveId(id) {
-      return id === markdownStyleModule ? resolvedMarkdownStyleModule : undefined;
-    },
-    load(id) {
-      if (id !== resolvedMarkdownStyleModule) return undefined;
-      return `export const previewCss = ${JSON.stringify(markdownPreviewCss)};`;
-    },
-  };
-}
-
-function materialThemePlugin(): Plugin {
-  return {
-    name: "issue-pilot-material-theme",
-    enforce: "pre",
-    resolveId(id) {
-      return id === materialThemeModule ? resolvedMaterialThemeModule : undefined;
-    },
-    load(id) {
-      if (id !== resolvedMaterialThemeModule) return undefined;
-      const manifest = {
-        name: materialThemeManifest.name,
-        publisher: materialThemeManifest.publisher,
-        version: materialThemeManifest.version,
-        displayName: materialThemeManifest.displayName,
-        description: materialThemeManifest.description,
-        engines: materialThemeManifest.engines,
-        categories: ["Themes"],
-        contributes: {
-          iconThemes: [{ id: "material-icon-theme", label: "Material Icon Theme", path: "./dist/material-icons.json" }],
-        },
-      };
-      const resources = [
-        { extensionPath: "dist/material-icons.json", absolutePath: materialIconsPath, mimeType: "application/json" },
-        ...materialIconPaths.map(({ extensionPath, absolutePath }) => ({ extensionPath, absolutePath, mimeType: "image/svg+xml" })),
-      ];
-      const registrations = resources.map(({ extensionPath, absolutePath, mimeType }) =>
-        `registerFileUrl(${JSON.stringify(extensionPath)}, new URL(${JSON.stringify(absolutePath)}, import.meta.url).toString(), ${JSON.stringify({ mimeType, size: fs.statSync(absolutePath).size })});`
-      ).join("\n");
-      return `
-import { registerExtension } from "@codingame/monaco-vscode-api/extensions";
-const { registerFileUrl, whenReady } = registerExtension(${JSON.stringify(manifest)}, undefined, { system: true });
-${registrations}
-export { whenReady };
-`;
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: "assets/editor-icon-licenses.txt", source: iconLicenses });
+      for (const name of iconFiles) this.emitFile({ type: "asset", fileName: iconPrefix + name, source: readFileSync(path.join(iconRoot, name)) });
     },
   };
 }
@@ -115,31 +39,16 @@ export { whenReady };
 export default defineConfig({
   root: import.meta.dirname,
   cacheDir: "../../node_modules/.vite/issue-pilot-web",
-  plugins: [
-    githubThemePlugin(),
-    markdownStylePlugin(),
-    materialThemePlugin(),
-    solidPlugin(),
-  ],
+  plugins: [editorIconAssets(), solidPlugin()],
   server: {
     host: issuePilotConfig.web.host,
     port: issuePilotConfig.web.port,
-    watch: {
-      awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 },
-    },
+    watch: { awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 } },
     proxy: {
       "/mcp": { target: `http://127.0.0.1:${issuePilotConfig.http.port}` },
       "/api": { target: `http://127.0.0.1:${issuePilotConfig.http.port}`, ws: true },
     },
   },
   test: { setupFiles: ["./src/test-setup.ts"] },
-  build: {
-    target: "es2022",
-    rollupOptions: {
-      input: {
-        main: path.join(import.meta.dirname, "index.html"),
-        vscode: path.join(import.meta.dirname, "vscode.html"),
-      },
-    },
-  },
+  build: { target: "es2022", rollupOptions: { input: path.join(import.meta.dirname, "index.html") } },
 });

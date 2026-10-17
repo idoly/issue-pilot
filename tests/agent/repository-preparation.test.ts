@@ -14,7 +14,7 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
-import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRuntimeRoot, issueWorkDirectory, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -212,12 +212,13 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(prodRepository!.workingBranch, null);
     assert.equal(prodRepository!.localPath, null);
     assert.equal(prodWorkspace!.runtimeReady, true);
-    assert.equal(prodSession!.workspacePath, issueRuntimeRoot(stateRoot, prodIssue!.key));
+    assert.equal(prodSession!.workspacePath, issueWorkDirectory(stateRoot, prodIssue!.key));
     const prodRuntimeName = repositoryWorkspaceNames(remotes).get(remotes[0])!;
     assert.equal(starts[0]!.context.canModifyCode, false);
     assert.equal(sessionStops, 1);
-    assert.equal(starts[0]!.workspaceRoot, issueRuntimeRoot(stateRoot, prodIssue!.key));
-    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(starts[0]!.workspaceRoot, prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
+    assert.equal(starts[0]!.workspaceRoot, issueWorkDirectory(stateRoot, prodIssue!.key));
+    await writeFile(path.join(starts[0]!.workspaceRoot, "notes.txt"), "retain analysis");
+    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRuntimeRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
     await assert.rejects(access(issueWorkspaceRoot(stateRoot, prodIssue!.key)));
 
     const firstProdCommit = prodRepository.commitBefore;
@@ -234,6 +235,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(refreshedProdRepository.commitBefore, await git(["-C", source, "rev-parse", "prod"]));
     assert.equal(refreshedProdRepositoryByUrl.get(remotes[1])!.commitBefore, firstSecondaryCommit);
     assert.equal(sessionStops, 2);
+    assert.equal(await readFile(path.join(starts[1]!.workspaceRoot, "notes.txt"), "utf8"), "retain analysis");
 
     await internal.run(devIssue!.id);
     const devRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));

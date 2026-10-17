@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { connectMcp, createMcpToolBindings, inspectMcp, type McpToolBinding, type McpConfiguration, type McpConnector, type McpTool } from "../../src/mcp/client.ts";
-import { createCapabilityTools } from "../../src/pi/tools.ts";
+import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 
 const configuration: McpConfiguration = { id: "service-1", name: "Documents", url: "https://mcp.example.test/mcp", transport: "streamable_http", authorization: "Bearer private-token", enabled: true };
 const schema = { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false };

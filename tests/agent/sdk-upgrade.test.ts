@@ -15,7 +15,7 @@ const context: AgentSessionContext = {
   capabilities: [], canModifyCode: false, canWriteOutputs: false,
 };
 
-test("SDK 1.3 replays persistent sessions with current tools and canonical prompts without restoring mutation tools", async () => {
+test("SDK 1.3 replays persistent sessions with current tools and canonical prompts without restoring obsolete tools", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-sdk-lifecycle-"));
   await mkdir(path.join(root, "sessions"));
   await writeFile(path.join(root, "evidence.txt"), "verified evidence\n");
@@ -56,7 +56,7 @@ test("SDK 1.3 replays persistent sessions with current tools and canonical promp
     manager.appendMessage({ role: "system", content: "", toolsAdded: [{ name: "bash", description: "old writable tool", parameters: {} }], timestamp: Date.now() });
     const reopened = SessionManager.open(persisted);
     const resumed = await runtime.start({ manager: reopened, context, deploymentConfig: {}, workspaceRoot: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
-    assert.deepEqual(resumed.session.getActiveToolNames().sort(), ["find", "grep", "ls", "read", "sandbox"]);
+    assert.deepEqual(resumed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     await resumed.prompt("Continue after reopening");
     await resumed.stop();
     const replay = sessionTranscript(SessionManager.open(persisted), "issue");

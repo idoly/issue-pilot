@@ -2,6 +2,7 @@ import { Button, Modal, Skeleton } from "../ui";
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 
 import { Copy, Download, Paperclip, ZoomIn, ZoomOut } from "../ui/icons";
+import { copyText as copyToClipboard } from "../ui/clipboard";
 import { ExcelPreview } from "./ExcelPreview";
 import { attachmentUrl, fetchAttachment, type IssueDetail } from "../data/client";
 
@@ -14,16 +15,6 @@ function attachmentPreviewKind(attachment: IssueAttachment): AttachmentPreviewKi
   if (attachment.mediaType === "application/pdf") return "pdf";
   if (attachment.mediaType.startsWith("text/") || ["application/json", "application/xml", "application/yaml", "application/x-yaml"].includes(attachment.mediaType) || /\.(txt|log|md|csv|json|xml|ya?ml|properties)$/i.test(attachment.fileName)) return "text";
   return "unsupported";
-}
-
-function readBlobText(blob: Blob): Promise<string> {
-  if (typeof blob.text === "function") return blob.text();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(typeof reader.result === "string" ? reader.result : ""));
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("attachment_preview_failed")));
-    reader.readAsText(blob);
-  });
 }
 
 export function AttachmentPreview(props: { issueKey: string; attachment: IssueAttachment | null; onClose: () => void }) {
@@ -64,7 +55,7 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
         if (sequence !== requestSequence) return;
         if (attachmentPreviewKind(attachment) === "excel") { setExcelBlob(blob); return; }
         if (attachmentPreviewKind(attachment) === "text") {
-          const content = await readBlobText(blob);
+          const content = await blob.text();
           if (sequence === requestSequence) setText(content);
         } else {
           setObjectUrl(URL.createObjectURL(blob));
@@ -125,7 +116,7 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
   };
   const copyText = async () => {
     try {
-      await navigator.clipboard.writeText(text());
+      await copyToClipboard(text());
       setCopied(true);
     } catch {
       setError("clipboard_write_failed");

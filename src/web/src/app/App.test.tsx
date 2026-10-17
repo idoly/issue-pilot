@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
+  const { Blob } = await import("node:buffer");
   const { issuePilotConfig } = await import("../../../../issue-pilot.config.ts");
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
@@ -67,6 +68,7 @@ vi.mock("../data/client", async (importOriginal) => {
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
     })),
     loadApplicationEndpoints: vi.fn(async () => ({ endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: true, tools: [{ name: "issue_get", description: "Read Issue details", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { key: { type: "string", description: "Issue key" } }, required: ["key"] } }] }] })),
+    importMcpServices: vi.fn(async () => []),
     loadMcpServices: vi.fn(async () => []),
     createMcpService: vi.fn(async (input) => ({ id: "mcp-1", name: input.name, url: input.url, transport: input.transport, enabled: input.enabled, credentialConfigured: input.credentialUpdate.mode === "replace" })),
     updateMcpService: vi.fn(async () => ({ id: "mcp-1", name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialConfigured: false })),
@@ -121,7 +123,7 @@ vi.mock("../data/client", async (importOriginal) => {
       : sourceRepository === "srm-server"
         ? { path: "", entries: [{ name: "pom.xml", path: "pom.xml", type: "file" as const, size: 24 }], truncated: false }
         : { path: "", entries: [{ name: "src", path: "src", type: "directory" as const, size: null }, { name: "README.md", path: "README.md", type: "file" as const, size: 24 }], truncated: false }),
-    loadSourceFile: vi.fn(async (_id: string, _repository: string, sourcePath: string) => ({ path: sourcePath, content: sourcePath === "README.md" ? "# SRM source\n" : "export const ready = true;\n", size: 24 })),
+    loadSourceFile: vi.fn(async (_id: string, _repository: string, sourcePath: string) => ({ path: sourcePath, content: sourcePath === "README.md" ? "# SRM source\n" : "export const ready = true;\n", size: 24, sha256: "a".repeat(64) })),
     searchSource: vi.fn(async () => ({ matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false })),
     loadSourceHistory: vi.fn(async () => ({ commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Fixture User", date: now, subject: "Fix source browser" }], truncated: false })),
     loadSourceCommit: vi.fn(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
@@ -391,6 +393,28 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "收起描述" }).getAttribute("aria-expanded")).toBe("true"));
   });
 
+  test("keeps an unsaved code draft when navigation or identity changes are declined", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(() => <App initialView="issues" />);
+    fireEvent.click(await screen.findByRole("button", { name: "浏览工单代码" }));
+    const browser = await screen.findByRole("region", { name: "ISSUE-20260810-042 代码浏览器" });
+    fireEvent.click(await within(browser).findByRole("button", { name: /README\.md/ }));
+    const editor = await within(browser).findByLabelText("代码内容 README.md") as HTMLTextAreaElement;
+    await fireEvent.input(editor, { target: { value: "keep unsaved code" } });
+    await screen.findByText(/README.md · 未保存/);
+    fireEvent.click(screen.getByRole("radio", { name: "配置" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("radio", { name: "工单" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByLabelText("当前用户"));
+    fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test");
+    fireEvent.click(within(browser).getByRole("button", { name: "关闭代码浏览器" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(3));
+    expect(editor.value).toBe("keep unsaved code");
+    expect(browser.isConnected).toBe(true);
+  });
+
   test("renders issues and data-backed statistics, then opens configuration", async () => {
     const consoleWarning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     render(() => <App initialView="issues" />);
@@ -430,18 +454,16 @@ describe("issue pilot workspace", () => {
     expect(issueWorkspace.classList.contains("source-detail-panel")).toBe(true);
     expect(agentRegion.hidden).toBe(false);
     expect(issueQueue.isConnected && issueWorkspace.isConnected && agentRegion.isConnected).toBe(true);
-    expect(document.querySelector(".app-content")?.classList.contains("workbench-ready")).toBe(false);
-    expect(within(sourceBrowser).getByRole("status", { name: "代码工作台加载中" })).toBeTruthy();
-    const workbench = within(sourceBrowser).getByTitle("ISSUE-20260810-042 VS Code工作台") as HTMLIFrameElement;
-    expect(workbench.src).toContain("/vscode.html?issue=ISSUE-20260810-042");
-    expect(workbench.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+    expect(sourceBrowser.querySelector("iframe")).toBeNull();
+    fireEvent.click(await within(sourceBrowser).findByRole("button", { name: /README.md/ }));
+    expect(await within(sourceBrowser).findByLabelText("代码内容 README.md")).toHaveProperty("value", "# SRM source\n");
     const viewToolbar = within(sourceBrowser).getByRole("toolbar", { name: "代码视图" });
-    expect(within(viewToolbar).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Explorer", "Search", "Source Control"]);
-    const searchToggle = within(viewToolbar).getByRole("button", { name: "Search" });
+    expect(within(viewToolbar).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["文件", "搜索", "变更"]);
+    const searchToggle = within(viewToolbar).getByRole("button", { name: "搜索" });
     fireEvent.click(searchToggle);
     await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("true"));
-    expect(within(viewToolbar).getByRole("button", { name: "Explorer" }).getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(searchToggle);
+    expect(within(viewToolbar).getByRole("button", { name: "文件" }).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(within(viewToolbar).getByRole("button", { name: "文件" }));
     await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("false"));
     fireEvent.click(searchToggle);
     await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("true"));
@@ -462,34 +484,6 @@ describe("issue pilot workspace", () => {
     fireEvent.click(detailsToggle);
     await waitFor(() => expect(detailsToggle.getAttribute("aria-pressed")).toBe("true"));
     expect(issueWorkspace.classList.contains("details-open")).toBe(true);
-    Object.defineProperties(workbench, {
-      clientWidth: { configurable: true, value: 1360 },
-      clientHeight: { configurable: true, value: 820 },
-    });
-    window.dispatchEvent(new MessageEvent("message", {
-      origin: window.location.origin,
-      source: workbench.contentWindow,
-      data: { kind: "issue-pilot-workbench-ready", issueKey: "ISSUE-20260810-042" },
-    }));
-    await waitFor(() => expect(within(sourceBrowser).queryByRole("status", { name: "代码工作台加载中" })).toBeNull());
-    window.dispatchEvent(new MessageEvent("message", {
-      origin: window.location.origin,
-      source: workbench.contentWindow,
-      data: {
-        kind: "issue-pilot-workbench-layout",
-        issueKey: "ISSUE-20260810-042",
-        panel: { x: 300, y: 520, width: 700, height: 300 },
-        auxiliary: { x: 1000, y: 0, width: 360, height: 820 },
-        theme: {
-          background: "#181818", foreground: "#cccccc", mutedForeground: "#999999", border: "#2b2b2b",
-          inputBackground: "#242424", inputForeground: "#f0f0f0", inputBorder: "#3c3c3c", focusBorder: "#007fd4",
-          buttonBackground: "#0e639c", buttonForeground: "#ffffff", buttonHoverBackground: "#1177bb", hoverBackground: "#2a2d2e",
-        },
-      },
-    }));
-    await waitFor(() => expect((document.querySelector(".app-content") as HTMLElement).style.getPropertyValue("--source-panel-x")).toBe("300px"));
-    expect((document.querySelector(".app-content") as HTMLElement).style.getPropertyValue("--workbench-input-bg")).toBe("#242424");
-    expect(document.querySelector(".app-content")?.classList.contains("workbench-ready")).toBe(true);
     fireEvent.click(within(sourceBrowser).getByRole("button", { name: "关闭代码浏览器" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "ISSUE-20260810-042 代码浏览器" })).toBeNull());
     expect(screen.getByLabelText("工单队列")).toBe(issueQueue);
@@ -586,8 +580,8 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(developmentEditor).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "浏览工单代码" }));
     const developmentSource = await waitFor(() => screen.getByRole("region", { name: "ISSUE-20260810-041 代码浏览器" }));
-    expect((within(developmentSource).getByTitle("ISSUE-20260810-041 VS Code工作台") as HTMLIFrameElement).src).toContain("view=source-control");
-    expect(within(developmentSource).getByRole("button", { name: "Source Control" }).getAttribute("aria-pressed")).toBe("true");
+    expect(developmentSource.querySelector("iframe")).toBeNull();
+    expect(within(developmentSource).getByRole("button", { name: "变更" }).getAttribute("aria-pressed")).toBe("true");
     expect(within(developmentSource).getByRole("button", { name: "Agent面板" }).getAttribute("aria-pressed")).toBe("true");
     expect(within(developmentSource).getByRole("button", { name: "工单详情" }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(within(developmentSource).getByRole("button", { name: "关闭代码浏览器" }));
@@ -874,6 +868,43 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.createMcpService).toHaveBeenCalledWith({ name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialUpdate: { mode: "replace", values: { authorization: "Bearer secret-token" } } }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("adds a stdio MCP process with private launch configuration", async () => {
+    const client = await import("../data/client"); vi.mocked(client.createMcpService).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
+    fireEvent.click(await screen.findByRole("button", { name: "添加能力" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加能力" });
+    fireEvent.input(within(dialog).getByLabelText("能力名称"), { target: { value: "Local" } });
+    fireEvent.click(within(dialog).getByLabelText("MCP 协议"));
+    fireEvent.click(await screen.findByRole("option", { name: "stdio（本地进程）" }));
+    const config = { command: "npx", args: ["@playwright/mcp@latest"], env: { TOKEN: "private-token" } };
+    fireEvent.input(await within(dialog).findByLabelText("MCP 进程配置"), { target: { value: JSON.stringify(config) } });
+    expect(within(dialog).queryByLabelText("能力地址")).toBeNull();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.createMcpService).toHaveBeenCalledWith({ name: "Local", url: "", transport: "stdio", enabled: false, credentialUpdate: { mode: "replace", values: { stdio: config } } }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("imports mcpServers JSON and reports malformed input without echoing secrets", async () => {
+    const client = await import("../data/client"); vi.mocked(client.importMcpServices).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
+    fireEvent.click(await screen.findByRole("button", { name: "导入 mcpServers" }));
+    const dialog = await screen.findByRole("dialog", { name: "导入 mcpServers" });
+    const field = within(dialog).getByLabelText("mcpServers JSON");
+    await fireEvent.input(field, { target: { value: '{"TOKEN":"private-import-token"' } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^导入$/ }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe("请输入有效的 JSON");
+    expect(client.importMcpServices).not.toHaveBeenCalled();
+    const value = { mcpServers: { playwright: { command: "npx", args: ["@playwright/mcp@latest"] } } };
+    await fireEvent.input(field, { target: { value: JSON.stringify(value) } });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /^导入$/ })).toHaveProperty("disabled", false));
+    fireEvent.click(within(dialog).getByRole("button", { name: /^导入$/ }));
+    await waitFor(() => expect(client.importMcpServices).toHaveBeenCalledWith(value));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 

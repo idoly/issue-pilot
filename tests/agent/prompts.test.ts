@@ -11,6 +11,9 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     for (const principle of ["Think Before Coding", "Simplicity First", "Surgical Changes", "Goal-Driven Execution"]) assert.ok(prompt.includes(principle));
     assert.equal(prompt.match(/# Karpathy Guidelines/g)?.length, 1);
     assert.match(prompt, /tool availability and tool validation as hard authorization boundaries/);
+    assert.match(prompt, /native read\/bash\/edit\/write\/grep\/find\/ls/);
+    assert.match(prompt, /not an operating-system isolation boundary/);
+    assert.doesNotMatch(prompt, /sandbox operation|output\.spreadsheet|sandbox export_output/);
     if (mode !== "development") assert.match(prompt, /All repository workspaces are read-only/);
   }
 });

@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import Fastify from "fastify";
+import { eq } from "drizzle-orm";
+import { openDatabase } from "../../src/db/client.ts";
+import { subjects } from "../../src/db/schema.ts";
+import { ApiError } from "../../src/http/input.ts";
+import { registerUserRoutes } from "../../src/http/user-routes.ts";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { createApiFixture, createService, issuePayload, json } from "./fixture.ts";
@@ -79,6 +85,41 @@ test("manages active users in SQLite without rewriting historical identities", a
     assert.equal(lastActive.statusCode, 409);
     assert.equal((await json(lastActive)).error, "last_active_user");
   } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("rejects a user change when the actor loses the developer role while queued", { timeout: 10_000 }, async () => {
+  const fixture = await createApiFixture();
+  const database = openDatabase(fixture.databaseFile);
+  const app = Fastify();
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const waiting = new Promise<void>((resolve) => { entered = resolve; });
+  registerUserRoutes({ app, database, engine: fixture.engine, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
+  try {
+    await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });
+    await createService(fixture.app, "Queued auth");
+    const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: bootstrapHeaders, payload: { ...issuePayload("queued-auth"), assigneeSubject: "other-developer" } });
+    assert.equal(created.statusCode, 201, created.body);
+    fixture.engine.running.clear();
+    const response = app.inject({ method: "PATCH", url: "/api/users/other-developer", headers: bootstrapHeaders, payload: { name: "Changed", email: "other@example.test", active: true } }).then(result => result);
+    await waiting;
+    // Simulate the earlier scope operation committing a role change before this request acquires it.
+    await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, issuePilotConfig.bootstrapUser.subject));
+    release();
+    const result = await response;
+    assert.equal(result.statusCode, 403, result.body);
+    assert.deepEqual(JSON.parse(result.body), { error: "developer_role_required" });
+    assert.deepEqual(fixture.engine.closedSessions, []);
+    const [target] = await database.db.select().from(subjects).where(eq(subjects.subject, "other-developer"));
+    assert.equal(target?.displayName, "Other");
+  } finally {
+    release();
+    await app.close();
+    database.close();
     await fixture.cleanup();
   }
 });

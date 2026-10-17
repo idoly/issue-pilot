@@ -2,7 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TSchema } from "typebox";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import type { CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
 
 const defaults = issuePilotConfig.defaults;
 const limits = issuePilotConfig.limits.capability;
@@ -262,8 +262,4 @@ export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, 
 
 export function parseCapabilityConfiguration<Key extends CapabilityName>(key: Key, value: unknown): CapabilityConfig<Key> {
   return capabilityDefinitions[key].parseConfiguration(value);
-}
-
-export function storedCapabilitySections(input: CapabilityConfiguration): CapabilityConfiguration {
-  return Object.fromEntries(CAPABILITY_KEYS.flatMap((key) => input[key] ? [[key, input[key]]] : [])) as CapabilityConfiguration;
 }

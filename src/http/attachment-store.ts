@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -29,7 +29,7 @@ export async function readMultipartAttachment(part: MultipartFile): Promise<Pend
   try {
     for await (const chunk of part.file) {
       const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      await handle.write(content);
+      await handle.writeFile(content);
       sha256.update(content);
       size += content.length;
     }
@@ -50,7 +50,7 @@ export async function removePendingAttachments(pendingAttachments: PendingAttach
 
 export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
   const attachmentPath = path.resolve(objectKey);
-  const metadata = await stat(attachmentPath).catch(() => undefined);
+  const metadata = await lstat(attachmentPath).catch(() => undefined);
   if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
   return attachmentPath;
 }

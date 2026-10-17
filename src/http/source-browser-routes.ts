@@ -1,13 +1,10 @@
 import type { FastifyRequest } from "fastify";
-import { eq } from "drizzle-orm";
-
-import { subjects } from "../db/schema.ts";
 import { ApiError } from "./input.ts";
-import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 const notFoundErrors = new Set(["source_repository_not_found", "source_path_not_found", "source_commit_not_found", "source_commit_file_not_found", "source_diff_file_not_found"]);
 const conflictErrors = new Set(["source_browser_unavailable", "source_repository_state_invalid", "source_runtime_invalid", "source_read_only", "source_file_changed", "source_path_exists", "source_stage_failed", "source_unstage_failed", "source_discard_failed", "source_commit_failed"]);
-const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_revision", "invalid_source_line", "invalid_source_hash", "invalid_source_commit_message", "invalid_source_commit_author", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
+const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_history_cursor", "invalid_source_revision", "invalid_source_line", "invalid_source_hash", "invalid_source_commit_message", "invalid_source_commit_author", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
 const contentErrors = new Set(["source_file_binary", "source_commit_too_large", "source_diff_too_large"]);
 const unrestrictedBodyLimit = Number.MAX_SAFE_INTEGER;
 
@@ -42,13 +39,21 @@ type SourceRequest = FastifyRequest<{ Params: { key: string } }>;
 type GitRequest = FastifyRequest<{ Params: { key: string }; Body: { paths?: unknown } }>;
 type Issue = Awaited<ReturnType<typeof requireIssue>>;
 
-export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
+export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "sourceBrowser">): void {
   const { app, database, engine, sourceBrowser } = context;
-  const register = (resource: string, operation: (issue: Issue, request: SourceRequest) => Promise<unknown>) => {
+  const register = (resource: string, operation: (issue: Issue, request: SourceRequest, signal: AbortSignal) => Promise<unknown>) => {
     app.get<{ Params: { key: string } }>(`/api/issues/:key/source/${resource}`, { logLevel: "silent" }, async (request, reply) => {
       reply.header("Cache-Control", "private, no-store");
-      const issue = await requireIssue(database, request.params.key);
-      return sourceOperation(() => operation(issue, request));
+      const controller = new AbortController();
+      const closed = () => { if (!reply.raw.writableEnded) controller.abort(); };
+      reply.raw.once("close", closed);
+      try {
+        const issue = await requireIssue(database, request.params.key);
+        return await sourceOperation(() => operation(issue, request, controller.signal));
+      } catch (error) {
+        if (controller.signal.aborted) { reply.hijack(); return; }
+        throw error;
+      } finally { reply.raw.off("close", closed); }
     });
   };
   const repository = (request: SourceRequest) => headerValue(request.headers["x-issue-pilot-repository"], true);
@@ -99,20 +104,25 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
     ["discard", (issue: Issue, request: GitRequest) => sourceBrowser.discard(issue, repository(request), gitPaths(request))],
   ] as const) app.post<{ Params: { key: string }; Body: { paths?: unknown } }>(`/api/issues/:key/source/${action}`, { logLevel: "silent" }, (request) => mutate(request, (issue) => operation(issue, request)));
   app.post<{ Params: { key: string }; Body: { message?: unknown } }>("/api/issues/:key/source/commit", { logLevel: "silent" }, async (request) => {
-    const subject = await ensureCurrentSubject(database, request);
-    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (!person) throw new ApiError(400, "invalid_current_subject");
+    const person = await requireCurrentUser(database, request);
     return mutate(request, (issue) => sourceBrowser.createCommit(issue, repository(request), typeof request.body?.message === "string" ? request.body.message : "", {
       name: person.displayName ?? person.subject,
       email: person.email ?? `${person.subject}@localhost`,
     }));
   });
-  register("search", (issue, request) => sourceBrowser.search(issue, repository(request), headerValue(request.headers["x-issue-pilot-query"], true), {
+  register("search", (issue, request, signal) => sourceBrowser.search(issue, repository(request), headerValue(request.headers["x-issue-pilot-query"], true), {
+    signal,
     caseSensitive: booleanHeader(request.headers["x-issue-pilot-case-sensitive"], true),
     wordMatch: booleanHeader(request.headers["x-issue-pilot-word-match"], false),
   }));
   register("blame", (issue, request) => sourceBrowser.blame(issue, repository(request), relativePath(request, true), line(request)));
-  register("history", (issue, request) => sourceBrowser.history(issue, repository(request), relativePath(request)));
+  const historyCursor = (request: SourceRequest) => {
+    const revision = headerValue(request.headers["x-issue-pilot-revision"]), offset = headerValue(request.headers["x-issue-pilot-offset"]);
+    if (!revision && !offset) return undefined;
+    if (!/^[1-9][0-9]*$/.test(offset)) throw new ApiError(400, "invalid_source_history_cursor");
+    return { revision, offset: Number(offset) };
+  };
+  register("history", (issue, request, signal) => sourceBrowser.history(issue, repository(request), relativePath(request), historyCursor(request), signal));
   register("commit", (issue, request) => sourceBrowser.commit(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request)));
   register("commit-file", (issue, request) => sourceBrowser.commitFile(issue, repository(request), headerValue(request.headers["x-issue-pilot-revision"], true), relativePath(request, true)));
   register("diff", (issue, request) => sourceBrowser.diff(issue, repository(request), relativePath(request), booleanHeader(request.headers["x-issue-pilot-staged"], false)));

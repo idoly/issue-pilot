@@ -1,5 +1,5 @@
 import { Segmented, Select, Skeleton } from "../ui";
-import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, Show, Switch } from "solid-js";
+import { createEffect, createSignal, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
 import { AgentPanel } from "./AgentPanel";
@@ -8,8 +8,7 @@ import { SettingsView } from "./SettingsView";
 import { OverviewView } from "./OverviewView";
 import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
-import type { WorkbenchPartLayout } from "./CodeBrowser";
-
+import type { SourcePanel } from "./CodeBrowser";
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
 type AppView = "dashboard" | "issues" | "configuration";
@@ -19,16 +18,16 @@ const viewOptions: Array<{ value: AppView; label: string }> = [
   { value: "configuration", label: "配置" },
 ];
 
-function AgentWorkbench(props: { issue: IssueDetail; sourceAgentOpen: boolean; sourceExpanded: boolean; sourceDetailsOpen: boolean; onCloseSource: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onRefresh: (issueKey: string) => Promise<IssueDetail>; onToggleAgent: () => void; onToggleDetails: () => void }) {
+function AgentWorkspace(props: { issue: IssueDetail; sourceAgentOpen: boolean; sourceExpanded: boolean; sourceDetailsOpen: boolean; onCloseSource: () => void; onRefresh: (issueKey: string) => Promise<IssueDetail>; onToggleAgent: () => void; onToggleDetails: () => void; onDirtyChange: (dirty: boolean) => void; onResize: (panel: SourcePanel, size: number) => void }) {
   return (
-    <section class={`agent-workbench${props.sourceExpanded ? " source-open" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
+    <section class={`agent-workspace${props.sourceExpanded ? " source-open" : ""}${props.sourceExpanded && !props.sourceAgentOpen ? " agent-closed" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
       <AgentPanel issue={props.issue} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} />
-      <Show when={props.sourceExpanded}><CodeBrowser issueKey={props.issue.id} repositoryVersion={props.issue.repositories.map((repository) => `${repository.name}:${repository.url}`).join("|")} development={props.issue.environmentKey === "dev"} agentOpen={props.sourceAgentOpen} detailsOpen={props.sourceDetailsOpen} onClose={props.onCloseSource} onLayout={props.onLayout} onPartVisibility={props.onPartVisibility} onToggleAgent={props.onToggleAgent} onToggleDetails={props.onToggleDetails} /></Show>
+      <Show when={props.sourceExpanded}><CodeBrowser issueKey={props.issue.id} repositoryVersion={JSON.stringify([props.issue.environmentKey, props.issue.status, props.issue.workspace.status, props.issue.workspace.sourceAvailable, props.issue.repositories])} contentVersion={props.issue.updatedAt} development={props.issue.environmentKey === "dev"} agentOpen={props.sourceAgentOpen} detailsOpen={props.sourceDetailsOpen} onClose={props.onCloseSource} onToggleAgent={props.onToggleAgent} onToggleDetails={props.onToggleDetails} onDirtyChange={props.onDirtyChange} onResize={props.onResize} /></Show>
     </section>
   );
 }
 
-function CurrentUserIdentity() {
+function CurrentUserIdentity(props: { mayChange: () => boolean }) {
   const { currentUser, selectCurrentUser, people } = useApplicationResources();
   const name = () => currentUser()?.name || currentUser()?.subject || "本地用户";
   return (
@@ -36,12 +35,11 @@ function CurrentUserIdentity() {
       <span>{name().slice(0, 1)}</span>
       <Select
         aria-label="当前用户"
-        size="small"
         value={currentUser()?.subject}
         options={people().map((user) => ({ value: user.subject, label: `${user.name} · ${user.email}` }))}
         labelRender={(selected) => people().find((user) => user.subject === selected.value)?.email ?? selected.label}
         popupMatchSelectWidth={320}
-        onChange={(subject) => { if (typeof subject === "string") selectCurrentUser(subject); }}
+        onChange={(subject) => { if (typeof subject === "string" && subject !== currentUser()?.subject && props.mayChange()) selectCurrentUser(subject); }}
       />
     </div>
   );
@@ -80,7 +78,9 @@ export function App(props: { initialView?: AppView } = {}) {
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDetailsOpen, setSourceDetailsOpen] = createSignal(true, { ownedWrite: true });
-  const [workbenchLayout, setWorkbenchLayout] = createSignal<WorkbenchPartLayout | null>(null, { ownedWrite: true });
+  const [sourceDirty, setSourceDirty] = createSignal(false, { ownedWrite: true });
+  const [sourceSizes, setSourceSizes] = createSignal<Partial<Record<SourcePanel, number>>>({}, { ownedWrite: true });
+  const mayNavigate = () => !sourceExpanded() || !sourceDirty() || window.confirm("文件有未保存修改，是否放弃这些修改？");
   let issueWorkspace: HTMLElement | undefined;
   let selectionGeneration = 0;
   const issueRefreshes = new Map<string, number>();
@@ -89,7 +89,7 @@ export function App(props: { initialView?: AppView } = {}) {
     (id) => {
       const currentGeneration = ++selectionGeneration;
       setSourceExpanded(false);
-      setWorkbenchLayout(null);
+      setSourceDirty(false);
       if (!id) {
         setIssue(null);
         setLoading(false);
@@ -128,32 +128,6 @@ export function App(props: { initialView?: AppView } = {}) {
     }
     return refreshed;
   };
-  const sourceLayoutStyle = createMemo(() => {
-    const layout = workbenchLayout();
-    if (!sourceExpanded() || !layout) return undefined;
-    return [
-      `--source-panel-x:${layout.panel.x}px`,
-      `--source-panel-y:${layout.panel.y}px`,
-      `--source-panel-width:${layout.panel.width}px`,
-      `--source-panel-height:${layout.panel.height}px`,
-      `--source-detail-x:${layout.auxiliary.x}px`,
-      `--source-detail-y:${layout.auxiliary.y}px`,
-      `--source-detail-width:${layout.auxiliary.width}px`,
-      `--source-detail-height:${layout.auxiliary.height}px`,
-      `--workbench-detail-bg:${layout.theme.background}`,
-      `--workbench-detail-fg:${layout.theme.foreground}`,
-      `--workbench-detail-muted:${layout.theme.mutedForeground}`,
-      `--workbench-detail-border:${layout.theme.border}`,
-      `--workbench-input-bg:${layout.theme.inputBackground}`,
-      `--workbench-input-fg:${layout.theme.inputForeground}`,
-      `--workbench-input-border:${layout.theme.inputBorder}`,
-      `--workbench-focus-border:${layout.theme.focusBorder}`,
-      `--workbench-button-bg:${layout.theme.buttonBackground}`,
-      `--workbench-button-fg:${layout.theme.buttonForeground}`,
-      `--workbench-button-hover-bg:${layout.theme.buttonHoverBackground}`,
-      `--workbench-hover-bg:${layout.theme.hoverBackground}`,
-    ].join(";");
-  });
   return (
       <ApplicationResourcesProvider>
       <div class="app-shell">
@@ -162,15 +136,14 @@ export function App(props: { initialView?: AppView } = {}) {
           <div class="header-context">
             <Segmented
               aria-label="工作台视图"
-              size="small"
               value={view()}
               options={viewOptions}
-              onChange={(value) => setView(value as AppView)}
+              onChange={(value) => { if (value !== view() && mayNavigate()) { setSourceDirty(false); setView(value as AppView); } }}
             />
           </div>
-          <CurrentUserIdentity />
+          <CurrentUserIdentity mayChange={() => { if (!mayNavigate()) return false; setSourceExpanded(false); setSourceDirty(false); return true; }} />
         </header>
-        <div class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
+        <div class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${sourceDetailsOpen() ? "" : " details-hidden"}` : ""}`} style={{ "--source-navigation-user-width": sourceSizes().navigation === undefined ? undefined : `${sourceSizes().navigation}px`, "--source-details-user-width": sourceSizes().details === undefined ? undefined : `${sourceSizes().details}px`, "--source-agent-user-height": sourceSizes().agent === undefined ? undefined : `${sourceSizes().agent}px` }}>
           <Switch>
             <Match when={view() === "dashboard"}><ResourceBackedOverview onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setDashboardTarget(issueKey); setSelectedId(issueKey); setView("issues"); }} /></Match>
             <Match when={view() === "issues"}>
@@ -179,14 +152,14 @@ export function App(props: { initialView?: AppView } = {}) {
                 <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                   {(current) => (
                     <>
-                      <AgentWorkbench issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => setSourceExpanded(false)} onLayout={setWorkbenchLayout} onPartVisibility={(agentOpen, detailsOpen) => { setSourceAgentOpen(agentOpen); if (detailsOpen !== undefined) setSourceDetailsOpen(detailsOpen); }} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
+                      <AgentWorkspace issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => { setSourceExpanded(false); setSourceDirty(false); }} onDirtyChange={setSourceDirty} onResize={(panel, size) => setSourceSizes(current => ({ ...current, [panel]: size }))} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
                       <IssueWorkspace issue={current()} elementRef={(element) => { issueWorkspace = element; }} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => {
-                        setWorkbenchLayout(null);
                         setSourceAgentOpen(true);
-                        setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 600px)").matches);
+                        setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 699px)").matches);
                         setSourceExpanded(true);
                       }} onUpdated={async () => { await refreshIssue(current().id, true); }} onCreatedFollowUp={(issueKey) => {
                         setIssueRefreshToken((value) => value + 1);
+                        if (!mayNavigate()) return;
                         setKeepExternalSelection(false);
                         setSelectedId(issueKey);
                       }} />

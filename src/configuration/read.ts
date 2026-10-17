@@ -6,7 +6,7 @@ import type { Database } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
-import type { AgentModelCatalog } from "../pi/models.ts";
+import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
 import { deploymentContext } from "./service-context.ts";
 import { projectDeploymentConfiguration, resolveDeploymentConfiguration } from "./credentials.ts";

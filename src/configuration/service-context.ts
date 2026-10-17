@@ -42,7 +42,7 @@ export function deploymentContext(environment: { key: string; name: string }, co
     const v = value.sls;
     sections.push(section("SLS", [["Region", v.region], ["Project", v.project], ["Logstore", v.logstores]]));
   }
-  for (const row of mcp.filter(row => value.mcpServices?.includes(row.id))) sections.push(section("MCP", [["名称", row.name], ["地址", row.url], ["协议", row.transport === "streamable_http" ? "Streamable HTTP" : "SSE"], ["状态", row.enabled ? "开启" : "关闭"], ["Authorization", mcpCredentials.find(secret => secret.id === row.id)?.authorization]]));
+  for (const row of mcp.filter(row => value.mcpServices?.includes(row.id))) sections.push(section("MCP", [["名称", row.name], ["地址", row.url], ["协议", row.transport === "stdio" ? "stdio（本地进程）" : row.transport === "streamable_http" ? "Streamable HTTP" : "SSE"], ["状态", row.enabled ? "开启" : "关闭"], ["Authorization", mcpCredentials.find(secret => secret.id === row.id)?.authorization]]));
   if (sections.length === 1) sections.push("未配置外部查询能力。");
   return sections.join("\n\n");
 }

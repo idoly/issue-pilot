@@ -1,9 +1,9 @@
+import path from "node:path";
 import { writeFile } from "node:fs/promises";
 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
-  createCodemodeExtension,
   createBashToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
@@ -17,19 +17,12 @@ import {
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { DeploymentConfig } from "../domain/contracts.ts";
-import type { SpreadsheetAttachment } from "../outputs/spreadsheet.ts";
-import { createMcpToolBindings, type McpConfiguration, type McpToolBinding } from "../mcp/client.ts";
+import { createMcpConnectionPool, createMcpToolBindings, type McpConfiguration, type McpToolBinding } from "../mcp/client.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
-import { createPiModelRuntime, type PiModelRuntime } from "../pi/models.ts";
-import { createCapabilityTools, type ServiceToolScope, type ServiceMcpToolScope } from "../pi/tools.ts";
+import { createPiModelRuntime, type PiModelRuntime } from "./model-runtime.ts";
+import { createCapabilityTools, type ServiceToolScope, type ServiceMcpToolScope } from "./service-query-tool.ts";
 import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
-import { createDocumentReadTool } from "./document-read-tool.ts";
-import { SandboxToolSession } from "./sandbox-tool.ts";
-import { PodmanSandbox, type SandboxFactory } from "../sandbox/runtime.ts";
 import { createOutputTool } from "./output-tool.ts";
-
-const isWindows = process.platform === "win32";
-const pathSeparator = isWindows ? ";" : ":";
 
 export interface GitCommitIdentity {
   name: string;
@@ -49,9 +42,7 @@ export interface StartPiSessionOptions {
   workspaceTool?: ToolDefinition<any, any, any>;
   mcpScopes?: Array<{ environmentKey: string; serviceKey: string; serviceName: string; configurations: McpConfiguration[] }>;
   outputStore?: IssueOutputStore;
-  spreadsheetAttachments?: { attachmentRoot: string; attachments: SpreadsheetAttachment[] };
   systemPrompt: string;
-  codemode?: boolean;
   modelResponseIdleMs?: number;
   onEvent: (event: JsonAgentSessionEvent) => void;
 }
@@ -154,15 +145,13 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
   };
 }
 
-function sessionTools(context: AgentSessionContext, deploymentConfig: DeploymentConfig, workspaceRoot: string, gitIdentity: () => GitCommitIdentity | undefined, outputStore?: IssueOutputStore, executableRoot?: string, gitEnvironment?: Record<string, string>, spreadsheetAttachments?: StartPiSessionOptions["spreadsheetAttachments"], serviceScopes?: ServiceToolScope[], mcpScopes?: ServiceMcpToolScope[]): ToolDefinition<any, any, any>[] {
+function sessionTools(options: StartPiSessionOptions, gitIdentity: () => GitCommitIdentity | undefined, mcpScopes: ServiceMcpToolScope[]): ToolDefinition<any, any, any>[] {
+  const { context, deploymentConfig, workspaceRoot, outputStore, executableRoot, gitEnvironment, serviceScopes } = options;
   const tools = createCapabilityTools(context, deploymentConfig, { outputStore, serviceScopes, mcpScopes });
-  tools.unshift(createDocumentReadTool(workspaceRoot));
   if (context.canWriteOutputs) {
     if (!outputStore) throw new Error("issue_output_store_required");
-    tools.unshift(createOutputTool(outputStore, spreadsheetAttachments));
+    tools.unshift(createOutputTool(outputStore, workspaceRoot));
   }
-  if (!sessionToolAllowlist(context).includes("bash")) return tools;
-  if (!executableRoot) throw new Error("project_wrapper_root_required");
   tools.unshift(createBashToolDefinition(workspaceRoot, {
     spawnHook: (context) => ({
       ...context,
@@ -170,7 +159,8 @@ function sessionTools(context: AgentSessionContext, deploymentConfig: Deployment
         ...context.env,
         AI_AGENT: "pi",
         PI_CODING_AGENT: "true",
-        PATH: `${executableRoot}${pathSeparator}${context.env.PATH ?? ""}`,
+        NODE_PATH: [path.resolve(import.meta.dirname, "../../node_modules"), context.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+        ...(executableRoot ? { PATH: `${executableRoot}${path.delimiter}${context.env.PATH ?? ""}` } : {}),
         ...gitEnvironment,
         ...gitIdentityEnvironment(gitIdentity()),
       },
@@ -200,17 +190,14 @@ async function abortAndDispose(session: AgentSession): Promise<void> {
 export class PiSessionRuntime {
   readonly #modelRuntime: PiModelRuntime;
   readonly #ownsModelRuntime: boolean;
-  readonly #sandboxFactory: SandboxFactory | undefined;
 
-  constructor(modelRuntime?: PiModelRuntime, sandboxFactory?: SandboxFactory) {
+  constructor(modelRuntime?: PiModelRuntime) {
     this.#modelRuntime = modelRuntime ?? createPiModelRuntime();
     this.#ownsModelRuntime = modelRuntime === undefined;
-    this.#sandboxFactory = sandboxFactory;
   }
 
   async close(): Promise<void> {
-    try { if (this.#ownsModelRuntime) await this.#modelRuntime.close(); }
-    finally { await PodmanSandbox.cleanupPending(); }
+    if (this.#ownsModelRuntime) await this.#modelRuntime.close();
   }
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
@@ -238,13 +225,11 @@ export class PiSessionRuntime {
       steeringMode: "one-at-a-time",
       followUpMode: "one-at-a-time",
     });
-    const codemode = options.codemode ?? issuePilotConfig.runtime.agent.codemode;
     const resourceLoader = new DefaultResourceLoader({
       cwd: workspaceRoot,
       agentDir: getAgentDir(),
       settingsManager,
       noExtensions: true,
-      extensionFactories: codemode ? [createCodemodeExtension({ mode: "on", models: false })] : [],
       noSkills: true,
       noPromptTemplates: true,
       noThemes: true,
@@ -254,74 +239,67 @@ export class PiSessionRuntime {
     });
     await resourceLoader.reload();
 
-    const discovered = new Map<string, Promise<McpToolBinding[]>>();
-    const mcpScopes = await Promise.all((options.mcpScopes ?? []).map(async scope => ({
-      environmentKey: scope.environmentKey, serviceKey: scope.serviceKey, serviceName: scope.serviceName,
-      tools: (await Promise.all(scope.configurations.map(configuration => {
-        const writable = context.canModifyCode && scope.environmentKey === "dev";
-        const key = `${configuration.id}:${writable}`;
-        if (!discovered.has(key)) discovered.set(key, createMcpToolBindings([configuration], writable));
-        return discovered.get(key)!;
-      }))).flat(),
-    })));
-    const expectedTools = [...(codemode ? ["codemode"] : []), ...sessionToolAllowlist(context), ...(!context.capabilities.length && mcpScopes.some(scope => scope.tools.length) ? ["service_query"] : []), ...(options.workspaceTool ? [options.workspaceTool.name] : [])];
-    let gitIdentity = options.gitIdentity;
-    gitIdentityEnvironment(gitIdentity);
-    const sandbox = new SandboxToolSession(context.canWriteOutputs ? options.outputStore : undefined, this.#sandboxFactory);
-    const { session } = await createAgentSession({
-      cwd: workspaceRoot,
-      agentDir: getAgentDir(),
-      modelRuntime,
-      model,
-      thinkingLevel: context.model.thinkingLevel,
-      tools: expectedTools,
-      customTools: [sandbox.tool, ...sessionTools(context, options.deploymentConfig, workspaceRoot, () => gitIdentity, options.outputStore, options.executableRoot, options.gitEnvironment, options.spreadsheetAttachments, options.serviceScopes, mcpScopes), ...(options.workspaceTool ? [options.workspaceTool] : [])],
-      sessionManager: options.manager,
-      settingsManager,
-      resourceLoader,
-    });
+    const mcp = createMcpConnectionPool({ cwd: workspaceRoot });
+    let activeSession: AgentSession | undefined;
     try {
-      await session.bindExtensions({});
+      const discovered = new Map<string, Promise<McpToolBinding[]>>();
+      const mcpScopes = await Promise.all((options.mcpScopes ?? []).map(async scope => ({
+        environmentKey: scope.environmentKey, serviceKey: scope.serviceKey, serviceName: scope.serviceName,
+        tools: (await Promise.all(scope.configurations.map(configuration => {
+          const writable = context.canModifyCode && scope.environmentKey === "dev";
+          const key = `${configuration.id}:${writable}`;
+          if (!discovered.has(key)) discovered.set(key, createMcpToolBindings([configuration], writable, mcp.connect));
+          return discovered.get(key)!;
+        }))).flat(),
+      })));
+      const expectedTools = [...sessionToolAllowlist(context), ...(!context.capabilities.length && mcpScopes.some(scope => scope.tools.length) ? ["service_query"] : []), ...(options.workspaceTool ? [options.workspaceTool.name] : [])];
+      let gitIdentity = options.gitIdentity;
+      gitIdentityEnvironment(gitIdentity);
+      const { session } = await createAgentSession({
+        cwd: workspaceRoot,
+        agentDir: getAgentDir(),
+        modelRuntime,
+        model,
+        thinkingLevel: context.model.thinkingLevel,
+        tools: expectedTools,
+        customTools: [...sessionTools(options, () => gitIdentity, mcpScopes), ...(options.workspaceTool ? [options.workspaceTool] : [])],
+        sessionManager: options.manager,
+        settingsManager,
+        resourceLoader,
+      });
+      activeSession = session;
       assertSessionState(session, context, options.manager.getSessionId(), expectedTools);
+      let rejectIdle: ((error: Error) => void) | undefined;
+      const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? issuePilotConfig.runtime.agent.modelResponseIdleMs, () => {
+        const error = new Error("model_response_idle_timeout");
+        rejectIdle?.(error);
+        void session.abort().catch(() => undefined);
+      });
+      const unsubscribe = session.subscribe((event) => {
+        const wireEvent = toWireEvent(event);
+        watchdog.observe(wireEvent);
+        options.onEvent(wireEvent);
+      });
+      let stop: Promise<void> | undefined, stopped = false;
+      return {
+        session,
+        get streaming() { return session.isStreaming; },
+        setGitIdentity: (identity) => { gitIdentityEnvironment(identity); gitIdentity = identity; },
+        prompt: async (message, images = []) => {
+          const idle = new Promise<never>((_resolve, reject) => { rejectIdle = reject; });
+          watchdog.start();
+          try { await Promise.race([session.prompt(message, images.length ? { images } : undefined), idle]); }
+          finally { rejectIdle = undefined; watchdog.stop(); }
+        },
+        stop: () => stopped ? Promise.resolve() : stop ??= (async () => {
+          try { watchdog.stop(); unsubscribe(); await abortAndDispose(session); }
+          finally { await mcp.close(); stopped = true; }
+        })(),
+      };
     } catch (error) {
-      try { await abortAndDispose(session); } finally { await sandbox.close(); }
+      try { if (activeSession) await abortAndDispose(activeSession); }
+      finally { await mcp.close(); }
       throw error;
     }
-    let rejectIdle: ((error: Error) => void) | undefined;
-    const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? issuePilotConfig.runtime.agent.modelResponseIdleMs, () => {
-      const error = new Error("model_response_idle_timeout");
-      rejectIdle?.(error);
-      void session.abort().catch(() => undefined);
-    });
-    const unsubscribe = session.subscribe((event) => {
-      const wireEvent = toWireEvent(event);
-      watchdog.observe(wireEvent);
-      options.onEvent(wireEvent);
-    });
-    let stopped = false;
-
-    return {
-      session,
-      get streaming() {
-        return session.isStreaming;
-      },
-      setGitIdentity: (identity) => {
-        gitIdentityEnvironment(identity);
-        gitIdentity = identity;
-      },
-      prompt: async (message, images = []) => {
-        const idle = new Promise<never>((_resolve, reject) => { rejectIdle = reject; });
-        watchdog.start();
-        try { await Promise.race([session.prompt(message, images.length ? { images } : undefined), idle]); }
-        finally { rejectIdle = undefined; watchdog.stop(); await sandbox.finishRun(); }
-      },
-      stop: async () => {
-        if (stopped) { await sandbox.close(); return; }
-        stopped = true;
-        watchdog.stop();
-        unsubscribe();
-        try { await abortAndDispose(session); } finally { await sandbox.close(); }
-      },
-    };
   }
 }

@@ -25,19 +25,21 @@ test("keeps Agent session context small and credential-free", () => {
   const value = context("prod");
   assert.deepEqual(value.capabilities, ["redis"]);
   assert.doesNotMatch(JSON.stringify(value), /redis\.example\.test|reader|secret/);
-  assert.deepEqual(sessionToolAllowlist(value), ["read", "grep", "find", "ls", "sandbox", "service_query"]);
+  assert.deepEqual(sessionToolAllowlist(value), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 
-test("allows mutation tools only for writable development repositories", () => {
+test("keeps repository policy independent from the native coding tool set", () => {
   assert.equal(context("prod").canModifyCode, false);
-  assert.deepEqual(sessionToolAllowlist(context("dev")), ["read", "bash", "edit", "write", "grep", "find", "ls", "sandbox", "service_query"]);
-  assert.deepEqual(sessionToolAllowlist(context("dev", [])), ["read", "grep", "find", "ls", "sandbox", "service_query"]);
+  assert.deepEqual(sessionToolAllowlist(context("dev")), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
+  assert.equal(context("dev").canModifyCode, true);
+  assert.equal(context("dev", []).canModifyCode, false);
+  assert.deepEqual(sessionToolAllowlist(context("dev", [])), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 
 test("grants only the durable output tool to production data-processing Issues", () => {
   const data = context("prod", ["read"], "data_processing");
   assert.equal(data.canModifyCode, false);
   assert.equal(data.canWriteOutputs, true);
-  assert.deepEqual(sessionToolAllowlist(data), ["read", "grep", "find", "ls", "sandbox", "output", "service_query"]);
+  assert.deepEqual(sessionToolAllowlist(data), ["read", "bash", "edit", "write", "grep", "find", "ls", "output", "service_query"]);
   assert.equal(context("prod", ["read"], "smart_analysis").canWriteOutputs, false);
 });

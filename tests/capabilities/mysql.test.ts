@@ -11,7 +11,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { exportMysql, queryMysql, readMysql, validateReadOnlyQuery, type MysqlConnectionFactory } from "../../src/capabilities/mysql.ts";
 import { IssueOutputStore, resolveIssueOutput } from "../../src/outputs/store.ts";
 
-function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }>, wait?: Promise<void>) {
+function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }>, wait?: Promise<void>, options: { failStatement?: string; endError?: Error; onEnd?: () => void } = {}) {
   const statements: string[] = [];
   let ended = false;
   let destroyed = false;
@@ -19,7 +19,7 @@ function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }
   const connection = {
     query(statement: string, callback?: (error: Error | null) => void) {
       statements.push(statement);
-      if (callback) { queueMicrotask(() => callback(null)); return undefined; }
+      if (callback) { queueMicrotask(() => callback(statement === options.failStatement ? new Error("fixture_statement_failed") : null)); return undefined; }
       const query = new EventEmitter() as EventEmitter & { stream: () => Readable };
       query.stream = () => {
         queueMicrotask(() => query.emit("fields", fields as FieldPacket[]));
@@ -30,7 +30,7 @@ function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }
       };
       return query;
     },
-    end(callback: (error?: Error | null) => void) { ended = true; callback(null); },
+    end(callback: (error?: Error | null) => void) { ended = true; options.onEnd?.(); callback(options.endError ?? null); },
     destroy() { destroyed = true; releaseWait?.(); },
   } as unknown as Connection;
   return { connection, statements, ended: () => ended, destroyed: () => destroyed };
@@ -127,6 +127,23 @@ test("streams unbounded MySQL rows directly into a durable CSV output", async ()
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+for (const stage of ["START TRANSACTION READ ONLY", "ROLLBACK", "close", "abort_at_close"] as const) test(`preserves the old MySQL export on ${stage} failure`, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-mysql-finalization-"));
+  const controller = new AbortController();
+  const fixture = connectionFixture([{ id: "1" } as RowDataPacket], [{ name: "id" }], undefined, {
+    ...(stage === "close" ? { endError: new Error("fixture_close_failed") } : stage === "abort_at_close" ? { onEnd: () => controller.abort(new Error("cancelled_at_close")) } : { failStatement: stage }),
+  });
+  try {
+    const store = new IssueOutputStore(root, "ISSUE-20261017-001");
+    await store.write("result.jsonl", "old-delivery");
+    await assert.rejects(exportMysql({ config, statement: "SELECT id FROM orders", output: { fileName: "result.jsonl", format: "jsonl" }, store }, controller.signal, () => fixture.connection), /fixture_statement_failed|fixture_close_failed|cancelled_at_close/);
+    assert.equal((await store.read("result.jsonl")).toString(), "old-delivery");
+    assert.deepEqual((await store.list()).map(file => file.fileName), ["result.jsonl"]);
+    assert.ok(fixture.ended());
+    if (stage === "START TRANSACTION READ ONLY") assert.deepEqual(fixture.statements, [stage]);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("destroys an active MySQL connection when the operation is aborted", async () => {

@@ -158,7 +158,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const running = () => processing();
   const canSend = () => issueStatus() !== "resolved";
   const usageText = () => footerText(footer());
-  const executionRoot = () => props.issue.environmentKey === "dev"
+  const codeRoot = () => props.issue.environmentKey === "dev"
     ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
     : `~/.issue-pilot/issues/${props.issue.id.toLowerCase()}/runtime`;
   const developmentRepositoriesPending = () => props.issue.environmentKey === "dev"
@@ -442,7 +442,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       </div>
       <Show when={error()}><div class="agent-panel-error" role="alert">{panelError(error())}</div></Show>
       <footer class="agent-meta">
-        <div class="agent-meta-primary"><span title={executionRoot()}>{executionRoot()}</span></div>
+        <div class="agent-meta-primary"><span title={`代码目录：${codeRoot()}`}>{codeRoot()}</span></div>
         <div class="agent-meta-secondary"><span>{usageText()}</span><span><b>{agent().model || "no-model"}</b>{agent().thinkingLevel ? ` • ${agent().thinkingLevel}` : ""}</span></div>
       </footer>
     </div>

@@ -24,6 +24,14 @@ export const issuePilotConfig = Object.freeze({
     agentStreamStaleMs: 45_000,
     agentToolOutputCharacters: 40_000,
     outputPreviewBytes: 20 * 1024 * 1024,
+    sourceAutoSaveDebounceMs: 500,
+    sourceRefreshMs: 2_000,
+    sourceBlameDebounceMs: 200,
+    sourceSearchConcurrency: 3,
+    sourceSearchPageMatches: 100,
+    sourceSearchDebounceMs: 200,
+    sourceDiffMs: 200,
+    sourceHighlightCharacters: 200_000,
     markdownCacheEntries: 512,
     markdownCacheCharacters: 4 * 1024 * 1024,
   }),
@@ -43,8 +51,7 @@ export const issuePilotConfig = Object.freeze({
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
-    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, codemode: false }),
-    sandbox: Object.freeze({ executable: "podman", image: "docker.io/library/node:26-bookworm-slim" }),
+    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000 }),
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
     slsWorker: Object.freeze({ oldGenerationMb: 192, youngGenerationMb: 16 }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
@@ -61,9 +68,7 @@ export const issuePilotConfig = Object.freeze({
     }),
   }),
   limits: Object.freeze({
-    sandbox: Object.freeze({ concurrency: 2, memoryBytes: 512 * 1024 * 1024, cpus: 1, processes: 64, workspaceBytes: 128 * 1024 * 1024, temporaryBytes: 64 * 1024 * 1024, executionMs: 30_000, lifetimeSeconds: 1800, outputBytes: 256 * 1024, transferBytes: 16 * 1024 * 1024, controlMs: 20_000, commandCharacters: 20_000 }),
     mcpServer: Object.freeze({ requestBytes: 1024 * 1024, responseBytes: 1024 * 1024, pageItems: 100, textLines: 1000 }),
-    spreadsheet: Object.freeze({ executionMs: 30_000, memoryBytes: 256 * 1024 * 1024, workers: 2 }),
     agentMessageChars: 50_000,
     relatedIssues: 20,
     agentImage: Object.freeze({
@@ -74,6 +79,7 @@ export const issuePilotConfig = Object.freeze({
     sourceBrowser: Object.freeze({
       directoryEntries: 500,
       searchQueryCharacters: 200,
+      searchMatches: 1_000,
       historyCommits: 100,
       changeFiles: 500,
       commandMs: 5_000,

@@ -22,6 +22,10 @@ export function normalizeIssueKey(value: string): string {
   return normalized;
 }
 
+export const MCP_TRANSPORTS = ["streamable_http", "sse", "stdio"] as const;
+export type McpTransport = typeof MCP_TRANSPORTS[number];
+export interface McpStdioConfiguration { command: string; args: string[]; env: Record<string, string>; cwd?: string }
+
 export const CAPABILITY_KEYS = ["nacos", "db", "redis", "mq", "es", "dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
 export const CAPABILITY_TYPES = { nacos: "http", db: "database", redis: "redis", mq: "http", es: "http", dms: "mcp", sls: "http" } as const;

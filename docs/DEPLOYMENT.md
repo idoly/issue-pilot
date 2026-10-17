@@ -1,219 +1,75 @@
-# 部署说明
+# 部署
 
-Issue Pilot 提供单节点、单副本 Kubernetes application 部署清单；当前本机环境以用户级 systemd 服务运行 API 和 Web。Kubernetes image 包含应用、Web、Workbench、Pi、Node/npm、Maven/JDK、Git、ripgrep 和官方 SLS Node SDK，运行时只挂载正式 state、Operator 原生配置和临时 cache。分析沙盒在两种运行方式下的前提见下文。
+## 应用拓扑
 
-## 拓扑
+[Containerfile](../Containerfile) 构建单一应用镜像：生产 Node 进程运行 Fastify、SQLite、Agent 和项目工具 broker，同时提供编译后的 Solid 页面和本地代码浏览器。镜像包含 Node/npm、Git、ripgrep、OpenSSH、Java 8/Maven 和 Pi；SLS 使用 HTTPS SDK，没有额外 CLI。
 
-```text
-TLS/auth Ingress
-  -> ClusterIP Service :3000
-  -> Deployment issue-pilot
-       replicas: 1
-       strategy: Recreate
-       application container
-       hostPath: state
-       hostPath: Pi/npm/Maven/SSH config (read-only)
-       emptyDir: /tmp, npm cache, Maven repository cache
-```
+默认端口 3000。Vite 的 4173 仅用于前端开发，不是生产第二进程。模型 provider、Git remote 和能力目标的网络由应用访问；正式/测试查询及 Source 只读由应用 owner 强制执行。API、静态页面和入站 MCP 同源。
 
-SQLite、bare Git、worktree metadata、Pi JSONL 和 Attachment 存在跨介质关系，不能用多副本共享写入。应用不访问 Kubernetes API，不 automount ServiceAccount token，也不挂载 Docker/Podman socket。
+镜像使用 node 用户。Kubernetes 清单采用单副本、Recreate、UID/GID 1000、只读根文件系统、禁止提权、移除 capabilities，不自动挂载 ServiceAccount token。不要以多副本共享同一 SQLite/state、宿主引擎 socket 或 privileged 模式绕过当前设计。
 
-## 部署事实源
+## 持久挂载
 
-| 文件 | 内容 |
-| --- | --- |
-| `Containerfile` | Image stage、工具版本、运行用户、entrypoint |
-| `deploy/issue-pilot.yaml` | Deployment、Service、mount、resource、probe、security context |
-| `issue-pilot.config.ts` | 应用 path、port、runtime、timeout、budget |
+[deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml) 定义实际挂载和预算：
 
-不要在文档、环境变量或第二份 manifest 中复制一套可执行配置。
+| 宿主或 volume | 容器路径 | 内容 |
+| --- | --- | --- |
+| /var/lib/issue-pilot | /opt/issue-pilot/.issue-pilot | SQLite、工单文件、Git stores/worktrees、备份 |
+| /etc/issue-pilot，只读 | /home/node | Operator 运行配置、Pi 配置、SSH、npm/Maven 配置 |
+| tmp emptyDir | /tmp | 临时文件 |
+| npm-cache emptyDir | /home/node/.npm | 项目工具缓存 |
+| maven-cache emptyDir | /home/node/.m2/repository | Maven 依赖缓存 |
 
-## Image
+根配置基于应用安装目录解析 state 路径，不能用环境变量改变它。宿主缓存挂载不表示所有工单共享可写依赖；实际项目命令、config 和 Issue 私有目录由 [project-tools.ts](../src/workspace/project-tools.ts)、[tool-runtime.ts](../src/tool-runtime.ts) 授权。
 
-`Containerfile` 当前包含：
+部署前准备挂载目录、正确 owner/mode 和有持久存储的节点。清单选择 `issue-pilot/state=true` 节点。初始用户和默认值来自根配置；不要复制另一套环境变量配置。
 
-- Build stage：`node:26-bookworm-slim`，先复制根清单、lockfile 和 `packages/workbench` 私有 workspace，再执行根目录 `npm ci`、Web build、`npm prune --omit=dev`；Workbench 的 editor 依赖只在该 workspace 的 devDependencies 中，裁剪后不进入 runtime node_modules。
-- Maven stage：Maven 3.9 + Eclipse Temurin 8。
-- Git stage：从 kernel.org 源码构建 Git `2.53.0`，保证 relative worktree 格式可读。
-- Runtime：`node:26-bookworm-slim`。
-- SLS 使用生产依赖 @alicloud/sls20201230 的签名 HTTPS API，不安装 Aliyun CLI。
-- OpenSSH client、ripgrep、curl、Perl 与 Git runtime library。
-- Production dependencies、Fastify API、Solid Web 和 VS Code Workbench assets。
+Pi 模型目录和 Operator 凭证按 Pi runtime 的配置位置放在受管 HOME。个人开发模型 Key/SSH 和个人生产凭证保存在 SQLite，经应用配置维护，具体优先级见[配置](CONFIGURATION.md)。SSH 主机验证所需 known_hosts 必须可用，不能关闭验证解决连接问题。
 
-DMS 由 application 内的 MCP SDK SSE client 调用。
+## 首次发布
 
-Runtime 固定：
-
-```text
-WORKDIR=/opt/issue-pilot
-USER=node (UID/GID 1000)
-HOME=/home/node
-PORT=3000
-CMD=node --experimental-strip-types src/http/production.ts
-```
-
-## 宿主目录
-
-### State
-
-Manifest 映射：
-
-```text
-host /var/lib/issue-pilot
-  -> container /opt/issue-pilot/.issue-pilot
-```
-
-使用全新 state 或经过验证的正式 backup，不要把 checkout 中用于开发的 `.issue-pilot` 复制到生产。
+在独立构建 checkout 中执行：
 
 ```bash
-install -d -m 0700 -o 1000 -g 1000 /var/lib/issue-pilot
-kubectl label node <node-name> issue-pilot/state=true
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm audit --omit=dev --audit-level=high
+podman build -f Containerfile -t registry.example.com/issue-pilot:<version> .
+podman push registry.example.com/issue-pilot:<version>
 ```
 
-`nodeSelector` 固定为：
-
-```yaml
-issue-pilot/state: "true"
-```
-
-`hostPath.type` 必须保持 `Directory`。错误节点或错误路径应显式失败，不能改成 `DirectoryOrCreate` 静默创建空 state。
-
-### Operator 配置
-
-```text
-/etc/issue-pilot/
-  .pi/agent/
-    auth.json
-    models.json
-    models-store.json
-  .npmrc
-  .m2/settings.xml
-  .ssh/
-    id_ed25519
-    known_hosts
-```
-
-Manifest 将整个目录只读挂载到 `/home/node`，再以 writable `emptyDir` 覆盖 `.npm` 和 `.m2/repository` cache。
-
-准备示例：
+将镜像引用替换为审核后的 tag/digest，确认 namespace、节点标签、持久目录和可信入口，再应用清单：
 
 ```bash
-install -d -m 0700 -o 1000 -g 1000 \
-  /etc/issue-pilot \
-  /etc/issue-pilot/.pi/agent \
-  /etc/issue-pilot/.m2 \
-  /etc/issue-pilot/.ssh
-
-install -m 0600 -o 1000 -g 1000 "$HOME/.pi/agent/auth.json" \
-  /etc/issue-pilot/.pi/agent/auth.json
-install -m 0600 -o 1000 -g 1000 "$HOME/.pi/agent/models.json" \
-  /etc/issue-pilot/.pi/agent/models.json
-install -m 0600 -o 1000 -g 1000 "$HOME/.pi/agent/models-store.json" \
-  /etc/issue-pilot/.pi/agent/models-store.json
-install -m 0600 -o 1000 -g 1000 "$HOME/.npmrc" \
-  /etc/issue-pilot/.npmrc
-install -m 0600 -o 1000 -g 1000 "$HOME/.m2/settings.xml" \
-  /etc/issue-pilot/.m2/settings.xml
-install -m 0600 -o 1000 -g 1000 "$HOME/.ssh/id_ed25519" \
-  /etc/issue-pilot/.ssh/id_ed25519
-install -m 0600 -o 1000 -g 1000 "$HOME/.ssh/known_hosts" \
-  /etc/issue-pilot/.ssh/known_hosts
-```
-
-不要把这些文件写入 image、ConfigMap、manifest environment 或日志。Deployment capability credential 通过受信配置 API 保存到 SQLite，不进入该目录。
-
-## 构建与发布
-
-```bash
-podman build --pull=always \
-  --file Containerfile \
-  --tag registry.example.com/issue-pilot:0.1.0 \
-  .
-
-podman push registry.example.com/issue-pilot:0.1.0
-```
-
-生产应把 manifest image 替换成 reviewed immutable tag 或 digest。
-
-首次部署：
-
-```bash
-kubectl create namespace issue-pilot
-kubectl apply -f deploy/issue-pilot.yaml
-kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=10m
-```
-
-## 分析沙盒执行环境
-
-新增 `sandbox` 分析工具的运行前提见[工单分析沙盒](SANDBOX.md#部署与诊断)。第一版要求应用进程所在 Linux 用户环境可运行 rootless Podman 并已有镜像；当前 image/manifest 未提供该能力，调用会明确失败，其余工具不受影响。不要添加引擎 socket 挂载或 privileged 来绕过隔离边界。
-
-## Manifest 不变量
-
-- `replicas: 1`。
-- `strategy.type: Recreate`。
-- `runAsNonRoot: true`，UID/GID/fsGroup 1000。
-- `allowPrivilegeEscalation: false`。
-- Drop all Linux capabilities。
-- RuntimeDefault seccomp。
-- Read-only root filesystem。
-- `automountServiceAccountToken: false`。
-- `/tmp` emptyDir 1 GiB。
-- npm cache emptyDir 2 GiB。
-- Maven repository cache emptyDir 5 GiB。
-- CPU request/limit 1/4 core，memory request/limit 1/4 GiB。
-- Startup/readiness/liveness 均检查 `/health`。
-- `terminationGracePeriodSeconds: 1800`，覆盖最长 project action。
-
-不要挂载整个项目目录。Application 源码来自 image；生产只挂载 state、明确的原生配置和 cache。
-
-## 网络
-
-ClusterIP Service 只暴露 3000。Ingress 必须：
-
-- 提供 TLS 和组织 authentication/authorization。
-- 禁用 SSE response buffering。
-- 设置至少 1 小时 read timeout。
-- 不记录 Config response/write body、Source body、credential 或 capability result。
-
-API 没有内置认证。页面用户切换和 `X-Issue-Pilot-Subject` 只选择 active user 及写入署名，不是认证凭据。
-
-建议 NetworkPolicy：
-
-- Ingress 只能访问 application 3000。
-- Egress 只允许 Repository、Pi provider、Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP、SLS target 和必要 DNS。
-- 未提供 TLS 的 protocol 必须位于可信加密网络。
-
-## 首次验收
-
-```bash
+kubectl -n issue-pilot apply -f deploy/issue-pilot.yaml
+kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 kubectl -n issue-pilot get deployment,pod,service
-kubectl -n issue-pilot logs deployment/issue-pilot --tail=200
-kubectl -n issue-pilot port-forward service/issue-pilot 3000:3000
-curl -fsS http://127.0.0.1:3000/health
 ```
 
-还应验证：
+上述命令是操作说明，不会自动为你准备 Ingress、namespace、DNS、证书或持久存储。已有数据的发布属于升级，先按[运维](RUNBOOK.md)停机、备份并验证迁移，不能直接套首次安装步骤。
 
-- `/` 与 `/vscode.html` 和 API 同源可达。
-- SQLite mode、integrity、foreign keys 和业务不变量。
-- Project broker socket 为 owner-only `0600`。
-- Global model catalog 可用。
-- 一个 prod/test Issue 的只读 runtime 与 Source。
-- 一个隔离 dev Issue 的文件/Git mutation 和 project wrapper。
-- 必要 capability 的最小只读 smoke。
-- SSE `snapshot_ready`、heartbeat 和 proxy 不缓冲。
+## 网络与身份
 
-## 升级与回滚
+Service 为 ClusterIP，外部入口使用可信 TLS/auth 网关。应用没有内置登录；`X-Issue-Pilot-Subject` 和浏览器用户选择器只是身份选择。网关必须校验已认证用户与该 header 的关系，不能把任意客户端头当认证结果。
 
-升级顺序：
+保护 API、源码、下载、配置描述和 MCP，避免公网直连应用端口。反向代理应禁用 SSE 缓冲，支持长连接及配置允许的上传/请求体；应用附件上传不设业务大小/数量上限，边缘限制由部署方明确设置。Agent 图片、MCP、成果预览和协议请求仍有独立预算。
 
-1. Build/push reviewed image。
-2. 在 state backup 副本 dry-run migrations。
-3. 隔离 Ingress 流量并等待 Agent/Workspace 操作结束。
-4. 正常停止 Pod。
-5. 创建一致 database 和 full-state backup。
-6. 更新 immutable image tag/digest。
-7. Apply manifest 并等待 probes。
-8. 验证 DB、Git/runtime、Attachment、SSE、Source、project tools 和 capability。
+网络放行按实际 provider、Git/SSH、能力目标和包仓库配置。业务查询可包含敏感结果，不把请求/响应 body、配置或认证头加入访问日志。
 
-Rollback 必须恢复 matching code image 与 matching DB/state backup，不能只回退 image。详细流程见[运维手册](RUNBOOK.md)。
+## 代码执行
+
+Agent 直接使用应用容器中的 Pi 原生工具、Node/Shell 和已安装库。所有工单都有自己的 work 目录；正式数据处理通过通用文件发布交付成果。应用不按文件格式运行模型脚本，也不启动嵌套容器、VM 或每工单执行服务。
+
+应用和 Agent 代码共享容器内信任。只读根文件系统和容器资源限额仍按清单生效，但可写 state 挂载、HOME 配置与其他工单不是互相隔离的权限域。cwd 只组织工作，原生代码拥有应用用户权限；Source API 和内建查询的只读约束不构成对 Shell 的强制限制。
+
+生产镜像已包含 Node 和应用 runtime 依赖，原生 bash 通过 NODE_PATH 使用这些库。工作文件位于 issues/<key>/work，跨轮次保留；成果 publish 按字节原子复制到 outputs。Node/Git 操作使用同一容器，不需要额外容器引擎或执行后端配置。
+
+## 健康与关闭
+
+`GET /health` 返回 `{"ok":true}`。启动执行迁移、恢复、Git/runtime 校验和维护，进程存在不等于 ready；清单 startup/readiness/liveness probe 指向 /health。实际 probe、资源和终止宽限以 YAML 为准。
+
+SIGINT/SIGTERM 触发 Fastify 关闭，等待维护、Agent、session、model runtime、project broker 和数据库清理。Recreate 防止两个版本同时写 state；不要在旧进程未退出时启动第二个 API。
+
+发布后核对健康、Web/代码浏览器资源、SSE、数据库不变量、受管 Git/ref 与附件完整性。禁止用真实工单写消息作为默认 smoke；使用独立 state 或授权的最小只读检查。恢复和故障处理见[运维](RUNBOOK.md)。

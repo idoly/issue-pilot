@@ -1,48 +1,47 @@
-import { defineTool, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { constants } from "node:fs";
+import { open, realpath } from "node:fs/promises";
+import path from "node:path";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-
 import { capabilityResultText, capabilityTextResult } from "../capabilities/contracts.ts";
-import { generateSpreadsheet, type SpreadsheetAttachment } from "../outputs/spreadsheet.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 
-const outputInputSchema = Type.Union([
+const schema = Type.Union([
   Type.Object({ operation: Type.Literal("list") }, { additionalProperties: false }),
-  Type.Object({ operation: Type.Literal("write"), fileName: Type.String({ minLength: 1, maxLength: 255 }), content: Type.String() }, { additionalProperties: false }),
-  Type.Object({ operation: Type.Literal("append"), fileName: Type.String({ minLength: 1, maxLength: 255 }), content: Type.String() }, { additionalProperties: false }),
-  Type.Object({ operation: Type.Literal("spreadsheet"), fileName: Type.String({ minLength: 1, maxLength: 255, description: "Output .xlsx file name" }), attachmentIds: Type.Array(Type.String(), { uniqueItems: true, description: "IDs of this Issue's Excel attachments; use list to discover them" }), outputFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 255 }), { uniqueItems: true, description: "Existing output file names in this Issue only: JSON/JSONL, CSV/TSV, XLS/XLSX. DMS exports are JSON with {tool,result}; text content inside result may itself be JSON." })), data: Type.Optional(Type.Unknown({ description: "Optional structured data available as the data variable" })), script: Type.String({ description: "JavaScript function body. files is an array of {id?,fileName,source,sheets?:[{name,rows:string[][]}],data?:unknown}. Excel/CSV have sheets; JSON/JSONL have data. Process all rows using JS arrays, Map, Set, etc. Return {sheets:[{name,rows:(string|number|boolean|null)[][]}]}. No filesystem, network, Node.js, or process APIs. Example: return {sheets: files[0].sheets};" }) }, { additionalProperties: false }),
+  Type.Object({ operation: Type.Literal("publish"), sourcePath: Type.String({ minLength: 1 }), fileName: Type.String({ minLength: 1, maxLength: 255 }) }, { additionalProperties: false }),
 ]);
 
-type OutputInput = Static<typeof outputInputSchema>;
-
-export function createOutputTool(store: IssueOutputStore, spreadsheet?: { attachmentRoot: string; attachments: SpreadsheetAttachment[] }): ToolDefinition<any, any, any> {
+export function createOutputTool(store: IssueOutputStore, workDirectory: string) {
   return defineTool({
-    name: "output",
-    label: "Write Issue Output",
-    description: "Create, append, or list durable output files. Use operation spreadsheet to batch-process this Issue's Excel attachments, existing query-result output files, and supplied data in isolated JavaScript and generate a real .xlsx. Repositories remain read-only.",
-    promptSnippet: "Batch-process Excel attachments and generate XLSX, or write SQL, CSV, JSON, JSONL, text, Markdown results",
-    promptGuidelines: [
-      "Use output for user-deliverable files only; repository snapshots remain read-only.",
-      "Use append for chunked large results and report each generated file name in the final answer.",
-    ],
-    parameters: outputInputSchema,
-    execute: async (_id, rawInput, signal): Promise<AgentToolResult<unknown>> => {
-      let input: OutputInput;
-      try { input = Value.Parse(outputInputSchema, rawInput ?? {}); }
-      catch { throw new Error("invalid_output_input"); }
-      if (input.operation === "list") {
-        const outputs = await store.list();
-        return capabilityTextResult(capabilityResultText({ outputs, attachments: spreadsheet?.attachments.map(({ id, fileName, size }) => ({ id, fileName, size })) ?? [] }), { operation: "list", files: outputs.length });
-      }
-      if (input.operation === "spreadsheet") {
-        if (!spreadsheet) throw new Error("spreadsheet_attachments_unavailable");
-        const output = await generateSpreadsheet(store, spreadsheet.attachmentRoot, spreadsheet.attachments, input, signal);
-        return capabilityTextResult(capabilityResultText({ output }), { operation: "spreadsheet", fileName: output.fileName, size: output.size });
-      }
-      const output = input.operation === "write"
-        ? await store.write(input.fileName, input.content)
-        : await store.append(input.fileName, input.content);
-      return capabilityTextResult(capabilityResultText({ output }), { operation: input.operation, fileName: output.fileName, size: output.size });
+    name: "output", label: "Issue outputs", parameters: schema,
+    description: "List published outputs or publish a regular file from this Issue's working directory. Generate any file format with the native coding tools, then publish it by sourcePath and delivery fileName. Publication is atomic and returns metadata only.",
+    promptGuidelines: ["Create files in the working directory and use publish for delivery. Name every published file in the final answer."],
+    execute: async (_id, raw, signal) => {
+      let input: Static<typeof schema>;
+      try { input = Value.Parse(schema, raw); } catch { throw new Error("invalid_output_input"); }
+      signal?.throwIfAborted();
+      if (input.operation === "list") return capabilityTextResult(capabilityResultText({ directory: store.directory, outputs: await store.list() }), { operation: "list" });
+      const root = await realpath(workDirectory);
+      const source = await realpath(path.resolve(root, input.sourcePath));
+      const relative = path.relative(root, source);
+      if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("output_source_outside_work_directory");
+      const handle = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        if (!(await handle.stat()).isFile()) throw new Error("output_source_not_file");
+        const output = await store.generate(input.fileName, async append => {
+          const buffer = Buffer.alloc(64 * 1024);
+          while (true) {
+            signal?.throwIfAborted();
+            const { bytesRead } = await handle.read(buffer);
+            if (!bytesRead) break;
+            await append(buffer.subarray(0, bytesRead));
+          }
+          await handle.close();
+          signal?.throwIfAborted();
+        });
+        return capabilityTextResult(capabilityResultText({ output: { fileName: output.fileName, size: output.size, updatedAt: output.updatedAt } }), { operation: "publish", fileName: output.fileName });
+      } finally { await handle.close(); }
     },
   });
 }

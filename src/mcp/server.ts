@@ -47,7 +47,7 @@ const bounded = (value: unknown) => {
   return { content: [{ type: "text" as const, text }] };
 };
 
-export function createApplicationMcpServer(context: ApiRouteContext, request: Pick<FastifyRequest, "headers">) {
+function createApplicationMcpServer(context: ApiRouteContext, request: Pick<FastifyRequest, "headers">) {
   const server = new Server({ name: "issue-pilot", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } });
   const headers = typeof request.headers["x-issue-pilot-subject"] === "string" ? { "x-issue-pilot-subject": request.headers["x-issue-pilot-subject"] } : {};
   const api = async (url: string, payload?: Input) => {

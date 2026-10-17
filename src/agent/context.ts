@@ -11,10 +11,7 @@ export interface AgentSessionContext {
 }
 
 export function sessionToolAllowlist(context: AgentSessionContext): string[] {
-  const localTools = context.canModifyCode
-    ? ["read", "bash", "edit", "write", "grep", "find", "ls"]
-    : ["read", "grep", "find", "ls"];
-  return [...localTools, "sandbox", ...(context.canWriteOutputs ? ["output"] : []), ...(context.capabilities.length ? ["service_query"] : [])];
+  return ["read", "bash", "edit", "write", "grep", "find", "ls", ...(context.canWriteOutputs ? ["output"] : []), ...(context.capabilities.length ? ["service_query"] : [])];
 }
 
 export function createAgentSessionContext(input: {

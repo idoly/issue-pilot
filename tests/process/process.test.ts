@@ -23,6 +23,17 @@ test("bounds output and applies scoped environment overrides for local capabilit
   assert.equal(unbounded.killed, false);
 });
 
+test("streams stdout without retaining it and stops a cancelled producer", async () => {
+  const chunks: string[] = [];
+  const complete = await executeLocalCommand(process.execPath, ["-e", "process.stdout.write('订单 AI\\n')"], { onStdout: chunk => chunks.push(chunk) });
+  assert.equal(chunks.join(""), "订单 AI\n");
+  assert.equal(complete.stdout, "");
+  const cancellation = new AbortController();
+  const stopped = await executeLocalCommand(process.execPath, ["-e", "setInterval(()=>process.stdout.write('AI\\n'),1)"], { signal: cancellation.signal, onStdout: () => cancellation.abort() });
+  assert.equal(stopped.killed, true); assert.equal(stopped.stdout, "");
+  await assert.rejects(executeLocalCommand(process.execPath, ["-e", "process.stdout.write('AI');setInterval(()=>{},1000)"], { onStdout: () => { throw new Error("consumer_failed"); } }), /consumer_failed/);
+});
+
 test("passes binary stdin without argv exposure and tolerates an early reader exit", async () => {
   const input = Buffer.from(Array.from({ length: 1024 }, (_, index) => index % 256));
   const result = await executeLocalCommand(process.execPath, ["-e", "const fs=require('fs'),crypto=require('crypto');process.stdout.write(JSON.stringify({hash:crypto.createHash('sha256').update(fs.readFileSync(0)).digest('hex'),args:process.argv.slice(1)}))"], { input });

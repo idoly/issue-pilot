@@ -1,142 +1,64 @@
 # Issue Pilot
 
-Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它在一个有状态应用中统一管理 Issue、Service/Deployment 配置、Git 代码上下文、Pi Agent 会话、附件和受限的只读外部数据访问。
+Issue Pilot 是基于 Pi SDK 的工单协作应用。每张工单拥有独立的代码上下文、Agent 对话、附件和处理状态；开发工单使用独立 Git worktree，正式和测试调查使用只读代码快照。
 
-## 主要能力
+## 可以做什么
 
-- Service 管理一个或多个带稳定 alias 的 Git Repository。
-- Deployment 按 Environment 配置每个 Repository 的基线分支和可用 capability。
-- 所有 Service 和 Environment 共享唯一的全局 Pi provider、model 和 thinking level。
-- Prod/test 每轮使用当前 Deployment 分支最新 fetched commit，Agent 和 Workbench 均只读。
-- Dev 使用 Issue 专属本地 branch 和 worktree，可修改代码并运行受限 npm/Maven action。
-- Resolved dev workspace 可受管释放；代码由 bare store 中的本地 working branch 持久保存，可只读浏览并在 reopen 时恢复。
-- 每张 Issue 持久保存 Pi JSONL conversation、Attachment、Comment、Repository 投影和 Workspace 状态；Agent 输入框可直接粘贴图片并随消息发送给模型。
-- 内置 Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff、blame、history 和安全的 Markdown Preview。
-- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 通过统一 service_query 读取证据；显式选择来源环境与服务。开发工单继承正式/测试查询能力，来源保持只读。
-- 用户由 SQLite 管理，停用用户不会删除历史署名。
+- 创建正式调查、测试调查、正式数据处理、开发修复和功能开发工单。
+- 在工单中与 Agent 对话，补充文字或粘贴图片，查看执行过程、工具结果和使用量。
+- 关联其他工单，读取其元数据、已持久化对话和可用的开发提交快照。
+- 跨服务加入代码，通过统一查询工具读取已配置的数据库、日志、缓存、配置中心和远程 MCP 能力。
+- 在浏览器查看文件、搜索、比较 Git 差异与历史；开发工单可编辑、管理路径、暂存和提交。
+- 通过原生工具和常规库处理文件，在正式数据处理工单中发布、下载和预览任意格式成果。
+- 通过入站 MCP 让外部 AI 创建工单、发送补充消息、查询进展并读取交付物。
 
-## Web 界面
+## 处理方式与权限
 
-顶级导航只有“首页 / 工单 / 配置”：
+| 处理方式 | 环境 | 代码 | 创建角色 |
+| --- | --- | --- | --- |
+| 正式调查 | prod | 只读 | 全部活跃用户 |
+| 测试调查 | test | 只读 | 全部活跃用户 |
+| 正式数据处理 | prod | 只读，可写成果区 | developer |
+| 开发修复 | dev | 独立可写 worktree | developer |
+| 功能开发 | dev | 独立可写 worktree | developer |
 
-- 首页展示完整团队工单动态和“产出 / 分布 / 团队 / 资源”运营视图。
-- 工单页左侧只展示处理人为当前登录用户的工单，并支持状态、服务、环境和关键词筛选；首页团队动态可打开跨人员工单详情，但不会把该工单注入当前用户队列。
-- 配置页包含“用户 / 模型 / 服务”三个保持挂载的 Tab，默认打开“服务”。
-- 服务编辑器按“代码仓库 / 环境部署 / 服务描述”组织；Deployment 折叠标题始终显示环境名和已启用 capability，展开后编辑分支、添加或移除 capability 及其参数。
+用户角色为 product、test、developer。身份选择器用于可信环境下选择用户，**不提供登录认证**。外部部署必须由可信网关完成认证和身份头约束。
 
-## 代码模式
+## 本地运行
 
-| 场景 | 代码来源 | 权限 |
-| --- | --- | --- |
-| Prod/test | 当前 Deployment 各 `baseBranch` 的最新 commit | Agent、Source 和 Workbench 只读 |
-| Active dev | `hotfix-*` 或 `feature-*` 本地 branch 的 Issue worktree | 读写，可运行受限项目命令 |
-| Released dev | 本地 working branch tip 的 immutable checkout | 只读，可 reopen |
-
-Dirty、untracked、running、结构异常、changed checkout 或数据库未登记的状态不会被自动删除或猜测修复。
-
-## 运行拓扑
-
-```text
-Browser
-  -> trusted TLS/auth proxy
-  -> one application container
-       Fastify + static Solid Web/Workbench
-       SQLite/Drizzle
-       AgentEngine + Pi SDK + Pi JSONL
-       Git bare stores/worktrees/generated runtimes
-       protocol clients + authorized process runtime
-```
-
-生产保持一个 Kubernetes Pod。应用不访问 Kubernetes API，不挂载 Docker/Podman socket，也不为 Agent 创建工具容器。项目代码仅适用于可信内部 Repository；application 进程不是恶意代码 sandbox。
-
-## 快速验证
-
-需要 Node/npm：
+使用支持项目 TypeScript 与依赖版本的 Node.js；应用镜像使用 Node 26。准备 Git、ripgrep，以及开发项目需要的 npm、Java/Maven。完整依赖和镜像内容以 [package.json](package.json) 与 [Containerfile](Containerfile) 为准。
 
 ```bash
 npm ci
 npm run typecheck
 npm test
 npm run build
-npm audit --omit=dev --audit-level=high
+node --experimental-strip-types src/http/production.ts
 ```
 
-前端开发：
+默认应用地址为 `http://127.0.0.1:3000`，API 同时提供前端静态页面。前端开发可另运行 `npm run dev:web`，默认端口 4173，代理本机 3000 API。
 
-```bash
-npm run dev:web
-```
+**启动会迁移数据库、恢复状态并重建受管 runtime。** 首次运行前检查 [issue-pilot.config.ts](issue-pilot.config.ts) 中的初始用户、路径和默认配置。已有 `.issue-pilot` 时先阅读[运维说明](docs/RUNBOOK.md)。实验和测试使用临时状态，手动隔离运行使用独立项目副本及其根配置。
 
-Vite 默认监听 `0.0.0.0:4173` 并代理本机 API，只能用于可信开发网络。
+在配置页面维护用户和个人凭证、全局模型、能力、仓库及服务。Agent provider/model/thinking level 全局唯一；模型目录由 Pi runtime 提供。所有工单使用 Pi 原生编码工具，在自己的 work 目录运行普通脚本。
 
-构建镜像：
+## 状态与集成
 
-```bash
-podman build --pull=always -f Containerfile \
-  -t registry.example.com/issue-pilot:0.1.0 .
-```
+状态默认位于项目根目录 `.issue-pilot`，由根配置和 [src/config.ts](src/config.ts) 解析，没有 state root 环境变量覆盖。SQLite、附件、成果、Pi JSONL、本地 Git branches 和开发 worktree 都可能包含需要保留的业务数据。
 
-生产部署前必须准备 `/var/lib/issue-pilot`、`/etc/issue-pilot`、节点标签和可信 TLS/auth Ingress，详见[部署说明](docs/DEPLOYMENT.md)。升级前必须停机并创建一致备份，详见[运维手册](docs/RUNBOOK.md)。
+内建查询包括 Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS。正式/测试工单查询本环境；开发工单可调查正式和测试配置，调用仍受只读授权。Agent 的原生代码在应用容器内可信执行，cwd 不提供工单间强隔离；Source API 的仓库只读策略与脚本权限不同，见[架构](docs/ARCHITECTURE.md)。
 
-## 配置与 State
-
-应用配置不接受环境变量覆盖：
-
-- 路径、端口、默认值、retention、timeout 和 budget：`issue-pilot.config.ts`
-- User、Service、Repository、Deployment、全局 Agent model 和 capability credential：SQLite
-- Image、资源、挂载和 probe：`Containerfile` 与 `deploy/issue-pilot.yaml`
-- Pi/npm/Maven/SSH 原生配置：Operator 管理的 `/etc/issue-pilot`
-
-默认 state root：
-
-```text
-.issue-pilot/
-  issues.db
-  issues/<issue-key>/
-    attachments/
-    agent/
-    runtime/
-  git/
-    repositories/
-    checkouts/
-  workspaces/<issue-key>/
-  control/project-tools.sock
-  backups/
-```
-
-`.issue-pilot` 可能包含生产凭据、业务查询结果、内部源码、附件、Pi JSONL、本地 branch 和备份。不要提交、缓存化或用作开发实验目录。
-
-## 安全边界
-
-- API 没有内置 authentication/authorization；`X-Issue-Pilot-Subject` 只选择启用用户和写入署名，不是认证。
-- ClusterIP Service 必须由带 TLS 和组织认证授权的可信 Ingress 保护。
-- `GET /api/config` 只返回凭证配置状态，不返回已存密钥；凭证更新协议见[配置说明](docs/CONFIGURATION.md#result-与-secret)。
-- Credential 不进入 `AgentSessionContext`、prompt、tool schema/input、日志或诊断。
-- DMS Bearer 只作为 session-local HTTPS Authorization header；SLS AccessKey 只进入隔离 worker 中的官方签名 SDK，不写认证文件。
-- Capability result 会进入模型上下文和该 Issue 的 Pi JSONL，可能包含敏感业务数据。
-- Source 和 Workbench 返回内部源码；dev mutation 会直接修改 Issue worktree，均属于敏感接口。
-
-## API 范围
-
-Web 使用以下 API 域：
-
-- User：active user、current user、管理列表、创建与更新。
-- Configuration：catalog、完整 config、全局 model、DMS scope resolve、Service CRUD。
-- Issue：用户级固定个人队列、创建、正式跟进、通用关联工单管理、编辑、详情、状态转换和 Comment。
-- Agent：retry、message、SSE stream。
-- Attachment：完整性校验后的只读 GET；写入只属于 Issue create/edit multipart transaction。
-- Workspace：stats、带审计历史的无状态 Scope Transition plan/apply 和受管 release/reopen。
-- Source：Repository、tree、file/directory/path/rename、search、blame、history、commit、diff，以及受限 Stage、Unstage、Discard、Commit。
-
-不存在独立 Attachment write route、Issue sync route、Terminal 或任意宿主 Git command endpoint。Source mutation 只允许 active development workspace，并按 Issue reservation 串行。
+外部 AI 使用 `POST /mcp` 的无状态 Streamable HTTP。先发现服务/用户，再创建或搜索工单，发送补充消息，最后轮询状态和对话、读取附件或成果。写入成功表示已受理，详情见[配置与 MCP](docs/CONFIGURATION.md)。
 
 ## 文档
 
-| 文档 | 主题 |
+| 文档 | 内容 |
 | --- | --- |
-| [Architecture](docs/ARCHITECTURE.md) | 所有权、状态、Git/runtime、Agent、并发和不变量 |
-| [Configuration](docs/CONFIGURATION.md) | 根配置、SQLite 配置、全局模型、capability 和 secret 流 |
-| [Deployment](docs/DEPLOYMENT.md) | Image、Kubernetes、挂载、网络和首次部署 |
-| [Development](docs/DEVELOPMENT.md) | Module owner、修改配方、测试和 review |
-| [Runbook](docs/RUNBOOK.md) | 健康检查、容量、备份、升级、恢复和故障处理 |
-| [Agent Guide](AGENTS.md) | Coding Agent 的状态保护和完成标准 |
+| [架构](docs/ARCHITECTURE.md) | 事实所有权、状态、代码生命周期和并发 |
+| [配置](docs/CONFIGURATION.md) | 服务、角色、凭证、能力、工具与 MCP |
+| [开发](docs/DEVELOPMENT.md) | 模块入口、修改约束和验证命令 |
+| [部署](docs/DEPLOYMENT.md) | 镜像、挂载、网络和沙盒前提 |
+| [运维](docs/RUNBOOK.md) | 健康检查、备份、升级与恢复 |
+| [Agent 指南](AGENTS.md) | 编码代理的状态保护与交付要求 |
+
+这些文档描述当前实现。字段、默认值、迁移顺序和工具 schema 以对应源码为准。

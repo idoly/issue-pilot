@@ -2,7 +2,6 @@ FROM docker.io/library/node:26-bookworm-slim AS build
 
 WORKDIR /build
 COPY package.json package-lock.json ./
-COPY packages/workbench ./packages/workbench
 RUN npm ci
 COPY issue-pilot.config.ts tsconfig.json ./
 COPY drizzle ./drizzle

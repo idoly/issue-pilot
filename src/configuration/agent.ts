@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { globalAgentConfiguration } from "../db/schema.ts";
 import type { AgentConfiguration, AgentModelDefinition } from "../domain/contracts.ts";
-import type { AgentModelCatalog } from "../pi/models.ts";
+import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 
 export async function loadGlobalAgentConfiguration(database: Pick<Database, "select">): Promise<AgentConfiguration> {
   const [configuration] = await database.select().from(globalAgentConfiguration).where(eq(globalAgentConfiguration.id, 1)).limit(1);

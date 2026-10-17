@@ -18,12 +18,11 @@ import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
-import { issueAttachmentRoot, issueSessionRoot, pathExists } from "../workspace/state.ts";
+import { issueAttachmentRoot, issueSessionRoot, issueWorkDirectory, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import {
   agentSessions,
   mcpServices,
-  issueAttachments,
   environments,
   issueWorkspaces,
   issues,
@@ -31,7 +30,7 @@ import {
   subjects,
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind } from "../domain/contracts.ts";
-import type { PiModelRuntime } from "../pi/models.ts";
+import type { PiModelRuntime } from "./model-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -271,6 +270,9 @@ export class AgentEngine implements AgentController {
 
     const project = await this.projectManager.prepare(issue, environmentKind, personalGit?.env);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
+    const workDirectory = issueWorkDirectory(this.stateRoot, issue.key);
+    await mkdir(workDirectory, { recursive: true, mode: 0o700 });
+    await chmod(workDirectory, 0o700);
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
@@ -301,12 +303,12 @@ export class AgentEngine implements AgentController {
     });
     const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const manager = binding && await pathExists(binding.sessionFile)
-      ? SessionManager.open(binding.sessionFile, sessionDirectory, project.workspaceRoot)
-      : await createPrivateSessionManager(project.workspaceRoot, sessionDirectory);
+      ? SessionManager.open(binding.sessionFile, sessionDirectory, workDirectory)
+      : await createPrivateSessionManager(workDirectory, sessionDirectory);
     const hadMessages = manager.buildSessionContext().messages.length > 0;
 
     const managed = await this.piRuntime.start({
-      workspaceRoot: project.workspaceRoot,
+      workspaceRoot: workDirectory,
       context,
       deploymentConfig,
       serviceScopes,
@@ -317,10 +319,7 @@ export class AgentEngine implements AgentController {
       gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,
       ...(modelApiKey ? { modelApiKey } : {}),
       ...(personalGit ? { gitEnvironment: personalGit.env } : {}),
-      ...(context.canWriteOutputs ? {
-        outputStore: new IssueOutputStore(this.stateRoot, issue.key),
-        spreadsheetAttachments: { attachmentRoot: attachmentPath, attachments: await this.database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)) },
-      } : {}),
+      ...(context.canWriteOutputs ? { outputStore: new IssueOutputStore(this.stateRoot, issue.key) } : {}),
       systemPrompt: agentSystemPrompt(context),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
@@ -328,14 +327,14 @@ export class AgentEngine implements AgentController {
     if (sharedRepositories) this.sharedReadOnlySessions.add(issue.id);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
-    await this.database.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: project.workspaceRoot }).onConflictDoUpdate({
+    await this.database.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workDirectory }).onConflictDoUpdate({
       target: agentSessions.issueId,
-      set: { sessionFile, workspacePath: project.workspaceRoot, updatedAt: new Date() },
+      set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
     });
     await this.markRunning(issue.id, project.runtimeReady);
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed, currentMessage, images);
 
-    const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: path.relative(project.workspaceRoot, repository.workspacePath), readOnly: repository.access === "read" }));
+    const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: repository.workspacePath, readOnly: repository.access === "read" }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys, path.join(project.runtimeRoot, "related-issues"))
       : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, relatedIssueKeys: project.relatedIssueKeys, relatedRoot: path.join(project.runtimeRoot, "related-issues"), ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });

@@ -7,11 +7,11 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues, subjects } from "../db/schema.ts";
+import { agentSessions, issues } from "../db/schema.ts";
 import type { AgentFooterStats } from "../domain/contracts.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { authorizeWorkMode, ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { authorizeWorkMode, requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -125,9 +125,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     if (issue.type === "data_processing") await authorizeWorkMode(database, request, "production_data");
     const { message, images } = await readAgentMessage(request);
-    const subject = await ensureCurrentSubject(database, request);
-    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (!person) throw new ApiError(400, "invalid_current_subject");
+    const person = await requireCurrentUser(database, request);
     try {
       await engine.send(issue.id, message, {
         name: person.displayName ?? person.subject,

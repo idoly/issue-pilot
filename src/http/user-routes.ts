@@ -1,12 +1,12 @@
 import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration, CapabilityConfigurationError } from "../capabilities/registry.ts";
-import { asc, desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { subjects, issues, userCredentials } from "../db/schema.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
 import { USER_ROLES } from "../domain/contracts.ts";
 import { ApiError, choice, record, text } from "./input.ts";
-import { ensureCurrentSubject, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireCurrentUser, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 function userSubject(value: unknown): string {
   const subject = text(value, "user_subject", 255).toLowerCase();
@@ -38,15 +38,11 @@ function serializeManagedUser(user: typeof subjects.$inferSelect) {
   };
 }
 
-export function registerUserRoutes(context: ApiRouteContext): void {
+export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">): void {
   const { app, database, engine, runScopeExclusive } = context;
-  const requireDeveloper = async (request: Parameters<typeof ensureCurrentSubject>[1]) => {
-    const subject = await ensureCurrentSubject(database, request);
-    const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (user?.role !== "developer") throw new ApiError(403, "developer_role_required");
-    return subject;
-  };
-  const changeUser = async <T>(subject: string, change: () => Promise<T>) => runScopeExclusive(async () => {
+
+  const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: () => Promise<T>) => runScopeExclusive(async () => {
+    await authorize();
     const affected = await database.db.select({ id: issues.id }).from(issues).where(or(eq(issues.reporterSubject, subject), eq(issues.assigneeSubject, subject)));
     return runIssueExclusive(engine, affected.map(({ id }) => id), async (reservation) => {
       for (const { id } of affected) await reservation.closeSession(id);
@@ -55,22 +51,19 @@ export function registerUserRoutes(context: ApiRouteContext): void {
   });
 
   app.get("/api/me/credentials", async (request, reply) => {
-    const subject = await ensureCurrentSubject(database, request);
+    const user = await requireCurrentUser(database, request);
     reply.header("Cache-Control", "private, no-store");
-    const [credentials] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
-    const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+    const [credentials] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, user.subject)).limit(1);
     const status = credentialStatus(credentials);
-    return user?.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
+    return user.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
   });
 
   app.put("/api/me/credentials", { logLevel: "silent" }, async (request, reply) => {
     const subject = await ensureCurrentSubject(database, request);
     const input = record(request.body);
-    if (input.model || input.git) await requireDeveloper(request);
+    if (input.model || input.git) await requireDeveloper(database, request);
     if (Object.keys(input).some((key) => !["model", "git", "production"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
-    const result = await changeUser(subject, async () => {
-      await ensureCurrentSubject(database, request);
-      if (input.model || input.git) await requireDeveloper(request);
+    const result = await changeUser(subject, () => input.model || input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async () => {
       const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
       const values = { modelApiKeys: { ...existing?.modelApiKeys }, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
       if (input.model) {
@@ -127,9 +120,7 @@ export function registerUserRoutes(context: ApiRouteContext): void {
 
   app.get("/api/me", async (request, reply) => {
     reply.header("Cache-Control", "private, no-store");
-    const subject = await ensureCurrentSubject(database, request);
-    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (!person) throw new Error("current_subject_not_found");
+    const person = await requireCurrentUser(database, request);
     return serializePerson(person);
   });
 
@@ -141,7 +132,7 @@ export function registerUserRoutes(context: ApiRouteContext): void {
   });
 
   app.post("/api/users", async (request, reply) => {
-    await requireDeveloper(request);
+    await requireDeveloper(database, request);
     const input = record(request.body);
     const [created] = await database.db.insert(subjects).values({
       subject: userSubject(input.subject),
@@ -154,11 +145,11 @@ export function registerUserRoutes(context: ApiRouteContext): void {
   });
 
   app.patch<{ Params: { subject: string } }>("/api/users/:subject", async (request) => {
-    await requireDeveloper(request);
+    await requireDeveloper(database, request);
     const subject = userSubject(request.params.subject);
     const input = record(request.body);
     const update = { displayName: userName(input.name), email: userEmail(input.email), active: userActive(input.active), updatedAt: new Date() };
-    return changeUser(subject, () => database.db.transaction(async (transaction) => {
+    return changeUser(subject, () => requireDeveloper(database, request), () => database.db.transaction(async (transaction) => {
       const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
       if (!existing) throw new ApiError(404, "user_not_found");
       if (existing.active && !update.active) {
@@ -167,9 +158,8 @@ export function registerUserRoutes(context: ApiRouteContext): void {
       }
       const nextRole = input.role === undefined ? existing.role : choice(input.role, "user_role", USER_ROLES);
       if (existing.active && existing.role === "developer" && (!update.active || nextRole !== "developer")) {
-        const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.role, "developer"));
-        const otherActive = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true));
-        if (!developers.some(({ subject: id }) => id !== subject && otherActive.some(({ subject: activeId }) => activeId === id))) throw new ApiError(409, "last_active_developer");
+        const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
+        if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
       }
       const [updated] = await transaction.update(subjects).set({ ...update, role: nextRole }).where(eq(subjects.subject, subject)).returning();
       return serializeManagedUser(updated!);

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
+import { MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -39,10 +39,11 @@ export const services = sqliteTable("services", {
 
 export const mcpServices = sqliteTable("mcp_services", {
   id: id(), name: text("name").notNull(), url: text("url").notNull(),
-  transport: text("transport", { enum: ["streamable_http", "sse"] }).notNull(),
+  transport: text("transport", { enum: MCP_TRANSPORTS }).notNull(),
+  stdio: json<McpStdioConfiguration>("stdio"),
   authorization: text("authorization").notNull().default(""),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false), ...timestamps,
-}, (table) => [uniqueIndex("mcp_service_name_unique").on(table.name), check("mcp_transport_valid", sql`${table.transport} IN ('streamable_http','sse')`)]);
+}, (table) => [uniqueIndex("mcp_service_name_unique").on(table.name), check("mcp_transport_valid", sql`${table.transport} IN ('streamable_http','sse','stdio')`)]);
 
 export const capabilitySwitches = sqliteTable("capability_switches", {
   key: text("key", { enum: CAPABILITY_KEYS }).primaryKey(),

@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Skeleton } from "../ui";
 import { errorMessage, loadApplicationEndpoints, type ApplicationEndpoint } from "../data/client";
+import { copyText } from "../ui/clipboard";
 import { useApplicationResources } from "./ApplicationResources";
 
 export function EndpointConfiguration() {
@@ -21,7 +22,7 @@ export function EndpointConfiguration() {
   onCleanup(() => controller?.abort());
   const url = (endpoint: ApplicationEndpoint) => new URL(endpoint.path, window.location.origin).href;
   const copy = async (endpoint: ApplicationEndpoint) => {
-    try { await navigator.clipboard.writeText(url(endpoint)); setCopied(endpoint.path); }
+    try { await copyText(url(endpoint)); setCopied(endpoint.path); }
     catch { setError("复制失败，请直接选中地址复制"); }
   };
   return <main class="endpoint-configuration"><section class="user-management-card" aria-label="端点说明">

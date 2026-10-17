@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { finalizeQuarantinedAttachments, removeWrittenAttachments } from "../../src/http/attachment-store.ts";
+import { finalizeQuarantinedAttachments, removeWrittenAttachments, resolveSecureAttachmentFile } from "../../src/http/attachment-store.ts";
 import { claimIssueRoot, issueAttachmentRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
 
 test("rolls back only empty state claimed for a failed Issue creation", async () => {
@@ -29,6 +29,21 @@ test("rolls back only empty state claimed for a failed Issue creation", async ()
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("rejects an attachment symlink while preserving its target and evidence", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-symlink-"));
+  try {
+    const attachmentRoot = path.join(root, "attachments");
+    await mkdir(attachmentRoot, { mode: 0o700 });
+    const target = path.join(root, "outside.txt");
+    await writeFile(target, "evidence", { mode: 0o400 });
+    const objectKey = path.join(attachmentRoot, "linked.txt");
+    await symlink(target, objectKey);
+    await assert.rejects(resolveSecureAttachmentFile(attachmentRoot, objectKey, 8), /insecure_issue_attachment_file/);
+    assert.equal(await readlink(objectKey), target);
+    assert.equal(await readFile(target, "utf8"), "evidence");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("reports quarantine finalize failures without hiding retained evidence", async () => {

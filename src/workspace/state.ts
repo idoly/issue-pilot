@@ -53,6 +53,10 @@ export function issueRoot(stateRoot: string, issueKey: string): string {
   return path.join(issuesRoot(stateRoot), issueSegment(issueKey));
 }
 
+export function issueWorkDirectory(stateRoot: string, issueKey: string): string {
+  return path.join(issueRoot(stateRoot, issueKey), "work");
+}
+
 export function issueSessionRoot(stateRoot: string, issueKey: string): string {
   return path.join(issueRoot(stateRoot, issueKey), "agent");
 }

@@ -1,3 +1,5 @@
+import type { SourceHistoryCursor, SourceHistoryPage } from "../../../workspace/source-browser";
+export type { SourceHistoryCursor } from "../../../workspace/source-browser";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
@@ -181,7 +183,7 @@ export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 export const updateGlobalAgent = (input: AgentConfiguration) => request<{ ok: true }>("/api/config/agent", { method: "PUT", body: JSON.stringify(input) });
 
-type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite";
+type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite" | "Offset";
 
 function sourceResponseRecord(value: unknown, code: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
@@ -238,7 +240,7 @@ export const searchSource = (key: string, repository: string, query: string, opt
   "Word-Match": String(options.wordMatch ?? false),
 }, signal) as Promise<{ matches: SourceSearchMatch[]; truncated: boolean }>;
 export const loadSourceBlame = (key: string, repository: string, path: string, line: number, signal?: AbortSignal) => sourceRequest(key, "blame", repository, { Path: path, Line: String(line) }, signal) as Promise<SourceBlame>;
-export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal) => sourceRequest(key, "history", repository, { Path: path }, signal) as Promise<{ commits: SourceCommit[]; truncated: boolean }>;
+export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal, cursor?: SourceHistoryCursor) => sourceRequest(key, "history", repository, { Path: path, ...(cursor ? { Revision: cursor.revision, Offset: String(cursor.offset) } : {}) }, signal) as Promise<SourceHistoryPage>;
 export async function loadSourceCommit(key: string, repository: string, revision: string, path = "", signal?: AbortSignal): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
   const code = "source_commit_response_invalid";
   const response = sourceResponseRecord(await sourceRequest(key, "commit", repository, { Revision: revision, Path: path }, signal), code);
@@ -276,8 +278,10 @@ function appendFiles(form: FormData, files: File[]): void {
 
 export const resolveDmsScope = (input: { url: string; authorization?: string; serviceKey?: string; environmentKey: string; instanceAlias: string; schemaName: string }) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input);
 
-export interface McpService { id: string; name: string; url: string; transport: "streamable_http" | "sse"; enabled: boolean; credentialConfigured: boolean }
-export interface McpServiceInput { name: string; url: string; transport: McpService["transport"]; enabled: boolean; credentialUpdate: { mode: "preserve" | "clear" } | { mode: "replace"; values: { authorization: string } } }
+import type { McpStdioConfiguration, McpTransport } from "../../../domain/contracts";
+export interface McpService { id: string; name: string; url: string; transport: McpTransport; enabled: boolean; credentialConfigured: boolean }
+export interface McpServiceInput { name: string; url: string; transport: McpService["transport"]; enabled: boolean; credentialUpdate: { mode: "preserve" | "clear" } | { mode: "replace"; values: { authorization: string } | { stdio: McpStdioConfiguration } } }
+export const importMcpServices = (input: unknown) => jsonRequest<McpService[]>("/api/mcp-services/import", "POST", input);
 export const loadMcpServices = () => request<McpService[]>("/api/mcp-services");
 export const createMcpService = (input: McpServiceInput) => jsonRequest<McpService>("/api/mcp-services", "POST", input);
 export const updateMcpService = (id: string, input: McpServiceInput) => jsonRequest<McpService>(`/api/mcp-services/${encodeURIComponent(id)}`, "PATCH", input);

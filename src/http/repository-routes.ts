@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { repositories, serviceRepositories, services, issues, subjects } from "../db/schema.ts";
+import { repositories, serviceRepositories, services, issues } from "../db/schema.ts";
 import { ApiError, record, text } from "./input.ts";
-import { ensureCurrentSubject, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 function repositoryInput(body: unknown) {
   const input = record(body);
@@ -18,11 +18,7 @@ function repositoryInput(body: unknown) {
 
 export function registerRepositoryRoutes(context: ApiRouteContext) {
   const { app, database, engine, runScopeExclusive } = context;
-  const authorize = async (request: Parameters<typeof ensureCurrentSubject>[1]) => {
-    const subject = await ensureCurrentSubject(database, request);
-    const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (user?.role !== "developer") throw new ApiError(403, "developer_role_required");
-  };
+
   app.get("/api/repositories", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     return runScopeExclusive(async () => {
@@ -32,20 +28,20 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
     });
   });
   app.post("/api/repositories", async (request, reply) => {
-    await authorize(request);
+    await requireDeveloper(database, request);
     const input = repositoryInput(request.body);
     const result = await runScopeExclusive(async () => {
-      await authorize(request);
+      await requireDeveloper(database, request);
       const [saved] = await database.db.insert(repositories).values(input).returning();
       return { id: saved!.id };
     });
     return reply.code(201).send(result);
   });
   app.patch<{ Params: { id: string } }>("/api/repositories/:id", async (request) => {
-    await authorize(request);
+    await requireDeveloper(database, request);
     const input = repositoryInput(request.body);
     return runScopeExclusive(async () => {
-      await authorize(request);
+      await requireDeveloper(database, request);
       const [existing] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
       if (!existing) throw new ApiError(404, "repository_not_found");
       if (existing.name === input.name && existing.url === input.url) return { ok: true };
@@ -67,9 +63,9 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
     });
   });
   app.delete<{ Params: { id: string } }>("/api/repositories/:id", async (request, reply) => {
-    await authorize(request);
+    await requireDeveloper(database, request);
     await runScopeExclusive(async () => {
-      await authorize(request);
+      await requireDeveloper(database, request);
       const [row] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
       if (!row) throw new ApiError(404, "repository_not_found");
       const [binding] = await database.db.select({ id: serviceRepositories.id }).from(serviceRepositories).where(eq(serviceRepositories.url, row.url)).limit(1);

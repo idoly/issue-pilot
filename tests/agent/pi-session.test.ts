@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import type { Model } from "@earendil-works/pi-ai";
@@ -10,7 +11,7 @@ import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
 import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
 import { IssueOutputStore } from "../../src/outputs/store.ts";
-import type { PiModelRuntime } from "../../src/pi/models.ts";
+import type { PiModelRuntime } from "../../src/agent/model-runtime.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-session-"));
@@ -36,6 +37,10 @@ test("creates a private Pi session file before the first Agent prompt", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+function localMcp(root: string) {
+  return { environmentKey: "prod", serviceKey: "orders", serviceName: "Orders", configurations: [{ id: "local", name: "Local", url: "", authorization: "", transport: "stdio" as const, enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_PID_FILE: join(root, "pid") } } }] };
+}
 
 function context(options: { writable: boolean; capability?: "db"; outputs?: boolean }): AgentSessionContext {
   return {
@@ -102,15 +107,15 @@ test("maps the current user to Git author and committer environment", () => {
   assert.throws(() => gitIdentityEnvironment({ name: "", email: "user@example.test" }), /invalid_git_commit_identity/);
 });
 
-test("limits read-only deployments to non-mutating Pi tools", () => {
-  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "sandbox", "service_query"]);
+test("uses native coding tools independently of repository access policy", () => {
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 
-test("enables Pi mutation tools only for writable development contexts", () => {
+test("keeps output publication limited to data-processing contexts", () => {
   assert.deepEqual(sessionToolAllowlist(context({ writable: true })), [
-    "read", "bash", "edit", "write", "grep", "find", "ls", "sandbox",
+    "read", "bash", "edit", "write", "grep", "find", "ls",
   ]);
-  assert.deepEqual(sessionToolAllowlist(context({ writable: false, outputs: true })), ["read", "grep", "find", "ls", "sandbox", "output"]);
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false, outputs: true })), ["read", "bash", "edit", "write", "grep", "find", "ls", "output"]);
 });
 
 test("starts an SDK session with only context-selected tools and explicit resources", async () => {
@@ -131,7 +136,7 @@ test("starts an SDK session with only context-selected tools and explicit resour
       onEvent: () => undefined,
     });
     assert.deepEqual(refreshes, [{ providers: ["test-provider"], allowNetwork: false }]);
-    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["find", "grep", "ls", "read", "sandbox"]);
+    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     assert.equal(managed.session.model?.id, "test-model");
     assert.equal(managed.session.thinkingLevel, "medium");
     assert.match(managed.session.systemPrompt, /Issue Pilot test context/);
@@ -157,14 +162,14 @@ test("registers the durable output tool only with an explicit Issue output store
       systemPrompt: "",
       onEvent: () => undefined,
     });
-    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["find", "grep", "ls", "output", "read", "sandbox"]);
+    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "output", "read", "write"]);
     await managed.stop();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("disposes an SDK session even when abort fails during stop", async () => {
+test("disposes an SDK session and stdio process even when abort fails during stop", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
   const manager = await createPrivateSessionManager(root, root);
   const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
@@ -172,9 +177,11 @@ test("disposes an SDK session even when abort fails during stop", async () => {
     context: context({ writable: false }),
     deploymentConfig: {},
     workspaceRoot: root,
+    mcpScopes: [localMcp(root)],
     systemPrompt: "",
     onEvent: () => undefined,
   });
+  const child = Number(await readFile(join(root, "pid"), "utf8"));
   let disposed = false;
   const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
   const dispose = session.dispose.bind(session);
@@ -184,10 +191,22 @@ test("disposes an SDK session even when abort fails during stop", async () => {
   try {
     await assert.rejects(managed.stop(), /abort_failed/);
     assert.equal(disposed, true);
+    assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
     await managed.stop();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("closes discovered stdio processes when Agent initialization fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-start-"));
+  try {
+    await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+      manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, mcpScopes: [localMcp(root)], gitIdentity: { name: "", email: "test@example.test" }, systemPrompt: "", onEvent: () => undefined,
+    }), /invalid_git_commit_identity/);
+    const child = Number(await readFile(join(root, "pid"), "utf8"));
+    assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("rejects configured models that are not currently available", async () => {
