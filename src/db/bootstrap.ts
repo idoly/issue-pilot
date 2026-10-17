@@ -40,7 +40,7 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
     const [existingSubject] = await database.db.select({ subject: subjects.subject }).from(subjects).limit(1);
     if (!existingSubject) {
       const user = issuePilotConfig.bootstrapUser;
-      await database.db.insert(subjects).values({ subject: user.subject, displayName: user.name, email: user.email });
+      await database.db.insert(subjects).values({ subject: user.subject, displayName: user.name, email: user.email, role: user.role });
     }
     await database.client.execute({
       sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() * 1000 WHERE status != 'resolved' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",

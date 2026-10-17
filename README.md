@@ -12,7 +12,7 @@ Issue Pilot 是面向可信内部代码库的本地优先 AI 工单系统。它�
 - Resolved dev workspace 可受管释放；代码由 bare store 中的本地 working branch 持久保存，可只读浏览并在 reopen 时恢复。
 - 每张 Issue 持久保存 Pi JSONL conversation、Attachment、Comment、Repository 投影和 Workspace 状态；Agent 输入框可直接粘贴图片并随消息发送给模型。
 - 内置 Workbench 提供 Explorer、Search、SCM Changes/Graph、revision Diff、blame、history 和安全的 Markdown Preview。
-- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS MCP 和 SLS 作为 Deployment-scoped 只读 Pi tools；DMS 可配置多个 schema，Agent 每次只能选择一个已授权目标。
+- Nacos、MySQL、Redis、RabbitMQ、Elasticsearch、DMS 和 SLS 通过统一 service_query 读取证据；显式选择来源环境与服务。开发工单继承正式/测试查询能力，来源保持只读。
 - 用户由 SQLite 管理，停用用户不会删除历史署名。
 
 ## Web 界面
@@ -110,9 +110,9 @@ podman build --pull=always -f Containerfile \
 
 - API 没有内置 authentication/authorization；`X-Issue-Pilot-Subject` 只选择启用用户和写入署名，不是认证。
 - ClusterIP Service 必须由带 TLS 和组织认证授权的可信 Ingress 保护。
-- `GET /api/config` 有意返回配置页需要的完整 Deployment credential；不得记录、监控或导出该响应。
+- `GET /api/config` 只返回凭证配置状态，不返回已存密钥；凭证更新协议见[配置说明](docs/CONFIGURATION.md#result-与-secret)。
 - Credential 不进入 `AgentSessionContext`、prompt、tool schema/input、日志或诊断。
-- DMS Bearer 只作为 session-local HTTPS Authorization header；SLS AccessKey 只写入调用级临时 `0600` profile。
+- DMS Bearer 只作为 session-local HTTPS Authorization header；SLS AccessKey 只进入隔离 worker 中的官方签名 SDK，不写认证文件。
 - Capability result 会进入模型上下文和该 Issue 的 Pi JSONL，可能包含敏感业务数据。
 - Source 和 Workbench 返回内部源码；dev mutation 会直接修改 Issue worktree，均属于敏感接口。
 
@@ -122,10 +122,10 @@ Web 使用以下 API 域：
 
 - User：active user、current user、管理列表、创建与更新。
 - Configuration：catalog、完整 config、全局 model、DMS scope resolve、Service CRUD。
-- Issue：列表、创建、编辑、详情、状态转换和 Comment。
+- Issue：用户级固定个人队列、创建、正式跟进、通用关联工单管理、编辑、详情、状态转换和 Comment。
 - Agent：retry、message、SSE stream。
 - Attachment：完整性校验后的只读 GET；写入只属于 Issue create/edit multipart transaction。
-- Workspace：stats、analysis-to-development 转换和受管 release/reopen。
+- Workspace：stats、带审计历史的无状态 Scope Transition plan/apply 和受管 release/reopen。
 - Source：Repository、tree、file/directory/path/rename、search、blame、history、commit、diff，以及受限 Stage、Unstage、Discard、Commit。
 
 不存在独立 Attachment write route、Issue sync route、Terminal 或任意宿主 Git command endpoint。Source mutation 只允许 active development workspace，并按 Issue reservation 串行。

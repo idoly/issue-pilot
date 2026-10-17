@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -11,10 +12,11 @@ import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueAttachments, issueComments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, issueAttachments, issueComments, issueRepositories, issueScopeTransitions, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { WorkspaceConversionRefusal, WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
+import { WorkspaceConversionRefusal, WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, WorkspaceScopeMigrationRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
 import { IssueProjectManager, prepareDevelopmentIssueRuntimes } from "../../src/workspace/project.ts";
+import { IssueScopeTransitionManager, ScopeTransitionRefusal } from "../../src/workspace/scope-transition.ts";
 import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -587,6 +589,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     await database.db.insert(subjects).values({ subject: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
     const [service] = await database.db.insert(services).values({ key: "conversion-service", name: "Conversion Service" }).returning();
     const remote = await createRemote(root, "conversion");
+    await registerTestRepositories(database.db, [remote]);
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "conversion", url: remote }).returning();
     const [testDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: testEnvironment.id, config: {} }).returning();
     const [devDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: devEnvironment.id, config: {} }).returning();
@@ -692,6 +695,145 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.deepEqual(conversionEngine.closed, [issue!.id, issue!.id]);
     assert.deepEqual(conversionEngine.enqueued, [issue!.id]);
     await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "issue_not_convertible_to_development");
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("migrates ready development scopes while preserving retained changes and rolling back failures", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-scope-migration-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    await database.db.insert(subjects).values({ subject: "migration-tester", displayName: "Migration Tester" });
+    const [sourceService, targetService] = await database.db.insert(services).values([
+      { key: "scope-source", name: "Scope Source" },
+      { key: "scope-target", name: "Scope Target" },
+    ]).returning();
+    const retainedRemote = await createRemote(root, "scope-retained");
+    const removedRemote = await createRemote(root, "scope-removed");
+    const addedRemote = await createRemote(root, "scope-added");
+    await registerTestRepositories(database.db, [retainedRemote, removedRemote, addedRemote]);
+    const sourceRepositories = await database.db.insert(serviceRepositories).values([
+      { serviceId: sourceService!.id, alias: "retained-source", url: retainedRemote },
+      { serviceId: sourceService!.id, alias: "removed", url: removedRemote },
+    ]).returning();
+    const targetRepositories = await database.db.insert(serviceRepositories).values([
+      { serviceId: targetService!.id, alias: "retained-target", url: retainedRemote },
+      { serviceId: targetService!.id, alias: "added", url: addedRemote },
+    ]).returning();
+    const [sourceDeployment, targetDeployment] = await database.db.insert(serviceDeployments).values([
+      { serviceId: sourceService!.id, environmentId: devEnvironment!.id, config: {} },
+      { serviceId: targetService!.id, environmentId: devEnvironment!.id, config: {} },
+    ]).returning();
+    await database.db.insert(serviceDeploymentRepositories).values([
+      ...sourceRepositories.map((repository) => ({ deploymentId: sourceDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),
+      ...targetRepositories.map((repository) => ({ deploymentId: targetDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),
+    ]);
+    const [issue] = await database.db.insert(issues).values({
+      key: "ISSUE-20260814-102",
+      title: "Migrate development scope",
+      type: "defect_fix",
+      serviceId: sourceService!.id,
+      environmentId: devEnvironment!.id,
+      reporterSubject: "migration-tester",
+    }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
+    const projects = new IssueProjectManager(database.db, root);
+    await projects.prepare(issue!, "dev");
+    await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, issue!.id));
+
+    const originalRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    const originalByUrl = new Map(originalRepositories.map((repository) => [repository.url, repository]));
+    const retainedPath = originalByUrl.get(retainedRemote)!.localPath!;
+    const removedPath = originalByUrl.get(removedRemote)!.localPath!;
+    await writeFile(path.join(retainedPath, "README.md"), "retained staged change\n", "utf8");
+    await git(["-C", retainedPath, "add", "README.md"]);
+    await writeFile(path.join(retainedPath, "untracked.txt"), "retained untracked change\n", "utf8");
+
+    const migrationEngine = {
+      closed: [] as string[],
+      enqueued: [] as string[],
+      enqueue(issueId: string) { this.enqueued.push(issueId); }, async send() {}, isRunning() { return false; },
+      async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(issueId: string): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
+        return operation({ enqueue: (issueId) => { this.enqueue(issueId); }, closeSession: async (issueId) => { this.closed.push(issueId); } });
+      },
+    };
+    const lifecycle = new WorkspaceLifecycleManager(database.db, root, migrationEngine as never, {
+      retentionMs: Number.POSITIVE_INFINITY,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
+    const transitions = new IssueScopeTransitionManager(database.db, migrationEngine as never, lifecycle);
+    await assert.rejects(
+      transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_feature" }),
+      (error: unknown) => error instanceof ScopeTransitionRefusal && error.reason === "development_branch_mode_immutable",
+    );
+    const plan = await transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" });
+    assert.equal(plan.action, "migrate_development");
+    assert.equal(plan.branch, `hotfix-${issue!.key.toLowerCase()}`);
+    assert.deepEqual(plan.repositories.retained.map(({ url }) => url), [retainedRemote]);
+    assert.deepEqual(plan.repositories.added.map(({ url }) => url), [addedRemote]);
+    assert.deepEqual(plan.repositories.removed.map(({ url }) => url), [removedRemote]);
+
+    const dirtyRemovedFile = path.join(removedPath, "do-not-remove.txt");
+    await writeFile(dirtyRemovedFile, "operator evidence\n", "utf8");
+    await assert.rejects(
+      transitions.apply(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" }, { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash }, "migration-tester"),
+      (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.reason === "scope_transition_removed_repository_changed",
+    );
+    assert.equal(await readFile(dirtyRemovedFile, "utf8"), "operator evidence\n");
+    await unlink(dirtyRemovedFile);
+
+    const mutableDatabase = database.db as typeof database.db & { transaction: typeof database.db.transaction };
+    const transaction = mutableDatabase.transaction.bind(mutableDatabase);
+    let failFinalize = true;
+    mutableDatabase.transaction = (async (operation: Parameters<typeof database.db.transaction>[0]) => {
+      if (failFinalize) {
+        failFinalize = false;
+        throw new Error("simulated_scope_migration_transaction_failure");
+      }
+      return transaction(operation);
+    }) as typeof database.db.transaction;
+    await assert.rejects(
+      transitions.apply(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" }, { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash }, "migration-tester"),
+      (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.reason === "simulated_scope_migration_transaction_failure",
+    );
+    mutableDatabase.transaction = transaction;
+    const rolledBackRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(rolledBackRepositories.map(({ url }) => url).sort(), [removedRemote, retainedRemote].sort());
+    await Promise.all(rolledBackRepositories.map(({ localPath }) => access(localPath!)));
+    assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.serviceId, sourceService!.id);
+    assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /README\.md/);
+    assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /untracked\.txt/);
+    assert.equal((await database.db.select().from(issueScopeTransitions).where(eq(issueScopeTransitions.issueId, issue!.id))).length, 0);
+
+    const retryPlan = await transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" });
+    const migrated = await transitions.apply(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" }, {
+      expectedIssueUpdatedAt: retryPlan.expectedIssueUpdatedAt,
+      expectedPlanHash: retryPlan.planHash,
+    }, "migration-tester");
+    assert.equal(migrated.serviceId, targetService!.id);
+    const migratedRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    assert.deepEqual(migratedRepositories.map(({ url }) => url).sort(), [addedRemote, retainedRemote].sort());
+    const migratedByUrl = new Map(migratedRepositories.map((repository) => [repository.url, repository]));
+    assert.equal(migratedByUrl.get(retainedRemote)!.localPath, retainedPath);
+    assert.equal(migratedByUrl.get(retainedRemote)!.workingBranch, originalByUrl.get(retainedRemote)!.workingBranch);
+    assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /README\.md/);
+    assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /untracked\.txt/);
+    await assert.rejects(access(removedPath));
+    await access(migratedByUrl.get(addedRemote)!.localPath!);
+    assert.equal(await git(["-C", migratedByUrl.get(addedRemote)!.localPath!, "branch", "--show-current"]), `hotfix-${issue!.key.toLowerCase()}`);
+    assert.deepEqual(migrationEngine.enqueued, [issue!.id]);
+    const transitionRows = await database.db.select().from(issueScopeTransitions).where(eq(issueScopeTransitions.issueId, issue!.id));
+    assert.equal(transitionRows.length, 1);
+    assert.equal(transitionRows[0]!.actorSubject, "migration-tester");
+    assert.equal(transitionRows[0]!.action, "migrate_development");
+    assert.equal(transitionRows[0]!.planHash, retryPlan.planHash);
+    assert.deepEqual(transitionRows[0]!.repositories, { retained: [retainedRemote], added: [addedRemote], removed: [removedRemote] });
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

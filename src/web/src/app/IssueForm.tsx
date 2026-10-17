@@ -1,17 +1,13 @@
-import { Button, Modal, Segmented, TextArea } from "@idoly/ant-design-solid";
+import { Button, Modal, Segmented, Select, TextArea } from "../ui";
 import { createSignal, For, Show } from "solid-js";
 
 import { Maximize2, Paperclip, Trash2 } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
-import { ISSUE_TYPES_BY_ENVIRONMENT, type IssueDetail, type IssueType } from "../data/client";
+import type { IssueDetail, IssueExecutionItem } from "../data/client";
 import { fileSize } from "./model";
 
 export function selectedChoice<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   return typeof value === "string" && allowed.includes(value as T) ? value as T : undefined;
-}
-
-export function issueTypesForEnvironment(environmentKey: string): IssueType[] {
-  return [...(ISSUE_TYPES_BY_ENVIRONMENT[environmentKey as keyof typeof ISSUE_TYPES_BY_ENVIRONMENT] ?? [])];
 }
 
 export function DescriptionField(props: { value: () => string; inputLabel: string; expandLabel: string; onChange: (value: string) => void }) {
@@ -29,6 +25,55 @@ export function DescriptionField(props: { value: () => string; inputLabel: strin
           <TextArea class="description-expanded-input" aria-label="放大描述编辑器" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} />
         </Show>
       </Modal>
+    </div>
+  );
+}
+
+interface RelatedIssueOption {
+  value: string;
+  label: string;
+  title: string;
+  searchText: string;
+  candidate: IssueExecutionItem;
+}
+
+export function RelatedIssueSelect(props: {
+  candidates: IssueExecutionItem[];
+  value: string[];
+  loading?: boolean;
+  inputLabel: string;
+  onChange: (value: string[]) => void;
+}) {
+  const options = () => props.candidates.map((candidate): RelatedIssueOption => ({
+    value: candidate.id,
+    label: candidate.id,
+    title: candidate.title,
+    searchText: `${candidate.id} ${candidate.title} ${candidate.service.key} ${candidate.service.name}`.toLowerCase(),
+    candidate,
+  }));
+  return (
+    <div class="multi-select-trigger related-issue-select">
+      <Select<RelatedIssueOption>
+        mode="multiple"
+        aria-label={props.inputLabel}
+        loading={props.loading}
+        value={props.value}
+        onChange={props.onChange}
+        options={options()}
+        showSearch={{ filterOption: (input, option) => option.searchText.includes(input.trim().toLowerCase()) }}
+        optionRender={(option) => (
+          <div class="related-issue-option" title={`${option.candidate.id} · ${option.candidate.title}`}>
+            <div><strong>{option.candidate.id}</strong><span>{option.candidate.service.name}</span></div>
+            <small>{option.candidate.title}</small>
+          </div>
+        )}
+        maxTagCount={2}
+        listHeight={420}
+        popupClass="related-issue-popup"
+        popupMatchSelectWidth
+        placeholder="搜索工单号、标题或服务"
+        notFoundContent="没有匹配的工单"
+      />
     </div>
   );
 }

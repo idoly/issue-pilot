@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 
 import type { Connection, ConnectionOptions, FieldPacket, RowDataPacket } from "mysql2";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { queryMysql, validateReadOnlyQuery, type MysqlConnectionFactory } from "../../src/capabilities/mysql.ts";
+import { exportMysql, queryMysql, readMysql, validateReadOnlyQuery, type MysqlConnectionFactory } from "../../src/capabilities/mysql.ts";
+import { IssueOutputStore, resolveIssueOutput } from "../../src/outputs/store.ts";
 
 function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }>, wait?: Promise<void>) {
   const statements: string[] = [];
@@ -48,6 +52,13 @@ test("accepts complete MySQL reads and rejects side-effecting read expressions",
 
 const config = { url: "mysql://mysql.example.test:3307/orders", username: "readonly", password: "db-secret" };
 
+test("rejects native MySQL databases outside the deployment allowlist", async () => {
+  await assert.rejects(
+    readMysql({ databases: [config] }, { database: "inventory", statement: "SELECT 1" }),
+    /db_database_not_authorized/,
+  );
+});
+
 test("streams MySQL reads inside a server-enforced read-only transaction", async () => {
   let options: ConnectionOptions | undefined;
   const fixture = connectionFixture(
@@ -75,15 +86,47 @@ test("streams MySQL reads inside a server-enforced read-only transaction", async
   assert.equal(fixture.ended(), true);
 });
 
-test("stops streaming MySQL results at the configured row boundary", async () => {
-  const fixture = connectionFixture(Array.from({ length: 600 }, (_, id) => ({ id }) as RowDataPacket), [{ name: "id" }]);
-  await assert.rejects(queryMysql(
-    { config, statement: "SELECT id FROM orders" },
+test("returns every MySQL row without a row or result-byte cap", async () => {
+  const rows = Array.from({ length: 600 }, (_, id) => ({ id: String(id), value: "x".repeat(2000) }) as RowDataPacket);
+  const fixture = connectionFixture(rows, [{ name: "id" }, { name: "value" }]);
+  const result = await readMysql(
+    { databases: [config] },
+    { database: "orders", statement: "SELECT id, value FROM orders" },
+    undefined,
     undefined,
     () => fixture.connection,
-  ), /capability_result_too_large/);
-  assert.equal(fixture.statements.filter((statement) => statement === "SELECT id FROM orders").length, 1);
-  assert.equal(fixture.statements.includes("ROLLBACK"), true);
+  );
+  const text = result.content[0]!.text;
+  assert.ok(Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes);
+  const parsed = JSON.parse(text);
+  assert.equal(parsed.rows.length, 600);
+  assert.deepEqual(parsed.rows.at(-1), { id: "599", value: "x".repeat(2000) });
+  assert.deepEqual(fixture.statements, ["START TRANSACTION READ ONLY", "SELECT id, value FROM orders", "ROLLBACK"]);
+  assert.equal(fixture.ended(), true);
+});
+
+test("streams unbounded MySQL rows directly into a durable CSV output", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-mysql-output-"));
+  const fixture = connectionFixture(
+    Array.from({ length: 600 }, (_, id) => ({ id: String(id), note: id === 0 ? 'quoted "value"' : `row-${id}` }) as RowDataPacket),
+    [{ name: "id" }, { name: "note" }],
+  );
+  try {
+    const result = await exportMysql({
+      config,
+      statement: "SELECT id, note FROM orders",
+      output: { fileName: "orders.csv", format: "csv" },
+      store: new IssueOutputStore(root, "ISSUE-20260929-001"),
+    }, undefined, () => fixture.connection);
+    assert.equal(result.rows, 600);
+    assert.deepEqual(result.columns, ["id", "note"]);
+    assert.deepEqual(fixture.statements, ["START TRANSACTION READ ONLY", "SELECT id, note FROM orders", "ROLLBACK"]);
+    const content = await readFile(await resolveIssueOutput(root, "ISSUE-20260929-001", "orders.csv"), "utf8");
+    assert.equal(content.split("\n").filter(Boolean).length, 601);
+    assert.match(content, /^"id","note"\n"0","quoted ""value"""\n/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("destroys an active MySQL connection when the operation is aborted", async () => {

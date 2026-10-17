@@ -1,10 +1,13 @@
-import { Button, Select, Skeleton } from "@idoly/ant-design-solid";
+import { Button, Select, Skeleton } from "../ui";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { errorMessage, updateGlobalAgent, type AgentConfiguration } from "../data/client";
 import { ConfigurationView } from "./ConfigurationView";
 import { useApplicationResources } from "./ApplicationResources";
 import { selectedChoice } from "./IssueForm";
+import { EndpointConfiguration } from "./EndpointConfiguration";
+import { CapabilityManagement } from "./CapabilityManagement";
+import { RepositoryManagement } from "./RepositoryManagement";
 import { UserManagement } from "./UserManagement";
 
 function GlobalModelConfiguration() {
@@ -56,12 +59,15 @@ function GlobalModelConfiguration() {
   );
 }
 
-type SettingsPanel = "users" | "model" | "services";
+type SettingsPanel = "users" | "model" | "services" | "repositories" | "capabilities" | "endpoints";
 
 const settingsPanels: Array<{ key: SettingsPanel; label: string }> = [
   { key: "users", label: "用户" },
   { key: "model", label: "模型" },
+  { key: "capabilities", label: "能力" },
+  { key: "repositories", label: "仓库" },
   { key: "services", label: "服务" },
+  { key: "endpoints", label: "端点" },
 ];
 
 export function SettingsView() {
@@ -80,6 +86,9 @@ export function SettingsView() {
       </nav>
       <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "users"}><UserManagement /></div>
       <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "model"}><GlobalModelConfiguration /></div>
+      <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "capabilities"}><CapabilityManagement /></div>
+      <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "endpoints"}><EndpointConfiguration /></div>
+      <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "repositories"}><RepositoryManagement /></div>
       <div class="settings-panel service-settings-panel" role="tabpanel" hidden={selectedPanel() !== "services"}><ConfigurationView /></div>
     </main>
   );

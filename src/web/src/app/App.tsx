@@ -1,5 +1,5 @@
-import { ConfigProvider, Layout, Segmented, Select, Skeleton, theme } from "@idoly/ant-design-solid";
-import { createEffect, createMemo, createSignal, lazy, Match, Show, Switch } from "solid-js";
+import { Segmented, Select, Skeleton } from "../ui";
+import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
 import { AgentPanel } from "./AgentPanel";
@@ -9,7 +9,7 @@ import { OverviewView } from "./OverviewView";
 import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
 import type { WorkbenchPartLayout } from "./CodeBrowser";
-import "@idoly/ant-design-solid/styles.css";
+
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
 type AppView = "dashboard" | "issues" | "configuration";
@@ -18,22 +18,12 @@ const viewOptions: Array<{ value: AppView; label: string }> = [
   { value: "issues", label: "工单" },
   { value: "configuration", label: "配置" },
 ];
-const appTheme = {
-  algorithm: theme.defaultAlgorithm,
-  token: {
-    colorPrimary: "#176b5b",
-    colorPrimaryHover: "#248171",
-    colorPrimaryActive: "#105448",
-    borderRadius: "6px",
-    colorInfo: "#1677ff",
-  },
-};
 
 function AgentWorkbench(props: { issue: IssueDetail; sourceAgentOpen: boolean; sourceExpanded: boolean; sourceDetailsOpen: boolean; onCloseSource: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onRefresh: (issueKey: string) => Promise<IssueDetail>; onToggleAgent: () => void; onToggleDetails: () => void }) {
   return (
     <section class={`agent-workbench${props.sourceExpanded ? " source-open" : ""}`} aria-label={`${props.issue.id} 智能体工作区`}>
       <AgentPanel issue={props.issue} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} />
-      <Show when={props.sourceExpanded}><CodeBrowser issueKey={props.issue.id} development={props.issue.environmentKey === "dev"} agentOpen={props.sourceAgentOpen} detailsOpen={props.sourceDetailsOpen} onClose={props.onCloseSource} onLayout={props.onLayout} onPartVisibility={props.onPartVisibility} onToggleAgent={props.onToggleAgent} onToggleDetails={props.onToggleDetails} /></Show>
+      <Show when={props.sourceExpanded}><CodeBrowser issueKey={props.issue.id} repositoryVersion={props.issue.repositories.map((repository) => `${repository.name}:${repository.url}`).join("|")} development={props.issue.environmentKey === "dev"} agentOpen={props.sourceAgentOpen} detailsOpen={props.sourceDetailsOpen} onClose={props.onCloseSource} onLayout={props.onLayout} onPartVisibility={props.onPartVisibility} onToggleAgent={props.onToggleAgent} onToggleDetails={props.onToggleDetails} /></Show>
     </section>
   );
 }
@@ -62,6 +52,22 @@ function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: num
   return <IssueQueue selectedId={props.selectedId} userSubject={currentUser()?.subject ?? ""} refreshToken={props.refreshToken} hidden={props.hidden} keepExternalSelection={props.keepExternalSelection} onSelect={props.onSelect} />;
 }
 
+function ResourceBackedOverview(props: { onSelectIssue: (issueKey: string) => void }) {
+  const { people, selectCurrentUser, refreshPeople } = useApplicationResources();
+  let generation = 0, disposed = false;
+  onCleanup(() => { disposed = true; generation++; });
+  const open = async (issueKey: string, subject?: string) => {
+    const owner = ++generation;
+    if (subject && !people().some(user => user.subject === subject)) {
+      try { await refreshPeople(); } catch { /* the Issue can still open with the current user */ }
+    }
+    if (disposed || owner !== generation) return;
+    if (subject) selectCurrentUser(subject);
+    props.onSelectIssue(issueKey);
+  };
+  return <OverviewView onSelectIssue={(issueKey, subject) => { void open(issueKey, subject); }} />;
+}
+
 export function App(props: { initialView?: AppView } = {}) {
   const [view, setView] = createSignal<AppView>(props.initialView ?? "dashboard", { ownedWrite: true });
   const [selectedId, setSelectedId] = createSignal("", { ownedWrite: true });
@@ -70,10 +76,12 @@ export function App(props: { initialView?: AppView } = {}) {
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
   const [keepExternalSelection, setKeepExternalSelection] = createSignal(false, { ownedWrite: true });
+  const [dashboardTarget, setDashboardTarget] = createSignal("", { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDetailsOpen, setSourceDetailsOpen] = createSignal(true, { ownedWrite: true });
   const [workbenchLayout, setWorkbenchLayout] = createSignal<WorkbenchPartLayout | null>(null, { ownedWrite: true });
+  let issueWorkspace: HTMLElement | undefined;
   let selectionGeneration = 0;
   const issueRefreshes = new Map<string, number>();
   createEffect(
@@ -100,6 +108,13 @@ export function App(props: { initialView?: AppView } = {}) {
       });
     },
   );
+  createEffect(() => ({ current: issue()?.id, target: dashboardTarget(), currentView: view() }), ({ current, target, currentView }) => {
+    if (!target || current !== target || currentView !== "issues") return;
+    setDashboardTarget("");
+    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches) {
+      window.requestAnimationFrame(() => issueWorkspace?.scrollIntoView({ block: "start" }));
+    }
+  });
   const refreshIssue = async (issueKey: string, refreshQueue = false) => {
     const currentGeneration = selectionGeneration;
     const currentRefresh = (issueRefreshes.get(issueKey) ?? 0) + 1;
@@ -140,10 +155,9 @@ export function App(props: { initialView?: AppView } = {}) {
     ].join(";");
   });
   return (
-    <ConfigProvider theme={appTheme} button={{ autoInsertSpace: false }}>
       <ApplicationResourcesProvider>
-      <Layout class="app-shell">
-        <Layout.Header class="app-header">
+      <div class="app-shell">
+        <header class="app-header">
           <div class="brand"><span>IP</span><strong>issue-pilot</strong></div>
           <div class="header-context">
             <Segmented
@@ -155,23 +169,27 @@ export function App(props: { initialView?: AppView } = {}) {
             />
           </div>
           <CurrentUserIdentity />
-        </Layout.Header>
-        <Layout.Content class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
+        </header>
+        <div class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${workbenchLayout() ? " workbench-ready" : ""}` : ""}`} style={sourceLayoutStyle()} onContextMenu={(event) => { if (sourceExpanded()) { event.preventDefault(); event.stopPropagation(); } }}>
           <Switch>
-            <Match when={view() === "dashboard"}><OverviewView onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setSelectedId(issueKey); setView("issues"); }} /></Match>
+            <Match when={view() === "dashboard"}><ResourceBackedOverview onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setDashboardTarget(issueKey); setSelectedId(issueKey); setView("issues"); }} /></Match>
             <Match when={view() === "issues"}>
-              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} keepExternalSelection={keepExternalSelection()} onSelect={(issueKey) => { setKeepExternalSelection(false); setSelectedId(issueKey); }} />
+              <ResourceBackedIssueQueue selectedId={selectedId()} refreshToken={issueRefreshToken()} hidden={sourceExpanded()} keepExternalSelection={keepExternalSelection()} onSelect={(issueKey) => { setDashboardTarget(""); setKeepExternalSelection(false); setSelectedId(issueKey); }} />
               <Show when={!loading()} fallback={<main class="issue-loading"><Skeleton active paragraph={{ rows: 12 }} /></main>}>
                 <Show when={issue()} fallback={<main class="issue-empty"><strong>{issueError() || "暂无工单"}</strong></main>}>
                   {(current) => (
                     <>
                       <AgentWorkbench issue={current()} sourceAgentOpen={sourceAgentOpen()} sourceExpanded={sourceExpanded()} sourceDetailsOpen={sourceDetailsOpen()} onCloseSource={() => setSourceExpanded(false)} onLayout={setWorkbenchLayout} onPartVisibility={(agentOpen, detailsOpen) => { setSourceAgentOpen(agentOpen); if (detailsOpen !== undefined) setSourceDetailsOpen(detailsOpen); }} onRefresh={refreshIssue} onToggleAgent={() => setSourceAgentOpen((open) => !open)} onToggleDetails={() => setSourceDetailsOpen((open) => !open)} />
-                      <IssueWorkspace issue={current()} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => {
+                      <IssueWorkspace issue={current()} elementRef={(element) => { issueWorkspace = element; }} sourcePanel={sourceExpanded()} sourcePanelOpen={sourceDetailsOpen()} onOpenSource={() => {
                         setWorkbenchLayout(null);
                         setSourceAgentOpen(true);
                         setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 600px)").matches);
                         setSourceExpanded(true);
-                      }} onUpdated={async () => { await refreshIssue(current().id, true); }} />
+                      }} onUpdated={async () => { await refreshIssue(current().id, true); }} onCreatedFollowUp={(issueKey) => {
+                        setIssueRefreshToken((value) => value + 1);
+                        setKeepExternalSelection(false);
+                        setSelectedId(issueKey);
+                      }} />
                     </>
                   )}
                 </Show>
@@ -179,9 +197,8 @@ export function App(props: { initialView?: AppView } = {}) {
             </Match>
             <Match when={view() === "configuration"}><SettingsView /></Match>
           </Switch>
-        </Layout.Content>
-      </Layout>
+        </div>
+      </div>
       </ApplicationResourcesProvider>
-    </ConfigProvider>
   );
 }

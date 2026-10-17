@@ -5,9 +5,10 @@ import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { AgentEventBus } from "../agent/events.ts";
 import type { DatabaseConnection } from "../db/client.ts";
 import { issues, subjects } from "../db/schema.ts";
-import { parseIssueKey } from "../domain/contracts.ts";
+import { parseIssueKey, canUseIssueWorkMode, type IssueWorkMode } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import type { WorkspaceLifecycleManager } from "../workspace/lifecycle.ts";
+import type { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import type { SourceBrowser } from "../workspace/source-browser.ts";
 import { ApiError } from "./input.ts";
 
@@ -19,12 +20,13 @@ export interface ApiRouteContext {
   modelCatalog: AgentModelCatalog;
   events: AgentEventBus;
   workspaces: WorkspaceLifecycleManager;
+  scopeTransitions: IssueScopeTransitionManager;
   sourceBrowser: SourceBrowser;
   runScopeExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export function serializePerson(person: typeof subjects.$inferSelect) {
-  return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "" };
+  return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "", role: person.role };
 }
 
 export async function ensureCurrentSubject(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">): Promise<string> {
@@ -35,6 +37,13 @@ export async function ensureCurrentSubject(database: ApiRouteContext["database"]
     : await database.db.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.createdAt), asc(subjects.subject)).limit(1);
   if (!user) throw new ApiError(400, "invalid_current_subject");
   return user.subject;
+}
+
+export async function authorizeWorkMode(database: ApiRouteContext["database"], request: Pick<FastifyRequest, "headers">, workMode: IssueWorkMode): Promise<string> {
+  const subject = await ensureCurrentSubject(database, request);
+  const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+  if (!user || !canUseIssueWorkMode(user.role, workMode)) throw new ApiError(403, "developer_role_required");
+  return subject;
 }
 
 export async function requireIssue(database: ApiRouteContext["database"], key: string) {

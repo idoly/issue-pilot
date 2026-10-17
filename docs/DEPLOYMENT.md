@@ -1,6 +1,6 @@
 # 部署说明
 
-Issue Pilot 当前只支持单节点、单副本 Kubernetes application 部署。应用代码、Web、Workbench、Pi、Node/npm、Maven/JDK、Git、ripgrep 和 Aliyun CLI 位于同一个 image；运行时只挂载正式 state、Operator 原生配置和临时 cache。
+Issue Pilot 提供单节点、单副本 Kubernetes application 部署清单；当前本机环境以用户级 systemd 服务运行 API 和 Web。Kubernetes image 包含应用、Web、Workbench、Pi、Node/npm、Maven/JDK、Git、ripgrep 和官方 SLS Node SDK，运行时只挂载正式 state、Operator 原生配置和临时 cache。分析沙盒在两种运行方式下的前提见下文。
 
 ## 拓扑
 
@@ -32,15 +32,15 @@ SQLite、bare Git、worktree metadata、Pi JSONL 和 Attachment 存在跨介质�
 
 `Containerfile` 当前包含：
 
-- Build stage：`node:26-bookworm-slim`，执行 `npm ci`、Web build、`npm prune --omit=dev`。
+- Build stage：`node:26-bookworm-slim`，先复制根清单、lockfile 和 `packages/workbench` 私有 workspace，再执行根目录 `npm ci`、Web build、`npm prune --omit=dev`；Workbench 的 editor 依赖只在该 workspace 的 devDependencies 中，裁剪后不进入 runtime node_modules。
 - Maven stage：Maven 3.9 + Eclipse Temurin 8。
 - Git stage：从 kernel.org 源码构建 Git `2.53.0`，保证 relative worktree 格式可读。
 - Runtime：`node:26-bookworm-slim`。
-- Aliyun CLI `3.4.11`，只供 SLS capability 使用。
+- SLS 使用生产依赖 @alicloud/sls20201230 的签名 HTTPS API，不安装 Aliyun CLI。
 - OpenSSH client、ripgrep、curl、Perl 与 Git runtime library。
 - Production dependencies、Fastify API、Solid Web 和 VS Code Workbench assets。
 
-DMS 不使用 Aliyun CLI；它由 application 内的 MCP SDK SSE client 调用。
+DMS 由 application 内的 MCP SDK SSE client 调用。
 
 Runtime 固定：
 
@@ -142,6 +142,10 @@ kubectl create namespace issue-pilot
 kubectl apply -f deploy/issue-pilot.yaml
 kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=10m
 ```
+
+## 分析沙盒执行环境
+
+新增 `sandbox` 分析工具的运行前提见[工单分析沙盒](SANDBOX.md#部署与诊断)。第一版要求应用进程所在 Linux 用户环境可运行 rootless Podman 并已有镜像；当前 image/manifest 未提供该能力，调用会明确失败，其余工具不受影响。不要添加引擎 socket 挂载或 privileged 来绕过隔离边界。
 
 ## Manifest 不变量
 

@@ -10,7 +10,7 @@ export const issuePilotConfig = Object.freeze({
     locale: "zh-CN",
     timeZone: "Asia/Shanghai",
   }),
-  bootstrapUser: Object.freeze({ subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
+  bootstrapUser: Object.freeze({ role: "developer" as const, subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
   http: Object.freeze({
     host: "0.0.0.0",
     port: 3000,
@@ -23,6 +23,7 @@ export const issuePilotConfig = Object.freeze({
     agentStreamReconnectMs: 1_000,
     agentStreamStaleMs: 45_000,
     agentToolOutputCharacters: 40_000,
+    outputPreviewBytes: 20 * 1024 * 1024,
     markdownCacheEntries: 512,
     markdownCacheCharacters: 4 * 1024 * 1024,
   }),
@@ -42,8 +43,10 @@ export const issuePilotConfig = Object.freeze({
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
-    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000 }),
+    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, codemode: false }),
+    sandbox: Object.freeze({ executable: "podman", image: "docker.io/library/node:26-bookworm-slim" }),
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
+    slsWorker: Object.freeze({ oldGenerationMb: 192, youngGenerationMb: 16 }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
     projectTools: Object.freeze({
       node: Object.freeze({
@@ -58,15 +61,17 @@ export const issuePilotConfig = Object.freeze({
     }),
   }),
   limits: Object.freeze({
+    sandbox: Object.freeze({ concurrency: 2, memoryBytes: 512 * 1024 * 1024, cpus: 1, processes: 64, workspaceBytes: 128 * 1024 * 1024, temporaryBytes: 64 * 1024 * 1024, executionMs: 30_000, lifetimeSeconds: 1800, outputBytes: 256 * 1024, transferBytes: 16 * 1024 * 1024, controlMs: 20_000, commandCharacters: 20_000 }),
+    mcpServer: Object.freeze({ requestBytes: 1024 * 1024, responseBytes: 1024 * 1024, pageItems: 100, textLines: 1000 }),
+    spreadsheet: Object.freeze({ executionMs: 30_000, memoryBytes: 256 * 1024 * 1024, workers: 2 }),
     agentMessageChars: 50_000,
-    attachment: Object.freeze({
+    relatedIssues: 20,
+    agentImage: Object.freeze({
       fileBytes: 20 * 1024 * 1024,
       requestBytes: 40 * 1024 * 1024,
       files: 20,
-      formFieldBytes: 100_000,
     }),
     sourceBrowser: Object.freeze({
-      fileBytes: 2 * 1024 * 1024,
       directoryEntries: 500,
       searchQueryCharacters: 200,
       historyCommits: 100,
@@ -84,11 +89,13 @@ export const issuePilotConfig = Object.freeze({
       diskUsageOutputBytes: 1024 * 1024,
     }),
     capability: Object.freeze({
+      workerConcurrency: 4,
       resultBytes: 1024 * 1024,
       timeoutMs: 15_000,
       connectionMs: 10_000,
-      database: Object.freeze({ queryChars: 20_000, rows: 500 }),
-      dms: Object.freeze({ executionMs: 30_000, databases: 20 }),
+      database: Object.freeze({ queryChars: 20_000, databases: 20 }),
+      mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
+      dms: Object.freeze({ executionMs: 120_000, databases: 20 }),
       elasticsearch: Object.freeze({ results: 200 }),
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
       redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),

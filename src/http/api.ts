@@ -13,6 +13,7 @@ import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } fro
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { prepareDevelopmentIssueRuntimes, prepareReadOnlyIssueRuntimes } from "../workspace/project.ts";
+import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import { ProjectToolBroker } from "../workspace/project-tools.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
 import { pruneState } from "../workspace/state.ts";
@@ -22,6 +23,10 @@ import { registerConfigurationRoutes } from "./configuration-routes.ts";
 import { ApiError } from "./input.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
 import { registerSourceBrowserRoutes } from "./source-browser-routes.ts";
+import { registerApplicationMcp } from "../mcp/server.ts";
+import { registerMcpRoutes } from "./mcp-routes.ts";
+import { registerCapabilityRoutes } from "./capability-routes.ts";
+import { registerRepositoryRoutes } from "./repository-routes.ts";
 import { registerUserRoutes } from "./user-routes.ts";
 import { registerWebRoutes } from "./web-routes.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
@@ -99,10 +104,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const sharedModelRuntime = () => modelRuntime ??= createPiModelRuntime();
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
     await ensureGlobalAgentConfiguration(database.db, modelCatalog);
-    const attachmentLimits = applicationConfig.limits.attachment;
-    await app.register(multipart, { limits: { fileSize: attachmentLimits.fileBytes, files: attachmentLimits.files, parts: attachmentLimits.files + 1, fieldSize: attachmentLimits.formFieldBytes } });
+    await app.register(multipart, { limits: { fileSize: Infinity, files: Infinity, fields: Infinity, parts: Infinity, fieldSize: Infinity } });
     const events = options.events ?? new AgentEventBus((error) => app.log.error(error));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), options.toolRuntime, sharedModelRuntime());
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(error), sharedModelRuntime());
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -113,8 +117,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
     app.setErrorHandler((error, _request, reply) => {
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
-      const errorCode = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
-      if (["FST_REQ_FILE_TOO_LARGE", "FST_FILES_LIMIT", "FST_PARTS_LIMIT", "FST_FIELDS_LIMIT"].includes(errorCode)) return reply.code(413).send({ error: "attachment_limit_exceeded" });
       const errorMessages: string[] = [];
       const seenCauses = new Set<unknown>();
       let cause: unknown = error;
@@ -140,9 +142,14 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     });
 
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);
-    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, sourceBrowser, runScopeExclusive };
+    const scopeTransitions = new IssueScopeTransitionManager(database.db, engine, workspaces);
+    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive };
     app.get("/health", async () => ({ ok: true }));
     registerUserRoutes(routeContext);
+    registerRepositoryRoutes(routeContext);
+    registerCapabilityRoutes(routeContext);
+    registerMcpRoutes(routeContext);
+    registerApplicationMcp(routeContext);
     registerConfigurationRoutes(routeContext);
     registerIssueRoutes(routeContext);
     registerAttachmentRoutes(routeContext);

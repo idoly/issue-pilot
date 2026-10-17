@@ -7,7 +7,7 @@ import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } fr
 
 const configuration: CapabilityConfiguration = {
   nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "operator", password: "nacos-secret" },
-  db: { url: "mysql://db.example.test:3306/orders", username: "reader", password: "db-secret" },
+  db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "db-secret" }] },
   redis: { host: "redis.example.test", port: 6379, username: "reader", password: "redis-secret", database: 0 },
   mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", password: "mq-secret", virtualHost: "/" },
   es: { url: "https://es.example.test", username: "reader", password: "es-secret" },
@@ -16,7 +16,11 @@ const configuration: CapabilityConfiguration = {
 };
 
 function publicInput(key: CapabilityName, credentialUpdate: Record<string, unknown>): Record<string, unknown> {
-  const section = projectCapabilityConfiguration(configuration)[key] as Record<string, unknown>;
+  const projected = projectCapabilityConfiguration(configuration);
+  if (key === "db") return {
+    databases: projected.db!.databases.map(({ credentialConfigured: _configured, ...database }) => ({ ...database, credentialUpdate })),
+  };
+  const section = projected[key] as Record<string, unknown>;
   const credentialFields = new Set<string>(CAPABILITY_CREDENTIALS[key].fields as readonly string[]);
   const visible = Object.fromEntries(Object.entries(section).filter(([field]) => field !== "credentialConfigured" && !credentialFields.has(field)));
   return { ...visible, credentialUpdate };
@@ -25,13 +29,18 @@ function publicInput(key: CapabilityName, credentialUpdate: Record<string, unkno
 test("projects and preserves every capability credential through the shared contract", () => {
   const projected = projectCapabilityConfiguration(configuration);
   for (const key of CAPABILITY_KEYS) {
-    const section = projected[key] as Record<string, unknown>;
-    assert.equal(section.credentialConfigured, true);
-    for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(section[field], (configuration[key] as Record<string, unknown>)[field]);
+    if (key === "db") {
+      assert.equal(projected.db!.databases[0]!.credentialConfigured, true);
+      assert.equal("password" in projected.db!.databases[0]!, false);
+    } else {
+      const section = projected[key] as Record<string, unknown>;
+      assert.equal(section.credentialConfigured, true);
+      for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(field in section, false);
+    }
     const resolved = resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], configuration);
     assert.deepEqual(resolved[key], configuration[key]);
   }
-  assert.equal(JSON.stringify(projected).includes("secret"), true);
+  assert.equal(JSON.stringify(projected).includes("secret"), false);
 });
 
 test("clears only optional credentials and rejects preservation without stored values", () => {

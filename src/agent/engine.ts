@@ -6,8 +6,14 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
+import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
+import { applyProductionCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
+import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
-import { processToolRuntime, type ToolRuntime } from "../tool-runtime.ts";
+import { resolveDeploymentConfiguration } from "../configuration/credentials.ts";
+import { listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
+import { createWorkspaceTool } from "./workspace-tool.ts";
+import { IssueOutputStore } from "../outputs/store.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
@@ -16,6 +22,8 @@ import { issueAttachmentRoot, issueSessionRoot, pathExists } from "../workspace/
 import type { Database } from "../db/client.ts";
 import {
   agentSessions,
+  mcpServices,
+  issueAttachments,
   environments,
   issueWorkspaces,
   issues,
@@ -55,6 +63,8 @@ export class AgentEngine implements AgentController {
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly onError: (error: unknown) => void;
   private readonly sessions = new Map<string, ManagedPiSession>();
+  private readonly personalGit = new Map<string, PersonalGitEnvironment>();
+  private readonly personalSessions = new Set<string>();
   private readonly sharedReadOnlySessions = new Set<string>();
   private readonly piRuntime: PiSessionRuntime;
   private closePromise: Promise<void> | undefined;
@@ -65,7 +75,6 @@ export class AgentEngine implements AgentController {
     stateRoot = ".issue-pilot",
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
-    tools: ToolRuntime = processToolRuntime,
     modelRuntime?: PiModelRuntime,
   ) {
     this.database = database;
@@ -73,7 +82,7 @@ export class AgentEngine implements AgentController {
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
     this.publish = publish;
     this.onError = onError;
-    this.piRuntime = new PiSessionRuntime(modelRuntime, tools);
+    this.piRuntime = new PiSessionRuntime(modelRuntime);
   }
 
   enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
@@ -128,7 +137,7 @@ export class AgentEngine implements AgentController {
         this.schedule(issueId, () => this.run(issueId, userMessage, true, gitIdentity, images));
         return;
       }
-      if (gitIdentity) managed.setGitIdentity(gitIdentity);
+      if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
       if (managed.streaming) {
         await this.steerQueue.run(issueId, async () => {
           if (this.sessions.get(issueId) !== managed || !managed.streaming) throw new Error("agent_session_changed");
@@ -157,7 +166,7 @@ export class AgentEngine implements AgentController {
     this.closing = true;
     await this.waitForIdle();
     const failures: unknown[] = [];
-    for (const issueId of [...this.sessions.keys()]) {
+    for (const issueId of new Set([...this.sessions.keys(), ...this.personalGit.keys()])) {
       try { await this.stopSession(issueId); }
       catch (error) { failures.push(error); }
     }
@@ -246,8 +255,21 @@ export class AgentEngine implements AgentController {
     if (!ENVIRONMENT_KINDS.includes(service.environmentKind as EnvironmentKind)) throw new Error("unsupported_issue_environment_kind");
     const environmentKind = service.environmentKind as EnvironmentKind;
     await this.stopSession(issue.id);
+    const owner = await loadIssueCredentialOwner(this.database, issue.id);
+    if ((environmentKind === "dev" || issue.type === "data_processing") && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
+    const agentConfiguration = await loadGlobalAgentConfiguration(this.database);
+    let modelApiKey: string | undefined;
+    let personalGit: PersonalGitEnvironment | undefined;
+    if (owner.user.role === "developer") {
+      modelApiKey = owner.credentials?.modelApiKeys[agentConfiguration.provider];
+      if (!modelApiKey) throw new Error("user_model_api_key_required");
+      const deployment = await loadIssueDeployments(this.database, issue);
+      personalGit = await createPersonalGitEnvironment(owner.credentials, deployment.repositories.map(({ repository }) => repository.url));
+      this.personalGit.set(issue.id, personalGit);
+      this.personalSessions.add(issue.id);
+    }
 
-    const project = await this.projectManager.prepare(issue, environmentKind);
+    const project = await this.projectManager.prepare(issue, environmentKind, personalGit?.env);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
@@ -255,11 +277,22 @@ export class AgentEngine implements AgentController {
     const attachmentPath = issueAttachmentRoot(this.stateRoot, issue.key);
     await mkdir(attachmentPath, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(attachmentPath), 0o700), chmod(attachmentPath, 0o700)]);
-    const agentConfiguration = await loadGlobalAgentConfiguration(this.database);
+    const environmentServices = await listEnvironmentServices(this.database, issue.environmentId, true);
+    const queryServices = environmentServices.filter(row => row.environment.kind !== "dev");
+    const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyProductionCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key, owner.credentials) }));
+    const deploymentConfig = serviceScopes.find(scope => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
+    const mcpRows = await this.database.select().from(mcpServices);
+    const mcpScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, configurations: (row.deployment.config.mcpServices ?? []).map(id => {
+      const connection = mcpRows.find(connection => connection.id === id);
+      if (!connection) throw new Error("deployment_mcp_service_not_found");
+      return connection;
+    }).filter(connection => connection.enabled) }));
     const context = createAgentSessionContext({
       issueKey: issue.key,
       issueType: issue.type,
-      deploymentConfig: project.deployment.config,
+      enabledCapabilities: await loadEnabledCapabilities(this.database),
+      deploymentConfig,
+      additionalDeploymentConfigs: serviceScopes.map(scope => scope.config),
       agentConfiguration,
       serviceKey: service.key,
       environmentKey: service.environmentKey,
@@ -275,10 +308,19 @@ export class AgentEngine implements AgentController {
     const managed = await this.piRuntime.start({
       workspaceRoot: project.workspaceRoot,
       context,
-      deploymentConfig: project.deployment.config,
+      deploymentConfig,
+      serviceScopes,
+      workspaceTool: await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env),
+      mcpScopes,
       manager,
       ...(project.executableRoot ? { executableRoot: project.executableRoot } : {}),
-      gitIdentity,
+      gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,
+      ...(modelApiKey ? { modelApiKey } : {}),
+      ...(personalGit ? { gitEnvironment: personalGit.env } : {}),
+      ...(context.canWriteOutputs ? {
+        outputStore: new IssueOutputStore(this.stateRoot, issue.key),
+        spreadsheetAttachments: { attachmentRoot: attachmentPath, attachments: await this.database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)) },
+      } : {}),
       systemPrompt: agentSystemPrompt(context),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
@@ -295,8 +337,8 @@ export class AgentEngine implements AgentController {
 
     const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: path.relative(project.workspaceRoot, repository.workspacePath), readOnly: repository.access === "read" }));
     const prompt = hadMessages
-      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage)
-      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
+      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys, path.join(project.runtimeRoot, "related-issues"))
+      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, relatedIssueKeys: project.relatedIssueKeys, relatedRoot: path.join(project.runtimeRoot, "related-issues"), ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
     await managed.prompt(prompt, images);
     if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);
@@ -366,9 +408,12 @@ export class AgentEngine implements AgentController {
   private async stopSession(issueId: string): Promise<void> {
     const managed = this.sessions.get(issueId);
     this.sharedReadOnlySessions.delete(issueId);
-    if (!managed) return;
+    this.personalSessions.delete(issueId);
+    const personalGit = this.personalGit.get(issueId);
+    this.personalGit.delete(issueId);
     this.sessions.delete(issueId);
-    await managed.stop();
+    try { await managed?.stop(); }
+    finally { await personalGit?.close(); }
   }
 
   private publishStatus(issueId: string, status: "complete" | "error"): void {

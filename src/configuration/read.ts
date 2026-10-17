@@ -1,12 +1,17 @@
-import { asc, inArray, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/libsql";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 
 import { loadGlobalAgentConfiguration } from "./agent.ts";
 import type { Database } from "../db/client.ts";
+import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../pi/models.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
-import { projectCapabilityConfiguration } from "./credentials.ts";
+import { deploymentContext } from "./service-context.ts";
+import { projectDeploymentConfiguration, resolveDeploymentConfiguration } from "./credentials.ts";
+
+const descriptionEnvironmentOrder = ["dev", "test", "prod"];
 
 type ConfigurationReader = Pick<Database, "select">;
 
@@ -31,20 +36,33 @@ async function projectConfigurationCatalog(database: ConfigurationReader): Promi
   };
 }
 
+async function readSnapshot<T>(database: Database, project: (reader: ConfigurationReader) => Promise<T>): Promise<T> {
+  const client = new Proxy(database.$client, {
+    get(target, property) {
+      if (property === "transaction") return () => target.transaction("read");
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return drizzle(client, { schema }).transaction((transaction) => project(transaction));
+}
+
 export function loadConfigurationCatalog(database: Database): Promise<ConfigurationCatalog> {
-  return database.transaction((transaction) => projectConfigurationCatalog(transaction));
+  return readSnapshot(database, projectConfigurationCatalog);
 }
 
 async function projectConfiguration(database: ConfigurationReader, agentModels: AgentModelDefinition[]): Promise<Configuration> {
-  const [agent, environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows] = await Promise.all([
+  const [agent, environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows, mcp] = await Promise.all([
     loadGlobalAgentConfiguration(database),
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
     database.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
     database.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
     database.select().from(serviceRepositories).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
     database.select().from(serviceDeploymentRepositories),
+    database.select({ id: schema.mcpServices.id, name: schema.mcpServices.name, url: schema.mcpServices.url, transport: schema.mcpServices.transport, enabled: schema.mcpServices.enabled }).from(schema.mcpServices),
   ]);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
+  const environmentById = new Map(environmentRows.map(environment => [environment.id, environment]));
   const deploymentsByServiceId = new Map<string, typeof deploymentRows>();
   const repositoriesByServiceId = new Map<string, typeof repositoryRows>();
   const branchesByDeploymentId = new Map<string, Map<string, string>>();
@@ -75,6 +93,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
         key: service.key,
         name: service.name,
         description: service.description,
+        context: [service.description, ...deployments.toSorted((left, right) => descriptionEnvironmentOrder.indexOf(environmentKeyById.get(left.environmentId)!) - descriptionEnvironmentOrder.indexOf(environmentKeyById.get(right.environmentId)!)).map(deployment => deploymentContext(environmentById.get(deployment.environmentId)!, deployment.config, mcp))].filter(Boolean).join("\n\n"),
         deployments: deployments.map((deployment) => {
           const deploymentConfig = deployment.config;
           const environmentKey = environmentKeyById.get(deployment.environmentId);
@@ -82,7 +101,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
           const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();
           if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
           return {
-            ...projectCapabilityConfiguration(deploymentConfig),
+            ...projectDeploymentConfiguration(deploymentConfig),
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
             capabilities: configuredCapabilities(deploymentConfig),
@@ -94,7 +113,24 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
   };
 }
 
+export function loadServiceConfigurationDescription(database: Database, key: string): Promise<{ context: string } | undefined> {
+  return readSnapshot(database, async reader => {
+    const [service] = await reader.select().from(services).where(eq(services.key, key)).limit(1);
+    if (!service) return undefined;
+    const [deployments, environmentRows, mcp] = await Promise.all([
+      reader.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, service.id)),
+      reader.select().from(environments), reader.select().from(schema.mcpServices),
+    ]);
+    return { context: [service.description, ...deployments.toSorted((left, right) => descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === left.environmentId)?.key ?? "") - descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === right.environmentId)?.key ?? "")).map(deployment => {
+      const environment = environmentRows.find(row => row.id === deployment.environmentId);
+      if (!environment) throw new Error("deployment_environment_not_found");
+      const credentials = environment.kind === "dev" ? undefined : resolveDeploymentConfiguration(deployment.config);
+      return deploymentContext(environment, deployment.config, mcp, credentials, mcp);
+    })].filter(Boolean).join("\n\n") };
+  });
+}
+
 export async function loadConfiguration(database: Database, modelCatalog: AgentModelCatalog): Promise<Configuration> {
   const agentModels = await modelCatalog.list();
-  return database.transaction((transaction) => projectConfiguration(transaction, agentModels));
+  return readSnapshot(database, (reader) => projectConfiguration(reader, agentModels));
 }

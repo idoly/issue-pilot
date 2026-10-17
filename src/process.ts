@@ -8,6 +8,7 @@ export interface CommandExecutionOptions {
   signal?: AbortSignal;
   environment?: Readonly<Record<string, string>>;
   maxOutputBytes?: number | null;
+  input?: Uint8Array;
 }
 
 export interface CommandExecutionResult {
@@ -28,7 +29,7 @@ export async function executeLocalCommand(command: string, args: string[], optio
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.environment ? { env: { ...options.environment } } : {}),
       detached: usesProcessGroup,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
@@ -74,10 +75,14 @@ export async function executeLocalCommand(command: string, args: string[], optio
       }
       append(chunk);
     };
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", capture((chunk) => { stdout += chunk; }));
-    child.stderr.on("data", capture((chunk) => { stderr += chunk; }));
+    child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") terminate();
+    });
+    if (options.input) child.stdin?.end(options.input);
+    child.stdout!.setEncoding("utf8");
+    child.stderr!.setEncoding("utf8");
+    child.stdout!.on("data", capture((chunk) => { stdout += chunk; }));
+    child.stderr!.on("data", capture((chunk) => { stderr += chunk; }));
     child.on("error", (error) => finish(() => reject(error)));
     child.on("close", (code) => finish(() => outputLimitExceeded
       ? reject(new Error("command_output_too_large"))

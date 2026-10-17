@@ -26,7 +26,7 @@ test("runs fixed tools from the application process environment", async () => {
   await assert.rejects(access(temporaryHome), { code: "ENOENT" });
 });
 
-test("allows only npm, Maven, and scoped Aliyun commands", async () => {
+test("allows only npm and Maven project commands", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const runtime = new ProcessToolRuntime({
     async execute(command, args) {
@@ -35,12 +35,11 @@ test("allows only npm, Maven, and scoped Aliyun commands", async () => {
     },
   });
   await runtime.run({ command: ["mvn", "--version"] });
-  await runtime.run({ command: ["aliyun", "sls", "GetLogs"] });
   assert.deepEqual(calls, [
     { command: "mvn", args: ["--version"] },
-    { command: "aliyun", args: ["sls", "GetLogs"] },
   ]);
   await assert.rejects(runtime.run({ command: ["node", "--version"] }), /tool_command_not_allowed/);
+  await assert.rejects(runtime.run({ command: ["aliyun", "sls", "GetLogs"] }), /tool_command_not_allowed/);
   await assert.rejects(runtime.run({ command: ["aliyun", "ecs", "DescribeInstances"] }), /tool_command_not_allowed/);
 });
 

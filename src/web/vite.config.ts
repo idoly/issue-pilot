@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import { defineConfig, type Plugin } from "vite";
-import solidPlugin from "vite-plugin-solid";
+import solidPlugin from "@solidjs/vite-plugin";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
@@ -128,6 +128,7 @@ export default defineConfig({
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 },
     },
     proxy: {
+      "/mcp": { target: `http://127.0.0.1:${issuePilotConfig.http.port}` },
       "/api": { target: `http://127.0.0.1:${issuePilotConfig.http.port}`, ws: true },
     },
   },

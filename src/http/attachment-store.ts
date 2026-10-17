@@ -1,44 +1,57 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { MultipartFile } from "@fastify/multipart";
-
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { Database } from "../db/client.ts";
 import { issueAttachments } from "../db/schema.ts";
 import { issueAttachmentRoot } from "../workspace/state.ts";
 import { ApiError } from "./input.ts";
 
-const limits = issuePilotConfig.limits.attachment;
-
 export interface PendingAttachment {
   fileName: string;
   mediaType: string;
-  content: Buffer;
+  temporaryPath: string;
+  size: number;
   sha256: string;
 }
 
-export async function readMultipartAttachment(part: MultipartFile, consumedBytes: number): Promise<PendingAttachment> {
-  const chunks: Buffer[] = [];
-  let totalBytes = consumedBytes;
-  for await (const chunk of part.file) {
-    const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += chunkBuffer.length;
-    if (totalBytes > limits.requestBytes) throw new ApiError(413, "attachment_limit_exceeded");
-    chunks.push(chunkBuffer);
-  }
-  if (part.file.truncated) throw new ApiError(413, "attachment_limit_exceeded");
-  const content = Buffer.concat(chunks);
+export async function readMultipartAttachment(part: MultipartFile): Promise<PendingAttachment> {
   const fileName = path.basename(part.filename);
   if (!fileName) throw new ApiError(400, "invalid_attachment_name");
-  return { fileName, mediaType: part.mimetype, content, sha256: createHash("sha256").update(content).digest("hex") };
+  const stagingRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-"));
+  const temporaryPath = path.join(stagingRoot, randomUUID());
+  const handle = await open(temporaryPath, "wx", 0o600);
+  const sha256 = createHash("sha256");
+  let size = 0;
+  try {
+    for await (const chunk of part.file) {
+      const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      await handle.write(content);
+      sha256.update(content);
+      size += content.length;
+    }
+    if (part.file.truncated) throw new Error("attachment_stream_truncated");
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+  await handle.close();
+  return { fileName, mediaType: part.mimetype, temporaryPath, size, sha256: sha256.digest("hex") };
+}
+
+export async function removePendingAttachments(pendingAttachments: PendingAttachment[]): Promise<void> {
+  const stagingRoots = [...new Set(pendingAttachments.map(({ temporaryPath }) => path.dirname(temporaryPath)))];
+  await Promise.all(stagingRoots.map((stagingRoot) => rm(stagingRoot, { recursive: true, force: true })));
 }
 
 export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
   const attachmentPath = path.resolve(objectKey);
   const metadata = await stat(attachmentPath).catch(() => undefined);
-  if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && (metadata.size !== expectedSize || metadata.size > limits.fileBytes))) throw new Error("insecure_issue_attachment_file");
+  if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
   return attachmentPath;
 }
 
@@ -105,8 +118,9 @@ export async function writePendingAttachments(
   for (const pendingAttachment of pendingAttachments) {
     const objectKey = path.join(attachmentRoot, `${randomUUID()}-${pendingAttachment.fileName}`);
     writtenObjectKeys.push(objectKey);
-    await writeFile(objectKey, pendingAttachment.content, { mode: 0o400 });
-    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, mediaType: pendingAttachment.mediaType, size: pendingAttachment.content.length, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
+    await copyFile(pendingAttachment.temporaryPath, objectKey, constants.COPYFILE_EXCL);
+    await chmod(objectKey, 0o400);
+    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
     createdAttachments.push(serializeAttachment(attachment!));
   }
   return createdAttachments;

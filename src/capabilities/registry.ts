@@ -11,19 +11,11 @@ const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 
-interface ToolMetadata {
-  label: string;
-  description: string;
-  promptSnippet: string;
-  promptGuidelines: string[];
-}
-
 export type CapabilityConfig<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]>;
 
 type CapabilityDefinition<Key extends CapabilityName> = {
   key: Key;
   inputSchema: TSchema;
-  metadata: ToolMetadata;
   parseConfiguration(value: unknown): CapabilityConfig<Key>;
 };
 
@@ -82,23 +74,39 @@ export function parseDmsConnectionConfiguration(value: unknown): Pick<Capability
   return { url: connectionUrl(input.url, "dms_url", ["https:"]), authorization };
 }
 
+export function parseSlsConnectionConfiguration(value: unknown): Pick<CapabilityConfig<"sls">, "accessKeyId" | "accessKeySecret"> {
+  const input = inputRecord(value);
+  return { accessKeyId: requiredText(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "sls_access_key_secret") };
+}
+
 const slsQueryProperties = {
   from: Type.Optional(Type.Integer({ minimum: 0 })),
   to: Type.Optional(Type.Integer({ minimum: 1 })),
-  query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars })),
+  query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars, description: "Log filter or SQL analysis. SQL uses its LIMIT/ORDER BY for pagination; incomplete results fail explicitly." })),
   trace_id: Type.Optional(Type.String({ maxLength: limits.sls.traceIdChars })),
 };
 
+const databaseOutputSchema = Type.Object({
+  fileName: Type.String({ minLength: 1, maxLength: 255, description: "Durable Issue output file name." }),
+  format: StringEnum(["csv", "jsonl"] as const),
+}, { additionalProperties: false });
+
+const dmsOutputSchema = Type.Object({ fileName: Type.String({ minLength: 1, maxLength: 255, description: "Save the complete MCP result as this Issue's JSON output instead of returning query rows to the conversation." }) }, { additionalProperties: false });
+
 const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
-  db: Type.Object({ statement: Type.String({ maxLength: limits.database.queryChars }) }, { additionalProperties: false }),
+  db: Type.Object({
+    database: Type.String({ minLength: 1, maxLength: 255, description: "Exact database configured for the selected deployment." }),
+    statement: Type.String({ maxLength: limits.database.queryChars }),
+    output: Type.Optional(databaseOutputSchema),
+  }, { additionalProperties: false }),
   redis: Type.Object({
     action: StringEnum(["get", "mget", "hget", "hgetall", "type", "ttl", "scan"] as const),
     key: Type.Optional(Type.String({ maxLength: limits.redis.keyChars })),
     keys: Type.Optional(Type.Array(Type.String({ maxLength: limits.redis.keyChars }), { maxItems: limits.redis.keys })),
     field: Type.Optional(Type.String({ maxLength: limits.redis.keyChars })),
     pattern: Type.Optional(Type.String({ maxLength: limits.redis.keyChars })),
-    cursor: Type.Optional(Type.String({ maxLength: limits.redis.cursorChars })),
+    cursor: Type.Optional(Type.String({ maxLength: limits.redis.cursorChars, pattern: "^[0-9]+$" })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: limits.redis.results })),
   }, { additionalProperties: false }),
   mq: Type.Object({
@@ -113,6 +121,7 @@ const capabilityInputSchemas = {
   dms: Type.Object({
     schema: Type.String({ minLength: 1, maxLength: 255, description: "Exact configured schema for the selected deployment." }),
     script: Type.String({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+    output: Type.Optional(dmsOutputSchema),
     logic: Type.Optional(Type.Boolean({ description: "Whether DMS should execute the statement as a logical database query." })),
   }, { additionalProperties: false }),
   sls: Type.Object({
@@ -129,12 +138,6 @@ const definitions = {
   nacos: {
     key: "nacos",
     inputSchema: capabilityInputSchemas.nacos,
-    metadata: {
-      label: "Read Service Configuration",
-      description: "Return the raw configuration for the deployment's authorized Nacos data IDs.",
-      promptSnippet: "Read every exact Nacos Data ID authorized for this deployment",
-      promptGuidelines: ["Use nacos only for the deployment configuration scope supplied by Issue Pilot."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
       const credentials = optionalCredentials(input, "nacos");
@@ -148,31 +151,26 @@ const definitions = {
   db: {
     key: "db",
     inputSchema: capabilityInputSchemas.db,
-    metadata: {
-      label: "Query Database",
-      description: "Run one read-only SQL statement against the selected deployment database.",
-      promptSnippet: "Run one bounded read-only MySQL statement",
-      promptGuidelines: ["Use db only for read-only SQL evidence and request the complete bounded result."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
-      const url = connectionUrl(input.url, "db_url", ["mysql:"]);
-      const parsed = new URL(url);
-      let database = "";
-      try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { return fail("invalid_db_url"); }
-      if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) fail("invalid_db_url");
-      return { url, username: requiredText(input.username, "db_username", 500), password: requiredText(input.password, "db_password") };
+      if (!Array.isArray(input.databases) || !input.databases.length || input.databases.length > limits.database.databases) fail("invalid_db_databases");
+      const databases = input.databases.map((value) => {
+        const databaseInput = inputRecord(value);
+        const url = connectionUrl(databaseInput.url, "db_url", ["mysql:"]);
+        const parsed = new URL(url);
+        let database = "";
+        try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { return fail("invalid_db_url"); }
+        if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) fail("invalid_db_url");
+        return { url, database, username: requiredText(databaseInput.username, "db_username", 500), password: requiredText(databaseInput.password, "db_password") };
+      });
+      if (new Set(databases.map(({ url }) => url)).size !== databases.length) fail("duplicate_db_url");
+      if (new Set(databases.map(({ database }) => database)).size !== databases.length) fail("duplicate_db_database");
+      return { databases: databases.map(({ url, username, password }) => ({ url, username, password })) };
     },
   },
   redis: {
     key: "redis",
     inputSchema: capabilityInputSchemas.redis,
-    metadata: {
-      label: "Read Redis",
-      description: "Run one read-only Redis operation.",
-      promptSnippet: "Run an allowlisted read-only Redis operation",
-      promptGuidelines: ["Use redis only for the allowlisted read operations; arbitrary Redis commands are unavailable."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
       const password = optionalText(input.password);
@@ -182,12 +180,6 @@ const definitions = {
   mq: {
     key: "mq",
     inputSchema: capabilityInputSchemas.mq,
-    metadata: {
-      label: "Read RabbitMQ",
-      description: "Read RabbitMQ management metadata without consuming messages.",
-      promptSnippet: "Read RabbitMQ management metadata without consuming messages",
-      promptGuidelines: ["Use mq only for management metadata; message consumption is unavailable."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
       return { host: requiredText(input.host, "mq_host", 255), port: boundedInteger(input.port ?? defaults.rabbitmq.port, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: requiredText(input.username, "mq_username", 500), password: requiredText(input.password, "mq_password"), virtualHost: requiredText(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
@@ -196,12 +188,6 @@ const definitions = {
   es: {
     key: "es",
     inputSchema: capabilityInputSchemas.es,
-    metadata: {
-      label: "Read Elasticsearch",
-      description: "Run a search, count, or mapping request against the selected deployment.",
-      promptSnippet: "Read Elasticsearch search, count, or mapping evidence",
-      promptGuidelines: ["Use es only for search, count, or mapping reads against the selected deployment."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
       return { url: connectionUrl(input.url, "es_url", ["http:", "https:"]), ...optionalCredentials(input, "es") };
@@ -210,12 +196,6 @@ const definitions = {
   dms: {
     key: "dms",
     inputSchema: capabilityInputSchemas.dms,
-    metadata: {
-      label: "Query DMS Database",
-      description: "Run one read-only SQL statement against a schema authorized by the deployment through Alibaba Cloud DMS MCP executeScript.",
-      promptSnippet: "Run read-only SQL against one configured DMS schema through executeScript",
-      promptGuidelines: ["Select one configured schema and submit one SELECT, SHOW, DESCRIBE, or EXPLAIN statement. Database IDs and write operations are unavailable."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
       const { url, authorization } = parseDmsConnectionConfiguration(input);
@@ -239,26 +219,28 @@ const definitions = {
   sls: {
     key: "sls",
     inputSchema: capabilityInputSchemas.sls,
-    metadata: {
-      label: "Read SLS Logs",
-      description: "Query the selected deployment's Simple Log Service.",
-      promptSnippet: "Query an authorized SLS logstore with bounded inputs",
-      promptGuidelines: ["Use sls only for logstores authorized by the Issue Pilot deployment policy."],
-    },
     parseConfiguration(value) {
       const input = inputRecord(value);
       const region = requiredText(input.region, "sls_region", 63);
       const project = requiredText(input.project, "sls_project", 63);
       const logstores = [...new Set(stringList(input.logstores, "sls_logstores").map((entry) => requiredText(entry, "sls_logstore", 63)))];
       if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some((entry) => !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
-      return { accessKeyId: requiredText(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "sls_access_key_secret"), region, project, logstores };
+      return { ...parseSlsConnectionConfiguration(input), region, project, logstores };
     },
   },
 } satisfies { [Key in CapabilityName]: CapabilityDefinition<Key> };
 
 export const capabilityDefinitions: { [Key in CapabilityName]: CapabilityDefinition<Key> } = definitions;
 
-export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>): TSchema {
+export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>, options: { outputEnabled?: boolean } = {}): TSchema {
+  if (key === "db") {
+    const databases = (configuration as CapabilityConfig<"db">).databases.map(({ url }) => decodeURIComponent(new URL(url).pathname.slice(1)));
+    return Type.Object({
+      database: StringEnum(databases, { description: "Exact database configured for the selected deployment." }),
+      statement: Type.String({ maxLength: limits.database.queryChars }),
+      ...(options.outputEnabled ? { output: Type.Optional(databaseOutputSchema) } : {}),
+    }, { additionalProperties: false });
+  }
   if (key === "sls") {
     const logstores = (configuration as CapabilityConfig<"sls">).logstores;
     return Type.Object({
@@ -271,6 +253,7 @@ export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, 
     return Type.Object({
       schema: StringEnum(schemas, { description: "Exact schema configured for the selected deployment." }),
       script: Type.String({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+      ...(options.outputEnabled ? { output: Type.Optional(dmsOutputSchema) } : {}),
       logic: Type.Optional(Type.Boolean({ description: "Whether DMS should execute the statement as a logical database query." })),
     }, { additionalProperties: false });
   }

@@ -1,3 +1,10 @@
+export const USER_ROLES = ["product", "test", "developer"] as const;
+export type UserRole = typeof USER_ROLES[number];
+export function canCreateDevelopmentIssues(role: UserRole): boolean { return role === "developer"; }
+export function canUseIssueWorkMode(role: UserRole, workMode: IssueWorkMode): boolean {
+  return role === "developer" || (workMode !== "production_data" && issueScopeForWorkMode(workMode).repositoryAccess !== "write");
+}
+
 const ISSUE_KEY = /^ISSUE-[0-9]{8}-[0-9]{3,}$/i;
 
 export function errorMessage(error: unknown): string {
@@ -17,6 +24,7 @@ export function normalizeIssueKey(value: string): string {
 
 export const CAPABILITY_KEYS = ["nacos", "db", "redis", "mq", "es", "dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
+export const CAPABILITY_TYPES = { nacos: "http", db: "database", redis: "redis", mq: "http", es: "http", dms: "mcp", sls: "http" } as const;
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];
@@ -48,7 +56,7 @@ export interface AgentFooterStats {
 
 export interface CapabilityConfiguration {
   nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string };
-  db?: { url: string; username: string; password: string };
+  db?: { databases: Array<{ url: string; username: string; password: string }> };
   dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   redis?: { host: string; port: number; username: string; password?: string; database: number };
@@ -57,8 +65,13 @@ export interface CapabilityConfiguration {
 }
 
 export type DeploymentConfig = CapabilityConfiguration;
+export type StoredDeploymentConfig = CapabilityConfiguration & {
+  /** Private pre-upgrade development settings; never projected or executed. */
+  archivedDevelopment?: unknown;
+  mcpServices?: string[];
+};
 
-export function configuredCapabilities(config: DeploymentConfig): CapabilityName[] {
+export function configuredCapabilities(config: Partial<Record<CapabilityName, unknown>>): CapabilityName[] {
   return CAPABILITY_KEYS.filter((key) => config[key] !== undefined);
 }
 
@@ -73,6 +86,28 @@ export const ISSUE_TYPES_BY_ENVIRONMENT: Record<EnvironmentKind, readonly IssueT
   test: ["smart_analysis"],
   dev: ["defect_fix", "feature_development"],
 };
+
+export const ISSUE_WORK_MODES = ["production_data", "production_analysis", "test_analysis", "development_fix", "development_feature"] as const;
+export type IssueWorkMode = typeof ISSUE_WORK_MODES[number];
+
+const ISSUE_SCOPE_BY_WORK_MODE: Record<IssueWorkMode, { environmentKind: EnvironmentKind; issueType: IssueType; repositoryAccess: "read" | "write" }> = {
+  production_data: { environmentKind: "prod", issueType: "data_processing", repositoryAccess: "read" },
+  production_analysis: { environmentKind: "prod", issueType: "smart_analysis", repositoryAccess: "read" },
+  test_analysis: { environmentKind: "test", issueType: "smart_analysis", repositoryAccess: "read" },
+  development_fix: { environmentKind: "dev", issueType: "defect_fix", repositoryAccess: "write" },
+  development_feature: { environmentKind: "dev", issueType: "feature_development", repositoryAccess: "write" },
+};
+
+export function issueScopeForWorkMode(workMode: IssueWorkMode): Readonly<{ environmentKind: EnvironmentKind; issueType: IssueType; repositoryAccess: "read" | "write" }> {
+  return ISSUE_SCOPE_BY_WORK_MODE[workMode];
+}
+
+export function issueWorkMode(environmentKind: EnvironmentKind, issueType: IssueType): IssueWorkMode | undefined {
+  return ISSUE_WORK_MODES.find((workMode) => {
+    const scope = ISSUE_SCOPE_BY_WORK_MODE[workMode];
+    return scope.environmentKind === environmentKind && scope.issueType === issueType;
+  });
+}
 
 export const ISSUE_STATUSES = ["open", "in_progress", "pending", "resolved"] as const;
 export type IssueStatus = typeof ISSUE_STATUSES[number];

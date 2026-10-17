@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -10,7 +11,7 @@ import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
@@ -51,8 +52,10 @@ test("atomically switches development repository sets across preparation and fin
       await git(["clone", "--bare", source, remote]);
     }));
     const [dev] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
-    await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester" });
+    await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
+    await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
     const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
+    await registerTestRepositories(database.db, remotes);
     const repositories = await database.db.insert(serviceRepositories).values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url }))).returning();
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values(repositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
@@ -85,6 +88,7 @@ test("atomically switches development repository sets across preparation and fin
     await writeFile(path.join(dirtyRemovedPath, "untracked.txt"), "preserve\n", "utf8");
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[1]!.id));
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[2]!.id));
+    await registerTestRepositories(database.db, targetRemotes);
     const targetRepositories = await database.db.insert(serviceRepositories).values(targetRemotes.map((url, index) => ({ serviceId: service!.id, alias: `target-${index}`, url }))).returning();
     await database.db.insert(serviceDeploymentRepositories).values(targetRepositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
     const targetNames = repositoryWorkspaceNames(targetRemotes);
@@ -158,8 +162,10 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const environmentRows = await database.db.select().from(environments);
     const prod = environmentRows.find((environment) => environment.kind === "prod")!;
     const dev = environmentRows.find((environment) => environment.kind === "dev")!;
-    await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester" });
+    await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
+    await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
+    await registerTestRepositories(database.db, remotes);
     const repositories = await database.db.insert(serviceRepositories).values([
       { serviceId: service!.id, alias: "orders", url: remotes[0] },
       { serviceId: service!.id, alias: "orders-secondary", url: remotes[1] },

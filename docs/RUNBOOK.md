@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | `issues.db`、WAL、SHM | 是 | 停 API 后一致 backup/restore |
 | `issues/<key>/attachments` | 是 | 只随 Issue edit transaction 删除 |
+| `issues/<key>/outputs` | 是 | 正式成果，随 matching state 备份/恢复 |
 | `issues/<key>/agent` | 是 | 保留 Pi JSONL 与 sidecar |
 | `git/repositories` | 是 | 保留 objects、local branches、worktree metadata |
 | `workspaces/<key>` | 有条件 | 只通过受管 release 回收 |
@@ -131,7 +132,7 @@ Source repositories 返回的 alias 必须映射到受管 runtime symlink：acti
 - 位于对应 Issue attachment root 的直属路径。
 - 是 regular file。
 - Mode 为 `0400`，或至少 group/world 权限为 0。
-- Size、SHA-256 与 DB 一致，且不超过 20 MiB。
+- Size、SHA-256 与 DB 一致；Attachment 不设应用层大小上限。
 - Runtime 中无 copy/link。
 - 没有未调查的 `.deleting` quarantine。
 
@@ -166,6 +167,12 @@ kubectl -n issue-pilot logs deployment/issue-pilot --tail=200
 ```
 
 Startup 执行 migration、结构/recovery、unmanaged/generated checks、socket、runtime hydration、global model initialization 和 maintenance。失败时保留 path/ref/row，不先删除现场。
+
+### User role / personal credential upgrade
+
+`0045_user_roles_credentials` 为现有用户填入 `developer`，新增用户默认为 `product`，不复制 Operator 模型/Git 凭证。按标准 Stop → 一致 DB backup → 隔离 copy migration dry-run → matching code Start 升级；启动后用 `/api/me`、`/api/users/manage` 核对角色，再由开发本人在用户页配置个人 API Key 与 Git SSH 私钥。`0046_user_git_ssh_only` 移除个人 HTTPS 凭证列，个人 remote fetch 只支持 SSH；保存升级前先核对这些列无需要保留的真实 HTTPS 凭证。未配置时 `user_model_api_key_required` / `user_git_ssh_credentials_required` 是预期的显式失败，不改用共享密钥。角色/凭证变化有 active owned Issue 时拒绝，等待 Agent 空闲后再保存。
+
+角色校验以 trusted proxy 提供的 subject 为身份；本地 user selector / `X-Issue-Pilot-Subject` 不是登录认证，外部部署必须固定/校验该 header，不能让客户端任意冒用他人 subject。
 
 ### Pod replacement
 
@@ -244,6 +251,7 @@ curl -fsS -X DELETE \
 | `workspace_repository_missing` | 备份剩余 state/ref，调查 partial deletion |
 | `development_repository_state_invalid` | 保留 DB/path，不猜测 mixed state |
 | `workspace_path_does_not_match_repository` | 不移动目录；恢复 matching version |
+| `workspace_branch_does_not_match_issue_policy` | 先备份 worktree（含 staged/untracked）、本地 refs 和 DB；核对记录与实际 HEAD 的归属，在隔离副本确定恢复方案后由 Operator 恢复 matching state。不要直接 checkout、reset 或改 DB 来掩盖偏差 |
 | `repository_workspace_name_conflict` | 核对 URL 集合与历史 workspace name |
 | `workspace_release_rollback_failed` | 停 maintenance，备份 DB/workspace/bare |
 | `workspace_restore_cleanup_failed` | 停止 retry，保留 evidence |
@@ -296,21 +304,34 @@ scripts/playwright.sh status
 
 Project failure output 留在 worktree。不要允许 wrapper 接受 executable、absolute path、config path 或 cache path。
 
+## 服务描述与能力升级
+
+0052_deployment_capabilities 按标准停 API → 一致备份 → 隔离副本迁移/核对 → matching code 启动执行。逐条核对原 resource_services 的 service/environment/connection/target 到新 Deployment 的映射，验证分支 rows、仓库 ID、工单、附件、JSONL 未变。旧资源说明并入服务描述，生成分支/参数的 context 不持久化。
+
+遇到无归属、disabled 或无法表示的多连接/多 SLS project 时迁移守卫失败，必须保留原表和备份，由 Operator 先确认目标归属与模型表达，不能删行或忽略守卫。开发旧能力存于 archivedDevelopment，不投影或执行；不要手动把归档字段复制回活动配置。能力更新会使依赖它的开发会话失效，修改前确认无 running Agent。
+
+恢复时用 matching DB/代码备份，保留较新的 worktree、outputs、Attachment 和 Pi JSONL，不修改已发布迁移。
+
+## 分析沙盒
+
+`sandbox` 的运行前提、错误与清理合同见[工单分析沙盒](SANDBOX.md#部署与诊断)。升级/关闭等待当前 Agent 轮次正常清理；可按 `io.issue-pilot.component=analysis-sandbox` 检查本应用用户拥有的容器。Scratch 为临时状态，正式成果仍按本手册的 outputs/state 备份规则保留。
+
 ## DMS MCP 与 SLS
 
 ### DMS
 
 检查：
 
-- Deployment URL 是可达的 HTTPS SSE endpoint。
+- 资源连接 URL 是可达的 HTTPS SSE endpoint。
 - Authorization 是未过期的 `Bearer <token>`。
 - SSE GET 与同源 message POST 都携带 Authorization，redirect 被拒绝。
 - 每个 alias/schema 已解析到预期 InstanceId、DatabaseId、host:port。
-- SchemaName 和 DatabaseId 在 Deployment 内均唯一。
+- 资源的 Environment、服务标签与已解析 DatabaseId 对应预期数据库。
 - `listInstances` 与 `getDatabase` 只在受信配置解析中使用。
-- Agent 的 schema input 只能取当前 Deployment 动态 enum，并只调用唯一、schema-compatible 的 `executeScript`。
+- Agent 的 service_query 只能选择授权来源环境、服务和该部署的 schema，只调用唯一、schema-compatible 的 executeScript。
 - 服务端把 schema 映射为 DatabaseId 并注入，SQL 是单条只读 statement。
-- 连接/list/call/close 位于 30 秒 operation timeout 内。
+- 首次 SSE handshake 的 12 秒计时器在连接完成后清除，仅 handshake 超时允许重建连接一次；不能让 handshake deadline 中断已建立的 SSE 或后续 tool 请求。
+- 连接/list/call/close 位于 120 秒 operation timeout 内。
 
 旧 AccessKey/dbId/tid 配置不受支持，必须通过当前配置页重新保存。不要记录 Authorization、MCP request header 或完整 result。
 
@@ -318,19 +339,18 @@ Project failure output 留在 worktree。不要允许 wrapper 接受 executable�
 
 检查：
 
-- Image 中 Aliyun CLI 可执行。
-- Deployment AccessKey 有效且最小权限。
+- 官方 SLS SDK 可加载，HTTPS endpoint 按 region/project 解析。
+- 共享 SLS 连接的 AccessKey 有效且最小权限。
 - Region/project/logstore exact 匹配。
 - Query/time range 符合合同。
-- Temporary HOME/profile 在调用后删除。
+- Worker 超时/取消正常，SQL 分析不使用 offset 自动分页。
 
-SLS AccessKey 不进入 argv；query、project、logstore 与时间可能短暂出现在 application process list。
+SLS AccessKey 不写 profile 或进入 argv。worker 只暴露 GetLogsV2 查询，结果不完整时明确失败；开发工单按来源环境/服务查询。
 
 ## Attachment 故障
 
 | Error | Action |
 | --- | --- |
-| `attachment_limit_exceeded` | 缩小 request，不改成 unbounded |
 | `insecure_issue_attachment_file` | 停止读取，核对 DB/path/type/mode/size |
 | `attachment_integrity_check_failed` | 保留 file/DB，调查修改来源 |
 | `attachment_rollback_failed` | 停止 edit，备份 attachment root/DB |
@@ -369,7 +389,7 @@ chmod 0600 "$backup"/*
 
 高风险升级/恢复还需保存 matching：
 
-- `issues/` 中的 Attachment 和 Pi JSONL。
+- `issues/` 中的 Attachment、正式 outputs 和 Pi JSONL。
 - `git/repositories/` 的 objects、local branches、worktree metadata。
 - Active dev `workspaces/`。
 - Root config、manifest、image digest 和 reviewed code commit。

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, rmdir } from "node:fs/promises";
@@ -132,6 +133,11 @@ export function issueRepositoryWorkspaceNames(repositories: Array<{ url: string;
 const repositoryQueue = new KeyedSerialQueue();
 
 export class WorktreeManager {
+  private readonly gitEnvironment = new AsyncLocalStorage<Record<string, string>>();
+
+  withGitEnvironment<T>(env: Record<string, string>, operation: () => Promise<T>): Promise<T> {
+    return this.gitEnvironment.run(env, operation);
+  }
   private readonly stateRoot: string;
   private readonly repositoriesRoot: string;
   private readonly sharedCheckoutsRoot: string;
@@ -283,7 +289,8 @@ export class WorktreeManager {
       await this.git(["init", "--bare", cachePath]);
       await this.git(["-C", cachePath, "remote", "add", "origin", input.url]);
     }
-    await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
+    try { await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]); }
+    catch (error) { if (this.gitEnvironment.getStore()) throw new Error("personal_git_fetch_failed"); throw error; }
     return cachePath;
   }
 
@@ -382,7 +389,7 @@ export class WorktreeManager {
 
   private async git(args: string[]): Promise<string> {
     const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
-    const { stdout } = await execFileAsync("git", args, { timeout: gitOperationMs, maxBuffer: gitOutputBytes });
+    const { stdout } = await execFileAsync("git", args, { timeout: gitOperationMs, maxBuffer: gitOutputBytes, env: { ...process.env, ...this.gitEnvironment.getStore() } });
     return stdout;
   }
 }

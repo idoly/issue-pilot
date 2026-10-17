@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { convertIssueToDevelopment, createIssue, createUser, deleteService, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, updateIssue, updateService, updateUser } from "./client";
+import { applyIssueScopeTransition, createIssue, createUser, deleteService, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService, updateUser } from "./client";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -14,17 +14,18 @@ describe("API client", () => {
       title: "Investigate",
       description: "Details",
       priority: "p1",
-      type: "smart_analysis",
+      workMode: "production_analysis",
       serviceKey: "service-a",
-      environmentKey: "test",
       assigneeSubject: null,
       ccSubjects: [],
+      relatedIssueKeys: ["ISSUE-20260809-099"],
     }, [file]);
 
     const [, init] = fetch.mock.calls[0]!;
     expect(init.method).toBe("POST");
     expect(init.body).toBeInstanceOf(FormData);
     expect((init.body as FormData).get("issue")).toContain('"title":"Investigate"');
+    expect(JSON.parse(String((init.body as FormData).get("issue"))).relatedIssueKeys).toEqual(["ISSUE-20260809-099"]);
     const submittedFile = (init.body as FormData).get("files") as File;
     expect(submittedFile.name).toBe("evidence.txt");
     expect(submittedFile.type).toBe("text/plain");
@@ -35,7 +36,7 @@ describe("API client", () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const file = new File(["new evidence"], "new.txt", { type: "text/plain" });
-    const input = { title: "Updated", description: "Details", priority: "p2" as const, type: "smart_analysis" as const, serviceKey: "service-a", environmentKey: "test", assigneeSubject: null, ccSubjects: [] };
+    const input = { title: "Updated", description: "Details", priority: "p2" as const, assigneeSubject: null, ccSubjects: [] };
 
     await updateIssue("ISSUE-20260810-001", input, ["attachment-1"], [file]);
 
@@ -95,13 +96,39 @@ describe("API client", () => {
   });
 
   it("passes cancellation to read-only list requests", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response("[]", { status: 200 }));
+    const fetch = vi.fn().mockImplementation(async () => new Response("[]", { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const controller = new AbortController();
 
     await listIssues(controller.signal);
+    await listIssuePins(controller.signal);
 
     expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
+    expect(fetch).toHaveBeenCalledWith("/api/issue-pins", expect.objectContaining({ signal: controller.signal }));
+  });
+
+  it("replaces an Issue's related Issues", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await updateIssueRelatedIssues("ISSUE-20260810-001", ["ISSUE-20260809-099"]);
+
+    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-20260810-001/related-issues", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ relatedIssueKeys: ["ISSUE-20260809-099"] }),
+    }));
+  });
+
+  it("uses idempotent per-Issue pin endpoints", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await setIssuePinned("ISSUE-20260810-001", true);
+    await setIssuePinned("ISSUE-20260810-001", false);
+
+    expect(fetch.mock.calls[0]![0]).toBe("/api/issues/ISSUE-20260810-001/pin");
+    expect(fetch.mock.calls[0]![1]).toEqual(expect.objectContaining({ method: "PUT" }));
+    expect(fetch.mock.calls[1]![1]).toEqual(expect.objectContaining({ method: "DELETE" }));
   });
 
   it("keeps source paths and search queries out of request URLs", async () => {
@@ -177,12 +204,19 @@ describe("API client", () => {
     await expect(loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/index.ts")).rejects.toThrow("source_diff_file_response_invalid");
   });
 
-  it("uses the dedicated development conversion endpoint", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ issueKey: "ISSUE-20260810-001" }), { status: 200 }));
+  it("uses plan and apply for scope transitions", async () => {
+    const plan = { planHash: `sha256:${"a".repeat(64)}`, expectedIssueUpdatedAt: "2026-08-10T00:00:00.000Z" };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ issueKey: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
+    const target = { serviceKey: "orders", workMode: "development_fix" as const };
 
-    await expect(convertIssueToDevelopment("ISSUE-20260810-001")).resolves.toEqual({ issueKey: "ISSUE-20260810-001" });
-    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-20260810-001/development", expect.objectContaining({ method: "POST" }));
+    await planIssueScopeTransition("ISSUE-20260810-001", target);
+    await expect(applyIssueScopeTransition("ISSUE-20260810-001", target, plan)).resolves.toEqual({ issueKey: "ISSUE-20260810-001" });
+    expect(fetch.mock.calls[0]![0]).toBe("/api/issues/ISSUE-20260810-001/scope-transition/plan");
+    expect(fetch.mock.calls[1]![0]).toBe("/api/issues/ISSUE-20260810-001/scope-transition/apply");
+    expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({ ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
   });
 
   it("accepts a user message for Pi session delivery", async () => {

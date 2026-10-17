@@ -1,4 +1,4 @@
-import { Select, Skeleton } from "@idoly/ant-design-solid";
+import { Select, Skeleton } from "../ui";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
@@ -95,7 +95,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
       </div>
       <div class="insight-panel" role="tabpanel" hidden={view() !== "distribution"}>
         <div class="distribution-grid">
-          <section class="statistics-section"><div class="statistics-title"><h2>服务工单量</h2><span>按服务计数</span></div><div class="compact-scroll"><For each={services()} fallback={<div class="empty-band">周期内暂无服务工单</div>}>{(service) => <div class="ranking-row"><span>{service.name}</span><div><i style={{ width: `${service.count / (services()[0]?.count ?? 1) * 100}%` }} /></div><strong>{service.count}</strong></div>}</For></div></section>
+          <section class="statistics-section"><div class="statistics-title"><h2>服务工单量</h2><span>按服务计数</span></div><div class="compact-scroll service-ranking-scroll"><For each={services()} fallback={<div class="empty-band">周期内暂无服务工单</div>}>{(service) => <div class="ranking-row"><span>{service.name}</span><div><i style={{ width: `${service.count / (services()[0]?.count ?? 1) * 100}%` }} /></div><strong>{service.count}</strong></div>}</For></div></section>
           <section class="statistics-section"><div class="statistics-title"><h2>工单类型</h2><span>共 {filteredIssues().length} 个</span></div><div class="compact-scroll"><For each={types()} fallback={<div class="empty-band">周期内暂无工单</div>}>{(type) => <div class="type-row"><i /><span>{type.name} / {type.key}</span><strong>{type.count}</strong><small>{Math.round(type.count / filteredIssues().length * 100)}%</small></div>}</For></div></section>
         </div>
       </div>

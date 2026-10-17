@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -14,6 +14,13 @@ import { issueRoot, issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } 
 export interface IssueRuntimeRepository {
   name: string;
   repositoryPath: string;
+}
+
+export interface RelatedIssueRuntime {
+  key: string;
+  metadata: Record<string, unknown>;
+  conversationPath?: string;
+  repositories: IssueRuntimeRepository[];
 }
 
 export type IssueRuntimeAccess = "read" | "write";
@@ -61,6 +68,7 @@ export async function prepareIssueRuntime(
   issueKey: string,
   repositories: IssueRuntimeRepository[],
   access: IssueRuntimeAccess,
+  relatedIssues: RelatedIssueRuntime[] = [],
 ): Promise<string> {
   const issueDirectory = issueRoot(stateRoot, issueKey);
   const runtimeRoot = issueRuntimeRoot(stateRoot, issueKey);
@@ -74,10 +82,30 @@ export async function prepareIssueRuntime(
   try {
     await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const repository of repositories) {
-      if (!/^[a-z0-9._-]+$/.test(repository.name) || names.has(repository.name)) throw new Error("invalid_runtime_repository_name");
+      if (!/^[a-z0-9._-]+$/.test(repository.name) || names.has(repository.name) || repository.name === "related-issues") throw new Error("invalid_runtime_repository_name");
       names.add(repository.name);
       const repositoryTarget = managedRepository(stateRoot, issueKey, repository.repositoryPath, access);
       await symlink(path.relative(temporaryRoot, repositoryTarget), path.join(temporaryRoot, repository.name), "dir");
+    }
+    if (relatedIssues.length) {
+      const relatedRoot = path.join(temporaryRoot, "related-issues");
+      await mkdir(relatedRoot, { mode: 0o700 });
+      for (const relatedIssue of relatedIssues) {
+        const normalizedKey = relatedIssue.key.toLowerCase();
+        if (!/^issue-[0-9]{8}-[0-9]{3,}$/.test(normalizedKey)) throw new Error("invalid_related_issue_key");
+        const relatedIssueRoot = path.join(relatedRoot, normalizedKey);
+        const repositoryRoot = path.join(relatedIssueRoot, "repositories");
+        await mkdir(repositoryRoot, { recursive: true, mode: 0o700 });
+        await writeFile(path.join(relatedIssueRoot, "issue.json"), `${JSON.stringify(relatedIssue.metadata, null, 2)}\n`, { encoding: "utf8", mode: 0o400 });
+        if (relatedIssue.conversationPath) await symlink(path.relative(relatedIssueRoot, relatedIssue.conversationPath), path.join(relatedIssueRoot, "conversation.jsonl"), "file");
+        const relatedNames = new Set<string>();
+        for (const repository of relatedIssue.repositories) {
+          if (!/^[a-z0-9._-]+$/.test(repository.name) || relatedNames.has(repository.name)) throw new Error("invalid_runtime_repository_name");
+          relatedNames.add(repository.name);
+          const repositoryTarget = managedRepository(stateRoot, issueKey, repository.repositoryPath, "read");
+          await symlink(path.relative(repositoryRoot, repositoryTarget), path.join(repositoryRoot, repository.name), "dir");
+        }
+      }
     }
 
     await replaceGeneratedDirectory(runtimeRoot, temporaryRoot, previousRoot);

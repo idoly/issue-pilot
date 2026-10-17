@@ -64,7 +64,7 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
     const issueId = fixture.engine.enqueued.at(-1)!;
     fixture.engine.running.delete(issueId);
     const created = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string }> };
-    const edit = { title: "Updated", description: "Atomic edit", priority: "p2", type: "smart_analysis", serviceKey: "alpha", environmentKey: "test", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] };
+    const edit = { title: "Updated", description: "Atomic edit", priority: "p2", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] };
     const boundary = "replace-attachment";
     const updated = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: issueMultipart(boundary, edit, "replacement.txt", "replacement evidence") });
     assert.equal(updated.statusCode, 200, updated.body);
@@ -126,7 +126,7 @@ test("serves only verified attachment files and exposes no independent write rou
   }
 });
 
-test("rejects oversized multipart Issue edits at the configured attachment boundary", async () => {
+test("streams Issue attachments larger than the former application limit", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
@@ -134,7 +134,7 @@ test("rejects oversized multipart Issue edits at the configured attachment bound
     const issue = await json(created);
     fixture.engine.running.clear();
     const boundary = "oversized-attachment";
-    const edit = { title: "Updated", description: "", priority: "p2", type: "smart_analysis", serviceKey: "alpha", environmentKey: "test", assigneeSubject: null, ccSubjects: [] };
+    const edit = { title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [] };
     const response = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
@@ -145,8 +145,9 @@ test("rejects oversized multipart Issue edits at the configured attachment bound
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ]),
     });
-    assert.equal(response.statusCode, 413);
-    assert.equal((await json(response)).error, "attachment_limit_exceeded");
+    assert.equal(response.statusCode, 200, response.body);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((current) => JSON.parse(current.body)) as { attachments: Array<{ fileName: string; size: number }> };
+    assert.deepEqual(detail.attachments.map(({ fileName, size }) => ({ fileName, size })), [{ fileName: "oversized.bin", size: 20 * 1024 * 1024 + 1 }]);
   } finally {
     await fixture.cleanup();
   }

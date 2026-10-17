@@ -1,0 +1,2290 @@
+{
+  "startedAt": "2026-10-16T16:41:28.185Z",
+  "reportRoot": "/tmp/issue-pilot-ablation-report-YkplbQ",
+  "fixture": "synthetic-v1",
+  "trials": 3,
+  "model": "xhgj/gpt-6.1-sol",
+  "results": [
+    {
+      "task": "simple-config",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 4454.385343999998,
+      "startupMs": 0.0010999999994965037,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4628,
+        "output": 55,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.053254,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 5685.395073,
+      "startupMs": 287.34978799999953,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4652,
+        "output": 59,
+        "cacheRead": 4352,
+        "cacheWrite": 0
+      },
+      "cost": 0.05382200000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 10854.030901000002,
+      "startupMs": 256.01629500000126,
+      "shellMs": 801.1081819999999,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 5688,
+        "output": 109,
+        "cacheRead": 14720,
+        "cacheWrite": 0
+      },
+      "cost": 0.07705000000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 4153.829749,
+      "startupMs": 0.0007999999979801942,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4636,
+        "output": 65,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.05383400000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 7648.923145000001,
+      "startupMs": 303.534510999998,
+      "shellMs": 323.70551200000045,
+      "shellCalls": 1,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 4895,
+        "output": 75,
+        "cacheRead": 8704,
+        "cacheWrite": 0
+      },
+      "cost": 0.06140400000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 5583.309893000005,
+      "startupMs": 256.8868760000041,
+      "shellMs": 323.81756999999925,
+      "shellCalls": 1,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 5348,
+        "output": 60,
+        "cacheRead": 4736,
+        "cacheWrite": 0
+      },
+      "cost": 0.061216000000000007,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 10763.687958000002,
+      "startupMs": 0.0007000000041443855,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36646,
+        "output": 237,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.404934,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 12077.495427000002,
+      "startupMs": 316.41699700000026,
+      "shellMs": 935.0157800000015,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 5475,
+        "output": 252,
+        "cacheRead": 13696,
+        "cacheWrite": 0
+      },
+      "cost": 0.081046,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 12151.694069000005,
+      "startupMs": 287.2407930000045,
+      "shellMs": 716.7426869999908,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 18895,
+        "output": 167,
+        "cacheRead": 37376,
+        "cacheWrite": 0
+      },
+      "cost": 0.23467600000000002,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 12852.390570000003,
+      "startupMs": 0.0004000000044470653,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36651,
+        "output": 293,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.40778400000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 13642.876315000001,
+      "startupMs": 337.43278499999724,
+      "shellMs": 1079.838173000011,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 5462,
+        "output": 237,
+        "cacheRead": 13824,
+        "cacheWrite": 0
+      },
+      "cost": 0.08029399999999999,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 10315.554130000004,
+      "startupMs": 443.19183100000373,
+      "shellMs": 726.5667320000066,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 23636,
+        "output": 166,
+        "cacheRead": 32640,
+        "cacheWrite": 0
+      },
+      "cost": 0.2773,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 8741.643809999994,
+      "startupMs": 0.0005999999993946403,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 3,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 44628,
+        "output": 150,
+        "cacheRead": 26240,
+        "cacheWrite": 0
+      },
+      "cost": 0.48002000000000006,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 9140.10246000001,
+      "startupMs": 299.6514040000038,
+      "shellMs": 683.534302999964,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 1845,
+        "output": 219,
+        "cacheRead": 14080,
+        "cacheWrite": 0
+      },
+      "cost": 0.04348,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 11972.421424,
+      "startupMs": 230.1431980000052,
+      "shellMs": 1109.564022000035,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 38504,
+        "output": 250,
+        "cacheRead": 47360,
+        "cacheWrite": 0
+      },
+      "cost": 0.4449,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 13803.910833000002,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 3,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 37985,
+        "output": 432,
+        "cacheRead": 27904,
+        "cacheWrite": 0
+      },
+      "cost": 0.429354,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 11526.77304,
+      "startupMs": 325.81498700001976,
+      "shellMs": 1134.790599,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 35752,
+        "output": 230,
+        "cacheRead": 43776,
+        "cacheWrite": 0
+      },
+      "cost": 0.41279600000000005,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 11527.73128399998,
+      "startupMs": 245.97349099998246,
+      "shellMs": 1095.3232609999832,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 11852,
+        "output": 265,
+        "cacheRead": 11264,
+        "cacheWrite": 0
+      },
+      "cost": 0.143034,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 5379.331215000013,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 8368,
+        "output": 91,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.09245400000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 8521.566563,
+      "startupMs": 306.56678700001794,
+      "shellMs": 706.6981709999964,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5127,
+        "output": 222,
+        "cacheRead": 8960,
+        "cacheWrite": 0
+      },
+      "cost": 0.07133,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 8417.219035000016,
+      "startupMs": 218.5174929999921,
+      "shellMs": 749.6456769999932,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 943,
+        "output": 200,
+        "cacheRead": 14464,
+        "cacheWrite": 0
+      },
+      "cost": 0.033894,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 4445.478065000003,
+      "startupMs": 0.0007000000041443855,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4696,
+        "output": 84,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.055384,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 14873.363279000012,
+      "startupMs": 292.65099100000225,
+      "shellMs": 1003.5819780000311,
+      "shellCalls": 3,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 1,
+      "modelTurns": 5,
+      "tokens": {
+        "input": 5296,
+        "output": 229,
+        "cacheRead": 17920,
+        "cacheWrite": 0
+      },
+      "cost": 0.08233000000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 16298.454560999991,
+      "startupMs": 254.88009600000805,
+      "shellMs": 1385.0618669999822,
+      "shellCalls": 4,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 2,
+      "modelTurns": 6,
+      "tokens": {
+        "input": 11441,
+        "output": 385,
+        "cacheRead": 19968,
+        "cacheWrite": 0
+      },
+      "cost": 0.153628,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 5551.86776600001,
+      "startupMs": 215.0779920000059,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4653,
+        "output": 60,
+        "cacheRead": 4352,
+        "cacheWrite": 0
+      },
+      "cost": 0.053882000000000006,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 4654.467096000008,
+      "startupMs": 260.1777889999794,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 5164,
+        "output": 59,
+        "cacheRead": 4736,
+        "cacheWrite": 0
+      },
+      "cost": 0.059326000000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 3725.144414999988,
+      "startupMs": 0.00039999998989515007,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 405,
+        "output": 56,
+        "cacheRead": 8448,
+        "cacheWrite": 0
+      },
+      "cost": 0.015297999999999999,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 7913.094337999966,
+      "startupMs": 293.74760199998855,
+      "shellMs": 653.908894000022,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 4881,
+        "output": 87,
+        "cacheRead": 8704,
+        "cacheWrite": 0
+      },
+      "cost": 0.061864,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 6497.269115000032,
+      "startupMs": 227.76699500001268,
+      "shellMs": 359.18799200002104,
+      "shellCalls": 1,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5531,
+        "output": 74,
+        "cacheRead": 9728,
+        "cacheWrite": 0
+      },
+      "cost": 0.06873800000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 4270.125121999998,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4635,
+        "output": 66,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.053874000000000005,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 9138.229784000025,
+      "startupMs": 306.3551870000083,
+      "shellMs": 695.8081389999716,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5546,
+        "output": 155,
+        "cacheRead": 9472,
+        "cacheWrite": 0
+      },
+      "cost": 0.072682,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 11169.284160999989,
+      "startupMs": 210.11075200000778,
+      "shellMs": 660.7120080000605,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 18891,
+        "output": 163,
+        "cacheRead": 37376,
+        "cacheWrite": 0
+      },
+      "cost": 0.234436,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 9638.998450000014,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36646,
+        "output": 226,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.404384,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 13966.390902000014,
+      "startupMs": 375.09439199999906,
+      "shellMs": 1093.6972740000347,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 5620,
+        "output": 254,
+        "cacheRead": 13568,
+        "cacheWrite": 0
+      },
+      "cost": 0.082468,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 8746.156944999995,
+      "startupMs": 238.88659599999664,
+      "shellMs": 343.3396149999462,
+      "shellCalls": 1,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 23538,
+        "output": 152,
+        "cacheRead": 27648,
+        "cacheWrite": 0
+      },
+      "cost": 0.27062800000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 11672.151574000018,
+      "startupMs": 0.0005000000237487257,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36651,
+        "output": 296,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.407934,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 12380.078386000008,
+      "startupMs": 287.79971900000237,
+      "shellMs": 1055.6552159999264,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 1394,
+        "output": 285,
+        "cacheRead": 17920,
+        "cacheWrite": 0
+      },
+      "cost": 0.04611,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 13704.182113999967,
+      "startupMs": 246.8371019999613,
+      "shellMs": 1099.2497009999934,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 14384,
+        "output": 272,
+        "cacheRead": 23168,
+        "cacheWrite": 0
+      },
+      "cost": 0.18060800000000002,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 9759.604666999949,
+      "startupMs": 0.0003999999607913196,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 3,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36312,
+        "output": 144,
+        "cacheRead": 34560,
+        "cacheWrite": 0
+      },
+      "cost": 0.40488,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 16612.24452899996,
+      "startupMs": 312.5369209999917,
+      "shellMs": 1073.0894189999672,
+      "shellCalls": 3,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 5,
+      "tokens": {
+        "input": 23576,
+        "output": 275,
+        "cacheRead": 53888,
+        "cacheWrite": 0
+      },
+      "cost": 0.303398,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 12704.671389000025,
+      "startupMs": 277.11236500000814,
+      "shellMs": 1085.0048839999945,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 5970,
+        "output": 266,
+        "cacheRead": 14976,
+        "cacheWrite": 0
+      },
+      "cost": 0.087976,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 13619.140129000007,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 3,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 33761,
+        "output": 459,
+        "cacheRead": 32128,
+        "cacheWrite": 0
+      },
+      "cost": 0.39268800000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 8319.893072000006,
+      "startupMs": 346.0669929999858,
+      "shellMs": 712.7169899999863,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 893,
+        "output": 214,
+        "cacheRead": 13184,
+        "cacheWrite": 0
+      },
+      "cost": 0.032814,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 9252.155519000022,
+      "startupMs": 251.00929700001143,
+      "shellMs": 753.8770060000243,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5671,
+        "output": 193,
+        "cacheRead": 9728,
+        "cacheWrite": 0
+      },
+      "cost": 0.07608800000000002,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 5197.55214699998,
+      "startupMs": 0.0003999999607913196,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 8373,
+        "output": 123,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.094104,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 15219.177051000006,
+      "startupMs": 320.7656030000071,
+      "shellMs": 1121.6948909998755,
+      "shellCalls": 3,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 1,
+      "modelTurns": 5,
+      "tokens": {
+        "input": 5317,
+        "output": 226,
+        "cacheRead": 17920,
+        "cacheWrite": 0
+      },
+      "cost": 0.08239000000000002,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 13687.882627999992,
+      "startupMs": 283.585196,
+      "shellMs": 1197.5865830000257,
+      "shellCalls": 3,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 1,
+      "modelTurns": 5,
+      "tokens": {
+        "input": 5953,
+        "output": 286,
+        "cacheRead": 19584,
+        "cacheWrite": 0
+      },
+      "cost": 0.09341400000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 5953.103116000013,
+      "startupMs": 0.0005000000237487257,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 472,
+        "output": 81,
+        "cacheRead": 8448,
+        "cacheWrite": 0
+      },
+      "cost": 0.017217999999999997,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 7367.23064699996,
+      "startupMs": 317.4074009999749,
+      "shellMs": 388.1189209999866,
+      "shellCalls": 1,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5308,
+        "output": 82,
+        "cacheRead": 9600,
+        "cacheWrite": 0
+      },
+      "cost": 0.06678,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 3694.253396999964,
+      "startupMs": 0.0002999999560415745,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 404,
+        "output": 55,
+        "cacheRead": 8448,
+        "cacheWrite": 0
+      },
+      "cost": 0.015238,
+      "manualInterventions": 0
+    },
+    {
+      "task": "simple-config",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "expected": {
+        "attempts": 4,
+        "backoffMs": 250
+      },
+      "wallMs": 5299.968097999983,
+      "startupMs": 287.3000989999855,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 428,
+        "output": 59,
+        "cacheRead": 8576,
+        "cacheWrite": 0
+      },
+      "cost": 0.015806,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 7108.363641000004,
+      "startupMs": 242.18030000000726,
+      "shellMs": 388.54640300001483,
+      "shellCalls": 1,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 801,
+        "output": 77,
+        "cacheRead": 14464,
+        "cacheWrite": 0
+      },
+      "cost": 0.026324,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 5187.689848000009,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 283,
+        "output": 52,
+        "cacheRead": 8576,
+        "cacheWrite": 0
+      },
+      "cost": 0.014006,
+      "manualInterventions": 0
+    },
+    {
+      "task": "csv-total",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "totalCents": 1276
+      },
+      "expected": {
+        "totalCents": 1276
+      },
+      "wallMs": 7386.599543999997,
+      "startupMs": 307.67236800002865,
+      "shellMs": 746.796905999945,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 659,
+        "output": 74,
+        "cacheRead": 12928,
+        "cacheWrite": 0
+      },
+      "cost": 0.023218000000000003,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 10170.29390499997,
+      "startupMs": 240.60940099996515,
+      "shellMs": 794.0492359999917,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 23624,
+        "output": 160,
+        "cacheRead": 32640,
+        "cacheWrite": 0
+      },
+      "cost": 0.27688,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 9083.629679000005,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 22822,
+        "output": 217,
+        "cacheRead": 40448,
+        "cacheWrite": 0
+      },
+      "cost": 0.27951800000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "large-aggregate",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "expected": {
+        "count": 1028,
+        "totalCents": 1533000
+      },
+      "wallMs": 11596.940555999987,
+      "startupMs": 292.95888699998613,
+      "shellMs": 1055.4746840000153,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 1164,
+        "output": 233,
+        "cacheRead": 17792,
+        "cacheWrite": 0
+      },
+      "cost": 0.04108200000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 3,
+      "group": "C",
+      "passed": false,
+      "failure": "invalid_final_json",
+      "actual": null,
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 7104.091950000031,
+      "startupMs": 202.89859600004274,
+      "shellMs": 403.6454930000473,
+      "shellCalls": 1,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 1,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5333,
+        "output": 127,
+        "cacheRead": 4736,
+        "cacheWrite": 0
+      },
+      "cost": 0.064416,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 9427.293930999935,
+      "startupMs": 0.0003999999025836587,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36651,
+        "output": 276,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.406934,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 11351.140789000085,
+      "startupMs": 328.5833880000282,
+      "shellMs": 814.48327899992,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 23393,
+        "output": 169,
+        "cacheRead": 31104,
+        "cacheWrite": 0
+      },
+      "cost": 0.273484,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 9835.595008999924,
+      "startupMs": 311.84409399994183,
+      "shellMs": 712.7873250000412,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 2659,
+        "output": 225,
+        "cacheRead": 16256,
+        "cacheWrite": 0
+      },
+      "cost": 0.054096000000000005,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 7462.879104999942,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 3,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 40408,
+        "output": 141,
+        "cacheRead": 30464,
+        "cacheWrite": 0
+      },
+      "cost": 0.44159400000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-join",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "count": 29
+      },
+      "expected": {
+        "count": 29
+      },
+      "wallMs": 11240.57862299995,
+      "startupMs": 340.5430039999774,
+      "shellMs": 949.4716800000751,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 10399,
+        "output": 285,
+        "cacheRead": 8832,
+        "cacheWrite": 0
+      },
+      "cost": 0.127072,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 14070.454940999974,
+      "startupMs": 240.80799600004684,
+      "shellMs": 1117.2277909999248,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 11360,
+        "output": 259,
+        "cacheRead": 20352,
+        "cacheWrite": 0
+      },
+      "cost": 0.146902,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 14252.24282699998,
+      "startupMs": 0.0004000000189989805,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 3,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 37985,
+        "output": 442,
+        "cacheRead": 27904,
+        "cacheWrite": 0
+      },
+      "cost": 0.42985400000000007,
+      "manualInterventions": 0
+    },
+    {
+      "task": "refund-join",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "refundCents": 68450
+      },
+      "expected": {
+        "refundCents": 68450
+      },
+      "wallMs": 12977.831846000045,
+      "startupMs": 312.7890919999918,
+      "shellMs": 1150.3076800000854,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 6572,
+        "output": 248,
+        "cacheRead": 14848,
+        "cacheWrite": 0
+      },
+      "cost": 0.092968,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 9351.13617199997,
+      "startupMs": 228.2433969998965,
+      "shellMs": 801.132188999909,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5688,
+        "output": 205,
+        "cacheRead": 9728,
+        "cacheWrite": 0
+      },
+      "cost": 0.07685800000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 6426.311708999914,
+      "startupMs": 0.0003999999025836587,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4145,
+        "output": 96,
+        "cacheRead": 8448,
+        "cacheWrite": 0
+      },
+      "cost": 0.054698000000000004,
+      "manualInterventions": 0
+    },
+    {
+      "task": "trace-ranking",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "expected": {
+        "trace": "trace-0",
+        "count": 5
+      },
+      "wallMs": 9508.711789999972,
+      "startupMs": 287.3411949999863,
+      "shellMs": 833.9806640000315,
+      "shellCalls": 2,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 5103,
+        "output": 200,
+        "cacheRead": 8960,
+        "cacheWrite": 0
+      },
+      "cost": 0.06999000000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 18716.684516999987,
+      "startupMs": 279.2910789999878,
+      "shellMs": 1451.7852260000072,
+      "shellCalls": 4,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 2,
+      "modelTurns": 6,
+      "tokens": {
+        "input": 1744,
+        "output": 489,
+        "cacheRead": 29824,
+        "cacheWrite": 0
+      },
+      "cost": 0.071714,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 5238.743251000065,
+      "startupMs": 0.0004999999655410647,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 2,
+      "tokens": {
+        "input": 4696,
+        "output": 79,
+        "cacheRead": 4224,
+        "cacheWrite": 0
+      },
+      "cost": 0.055134,
+      "manualInterventions": 0
+    },
+    {
+      "task": "reproduction",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "actual": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "expected": {
+        "actual": 9980,
+        "corrected": 8000
+      },
+      "wallMs": 16674.975084000034,
+      "startupMs": 289.35546400002204,
+      "shellMs": 1457.462440000032,
+      "shellCalls": 4,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 2,
+      "modelTurns": 6,
+      "tokens": {
+        "input": 1654,
+        "output": 431,
+        "cacheRead": 27136,
+        "cacheWrite": 0
+      },
+      "cost": 0.065226,
+      "manualInterventions": 0
+    }
+  ],
+  "evidenceSha256": "9eb1af78fe9065d6de3b1d628f3f3f0b51db5abcc3d8ea8094d80b347fa291e8",
+  "conditions": {
+    "thinkingLevel": "medium",
+    "modelRunTimeoutMs": 180000,
+    "assistantTurns": 12,
+    "readAndShellCalls": 30,
+    "readPageCharacters": 51200,
+    "retry": false,
+    "compaction": false
+  },
+  "safetyChecks": [
+    "non-root",
+    "host-and-other-issue-unmounted",
+    "no-engine-socket",
+    "no-host-env",
+    "evidence-read-only",
+    "root-read-only",
+    "no-new-privileges",
+    "capabilities-dropped",
+    "network-loopback-only",
+    "workspace-writable",
+    "memory-and-pid-limits-configured",
+    "abort-removes-container-and-descendants",
+    "timeout-removes-container-and-descendants",
+    "output-removes-container-and-descendants"
+  ],
+  "benchmark": {
+    "image": "docker.io/library/node:26-bookworm-slim",
+    "imageId": "a1b97d6761bf16f53e69dfbb124d934f7bb9f523564a402b0e5dfa88ac29f6a9",
+    "hostNode": "v24.18.0",
+    "containerNode": "v26.7.0",
+    "limits": {
+      "memory": "512m",
+      "cpus": "1",
+      "pids": "64",
+      "temporary": "64m",
+      "workspace": "128m",
+      "executionMs": 30000,
+      "outputBytes": 262144
+    },
+    "startupMs": 289.30908399999953,
+    "host": {
+      "samples": 10,
+      "medianMs": 20.42439800000011,
+      "p95Ms": 22.19289900000058,
+      "valuesMs": [
+        20.117498999999953,
+        20.534998000000087,
+        20.81829900000048,
+        20.630298999999468,
+        20.349498999999923,
+        19.082798999999795,
+        22.19289900000058,
+        20.346198999999615,
+        20.42439800000011,
+        20.07079900000099
+      ]
+    },
+    "container": {
+      "samples": 10,
+      "medianMs": 311.03658300000006,
+      "p95Ms": 386.8024780000005,
+      "valuesMs": [
+        311.03658300000006,
+        317.2809820000002,
+        301.01638300000013,
+        289.91088300000047,
+        386.8024780000005,
+        286.5673829999996,
+        296.52848300000005,
+        310.04108199999973,
+        354.7621800000006,
+        328.1008810000003
+      ]
+    }
+  },
+  "summary": [
+    {
+      "group": "A",
+      "runs": 24,
+      "passed": 24,
+      "meanWallMs": 7883.480037958325,
+      "meanModelTurns": 2.5,
+      "meanCodemodeCalls": 0,
+      "meanCost": 0.22768225
+    },
+    {
+      "group": "B",
+      "runs": 24,
+      "passed": 24,
+      "meanWallMs": 10760.59239416667,
+      "meanModelTurns": 3.625,
+      "meanCodemodeCalls": 0,
+      "meanCost": 0.09712316666666666
+    },
+    {
+      "group": "C",
+      "runs": 24,
+      "passed": 23,
+      "meanWallMs": 10469.180626916661,
+      "meanModelTurns": 3.6666666666666665,
+      "meanCodemodeCalls": 0,
+      "meanCost": 0.13670341666666666
+    }
+  ],
+  "completedAt": "2026-10-16T16:53:15.572Z"
+}

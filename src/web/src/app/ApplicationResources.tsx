@@ -52,23 +52,28 @@ export function ApplicationResourcesProvider(props: ParentProps) {
 
   const refreshCatalog = latestLoader(loadCatalog, setCatalog, setCatalogError);
   const refreshConfiguration = latestLoader(loadConfig, (value) => { setConfiguration(value); setConfigurationLoaded(true); }, setConfigurationError);
+  let peopleGeneration = 0;
   const refreshPeople = async () => {
+    const owner = ++peopleGeneration;
     try {
       const users = await loadUsers();
+      if (owner !== peopleGeneration) return users;
       if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) setCurrentUserSubject(null);
       const currentUser = await loadCurrentUser();
+      if (owner !== peopleGeneration) return users;
       setPeople(users);
       setCurrentUser(currentUser);
       setPeopleError("");
       return users;
     } catch (error) {
-      setPeopleError(errorMessage(error));
+      if (owner === peopleGeneration) setPeopleError(errorMessage(error));
       throw error;
     }
   };
   const selectCurrentUser = (subject: string) => {
     const user = people().find((candidate) => candidate.subject === subject);
     if (!user) return;
+    peopleGeneration++;
     setCurrentUserSubject(subject);
     setCurrentUser(user);
   };

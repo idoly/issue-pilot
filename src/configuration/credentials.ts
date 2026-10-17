@@ -1,6 +1,6 @@
 import { CapabilityConfigurationError, parseCapabilityConfiguration } from "../capabilities/registry.ts";
-import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
-import { CAPABILITY_CREDENTIALS, type ProjectedCapabilityConfiguration } from "./contracts.ts";
+import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName, type DeploymentConfig, type StoredDeploymentConfig } from "../domain/contracts.ts";
+import { CAPABILITY_CREDENTIALS, type ProjectedCapabilityConfiguration, type ServiceCapabilityConfiguration } from "./contracts.ts";
 
 function fail(code: string): never {
   throw new CapabilityConfigurationError(code);
@@ -22,10 +22,26 @@ export function projectCapabilityConfiguration(configuration: CapabilityConfigur
   for (const key of CAPABILITY_KEYS) {
     const stored = configuration[key];
     if (!stored) continue;
+    if (key === "db") {
+      projected.db = {
+        databases: configuration.db!.databases.map(({ password, ...database }) => ({ ...database, credentialConfigured: Boolean(password) })),
+      };
+      continue;
+    }
     const section = stored as Record<string, unknown>;
-    projected[key] = { ...section, credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
+    const fields = CAPABILITY_CREDENTIALS[key].fields as readonly string[];
+    projected[key] = { ...Object.fromEntries(Object.entries(section).filter(([field]) => !fields.includes(field))), credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
   }
   return projected as ProjectedCapabilityConfiguration;
+}
+
+export function resolveDeploymentConfiguration(stored: StoredDeploymentConfig): DeploymentConfig {
+  const { mcpServices: _mcp, archivedDevelopment: _archive, ...configuration } = stored;
+  return configuration;
+}
+
+export function projectDeploymentConfiguration(stored: StoredDeploymentConfig): ServiceCapabilityConfiguration {
+  return { ...projectCapabilityConfiguration(resolveDeploymentConfiguration(stored)), ...(stored.mcpServices?.length ? { mcpServices: stored.mcpServices } : {}) };
 }
 
 function replacementCredentialValues(key: CapabilityName, value: unknown): Record<string, string> {
@@ -37,7 +53,36 @@ function replacementCredentialValues(key: CapabilityName, value: unknown): Recor
   return Object.fromEntries(fields.map((field) => [field, input[field] as string]));
 }
 
+function resolveDbConfiguration(value: unknown, existing: CapabilityConfiguration | undefined): NonNullable<CapabilityConfiguration["db"]> {
+  const input = inputRecord(value);
+  if (Object.keys(input).some((field) => field !== "databases") || !Array.isArray(input.databases)) fail("invalid_db_databases");
+  const existingByUrl = new Map(existing?.db?.databases.map((database) => [database.url, database]));
+  const databases = input.databases.map((value) => {
+    const database = inputRecord(value);
+    if ("password" in database || Object.keys(database).some((field) => !["url", "username", "credentialUpdate"].includes(field))) fail("credential_fields_not_allowed");
+    const url = typeof database.url === "string" ? database.url : "";
+    const update = inputRecord(database.credentialUpdate);
+    let password = "";
+    if (update.mode === "preserve") {
+      if (Object.keys(update).length !== 1) fail("invalid_credential_update");
+      password = existingByUrl.get(url)?.password ?? fail("credential_not_configured");
+    } else if (update.mode === "replace") {
+      if (Object.keys(update).length !== 2 || !("values" in update)) fail("invalid_credential_update");
+      const values = inputRecord(update.values);
+      if (Object.keys(values).length !== 1 || typeof values.password !== "string" || !values.password.trim()) fail("invalid_db_password");
+      password = values.password;
+    } else if (update.mode === "clear") {
+      fail("credential_required");
+    } else {
+      fail("invalid_credential_update");
+    }
+    return { url, username: database.username, password };
+  });
+  return parseCapabilityConfiguration("db", { databases });
+}
+
 function resolveCapabilityConfiguration(key: CapabilityName, value: unknown, existing: CapabilityConfiguration | undefined): NonNullable<CapabilityConfiguration[CapabilityName]> {
+  if (key === "db") return resolveDbConfiguration(value, existing);
   const input = inputRecord(value);
   const credentialFields = CAPABILITY_CREDENTIALS[key].fields as readonly string[];
   if (credentialFields.some((field) => field in input)) fail("credential_fields_not_allowed");
@@ -47,6 +92,7 @@ function resolveCapabilityConfiguration(key: CapabilityName, value: unknown, exi
   if (update.mode === "preserve") {
     if (Object.keys(update).length !== 1) fail("invalid_credential_update");
     const stored = existing?.[key] as Record<string, unknown> | undefined;
+    if (key === "dms" && stored?.url !== base.url) fail("dms_credentials_target_changed");
     credentials = stored ? configuredCredentialValues(key, stored) ?? fail("credential_not_configured") : fail("credential_not_configured");
   } else if (update.mode === "replace") {
     if (Object.keys(update).length !== 2 || !("values" in update)) fail("invalid_credential_update");

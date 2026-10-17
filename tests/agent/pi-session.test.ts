@@ -9,6 +9,7 @@ import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
 import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
+import { IssueOutputStore } from "../../src/outputs/store.ts";
 import type { PiModelRuntime } from "../../src/pi/models.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
@@ -36,7 +37,7 @@ test("creates a private Pi session file before the first Agent prompt", async ()
   }
 });
 
-function context(options: { writable: boolean; capability?: "db" }): AgentSessionContext {
+function context(options: { writable: boolean; capability?: "db"; outputs?: boolean }): AgentSessionContext {
   return {
     issueKey: "ISSUE-20260808-001",
     serviceKey: "orders",
@@ -44,6 +45,7 @@ function context(options: { writable: boolean; capability?: "db" }): AgentSessio
     model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" },
     capabilities: options.capability ? [options.capability] : [],
     canModifyCode: options.writable,
+    canWriteOutputs: options.outputs ?? false,
   };
 }
 
@@ -101,13 +103,14 @@ test("maps the current user to Git author and committer environment", () => {
 });
 
 test("limits read-only deployments to non-mutating Pi tools", () => {
-  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "db"]);
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "grep", "find", "ls", "sandbox", "service_query"]);
 });
 
 test("enables Pi mutation tools only for writable development contexts", () => {
   assert.deepEqual(sessionToolAllowlist(context({ writable: true })), [
-    "read", "bash", "edit", "write", "grep", "find", "ls",
+    "read", "bash", "edit", "write", "grep", "find", "ls", "sandbox",
   ]);
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false, outputs: true })), ["read", "grep", "find", "ls", "sandbox", "output"]);
 });
 
 test("starts an SDK session with only context-selected tools and explicit resources", async () => {
@@ -128,10 +131,33 @@ test("starts an SDK session with only context-selected tools and explicit resour
       onEvent: () => undefined,
     });
     assert.deepEqual(refreshes, [{ providers: ["test-provider"], allowNetwork: false }]);
-    assert.deepEqual(managed.session.getActiveToolNames(), ["read", "grep", "find", "ls"]);
+    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["find", "grep", "ls", "read", "sandbox"]);
     assert.equal(managed.session.model?.id, "test-model");
     assert.equal(managed.session.thinkingLevel, "medium");
-    assert.match(managed.session.agent.state.systemPrompt, /Issue Pilot test context/);
+    assert.match(managed.session.systemPrompt, /Issue Pilot test context/);
+    await managed.stop();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("registers the durable output tool only with an explicit Issue output store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-output-"));
+  const sessionDirectory = join(root, "sessions");
+  await mkdir(sessionDirectory);
+  const manager = await createPrivateSessionManager(root, sessionDirectory);
+  const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime()));
+  try {
+    const managed = await runtime.start({
+      manager,
+      context: context({ writable: false, outputs: true }),
+      deploymentConfig: {},
+      workspaceRoot: root,
+      outputStore: new IssueOutputStore(root, "ISSUE-20260929-001"),
+      systemPrompt: "",
+      onEvent: () => undefined,
+    });
+    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["find", "grep", "ls", "output", "read", "sandbox"]);
     await managed.stop();
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -152,7 +178,7 @@ test("disposes an SDK session even when abort fails during stop", async () => {
   let disposed = false;
   const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
   const dispose = session.dispose.bind(session);
-  Object.defineProperty(session, "isStreaming", { configurable: true, get: () => true });
+  Object.defineProperty(session, "isIdle", { configurable: true, get: () => false });
   session.abort = async () => { throw new Error("abort_failed"); };
   session.dispose = () => { disposed = true; dispose(); };
   try {

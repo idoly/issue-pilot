@@ -1,7 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { eq } from "drizzle-orm";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { subjects } from "../db/schema.ts";
 import { ApiError } from "./input.ts";
 import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
@@ -9,7 +8,8 @@ import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteCon
 const notFoundErrors = new Set(["source_repository_not_found", "source_path_not_found", "source_commit_not_found", "source_commit_file_not_found", "source_diff_file_not_found"]);
 const conflictErrors = new Set(["source_browser_unavailable", "source_repository_state_invalid", "source_runtime_invalid", "source_read_only", "source_file_changed", "source_path_exists", "source_stage_failed", "source_unstage_failed", "source_discard_failed", "source_commit_failed"]);
 const requestErrors = new Set(["invalid_source_path", "invalid_source_query", "invalid_source_revision", "invalid_source_line", "invalid_source_hash", "invalid_source_commit_message", "invalid_source_commit_author", "source_path_not_directory", "source_path_not_file", "source_path_outside_repository"]);
-const contentErrors = new Set(["source_file_too_large", "source_file_binary", "source_commit_too_large", "source_diff_too_large"]);
+const contentErrors = new Set(["source_file_binary", "source_commit_too_large", "source_diff_too_large"]);
+const unrestrictedBodyLimit = Number.MAX_SAFE_INTEGER;
 
 function headerValue(value: string | string[] | undefined, required = false): string {
   if (value === undefined && !required) return "";
@@ -68,7 +68,7 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
     .then((issue) => runIssueExclusive(engine, [issue.id], () => sourceOperation(() => operation(issue))));
   app.put<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", {
     logLevel: "silent",
-    bodyLimit: issuePilotConfig.limits.sourceBrowser.fileBytes,
+    bodyLimit: unrestrictedBodyLimit,
   }, async (request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
@@ -81,7 +81,7 @@ export function registerSourceBrowserRoutes(context: ApiRouteContext): void {
       headerValue(request.headers["x-issue-pilot-sha256"], true),
     )));
   });
-  app.post<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", { logLevel: "silent", bodyLimit: issuePilotConfig.limits.sourceBrowser.fileBytes }, (request) => {
+  app.post<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", { logLevel: "silent", bodyLimit: unrestrictedBodyLimit }, (request) => {
     if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
     return mutate(request, (issue) => sourceBrowser.createFile(issue, repository(request), relativePath(request, true), request.body));
   });

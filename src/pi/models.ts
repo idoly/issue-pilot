@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdtemp, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,7 +26,7 @@ async function copyPrivateFile(source: string, destination: string): Promise<voi
   }
 }
 
-export function createPiModelRuntime(agentDir = getAgentDir()): PiModelRuntime {
+export function createPiModelRuntime(agentDir = getAgentDir(), personal?: { provider: string; apiKey: string }): PiModelRuntime {
   let privateDirectory: string | undefined;
   let runtime: Promise<ModelRuntime> | undefined;
   let closing: Promise<void> | undefined;
@@ -43,16 +43,31 @@ export function createPiModelRuntime(agentDir = getAgentDir()): PiModelRuntime {
       try {
         await chmod(directory, 0o700);
         await Promise.all([
-          copyPrivateFile(join(agentDir, "auth.json"), join(directory, "auth.json")),
+          ...(personal ? [] : [copyPrivateFile(join(agentDir, "auth.json"), join(directory, "auth.json"))]),
           copyPrivateFile(join(agentDir, "models-store.json"), join(directory, "models-store.json")),
         ]);
-        return await ModelRuntime.create({
+        let modelsPath = join(agentDir, "models.json");
+        if (personal) {
+          try {
+            const models = JSON.parse(await readFile(modelsPath, "utf8"), (key, value) => {
+              if (key === "apiKey" || /^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(key)) return undefined;
+              return value;
+            });
+            modelsPath = join(directory, "models.json");
+            await writeFile(modelsPath, JSON.stringify(models), { mode: 0o600 });
+          } catch (error) {
+            if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+          }
+        }
+        const modelRuntime = await ModelRuntime.create({
           authPath: join(directory, "auth.json"),
-          modelsPath: join(agentDir, "models.json"),
+          modelsPath,
           modelsStorePath: join(directory, "models-store.json"),
           allowModelNetwork: false,
           refreshOnCreate: false,
         });
+        if (personal) await modelRuntime.setRuntimeApiKey(personal.provider, personal.apiKey);
+        return modelRuntime;
       } catch (error) {
         await cleanup().catch(() => undefined);
         throw error;

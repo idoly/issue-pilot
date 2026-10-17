@@ -288,6 +288,104 @@
       "when": 1789488000000,
       "tag": "0040_dms_schema_selector",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1789747200000,
+      "tag": "0041_related_issues",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1790035200000,
+      "tag": "0042_issue_pins",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1790121600000,
+      "tag": "0043_issue_scope_transitions",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1790208000000,
+      "tag": "0044_db_database_targets",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1790294400000,
+      "tag": "0045_user_roles_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1790380800000,
+      "tag": "0046_user_git_ssh_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1790467200000,
+      "tag": "0047_repository_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1790553600000,
+      "tag": "0048_capability_switches",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1790640000000,
+      "tag": "0049_mcp_services",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1790726400000,
+      "tag": "0050_resource_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1790812800000,
+      "tag": "0051_issue_service_scopes",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1790899200000,
+      "tag": "0052_deployment_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1790985600000,
+      "tag": "0053_inline_capability_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1791072000000,
+      "tag": "0054_personal_production_credentials",
+      "breakpoints": true
     }
   ]
 }

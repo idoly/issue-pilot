@@ -6,9 +6,10 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
-import { AGENT_THINKING_LEVELS, type EnvironmentKind } from "../../src/domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
 
 export const testAgent = { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" as const };
@@ -106,7 +107,7 @@ export async function json(response: { body: string }): Promise<Record<string, u
   return JSON.parse(response.body) as Record<string, unknown>;
 }
 
-export function servicePayload(name: string, environments: EnvironmentKind[] = ["test"], repositoryUrls = [`https://example.test/${name.toLowerCase()}.git`]) {
+export function servicePayload(name: string, environments: EnvironmentKind[] = ["test"], repositoryUrls = [`https://example.test/${name.toLowerCase().replace(/\s+/g, "-")}.git`]) {
   const key = name.toLowerCase();
   const repositories = repositoryUrls.map((url, index) => ({ alias: `${key}-${index + 1}`, url }));
   return {
@@ -122,22 +123,29 @@ export function servicePayload(name: string, environments: EnvironmentKind[] = [
 }
 
 export async function createService(app: FastifyInstance, name: string, environments: EnvironmentKind[] = ["test"], repositoryUrls?: string[]) {
-  const response = await app.inject({ method: "POST", url: "/api/services", payload: servicePayload(name, environments, repositoryUrls) });
+  const definition = servicePayload(name, environments, repositoryUrls);
+  for (const repository of definition.repositories) {
+    const registered = await app.inject({ method: "POST", url: "/api/repositories", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: { name: repository.alias, url: repository.url } });
+    assert.ok([201, 409].includes(registered.statusCode), registered.body);
+  }
+  const response = await app.inject({ method: "POST", url: "/api/services", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: definition });
   assert.equal(response.statusCode, 201, response.body);
   return json(response);
 }
 
-export function issuePayload(serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
+export function issueMetadataPayload(title = "Test issue") {
   return {
     title,
     description: "Investigate the issue",
     priority: "p1",
-    type: environmentKey === "dev" ? "defect_fix" : "smart_analysis",
-    environmentKey,
-    serviceKey,
     assigneeSubject: null,
     ccSubjects: [],
   };
+}
+
+export function issuePayload(serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
+  const workMode: IssueWorkMode = environmentKey === "dev" ? "development_fix" : environmentKey === "prod" ? "production_analysis" : "test_analysis";
+  return { ...issueMetadataPayload(title), workMode, serviceKey };
 }
 
 export async function createIssue(app: FastifyInstance, serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
