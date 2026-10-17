@@ -2,6 +2,7 @@ FROM docker.io/library/node:26-bookworm-slim AS build
 
 WORKDIR /build
 COPY package.json package-lock.json ./
+COPY packages/workbench ./packages/workbench
 RUN npm ci
 COPY issue-pilot.config.ts tsconfig.json ./
 COPY drizzle ./drizzle
@@ -24,14 +25,9 @@ RUN apt-get update \
 
 FROM docker.io/library/node:26-bookworm-slim
 
-ARG ALIYUN_CLI_VERSION=3.4.11
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl libexpat1 openssh-client perl ripgrep \
-    && architecture="$(dpkg --print-architecture)" \
-    && curl --fail --location --silent --show-error "https://github.com/aliyun/aliyun-cli/releases/download/v${ALIYUN_CLI_VERSION}/aliyun-cli-linux-${ALIYUN_CLI_VERSION}-${architecture}.tgz" --output /tmp/aliyun.tgz \
-    && tar --extract --gzip --file /tmp/aliyun.tgz --directory /tmp \
-    && install -m 0555 /tmp/aliyun /usr/local/bin/aliyun \
-    && rm -rf /tmp/aliyun /tmp/aliyun.tgz /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=maven /opt/java/openjdk /opt/java/openjdk
 COPY --from=maven /usr/share/maven /usr/share/maven
 COPY --from=git /opt/git /opt/git

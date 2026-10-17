@@ -1,0 +1,64 @@
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Person } from "../data/client";
+
+const state = vi.hoisted(() => ({ user: undefined as unknown, save: vi.fn(), load: vi.fn() }));
+vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user }) }));
+vi.mock("../data/client", async (original) => ({ ...await original<typeof import("../data/client")>(), loadPersonalCredentials: state.load, updatePersonalCredentials: state.save }));
+import { PersonalCredentials } from "./PersonalCredentials";
+
+describe("personal credentials", () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+  it("uses one card and saves production rows independently without sending other drafts", async () => {
+    const [user] = createSignal<Person>({ subject: "alice", name: "Alice", email: "a@example.test", role: "developer" }, { ownedWrite: true });
+    state.user = user;
+    state.load.mockResolvedValue({ provider: "fixture", modelProviders: [], gitSshConfigured: false });
+    state.save.mockResolvedValue({ modelProviders: [], gitSshConfigured: false, productionDmsConfigured: true, productionDmsUrl: "https://dms.example.test/sse" });
+    const view = render(() => <PersonalCredentials />);
+    await waitFor(() => expect(state.load).toHaveBeenCalled());
+    expect(screen.getByRole("region", { name: "我的凭证" })).toBeTruthy();
+    expect(screen.queryByText("Alice")).toBeNull(); expect(screen.queryByText("a@example.test")).toBeNull();
+    fireEvent.input(screen.getByLabelText("生产 DMS 地址"), { target: { value: "https://dms.example.test/sse" } });
+    fireEvent.input(screen.getByLabelText("生产 DMS Token"), { target: { value: "Bearer personal" } });
+    fireEvent.input(screen.getByLabelText("生产 SLS AccessKey ID"), { target: { value: "unsaved-id" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存 DMS 生产凭证" })).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("button", { name: "保存 DMS 生产凭证" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ production: { dms: { mode: "replace", url: "https://dms.example.test/sse", authorization: "Bearer personal" } } }));
+    await waitFor(() => expect(screen.getByLabelText("生产 DMS Token")).toHaveProperty("value", ""));
+    expect(screen.getByLabelText("生产 SLS AccessKey ID")).toHaveProperty("value", "unsaved-id");
+    expect(view.container.querySelectorAll(".production-credentials-form > div")).toHaveLength(3);
+    view.unmount();
+  });
+  it("saves keys for the current user, does not display stored secrets, and clears drafts on user switch", async () => {
+    const [user, setUser] = createSignal<Person>({ subject: "alice", name: "Alice", email: "a@example.test", role: "developer" }, { ownedWrite: true });
+    state.user = user;
+    state.load.mockResolvedValue({ provider: "fixture", modelProviders: ["fixture"], gitSshConfigured: false });
+    state.save.mockResolvedValue({ modelProviders: ["fixture"], gitSshConfigured: false });
+    const view = render(() => <PersonalCredentials />);
+    const key = await screen.findByLabelText("apiKey") as HTMLInputElement;
+    await waitFor(() => expect(state.load).toHaveBeenCalled());
+    expect(screen.queryByLabelText("个人模型服务商")).toBeNull();
+    expect(view.baseElement.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show password" })).toBeNull();
+    expect(key.value).toBe("");
+    fireEvent.input(key, { target: { value: "alice-secret" } });
+    const ssh = screen.getByLabelText("sshKey") as HTMLTextAreaElement;
+    fireEvent.input(ssh, { target: { value: "alice-ssh-key\nsecond-line" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存凭证" })).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("button", { name: "保存凭证" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ model: { mode: "replace", apiKey: "alice-secret" }, git: { mode: "replace", type: "ssh", privateKey: "alice-ssh-key\nsecond-line" } }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("已保存"));
+    expect(key.value).toBe("alice-secret");
+    expect(ssh.value).toBe("alice-ssh-key\nsecond-line");
+    fireEvent.input(key, { target: { value: "unsaved-secret" } });
+    setUser({ subject: "bob", name: "Bob", email: "b@example.test", role: "developer" });
+    await waitFor(() => expect(key.value).toBe(""));
+    setUser({ subject: "product", name: "Product", email: "p@example.test", role: "product" });
+    await waitFor(() => expect(screen.queryByLabelText("apiKey")).toBeNull());
+    expect(screen.getByRole("region", { name: "我的凭证" })).toBeTruthy();
+    expect(screen.getByLabelText("生产 DMS 地址")).toBeTruthy();
+    expect(screen.getByLabelText("生产 SLS AccessKey ID")).toBeTruthy();
+    view.unmount();
+  });
+});

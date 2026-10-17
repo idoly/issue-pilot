@@ -143,6 +143,7 @@ test("replays the visible transcript from the active Pi session branch", () => {
     content: [{ type: "text", text: "{\"rows\":[{\"1\":1}]}" }],
     details: { runtime: "container" },
     isError: false,
+    durationMs: 1234,
     timestamp: Date.now(),
   });
 
@@ -159,6 +160,8 @@ test("replays the visible transcript from the active Pi session branch", () => {
   assert.deepEqual(assistant.content?.find((part) => part.type === "toolCall")?.arguments, { statement: "SELECT 1" });
   const toolEvent = transcript[2]!.event;
   assert.ok("result" in toolEvent);
+  assert.ok("durationMs" in toolEvent);
+  assert.equal(toolEvent.durationMs, 1234);
   assert.deepEqual((toolEvent.result as { details?: unknown }).details, { runtime: "container" });
 });
 
@@ -179,6 +182,20 @@ test("calculates Pi footer totals, cache hit rate, and context usage", () => {
     input: 500, output: 500, cacheRead: 9_500, cacheWrite: 0, cost: 0.35,
     latestCacheHitRate: 95, contextPercent: 52.5, contextWindow: 20_000, autoCompact: true,
   });
+});
+
+test("includes SDK usage entries without exposing internal context edits in visible history", () => {
+  const manager = SessionManager.inMemory("/workspace");
+  const id = manager.appendMessage({ role: "assistant", api: "openai-responses", provider: "test", model: "test-model", content: [{ type: "text", text: "Original visible answer" }], stopReason: "stop", usage, timestamp: Date.now() });
+  manager.appendContextEdit(id, null);
+  manager.appendUsage("cache_warm", "test", "test-model", { ...usage, input: 0, output: 0, cacheRead: 100, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01 } });
+  const stats = sessionFooterStats(manager, 20000);
+  assert.equal(stats.cacheRead, usage.cacheRead + 100);
+  assert.equal(stats.cost, usage.cost.total + 0.01);
+  assert.equal(manager.buildSessionContext().messages.some((message) => message.role === "assistant"), false);
+  const replay = sessionTranscript(manager, "issue");
+  assert.ok(JSON.stringify(replay).includes("Original visible answer"));
+  assert.equal(replay.length, 1);
 });
 
 test("keeps the visible active-branch transcript after context compaction", () => {

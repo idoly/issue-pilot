@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -588,6 +589,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     await database.db.insert(subjects).values({ subject: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
     const [service] = await database.db.insert(services).values({ key: "conversion-service", name: "Conversion Service" }).returning();
     const remote = await createRemote(root, "conversion");
+    await registerTestRepositories(database.db, [remote]);
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "conversion", url: remote }).returning();
     const [testDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: testEnvironment.id, config: {} }).returning();
     const [devDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: devEnvironment.id, config: {} }).returning();
@@ -712,6 +714,7 @@ test("migrates ready development scopes while preserving retained changes and ro
     const retainedRemote = await createRemote(root, "scope-retained");
     const removedRemote = await createRemote(root, "scope-removed");
     const addedRemote = await createRemote(root, "scope-added");
+    await registerTestRepositories(database.db, [retainedRemote, removedRemote, addedRemote]);
     const sourceRepositories = await database.db.insert(serviceRepositories).values([
       { serviceId: sourceService!.id, alias: "retained-source", url: retainedRemote },
       { serviceId: sourceService!.id, alias: "removed", url: removedRemote },

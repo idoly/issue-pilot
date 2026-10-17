@@ -1,4 +1,6 @@
 import {
+  FileChangeType,
+  type IFileChange,
   FilePermission,
   FileSystemProviderCapabilities,
   FileSystemProviderError,
@@ -11,12 +13,12 @@ import {
   type IStat,
   type IWatchOptions,
 } from "@codingame/monaco-vscode-files-service-override";
-import type { Uri } from "monaco-editor";
+import { URI as Uri } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
+import { Emitter } from "@codingame/monaco-vscode-api/vscode/vs/base/common/event";
 
 import { createSourceDirectory, createSourceFile, deleteSourcePath, errorMessage, loadSourceFile, loadSourceTree, renameSourcePath, saveSourceFile, type SourceRepository, type SourceTreeEntry } from "../data/client";
 
 const encoder = new TextEncoder();
-const noEvent = () => ({ dispose() {} });
 const directoryStat = (readOnly: boolean): IStat => ({ type: FileType.Directory, ctime: 0, mtime: 0, size: 0, ...(readOnly ? { permissions: FilePermission.Readonly } : {}) });
 
 function providerError(message: string, code: FileSystemProviderErrorCode): FileSystemProviderError {
@@ -34,16 +36,18 @@ function sourceError(error: unknown): FileSystemProviderError {
 }
 
 export class SourceFileSystemProvider implements IFileSystemProviderWithFileReadWriteCapability {
-  readonly capabilities: FileSystemProviderCapabilities;
-  readonly onDidChangeCapabilities = noEvent;
-  readonly onDidChangeFile = noEvent;
+  capabilities: FileSystemProviderCapabilities;
+  private readonly capabilityEvents = new Emitter<void>();
+  private readonly fileEvents = new Emitter<readonly IFileChange[]>();
+  readonly onDidChangeCapabilities = this.capabilityEvents.event;
+  readonly onDidChangeFile = this.fileEvents.event;
   readonly readOnlyMessage = { value: "测试和正式环境代码工作台为只读" };
 
   private readonly repositoryByName: Map<string, SourceRepository>;
   private readonly directoryRequests = new Map<string, Promise<SourceTreeEntry[]>>();
   private readonly fileHashes = new Map<string, string>();
   private onWrite: () => void = () => undefined;
-  private readonly workspaceBytes: Uint8Array;
+  private workspaceBytes: Uint8Array;
   readonly workspacePath: string;
   readonly workspaceUriPath: string;
 
@@ -56,6 +60,16 @@ export class SourceFileSystemProvider implements IFileSystemProviderWithFileRead
     this.workspaceBytes = encoder.encode(JSON.stringify({
       folders: repositories.map((repository) => ({ name: repository.name, path: `${this.workspacePath}/${repository.name}` })),
     }));
+  }
+
+  updateRepositories(repositories: SourceRepository[]): void {
+    this.repositoryByName.clear();
+    for (const repository of repositories) this.repositoryByName.set(repository.name, repository);
+    this.directoryRequests.clear();
+    this.workspaceBytes = encoder.encode(JSON.stringify({ folders: repositories.map((repository) => ({ name: repository.name, path: `${this.workspacePath}/${repository.name}` })) }));
+    const capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive | (repositories.some((repository) => repository.access === "write") ? 0 : FileSystemProviderCapabilities.Readonly);
+    if (capabilities !== this.capabilities) { this.capabilities = capabilities; this.capabilityEvents.fire(); }
+    this.fileEvents.fire([{ resource: Uri.file(this.workspaceUriPath), type: FileChangeType.UPDATED }, { resource: Uri.file(this.workspacePath), type: FileChangeType.UPDATED }]);
   }
 
   watch(_resource: Uri, _options: IWatchOptions) {

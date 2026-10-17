@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../data/client", async (importOriginal) => {
@@ -24,16 +24,16 @@ vi.mock("../data/client", async (importOriginal) => {
   issues[1]!.service = { key: "orders", name: "Orders" };
   issues[1]!.repositories[0]!.workingBranch = null;
   const managedUsers = [
-    { subject: "fixture-user", name: "严欣", email: "owner@example.test", active: true, createdAt: now, updatedAt: now },
-    { subject: "second-user", name: "刘宜展", email: "lyz@example.test", active: true, createdAt: now, updatedAt: now },
+    { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer", active: true, createdAt: now, updatedAt: now },
+    { subject: "second-user", name: "刘宜展", email: "lyz@example.test", role: "developer", active: true, createdAt: now, updatedAt: now },
   ];
   const configuration = {
     agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" },
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{
-      key: "srm", name: "SRM", description: "供应商关系管理服务。",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db", "dms"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "nacos-secret", credentialConfigured: true }, db: { databases: [{ url: "mysql://db.example.test:3306/srm", username: "readonly", password: "db-secret", credentialConfigured: true }] }, dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialConfigured: true } }],
+      key: "srm", name: "SRM", description: "供应商关系管理服务。", context: "供应商关系管理服务。\n\n### 测试环境\n\n代码基准分支：develop\n\nNacos（nacos）：srm-test.yaml",
+      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["nacos", "db"], nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: issuePilotConfig.defaults.nacos.group, dataIds: ["srm-test.yaml", "srm-shared.yaml"], username: "operator", password: "", credentialConfigured: true }, db: { databases: [{ url: "mysql://db.example.test:3306/srm", username: "readonly", password: "", credentialConfigured: true }] } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }, {
       key: "orders", name: "Orders", description: "订单服务。",
@@ -44,12 +44,13 @@ vi.mock("../data/client", async (importOriginal) => {
       repositories: [{ id: "orders-repository", alias: "orders", url: "git@example.com:team/orders.git" }],
     }],
   };
+  const capabilitySwitches = ["nacos", "db", "redis", "mq", "es", "dms", "sls"].map(key => ({ key, enabled: true }));
   return {
     ...actual,
-    loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email }) => ({ subject, name, email })))),
+    loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
     loadManagedUsers: vi.fn(async () => structuredClone(managedUsers)),
     createUser: vi.fn(async (input: { subject: string; name: string; email: string }) => {
-      const user = { ...input, active: true, createdAt: now, updatedAt: now };
+      const user = { ...input, role: "product", active: true, createdAt: now, updatedAt: now };
       managedUsers.push(user);
       return structuredClone(user);
     }),
@@ -58,11 +59,29 @@ vi.mock("../data/client", async (importOriginal) => {
       Object.assign(user, input, { updatedAt: now });
       return structuredClone(user);
     }),
-    loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test" })),
+    loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
+    loadPersonalCredentials: vi.fn(async () => ({ provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
+    updatePersonalCredentials: vi.fn(async () => ({ modelProviders: ["enterprise-ai"], gitSshConfigured: true })),
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
     })),
+    loadApplicationEndpoints: vi.fn(async () => ({ endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: true, tools: [{ name: "issue_get", description: "Read Issue details", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { key: { type: "string", description: "Issue key" } }, required: ["key"] } }] }] })),
+    loadMcpServices: vi.fn(async () => []),
+    createMcpService: vi.fn(async (input) => ({ id: "mcp-1", name: input.name, url: input.url, transport: input.transport, enabled: input.enabled, credentialConfigured: input.credentialUpdate.mode === "replace" })),
+    updateMcpService: vi.fn(async () => ({ id: "mcp-1", name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialConfigured: false })),
+    deleteMcpService: vi.fn(async () => undefined),
+    testMcpService: vi.fn(async () => ({ tools: [{ name: "search", readOnly: true }] })),
+    loadCapabilitySwitches: vi.fn(async () => structuredClone(capabilitySwitches)),
+    updateCapabilitySwitch: vi.fn(async (key, enabled) => { const row = capabilitySwitches.find(row => row.key === key)!; row.enabled = enabled; return structuredClone(row); }),
+    loadRepositories: vi.fn(async () => [
+      ...configuration.services.flatMap((service) => service.repositories.map((repository) => ({ id: repository.id, name: repository.alias, url: repository.url, createdAt: now, updatedAt: now, services: [{ key: service.key, name: service.name }] }))),
+      { id: "updated-repository", name: "Updated repository", url: "git@example.test:team/updated.git", createdAt: now, updatedAt: now, services: [] },
+    ]),
+    createRepository: vi.fn(async () => ({ id: "new-repository" })),
+    updateRepository: vi.fn(async () => ({ ok: true })),
+    deleteRepository: vi.fn(async () => undefined),
+    loadServiceConfigurationDescription: vi.fn(async (key: string) => ({ context: configuration.services.find(service => service.key === key)?.context ?? configuration.services.find(service => service.key === key)?.description ?? "" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     updateGlobalAgent: vi.fn(async (agent) => { configuration.agent = { ...agent }; return { ok: true as const }; }),
     listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
@@ -173,7 +192,7 @@ import { EventSourceMock } from "../test-setup";
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
-  afterEach(() => { localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); });
 
   test("shows operational attention and workload on the home dashboard and opens an Issue", async () => {
     const client = await import("../data/client");
@@ -192,9 +211,27 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "批量审批偶发超时" })).toBeTruthy());
     expect(screen.getByRole("radio", { name: "工单" }).getAttribute("aria-checked")).toBe("true");
     const personalQueue = screen.getByLabelText("工单队列");
-    expect(within(personalQueue).queryByText("ISSUE-20260810-038")).toBeNull();
-    expect(personalQueue.querySelector(".queue-item.selected")).toBeNull();
-    expect(within(personalQueue).getByText("ISSUE-20260810-042")).toBeTruthy();
+    expect(within(personalQueue).getByText("ISSUE-20260810-038")).toBeTruthy();
+    expect(personalQueue.querySelector(".queue-item.selected")?.textContent).toContain("ISSUE-20260810-038");
+    expect(within(personalQueue).queryByText("ISSUE-20260810-042")).toBeNull();
+    expect(client.currentUserSubject()).toBe("second-user");
+    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test");
+  });
+
+  test("keeps the selected assignee when an older user-list request finishes after dashboard navigation", async () => {
+    const client = await import("../data/client");
+    const users = await client.loadUsers();
+    let finish!: (value: typeof users) => void;
+    vi.mocked(client.loadUsers).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(() => <App />);
+    try {
+      const attention = await screen.findByRole("region", { name: "团队工单动态" });
+      fireEvent.click(within(attention).getByText("批量审批偶发超时").closest("button")!);
+      await screen.findByRole("heading", { name: "批量审批偶发超时" });
+      expect(client.currentUserSubject()).toBe("second-user");
+      finish(users);
+      await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test"));
+    } finally { finish(users); }
   });
 
   test("pins personal queue Issues above the existing queue order", async () => {
@@ -254,7 +291,26 @@ describe("issue pilot workspace", () => {
     expect(within(attention).getAllByRole("listitem")).toHaveLength(12);
   });
 
-  test("shows all related Issue candidates only for production smart analysis", async () => {
+  test("hides production-data and development work modes for product and test users", async () => {
+    const client = await import("../data/client");
+    for (const role of ["product", "test"] as const) {
+      vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role });
+      const view = render(() => <App initialView="issues" />);
+      const queue = await screen.findByLabelText("工单队列");
+      fireEvent.click(within(queue).getByRole("button", { name: "新建工单" }));
+      const dialog = await screen.findByRole("dialog", { name: "新建工单" });
+      fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
+      const listbox = await screen.findByRole("listbox");
+      expect(within(listbox).queryByText("正式数据处理")).toBeNull();
+      expect(within(listbox).queryByText("开发缺陷修复")).toBeNull();
+      expect(within(listbox).queryByText("开发功能开发")).toBeNull();
+      expect(within(listbox).getByText("正式问题调查")).toBeTruthy();
+      expect(within(listbox).getByText("测试问题调查")).toBeTruthy();
+      view.unmount();
+    }
+  });
+
+  test("shows related Issue candidates in every work mode and preserves selection across mode changes", async () => {
     const client = await import("../data/client");
     const catalog = await client.loadCatalog();
     const loadedIssues = await client.listIssues();
@@ -275,7 +331,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(within(dialog).getByLabelText("关联工单")).toBeTruthy());
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
     fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式数据处理"));
-    await waitFor(() => expect(within(dialog).queryByLabelText("关联工单")).toBeNull());
+    await waitFor(() => expect(within(dialog).getByLabelText("关联工单")).toBeTruthy());
 
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
     fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式问题调查"));
@@ -287,7 +343,12 @@ describe("issue pilot workspace", () => {
     expect(within(options).getByText("批量审批偶发超时")).toBeTruthy();
     expect(within(options).getAllByText("SRM").length).toBeGreaterThan(0);
     fireEvent.click(within(options).getByText("ISSUE-20260810-038"));
-    await waitFor(() => expect(relationSelect.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
+    await waitFor(() => expect(relationSelect.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
+    fireEvent.keyDown(relationSelect, { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
+    fireEvent.click(await screen.findByRole("option", { name: "正式数据处理" }));
+    await waitFor(() => expect(within(dialog).getByLabelText("关联工单").closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
   });
 
   test("updates related Issues from a production investigation", async () => {
@@ -309,9 +370,9 @@ describe("issue pilot workspace", () => {
     fireEvent.click(selector);
     const options = await screen.findByRole("listbox");
     fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
-    await waitFor(() => expect(selector.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038"));
+    await waitFor(() => expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
     fireEvent.click(within(dialog).getByText(/保存后当前 Agent session/));
-    expect(selector.closest(".ads-select")?.textContent).toContain("ISSUE-20260810-038");
+    expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038");
     fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
     await waitFor(() => expect(client.updateIssueRelatedIssues).toHaveBeenCalledWith("ISSUE-20260810-041", ["ISSUE-20260810-038"]));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑关联工单" })).toBeNull());
@@ -340,7 +401,7 @@ describe("issue pilot workspace", () => {
     expect(initialClient.loadConfig).not.toHaveBeenCalled();
     expect(screen.getByRole("radiogroup", { name: "工作台视图" })).toBeTruthy();
     const currentUserSelect = screen.getByLabelText("当前用户");
-    expect(currentUserSelect.closest(".ads-select")?.textContent).toContain("owner@example.test");
+    expect(currentUserSelect.closest(".ui-select")?.textContent).toContain("owner@example.test");
     expect(screen.queryByText("生产")).toBeNull();
     expect(screen.queryByText("ISSUE-20260810-038")).toBeNull();
     const agentRegion = screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" });
@@ -490,12 +551,12 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     const issueActions = document.querySelector(".issue-actions");
     expect(issueActions).toBeTruthy();
-    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["变更处理范围", "确认解决", "编辑工单"]);
+    expect([...issueActions!.querySelectorAll("button")].map((element) => element.textContent)).toEqual(["确认解决", "变更处理范围", "编辑工单"]);
     fireEvent.click(screen.getByRole("button", { name: "变更处理范围" }));
     const scopeDialog = await waitFor(() => screen.getByRole("dialog", { name: "变更处理范围" }));
     fireEvent.click(within(scopeDialog).getByLabelText("目标处理方式"));
     fireEvent.click(within(await screen.findByRole("listbox")).getByText("开发缺陷修复"));
-    await waitFor(() => expect(within(scopeDialog).getByLabelText("目标处理方式").closest(".ads-select")?.textContent).toContain("开发缺陷修复"));
+    await waitFor(() => expect(within(scopeDialog).getByLabelText("目标处理方式").closest(".ui-select")?.textContent).toContain("开发缺陷修复"));
     fireEvent.click(within(scopeDialog).getByRole("button", { name: "预检变更" }));
     const scopePreview = await waitFor(() => within(scopeDialog).getByRole("region", { name: "范围变更预览" }));
     expect(scopePreview.classList.contains("scope-transition-preview")).toBe(true);
@@ -507,7 +568,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(clientAfterConversion.applyIssueScopeTransition).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "变更处理范围" })).toBeNull());
     expect(screen.getByRole("button", { name: "变更处理范围" })).toBeTruthy();
-    expect([...issueActions!.children].map((element) => element.textContent)).toEqual(["创建正式跟进", "变更处理范围", "确认解决", "编辑工单"]);
+    expect([...issueActions!.querySelectorAll("button")].map((element) => element.textContent)).toEqual(["确认解决", "创建正式跟进", "变更处理范围", "编辑工单"]);
     fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
     const followUpDialog = await waitFor(() => screen.getByRole("dialog", { name: "创建正式跟进工单" }));
     expect((within(followUpDialog).getByLabelText("正式跟进标题") as HTMLInputElement).value).toBe("【正式跟进】客户导出的 CSV 缺少时区信息");
@@ -516,7 +577,6 @@ describe("issue pilot workspace", () => {
     const scopeHistory = screen.getByRole("heading", { name: "处理范围历史" }).closest("section")!;
     expect(scopeHistory.textContent).toContain("Orders · 正式问题调查 → Orders · 开发缺陷修复");
     expect(scopeHistory.textContent).toContain("严欣");
-    expect([...issueActions!.children].every((element) => element.tagName === "BUTTON")).toBe(true);
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const developmentEditor = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
@@ -533,7 +593,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(developmentSource).getByRole("button", { name: "关闭代码浏览器" }));
     fireEvent.click(screen.getByLabelText("当前用户"));
     fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
-    await waitFor(() => expect(currentUserSelect.closest(".ads-select")?.textContent).toContain("lyz@example.test"));
+    await waitFor(() => expect(currentUserSelect.closest(".ui-select")?.textContent).toContain("lyz@example.test"));
     await waitFor(() => expect(screen.getByText("ISSUE-20260810-038")).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
@@ -559,6 +619,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "个人处理情况" })).toBeTruthy());
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "SRM" })).toBeTruthy());
     const servicePanel = document.querySelector(".service-panel") as HTMLElement;
     expect(screen.queryByRole("button", { name: /拖动排序/ })).toBeNull();
@@ -572,100 +633,66 @@ describe("issue pilot workspace", () => {
     const serviceDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑服务" }));
     expect(screen.queryByLabelText("服务类型")).toBeNull();
     expect(serviceDialog.textContent).toContain("环境部署");
-    expect(within(serviceDialog).getByRole("button", { name: "展开部署1" }).getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByLabelText("部署 1 仓库 srm 分支")).toBeNull();
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署1" }));
-    await waitFor(() => expect(within(serviceDialog).getByRole("button", { name: "收起部署1" }).getAttribute("aria-expanded")).toBe("true"));
-    expect(screen.getByLabelText("部署 1 环境").textContent).toContain("测试");
-    expect(screen.getByLabelText("部署 1 能力").textContent).toContain("nacos");
-    const repositoryAliasInput = screen.getByLabelText("仓库别名 1") as HTMLInputElement;
-    fireEvent.input(repositoryAliasInput, { target: { value: "srm-api" } });
-    expect(repositoryAliasInput.value).toBe("srm-api");
-    const repositoryInput = screen.getByLabelText("仓库地址 1") as HTMLInputElement;
-    repositoryInput.focus();
-    fireEvent.input(repositoryInput, { target: { value: "git@example.test:team/updated.git" } });
-    expect(document.activeElement).toBe(repositoryInput);
-    expect(repositoryInput.value).toBe("git@example.test:team/updated.git");
-    const branchInput = screen.getByLabelText(/部署 1 仓库 .* 分支/) as HTMLInputElement;
+    expect(within(serviceDialog).getByRole("button", { name: "展开部署2" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByLabelText("部署 2 仓库 srm 分支")).toBeNull();
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署2" }));
+    await waitFor(() => expect(within(serviceDialog).getByRole("button", { name: "收起部署2" }).getAttribute("aria-expanded")).toBe("true"));
+    expect(screen.getByLabelText("部署 2 环境").textContent).toContain("测试");
+    expect(screen.getByLabelText("部署 2 能力").textContent).toContain("nacos");
+    expect(screen.queryByLabelText("仓库别名 1")).toBeNull();
+    const repositoryInput = screen.getByLabelText("关联仓库");
+    fireEvent.click(repositoryInput);
+    fireEvent.click(await screen.findByRole("option", { name: /git@example.com:team\/srm.git/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Updated repository/ }));
+    fireEvent.keyDown(repositoryInput, { key: "Escape" });
+    await waitFor(() => expect(repositoryInput.closest(".ui-select")?.textContent).toContain("Updated repository"));
+    const branchInput = screen.getByLabelText(/部署 2 仓库 .* 分支/) as HTMLInputElement;
     branchInput.focus();
     for (const value of ["r", "re", "rel", "release/test"]) {
       fireEvent.input(branchInput, { target: { value } });
       expect(document.activeElement).toBe(branchInput);
       expect(branchInput.isConnected).toBe(true);
-      expect(screen.getByLabelText("部署 1 仓库 srm 分支")).toBe(branchInput);
+      expect(screen.getByLabelText("部署 2 仓库 Updated repository 分支")).toBe(branchInput);
       expect(branchInput.value).toBe(value);
     }
-    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["redis", "mq", "es", "sls"]);
+    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["redis", "mq", "es", "dms", "sls", "MCP"]);
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "sls" }));
-    await waitFor(() => expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent).slice(-2)).toEqual(["dms", "sls"]));
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "移除 sls 能力" }));
-    await waitFor(() => expect(screen.queryByLabelText("sls accessKeyId 1")).toBeNull());
-    expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "nacos", "db", "dms"]);
-    const nacosServerUrl = screen.getByLabelText("nacos serverUrl 1");
-    expect((screen.getByLabelText("nacos dataIds 1") as HTMLInputElement).value).toBe("srm-test.yaml, srm-shared.yaml");
-    const databaseUrl = screen.getByLabelText("db url 1-1");
+    expect(screen.queryByLabelText("dms Authorization 2")).toBeNull();
+    expect(screen.queryByLabelText("sls accessKeySecret 2")).toBeNull();
+    expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "nacos", "db"]);
+    const nacosServerUrl = screen.getByLabelText("nacos serverUrl 2");
+    expect((screen.getByLabelText("nacos dataIds 2") as HTMLInputElement).value).toBe("srm-test.yaml, srm-shared.yaml");
+    const databaseUrl = screen.getByLabelText("db url 2-1");
     expect(nacosServerUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("serverUrl");
     expect(databaseUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
-    const dmsUrl = screen.getByLabelText("dms url 1") as HTMLInputElement;
-    expect(dmsUrl.value).toBe("https://dms.example.test/sse");
-    expect(dmsUrl.disabled).toBe(false);
-    expect((screen.getByLabelText("dms Authorization 1") as HTMLInputElement).value).toBe("Bearer dms-token");
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "收起部署1" }));
-    await waitFor(() => expect(screen.queryByLabelText("dms url 1")).toBeNull());
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "收起部署2" }));
+    await waitFor(() => expect(screen.queryByLabelText("db url 2-1")).toBeNull());
     expect(screen.queryByLabelText("部署环境 1")).toBeNull();
-    expect(screen.getByLabelText("部署 1 环境").textContent).toContain("测试");
-    expect(screen.getByLabelText("部署 1 能力").textContent).toContain("nacos");
-    expect(screen.getByLabelText("部署 1 能力").textContent).toContain("dms");
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署1" }));
-    const restoredDmsUrl = await waitFor(() => screen.getByLabelText("dms url 1") as HTMLInputElement);
-    expect(restoredDmsUrl.value).toBe("https://dms.example.test/sse");
-    fireEvent.input(restoredDmsUrl, { target: { value: "https://dms-updated.example.test/sse" } });
-    expect((screen.getByLabelText("db password 1-1") as HTMLInputElement).value).toBe("db-secret");
+    expect(screen.getByLabelText("部署 2 环境").textContent).toContain("测试");
+    expect(screen.getByLabelText("部署 2 能力").textContent).toContain("nacos");
+    fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署2" }));
+    expect(((await screen.findByLabelText("db password 2-1")) as HTMLInputElement).value).toBe("");
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "添加 MySQL 数据库" }));
-    fireEvent.input(await screen.findByLabelText("db url 1-2"), { target: { value: "mysql://analytics.example.test:3306/srm_report" } });
-    fireEvent.input(screen.getByLabelText("db username 1-2"), { target: { value: "reporter" } });
-    fireEvent.input(screen.getByLabelText("db password 1-2"), { target: { value: "report-secret" } });
-    fireEvent.input(screen.getByLabelText("dms Authorization 1"), { target: { value: "Bearer dms-token-updated" } });
+    fireEvent.input(await screen.findByLabelText("db url 2-2"), { target: { value: "mysql://analytics.example.test:3306/srm_report" } });
+    fireEvent.input(screen.getByLabelText("db username 2-2"), { target: { value: "reporter" } });
+    fireEvent.input(screen.getByLabelText("db password 2-2"), { target: { value: "report-secret" } });
     const client = await import("../data/client");
-    vi.mocked(client.resolveDmsScope).mockClear();
-    const dmsAliasInput = screen.getByLabelText("dms instance 1-1") as HTMLInputElement;
-    fireEvent.input(dmsAliasInput, { target: { value: "SRM-PROD" } });
-    await waitFor(() => expect(dmsAliasInput.value).toBe("SRM-PROD"));
-    fireEvent.input(screen.getByLabelText("dms database 1-1"), { target: { value: "srm" } });
-    await waitFor(() => expect(client.resolveDmsScope).toHaveBeenCalledWith({
-      url: "https://dms-updated.example.test/sse",
-      authorization: "Bearer dms-token-updated",
-      instanceAlias: "SRM-PROD",
-      schemaName: "srm",
-    }), { timeout: 2_000 });
-    await waitFor(() => expect(within(serviceDialog).getByText("DatabaseId 123")).toBeTruthy());
-    fireEvent.click(within(serviceDialog).getByRole("button", { name: "添加 DMS 数据库" }));
-    fireEvent.input(await screen.findByLabelText("dms instance 1-2"), { target: { value: "MPM-PROD" } });
-    fireEvent.input(screen.getByLabelText("dms database 1-2"), { target: { value: "mdm" } });
-    await waitFor(() => expect(client.resolveDmsScope).toHaveBeenCalledWith({
-      url: "https://dms-updated.example.test/sse",
-      authorization: "Bearer dms-token-updated",
-      instanceAlias: "MPM-PROD",
-      schemaName: "mdm",
-    }), { timeout: 2_000 });
-    await waitFor(() => expect(within(serviceDialog).getByText("DatabaseId 456")).toBeTruthy());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "es" }));
-    const esUrl = await waitFor(() => screen.getByLabelText("es url 1"));
+    const esUrl = await waitFor(() => screen.getByLabelText("es url 2"));
     expect(esUrl.closest("label")?.querySelector(".required-field")?.textContent).toBe("url");
-    const esAuthentication = screen.getByLabelText("es 认证 1");
+    const esAuthentication = screen.getByLabelText("es 认证 2");
     expect(esAuthentication.getAttribute("aria-checked")).toBe("false");
-    expect(screen.queryByLabelText("es username 1")).toBeNull();
+    expect(screen.queryByLabelText("es username 2")).toBeNull();
     fireEvent.click(esAuthentication);
-    await waitFor(() => expect(screen.getByLabelText("es username 1")).toBeTruthy());
-    expect(screen.getByLabelText("es password 1")).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("es username 2")).toBeTruthy());
+    expect(screen.getByLabelText("es password 2")).toBeTruthy();
     expect(screen.queryByLabelText(/es clusterNodes/i)).toBeNull();
     expect(screen.queryByLabelText(/es indexes/i)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "移除 nacos 能力" }));
-    await waitFor(() => expect(screen.queryByLabelText("nacos serverUrl 1")).toBeNull());
-    expect(screen.getByLabelText("db url 1-1")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByLabelText("nacos serverUrl 2")).toBeNull());
+    expect(screen.getByLabelText("db url 2-1")).toBeTruthy();
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "移除 es 能力" }));
-    await waitFor(() => expect(screen.queryByLabelText("es url 1")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("es url 2")).toBeNull());
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "保存" }));
     await waitFor(() => {
       const alert = within(serviceDialog).queryByRole("alert");
@@ -674,23 +701,226 @@ describe("issue pilot workspace", () => {
     });
     expect(vi.mocked(client.updateService).mock.calls.at(-1)?.[0]).toBe("srm");
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
-    expect(savedService?.repositories[0]).toEqual({ id: "srm-repository", alias: "srm-api", url: "git@example.test:team/updated.git" });
-    expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "srm-api", baseBranch: "release/test" }]);
-    expect(savedService?.deployments[0]?.db).toEqual({ databases: [
-      { url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "replace", values: { password: "db-secret" } } },
+    expect(savedService?.repositories[0]).toEqual({ alias: "repository-updated-repository", url: "git@example.test:team/updated.git" });
+    expect(savedService?.deployments[1]?.repositoryBranches).toEqual([{ repositoryAlias: "repository-updated-repository", baseBranch: "release/test" }]);
+    expect(savedService?.deployments[1]?.db).toEqual({ databases: [
+      { url: "mysql://db.example.test:3306/srm", username: "readonly", credentialUpdate: { mode: "preserve" } },
       { url: "mysql://analytics.example.test:3306/srm_report", username: "reporter", credentialUpdate: { mode: "replace", values: { password: "report-secret" } } },
     ] });
-    expect(savedService?.deployments[0]?.dms).toEqual({ url: "https://dms-updated.example.test/sse", databases: [
-      { instanceAlias: "SRM-PROD", schemaName: "srm", instanceId: "instance-1", instanceHost: "srm.db.example.test", instancePort: "3306", databaseId: "123" },
-      { instanceAlias: "MPM-PROD", schemaName: "mdm", instanceId: "instance-2", instanceHost: "mdm.db.example.test", instancePort: "3306", databaseId: "456" },
-    ], credentialUpdate: { mode: "replace", values: { authorization: "Bearer dms-token-updated" } } });
-    expect(JSON.stringify(savedService)).toContain("db-secret");
+    expect(savedService?.deployments[1]?.dms).toBeUndefined();
+    expect(savedService?.deployments[1]?.sls).toBeUndefined();
+    expect(JSON.stringify(savedService)).not.toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadCatalog).toHaveBeenCalledTimes(2);
     expect(client.loadConfig).toHaveBeenCalledTimes(2);
     expect(client.loadUsers).toHaveBeenCalledTimes(1);
     expect(client.loadCurrentUser).toHaveBeenCalledTimes(1);
     expect(consoleWarning.mock.calls.flat().filter((message) => String(message).includes("STRICT_READ_UNTRACKED"))).toEqual([]);
+  });
+
+  test("multi-selects service repositories without aliases and synchronizes environment branches", async () => {
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    const panel = await waitFor(() => document.querySelector(".service-panel") as HTMLElement);
+    fireEvent.click(await waitFor(() => within(panel).getByRole("button", { name: "添加" })));
+    const dialog = await screen.findByRole("dialog", { name: "添加服务" });
+    const selector = within(dialog).getByLabelText("关联仓库");
+    await waitFor(() => expect(selector.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.click(selector);
+    fireEvent.click(await screen.findByRole("option", { name: /git@example.com:team\/srm.git/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Updated repository/ }));
+    fireEvent.keyDown(selector, { key: "Escape" });
+    expect(within(dialog).queryByText("本服务别名")).toBeNull();
+    fireEvent.click(await within(dialog).findByRole("button", { name: "展开部署2" }));
+    const retained = await within(dialog).findByLabelText("部署 2 仓库 srm 分支");
+    fireEvent.input(retained, { target: { value: "feature/keep" } });
+    fireEvent.click(selector);
+    fireEvent.click(await screen.findByRole("option", { name: /Updated repository/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /git@example.com:team\/orders.git/ }));
+    fireEvent.keyDown(selector, { key: "Escape" });
+    await waitFor(() => expect(within(dialog).getByLabelText("部署 2 仓库 srm 分支")).toHaveProperty("value", "feature/keep"));
+    expect(within(dialog).getByLabelText("部署 2 仓库 orders 分支")).toHaveProperty("value", "main");
+    expect(within(dialog).queryByLabelText("部署 2 仓库 Updated repository 分支")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(within(panel).queryByRole("button", { name: "管理仓库" })).toBeNull();
+  });
+
+  test("keeps development editing to code branches and uses the existing service description editor", async () => {
+    render(() => <App initialView="configuration" />);
+    expect(screen.queryByRole("tab", { name: "环境" })).toBeNull();
+    fireEvent.click(await screen.findByRole("tab", { name: "Orders" }));
+    const panel = document.querySelector(".service-panel") as HTMLElement;
+    await waitFor(() => expect(within(panel).getByRole("tab", { name: "Orders" }).getAttribute("aria-selected")).toBe("true"));
+    expect(panel.querySelector(".service-repositories")).toBeTruthy();
+    expect(panel.querySelector(".service-environment-card")).toBeNull();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    const description = within(dialog).getByLabelText("项目描述");
+    fireEvent.input(description, { target: { value: "开发时查询正式订单，测试时查询测试日志。" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署1" }));
+    expect(await within(dialog).findByLabelText("部署 1 仓库 orders 分支")).toHaveProperty("value", "develop");
+    expect(within(dialog).queryByLabelText("redis host 2")).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "dms" })).toBeNull();
+    expect(within(dialog).getByLabelText("部署 1 能力").textContent).toContain("继承正式/测试能力");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  });
+
+  test("shows developer configuration credentials and removes them when switching to a product user", async () => {
+    const client = await import("../data/client");
+    const users = await client.loadUsers();
+    vi.mocked(client.loadUsers).mockResolvedValueOnce([...users, { subject: "viewer", name: "Viewer", email: "viewer@example.test", role: "product" }]);
+    const loadDescription = vi.mocked(client.loadServiceConfigurationDescription).getMockImplementation()!;
+    vi.mocked(client.loadServiceConfigurationDescription).mockResolvedValue({ context: "### 测试环境\n\n#### MySQL\n\n| 配置项 | 值 |\n| --- | --- |\n| 密码 | <code>synthetic-private-password</code> |" });
+    render(() => <App initialView="configuration" />);
+    await screen.findByText("synthetic-private-password");
+    expect(document.querySelector(".service-description table")).toBeTruthy();
+    const selector = screen.getByLabelText("当前用户");
+    fireEvent.click(selector);
+    fireEvent.click(await screen.findByRole("option", { name: "Viewer · viewer@example.test" }));
+    await waitFor(() => expect(screen.queryByText("synthetic-private-password")).toBeNull());
+    vi.mocked(client.loadServiceConfigurationDescription).mockImplementation(loadDescription);
+  });
+
+  test("shows the application MCP address and a simple tool description list", async () => {
+    render(() => <App initialView="configuration" />);
+    const tabs = screen.getByRole("tablist", { name: "配置分类" });
+    expect(within(tabs).getAllByRole("tab").at(-1)?.textContent).toBe("端点");
+    fireEvent.click(within(tabs).getByRole("tab", { name: "端点" }));
+    const panel = await screen.findByRole("region", { name: "端点说明" });
+    expect(await within(panel).findByText(`${window.location.origin}/mcp`)).toBeTruthy();
+    expect(await within(panel).findByText(/Streamable HTTP · 只读/)).toBeTruthy();
+    expect(await within(panel).findByText("issue_get")).toBeTruthy();
+    expect(within(panel).getByText("Read Issue details")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "复制地址" })).toBeTruthy();
+    expect(within(panel).queryByLabelText("搜索端点工具")).toBeNull();
+    expect(within(panel).queryByText("完整输入格式")).toBeNull();
+  });
+
+  test("keeps parsed DMS targets when replacing only the Token", async () => {
+    const client = await import("../data/client");
+    const configuration = structuredClone(await client.loadConfig());
+    const service = configuration.services[0]!;
+    const deployment = service.deployments[0]!;
+    deployment.capabilities.push("dms");
+    deployment.dms = { url: "https://dms.example.test/sse", credentialConfigured: true, databases: [{ instanceAlias: "SRM", schemaName: "srm", instanceId: "i1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" }] };
+    vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
+    vi.mocked(client.updateService).mockClear();
+    vi.mocked(client.resolveDmsScope).mockClear();
+    render(() => <App initialView="configuration" />);
+    const panel = await screen.findByRole("tablist", { name: "服务列表" });
+    await waitFor(() => expect(within(panel).getByRole("tab", { name: "SRM" })).toBeTruthy());
+    fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    const token = await within(dialog).findByLabelText("dms Token 2");
+    fireEvent.input(token, { target: { value: "Bearer replacement" } });
+    await waitFor(() => expect(within(dialog).getByText("DatabaseId 42")).toBeTruthy());
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.updateService).toHaveBeenCalled());
+    const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
+    expect(saved.deployments[1]?.dms?.databases[0]?.databaseId).toBe("42");
+    expect(saved.deployments[1]?.dms?.credentialUpdate).toEqual({ mode: "replace", values: { authorization: "Bearer replacement" } });
+    expect(client.resolveDmsScope).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
+  });
+
+  test("opens an unconfigured native capability directly as an unsaved form", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.updateService).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
+    const panel = await screen.findByRole("region", { name: "能力管理" });
+    const row = (await within(panel).findAllByText("Redis"))[0]!.closest(".capability-switch-row") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
+    const dialog = await screen.findByRole("dialog", { name: "REDIS 配置" });
+    fireEvent.click(within(dialog).getByLabelText("能力配置环境"));
+    fireEvent.click(await screen.findByRole("option", { name: "测试" }));
+    expect(await within(dialog).findByLabelText("redis host 1")).toHaveProperty("value", "");
+    expect(within(dialog).queryByRole("button", { name: "redis" })).toBeNull();
+    expect(client.updateService).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  });
+
+  test("opens native capability configuration in place without navigating to services", async () => {
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
+    const panel = await screen.findByRole("region", { name: "能力管理" });
+    const row = (await within(panel).findByText("MySQL")).closest(".capability-switch-row") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
+    const dialog = await screen.findByRole("dialog", { name: "DB 配置" });
+    expect(screen.getByRole("tab", { name: "能力" }).getAttribute("aria-selected")).toBe("true");
+    expect(within(dialog).getByLabelText("能力配置服务")).toBeTruthy();
+    fireEvent.click(within(dialog).getByLabelText("能力配置环境"));
+    fireEvent.click(await screen.findByRole("option", { name: "测试" }));
+    expect(await within(dialog).findByLabelText("db url 1-1")).toHaveProperty("value", "mysql://db.example.test:3306/srm");
+    expect(within(dialog).queryByLabelText("nacos serverUrl 1")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  });
+
+  test("adds a remote MCP service with masked credentials from capability settings", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.createMcpService).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
+    expect(screen.queryByRole("region", { name: "MCP 服务管理" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "连接与资源管理" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "添加能力" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加能力" });
+    fireEvent.input(within(dialog).getByLabelText("能力名称"), { target: { value: "Docs" } });
+    fireEvent.input(within(dialog).getByLabelText("能力地址"), { target: { value: "https://mcp.example.test/mcp" } });
+    const key = within(dialog).getByLabelText("能力 Authorization");
+    expect(key.getAttribute("type")).toBe("password");
+    fireEvent.input(key, { target: { value: "Bearer secret-token" } });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.createMcpService).toHaveBeenCalledWith({ name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialUpdate: { mode: "replace", values: { authorization: "Bearer secret-token" } } }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("manages global capability switches in their own settings tab", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.updateCapabilitySwitch).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
+    const panel = await screen.findByRole("region", { name: "能力管理" });
+    const toggle = await within(panel).findByRole("switch", { name: "DMS 全局开关" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(client.updateCapabilitySwitch).toHaveBeenCalledWith("dms", false));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    await waitFor(() => expect(toggle).toHaveProperty("disabled", false));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(client.updateCapabilitySwitch).toHaveBeenLastCalledWith("dms", true));
+  });
+
+  test("manages repositories from their own settings tab and selects registered URLs in services", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.createRepository).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
+    const panel = await screen.findByRole("region", { name: "仓库管理" });
+    await waitFor(() => expect(within(panel).getByText("git@example.com:team/srm.git")).toBeTruthy());
+    fireEvent.click(within(panel).getByRole("button", { name: "添加仓库" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加仓库" });
+    fireEvent.input(within(dialog).getByLabelText("统一仓库名称"), { target: { value: "Shared API" } });
+    fireEvent.input(within(dialog).getByLabelText("统一仓库地址"), { target: { value: "git@example.test:team/shared-api.git" } });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.createRepository).toHaveBeenCalledWith({ name: "Shared API", url: "git@example.test:team/shared-api.git" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("shows repository actions disabled when the selected user cannot maintain repositories", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "test" });
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
+    const panel = await screen.findByRole("region", { name: "仓库管理" });
+    await within(panel).findByText("git@example.com:team/srm.git");
+    expect(within(panel).getByRole("button", { name: "添加仓库" })).toHaveProperty("disabled", true);
+    for (const button of within(panel).getAllByRole("button", { name: "编辑" })) expect(button).toHaveProperty("disabled", true);
+    for (const button of within(panel).getAllByRole("button", { name: "删除" })) expect(button).toHaveProperty("disabled", true);
+    expect(within(panel).queryByText("仅开发可维护")).toBeNull();
   });
 
   test("adds, edits, and disables users from the user management view", async () => {
@@ -719,13 +949,13 @@ describe("issue pilot workspace", () => {
     await waitFor(() => {
       const alert = within(dialog).queryByRole("alert");
       if (alert) throw new Error(alert.textContent ?? "user save failed");
-      expect(client.createUser).toHaveBeenCalledWith({ subject: "new-user@example.test", name: "新用户", email: "new.user@example.test" });
+      expect(client.createUser).toHaveBeenCalledWith({ subject: "new-user@example.test", name: "新用户", email: "new.user@example.test", role: "product" });
     });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加用户" })).toBeNull());
     const newUserRow = await waitFor(() => screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement);
     expect(newUserRow).toBeTruthy();
     fireEvent.click(within(newUserRow).getByRole("button", { name: "停用" }));
-    await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { name: "新用户", email: "new.user@example.test", active: false }));
+    await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { name: "新用户", email: "new.user@example.test", active: false, role: "product" }));
     await waitFor(() => expect(within(screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement).getByText("停用")).toBeTruthy());
   });
 
@@ -735,8 +965,8 @@ describe("issue pilot workspace", () => {
     render(() => <App initialView="configuration" />);
     fireEvent.click(await waitFor(() => screen.getByRole("tab", { name: "模型" })));
     await waitFor(() => expect(screen.getByLabelText("全局模型 provider")).toBeTruthy());
-    expect(screen.getByLabelText("全局模型 provider").closest(".ads-select")?.textContent).toContain("enterprise-ai");
-    expect(screen.getByLabelText("全局模型 model").closest(".ads-select")?.textContent).toContain("engineering-model");
+    expect(screen.getByLabelText("全局模型 provider").closest(".ui-select")?.textContent).toContain("enterprise-ai");
+    expect(screen.getByLabelText("全局模型 model").closest(".ui-select")?.textContent).toContain("engineering-model");
     fireEvent.click(screen.getByRole("button", { name: "保存模型" }));
     await waitFor(() => expect(client.updateGlobalAgent).toHaveBeenCalledWith({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" }));
   });
@@ -791,7 +1021,7 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(screen.getByText("没有匹配的工单")).toBeTruthy());
     expect(getIssue).not.toHaveBeenCalled();
-    resolveCurrentUser({ subject: "fixture-user", name: "严欣", email: "owner@example.test" });
+    resolveCurrentUser({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" });
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(getIssue).toHaveBeenCalledTimes(1);
     expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042");

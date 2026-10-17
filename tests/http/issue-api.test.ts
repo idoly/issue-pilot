@@ -74,9 +74,9 @@ test("creates production smart-analysis Issues with related context", async () =
     assert.deepEqual((await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId), [developmentId]);
 
     fixture.engine.running.clear();
-    const disallowed = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, workMode: "production_data" } });
-    assert.equal(disallowed.statusCode, 400);
-    assert.equal((await json(disallowed)).error, "related_issues_not_allowed");
+    const missingRelated = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, workMode: "production_data", relatedIssueKeys: ["ISSUE-20260101-999"] } });
+    assert.equal(missingRelated.statusCode, 400);
+    assert.equal((await json(missingRelated)).error, "invalid_related_issues");
     fixture.engine.running.clear();
     const enqueueCount = fixture.engine.enqueued.length;
     const unchanged = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: [development.id] } });
@@ -355,6 +355,7 @@ test("plans and applies read-only scope transitions with stale-plan protection",
     assert.equal((JSON.parse(historyResponse.body) as unknown[]).length, 1);
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/development` })).statusCode, 404);
 
+    fixture.engine.running.clear();
     await createService(fixture.app, "Convertible", ["prod", "dev"]);
     const convertible = await createIssue(fixture.app, "convertible", "prod", "Convert through plan");
     const convertibleId = fixture.engine.enqueued.at(-1)!;

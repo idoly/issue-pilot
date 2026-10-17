@@ -6,7 +6,10 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces, services } from "../db/schema.ts";
 import { SerialQueue } from "../serial.ts";
-import type { DeploymentConfig, EnvironmentKind, IssueType } from "../domain/contracts.ts";
+import type { StoredDeploymentConfig, EnvironmentKind, IssueType } from "../domain/contracts.ts";
+import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
+import { createPersonalGitEnvironment } from "./git-credentials.ts";
+import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from "./issue-services.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareProjectWrappers } from "./project-wrappers.ts";
@@ -23,7 +26,7 @@ interface PreparedIssueRepository {
 }
 
 export interface PreparedIssueProject {
-  deployment: { id: string; config: DeploymentConfig };
+  deployment: { id: string; config: StoredDeploymentConfig };
   runtimeRoot: string;
   workspaceRoot: string;
   executableRoot?: string;
@@ -100,11 +103,12 @@ export class IssueProjectManager {
     if (!repositories.length) throw new Error("issue_has_no_repositories");
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
     const names = issueRepositoryWorkspaceNames(repositories);
+    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     let runtimeRoot: string;
     if (await pathExists(workspaceRoot)) {
       if (classifyRepositoryState(repositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
       await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
-      runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })), "write");
+      runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })), "write", relatedIssues);
       await prepareProjectWrappers(runtimeRoot);
     } else {
       if (classifyRepositoryState(repositories) !== "development_snapshot") throw new Error("development_repository_state_invalid");
@@ -113,7 +117,7 @@ export class IssueProjectManager {
         const snapshot = await this.worktrees.prepareBranchSnapshot({ url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch! });
         snapshots.push({ name: names.get(repository.url)!, repositoryPath: snapshot.workspacePath });
       }
-      runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, snapshots, "read");
+      runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, snapshots, "read", relatedIssues);
     }
     await this.database.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
     return runtimeRoot;
@@ -128,6 +132,7 @@ export class IssueProjectManager {
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
     const mode = developmentWorktreeMode(issue.type);
     const names = issueRepositoryWorkspaceNames(repositories);
+    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     try {
       return await this.worktrees.prepareBatch({
         worktrees: repositories.map((repository) => ({
@@ -141,7 +146,7 @@ export class IssueProjectManager {
         })),
         finalize: async (prepared) => {
           await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
-          const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })), "write");
+          const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })), "write", relatedIssues);
           await prepareProjectWrappers(runtimeRoot);
           return finalize(prepared, names);
         },
@@ -219,8 +224,8 @@ export class IssueProjectManager {
     return relatedIssues;
   }
 
-  private async prepareReadOnlyDeployment(input: { serviceId: string; environmentId: string }): Promise<PreparedReadOnlyDeployment> {
-    const { repositories: repositoryRows } = await loadDeploymentRepositories(this.database, input);
+  private async prepareReadOnlyDeployment(input: { serviceIds: string[]; environmentId: string }): Promise<PreparedReadOnlyDeployment> {
+    const { repositories: repositoryRows } = await loadServiceRepositorySet(this.database, input.serviceIds, input.environmentId);
     const urls = repositoryRows.map(({ repository }) => repository.url);
     const names = repositoryWorkspaceNames(urls);
     const repositories: PreparedReadOnlyDeployment["repositories"] = [];
@@ -259,10 +264,11 @@ export class IssueProjectManager {
     const existingRepositoryRows = repositoryRows ?? await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
     if (existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
 
-    const preparationKey = JSON.stringify([issue.serviceId, issue.environmentId]);
+    const serviceIds = await issueServiceIds(this.database, issue);
+    const preparationKey = JSON.stringify([serviceIds, issue.environmentId]);
     let preparation = preparations?.get(preparationKey);
     if (!preparation) {
-      preparation = this.prepareReadOnlyDeployment({ serviceId: issue.serviceId, environmentId: issue.environmentId });
+      preparation = this.prepareReadOnlyDeployment({ serviceIds, environmentId: issue.environmentId });
       preparations?.set(preparationKey, preparation);
     }
     const [{ names, repositories }, relatedIssues] = await Promise.all([preparation, this.prepareRelatedIssueRuntimes(issue.id)]);
@@ -289,9 +295,11 @@ export class IssueProjectManager {
     issue: ProjectIssue,
     developmentEnvironmentId: string,
     finalize: (conversion: PreparedDevelopmentConversion) => Promise<T>,
+    credentialsApplied = false,
   ): Promise<T> {
+    if (!credentialsApplied) return this.withPersonalGit(issue.id, { serviceId: issue.serviceId, environmentId: developmentEnvironmentId }, () => this.convertReadOnlyToDevelopment(issue, developmentEnvironmentId, finalize, true));
     const [{ repositories }, existingRepositories] = await Promise.all([
-      loadDeploymentRepositories(this.database, { serviceId: issue.serviceId, environmentId: developmentEnvironmentId }),
+      loadIssueDeployments(this.database, { id: issue.id, serviceId: issue.serviceId, environmentId: developmentEnvironmentId }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
@@ -331,9 +339,11 @@ export class IssueProjectManager {
     issue: ProjectIssue,
     target: { serviceId: string; environmentId: string },
     finalize: (migration: PreparedDevelopmentScopeMigration) => Promise<T>,
+    credentialsApplied = false,
   ): Promise<T> {
+    if (!credentialsApplied) return this.withPersonalGit(issue.id, target, () => this.migrateDevelopmentScope(issue, target, finalize, true));
     const [{ repositories }, existingRepositories] = await Promise.all([
-      loadDeploymentRepositories(this.database, target),
+      loadIssueDeployments(this.database, { id: issue.id, ...target }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (classifyRepositoryState(existingRepositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
@@ -401,9 +411,21 @@ export class IssueProjectManager {
     }
   }
 
-  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind): Promise<PreparedIssueProject> {
+  private async withPersonalGit<T>(issueId: string, target: { serviceId: string; environmentId: string }, operation: () => Promise<T>): Promise<T> {
+    const { repositories } = await loadIssueDeployments(this.database, { id: issueId, ...target });
+    const urls = repositories.map(({ repository }) => repository.url);
+    if (urls.every((url) => url.startsWith("file:") || path.isAbsolute(url))) return operation();
+    const owner = await loadIssueCredentialOwner(this.database, issueId);
+    if (owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
+    const git = await createPersonalGitEnvironment(owner.credentials, urls);
+    try { return await this.worktrees.withGitEnvironment(git.env, operation); }
+    finally { await git.close(); }
+  }
+
+  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, gitEnvironment?: Record<string, string>): Promise<PreparedIssueProject> {
+    if (gitEnvironment) return this.worktrees.withGitEnvironment(gitEnvironment, () => this.prepare(issue, environmentKind));
     const [{ deployment, repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
-      loadDeploymentRepositories(this.database, { serviceId: issue.serviceId, environmentId: issue.environmentId }),
+      loadIssueDeployments(this.database, issue),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     const shared = repositoryPreparationMode(environmentKind, issue.type) === "shared";
@@ -479,7 +501,7 @@ export class IssueProjectManager {
       });
     }
 
-    const relatedIssues = shared ? await this.prepareRelatedIssueRuntimes(issue.id) : [];
+    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     const runtimeRoot = await prepareIssueRuntime(
       this.stateRoot,
       issue.key,

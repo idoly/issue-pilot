@@ -380,7 +380,7 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
   const revisionContent = new SourceRevisionFileSystemProvider(vscode);
   vscode.workspace.registerFileSystemProvider(sourceRevisionScheme, revisionContent, { isCaseSensitive: true, isReadonly: true });
 
-  const providers: RegisteredSourceControl[] = repositories.map((repository) => {
+  const createProvider = (repository: SourceRepository): RegisteredSourceControl => {
     const root = vscode.Uri.file(`${workspacePath}/${repository.name}`);
     const sourceControl = vscode.scm.createSourceControl(`issue-pilot-${repository.name}`, repository.name, root);
     sourceControl.inputBox.visible = repository.access === "write";
@@ -400,11 +400,20 @@ export async function registerSourceControls(issueKey: string, repositories: Sou
     sourceControl.historyProvider = history;
     history.publishCurrentRef();
     return { repository, sourceControl, workingGroup, stagedGroup, history };
-  });
+  };
+  const providers: RegisteredSourceControl[] = repositories.map(createProvider);
 
   const resourceTargets = new Map<string, SourceControlMenuResource>();
   let refreshGeneration = 0;
   const refresh = async () => {
+    for (let index = providers.length - 1; index >= 0; index -= 1) {
+      const existing = providers[index]!;
+      if (!repositories.some((repository) => repository.name === existing.repository.name && repository.access === existing.repository.access)) {
+        existing.sourceControl.dispose(); providers.splice(index, 1);
+        for (const [key, resource] of resourceTargets) if (resource.issuePilot?.repository === existing.repository.name) resourceTargets.delete(key);
+      }
+    }
+    for (const repository of repositories) if (!providers.some((provider) => provider.repository.name === repository.name)) providers.push(createProvider(repository));
     const generation = ++refreshGeneration;
     await Promise.all(providers.map(async ({ repository, sourceControl, workingGroup, stagedGroup, history }) => {
       try {

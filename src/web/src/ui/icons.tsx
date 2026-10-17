@@ -2,6 +2,7 @@ import type { IconNode } from "lucide";
 import {
   ArrowDown as ArrowDownNode,
   CheckCircle2 as CheckCircle2Node,
+  ChevronDown as ChevronDownNode,
   ChevronRight as ChevronRightNode,
   Code2 as Code2Node,
   Copy as CopyNode,
@@ -59,6 +60,7 @@ function createIcon(node: IconNode) {
 
 export const ArrowDown = createIcon(ArrowDownNode);
 export const CheckCircle2 = createIcon(CheckCircle2Node);
+export const ChevronDown = createIcon(ChevronDownNode);
 export const ChevronRight = createIcon(ChevronRightNode);
 export const Code2 = createIcon(Code2Node);
 export const Copy = createIcon(CopyNode);

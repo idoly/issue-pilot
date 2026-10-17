@@ -16,12 +16,13 @@ import "@codingame/monaco-vscode-sql-default-extension";
 import "@codingame/monaco-vscode-typescript-basics-default-extension";
 import "@codingame/monaco-vscode-xml-default-extension";
 import "@codingame/monaco-vscode-yaml-default-extension";
-import "@codingame/monaco-vscode-standalone-languages";
+// TextMate extensions above own the project's primary languages. Only load
+// a standalone fallback for Python scripts, rather than every Monaco language.
+import "@codingame/monaco-vscode-standalone-languages/languages/definitions/python/register.js";
 import "@codingame/monaco-vscode-standalone-typescript-language-features";
 import "@codingame/monaco-vscode-standalone-json-language-features";
 import "@codingame/monaco-vscode-standalone-css-language-features";
 import "@codingame/monaco-vscode-standalone-html-language-features";
-import "@codingame/monaco-vscode-theme-defaults-default-extension";
 import "virtual:issue-pilot-github-dark-default";
 import { whenReady as materialIconThemeReady } from "virtual:issue-pilot-material-icon-theme";
 
@@ -32,7 +33,6 @@ import getEnvironmentServiceOverride from "@codingame/monaco-vscode-environment-
 import getExplorerServiceOverride from "@codingame/monaco-vscode-explorer-service-override";
 import getExtensionServiceOverride from "@codingame/monaco-vscode-extensions-service-override";
 import getFilesServiceOverride, { registerFileSystemOverlay } from "@codingame/monaco-vscode-files-service-override";
-import getKeybindingsServiceOverride from "@codingame/monaco-vscode-keybindings-service-override";
 import getLanguagesServiceOverride from "@codingame/monaco-vscode-languages-service-override";
 import getLifecycleServiceOverride from "@codingame/monaco-vscode-lifecycle-service-override";
 import getLogServiceOverride from "@codingame/monaco-vscode-log-service-override";
@@ -42,8 +42,6 @@ import getScmServiceOverride from "@codingame/monaco-vscode-scm-service-override
 import getStorageServiceOverride from "@codingame/monaco-vscode-storage-service-override";
 import getTextmateServiceOverride from "@codingame/monaco-vscode-textmate-service-override";
 import getThemeServiceOverride from "@codingame/monaco-vscode-theme-service-override";
-import getStatusBarServiceOverride from "@codingame/monaco-vscode-view-status-bar-service-override";
-import getTitleBarServiceOverride from "@codingame/monaco-vscode-view-title-bar-service-override";
 import getWorkbenchServiceOverride, { registerCustomView, ViewContainerLocation } from "@codingame/monaco-vscode-workbench-service-override";
 import getWorkingCopyServiceOverride from "@codingame/monaco-vscode-working-copy-service-override";
 import getWorkspaceTrustServiceOverride from "@codingame/monaco-vscode-workspace-trust-service-override";
@@ -294,9 +292,6 @@ async function start(): Promise<void> {
     ...getScmServiceOverride(),
     ...getTextmateServiceOverride(),
     ...getThemeServiceOverride(),
-    ...getKeybindingsServiceOverride(),
-    ...getStatusBarServiceOverride(),
-    ...getTitleBarServiceOverride(),
     ...getExplorerServiceOverride(),
     ...getWorkbenchServiceOverride(),
     ...getQuickAccessServiceOverride({
@@ -368,6 +363,18 @@ async function start(): Promise<void> {
       primaryButton: "&&Discard Changes",
     })).confirmed),
   ]);
+  let refreshGeneration = 0;
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    const message = event.data as { kind?: unknown; issueKey?: unknown } | null;
+    if (event.origin !== window.location.origin || event.source !== window.parent || message?.issueKey !== issueKey || message.kind !== "issue-pilot-workbench-repositories") return;
+    const generation = ++refreshGeneration;
+    void loadSourceRepositories(issueKey).then(async (next) => {
+      if (generation !== refreshGeneration) return;
+      repositories.splice(0, repositories.length, ...next);
+      provider.updateRepositories(next);
+      await refreshSourceControls();
+    }).catch(() => { console.warn("source_repository_refresh_failed"); });
+  });
   limitContextMenus(container, vscode, contextMenuService, contextViewService);
   provider.setOnWrite(() => { void refreshSourceControls(); });
   await viewsService.openView("workbench.scm.repositories", false);

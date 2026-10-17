@@ -11,7 +11,7 @@ import { agentSessions, issues, subjects } from "../db/schema.ts";
 import type { AgentFooterStats } from "../domain/contracts.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { authorizeWorkMode, ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -54,6 +54,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
+    if (issue.type === "data_processing") await authorizeWorkMode(database, request, "production_data");
     await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
       if (currentIssue.status !== "open") throw new ApiError(409, "issue_not_retryable");
@@ -122,6 +123,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
+    if (issue.type === "data_processing") await authorizeWorkMode(database, request, "production_data");
     const { message, images } = await readAgentMessage(request);
     const subject = await ensureCurrentSubject(database, request);
     const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);

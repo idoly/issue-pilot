@@ -1,4 +1,4 @@
-import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
+import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName, StoredDeploymentConfig } from "../domain/contracts.ts";
 
 export const CAPABILITY_CREDENTIALS = {
   nacos: { fields: ["password"], required: false },
@@ -21,8 +21,8 @@ export type CapabilityCredentialUpdate<Key extends CapabilityName> =
 type DbConfiguration = NonNullable<CapabilityConfiguration["db"]>;
 type DbConfigurationTarget = DbConfiguration["databases"][number];
 export type ProjectedCapabilitySection<Key extends CapabilityName> = Key extends "db"
-  ? { databases: Array<DbConfigurationTarget & { credentialConfigured: boolean }> }
-  : NonNullable<CapabilityConfiguration[Key]> & { credentialConfigured: boolean };
+  ? { databases: Array<Omit<DbConfigurationTarget, "password"> & { credentialConfigured: boolean }> }
+  : Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialConfigured: boolean };
 export type ProjectedCapabilityConfiguration = { [Key in CapabilityName]?: ProjectedCapabilitySection<Key> };
 export type CapabilityConfigurationInput = {
   [Key in CapabilityName]?: Key extends "db"
@@ -48,7 +48,9 @@ export interface ConfigurationCatalog {
   services: ServiceCatalogItem[];
 }
 
-interface ServiceDeployment extends ProjectedCapabilityConfiguration {
+export type ServiceCapabilityConfiguration = ProjectedCapabilityConfiguration & Pick<StoredDeploymentConfig, "mcpServices">;
+
+interface ServiceDeployment extends ServiceCapabilityConfiguration {
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];
@@ -58,6 +60,7 @@ export interface ServiceConfiguration {
   key: string;
   name: string;
   description: string;
+  context?: string;
   deployments: ServiceDeployment[];
   repositories: Array<{ id: string; alias: string; url: string }>;
 }
@@ -74,6 +77,7 @@ export interface ServiceConfigurationInput {
   repositories: Array<{ id?: string; alias: string; url: string }>;
   deployments: Array<CapabilityConfigurationInput & {
     environmentKey: string;
+    mcpServices?: string[];
     repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
     capabilities: CapabilityName[];
   }>;

@@ -1,5 +1,6 @@
+import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { copyFile, lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 import { KeyedSerialQueue } from "../serial.ts";
@@ -44,7 +45,7 @@ export async function listIssueOutputs(stateRoot: string, issueKey: string): Pro
   const entries = await readdir(root, { withFileTypes: true });
   if (entries.some((entry) => !entry.isFile() || !outputNamePattern.test(entry.name))) throw new Error("insecure_issue_output_file");
   const outputs = await Promise.all(entries.map((entry) => outputMetadata(root, entry.name)));
-  return outputs.sort((left, right) => left.fileName.localeCompare(right.fileName));
+  return outputs.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.fileName.localeCompare(right.fileName));
 }
 
 export async function resolveIssueOutput(stateRoot: string, issueKey: string, fileName: string): Promise<string> {
@@ -69,6 +70,28 @@ export class IssueOutputStore {
 
   list(): Promise<IssueOutput[]> {
     return listIssueOutputs(this.stateRoot, this.issueKey);
+  }
+
+  async read(fileName: string, maximumBytes?: number): Promise<Buffer> {
+    const file = await resolveIssueOutput(this.stateRoot, this.issueKey, fileName);
+    if (maximumBytes === undefined) return readFile(file);
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw new Error("invalid_output_read_limit");
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_issue_output_file");
+      if (metadata.size > maximumBytes) throw new Error("output_read_too_large");
+      const chunks: Buffer[] = [];
+      let size = 0;
+      while (true) {
+        const buffer = Buffer.alloc(Math.min(64 * 1024, maximumBytes - size + 1));
+        const { bytesRead } = await handle.read(buffer);
+        if (!bytesRead) return Buffer.concat(chunks, size);
+        size += bytesRead;
+        if (size > maximumBytes) throw new Error("output_read_too_large");
+        chunks.push(buffer.subarray(0, bytesRead));
+      }
+    } finally { await handle.close(); }
   }
 
   write(fileName: string, content: string): Promise<IssueOutput> {

@@ -51,7 +51,8 @@ Do not start, stop, migrate, copy, or call destructive routes against active sta
 | Prod/test code | Latest fetched current Deployment base-branch commit |
 | Conversation | Per-Issue Pi JSONL active branch |
 | Attachment integrity | Durable file plus DB object key, size, SHA-256 |
-| Capability save parser, input schema, metadata | `src/capabilities/registry.ts` |
+| Capability save parser and input schema | `src/capabilities/registry.ts` |
+| Unified query tool metadata and dispatch | `src/pi/tools.ts` |
 | Credential fields and update protocol | `src/configuration/contracts.ts`, `credentials.ts` |
 | Tool registration and dispatch | `src/pi/tools.ts` and protocol clients |
 | Runtime and wrappers | `src/workspace/runtime.ts`, `project-wrappers.ts` |
@@ -103,9 +104,9 @@ Routes coordinate owners, reservations, and transactions. They must not reimplem
 - Attachment writes occur only in Issue create/edit transactions. Clipboard images sent to Agent are Pi message content persisted in JSONL, not Attachment objects.
 - Unsafe or unknown filesystem/Git state fails explicitly and remains evidence.
 - Runtime, wrappers, and immutable checkouts are generated atomically and remain rebuildable.
-- Config GET intentionally returns stored credentials to the trusted configuration UI. Credentials must not enter logs, monitoring, diagnostics, Agent context, prompt, tool schema/input, or process arguments.
+- Config GET returns credential configuration status and omits stored secrets. Credentials must not enter logs, monitoring, diagnostics, Agent context, prompt, tool schema/input, or process arguments.
 - Pi tools parse input once with TypeBox and invoke typed protocol clients directly.
-- DMS Agent access is one `dms` tool. Its schema input is an enum of the current Deployment's configured schemas; the server maps the schema to DatabaseId, injects it into MCP `executeScript`, and enforces read-only SQL.
+- DMS Agent access goes through service_query with environment/service/schema. The server injects DatabaseId into executeScript and enforces read-only SQL. Development Issues may investigate prod/test sources; other Issues stay in their own environment.
 - API, migration, Git, runtime, Source Browser, and project-tool broker use one state root.
 - Published migrations and journal entries are immutable.
 

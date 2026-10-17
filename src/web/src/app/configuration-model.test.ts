@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 
@@ -10,14 +9,14 @@ const draft: DeploymentCapabilityDraft = {
   redis: { host: " redis.example.test ", port: 6379, username: " reader ", password: "redis-secret", database: 1, credentialConfigured: false, credentialEnabled: true },
   mq: { host: " mq.example.test ", port: 5672, managementPort: 15672, username: " reader ", password: "mq-secret", virtualHost: " /orders ", credentialConfigured: false, credentialEnabled: true },
   es: { url: " https://es.example.test ", username: " reader ", password: "es-secret", credentialConfigured: false, credentialEnabled: true },
-  dms: { url: " https://dms.example.test/sse ", authorization: " Bearer dms-token ", databases: [{ instanceAlias: " ORDERS-PROD ", schemaName: " orders ", instanceId: " instance-1 ", instanceHost: " db.example.test ", instancePort: " 3306 ", databaseId: " 123 " }], credentialConfigured: false, credentialEnabled: true },
-  sls: { accessKeyId: " sls-key ", accessKeySecret: "sls-secret", region: " cn-test ", project: " orders-test ", logstores: ["application"], credentialConfigured: false, credentialEnabled: true },
+  dms: { url: "https://dms.example.test/sse", authorization: "", credentialConfigured: true, credentialEnabled: true, databases: [{ instanceAlias: " ORDERS-PROD ", schemaName: " orders ", instanceId: " instance-1 ", instanceHost: " db.example.test ", instancePort: " 3306 ", databaseId: " 123 " }] },
+  sls: { accessKeyId: "", accessKeySecret: "", credentialConfigured: true, credentialEnabled: true, region: " cn-test ", project: " orders-test ", logstores: ["application"] },
 };
-
+const dms = { url: "https://dms.example.test/sse", credentialUpdate: { mode: "preserve" }, databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] };
 const replace = (values: Record<string, string>) => ({ mode: "replace", values });
 
 describe("capability deployment serialization", () => {
-  it("serializes every shared capability key through explicit credential replacements", () => {
+  it("serializes native credential replacements and stored DMS/SLS credentials", () => {
     expect(Object.keys(serializeCapabilityDraft(draft))).toEqual(CAPABILITY_KEYS);
     expect(serializeCapabilityDraft(draft)).toEqual({
       nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "reader", credentialUpdate: replace({ password: "nacos-secret" }) },
@@ -25,35 +24,26 @@ describe("capability deployment serialization", () => {
       redis: { host: "redis.example.test", port: 6379, username: "reader", database: 1, credentialUpdate: replace({ password: "redis-secret" }) },
       mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/orders", credentialUpdate: replace({ password: "mq-secret" }) },
       es: { url: "https://es.example.test", username: "reader", credentialUpdate: replace({ password: "es-secret" }) },
-      dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialUpdate: replace({ authorization: " Bearer dms-token " }) },
-      sls: { region: "cn-test", project: "orders-test", logstores: ["application"], credentialUpdate: replace({ accessKeyId: " sls-key ", accessKeySecret: "sls-secret" }) },
+      dms,
+      sls: { region: "cn-test", project: "orders-test", logstores: ["application"], credentialUpdate: { mode: "preserve" } },
     });
   });
-
-  it("preserves configured credentials without placing their values in the request", () => {
+  it("preserves configured credentials without putting their values in the request", () => {
     const existing = structuredClone(draft);
     for (const key of CAPABILITY_KEYS) {
-      if (key === "db") {
-        existing.db!.databases[0]!.credentialConfigured = true;
-        existing.db!.databases[0]!.password = "";
-        continue;
-      }
+      if (key === "dms" || key === "sls") continue;
+      if (key === "db") { existing.db!.databases[0]!.credentialConfigured = true; existing.db!.databases[0]!.password = ""; continue; }
       const section = existing[key]! as Record<string, unknown>;
-      section.credentialConfigured = true;
-      for (const field of ["password", "accessKeyId", "accessKeySecret", "authorization"]) if (field in section) section[field] = "";
+      section.credentialConfigured = true; section.password = "";
     }
     const serialized = serializeCapabilityDraft(existing);
-    for (const key of CAPABILITY_KEYS.filter((key) => key !== "db")) expect((serialized[key] as { credentialUpdate?: unknown } | undefined)?.credentialUpdate).toEqual({ mode: "preserve" });
+    for (const key of CAPABILITY_KEYS.filter(key => key !== "db" && key !== "dms" && key !== "sls")) expect((serialized[key] as { credentialUpdate?: unknown })?.credentialUpdate).toEqual({ mode: "preserve" });
     expect(serialized.db?.databases[0]?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(serialized.dms).toEqual(dms);
     expect(JSON.stringify(serialized)).not.toMatch(/secret|accessKeyId|accessKeySecret|authorization|password/);
   });
-
-  it("explicitly clears optional credentials and omits unselected capabilities", () => {
-    expect(serializeCapabilityDraft({ ...draft, capabilities: ["nacos"], nacos: { ...draft.nacos!, username: "", credentialEnabled: false } })).toEqual({
-      nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "", credentialUpdate: { mode: "clear" } },
-    });
-    expect(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] })).toEqual({
-      dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }], credentialUpdate: replace({ authorization: " Bearer dms-token " }) },
-    });
+  it("clears optional credentials and omits unselected capabilities", () => {
+    expect(serializeCapabilityDraft({ ...draft, capabilities: ["nacos"], nacos: { ...draft.nacos!, username: "", credentialEnabled: false } })).toEqual({ nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "", credentialUpdate: { mode: "clear" } } });
+    expect(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] })).toEqual({ dms });
   });
 });

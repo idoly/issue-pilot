@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 import { IssueOutputStore, listIssueOutputs, resolveIssueOutput } from "../../src/outputs/store.ts";
 import { issueOutputRoot } from "../../src/workspace/state.ts";
+
+test("lists recent outputs first with stable filename order for equal timestamps", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-output-order-"));
+  const issueKey = "ISSUE-20260929-002";
+  const store = new IssueOutputStore(root, issueKey);
+  try {
+    for (const name of ["old.csv", "z-new.xlsx", "a-new.md"]) await store.write(name, "data");
+    for (const [name, date] of [["old.csv", "2026-01-01"], ["z-new.xlsx", "2026-02-01"], ["a-new.md", "2026-02-01"]] as const) {
+      const file = await resolveIssueOutput(root, issueKey, name);
+      await utimes(file, new Date(date), new Date(date));
+    }
+    assert.deepEqual((await store.list()).map(({ fileName }) => fileName), ["a-new.md", "z-new.xlsx", "old.csv"]);
+    await store.append("old.csv", "updated");
+    assert.equal((await store.list())[0]!.fileName, "old.csv");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("writes durable Issue outputs atomically and confines file names", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-outputs-"));

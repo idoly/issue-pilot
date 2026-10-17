@@ -1,14 +1,16 @@
-import { Button, Modal, Skeleton } from "@idoly/ant-design-solid";
+import { Button, Modal, Skeleton } from "../ui";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { errorMessage, fetchOutput, outputUrl, type IssueDetail } from "../data/client";
+import { errorMessage, fetchOutput, fetchOutputBlob, outputUrl, type IssueDetail } from "../data/client";
 import { Download } from "../ui/icons";
+import { ExcelPreview } from "./ExcelPreview";
 import { Markdown } from "../ui/Markdown";
 
 type IssueOutput = IssueDetail["outputs"][number];
 
 export function OutputPreview(props: { issueKey: string; output: IssueOutput | null; onClose: () => void }) {
+  const [excel, setExcel] = createSignal<Blob | null>(null, { ownedWrite: true });
   const [text, setText] = createSignal("", { ownedWrite: true });
   const [loading, setLoading] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
@@ -18,9 +20,9 @@ export function OutputPreview(props: { issueKey: string; output: IssueOutput | n
   createEffect(() => ({ issueKey: props.issueKey, output: props.output, attempt: attempt() }), ({ issueKey, output }) => {
     controller?.abort();
     const current = ++generation;
-    setText(""); setError(""); setLoading(false);
+    setText(""); setExcel(null); setError(""); setLoading(false);
     if (!output) return;
-    if (!/\.(csv|json|jsonl|sql|txt|md|markdown|log|ya?ml|xml|tsv)$/i.test(output.fileName)) {
+    if (!/\.(csv|json|jsonl|sql|txt|md|markdown|log|ya?ml|xml|tsv|xlsx|xls)$/i.test(output.fileName)) {
       setError("此格式暂不支持预览，请下载查看");
       return;
     }
@@ -30,19 +32,22 @@ export function OutputPreview(props: { issueKey: string; output: IssueOutput | n
     }
     controller = new AbortController();
     setLoading(true);
-    void fetchOutput(issueKey, output.fileName, controller.signal).then((content) => {
+    const request = /\.(xlsx|xls)$/i.test(output.fileName)
+      ? fetchOutputBlob(issueKey, output.fileName, controller.signal).then((blob) => { if (current === generation) setExcel(blob); })
+      : fetchOutput(issueKey, output.fileName, controller.signal).then((content) => {
       if (current !== generation) return;
       if (/\.json$/i.test(output.fileName)) {
         try { content = JSON.stringify(JSON.parse(content), null, 2); } catch { /* Show original content for incomplete JSON. */ }
       }
       setText(content);
-    }).catch((cause) => {
+    });
+    void request.catch((cause) => {
       if (current === generation) setError(errorMessage(cause));
     }).finally(() => { if (current === generation) setLoading(false); });
   });
   onCleanup(() => { generation += 1; controller?.abort(); });
 
-  return <Modal width={960} open={Boolean(props.output)} title={props.output?.fileName ?? "成果文件预览"} okText="关闭" onOk={props.onClose} onCancel={props.onClose}>
+  return <Modal width={960} open={Boolean(props.output)} title={props.output?.fileName ?? "成果文件预览"} okText="关闭" cancelText="取消" onOk={props.onClose} onCancel={props.onClose}>
     <div class="attachment-preview">
       <div class="attachment-preview-toolbar">
         <Show when={error()}><Button onClick={() => setAttempt((value) => value + 1)}>重试</Button></Show>
@@ -50,10 +55,12 @@ export function OutputPreview(props: { issueKey: string; output: IssueOutput | n
       </div>
       <Show when={!loading()} fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
         <Show when={!error()} fallback={<div class="workspace-error" role="alert">{error()}</div>}>
+          <Show when={!excel()} fallback={<Show when={excel()}>{(blob) => <ExcelPreview blob={blob()} fileName={props.output?.fileName ?? ""} />}</Show>}>
           <Show when={text()} fallback={<div class="empty-band">文件内容为空</div>}>
             <Show when={/\.(md|markdown)$/i.test(props.output?.fileName ?? "")} fallback={<pre class="attachment-text-preview" tabindex="0">{text()}</pre>}>
               <div class="output-markdown-preview"><Markdown source={text()} /></div>
             </Show>
+          </Show>
           </Show>
         </Show>
       </Show>

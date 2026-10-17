@@ -1,85 +1,56 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-
+import { Type } from "typebox";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/pi/tools.ts";
-import type { ToolRuntime } from "../../src/tool-runtime.ts";
+import type { DeploymentConfig } from "../../src/domain/contracts.ts";
 
-const context: AgentSessionContext = {
-  issueKey: "ISSUE-20260808-001",
-  serviceKey: "orders",
-  environmentKey: "prod",
-  model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" },
-  capabilities: ["db", "redis", "dms"],
-  canModifyCode: false,
-  canWriteOutputs: false,
+const context: AgentSessionContext = { issueKey: "ISSUE-20260808-001", serviceKey: "orders", environmentKey: "prod", model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" }, capabilities: ["db", "redis", "dms"], canModifyCode: false, canWriteOutputs: false };
+const config: DeploymentConfig = {
+  db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "private-password" }] },
+  redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
+  dms: { url: "https://dms.example.test/sse", authorization: "Bearer private-token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
 };
+const call = (tool: ReturnType<typeof createCapabilityTools>[number], input: unknown) => tool.execute("call", input && typeof input === "object" ? { environment: "prod", ...input } as never : input as never, undefined, undefined, {} as never);
 
-test("creates only context-selected SDK capability tools", () => {
-  const tools = createCapabilityTools(context, {
-    db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] },
-    redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
-  });
-  assert.deepEqual(tools.map((tool) => tool.name), ["db", "redis", "dms"]);
-  assert.match(tools[0]?.promptSnippet ?? "", /read-only MySQL/);
-  assert.match(tools[1]?.promptGuidelines?.[0] ?? "", /allowlisted read operations/);
-  assert.match(tools[2]?.promptSnippet ?? "", /configured DMS schema through executeScript/);
-  const dbSchema = tools[0]?.parameters as unknown as { properties: Record<string, unknown>; required: string[] };
-  assert.deepEqual(Object.keys(dbSchema.properties), ["database", "statement"]);
-  assert.deepEqual(dbSchema.required, ["database", "statement"]);
-  assert.deepEqual((dbSchema.properties.database as { enum: string[] }).enum, ["orders"]);
-  const dmsSchema = tools[2]?.parameters as unknown as { properties: Record<string, unknown>; required: string[] };
-  assert.deepEqual(Object.keys(dmsSchema.properties), ["schema", "script", "logic"]);
-  assert.deepEqual(dmsSchema.required, ["schema", "script"]);
-  assert.deepEqual((dmsSchema.properties.schema as { enum: string[] }).enum, ["orders"]);
+test("folds context-selected adapters into one query schema without exposing credentials", () => {
+  const tools = createCapabilityTools(context, config);
+  assert.deepEqual(tools.map(tool => tool.name), ["service_query"]);
+  const serialized = JSON.stringify(tools[0]!.parameters);
+  assert.doesNotMatch(serialized, /private-password|private-token|databaseId/);
+  const schemas = (tools[0]!.parameters as unknown as { anyOf: Array<{ properties: Record<string, unknown>; required: string[] }> }).anyOf;
+  assert.equal(schemas.length, 3);
+  assert.deepEqual(schemas[0]!.required, ["environment", "service", "capability", "database", "statement"]);
+  assert.deepEqual((schemas[0]!.properties.database as { enum: string[] }).enum, ["orders"]);
+  assert.deepEqual((schemas[2]!.properties.schema as { enum: string[] }).enum, ["orders"]);
 });
 
-test("projects the selected deployment SLS logstores into the session-local tool schema", async () => {
-  const slsContext: AgentSessionContext = { ...context, capabilities: ["sls"] };
-  let calls = 0;
-  const unavailable: ToolRuntime = { run: () => { calls += 1; return Promise.reject(new Error("tool_runtime_unavailable")); } };
-  const tools = createCapabilityTools(slsContext, {
-    sls: {
-      accessKeyId: "key",
-      accessKeySecret: "secret",
-      region: "cn-hangzhou",
-      project: "xhgj-zysys",
-      logstores: ["srm-api-manage", "srm-api-portal", "srm-batch", "srm-api-supplier"],
-    },
-  }, unavailable);
-  const sls = tools[0]!;
-  const schema = sls.parameters as unknown as { properties: { logstore: { enum: string[]; description: string } } };
-  assert.deepEqual(schema.properties.logstore.enum, ["srm-api-manage", "srm-api-portal", "srm-batch", "srm-api-supplier"]);
-  assert.match(schema.properties.logstore.description, /selected deployment/);
-  await assert.rejects(sls.execute("call", { logstore: "srm" }, undefined, undefined, {} as never), /invalid_sls_input/);
-  assert.equal(calls, 0);
+test("projects exact SLS targets and rejects undeclared logstores before starting any request", async () => {
+  const [tool] = createCapabilityTools({ ...context, capabilities: ["sls"] }, { sls: { accessKeyId: "key", accessKeySecret: "secret", region: "cn-hangzhou", project: "orders", logstores: ["application", "gateway"] } });
+  const schema = tool!.parameters as unknown as { properties: { logstore: { enum: string[] } } };
+  assert.deepEqual(schema.properties.logstore.enum, ["application", "gateway"]);
+  await assert.rejects(call(tool!, { service: "orders", capability: "sls", logstore: "unconfigured" }), /invalid_service_query_input/);
 });
 
-test("exposes direct MySQL export only when the Issue has an output store", async () => {
-  const outputContext = { ...context, canWriteOutputs: true };
-  const tools = createCapabilityTools(outputContext, {
-    db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] },
-    redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
-  });
-  const db = tools.find((tool) => tool.name === "db")!;
-  const schema = db.parameters as unknown as { properties: Record<string, unknown> };
-  assert.deepEqual(Object.keys(schema.properties), ["database", "statement", "output"]);
-  await assert.rejects(db.execute("call", { database: "orders", statement: "SELECT 1", output: { fileName: "orders.csv", format: "csv" } }, undefined, undefined, {} as never), /issue_output_not_available/);
+test("keeps native write/target restrictions after combining the dispatch entry", async () => {
+  const [tool] = createCapabilityTools(context, config);
+  for (const input of [
+    { service: "other-environment", capability: "db", database: "orders", statement: "SELECT 1" },
+    { service: "orders", capability: "db", database: "unknown", statement: "SELECT 1" },
+    { service: "orders", capability: "redis", action: "del", key: "order" },
+    { service: "orders", capability: "dms", schema: "unknown", script: "SELECT 1" },
+    { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", databaseId: "different" },
+  ]) await assert.rejects(call(tool!, input), /invalid_service_query_input/);
+  const [exports] = createCapabilityTools({ ...context, canWriteOutputs: true }, config);
+  await assert.rejects(call(exports!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", output: { fileName: "batch.json" } }), /issue_output_not_available/);
+  await assert.rejects(call(exports!, { service: "orders", capability: "db", database: "orders", statement: "SELECT 1", output: { fileName: "batch.csv", format: "csv" } }), /issue_output_not_available/);
 });
 
-test("validates Pi tool input and passes the application tool runtime directly", async () => {
-  const unavailable: ToolRuntime = { run: () => Promise.reject(new Error("tool_runtime_unavailable")) };
-  const tools = createCapabilityTools(context, {
-    db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] },
-    redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
-    dms: { url: "https://dms.example.test/sse", authorization: "Bearer token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
-  }, unavailable);
-  const db = tools.find((tool) => tool.name === "db")!;
-  const redis = tools.find((tool) => tool.name === "redis")!;
-  const dms = tools.find((tool) => tool.name === "dms")!;
-  await assert.rejects(db.execute("call", { database: "unknown", statement: "SELECT 1" }, undefined, undefined, {} as never), /invalid_db_input/);
-  await assert.rejects(redis.execute("call", { action: "del", key: "order" }, undefined, undefined, {} as never), /invalid_redis_input/);
-  await assert.rejects(dms.execute("call", { schema: "unknown", script: "SELECT 1" }, undefined, undefined, {} as never), /invalid_dms_input/);
+test("configured MCP calls share the query entry and remain scoped to the declared service", async () => {
+  let received: unknown;
+  const [tool] = createCapabilityTools({ ...context, capabilities: [] }, {}, { mcpScopes: [{ environmentKey: "prod", serviceKey: "other", serviceName: "Other", tools: [{ name: "mcp_fixture", label: "Search", description: "Read docs", parameters: Type.Object({ query: Type.String() }, { additionalProperties: false }), async call(input) { received = input; return { content: [{ type: "text", text: "found" }], details: undefined }; } }] }] });
+  const result = await call(tool!, { service: "other", capability: "mcp", tool: "mcp_fixture", input: { query: "evidence" } });
+  assert.deepEqual(received, { query: "evidence" });
+  assert.match(JSON.stringify(result.content), /found/);
+  await assert.rejects(call(tool!, { service: "orders", capability: "mcp", tool: "mcp_fixture", input: { query: "evidence" } }), /invalid_service_query_input/);
 });

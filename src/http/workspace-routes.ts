@@ -2,7 +2,7 @@ import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
 import { ScopeTransitionRefusal } from "../workspace/scope-transition.ts";
 import { ApiError, choice, record, text } from "./input.ts";
-import { ensureCurrentSubject, requireIssue, type ApiRouteContext } from "./route-context.ts";
+import { authorizeWorkMode, requireIssue, type ApiRouteContext } from "./route-context.ts";
 
 function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["workspaces"]["inspectIssue"]>>) {
   return {
@@ -46,7 +46,8 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   app.post<{ Params: { key: string } }>("/api/issues/:key/scope-transition/plan", async (request) => {
     const issue = await requireIssue(database, request.params.key);
     const target = transitionTarget(request.body);
-    try { return await runScopeExclusive(() => scopeTransitions.plan(issue.id, target)); }
+    await authorizeWorkMode(database, request, target.workMode);
+    try { return await runScopeExclusive(async () => { await authorizeWorkMode(database, request, target.workMode); return scopeTransitions.plan(issue.id, target); }); }
     catch (error) { transitionError(error); }
   });
 
@@ -57,9 +58,9 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const expectedIssueUpdatedAt = text(input.expectedIssueUpdatedAt, "expected_issue_updated_at", 100);
     const expectedPlanHash = text(input.expectedPlanHash, "expected_plan_hash", 100);
     if (!/^sha256:[0-9a-f]{64}$/.test(expectedPlanHash) || !Number.isFinite(new Date(expectedIssueUpdatedAt).getTime())) throw new ApiError(400, "invalid_scope_transition_expectation");
-    const actorSubject = await ensureCurrentSubject(database, request);
+    const actorSubject = await authorizeWorkMode(database, request, target.workMode);
     try {
-      const changed = await runScopeExclusive(() => scopeTransitions.apply(issue.id, target, { expectedIssueUpdatedAt, expectedPlanHash }, actorSubject));
+      const changed = await runScopeExclusive(async () => { await authorizeWorkMode(database, request, target.workMode); return scopeTransitions.apply(issue.id, target, { expectedIssueUpdatedAt, expectedPlanHash }, actorSubject); });
       return { issueKey: changed.key };
     } catch (error) { transitionError(error); }
   });

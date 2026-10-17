@@ -1,4 +1,4 @@
-import { Button, Modal, Segmented, Select, TextArea } from "@idoly/ant-design-solid";
+import { Button, Modal, Segmented, Select, TextArea } from "../ui";
 import { createSignal, For, Show } from "solid-js";
 
 import { Maximize2, Paperclip, Trash2 } from "../ui/icons";
@@ -69,7 +69,6 @@ export function RelatedIssueSelect(props: {
         )}
         maxTagCount={2}
         listHeight={420}
-        virtual={false}
         popupClass="related-issue-popup"
         popupMatchSelectWidth
         placeholder="搜索工单号、标题或服务"

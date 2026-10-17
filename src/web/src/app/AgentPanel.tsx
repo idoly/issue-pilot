@@ -1,4 +1,4 @@
-import { Button } from "@idoly/ant-design-solid";
+import { Button } from "../ui";
 import { createEffect, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
@@ -310,7 +310,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     },
     onEvent: (envelope, generation) => {
       append(envelope);
-      if (envelope.event.type === "issue_status" || envelope.event.type === "agent_start") refreshIssue(props.issue.id, generation);
+      if (envelope.event.type === "issue_status" || envelope.event.type === "agent_start" || envelope.event.type === "tool_execution_end" && envelope.event.toolName === "workspace") refreshIssue(props.issue.id, generation);
     },
   });
   const connect = (issueId: string, resetForIssue = false) => {

@@ -4,6 +4,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilityTextResult } from "./contracts.ts";
 import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
+import { outputFileName, type IssueOutputStore } from "../outputs/store.ts";
 import { validateReadOnlySql } from "./sql.ts";
 
 const limits = issuePilotConfig.limits.capability.dms;
@@ -190,7 +191,13 @@ export async function queryDms(
   configured: CapabilityConfig<"dms">,
   signal?: AbortSignal,
   connect: ConnectDmsMcp = connectDmsMcp,
+  outputStore?: IssueOutputStore,
 ) {
+  if (input.output) {
+    if (!outputStore) throw new Error("issue_output_not_available");
+    outputFileName(input.output.fileName);
+    if (!/\.json$/i.test(input.output.fileName)) throw new Error("dms_output_json_required");
+  }
   const database = configured.databases.find(({ schemaName }) => schemaName === input.schema);
   if (!database) throw new Error("dms_database_not_authorized");
   const boundedSignal = operationSignal(signal);
@@ -200,7 +207,13 @@ export async function queryDms(
     if (!tool) throw new Error("dms_mcp_execute_script_unavailable");
     const result = await session.callTool(tool.name, executeScriptArguments(input, database.databaseId), boundedSignal);
     if (result && typeof result === "object" && "isError" in result && result.isError === true) throw new Error("dms_mcp_tool_failed");
-    return capabilityTextResult(JSON.stringify({ tool: tool.name, result }, null, 2), { provider: "aliyun-dms-mcp", tool: tool.name });
+    boundedSignal.throwIfAborted();
+    const text = JSON.stringify({ tool: tool.name, result }, null, 2);
+    if (input.output) {
+      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); boundedSignal.throwIfAborted(); });
+      return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
+    }
+    return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
   } finally {
     await session.close();
   }

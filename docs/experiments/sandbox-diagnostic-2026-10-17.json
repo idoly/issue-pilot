@@ -1,0 +1,423 @@
+{
+  "startedAt": "2026-10-16T16:54:37.480Z",
+  "reportRoot": "/tmp/issue-pilot-ablation-report-A8wZgo",
+  "fixture": "synthetic-v1",
+  "trials": 3,
+  "model": "xhgj/gpt-6.1-sol",
+  "results": [
+    {
+      "task": "cross-service-filter",
+      "trial": 1,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 12328.869643999999,
+      "startupMs": 0.0008999999990919605,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36651,
+        "output": 285,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.407384,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 1,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 11004.291368999999,
+      "startupMs": 303.79875000000175,
+      "shellMs": 1047.159437000002,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 9923,
+        "output": 236,
+        "cacheRead": 9216,
+        "cacheWrite": 0
+      },
+      "cost": 0.120246,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 1,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 11436.450248000001,
+      "startupMs": 202.22515600000042,
+      "shellMs": 1075.3836819999997,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 1299,
+        "output": 244,
+        "cacheRead": 19712,
+        "cacheWrite": 0
+      },
+      "cost": 0.044902,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 2,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 12292.967170999997,
+      "startupMs": 262.32573299999785,
+      "shellMs": 1154.7814589999907,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 1309,
+        "output": 257,
+        "cacheRead": 17920,
+        "cacheWrite": 0
+      },
+      "cost": 0.04386,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 2,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 10655.954148999997,
+      "startupMs": 256.7331239999985,
+      "shellMs": 702.7857379999987,
+      "shellCalls": 2,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 23636,
+        "output": 166,
+        "cacheRead": 32640,
+        "cacheWrite": 0
+      },
+      "cost": 0.2773,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 2,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 9071.716216,
+      "startupMs": 0.0008000000088941306,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 40875,
+        "output": 271,
+        "cacheRead": 22400,
+        "cacheWrite": 0
+      },
+      "cost": 0.4447000000000001,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 3,
+      "group": "C",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 13082.286697000003,
+      "startupMs": 335.82404400000814,
+      "shellMs": 1020.4178880000109,
+      "shellCalls": 3,
+      "readCalls": 0,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 4,
+      "tokens": {
+        "input": 6091,
+        "output": 256,
+        "cacheRead": 15104,
+        "cacheWrite": 0
+      },
+      "cost": 0.088814,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 3,
+      "group": "A",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 9421.405240000007,
+      "startupMs": 0.0008000000088941306,
+      "shellMs": 0,
+      "shellCalls": 0,
+      "readCalls": 2,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 36651,
+        "output": 298,
+        "cacheRead": 26624,
+        "cacheWrite": 0
+      },
+      "cost": 0.408034,
+      "manualInterventions": 0
+    },
+    {
+      "task": "cross-service-filter",
+      "trial": 3,
+      "group": "B",
+      "passed": true,
+      "failure": null,
+      "diagnostics": {
+        "toolErrors": []
+      },
+      "actual": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "expected": {
+        "count": 342,
+        "totalCents": 510300
+      },
+      "wallMs": 9710.986130999998,
+      "startupMs": 317.9115519999905,
+      "shellMs": 337.9177490000002,
+      "shellCalls": 1,
+      "readCalls": 1,
+      "codemodeCalls": 0,
+      "failedToolCalls": 0,
+      "modelTurns": 3,
+      "tokens": {
+        "input": 22958,
+        "output": 147,
+        "cacheRead": 26880,
+        "cacheWrite": 0
+      },
+      "cost": 0.26381,
+      "manualInterventions": 0
+    }
+  ],
+  "evidenceSha256": "9eb1af78fe9065d6de3b1d628f3f3f0b51db5abcc3d8ea8094d80b347fa291e8",
+  "conditions": {
+    "thinkingLevel": "medium",
+    "modelRunTimeoutMs": 180000,
+    "assistantTurns": 12,
+    "readAndShellCalls": 30,
+    "readPageCharacters": 51200,
+    "retry": false,
+    "compaction": false
+  },
+  "safetyChecks": [
+    "non-root",
+    "host-and-other-issue-unmounted",
+    "no-engine-socket",
+    "no-host-env",
+    "evidence-read-only",
+    "root-read-only",
+    "no-new-privileges",
+    "seccomp-filter-enabled",
+    "capabilities-dropped",
+    "network-loopback-only",
+    "workspace-writable",
+    "memory-and-pid-limits-configured",
+    "pre-abort-removes-container-and-descendants",
+    "abort-removes-container-and-descendants",
+    "timeout-removes-container-and-descendants",
+    "output-removes-container-and-descendants"
+  ],
+  "benchmark": {
+    "image": "docker.io/library/node:26-bookworm-slim",
+    "imageId": "a1b97d6761bf16f53e69dfbb124d934f7bb9f523564a402b0e5dfa88ac29f6a9",
+    "hostNode": "v24.18.0",
+    "containerNode": "v26.7.0",
+    "limits": {
+      "memory": "512m",
+      "cpus": "1",
+      "pids": "64",
+      "temporary": "64m",
+      "workspace": "128m",
+      "executionMs": 30000,
+      "outputBytes": 262144
+    },
+    "startupMs": 236.83285100000012,
+    "host": {
+      "samples": 10,
+      "medianMs": 20.393095000000358,
+      "p95Ms": 22.89569500000107,
+      "valuesMs": [
+        22.28459600000042,
+        19.04719599999953,
+        20.393095000000358,
+        20.24519599999985,
+        20.017295999999988,
+        20.763095999999678,
+        19.627196000000367,
+        20.520794999998543,
+        22.89569500000107,
+        19.259095999999772
+      ]
+    },
+    "container": {
+      "samples": 10,
+      "medianMs": 301.92903599999954,
+      "p95Ms": 383.52912000000106,
+      "valuesMs": [
+        301.92903599999954,
+        328.4187320000001,
+        301.493837,
+        277.5097420000002,
+        290.4752389999994,
+        306.9329349999998,
+        290.73033899999973,
+        383.52912000000106,
+        275.0461429999996,
+        308.8216349999984
+      ]
+    }
+  },
+  "summary": [
+    {
+      "group": "A",
+      "runs": 3,
+      "passed": 3,
+      "meanWallMs": 10273.997033333335,
+      "meanModelTurns": 3,
+      "meanCodemodeCalls": 0,
+      "meanCost": 0.4200393333333334
+    },
+    {
+      "group": "B",
+      "runs": 3,
+      "passed": 3,
+      "meanWallMs": 11002.748223666664,
+      "meanModelTurns": 3.6666666666666665,
+      "meanCodemodeCalls": 0,
+      "meanCost": 0.14263866666666666
+    },
+    {
+      "group": "C",
+      "runs": 3,
+      "passed": 3,
+      "meanWallMs": 11724.897031333334,
+      "meanModelTurns": 4,
+      "meanCodemodeCalls": 0,
+      "meanCost": 0.13700533333333334
+    }
+  ],
+  "completedAt": "2026-10-16T16:56:25.585Z"
+}

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type DeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -14,8 +14,20 @@ const timestamps = {
 };
 
 export const subjects = sqliteTable("subjects", {
+  role: text("role", { enum: USER_ROLES }).notNull().default("product"),
   subject: text("subject").primaryKey(), displayName: text("display_name"), email: text("email"), active: integer("active", { mode: "boolean" }).notNull().default(true), ...timestamps,
-}, (table) => [index("subjects_active_name_idx").on(table.active, table.displayName)]);
+}, (table) => [index("subjects_active_name_idx").on(table.active, table.displayName), check("subjects_role_valid", sql`${table.role} in ('product', 'test', 'developer')`)]);
+
+export const userCredentials = sqliteTable("user_credentials", {
+  subject: text("subject").primaryKey().references(() => subjects.subject, { onDelete: "cascade" }),
+  modelApiKeys: json<Record<string, string>>("model_api_keys").notNull().default({}),
+  productionDmsUrl: text("production_dms_url").notNull().default(""),
+  productionDmsAuthorization: text("production_dms_authorization").notNull().default(""),
+  productionSlsAccessKeyId: text("production_sls_access_key_id").notNull().default(""),
+  productionSlsAccessKeySecret: text("production_sls_access_key_secret").notNull().default(""),
+  gitPrivateKey: text("git_private_key").notNull().default(""),
+  updatedAt: date("updated_at").notNull().$defaultFn(() => new Date()),
+});
 
 export const environments = sqliteTable("environments", {
   id: id(), key: text("key").notNull(), name: text("name").notNull(), kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), ...timestamps,
@@ -24,6 +36,19 @@ export const environments = sqliteTable("environments", {
 export const services = sqliteTable("services", {
   id: id(), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), ...timestamps,
 }, (table) => [uniqueIndex("services_key_unique").on(table.key)]);
+
+export const mcpServices = sqliteTable("mcp_services", {
+  id: id(), name: text("name").notNull(), url: text("url").notNull(),
+  transport: text("transport", { enum: ["streamable_http", "sse"] }).notNull(),
+  authorization: text("authorization").notNull().default(""),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false), ...timestamps,
+}, (table) => [uniqueIndex("mcp_service_name_unique").on(table.name), check("mcp_transport_valid", sql`${table.transport} IN ('streamable_http','sse')`)]);
+
+export const capabilitySwitches = sqliteTable("capability_switches", {
+  key: text("key", { enum: CAPABILITY_KEYS }).primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull(),
+  updatedAt: date("updated_at").notNull().$defaultFn(() => new Date()),
+}, (table) => [check("capability_switch_key_valid", sql`${table.key} IN ('nacos','db','redis','mq','es','dms','sls')`)]);
 
 export const globalAgentConfiguration = sqliteTable("global_agent_configuration", {
   id: integer("id").primaryKey(),
@@ -36,11 +61,15 @@ export const globalAgentConfiguration = sqliteTable("global_agent_configuration"
 export const serviceDeployments = sqliteTable("service_deployments", {
   id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
   environmentId: text("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
-  config: json<DeploymentConfig>("config").notNull(), ...timestamps,
+  config: json<StoredDeploymentConfig>("config").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("service_deployment_unique").on(table.serviceId, table.environmentId)]);
 
+export const repositories = sqliteTable("repositories", {
+  id: id(), name: text("name").notNull(), url: text("url").notNull(), ...timestamps,
+}, (table) => [uniqueIndex("repositories_url_unique").on(table.url)]);
+
 export const serviceRepositories = sqliteTable("service_repositories", {
-  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), alias: text("alias").notNull(), url: text("url").notNull(), ...timestamps,
+  id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }), alias: text("alias").notNull(), url: text("url").notNull().references(() => repositories.url, { onUpdate: "cascade", onDelete: "restrict" }), ...timestamps,
 }, (table) => [uniqueIndex("service_repository_alias_unique").on(table.serviceId, table.alias), uniqueIndex("service_repository_url_unique").on(table.serviceId, table.url)]);
 
 export const serviceDeploymentRepositories = sqliteTable("service_deployment_repositories", {
@@ -58,6 +87,12 @@ export const issues = sqliteTable("issues", {
   reporterSubject: text("reporter_subject").notNull().references(() => subjects.subject), assigneeSubject: text("assignee_subject").references(() => subjects.subject),
   resolvedAt: date("resolved_at"), ...timestamps,
 }, (table) => [uniqueIndex("issues_key_unique").on(table.key), index("issues_queue_idx").on(table.status, table.priority, table.updatedAt), index("issues_assignee_idx").on(table.assigneeSubject, table.status)]);
+
+export const issueServiceScopes = sqliteTable("issue_service_scopes", {
+  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  serviceId: text("service_id").notNull().references(() => services.id),
+  createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
+}, (table) => [primaryKey({ columns: [table.issueId, table.serviceId] }), index("issue_service_scopes_service_idx").on(table.serviceId)]);
 
 export const issueCcRecipients = sqliteTable("issue_cc_recipients", {
   issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), subject: text("subject").notNull().references(() => subjects.subject),

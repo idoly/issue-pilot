@@ -1,4 +1,4 @@
-import { Select, Skeleton } from "@idoly/ant-design-solid";
+import { Select, Skeleton } from "../ui";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";

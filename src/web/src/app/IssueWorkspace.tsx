@@ -1,9 +1,9 @@
-import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "@idoly/ant-design-solid";
+import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "../ui";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Send } from "../ui/icons";
-import { addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
+import { canUseIssueWorkMode, addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { OutputPreview } from "./OutputPreview";
@@ -28,7 +28,7 @@ function localDateTime(value: string, includeYear = true): string {
 }
 
 export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (element: HTMLElement) => void; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void>; onCreatedFollowUp: (issueKey: string) => void }) {
-  const { catalog, people, peopleError } = useApplicationResources();
+  const { catalog, people, currentUser, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
   const [editDescription, setEditDescription] = createSignal("", { ownedWrite: true });
@@ -143,6 +143,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const currentWorkMode = () => issueWorkMode(props.issue.environmentKey as "prod" | "test" | "dev", props.issue.type);
   const outputs = () => props.issue.outputs ?? [];
   const availableScopeModes = createMemo(() => workModeOptions.filter(({ value }) => {
+    if (!canUseIssueWorkMode(currentUser()?.role ?? "product", value)) return false;
     if (props.issue.environmentKey === "dev" && value !== currentWorkMode()) return false;
     const environmentKind = issueScopeForWorkMode(value).environmentKind;
     return catalog().services.some((service) => service.deployments.some((deployment) => deployment.environmentKey === environmentKind));
@@ -218,7 +219,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     } finally { if (issueGeneration === generation) setFollowUpSaving(false); }
   };
   const canCreateFollowUp = () => props.issue.environmentKey === "dev" && !props.issue.agentRunning && ["ready", "stopped"].includes(props.issue.workspace.status) && props.issue.workspace.sourceAvailable && productionServices().length > 0;
-  const canEditRelatedIssues = () => currentWorkMode() === "production_analysis" && props.issue.status !== "resolved";
+  const canEditRelatedIssues = () => props.issue.status !== "resolved";
   const selectableRelatedIssues = createMemo(() => relatedCandidates().filter((candidate) => candidate.id !== props.issue.id));
   const openRelatedEditor = async () => {
     setRelatedKeys((props.issue.relatedIssues ?? []).map(({ id }) => id));
@@ -266,21 +267,26 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           </Show>
         </div>
         <div class="issue-actions">
-          <Show when={canCreateFollowUp()}><Button icon={<Plus size={15} />} onClick={openFollowUp}>创建正式跟进</Button></Show>
-          <Show when={canChangeScope()}><Button icon={<GitBranch size={15} />} onClick={() => openScopeTransition()}>变更处理范围</Button></Show>
-          <Show when={props.issue.workspace.retryable}>
-            <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
+          <Show when={props.issue.status === "pending"}><Button class="issue-status-action" type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
+          <Show when={props.issue.status === "resolved"}><Button class="issue-status-action" icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
+          <Show when={props.issue.status !== "resolved" && props.issue.status !== "pending" && props.issue.workspace.retryable}>
+            <Button class="issue-status-action" icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
           </Show>
-          <Show when={props.issue.status === "pending"}><Button type="primary" icon={<CheckCircle2 size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("resolved"); }}>确认解决</Button></Show>
-          <Show when={props.issue.status === "resolved"}><Button icon={<RefreshCw size={15} />} loading={statusSaving()} onClick={() => { void changeStatus("open"); }}>重新打开</Button></Show>
-          <Show when={props.issue.status !== "resolved"}><Button icon={<Pencil size={15} />} disabled={isWorkspaceBusy(props.issue.workspace.status)} onClick={openEditor}>编辑工单</Button></Show>
+          <div class="issue-secondary-actions">
+            <Show when={canCreateFollowUp()}><Button icon={<Plus size={15} />} onClick={openFollowUp}>创建正式跟进</Button></Show>
+            <Show when={canChangeScope()}><Button icon={<GitBranch size={15} />} onClick={() => openScopeTransition()}>变更处理范围</Button></Show>
+            <Show when={props.issue.status === "pending" && props.issue.workspace.retryable}>
+              <Button icon={<RefreshCw size={15} />} loading={retrying()} onClick={() => { void retry(); }}>{props.issue.workspace.status === "ready" ? "继续处理" : "重试处理"}</Button>
+            </Show>
+            <Show when={props.issue.status !== "resolved"}><Button icon={<Pencil size={15} />} disabled={isWorkspaceBusy(props.issue.workspace.status)} onClick={openEditor}>编辑工单</Button></Show>
+          </div>
         </div>
       </header>
 
       <div class="issue-facts">
         <div><span>处理人</span><strong>{props.issue.assignee ?? "未分配"}</strong></div>
         <div><span>创建人</span><strong>{props.issue.reporter?.name ?? "-"}</strong></div>
-        <div><span>服务</span><strong>{props.issue.service.name}</strong></div>
+        <div><span>入口服务</span><strong>{props.issue.service.name}</strong></div>
         <div><span>环境</span><strong>{environmentName()}</strong></div>
         <div><span>创建时间</span><strong>{localDateTime(props.issue.createdAt ?? props.issue.updatedAt)}</strong></div>
         <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
@@ -303,6 +309,9 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
             )}</For>
           </div>
         </section>
+      </Show>
+      <Show when={props.issue.collaboratingServices?.length}>
+        <section class="repository-band" aria-label="协作服务"><div class="band-title"><GitBranch size={16} /><h2>协作服务</h2></div><div class="capability-labels"><For each={props.issue.collaboratingServices ?? []}>{(service) => <code>{service.name}</code>}</For></div></section>
       </Show>
       <Show when={canEditRelatedIssues() || (props.issue.relatedIssues ?? []).length}>
         <section class="repository-band" aria-labelledby="related-issues-title">
@@ -367,7 +376,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         </div>
       </Modal>
       <Modal open={followUpOpen()} title="创建正式跟进工单" okText="创建并关联" cancelText="取消" confirmLoading={followUpSaving()} okButtonProps={{ disabled: !followUpTitle().trim() || !followUpService() }} onOk={() => { void createFormalFollowUp(); }} onCancel={() => { if (!followUpSaving()) setFollowUpOpen(false); }}>
-        <div class="create-issue-form compact-issue-form">
+        <div class="create-issue-form compact-issue-form follow-up-form">
           <label><span>处理方式</span><Input aria-label="正式跟进处理方式" value="正式问题调查" disabled /></label>
           <label><span>服务</span><Select aria-label="正式跟进服务" value={followUpService()} onChange={(value) => { const selected = selectedChoice(value, productionServices().map((service) => service.key)); if (selected) setFollowUpService(selected); }} options={productionServices().map((service) => ({ value: service.key, label: service.name }))} /></label>
           <label><span>标题</span><Input aria-label="正式跟进标题" value={followUpTitle()} onInput={(event) => setFollowUpTitle(event.currentTarget.value)} /></label>
@@ -397,7 +406,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
               <Show when={plan().branch}><div class="scope-transition-repository"><strong>分支</strong><small>{plan().branch}</small></div></Show>
             </div>
             <p>已有对话、附件和评论将保留；{plan().session.closeCurrent ? "当前 Agent session 将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
-            <Show when={plan().warnings.includes("related_issues_will_be_removed")}><p>关联工单将在离开正式问题调查时移除。</p></Show>
           </section>}</Show>
           <Show when={scopeError()}><div class="create-error modal-form-error" role="alert">{scopeError()}</div></Show>
         </div>
@@ -406,7 +414,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         <div class="create-issue-form compact-issue-form edit-issue-form">
           <Show when={editError() || peopleError()}><div class="create-error modal-form-error" role="alert">{editError() || peopleError()}</div></Show>
           <label><span>优先级</span><Select aria-label="编辑工单优先级" value={editPriority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setEditPriority(selected); }} options={priorityOptions} /></label>
-          <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
+          <label><span>处理人</span><Select aria-label="编辑工单处理人" value={editAssignee() ?? undefined} allowClear onClear={() => setEditAssignee(null)} onChange={(value) => { if (typeof value === "string" && value) setEditAssignee(value); }} options={people().filter((person) => !currentWorkMode() || canUseIssueWorkMode(person.role, currentWorkMode()!)).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="编辑工单抄送人" value={editCc()} onChange={setEditCc} options={people().filter((person) => person.subject !== editAssignee()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
           <label><span>标题</span><Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />

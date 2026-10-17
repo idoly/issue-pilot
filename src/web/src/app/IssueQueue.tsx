@@ -1,8 +1,8 @@
-import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "@idoly/ant-design-solid";
+import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
-import { createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
+import { canUseIssueWorkMode, createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
 import { priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
@@ -17,7 +17,7 @@ export function IssueQueue(props: {
   keepExternalSelection?: boolean;
   onSelect: (id: string) => void;
 }) {
-  const { catalog, people, catalogError, peopleError } = useApplicationResources();
+  const { catalog, people, currentUser, catalogError, peopleError } = useApplicationResources();
   const [issues, setIssues] = createSignal<Awaited<ReturnType<typeof listIssues>>>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
@@ -112,6 +112,7 @@ export function IssueQueue(props: {
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
   const availableWorkModes = createMemo(() => workModeOptions.filter((option) => {
+    if (!canUseIssueWorkMode(currentUser()?.role ?? "product", option.value)) return false;
     const environmentKind = issueScopeForWorkMode(option.value).environmentKind;
     return catalog().services.some((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === environmentKind));
   }));
@@ -119,7 +120,6 @@ export function IssueQueue(props: {
     const environmentKind = issueScopeForWorkMode(workMode()).environmentKind;
     return catalog().services.filter((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === environmentKind));
   });
-  const canRelateDevelopmentIssues = createMemo(() => workMode() === "production_analysis");
   const relatedIssues = createMemo(() => relatedCandidates());
   const openCreateIssue = () => {
     setCreateError("");
@@ -129,7 +129,6 @@ export function IssueQueue(props: {
       .catch((error) => setCreateError(errorMessage(error)))
       .finally(() => setRelatedLoading(false));
   };
-  createEffect(() => canRelateDevelopmentIssues(), (allowed) => { if (!allowed) setRelatedIssueKeys([]); });
   createEffect(
     () => ({ currentMode: workMode(), modes: availableWorkModes(), services: catalog().services }),
     ({ currentMode, modes, services }) => {
@@ -152,7 +151,7 @@ export function IssueQueue(props: {
         assigneeSubject: assigneeSubject(),
         ccSubjects: ccSubjects(),
         serviceKey: service(),
-        relatedIssueKeys: canRelateDevelopmentIssues() ? relatedIssueKeys() : [],
+        relatedIssueKeys: relatedIssueKeys(),
       }, attachments());
       setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
       props.onSelect(issue.id);
@@ -254,11 +253,11 @@ export function IssueQueue(props: {
       <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => setCreateOpen(false)} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form compact-issue-form new-issue-form">
           <label><span>处理方式</span><Select aria-label="工单处理方式" value={workMode()} onChange={(value) => { const selected = selectedChoice(value, availableWorkModes().map((option) => option.value)); if (selected) setWorkMode(selected); }} options={availableWorkModes()} /></label>
-          <label><span>服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, availableServices().map((item) => item.key)); if (selected) setService(selected); }} options={availableServices().map((item) => ({ value: item.key, label: item.name }))} /></label>
+          <label><span>入口服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, availableServices().map((item) => item.key)); if (selected) setService(selected); }} options={availableServices().map((item) => ({ value: item.key, label: item.name }))} /></label>
           <label><span>优先级</span><Select aria-label="工单优先级" value={priority()} onChange={(value) => { const selected = selectedChoice(value, priorityOptions.map((option) => option.value)); if (selected) setPriority(selected); }} options={priorityOptions} /></label>
-          <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
+          <label><span>处理人</span><Select aria-label="工单处理人" value={assigneeSubject() ?? undefined} allowClear onClear={() => setAssigneeSubject(null)} onChange={(value) => { if (typeof value === "string" && value) setAssigneeSubject(value); }} options={people().filter((person) => canUseIssueWorkMode(person.role, workMode())).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></label>
           <label><span>抄送人（可多选）</span><div class="multi-select-trigger"><Select mode="multiple" aria-label="工单抄送人" value={ccSubjects()} onChange={setCcSubjects} options={people().filter((person) => person.subject !== assigneeSubject()).map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))} /></div></label>
-          <Show when={canRelateDevelopmentIssues()}><label><span>关联工单（可多选，共 {relatedIssues().length} 个）</span><RelatedIssueSelect candidates={relatedIssues()} value={relatedIssueKeys()} loading={relatedLoading()} inputLabel="关联工单" onChange={setRelatedIssueKeys} /></label></Show>
+          <label><span>关联工单（可多选，共 {relatedIssues().length} 个）</span><RelatedIssueSelect candidates={relatedIssues()} value={relatedIssueKeys()} loading={relatedLoading()} inputLabel="关联工单" onChange={setRelatedIssueKeys} /></label>
           <label><span>标题</span><Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
           <DescriptionField value={description} inputLabel="工单描述" expandLabel="放大工单描述" onChange={(value) => setDescription(value)} />
           <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />

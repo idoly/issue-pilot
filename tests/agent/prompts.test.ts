@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { continuationPrompt, initialPrompt, promptWithRuntimeTime, runtimeTimeContext } from "../../src/agent/prompts.ts";
+import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime, runtimeTimeContext } from "../../src/agent/prompts.ts";
 
 const now = new Date("2026-08-06T01:52:43.000Z");
+
+test("bundles Karpathy guidelines for every Issue Agent without changing access policy", () => {
+  for (const mode of ["investigation", "development", "data"] as const) {
+    const prompt = agentSystemPrompt({ issueKey: "ISSUE-20261016-001", serviceKey: "service", environmentKey: mode === "development" ? "dev" : "prod", model: { provider: "test", modelId: "test", thinkingLevel: "medium" }, capabilities: [], canModifyCode: mode === "development", canWriteOutputs: mode === "data" });
+    for (const principle of ["Think Before Coding", "Simplicity First", "Surgical Changes", "Goal-Driven Execution"]) assert.ok(prompt.includes(principle));
+    assert.equal(prompt.match(/# Karpathy Guidelines/g)?.length, 1);
+    assert.match(prompt, /tool availability and tool validation as hard authorization boundaries/);
+    if (mode !== "development") assert.match(prompt, /All repository workspaces are read-only/);
+  }
+});
 
 test("injects the current UTC and Asia/Shanghai time into every Agent prompt", () => {
   const expected = "2026-08-06T09:52:43+08:00";

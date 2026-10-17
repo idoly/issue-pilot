@@ -168,7 +168,7 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
     }
     const messages = sessionEntryToContextMessages(entry);
     for (const [index, message] of messages.entries()) {
-      if (message.role === "user") continue;
+      if (message.role === "user" || message.role === "system") continue;
       const id = messages.length === 1 ? entry.id : `${entry.id}:${index}`;
       if (message.role === "toolResult") {
         events.push({
@@ -180,6 +180,7 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
             toolCallId: message.toolCallId,
             toolName: message.toolName,
             result: { content: message.content, details: message.details },
+            ...(message.durationMs === undefined ? {} : { durationMs: message.durationMs }),
             isError: message.isError,
           },
         });

@@ -10,6 +10,7 @@ function context(environmentKind: "dev" | "prod", repositoryAccess: Array<"read"
     issueKey: "ISSUE-20260804-001",
     issueType: issueType as "defect_fix" | "smart_analysis" | "data_processing",
     agentConfiguration: agent,
+    enabledCapabilities: ["redis"],
     deploymentConfig: {
       redis: { host: "redis.example.test", port: 6379, username: "reader", password: "secret", database: 0 },
     },
@@ -24,19 +25,19 @@ test("keeps Agent session context small and credential-free", () => {
   const value = context("prod");
   assert.deepEqual(value.capabilities, ["redis"]);
   assert.doesNotMatch(JSON.stringify(value), /redis\.example\.test|reader|secret/);
-  assert.deepEqual(sessionToolAllowlist(value), ["read", "grep", "find", "ls", "redis"]);
+  assert.deepEqual(sessionToolAllowlist(value), ["read", "grep", "find", "ls", "sandbox", "service_query"]);
 });
 
 test("allows mutation tools only for writable development repositories", () => {
   assert.equal(context("prod").canModifyCode, false);
-  assert.deepEqual(sessionToolAllowlist(context("dev")), ["read", "bash", "edit", "write", "grep", "find", "ls", "redis"]);
-  assert.deepEqual(sessionToolAllowlist(context("dev", [])), ["read", "grep", "find", "ls", "redis"]);
+  assert.deepEqual(sessionToolAllowlist(context("dev")), ["read", "bash", "edit", "write", "grep", "find", "ls", "sandbox", "service_query"]);
+  assert.deepEqual(sessionToolAllowlist(context("dev", [])), ["read", "grep", "find", "ls", "sandbox", "service_query"]);
 });
 
 test("grants only the durable output tool to production data-processing Issues", () => {
   const data = context("prod", ["read"], "data_processing");
   assert.equal(data.canModifyCode, false);
   assert.equal(data.canWriteOutputs, true);
-  assert.deepEqual(sessionToolAllowlist(data), ["read", "grep", "find", "ls", "output", "redis"]);
+  assert.deepEqual(sessionToolAllowlist(data), ["read", "grep", "find", "ls", "sandbox", "output", "service_query"]);
   assert.equal(context("prod", ["read"], "smart_analysis").canWriteOutputs, false);
 });

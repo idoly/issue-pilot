@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -36,6 +37,7 @@ test("adds available metadata, conversations, and development snapshots to a pro
     const [dev] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester" });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
+    await registerTestRepositories(database.db, [remote]);
     const [repository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: remote }).returning();
     const deployments = await database.db.insert(serviceDeployments).values([
       { serviceId: service!.id, environmentId: prod!.id, config: {} },
@@ -86,6 +88,17 @@ test("adds available metadata, conversations, and development snapshots to a pro
     assert.deepEqual(await readdir(path.join(metadataOnlyRoot, "repositories")), []);
     await assert.rejects(readFile(path.join(metadataOnlyRoot, "conversation.jsonl"), "utf8"), (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT");
     assert.equal(await readFile(path.join(preparedProduction.runtimeRoot, "remote", "README.md"), "utf8"), "production baseline\n");
+
+    // Development rounds and cold-start hydration expose the same read-only evidence
+    // in runtime without adding unmanaged entries to the writable workspace root.
+    await database.db.insert(issueRelations).values({ issueId: development!.id, relatedIssueId: relatedProduction!.id });
+    const developmentWithRelations = await projects.prepare(development!, "dev");
+    assert.deepEqual(developmentWithRelations.relatedIssueKeys, [relatedProduction!.key]);
+    const devEvidence = path.join(developmentWithRelations.runtimeRoot, "related-issues", relatedProduction!.key.toLowerCase(), "issue.json");
+    assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
+    assert.deepEqual(await readdir(developmentWithRelations.workspaceRoot), ["remote"]);
+    await projects.hydrateDevelopmentRuntime(development!);
+    assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

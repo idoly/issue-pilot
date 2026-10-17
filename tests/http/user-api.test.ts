@@ -20,6 +20,7 @@ test("manages active users in SQLite without rewriting historical identities", a
       name: "Operator",
       email: "operator@example.test",
       active: true,
+      role: "product",
       createdAt: (await json(created)).createdAt,
       updatedAt: (await json(created)).updatedAt,
     });
@@ -36,6 +37,7 @@ test("manages active users in SQLite without rewriting historical identities", a
     assert.equal(issue.statusCode, 201, issue.body);
     const issueKey = String((await json(issue)).id);
 
+    fixture.engine.running.clear();
     const disabled = await fixture.app.inject({ method: "PATCH", url: "/api/users/operator%40example.test", headers: bootstrapHeaders, payload: {
       name: "Operations",
       email: "operations@example.test",
@@ -47,6 +49,7 @@ test("manages active users in SQLite without rewriting historical identities", a
       name: "Operations",
       email: "operations@example.test",
       active: false,
+      role: "product",
       createdAt: (await json(disabled)).createdAt,
       updatedAt: (await json(disabled)).updatedAt,
     });

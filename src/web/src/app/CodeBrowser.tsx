@@ -1,4 +1,4 @@
-import { Button } from "@idoly/ant-design-solid";
+import { Button } from "../ui";
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X } from "../ui/icons";
@@ -58,7 +58,7 @@ function validBlameDetail(value: unknown): value is Omit<WorkbenchBlameHover, "l
     && (detail.commit === null || typeof detail.commit === "string") && typeof detail.path === "string" && Number.isSafeInteger(detail.line) && detail.line! > 0;
 }
 
-export default function CodeBrowser(props: { issueKey: string; development: boolean; agentOpen: boolean; detailsOpen: boolean; onClose: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onToggleAgent: () => void; onToggleDetails: () => void }) {
+export default function CodeBrowser(props: { issueKey: string; repositoryVersion?: string; development: boolean; agentOpen: boolean; detailsOpen: boolean; onClose: () => void; onLayout: (layout: WorkbenchPartLayout) => void; onPartVisibility: (agentOpen: boolean, detailsOpen?: boolean) => void; onToggleAgent: () => void; onToggleDetails: () => void }) {
   const initialView: WorkbenchView = untrack(() => props.development) ? "source-control" : "explorer";
   const workbenchUrl = () => `/vscode.html?issue=${encodeURIComponent(props.issueKey)}&view=${initialView}`;
   const [activeView, setActiveView] = createSignal<WorkbenchView | undefined>(initialView, { ownedWrite: true });
@@ -117,6 +117,9 @@ export default function CodeBrowser(props: { issueKey: string; development: bool
     currentFrame?.contentWindow?.postMessage({ kind: "issue-pilot-workbench-parts", issueKey, panelOpen, auxiliaryOpen }, window.location.origin);
   });
 
+  createEffect(() => ({ currentFrame: frame(), ready: workbenchReady(), version: props.repositoryVersion, issueKey: props.issueKey }), ({ currentFrame, ready, version, issueKey }) => {
+    if (ready && version) currentFrame?.contentWindow?.postMessage({ kind: "issue-pilot-workbench-repositories", issueKey }, window.location.origin);
+  });
   return (
     <section class="source-browser" aria-label={`${props.issueKey} 代码浏览器`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}>
       <header class="source-browser-header source-browser-header-workbench">

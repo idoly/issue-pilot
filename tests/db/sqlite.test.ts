@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,8 +18,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-14).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets"]);
-  const previousJournal = { ...journal, entries: journal.entries.slice(0, -14) };
+  assert.deepEqual(journal.entries.slice(-24).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets", "0045_user_roles_credentials", "0046_user_git_ssh_only", "0047_repository_catalog", "0048_capability_switches", "0049_mcp_services", "0050_resource_catalog", "0051_issue_service_scopes", "0052_deployment_capabilities", "0053_inline_capability_credentials", "0054_personal_production_credentials"]);
+  const previousJournal = { ...journal, entries: journal.entries.slice(0, journal.entries.findIndex(({ tag }) => tag === "0031_remove_unused_issue_metadata")) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
     writeFile(join(migrations, "meta", "_journal.json"), JSON.stringify(previousJournal)),
@@ -102,7 +103,12 @@ test("migrates each configured DMS database into the explicit target collection"
     await client.execute({ sql: "insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', ?, 1, 1)", args: [JSON.stringify({ dms: previousDms })] });
     await migrate(db, { migrationsFolder: migrationSource });
     const [row] = (await client.execute("select config from service_deployments where id = 'deployment'")).rows;
-    assert.deepEqual(JSON.parse(String(row!.config)), { dms: { url: previousDms.url, authorization: previousDms.authorization, databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] } });
+    const stored = JSON.parse(String(row!.config));
+    assert.equal(stored.dms.authorization, previousDms.authorization);
+    assert.equal(stored.dms.url, previousDms.url);
+    assert.ok(!("connectionId" in stored.dms));
+    const target = stored.dms.databases[0];
+    assert.deepEqual(target, { instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" });
     assert.equal((await client.execute("select count(*) count from sqlite_master where name = '_dms_database_targets_guard'")).rows[0]!.count, 0);
   } finally {
     await close();
@@ -241,6 +247,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.ok(environment?.createdAt instanceof Date);
     const [prod] = await db.insert(environments).values({ key: "prod", name: "Prod", kind: "prod" }).returning();
     const [service] = await db.insert(services).values({ key: "orders", name: "Orders", description: "" }).returning();
+    await registerTestRepositories(db, ["git@example.test:orders.git", "git@example.test:second.git", "git@example.test:third.git"]);
     const [repository] = await db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: "git@example.test:orders.git" }).returning();
     const [testDeployment] = await db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: { db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] } } }).returning();
     await assert.rejects(client.execute({
@@ -287,8 +294,8 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     assert.equal((await client.execute("pragma foreign_key_check")).rows.length, 0);
     const applicationTables = await client.execute("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' and name != '__drizzle_migrations' order by name");
     assert.deepEqual(applicationTables.rows.map((row) => row.name), [
-      "environments", "global_agent_configuration", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_pins", "issue_relations", "issue_repositories", "issue_scope_transitions",
-      "issue_workspaces", "issues", "service_deployment_repositories", "service_deployments", "service_repositories", "services", "subjects",
+      "capability_switches", "environments", "global_agent_configuration", "issue_attachments", "issue_cc_recipients", "issue_comments", "issue_pilot_sessions", "issue_pins", "issue_relations", "issue_repositories", "issue_scope_transitions", "issue_service_scopes",
+      "issue_workspaces", "issues", "mcp_services", "repositories", "service_deployment_repositories", "service_deployments", "service_repositories", "services", "subjects", "user_credentials",
     ]);
     const issueColumns = await client.execute("pragma table_info('issues')");
     assert.deepEqual(issueColumns.rows.map((column) => column.name), [
@@ -296,7 +303,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       "reporter_subject", "assignee_subject", "resolved_at", "created_at", "updated_at",
     ]);
     const subjectColumns = await client.execute("pragma table_info('subjects')");
-    assert.deepEqual(subjectColumns.rows.map((column) => column.name), ["subject", "display_name", "email", "created_at", "updated_at", "active"]);
+    assert.deepEqual(subjectColumns.rows.map((column) => column.name), ["subject", "display_name", "email", "created_at", "updated_at", "active", "role"]);
     assert.equal((await db.select().from(subjects).where(eq(subjects.subject, "demo-owner")))[0]!.active, true);
     const serviceRepositoryColumns = await client.execute("pragma table_info('service_repositories')");
     assert.deepEqual(serviceRepositoryColumns.rows.map((column) => column.name), ["id", "service_id", "alias", "url", "created_at", "updated_at"]);

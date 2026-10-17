@@ -3,7 +3,7 @@ import { CAPABILITY_CREDENTIALS, type CapabilityConfigurationInput, type Capabil
 
 type DbProjectedTarget = ProjectedCapabilitySection<"db">["databases"][number];
 type CapabilityCredentialDraft<Key extends CapabilityName> = Key extends "db"
-  ? { databases: Array<DbProjectedTarget & { credentialEnabled: boolean }> }
+  ? { databases: Array<DbProjectedTarget & { password: string; credentialEnabled: boolean }> }
   : ProjectedCapabilitySection<Key> & CapabilityCredentialValues<Key> & { credentialEnabled: boolean };
 type CapabilityDraftConfiguration = { [Key in CapabilityName]?: CapabilityCredentialDraft<Key> };
 

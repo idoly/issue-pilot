@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,6 +20,7 @@ test("loads deployment branches in service repository order and rejects incomple
       { key: "orders", name: "Orders" },
       { key: "payments", name: "Payments" },
     ]).returning();
+    await registerTestRepositories(database.db, ["https://example.test/orders-api.git", "https://example.test/orders-web.git", "https://example.test/payments-api.git"]);
     const repositories = await database.db.insert(serviceRepositories).values([
       { serviceId: service!.id, alias: "orders-api", url: "https://example.test/orders-api.git" },
       { serviceId: service!.id, alias: "orders-web", url: "https://example.test/orders-web.git" },

@@ -37,6 +37,11 @@ describe("Agent conversation state", () => {
     expect(source).toHaveLength(60_000);
   });
 
+  it("uses SDK tool duration when replaying a completed tool without a start event", () => {
+    const entries = applyAgentEvent([], event({ type: "tool_execution_end", toolCallId: "replayed", toolName: "dms", result: { content: [{ type: "text", text: "ok" }] }, isError: false, durationMs: 4500 }));
+    expect(entries[0]).toMatchObject({ kind: "tool", durationMs: 4500, status: "complete" });
+  });
+
   it("assembles Pi streaming events and replaces them with the final message", () => {
     let entries = applyAgentEvent([], event({ type: "message_start", message: assistant([], "pending") }, "message-1"));
     entries = applyAgentEvent(entries, event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "检查" } }));
@@ -73,7 +78,7 @@ describe("Agent conversation state", () => {
   it("keeps Pi retry lifecycle active until agent_settled", () => {
     expect(processingAfterEvent(true, event({ type: "agent_end", messages: [], willRetry: true }).event)).toBe(true);
     expect(processingAfterEvent(false, event({ type: "agent_start" }).event)).toBe(true);
-    expect(processingAfterEvent(true, event({ type: "agent_settled" }).event)).toBe(false);
+    expect(processingAfterEvent(true, event({ type: "agent_settled", aborted: false }).event)).toBe(false);
     expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "Compacting context...", tone: "info" });
     expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000, errorMessage: "overloaded" }).event)).toEqual({ text: "Retrying 2/3 in 2.0s...", tone: "warning" });
     expect(activityForEvent(event({ type: "auto_retry_end", success: true, attempt: 2 }).event)).toBeNull();

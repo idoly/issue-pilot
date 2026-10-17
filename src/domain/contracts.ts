@@ -1,3 +1,10 @@
+export const USER_ROLES = ["product", "test", "developer"] as const;
+export type UserRole = typeof USER_ROLES[number];
+export function canCreateDevelopmentIssues(role: UserRole): boolean { return role === "developer"; }
+export function canUseIssueWorkMode(role: UserRole, workMode: IssueWorkMode): boolean {
+  return role === "developer" || (workMode !== "production_data" && issueScopeForWorkMode(workMode).repositoryAccess !== "write");
+}
+
 const ISSUE_KEY = /^ISSUE-[0-9]{8}-[0-9]{3,}$/i;
 
 export function errorMessage(error: unknown): string {
@@ -17,6 +24,7 @@ export function normalizeIssueKey(value: string): string {
 
 export const CAPABILITY_KEYS = ["nacos", "db", "redis", "mq", "es", "dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
+export const CAPABILITY_TYPES = { nacos: "http", db: "database", redis: "redis", mq: "http", es: "http", dms: "mcp", sls: "http" } as const;
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];
@@ -57,8 +65,13 @@ export interface CapabilityConfiguration {
 }
 
 export type DeploymentConfig = CapabilityConfiguration;
+export type StoredDeploymentConfig = CapabilityConfiguration & {
+  /** Private pre-upgrade development settings; never projected or executed. */
+  archivedDevelopment?: unknown;
+  mcpServices?: string[];
+};
 
-export function configuredCapabilities(config: DeploymentConfig): CapabilityName[] {
+export function configuredCapabilities(config: Partial<Record<CapabilityName, unknown>>): CapabilityName[] {
   return CAPABILITY_KEYS.filter((key) => config[key] !== undefined);
 }
 

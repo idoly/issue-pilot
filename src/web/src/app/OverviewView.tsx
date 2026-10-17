@@ -6,7 +6,7 @@ import { Statistics } from "./Statistics";
 
 const refreshIntervalMs = 10_000;
 
-export function OverviewView(props: { onSelectIssue: (issueKey: string) => void }) {
+export function OverviewView(props: { onSelectIssue: (issueKey: string, userSubject?: string) => void }) {
   const [issues, setIssues] = createSignal<IssueExecutionItem[]>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });

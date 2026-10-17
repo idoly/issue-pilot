@@ -119,7 +119,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
       name: event.toolName,
       status: event.type === "tool_execution_end" ? event.isError ? "error" : "complete" : "running",
       startedAt: previous?.startedAt ?? envelope.createdAt,
-      ...(event.type === "tool_execution_end" && previous ? { durationMs: Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous.startedAt)) } : {}),
+      ...(event.type === "tool_execution_end" && (event.durationMs !== undefined || previous) ? { durationMs: event.durationMs ?? Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous!.startedAt)) } : {}),
       ...("args" in event ? { arguments: event.args } : previous?.arguments !== undefined ? { arguments: previous.arguments } : {}),
       ...(result ? { result } : previous?.result ? { result: previous.result } : {}),
     };

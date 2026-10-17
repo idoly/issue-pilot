@@ -1,6 +1,6 @@
 import { CapabilityConfigurationError, parseCapabilityConfiguration } from "../capabilities/registry.ts";
-import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
-import { CAPABILITY_CREDENTIALS, type ProjectedCapabilityConfiguration } from "./contracts.ts";
+import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName, type DeploymentConfig, type StoredDeploymentConfig } from "../domain/contracts.ts";
+import { CAPABILITY_CREDENTIALS, type ProjectedCapabilityConfiguration, type ServiceCapabilityConfiguration } from "./contracts.ts";
 
 function fail(code: string): never {
   throw new CapabilityConfigurationError(code);
@@ -24,14 +24,24 @@ export function projectCapabilityConfiguration(configuration: CapabilityConfigur
     if (!stored) continue;
     if (key === "db") {
       projected.db = {
-        databases: configuration.db!.databases.map((database) => ({ ...database, credentialConfigured: Boolean(database.password) })),
+        databases: configuration.db!.databases.map(({ password, ...database }) => ({ ...database, credentialConfigured: Boolean(password) })),
       };
       continue;
     }
     const section = stored as Record<string, unknown>;
-    projected[key] = { ...section, credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
+    const fields = CAPABILITY_CREDENTIALS[key].fields as readonly string[];
+    projected[key] = { ...Object.fromEntries(Object.entries(section).filter(([field]) => !fields.includes(field))), credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
   }
   return projected as ProjectedCapabilityConfiguration;
+}
+
+export function resolveDeploymentConfiguration(stored: StoredDeploymentConfig): DeploymentConfig {
+  const { mcpServices: _mcp, archivedDevelopment: _archive, ...configuration } = stored;
+  return configuration;
+}
+
+export function projectDeploymentConfiguration(stored: StoredDeploymentConfig): ServiceCapabilityConfiguration {
+  return { ...projectCapabilityConfiguration(resolveDeploymentConfiguration(stored)), ...(stored.mcpServices?.length ? { mcpServices: stored.mcpServices } : {}) };
 }
 
 function replacementCredentialValues(key: CapabilityName, value: unknown): Record<string, string> {
@@ -82,6 +92,7 @@ function resolveCapabilityConfiguration(key: CapabilityName, value: unknown, exi
   if (update.mode === "preserve") {
     if (Object.keys(update).length !== 1) fail("invalid_credential_update");
     const stored = existing?.[key] as Record<string, unknown> | undefined;
+    if (key === "dms" && stored?.url !== base.url) fail("dms_credentials_target_changed");
     credentials = stored ? configuredCredentialValues(key, stored) ?? fail("credential_not_configured") : fail("credential_not_configured");
   } else if (update.mode === "replace") {
     if (Object.keys(update).length !== 2 || !("values" in update)) fail("invalid_credential_update");

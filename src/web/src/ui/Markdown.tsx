@@ -30,7 +30,7 @@ function renderMarkdown(source: string): string {
   return html;
 }
 
-export function Markdown(props: { source: string }) {
-  const html = createMemo(() => renderMarkdown(props.source));
+export function Markdown(props: { source: string; cache?: boolean }) {
+  const html = createMemo(() => props.cache === false ? DOMPurify.sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source));
   return <div class="markdown markdown-body" innerHTML={html()} />;
 }

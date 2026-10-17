@@ -1,3 +1,4 @@
+import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -67,6 +68,7 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     const [prod] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester" });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
+    await registerTestRepositories(database.db, [remote]);
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: remote }).returning();
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" });
@@ -125,6 +127,7 @@ test("hydrates current read-only issue runtimes from deployment branches", async
 
     const extraRemote = path.join(root, "extra.git");
     await git(["clone", "--bare", remote, extraRemote]);
+    await registerTestRepositories(database.db, [extraRemote]);
     const [extraRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "extra", url: extraRemote }).returning();
     await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: extraRepository!.id, baseBranch: "missing" });
     const failedSwitch = await prepareReadOnlyIssueRuntimes(database.db, root);

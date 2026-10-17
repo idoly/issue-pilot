@@ -4,9 +4,9 @@ import { and, desc, eq } from "drizzle-orm";
 
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { Database } from "../db/client.ts";
-import { environments, issueRelations, issueRepositories, issueScopeTransitions, issues, issueWorkspaces, serviceRepositories, services, subjects } from "../db/schema.ts";
+import { environments, issueRepositories, issueScopeTransitions, issues, issueWorkspaces, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { issueScopeForWorkMode, issueWorkMode, type IssueWorkMode } from "../domain/contracts.ts";
-import { loadDeploymentRepositories } from "./deployment.ts";
+import { loadIssueDeployments } from "./issue-services.ts";
 import type { WorkspaceLifecycleManager } from "./lifecycle.ts";
 
 export interface ScopeTransitionTarget {
@@ -109,16 +109,15 @@ export class IssueScopeTransitionManager {
 
     let targetDeployment;
     try {
-      targetDeployment = await loadDeploymentRepositories(this.database, { serviceId: targetService.id, environmentId: targetEnvironment.id });
+      targetDeployment = await loadIssueDeployments(this.database, { id: current.issue.id, serviceId: targetService.id, environmentId: targetEnvironment.id });
     } catch (error) {
       if (error instanceof Error && error.message === "issue_service_deployment_not_found") throw new ScopeTransitionRefusal(error.message);
       throw error;
     }
 
-    const [currentRows, currentRepositoryDefinitions, relationRows] = await Promise.all([
+    const [currentRows, currentRepositoryDefinitions] = await Promise.all([
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, current.issue.id)),
       this.database.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, current.service.id)),
-      this.database.select().from(issueRelations).where(eq(issueRelations.issueId, current.issue.id)),
     ]);
     const currentDefinitionByUrl = new Map(currentRepositoryDefinitions.map((repository) => [repository.url, repository]));
     const currentRepositories = currentRows.map((repository) => ({
@@ -153,7 +152,7 @@ export class IssueScopeTransitionManager {
     const branch = action === "convert_to_development" || action === "migrate_development"
       ? `${targetScope.issueType === "defect_fix" ? "hotfix" : "feature"}-${current.issue.key.toLowerCase()}`
       : null;
-    const warnings = relationRows.length && target.workMode !== "production_analysis" ? ["related_issues_will_be_removed"] : [];
+    const warnings: string[] = [];
     const planWithoutHash: Omit<ScopeTransitionPlan, "planHash"> = {
       expectedIssueUpdatedAt: current.issue.updatedAt.toISOString(),
       action,
@@ -245,7 +244,6 @@ export class IssueScopeTransitionManager {
       }).where(and(eq(issues.id, issueId), eq(issues.updatedAt, new Date(expectation.expectedIssueUpdatedAt)))).returning();
       if (!changed) throw new ScopeTransitionRefusal("scope_transition_plan_stale");
       await transaction.delete(issueRepositories).where(eq(issueRepositories.issueId, issueId));
-      if (target.workMode !== "production_analysis") await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issueId));
       await transaction.update(issueWorkspaces).set({ status: "not_created", runtimeReady: false, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));
       await this.transitionAudit(issueId, actorSubject, plan)(transaction, now);
       return changed;

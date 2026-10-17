@@ -9,14 +9,15 @@ import type { FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
-import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
 import { listIssueOutputs, resolveIssueOutput } from "../outputs/store.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import { finalizeQuarantinedAttachments, type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removePendingAttachments, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachment-store.ts";
+import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { ensureCurrentSubject, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, authorizeWorkMode, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
@@ -105,18 +106,14 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     if (keys.length !== rawKeys.length) throw new ApiError(400, "invalid_related_issues");
     return keys;
   };
-  const validateRelatedIssues = async (keys: string[], environment: { kind: string }, issueType: IssueType) => {
-    if (environment.kind !== "prod" || issueType !== "smart_analysis") {
-      if (keys.length) throw new ApiError(400, "related_issues_not_allowed");
-      return [];
-    }
+  const validateRelatedIssues = async (keys: string[]) => {
     if (!keys.length) return [];
     const relatedRows = await database.db.select().from(issues).where(inArray(issues.key, keys));
     const byKey = new Map(relatedRows.map((issue) => [issue.key, issue]));
     if (byKey.size !== keys.length) throw new ApiError(400, "invalid_related_issues");
     return keys.map((key) => byKey.get(key)!);
   };
-  const parseRelatedIssues = (input: Record<string, unknown>, environment: { kind: string }, issueType: IssueType) => validateRelatedIssues(parseRelatedIssueKeys(input), environment, issueType);
+  const parseRelatedIssues = (input: Record<string, unknown>) => validateRelatedIssues(parseRelatedIssueKeys(input));
   const serializeIssueSummaries = async (selectedIssues: Array<typeof issues.$inferSelect>) => {
     const assigneeSubjects = [...new Set(selectedIssues.flatMap((issue) => issue.assigneeSubject ? [issue.assigneeSubject] : []))];
     const serviceIds = [...new Set(selectedIssues.map((issue) => issue.serviceId))];
@@ -181,10 +178,15 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
   app.post("/api/issues", async (request, reply) => {
     const { input, attachments: initialAttachments } = await readIssueInput(request);
     try {
-      const reporterSubject = await ensureCurrentSubject(database, request);
+      const reporterSubject = await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
     const createdIssue = await runScopeExclusive(async () => {
+      await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
       const issueValues = await parseCreateIssueInput(input);
-      const relatedIssues = await parseRelatedIssues(input, issueValues.environment, issueValues.type);
+      if (issueValues.environment.kind === "dev" || issueValues.type === "data_processing") {
+        const [owner] = await database.db.select().from(subjects).where(eq(subjects.subject, issueValues.assigneeSubject ?? reporterSubject)).limit(1);
+        if (owner?.role !== "developer") throw new ApiError(400, "issue_developer_owner_required");
+      }
+      const relatedIssues = await parseRelatedIssues(input);
       const issueId = randomUUID();
       return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
         const prefix = `ISSUE-${regionalDateStamp()}-`;
@@ -230,7 +232,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       return await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
       const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
-        database.db.select({ key: environments.key }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
+        database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
         database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, currentIssue.serviceId)).limit(1),
         parseIssueMetadataInput(input),
       ]);
@@ -239,6 +241,10 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       const removedAttachmentIdSet = new Set(removedAttachmentIds);
       const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
       if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
+      if (issueEnvironment?.kind === "dev" || currentIssue.type === "data_processing") {
+        const [owner] = await database.db.select().from(subjects).where(eq(subjects.subject, issueValues.assigneeSubject ?? currentIssue.reporterSubject)).limit(1);
+        if (owner?.role !== "developer") throw new ApiError(400, "issue_developer_owner_required");
+      }
       const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
       const removableFiles = await Promise.all(removedAttachments.map(async (attachment) => ({
         attachment,
@@ -294,15 +300,14 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       const reservationIds = [issue.id, ...existingRelations.map(({ relatedIssueId }) => relatedIssueId), ...requestedRows.map(({ id }) => id)];
       await runIssueExclusive(engine, reservationIds, async (reservation) => {
         const currentIssue = await requireIssue(database, issue.key);
-        const [[environment], [workspace], currentRelations] = await Promise.all([
-          database.db.select({ kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
+        const [[workspace], currentRelations] = await Promise.all([
           database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, currentIssue.id)).limit(1),
           database.db.select().from(issueRelations).where(eq(issueRelations.issueId, currentIssue.id)),
         ]);
-        if (!environment || environment.kind !== "prod" || currentIssue.type !== "smart_analysis" || currentIssue.status === "resolved") throw new ApiError(409, "related_issue_update_not_allowed");
+        if (currentIssue.status === "resolved") throw new ApiError(409, "related_issue_update_not_allowed");
         if (!workspace || !["ready", "stopped"].includes(workspace.status) || !workspace.runtimeReady) throw new ApiError(409, "related_issue_context_unavailable");
         if (requestedKeys.includes(currentIssue.key)) throw new ApiError(400, "invalid_related_issues");
-        const relatedIssues = await validateRelatedIssues(requestedKeys, environment, currentIssue.type);
+        const relatedIssues = await validateRelatedIssues(requestedKeys);
         const currentIds = currentRelations.map(({ relatedIssueId }) => relatedIssueId).sort();
         const requestedIds = relatedIssues.map(({ id }) => id).sort();
         if (currentIds.length === requestedIds.length && currentIds.every((id, index) => id === requestedIds[index])) return;
@@ -368,6 +373,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       ...summary, description: issue.description,
       repositories: repositoryRows.map((repository) => ({ name: repositoryNames.get(repository.url) ?? "", url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch })),
       attachments: attachmentRows.map(serializeAttachment),
+      collaboratingServices: await participatingServices(database.db, issue),
       outputs: outputRows,
       relatedIssues,
       scopeTransitions: scopeHistory,

@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { IssueOutputStore } from "../../src/outputs/store.ts";
 import { test } from "node:test";
 
 import { connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
@@ -68,6 +72,27 @@ function fixtureSession(overrides: Partial<DmsMcpSession> = {}) {
   };
   return { calls, closes: () => closes, connect, connections };
 }
+
+test("persists complete DMS results to an Issue output and only returns a file summary", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-"));
+  const store = new IssueOutputStore(root, "ISSUE-20261016-004");
+  const session = fixtureSession({ async listTools() { return [executeScriptTool]; } });
+  try {
+    const result = await queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "batch-001.json" } }, configured, undefined, session.connect, store);
+    const reply = JSON.stringify(result);
+    assert.ok(reply.includes("batch-001.json"));
+    assert.equal(reply.includes('\\"id\\"'), false);
+    const saved = JSON.parse((await store.read("batch-001.json")).toString("utf8"));
+    assert.deepEqual(saved.result.content, [{ type: "text", text: '[{"id":1}]' }]);
+    assert.equal(saved.tool, "executeScript");
+    assert.equal(session.closes(), 1);
+    assert.equal(JSON.stringify(saved).includes(configured.authorization), false);
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "x.json" } }, configured, undefined, session.connect), /issue_output_not_available/);
+    const failure = fixtureSession({ async listTools() { return [executeScriptTool]; }, async callTool() { return { isError: true }; } });
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "batch-001.json" } }, configured, undefined, failure.connect, store), /dms_mcp_tool_failed/);
+    assert.deepEqual(JSON.parse((await store.read("batch-001.json")).toString("utf8")), saved);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("uses Authorization for both sides of the MCP SSE protocol", async () => {
   const originalFetch = globalThis.fetch;

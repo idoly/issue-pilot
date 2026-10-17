@@ -1,4 +1,4 @@
-import { Button, Skeleton } from "@idoly/ant-design-solid";
+import { Button, Skeleton } from "../ui";
 import { createMemo, For, Show } from "solid-js";
 
 import type { IssueExecutionItem } from "../data/client";
@@ -26,7 +26,7 @@ export function Dashboard(props: {
   loadError: string;
   refreshing: boolean;
   onRefresh: () => void;
-  onSelectIssue: (issueKey: string) => void;
+  onSelectIssue: (issueKey: string, userSubject?: string) => void;
 }) {
   const { catalog } = useApplicationResources();
   const activeIssues = createMemo(() => props.issues.filter((issue) => issue.status !== "resolved"));
@@ -57,7 +57,7 @@ export function Dashboard(props: {
               <div class="dashboard-attention-list" role="list">
                 <For each={focusIssues()} fallback={<div class="dashboard-empty">当前没有未解决工单</div>}>
                   {(issue) => { const state = executionState(issue); return (
-                    <button type="button" role="listitem" class="dashboard-attention-item" onClick={() => props.onSelectIssue(issue.id)}>
+                    <button type="button" role="listitem" class="dashboard-attention-item" onClick={() => props.onSelectIssue(issue.id, issue.assigneeSubject ?? undefined)}>
                       <span class={`execution-state ${state.key}`}><i />{state.label}</span>
                       <div><strong>{issue.title}</strong><span><code>{issue.id}</code> · {issue.service.name} / {environmentName(issue.environmentKey)}</span></div>
                       <span class="dashboard-assignee">{issue.assignee ?? "未分配"}</span><time>{relativeTime(issue.updatedAt)}</time><ChevronRight size={15} aria-hidden="true" />

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,6 +21,15 @@ test("bounds output and applies scoped environment overrides for local capabilit
   const unbounded = await executeLocalCommand(process.execPath, oversizedCommand, { maxOutputBytes: null });
   assert.equal(Buffer.byteLength(unbounded.stdout), issuePilotConfig.limits.process.commandOutputBytes + 1);
   assert.equal(unbounded.killed, false);
+});
+
+test("passes binary stdin without argv exposure and tolerates an early reader exit", async () => {
+  const input = Buffer.from(Array.from({ length: 1024 }, (_, index) => index % 256));
+  const result = await executeLocalCommand(process.execPath, ["-e", "const fs=require('fs'),crypto=require('crypto');process.stdout.write(JSON.stringify({hash:crypto.createHash('sha256').update(fs.readFileSync(0)).digest('hex'),args:process.argv.slice(1)}))"], { input });
+  assert.deepEqual(JSON.parse(result.stdout), { hash: createHash("sha256").update(input).digest("hex"), args: [] });
+  const early = await executeLocalCommand(process.execPath, ["-e", "process.exit(0)"], { input: Buffer.alloc(1024 * 1024) });
+  assert.equal(early.code, 0);
+  assert.equal(early.killed, false);
 });
 
 test("terminates descendant processes after the grace period", { skip: process.platform === "win32" }, async () => {
