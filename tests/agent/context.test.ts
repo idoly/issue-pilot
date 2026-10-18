@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { createAgentSessionContext, sessionToolAllowlist } from "../../src/agent/context.ts";
 
-const agent = { provider: "test-provider", model: "test-model", thinkingLevel: "medium" as const };
+const agent = { provider: "test-provider", model: "test-model", thinkingLevel: "medium" as const, codemode: "off" as const, runtime: {} };
 
 function context(environmentKind: "dev" | "prod", repositoryAccess: Array<"read" | "write"> = ["write"], issueType = environmentKind === "dev" ? "defect_fix" : "smart_analysis") {
   return createAgentSessionContext({

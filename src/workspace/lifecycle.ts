@@ -3,7 +3,7 @@ import { rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import pMap from "p-map";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -13,7 +13,7 @@ import { agentSessions, environments, issueRelations, issueRepositories, issues,
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
-import { developmentWorktreeMode, IssueProjectManager } from "./project.ts";
+import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows } from "./project.ts";
 import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -289,53 +289,40 @@ export class WorkspaceLifecycleManager {
     ) throw new WorkspaceScopeMigrationRefusal("issue_not_migratable_between_development_scopes");
 
     await reservation.closeSession(issue.id);
-    try {
-      const migrated = await this.projects.migrateDevelopmentScope(issue, target, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
-        return this.database.transaction(async (transaction) => {
-          const now = new Date();
-          const targetUrls = repositories.map(({ repository }) => repository.url);
-          for (const [index, { repository }] of repositories.entries()) {
-            const worktree = prepared[index]!;
-            const existing = existingRepositories.find(({ url }) => url === repository.url);
-            const state = {
-              baseBranch: worktree.baseBranch,
-              workingBranch: worktree.workingBranch,
-              localPath: worktree.workspacePath,
-              workspaceName: names.get(repository.url)!,
-              commitBefore: existing?.commitBefore ?? worktree.baseCommit,
-            };
-            await transaction.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...state }).onConflictDoUpdate({
-              target: [issueRepositories.issueId, issueRepositories.url],
-              set: { ...state, updatedAt: now },
-            });
-          }
-          const issueFilter = eq(issueRepositories.issueId, issue.id);
-          if (existingRepositories.some(({ url }) => !targetUrls.includes(url))) {
-            await transaction.delete(issueRepositories).where(targetUrls.length ? and(issueFilter, notInArray(issueRepositories.url, targetUrls)) : issueFilter);
-          }
-          await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
-          await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
-          const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
-            .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
-          const [updated] = await transaction.update(issues).set({ serviceId: target.serviceId, environmentId: target.environmentId, updatedAt: now }).where(and(
-            eq(issues.id, issue.id),
-            eq(issues.serviceId, issue.serviceId),
-            eq(issues.environmentId, issue.environmentId),
-            eq(issues.type, issue.type),
-            eq(issues.updatedAt, new Date(expectedIssueUpdatedAt)),
-            inArray(issues.status, ["open", "pending"]),
-          )).returning();
-          if (!updatedWorkspace || !updated) throw new WorkspaceScopeMigrationRefusal("scope_transition_plan_stale");
-          await recordTransition?.(transaction, now);
-          return updated;
-        });
+    const migrated = await this.projects.migrateDevelopmentScope(issue, target, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+      return this.database.transaction(async (transaction) => {
+        const now = new Date();
+        const existingByUrl = new Map(existingRepositories.map(repository => [repository.url, repository]));
+        await replaceIssueRepositoryRows(transaction, issue.id, existingRepositories, repositories.map(({ repository }, index) => {
+          const worktree = prepared[index]!;
+          return {
+            url: repository.url,
+            baseBranch: worktree.baseBranch,
+            workingBranch: worktree.workingBranch,
+            localPath: worktree.workspacePath,
+            workspaceName: names.get(repository.url)!,
+            commitBefore: existingByUrl.get(repository.url)?.commitBefore ?? worktree.baseCommit,
+          };
+        }), now);
+        await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
+        await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
+        const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
+          .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
+        const [updated] = await transaction.update(issues).set({ serviceId: target.serviceId, environmentId: target.environmentId, updatedAt: now }).where(and(
+          eq(issues.id, issue.id),
+          eq(issues.serviceId, issue.serviceId),
+          eq(issues.environmentId, issue.environmentId),
+          eq(issues.type, issue.type),
+          eq(issues.updatedAt, new Date(expectedIssueUpdatedAt)),
+          inArray(issues.status, ["open", "pending"]),
+        )).returning();
+        if (!updatedWorkspace || !updated) throw new WorkspaceScopeMigrationRefusal("scope_transition_plan_stale");
+        await recordTransition?.(transaction, now);
+        return updated;
       });
-      reservation.enqueue(issue.id);
-      return migrated;
-    } catch (error) {
-      if (error instanceof WorkspaceScopeMigrationRefusal) throw error;
-      throw error;
-    }
+    });
+    reservation.enqueue(issue.id);
+    return migrated;
   }
 
   private async convertLocked(issueRow: IssueRow, reservation: AgentReservation, expectedIssueUpdatedAt?: string, recordTransition?: TransitionAudit): Promise<Issue> {
@@ -351,24 +338,17 @@ export class WorkspaceLifecycleManager {
       const converted = await this.projects.convertReadOnlyToDevelopment(issue, developmentEnvironment.id, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
         return this.database.transaction(async (transaction) => {
           const now = new Date();
-          const targetUrls = repositories.map(({ repository }) => repository.url);
-          for (const [index, { repository }] of repositories.entries()) {
+          await replaceIssueRepositoryRows(transaction, issue.id, existingRepositories, repositories.map(({ repository }, index) => {
             const worktree = prepared[index]!;
-            const state = {
+            return {
+              url: repository.url,
               baseBranch: worktree.baseBranch,
               workingBranch: worktree.workingBranch,
               localPath: worktree.workspacePath,
               workspaceName: names.get(repository.url)!,
               commitBefore: worktree.baseCommit,
             };
-            await transaction.insert(issueRepositories).values({ issueId: issue.id, url: repository.url, ...state }).onConflictDoUpdate({
-              target: [issueRepositories.issueId, issueRepositories.url],
-              set: { ...state, updatedAt: now },
-            });
-          }
-          if (existingRepositories.some(({ url }) => !targetUrls.includes(url))) {
-            await transaction.delete(issueRepositories).where(and(eq(issueRepositories.issueId, issue.id), notInArray(issueRepositories.url, targetUrls)));
-          }
+          }), now);
           await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
           await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
           const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })

@@ -37,6 +37,8 @@ async function projectConfigurationCatalog(database: ConfigurationReader): Promi
 }
 
 async function readSnapshot<T>(database: Database, project: (reader: ConfigurationReader) => Promise<T>): Promise<T> {
+  // Drizzle's libSQL adapter ignores transaction options. Use native read mode
+  // so a configuration snapshot does not reserve the SQLite writer.
   const client = new Proxy(database.$client, {
     get(target, property) {
       if (property === "transaction") return () => target.transaction("read");

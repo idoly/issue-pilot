@@ -6,7 +6,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_STATUSES, agentStreamUrl, sendAgentMessage, type AgentFooterStats, type IssueDetail, type IssueStatus, type RunEvent } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
-import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
+import { activityForEvent, applyAgentEvent, assistantNotice, codemodeCalls, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
 
@@ -28,6 +28,7 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
       <Show when={result().lines.length}><pre class="agent-tool-output"><Show when={result().omitted}><span class="omitted">... ({result().omitted} earlier lines)</span></Show><For each={result().lines}>{(line) => <span>{line}{"\n"}</span>}</For></pre></Show>
       <Show when={props.entry.durationMs !== undefined}><div class="agent-tool-timing">Took {duration(props.entry.durationMs)}</div></Show>
     </>}</Show>
+    <For each={codemodeCalls(props.entry)}>{call => <div class={`agent-nested-call ${call.status}`}><code>{call.name}</code><span>{({ running: "执行中", ok: "完成", error: "失败", cancelled: "已取消" })[call.status]}</span><Show when={call.durationMs !== undefined}><span>{duration(call.durationMs)}</span></Show><Show when={call.error}><span>{call.error}</span></Show></div>}</For>
     <Show when={genericOutput()}>{(text) => <pre class="agent-tool-output">{text()}</pre>}</Show>
     <For each={images()}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="Tool output" />}</For>
   </div>;
@@ -91,9 +92,10 @@ const emptyFooter = (): AgentFooterStats => ({
 });
 
 function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): AgentFooterStats {
-  if (event.type !== "message_end" || typeof event.message !== "object") return current;
-  const message = event.message;
-  const usage = message.role === "assistant" || message.role === "toolResult" ? message.usage : undefined;
+  const message = event.type === "message_end" && typeof event.message === "object" ? event.message : undefined;
+  const usage = event.type === "entry_appended" && event.entry.type === "usage"
+    ? event.entry.usage
+    : (message?.role === "assistant" || message?.role === "toolResult") ? message.usage : undefined;
   if (!usage) return current;
   const next = {
     ...current,
@@ -103,7 +105,7 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
     cacheWrite: current.cacheWrite + usage.cacheWrite,
     cost: current.cost + usage.cost.total,
   };
-  if (message.role !== "assistant") return next;
+  if (message?.role !== "assistant") return next;
   const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
   const contextTokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
   return {

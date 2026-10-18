@@ -153,6 +153,19 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
   }
 });
 
+test("does not start a DMS connection for an already cancelled operation", async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response(null, { status: 403 }); };
+  try {
+    const reason = new Error("cancelled_before_connect");
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.abort(reason)), error => error === reason);
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.abort(new DOMException("expired", "TimeoutError"))), { message: "dms_mcp_timeout" });
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.abort("private-cancellation-detail")), { message: "dms_mcp_aborted" });
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("reports an MCP SSE handshake timeout separately from connection failures", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {

@@ -1,6 +1,7 @@
 import { defineTool, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
-import { Value } from "typebox/value";
+import { Compile } from "typebox/compile";
+import { structuredJsonResult } from "../capabilities/contracts.ts";
 import { queryDms } from "../capabilities/dms.ts";
 import { readElasticsearch } from "../capabilities/elasticsearch.ts";
 import { readMysql } from "../capabilities/mysql.ts";
@@ -40,21 +41,24 @@ export function createCapabilityTools(context: Pick<AgentSessionContext, "servic
   for (const scope of mcpScopes) for (const tool of scope.tools) schemas.push(Type.Object({ environment: Type.Literal(scope.environmentKey), service: Type.Literal(scope.serviceKey, { description: scope.serviceName }), capability: Type.Literal("mcp"), tool: Type.Literal(tool.name, { description: `${tool.label}: ${tool.description}` }), input: tool.parameters }, { additionalProperties: false }));
   if (!schemas.length) return [];
   const schema = schemas.length === 1 ? schemas[0]! : Type.Union(schemas);
+  const validateInput = Compile(schema);
   return [defineTool({
-    name: "service_query", label: "Query service evidence", parameters: schema,
-    description: "Query evidence from a configured environment and service. Development Issues can read production/test sources; other Issues stay in their own environment. Use workspace list/describe to read service investigation notes before choosing a capability. Credentials and targets are injected by the server. Native operations remain read-only; MCP operations follow the source environment policy. For MCP select tool and supply its input object.",
+    name: "service_query", label: "Query service evidence", parameters: schema, outputSchema: Type.Unknown(),
+    description: "Query evidence from a configured environment and service. Development Issues can read production/test sources; other Issues stay in their own environment. Use workspace list/describe to read service investigation notes before choosing a capability. Credentials and targets are injected by the server. Native operations remain read-only; enabled external MCP tools are available in every Issue environment. For MCP select tool and supply its input object.",
+    promptGuidelines: ["When codemode is enabled, service_query resolves to structured JSON data. Batch independent evidence reads with Promise.allSettled and return only the fields needed for the answer. Await calls that depend on an earlier result or publish the same file."],
     execute: async (_id, raw, signal): Promise<AgentToolResult<unknown>> => {
-      let input: Record<string, unknown>;
-      try { input = Value.Parse(schema, raw ?? {}) as typeof input; } catch { throw new Error("invalid_service_query_input"); }
+      signal?.throwIfAborted();
+      if (!validateInput.Check(raw)) throw new Error("invalid_service_query_input");
+      const input = raw as Record<string, unknown>;
       if (input.capability === "mcp") {
         const binding = mcpScopes.find(scope => scope.serviceKey === input.service && scope.environmentKey === input.environment)?.tools.find(tool => tool.name === input.tool);
         if (!binding) throw new Error("service_capability_not_available");
-        return binding.call(input.input as Record<string, unknown>, signal);
+        return structuredJsonResult(await binding.call(input.input as Record<string, unknown>, signal));
       }
       const scope = scopes.find(scope => scope.serviceKey === input.service && scope.environmentKey === input.environment);
       const capability = input.capability as CapabilityName;
       if (!scope || !context.capabilities.includes(capability) || !scope.config[capability]) throw new Error("service_capability_not_available");
-      return runTool(scope.config, capability, input as unknown as CapabilityInputs[CapabilityName], signal, outputStore);
+      return structuredJsonResult(await runTool(scope.config, capability, input as unknown as CapabilityInputs[CapabilityName], signal, outputStore));
     },
   })];
 }

@@ -1,11 +1,40 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { access, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { finalizeQuarantinedAttachments, removeWrittenAttachments, resolveSecureAttachmentFile } from "../../src/http/attachment-store.ts";
+import type { MultipartFile } from "@fastify/multipart";
+import { finalizeQuarantinedAttachments, readMultipartAttachment, removeWrittenAttachments, resolveSecureAttachmentFile } from "../../src/http/attachment-store.ts";
 import { claimIssueRoot, issueAttachmentRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
+
+for (const stage of ["open", "close"] as const) test(`removes attachment staging after a file ${stage} failure`, async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-io-"));
+  const createDirectory = fs.mkdtemp, openFile = fs.open, reason = new Error(`fixture_${stage}_failed`);
+  let staging: string | undefined;
+  const part = { filename: "evidence.txt", mimetype: "text/plain", file: Object.assign(Readable.from([Buffer.from("evidence")]), { truncated: false }) } as MultipartFile;
+  try {
+    context.mock.method(fs, "mkdtemp", async () => {
+      staging = await createDirectory(path.join(root, "stage-"));
+      return staging;
+    });
+    if (stage === "open") context.mock.method(fs, "open", async () => { throw reason; });
+    else context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await openFile(...args), close = handle.close.bind(handle);
+      context.mock.method(handle, "close", async () => { await close(); throw reason; });
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(readMultipartAttachment(part), error => error === reason);
+    assert.ok(staging);
+    await assert.rejects(access(staging), { code: "ENOENT" });
+  } finally {
+    context.mock.restoreAll(); syncBuiltinESMExports();
+    part.file.destroy(); await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("rolls back only empty state claimed for a failed Issue creation", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-rollback-"));

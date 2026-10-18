@@ -7,7 +7,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel } from "./AgentPanel";
-import { activityForEvent, applyAgentEvent, boundedText, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
+import { activityForEvent, applyAgentEvent, boundedText, codemodeCalls, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "63ccbb08-d769-47b6-87a6-e93acea184f7", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -90,6 +90,19 @@ describe("Agent conversation state", () => {
     entries = applyAgentEvent(entries, event({ type: "tool_execution_end", toolCallId: "call-1", toolName: "db", result: { content: [{ type: "text", text: "done" }] }, isError: false }));
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ kind: "tool", toolCallId: "call-1", status: "complete", arguments: { statement: "SELECT 1" }, result: { content: [{ text: "done" }] } });
+  });
+
+  it("projects codemode calls from the parent's persisted details without duplicate live rows", () => {
+    let entries = applyAgentEvent([], event({ type: "tool_execution_start", toolCallId: "script", toolName: "codemode", args: { code: "return await tools.service_query({});" } }));
+    const parent = entries;
+    entries = applyAgentEvent(entries, event({ type: "tool_execution_start", parentToolCallId: "script", toolCallId: "script/1", toolName: "service_query", args: {} }));
+    entries = applyAgentEvent(entries, event({ type: "tool_execution_end", parentToolCallId: "script", toolCallId: "script/1", toolName: "service_query", result: { content: [{ type: "text", text: "intermediate data" }], details: undefined }, isError: false }));
+    expect(entries).toBe(parent);
+    const calls = [{ id: "script/1", name: "service_query", args: "{}", status: "ok" as const, durationMs: 15 }];
+    entries = applyAgentEvent(entries, event({ type: "tool_execution_end", toolCallId: "script", toolName: "codemode", result: { content: [{ type: "text", text: "Summary" }], details: { calls } }, isError: false }));
+    expect(entries).toHaveLength(1);
+    expect(codemodeCalls(entries[0] as Extract<ConversationEntry, { kind: "tool" }>)).toEqual(calls);
+    expect(JSON.stringify(entries)).not.toContain("intermediate data");
   });
 
   it("appends visible user messages and images", () => {
@@ -225,6 +238,34 @@ describe("Agent conversation state", () => {
     expect((body as FormData).getAll("images")).toHaveLength(1);
     await waitFor(() => expect(screen.queryByAltText("clipboard.png")).toBeNull());
     await waitFor(() => expect(revokeObjectUrl).toHaveBeenCalledWith("blob:clipboard-image"));
+    view.unmount();
+  });
+
+  it("updates auxiliary SDK usage without changing the main context or reconnecting", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const source = EventSourceMock.instances[0]!;
+    source.emit("snapshot_ready", {
+      agent: { provider: "test", model: "model", thinkingLevel: "medium" },
+      footer: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, cost: 0.1, latestCacheHitRate: 90, contextPercent: 10, contextWindow: 10_000, autoCompact: true },
+      running: false, issueStatus: "pending",
+    });
+    await waitFor(() => expect(screen.getByText("↑100 ↓10 R900 CH90.0% $0.100 10.0%/10k (auto)")).toBeTruthy());
+    const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    fireEvent.input(editor, { target: { value: "draft survives usage updates" } });
+    for (const [index, kind] of ["cache_warm", "native_auxiliary"].entries()) source.emit("message", event({
+      type: "entry_appended",
+      entry: { type: "usage", id: `usage-${index}`, parentId: null, timestamp: new Date().toISOString(), kind, provider: "test", model: "model", usage: { ...usage, cacheRead: 100, totalTokens: 100, cost: { ...usage.cost, cacheRead: 0.02, total: 0.02 } } },
+    }, `auxiliary-${index}`));
+    await waitFor(() => expect(screen.getByText("↑100 ↓10 R1.1k CH90.0% $0.140 10.0%/10k (auto)")).toBeTruthy());
+    expect(editor.value).toBe("draft survives usage updates");
+    expect(EventSourceMock.instances).toHaveLength(1);
     view.unmount();
   });
 

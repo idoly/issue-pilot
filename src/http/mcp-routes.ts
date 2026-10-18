@@ -1,9 +1,9 @@
 import { asc, eq } from "drizzle-orm";
-import { mcpServices, serviceDeployments, issues } from "../db/schema.ts";
+import { mcpServices, issues } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { ApiError, choice, record, text } from "./input.ts";
 import { MCP_TRANSPORTS, type McpStdioConfiguration } from "../domain/contracts.ts";
-import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({ id: row.id, name: row.name, url: row.url, transport: row.transport, enabled: row.enabled, credentialConfigured: row.transport === "stdio" ? Boolean(row.stdio) : Boolean(row.authorization) });
@@ -47,22 +47,23 @@ function parse(body: unknown, existing?: McpRow) {
   if (transport === "stdio" && input.enabled && !stdio) throw new ApiError(400, "mcp_stdio_configuration_required");
   return { name, url, transport, enabled: input.enabled, authorization, stdio };
 }
-function parseImport(body: unknown) {
+function parseImport(body: unknown, existing?: McpRow) {
   const entries = Object.entries(record(record(body).mcpServers));
-  if (!entries.length) throw new ApiError(400, "invalid_mcp_servers");
+  if (!entries.length || existing && entries.length !== 1) throw new ApiError(400, "invalid_mcp_servers");
   return entries.map(([name, value]) => {
-    const entry = record(value), enabled = entry.enabled ?? (entry.disabled === undefined ? true : !entry.disabled);
+    const entry = record(value), enabled = entry.enabled ?? (entry.disabled === undefined ? existing?.enabled ?? true : !entry.disabled);
     if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") throw new ApiError(400, "invalid_mcp_configuration");
     if (entry.disabled !== undefined && typeof entry.disabled !== "boolean") throw new ApiError(400, "invalid_mcp_configuration");
-    if ("command" in entry) {
+    if ("command" in entry || entry.type === "stdio") {
       if (entry.url !== undefined || entry.type !== undefined && entry.type !== "stdio") throw new ApiError(400, "invalid_mcp_configuration");
-      return parse({ name, transport: "stdio", enabled, credentialUpdate: { mode: "replace", values: { stdio: entry } } });
+      if (!("command" in entry) && (entry.args !== undefined || entry.env !== undefined || entry.cwd !== undefined || !existing)) throw new ApiError(400, "invalid_mcp_stdio");
+      return parse({ name, transport: "stdio", enabled, credentialUpdate: "command" in entry ? { mode: "replace", values: { stdio: entry } } : { mode: "preserve" } }, existing);
     }
     const type = entry.type === undefined ? "http" : entry.type;
     if (!["http", "streamable_http", "streamable-http", "sse"].includes(String(type))) throw new ApiError(400, "invalid_mcp_transport");
     const headers = Object.entries(record(entry.headers ?? {}));
     if (headers.some(([key]) => key.toLowerCase() !== "authorization") || headers.length > 1) throw new ApiError(400, "mcp_headers_not_supported");
-    return parse({ name, url: entry.url, transport: type === "sse" ? "sse" : "streamable_http", enabled, credentialUpdate: headers.length ? { mode: "replace", values: { authorization: headers[0]![1] } } : { mode: "clear" } });
+    return parse({ name, url: entry.url, transport: type === "sse" ? "sse" : "streamable_http", enabled, credentialUpdate: headers.length ? { mode: "replace", values: { authorization: headers[0]![1] } } : { mode: existing && entry.headers === undefined ? "preserve" : "clear" } }, existing);
   });
 }
 
@@ -94,10 +95,21 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     reply.header("Cache-Control", "private, no-store");
     return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).map(project));
   });
-  app.post("/api/mcp-services", { logLevel: "silent" }, async (request, reply) => {
-    await requireDeveloper(database, request);
-    const result = await runScopeExclusive(async () => {
+  app.get<{ Params: { id: string } }>("/api/mcp-services/:id/configuration", { logLevel: "silent" }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
+    return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
+      const row = await requireService(request.params.id);
+      const configuration = row.transport === "stdio"
+        ? { ...(row.stdio ?? { type: "stdio" }) }
+        : { url: row.url, ...(row.transport === "sse" ? { type: "sse" } : {}), ...(row.authorization ? { headers: { Authorization: row.authorization } } : {}) };
+      return { mcpServers: { [row.name]: { ...configuration, ...(!row.enabled ? { enabled: false } : {}) } } };
+    });
+  });
+  app.post("/api/mcp-services", { logLevel: "silent" }, async (request, reply) => {
+    await requireAdmin(database, request);
+    const result = await runScopeExclusive(async () => {
+      await requireAdmin(database, request);
       const input = parse(request.body);
       return mutate(async () => {
         const [row] = await database.db.insert(mcpServices).values(input).returning();
@@ -107,9 +119,9 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     return reply.code(201).send(result);
   });
   app.post("/api/mcp-services/import", { logLevel: "silent" }, async (request, reply) => {
-    await requireDeveloper(database, request);
+    await requireAdmin(database, request);
     const result = await runScopeExclusive(async () => {
-      await requireDeveloper(database, request);
+      await requireAdmin(database, request);
       const inputs = parseImport(request.body);
       return mutate(() => database.db.transaction(async transaction => (await transaction.insert(mcpServices).values(inputs).returning()).map(project)));
     });
@@ -120,7 +132,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const current = await requireService(request.params.id);
-      const input = parse(request.body, current);
+      const input = "mcpServers" in record(request.body) ? parseImport(request.body, current)[0]! : parse(request.body, current);
       if (Object.entries(input).every(([key, value]) => key === "stdio" ? JSON.stringify(current.stdio) === JSON.stringify(value) : current[key as keyof typeof input] === value)) return project(current);
       return mutate(async () => {
         const [row] = await database.db.update(mcpServices).set({ ...input, updatedAt: new Date() }).where(eq(mcpServices.id, current.id)).returning();
@@ -132,7 +144,6 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     await requireDeveloper(database, request);
     await runScopeExclusive(async () => {
       await requireDeveloper(database, request); const current = await requireService(request.params.id);
-      if ((await database.db.select().from(serviceDeployments)).some(row => row.config.mcpServices?.includes(current.id))) throw new ApiError(409, "mcp_service_in_use");
       await mutate(() => database.db.delete(mcpServices).where(eq(mcpServices.id, current.id)));
     });
     return reply.code(204).send();

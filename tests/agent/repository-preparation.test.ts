@@ -11,8 +11,8 @@ import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
-import type { AgentSessionContext } from "../../src/agent/context.ts";
+import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, mcpServices, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
+import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
 import { issueRuntimeRoot, issueWorkDirectory, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
@@ -154,7 +154,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
-  const starts: Array<{ context: AgentSessionContext; workspaceRoot: string }> = [];
+  const starts: Array<Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpScopes">> = [];
   let sessionStops = 0;
   try {
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
@@ -164,6 +164,8 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const dev = environmentRows.find((environment) => environment.kind === "dev")!;
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
     await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
+    const [globalMcp] = await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
+    await database.db.insert(mcpServices).values({ name: "Disabled tools", url: "https://disabled.example.test/mcp", transport: "streamable_http", enabled: false });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     await registerTestRepositories(database.db, remotes);
     const repositories = await database.db.insert(serviceRepositories).values([
@@ -171,7 +173,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { serviceId: service!.id, alias: "orders-secondary", url: remotes[1] },
     ]).returning();
     const deployments = await database.db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: prod.id, config: {} },
+      { serviceId: service!.id, environmentId: prod.id, config: { mcpServices: ["obsolete-binding"] } },
       { serviceId: service!.id, environmentId: dev.id, config: {} },
     ]).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
@@ -188,7 +190,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(options: { context: AgentSessionContext; workspaceRoot: string }): Promise<unknown>; close(): Promise<void> };
+      piRuntime: { start(options: Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpScopes">): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
@@ -267,6 +269,9 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { url: remotes[1], baseBranch: "prod" },
     ]);
 
+    for (const start of starts) {
+      assert.deepEqual(start.mcpScopes?.map(scope => ({ service: scope.serviceKey, environment: scope.environmentKey, ids: scope.configurations.map(row => row.id) })), [{ service: "orders", environment: start.context.environmentKey, ids: [globalMcp!.id] }]);
+    }
     await engine.close();
     assert.equal(sessionStops, 4);
   } finally {

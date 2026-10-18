@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
+import { type AgentRuntimeConfiguration, AGENT_CODEMODE_MODES, MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -14,6 +14,7 @@ const timestamps = {
 };
 
 export const subjects = sqliteTable("subjects", {
+  isAdmin: integer("is_admin", { mode: "boolean" }).notNull().default(false),
   role: text("role", { enum: USER_ROLES }).notNull().default("product"),
   subject: text("subject").primaryKey(), displayName: text("display_name"), email: text("email"), active: integer("active", { mode: "boolean" }).notNull().default(true), ...timestamps,
 }, (table) => [index("subjects_active_name_idx").on(table.active, table.displayName), check("subjects_role_valid", sql`${table.role} in ('product', 'test', 'developer')`)]);
@@ -56,8 +57,10 @@ export const globalAgentConfiguration = sqliteTable("global_agent_configuration"
   provider: text("provider").notNull(),
   model: text("model").notNull(),
   thinkingLevel: text("thinking_level").notNull(),
+  codemode: text("codemode", { enum: AGENT_CODEMODE_MODES }).notNull().default("on"),
+  runtime: json<AgentRuntimeConfiguration>("runtime").notNull().default({}),
   ...timestamps,
-}, (table) => [check("global_agent_configuration_singleton", sql`${table.id} = 1`)]);
+}, (table) => [check("global_agent_configuration_singleton", sql`${table.id} = 1`), check("global_agent_codemode_valid", sql`${table.codemode} IN ('off','on','only')`)]);
 
 export const serviceDeployments = sqliteTable("service_deployments", {
   id: id(), serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),

@@ -57,3 +57,23 @@ test("KeyedSerialQueue serializes each key while allowing different keys to prog
   await assert.rejects(queue.run("a", async () => { throw new Error("expected_failure"); }), /expected_failure/);
   assert.equal(await queue.run("a", async () => 3), 3);
 });
+
+test("queues recover from synchronous throws and preserve FIFO when running work enqueues more work", async () => {
+  for (const queue of [new SerialQueue(), new KeyedSerialQueue()]) {
+    const run = (operation: () => Promise<number>) => queue instanceof KeyedSerialQueue ? queue.run("same", operation) : queue.run(operation);
+    await assert.rejects(run(() => { throw new Error("synchronous_failure"); }), /synchronous_failure/);
+    const events: string[] = [];
+    let third: Promise<number> | undefined;
+    const first = run(async () => {
+      events.push("first");
+      third = run(async () => { events.push("third"); return 3; });
+      return 1;
+    });
+    const second = run(async () => { events.push("second"); return 2; });
+    assert.deepEqual(await Promise.all([first, second]), [1, 2]);
+    assert.ok(third);
+    assert.equal(await third, 3);
+    await queue.idle();
+    assert.deepEqual(events, ["first", "second", "third"]);
+  }
+});

@@ -10,7 +10,7 @@ export const issuePilotConfig = Object.freeze({
     locale: "zh-CN",
     timeZone: "Asia/Shanghai",
   }),
-  bootstrapUser: Object.freeze({ role: "developer" as const, subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
+  bootstrapUser: Object.freeze({ role: "developer" as const, isAdmin: true, subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
   http: Object.freeze({
     host: "0.0.0.0",
     port: 3000,
@@ -51,7 +51,7 @@ export const issuePilotConfig = Object.freeze({
     rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
-    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000 }),
+    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, resourceDirectory: ".pi" }),
     redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
     slsWorker: Object.freeze({ oldGenerationMb: 192, youngGenerationMb: 16 }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),

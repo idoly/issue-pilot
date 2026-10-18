@@ -1,3 +1,8 @@
+import { beforeEach, vi } from "vitest";
+import { resetMonacoTestState } from "./test-monaco";
+vi.mock("./app/monaco", async () => (await import("./test-monaco")).monacoMock);
+beforeEach(resetMonacoTestState);
+
 class ResizeObserverMock implements ResizeObserver {
   observe(): void {}
   unobserve(): void {}

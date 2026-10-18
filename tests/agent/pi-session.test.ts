@@ -49,6 +49,7 @@ function context(options: { writable: boolean; capability?: "db"; outputs?: bool
     environmentKey: options.writable ? "dev" : "prod",
     model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" },
     capabilities: options.capability ? [options.capability] : [],
+    codemode: "off",
     canModifyCode: options.writable,
     canWriteOutputs: options.outputs ?? false,
   };
@@ -196,6 +197,23 @@ test("disposes an SDK session and stdio process even when abort fails during sto
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+for (const environment of ["prod", "test", "dev"] as const) test(`exposes non-read-only MCP tools in ${environment} sessions`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-tools-"));
+  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
+  try {
+    managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+      manager: await createPrivateSessionManager(root, root),
+      context: { ...context({ writable: environment === "dev" }), environmentKey: environment },
+      deploymentConfig: {}, workspaceRoot: root,
+      mcpScopes: [{ ...localMcp(root), environmentKey: environment }],
+      systemPrompt: "", onEvent: () => undefined,
+    });
+    assert.ok(managed.session.getActiveToolNames().includes("service_query"));
+    const query = managed.session.getAllTools().find(tool => tool.name === "service_query");
+    assert.match(JSON.stringify(query?.parameters), /Local \/ write/);
+  } finally { await managed?.stop(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("closes discovered stdio processes when Agent initialization fails", async () => {

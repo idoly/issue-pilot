@@ -6,7 +6,7 @@ import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
 import { USER_ROLES } from "../domain/contracts.ts";
 import { ApiError, choice, record, text } from "./input.ts";
-import { ensureCurrentSubject, requireCurrentUser, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 function userSubject(value: unknown): string {
   const subject = text(value, "user_subject", 255).toLowerCase();
@@ -26,6 +26,11 @@ function userEmail(value: unknown): string {
 
 function userActive(value: unknown): boolean {
   if (typeof value !== "boolean") throw new ApiError(400, "invalid_user_active");
+  return value;
+}
+
+function userAdmin(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new ApiError(400, "invalid_user_admin");
   return value;
 }
 
@@ -134,14 +139,15 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
   app.post("/api/users", async (request, reply) => {
     await requireDeveloper(database, request);
     const input = record(request.body);
-    const [created] = await database.db.insert(subjects).values({
-      subject: userSubject(input.subject),
-      displayName: userName(input.name),
-      email: userEmail(input.email),
-      role: choice(input.role ?? "product", "user_role", USER_ROLES),
-      active: true,
-    }).returning();
-    return reply.code(201).send(serializeManagedUser(created!));
+    const created = await runScopeExclusive(async () => {
+      await requireDeveloper(database, request);
+      const role = choice(input.role ?? "product", "user_role", USER_ROLES);
+      const isAdmin = input.isAdmin === undefined ? false : userAdmin(input.isAdmin);
+      if (isAdmin) await requireAdmin(database, request);
+      const [saved] = await database.db.insert(subjects).values({ subject: userSubject(input.subject), displayName: userName(input.name), email: userEmail(input.email), role, isAdmin, active: true }).returning();
+      return saved!;
+    });
+    return reply.code(201).send(serializeManagedUser(created));
   });
 
   app.patch<{ Params: { subject: string } }>("/api/users/:subject", async (request) => {
@@ -149,7 +155,12 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const subject = userSubject(request.params.subject);
     const input = record(request.body);
     const update = { displayName: userName(input.name), email: userEmail(input.email), active: userActive(input.active), updatedAt: new Date() };
-    return changeUser(subject, () => requireDeveloper(database, request), () => database.db.transaction(async (transaction) => {
+    return changeUser(subject, async () => {
+      const actor = await requireDeveloper(database, request);
+      const [existing] = await database.db.select({ isAdmin: subjects.isAdmin }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
+      if (existing?.isAdmin || input.isAdmin === true) await requireAdmin(database, request);
+      return actor;
+    }, () => database.db.transaction(async (transaction) => {
       const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
       if (!existing) throw new ApiError(404, "user_not_found");
       if (existing.active && !update.active) {
@@ -157,11 +168,21 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
         if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
       }
       const nextRole = input.role === undefined ? existing.role : choice(input.role, "user_role", USER_ROLES);
+      const isAdmin = input.isAdmin === undefined ? existing.isAdmin : userAdmin(input.isAdmin);
+      if (existing.active && existing.isAdmin && (!update.active || !isAdmin)) {
+        const administrators = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.active, true))).limit(2);
+        if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+      }
       if (existing.active && existing.role === "developer" && (!update.active || nextRole !== "developer")) {
         const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
         if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
       }
-      const [updated] = await transaction.update(subjects).set({ ...update, role: nextRole }).where(eq(subjects.subject, subject)).returning();
+      // Changing management access requires both developer and isAdmin.
+      if (existing.active && existing.isAdmin && existing.role === "developer" && (!update.active || !isAdmin || nextRole !== "developer")) {
+        const managers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
+        if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+      }
+      const [updated] = await transaction.update(subjects).set({ ...update, role: nextRole, isAdmin }).where(eq(subjects.subject, subject)).returning();
       return serializeManagedUser(updated!);
     }));
   });

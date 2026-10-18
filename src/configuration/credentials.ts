@@ -41,7 +41,7 @@ export function resolveDeploymentConfiguration(stored: StoredDeploymentConfig): 
 }
 
 export function projectDeploymentConfiguration(stored: StoredDeploymentConfig): ServiceCapabilityConfiguration {
-  return { ...projectCapabilityConfiguration(resolveDeploymentConfiguration(stored)), ...(stored.mcpServices?.length ? { mcpServices: stored.mcpServices } : {}) };
+  return projectCapabilityConfiguration(resolveDeploymentConfiguration(stored));
 }
 
 function replacementCredentialValues(key: CapabilityName, value: unknown): Record<string, string> {

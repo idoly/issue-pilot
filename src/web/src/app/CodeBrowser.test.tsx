@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { monacoTestState } from "../test-monaco";
 import CodeBrowser from "./CodeBrowser";
 import { createSignal } from "solid-js";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
@@ -219,12 +220,12 @@ describe("native code browser", () => {
     await clickReady("查看差异 a.txt");
     expect(await screen.findByText("before")).toBeTruthy();
     expect(screen.getByText("after")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "代码差异" }).querySelector(".removed code")?.textContent).toBe("before");
-    expect(document.querySelectorAll(".source-diff-pane")).toHaveLength(0);
+    expect(screen.getByRole("region", { name: "代码差异" }).querySelector('[data-side="original"]')?.textContent).toBe("before");
+    expect(monacoTestState.diffs.at(-1)?.container.dataset.split).toBe("false");
     await clickReady("并排");
-    await waitFor(() => expect(document.querySelectorAll(".source-diff-pane")).toHaveLength(2));
+    await waitFor(() => expect(monacoTestState.diffs.at(-1)?.container.dataset.split).toBe("true"));
     await clickReady("行内");
-    await waitFor(() => expect(document.querySelectorAll(".source-diff-pane")).toHaveLength(0));
+    await waitFor(() => expect(monacoTestState.diffs.at(-1)?.container.dataset.split).toBe("false"));
     expect(screen.getByText("before")).toBeTruthy();
     await clickReady("暂存");
     await screen.findByRole("button", { name: "取消暂存" });
@@ -239,10 +240,8 @@ describe("native code browser", () => {
     api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({ files: staged ? [] : [changedFile], truncated: false }));
     api.loadSourceDiffFile.mockResolvedValue({ file: changedFile, before: { content: unchanged + "\nold ending\n" }, after: { content: unchanged + "\nnew ending\n" } });
     mount(true); await clickReady("查看差异 a.txt");
-    expect(await screen.findByText("unchanged line 1")).toBeTruthy();
-    expect(screen.getByText("unchanged line 20")).toBeTruthy();
-    expect(screen.getByText("old ending")).toBeTruthy();
-    expect(screen.getByText("new ending")).toBeTruthy();
+    await waitFor(() => expect(monacoTestState.models.at(-1)?.getValue()).toBe(unchanged + "\nnew ending\n"));
+    expect(monacoTestState.models.at(-2)?.getValue()).toBe(unchanged + "\nold ending\n");
   });
 
   it("requires a message before committing staged changes", async () => {
@@ -405,7 +404,7 @@ describe("native code browser", () => {
     await waitFor(() => expect(editor.value.slice(editor.selectionStart, editor.selectionEnd)).toBe("needle"));
     expect(api.searchSource.mock.calls.map(call => call[1])).toEqual(["app", "other"]);
     expect(api.loadSourceFile).toHaveBeenLastCalledWith("ISSUE-20261017-001", "other", "result.txt", expect.any(AbortSignal));
-    expect(screen.getByText("Ln 2, Col 4")).toBeTruthy();
+    expect(screen.getByText("Ln 2, Col 10")).toBeTruthy();
   });
 
   it("opens independent roots and single-child chains, preserving expansion after a save", async () => {

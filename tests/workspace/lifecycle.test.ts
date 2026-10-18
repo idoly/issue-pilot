@@ -744,6 +744,8 @@ test("migrates ready development scopes while preserving retained changes and ro
     await projects.prepare(issue!, "dev");
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, issue!.id));
 
+    const unchangedAt = new Date("2026-08-01T00:00:00Z");
+    await database.db.update(issueRepositories).set({ updatedAt: unchangedAt }).where(eq(issueRepositories.issueId, issue!.id));
     const originalRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     const originalByUrl = new Map(originalRepositories.map((repository) => [repository.url, repository]));
     const retainedPath = originalByUrl.get(retainedRemote)!.localPath!;
@@ -794,7 +796,10 @@ test("migrates ready development scopes while preserving retained changes and ro
     mutableDatabase.transaction = (async (operation: Parameters<typeof database.db.transaction>[0]) => {
       if (failFinalize) {
         failFinalize = false;
-        throw new Error("simulated_scope_migration_transaction_failure");
+        return transaction(async (transaction) => {
+          await operation(transaction);
+          throw new Error("simulated_scope_migration_transaction_failure");
+        });
       }
       return transaction(operation);
     }) as typeof database.db.transaction;
@@ -804,7 +809,7 @@ test("migrates ready development scopes while preserving retained changes and ro
     );
     mutableDatabase.transaction = transaction;
     const rolledBackRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.deepEqual(rolledBackRepositories.map(({ url }) => url).sort(), [removedRemote, retainedRemote].sort());
+    assert.deepEqual(rolledBackRepositories.toSorted((left, right) => left.url.localeCompare(right.url)), originalRepositories.toSorted((left, right) => left.url.localeCompare(right.url)));
     await Promise.all(rolledBackRepositories.map(({ localPath }) => access(localPath!)));
     assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.serviceId, sourceService!.id);
     assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /README\.md/);
@@ -822,6 +827,11 @@ test("migrates ready development scopes while preserving retained changes and ro
     const migratedByUrl = new Map(migratedRepositories.map((repository) => [repository.url, repository]));
     assert.equal(migratedByUrl.get(retainedRemote)!.localPath, retainedPath);
     assert.equal(migratedByUrl.get(retainedRemote)!.workingBranch, originalByUrl.get(retainedRemote)!.workingBranch);
+    assert.equal(migratedByUrl.get(retainedRemote)!.id, originalByUrl.get(retainedRemote)!.id);
+    assert.equal(migratedByUrl.get(retainedRemote)!.baseBranch, originalByUrl.get(retainedRemote)!.baseBranch);
+    assert.equal(migratedByUrl.get(retainedRemote)!.workspaceName, originalByUrl.get(retainedRemote)!.workspaceName);
+    assert.equal(migratedByUrl.get(retainedRemote)!.commitBefore, originalByUrl.get(retainedRemote)!.commitBefore);
+    assert.equal(migratedByUrl.get(retainedRemote)!.updatedAt.getTime(), unchangedAt.getTime());
     assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /README\.md/);
     assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /untracked\.txt/);
     await assert.rejects(access(removedPath));

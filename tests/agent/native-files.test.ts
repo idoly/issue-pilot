@@ -41,7 +41,7 @@ console.log('files generated');` }),
   ]);
   let managed;
   try {
-    managed = await runtime.start({ manager, context: { issueKey: "ISSUE-20261017-001", serviceKey: "fixture", environmentKey: "prod", model: { provider: "native-files-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: true }, deploymentConfig: {}, workspaceRoot: work, outputStore: outputs, systemPrompt: "Process files with native tools and publish them.", onEvent: () => {} });
+    managed = await runtime.start({ manager, context: { issueKey: "ISSUE-20261017-001", serviceKey: "fixture", environmentKey: "prod", model: { provider: "native-files-fixture", modelId: "fixture", thinkingLevel: "off" }, codemode: "off", capabilities: [], canModifyCode: false, canWriteOutputs: true }, deploymentConfig: {}, workspaceRoot: work, outputStore: outputs, systemPrompt: "Process files with native tools and publish them.", onEvent: () => {} });
     assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "output", "read", "write"]);
     await managed.prompt("Process the workbook and publish both files.");
     assert.deepEqual(parseExcel(await outputs.read("delivery.xlsx"))[0]!.rows[1], ["synthetic-private-row", "42"]);

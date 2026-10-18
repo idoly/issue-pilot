@@ -15,6 +15,16 @@ const directories: string[] = [];
 
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
+test("retains seed environment timestamps when startup does not change their values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-bootstrap-stamps-")); directories.push(root);
+  const file = join(root, "issues.db"), unchangedAt = new Date(2_000);
+  const initial = await openApplicationDatabase(file);
+  await initial.db.update(environments).set({ updatedAt: unchangedAt }); await initial.close();
+  const reopened = await openApplicationDatabase(file);
+  try { assert.ok((await reopened.db.select().from(environments)).every(row => row.updatedAt.getTime() === unchangedAt.getTime())); }
+  finally { await reopened.close(); }
+});
+
 test("keeps application paths and workspace defaults in the project configuration", () => {
   assert.equal(applicationConfig.databaseFile, join(applicationConfig.stateRoot, "issues.db"));
   assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");

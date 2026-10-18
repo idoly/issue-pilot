@@ -1,3 +1,4 @@
+import type { CodemodeToolDetails } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config";
@@ -108,6 +109,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
     if (entry.type === "custom_message" && entry.display) return [...entries, { id: entry.id, kind: "custom", label: entry.customType, blocks: displayBlocks(entry.content) }];
   }
   if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
+    if (event.parentToolCallId) return entries;
     const index = entries.findIndex((entry) => entry.kind === "tool" && entry.toolCallId === event.toolCallId);
     const previous = index >= 0 ? entries[index] as Extract<ConversationEntry, { kind: "tool" }> : undefined;
     const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
@@ -188,8 +190,15 @@ export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): 
   if (name === "ls") return `ls ${path() || "."}`;
   if (name === "edit") return `edit ${path()}`.trim();
   if (name === "write") return `write ${path()}`.trim();
+  if (name === "service_query") return `${value("capability")} ${value("environment")}/${value("service")}`.trim();
   const labels: Record<string, string> = { nacos: "config", sls: "logs" };
   return labels[name] ?? name;
+}
+
+export function codemodeCalls(entry: Extract<ConversationEntry, { kind: "tool" }>): CodemodeToolDetails["calls"] {
+  if (entry.name !== "codemode" || !entry.result?.details || typeof entry.result.details !== "object") return [];
+  const calls = (entry.result.details as Partial<CodemodeToolDetails>).calls;
+  return Array.isArray(calls) ? calls.filter(call => call && typeof call.name === "string" && typeof call.status === "string") : [];
 }
 
 export function duration(value: number | undefined): string {

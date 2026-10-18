@@ -8,6 +8,8 @@ import { useApplicationResources } from "./ApplicationResources";
 
 const userErrors: Record<string, string> = {
   developer_role_required: "只有开发角色可以管理用户或配置个人凭证",
+  admin_role_required: "只有管理角色可以维护管理用户",
+  last_active_admin: "至少保留一名启用的开发管理用户，以维护管理权限",
   invalid_user_role: "请选择产品、测试或开发角色",
   conflict: "用户标识已存在",
   invalid_user_subject: "用户标识格式无效",
@@ -32,6 +34,7 @@ function localDate(value: string): string {
 export function UserManagement() {
   const { refreshPeople, currentUser } = useApplicationResources();
   const canManage = () => currentUser()?.role === "developer";
+  const [isAdmin, setIsAdmin] = createSignal(false, { ownedWrite: true });
   const [role, setRole] = createSignal<UserRole>("product", { ownedWrite: true });
   const [users, setUsers] = createSignal<ManagedUser[]>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
@@ -73,7 +76,7 @@ export function UserManagement() {
     setName("");
     setEmail("");
     setActive(true);
-    setRole("product");
+    setRole("product"); setIsAdmin(false);
     setError("");
     setModalOpen(true);
   };
@@ -84,7 +87,7 @@ export function UserManagement() {
     setName(user.name);
     setEmail(user.email);
     setActive(user.active);
-    setRole(user.role);
+    setRole(user.role); setIsAdmin(Boolean(user.isAdmin));
     setError("");
     setModalOpen(true);
   };
@@ -96,8 +99,9 @@ export function UserManagement() {
     try {
       const editing = editingSubject();
       const values = { subject: subjectInput.value.trim(), name: nameInput.value.trim(), email: emailInput.value.trim() };
-      if (editing) await updateUser(editing, { name: values.name, email: values.email, active: active(), role: role() });
-      else await createUser({ ...values, role: role() });
+      const management = currentUser()?.isAdmin && (editing || isAdmin()) ? { isAdmin: isAdmin() } : {};
+      if (editing) await updateUser(editing, { name: values.name, email: values.email, active: active(), role: role(), ...management });
+      else await createUser({ ...values, role: role(), ...management });
       setModalOpen(false);
       await refreshPeople();
       await load();
@@ -141,10 +145,10 @@ export function UserManagement() {
               <div class="user-table-row">
                 <div class="user-cell-primary"><span class="user-avatar" aria-hidden="true">{user.name.slice(0, 1)}</span><span class="user-cell-copy"><strong>{user.name}</strong><span>{user.email}</span></span></div>
                 <code>{user.subject}</code>
-                <div class="user-role-cell"><Tag>{({ product: "产品", test: "测试", developer: "开发" })[user.role]}</Tag></div>
+                <div class="user-role-cell"><Tag>{({ product: "产品", test: "测试", developer: "开发" })[user.role]}</Tag><Show when={user.isAdmin}><Tag>管理</Tag></Show></div>
                 <div class="user-status-cell"><Tag color={user.active ? "green" : "default"}>{user.active ? "启用" : "停用"}</Tag></div>
                 <time>{localDate(user.updatedAt)}</time>
-                <Show when={canManage()}><div class="user-row-actions">
+                <Show when={canManage() && (!user.isAdmin || currentUser()?.isAdmin)}><div class="user-row-actions">
                   <Button size="small" icon={<Pencil size={14} />} onClick={() => openEdit(user)}>编辑</Button>
                   <Button size="small" loading={changingSubject() === user.subject} icon={user.active ? <UserX size={14} /> : <UserCheck size={14} />} onClick={() => { void changeActive(user); }}>{user.active ? "停用" : "启用"}</Button>
                 </div></Show>
@@ -159,6 +163,7 @@ export function UserManagement() {
           <label><span>姓名</span><input ref={nameInput} class="user-input" aria-label="用户姓名" value={name()} onInput={(event) => setName(event.currentTarget.value)} /></label>
           <label><span>邮箱</span><input ref={emailInput} class="user-input" aria-label="用户邮箱" value={email()} inputmode="email" onInput={(event) => setEmail(event.currentTarget.value)} /></label>
           <label><span>角色</span><Select aria-label="用户角色" value={role()} options={[{ value: "product", label: "产品" }, { value: "test", label: "测试" }, { value: "developer", label: "开发" }]} onChange={(value) => setRole(value as UserRole)} /></label>
+          <Show when={currentUser()?.isAdmin}><div class="user-active-field"><span>全局管理</span><Toggle aria-label="全局管理" checked={isAdmin()} onChange={setIsAdmin} /></div></Show>
           <Show when={editingSubject()}><div class="user-active-field"><span>启用</span><Toggle aria-label="用户启用状态" checked={active()} onChange={setActive} /></div></Show>
           <Show when={error()}>{(value) => <div class="form-error" role="alert">{value()}</div>}</Show>
         </div>

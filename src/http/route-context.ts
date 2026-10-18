@@ -26,7 +26,7 @@ export interface ApiRouteContext {
 }
 
 export function serializePerson(person: typeof subjects.$inferSelect) {
-  return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "", role: person.role };
+  return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "", role: person.role, ...(person.isAdmin ? { isAdmin: true } : {}) };
 }
 
 export async function requireCurrentUser(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">) {
@@ -46,6 +46,12 @@ export async function ensureCurrentSubject(database: ApiRouteContext["database"]
 export async function requireDeveloper(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">): Promise<string> {
   const user = await requireCurrentUser(database, request);
   if (user.role !== "developer") throw new ApiError(403, "developer_role_required");
+  return user.subject;
+}
+
+export async function requireAdmin(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">): Promise<string> {
+  const user = await requireCurrentUser(database, request);
+  if (!user.isAdmin) throw new ApiError(403, "admin_role_required");
   return user.subject;
 }
 

@@ -18,7 +18,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(-25).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets", "0045_user_roles_credentials", "0046_user_git_ssh_only", "0047_repository_catalog", "0048_capability_switches", "0049_mcp_services", "0050_resource_catalog", "0051_issue_service_scopes", "0052_deployment_capabilities", "0053_inline_capability_credentials", "0054_personal_production_credentials", "0055_mcp_stdio"]);
+  assert.deepEqual(journal.entries.slice(-28).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets", "0045_user_roles_credentials", "0046_user_git_ssh_only", "0047_repository_catalog", "0048_capability_switches", "0049_mcp_services", "0050_resource_catalog", "0051_issue_service_scopes", "0052_deployment_capabilities", "0053_inline_capability_credentials", "0054_personal_production_credentials", "0055_mcp_stdio", "0056_agent_codemode", "0057_agent_runtime", "0058_management_role"]);
   const previousJournal = { ...journal, entries: journal.entries.slice(0, journal.entries.findIndex(({ tag }) => tag === "0031_remove_unused_issue_metadata")) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
@@ -303,7 +303,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       "reporter_subject", "assignee_subject", "resolved_at", "created_at", "updated_at",
     ]);
     const subjectColumns = await client.execute("pragma table_info('subjects')");
-    assert.deepEqual(subjectColumns.rows.map((column) => column.name), ["subject", "display_name", "email", "created_at", "updated_at", "active", "role"]);
+    assert.deepEqual(subjectColumns.rows.map((column) => column.name), ["subject", "display_name", "email", "created_at", "updated_at", "active", "role", "is_admin"]);
     assert.equal((await db.select().from(subjects).where(eq(subjects.subject, "demo-owner")))[0]!.active, true);
     const serviceRepositoryColumns = await client.execute("pragma table_info('service_repositories')");
     assert.deepEqual(serviceRepositoryColumns.rows.map((column) => column.name), ["id", "service_id", "alias", "url", "created_at", "updated_at"]);

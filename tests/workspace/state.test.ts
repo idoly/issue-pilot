@@ -89,7 +89,8 @@ test("preserves unmanaged issue state before pruning generated resources", async
       writeFile(unmanagedAttachment, "preserve attachment\n", "utf8"),
       exec("git", ["init", "--bare", path.join(repositoriesRoot(root), "repository")]),
     ]);
-    await createSharedCheckout(root);
+    const checkout = await createSharedCheckout(root);
+    const checkoutInode = (await stat(checkout)).ino;
 
     const checkoutRootInode = (await stat(checkoutRoot)).ino;
     await assert.rejects(pruneState(root, ["ISSUE-20260807-001"]), /unmanaged_issue_state:issues\/issue-20260807-002,workspaces\/issue-20260807-002/);
@@ -113,7 +114,9 @@ test("preserves unmanaged issue state before pruning generated resources", async
     ]);
     assert.equal((await stat(path.join(root, "issues", activeKey, ".runtime-operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).ino, checkoutRootInode);
-    assert.deepEqual(await readdir(checkoutRoot), []);
+    assert.equal((await stat(checkout)).ino, checkoutInode);
+    assert.equal(await readFile(path.join(checkout, "README.md"), "utf8"), "shared checkout\n");
+    assert.deepEqual(await readdir(checkoutRoot), [path.basename(path.dirname(checkout))]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

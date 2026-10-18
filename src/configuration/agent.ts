@@ -8,7 +8,7 @@ import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 export async function loadGlobalAgentConfiguration(database: Pick<Database, "select">): Promise<AgentConfiguration> {
   const [configuration] = await database.select().from(globalAgentConfiguration).where(eq(globalAgentConfiguration.id, 1)).limit(1);
   if (!configuration) throw new Error("global_agent_configuration_missing");
-  return { provider: configuration.provider, model: configuration.model, thinkingLevel: configuration.thinkingLevel as AgentConfiguration["thinkingLevel"] };
+  return { provider: configuration.provider, model: configuration.model, thinkingLevel: configuration.thinkingLevel as AgentConfiguration["thinkingLevel"], codemode: configuration.codemode, runtime: configuration.runtime };
 }
 
 export function validateGlobalAgentConfiguration(configuration: AgentConfiguration, models: AgentModelDefinition[]): void {
@@ -23,6 +23,8 @@ export async function ensureGlobalAgentConfiguration(database: Database, modelCa
   const [model] = await modelCatalog.list();
   if (!model || !model.thinkingLevels.length) throw new Error("global_agent_model_unavailable");
   await database.insert(globalAgentConfiguration).values({
+    codemode: "on",
+    runtime: {},
     id: 1,
     provider: model.provider,
     model: model.id,

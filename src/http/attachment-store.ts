@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, lstat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, lstat, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -23,10 +23,11 @@ export async function readMultipartAttachment(part: MultipartFile): Promise<Pend
   if (!fileName) throw new ApiError(400, "invalid_attachment_name");
   const stagingRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-"));
   const temporaryPath = path.join(stagingRoot, randomUUID());
-  const handle = await open(temporaryPath, "wx", 0o600);
   const sha256 = createHash("sha256");
   let size = 0;
+  let handle: FileHandle | undefined;
   try {
+    handle = await open(temporaryPath, "wx", 0o600);
     for await (const chunk of part.file) {
       const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       await handle.writeFile(content);
@@ -34,13 +35,13 @@ export async function readMultipartAttachment(part: MultipartFile): Promise<Pend
       size += content.length;
     }
     if (part.file.truncated) throw new Error("attachment_stream_truncated");
+    await handle.close();
+    return { fileName, mediaType: part.mimetype, temporaryPath, size, sha256: sha256.digest("hex") };
   } catch (error) {
-    await handle.close().catch(() => undefined);
+    await handle?.close().catch(() => undefined);
     await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-  await handle.close();
-  return { fileName, mediaType: part.mimetype, temporaryPath, size, sha256: sha256.digest("hex") };
 }
 
 export async function removePendingAttachments(pendingAttachments: PendingAttachment[]): Promise<void> {

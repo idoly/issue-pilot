@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { addAbortListener } from "node:events";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -43,17 +44,17 @@ export const connectMcp: McpConnector = async (configuration, signal, initialize
   transport.close = () => closing ??= closeTransport();
   const startupSignal = AbortSignal.any([signal, initializeSignal]);
   const client = new Client({ name: "issue-pilot", version: "0.1.0" });
-  let abortListener: (() => void) | undefined;
+  let cancellation: ReturnType<typeof addAbortListener> | undefined;
   try {
     startupSignal.throwIfAborted();
     // SDK HTTP sessionId uses string|undefined while Transport declares it optional.
     await Promise.race([client.connect(transport as Parameters<Client["connect"]>[0], { signal: startupSignal, timeout: limits.executionMs }), new Promise<never>((_, reject) => {
-      abortListener = () => reject(startupSignal.reason); startupSignal.addEventListener("abort", abortListener, { once: true });
+      cancellation = addAbortListener(startupSignal, () => reject(startupSignal.reason));
     })]);
   } catch {
     await transport.close().catch(() => {});
     throw new McpFailure(startupSignal.aborted ? "mcp_timeout_or_aborted" : "mcp_connection_failed");
-  } finally { if (abortListener) startupSignal.removeEventListener("abort", abortListener); }
+  } finally { cancellation?.[Symbol.dispose](); }
   return {
     get closed() { return !client.transport; },
     async list(operationSignal) {
@@ -92,16 +93,16 @@ export function createMcpConnectionPool(options: { cwd?: string; connect?: McpCo
       void pending.catch(() => { if (sessions.get(configuration.id) === opened) sessions.delete(configuration.id); });
     }
     const waiting = AbortSignal.any([lifetime.signal, signal]);
-    let abortListener: (() => void) | undefined;
+    let cancellation: ReturnType<typeof addAbortListener> | undefined;
     let session: McpSession;
     try {
       session = await Promise.race([pending, new Promise<never>((_, reject) => {
-        abortListener = () => reject(waiting.reason); waiting.addEventListener("abort", abortListener, { once: true });
+        cancellation = addAbortListener(waiting, () => reject(waiting.reason));
       })]);
     } catch (error) {
       if (lifetime.signal.aborted) throw new McpFailure("mcp_session_closed");
       throw error;
-    } finally { if (abortListener) waiting.removeEventListener("abort", abortListener); }
+    } finally { cancellation?.[Symbol.dispose](); }
     waiting.throwIfAborted();
     if (existing && session.closed) {
       if (sessions.get(configuration.id) === pending) sessions.delete(configuration.id);
@@ -143,12 +144,12 @@ export interface McpToolBinding {
   call(input: Record<string, unknown>, signal?: AbortSignal): Promise<AgentToolResult<unknown>>;
 }
 
-export async function createMcpToolBindings(configurations: McpConfiguration[], writable: boolean, connect: McpConnector = connectMcp): Promise<McpToolBinding[]> {
+export async function createMcpToolBindings(configurations: McpConfiguration[], connect: McpConnector = connectMcp): Promise<McpToolBinding[]> {
   const tools: McpToolBinding[] = [];
   for (const stored of configurations.filter((configuration) => configuration.enabled)) {
     const configuration = structuredClone(stored);
     const discovered = await withSession(configuration, undefined, connect, (session) => session.list());
-    for (const tool of discovered.filter((tool) => writable || readOnly(tool))) {
+    for (const tool of discovered) {
       if (tool.inputSchema.type !== "object") throw new McpFailure("mcp_invalid_tool_schema");
       const schema = Type.Unsafe<Record<string, unknown>>(tool.inputSchema);
       const suffix = createHash("sha256").update(`${configuration.id}\0${tool.name}`).digest("hex").slice(0, 20);
@@ -159,7 +160,7 @@ export async function createMcpToolBindings(configurations: McpConfiguration[], 
         call: async (args, signal) => {
           return withSession(configuration, signal, connect, async (session) => {
             const current = (await session.list()).find((candidate) => candidate.name === tool.name);
-            if (!current || !writable && !readOnly(current)) throw new McpFailure("mcp_tool_not_allowed");
+            if (!current) throw new McpFailure("mcp_tool_not_allowed");
             if (JSON.stringify(current.inputSchema) !== JSON.stringify(tool.inputSchema)) throw new McpFailure("mcp_tool_schema_changed");
             const result = await session.call(tool.name, args);
             const text = JSON.stringify(result);

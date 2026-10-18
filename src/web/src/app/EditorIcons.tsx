@@ -31,5 +31,5 @@ export function EditorFileIcon(props: { path: string; directory?: boolean; expan
 }
 
 export function Codicon(props: { name: string; size?: number }) {
-  return <i class={`codicon codicon-${props.name}`} aria-hidden="true" style={{ "font-size": `${props.size ?? 16}px` }} />;
+  return <i class={`codicon editor-codicon codicon-${props.name}`} aria-hidden="true" style={{ "font-size": `${props.size ?? 16}px` }} />;
 }

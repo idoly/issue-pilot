@@ -9,12 +9,13 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const require = createRequire(import.meta.url);
 const materialRoot = path.dirname(require.resolve("material-icon-theme/package.json"));
+const monacoRoot = path.dirname(require.resolve("monaco-editor/package.json"));
 const materialVersion = (require("material-icon-theme/package.json") as { version: string }).version;
 const iconRoot = path.join(materialRoot, "icons");
 const iconFiles = readdirSync(iconRoot).filter(name => name.endsWith(".svg"));
 const iconNames = new Set(iconFiles);
 const iconPrefix = `assets/editor-icons-${materialVersion}/`;
-const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The editor uses the unchanged font distributed in @codingame/monaco-vscode-api 36.2.7, from https://github.com/microsoft/vscode/tree/main/src/vs/base/browser/ui/codicons; the matching icon names and code points are kept with the font.\n${readFileSync(path.resolve("src/web/src/app/editor-codicons.LICENSE"), "utf8")}`;
+const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The editor uses the unchanged font distributed in @codingame/monaco-vscode-api 36.2.7, from https://github.com/microsoft/vscode/tree/main/src/vs/base/browser/ui/codicons; the matching icon names and code points are kept with the font.\n${readFileSync(path.resolve("src/web/src/app/editor-codicons.LICENSE"), "utf8")}\n\nMonaco Editor © Microsoft Corporation — https://github.com/microsoft/monaco-editor\n${readFileSync(path.join(monacoRoot, "LICENSE"), "utf8")}\n${readFileSync(path.join(monacoRoot, "ThirdPartyNotices.txt"), "utf8")}`;
 
 function editorIconAssets(): Plugin {
   return {

@@ -3,9 +3,10 @@ import { parseDmsConnectionConfiguration, CapabilityConfigurationError } from ".
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { saveGlobalAgentConfiguration, validateGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { AgentRuntimeConfigurationError, inspectAgentResources, parseAgentRuntime } from "../configuration/pi-runtime.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
 import { environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
-import { AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
+import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
 import { ApiError, choice, optionalText, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
@@ -70,7 +71,10 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
   app.put("/api/config/agent", async (request) => runScopeExclusive(async () => {
     await requireDeveloper(database, request);
     const input = record(request.body);
-    const configuration = { provider: text(input.provider, "agent_provider", 200), model: text(input.model, "agent_model", 500), thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS) };
+    let runtime;
+    try { runtime = parseAgentRuntime(input.runtime); }
+    catch (error) { if (error instanceof AgentRuntimeConfigurationError) throw new ApiError(400, error.message); throw error; }
+    const configuration = { provider: text(input.provider, "agent_provider", 200), model: text(input.model, "agent_model", 500), thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS), codemode: choice(input.codemode, "agent_codemode", AGENT_CODEMODE_MODES), runtime };
     try { validateGlobalAgentConfiguration(configuration, await modelCatalog.list()); }
     catch (error) { if (error instanceof Error && ["agent_model_not_available", "agent_thinking_level_not_supported"].includes(error.message)) throw new ApiError(400, error.message); throw error; }
     const affected = await database.db.select({ id: issues.id }).from(issues);
@@ -82,6 +86,14 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       });
     } catch (error) { if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, "global_configuration_has_running_issues"); throw error; }
   }));
+  app.get("/api/config/agent/resources", { logLevel: "silent" }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    return runScopeExclusive(async () => {
+      await requireDeveloper(database, request);
+      try { return await inspectAgentResources(); }
+      catch (error) { if (error instanceof AgentRuntimeConfigurationError) throw new ApiError(400, error.message); throw new ApiError(400, "agent_resources_inspection_failed"); }
+    });
+  });
   app.post("/api/services", async (request, reply) => {
     await requireDeveloper(database, request);
     const input = record(request.body); const name = text(input.name, "name", 200); const description = optionalText(input.description) ?? "";

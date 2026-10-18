@@ -23,7 +23,8 @@ else {
         context.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error(secret)); }, { once: true });
       });
     }
-    return { content: [{ type: "text", text: JSON.stringify({ pid: process.pid, count: ++count, cwd: process.cwd(), inherited: Boolean(process.env.MCP_PARENT_SECRET) }) }] };
+    const data = { pid: process.pid, count: ++count, cwd: process.cwd(), inherited: Boolean(process.env.MCP_PARENT_SECRET) };
+    return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data };
   });
   await server.connect(new StdioServerTransport());
 }

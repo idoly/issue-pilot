@@ -8,7 +8,6 @@ interface SseTarget {
 
 export interface OrderedSseWriter {
   write(payload: string): void;
-  idle(): Promise<void>;
 }
 
 export function createOrderedSseWriter(
@@ -16,31 +15,18 @@ export function createOrderedSseWriter(
   onWriteFailure: (error: unknown) => void = () => undefined,
 ): OrderedSseWriter {
   const queue: string[] = [];
-  const idleWaiters = new Set<() => void>();
   let pumping = false;
   let closed = false;
   let removeDrainListener: (() => void) | undefined;
-  let transportListenersAttached = true;
 
-  const notifyIdle = () => {
-    if (pumping || removeDrainListener || queue.length) return;
-    for (const resolve of idleWaiters) resolve();
-    idleWaiters.clear();
-  };
-  const removeTransportListeners = () => {
-    if (!transportListenersAttached) return;
-    transportListenersAttached = false;
-    target.off("close", onTransportClose);
-    target.off("error", onTransportError);
-  };
   const close = () => {
     if (closed) return;
     closed = true;
     removeDrainListener?.();
     removeDrainListener = undefined;
-    removeTransportListeners();
+    target.off("close", onTransportClose);
+    target.off("error", onTransportError);
     queue.length = 0;
-    notifyIdle();
   };
   const fail = (error: unknown) => {
     if (closed) return;
@@ -75,7 +61,6 @@ export function createOrderedSseWriter(
       }
     } finally {
       pumping = false;
-      notifyIdle();
     }
   };
   const write = (payload: string) => {
@@ -83,8 +68,5 @@ export function createOrderedSseWriter(
     queue.push(payload);
     pump();
   };
-  const idle = () => pumping || removeDrainListener || queue.length
-    ? new Promise<void>((resolve) => idleWaiters.add(resolve))
-    : Promise.resolve();
-  return { write, idle };
+  return { write };
 }

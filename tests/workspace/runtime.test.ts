@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { eq } from "drizzle-orm";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
+import { environments, issues as issueRecords, issueWorkspaces, serviceDeployments, services } from "../../src/db/schema.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch } from "../../src/workspace/runtime.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
@@ -35,6 +39,32 @@ test("bounds runtime preparation concurrency and preserves Issue result order", 
     prepared: ["ISSUE-20260816-001", "ISSUE-20260816-003", "ISSUE-20260816-004"],
     blocked: [{ issueKey: "ISSUE-20260816-002", reason: "runtime_blocked" }],
   });
+});
+
+test("keeps unchanged runtime timestamps across preparation failures and retries", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-runtime-failure-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    const [service] = await database.db.insert(services).values({ key: "runtime-failure", name: "Runtime failure" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const rows = await database.db.insert(issueRecords).values(["001", "002", "003"].map(suffix => ({ key: `ISSUE-20261018-${suffix}`, title: "Runtime retry", type: "defect_fix" as const, serviceId: service!.id, environmentId: environment!.id, reporterSubject: issuePilotConfig.bootstrapUser.subject }))).returning();
+    const unchangedAt = new Date("2026-08-01T00:00:00Z");
+    await database.db.insert(issueWorkspaces).values(rows.map((issue, index) => ({ issueId: issue.id, runtimeReady: index > 0, updatedAt: unchangedAt })));
+    const prepare = async (issue: typeof rows[number]) => { if (issue.id !== rows[2]!.id) throw new Error("runtime_blocked"); };
+    const first = await prepareIssueRuntimeBatch(database.db, rows, prepare);
+    const firstStates = new Map((await database.db.select().from(issueWorkspaces)).map(row => [row.issueId, row]));
+    assert.equal(firstStates.get(rows[0]!.id)!.updatedAt.getTime(), unchangedAt.getTime());
+    assert.equal(firstStates.get(rows[1]!.id)!.runtimeReady, false);
+    assert.notEqual(firstStates.get(rows[1]!.id)!.updatedAt.getTime(), unchangedAt.getTime());
+    assert.equal(firstStates.get(rows[2]!.id)!.runtimeReady, true);
+    const repeated = await prepareIssueRuntimeBatch(database.db, rows, prepare);
+    assert.deepEqual(repeated, first);
+    assert.deepEqual(first, { prepared: [rows[2]!.key], blocked: rows.slice(0, 2).map(issue => ({ issueKey: issue.key, reason: "runtime_blocked" })) });
+    for (const workspace of await database.db.select().from(issueWorkspaces)) {
+      assert.equal(workspace.updatedAt.getTime(), firstStates.get(workspace.issueId)!.updatedAt.getTime());
+    }
+  } finally { await database.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("prepares the same issue runtime shape for read-only checkouts and writable worktrees", async () => {

@@ -2,22 +2,14 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 export async function boundedResponseText(response: Response, maximum = issuePilotConfig.limits.capability.resultBytes): Promise<string> {
   if (!response.body) return "";
-  const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      size += chunk.value.byteLength;
-      if (size > maximum) throw new Error("capability_result_too_large");
-      chunks.push(chunk.value);
-    }
-  } catch (error) {
-    await reader.cancel(error).catch(() => undefined);
-    throw error;
+  for await (const chunk of response.body) {
+    size += chunk.byteLength;
+    if (size > maximum) throw new Error("capability_result_too_large");
+    chunks.push(chunk);
   }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+  return Buffer.concat(chunks, size).toString("utf8");
 }
 
 export async function responseJson(response: Response): Promise<unknown> {

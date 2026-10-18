@@ -16,11 +16,11 @@ export type ServiceInput = ServiceConfigurationInput;
 export type { UserRole } from "../../../domain/contracts";
 import type { UserRole } from "../../../domain/contracts";
 export { USER_ROLES, canCreateDevelopmentIssues, canUseIssueWorkMode } from "../../../domain/contracts";
-export interface Person { subject: string; name: string; email: string; role: UserRole }
+export interface Person { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
 export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; databaseId: string }
 export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
-export interface ManagedUserInput { subject: string; name: string; email: string; role?: UserRole }
-export interface ManagedUserUpdate { name: string; email: string; active: boolean; role?: UserRole }
+export interface ManagedUserInput { subject: string; name: string; email: string; role?: UserRole; isAdmin?: boolean }
+export interface ManagedUserUpdate { name: string; email: string; active: boolean; role?: UserRole; isAdmin?: boolean }
 export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export interface PersonalCredentialUpdate {
   production?: {
@@ -282,9 +282,10 @@ import type { McpStdioConfiguration, McpTransport } from "../../../domain/contra
 export interface McpService { id: string; name: string; url: string; transport: McpTransport; enabled: boolean; credentialConfigured: boolean }
 export interface McpServiceInput { name: string; url: string; transport: McpService["transport"]; enabled: boolean; credentialUpdate: { mode: "preserve" | "clear" } | { mode: "replace"; values: { authorization: string } | { stdio: McpStdioConfiguration } } }
 export const importMcpServices = (input: unknown) => jsonRequest<McpService[]>("/api/mcp-services/import", "POST", input);
+export const loadMcpServiceConfiguration = (id: string, signal?: AbortSignal) => request<McpServersInput>(`/api/mcp-services/${encodeURIComponent(id)}/configuration`, signal ? { signal } : undefined);
 export const loadMcpServices = () => request<McpService[]>("/api/mcp-services");
-export const createMcpService = (input: McpServiceInput) => jsonRequest<McpService>("/api/mcp-services", "POST", input);
-export const updateMcpService = (id: string, input: McpServiceInput) => jsonRequest<McpService>(`/api/mcp-services/${encodeURIComponent(id)}`, "PATCH", input);
+export interface McpServersInput { mcpServers: Record<string, unknown> }
+export const updateMcpService = (id: string, input: McpServiceInput | McpServersInput) => jsonRequest<McpService>(`/api/mcp-services/${encodeURIComponent(id)}`, "PATCH", input);
 export const deleteMcpService = (id: string) => request<void>(`/api/mcp-services/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const testMcpService = (id: string) => jsonRequest<{ tools: Array<{ name: string; readOnly: boolean }> }>(`/api/mcp-services/${encodeURIComponent(id)}/test`, "POST", {});
 
@@ -330,14 +331,14 @@ export async function fetchOutputBlob(key: string, fileName: string, signal?: Ab
   const reader = response.body?.getReader();
   if (!reader) return new Blob();
   let bytes = 0;
-  const chunks: ArrayBuffer[] = [];
+  const chunks: BlobPart[] = [];
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
       if (bytes > issuePilotConfig.web.outputPreviewBytes) throw new Error("文件过大，请下载查看完整内容");
-      chunks.push(Uint8Array.from(value).buffer);
+      chunks.push(value);
     }
     return new Blob(chunks);
   } finally {

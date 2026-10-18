@@ -24,20 +24,22 @@ async function waitForFile(root: string, name: string) {
 const pid = async (root: string) => Number(await waitForFile(root, "pid"));
 const stopped = (value: number) => assert.throws(() => process.kill(value, 0), { code: "ESRCH" });
 
-test("reuses one stdio process across scopes and calls, filters tools and closes it once", async () => {
+test("reuses one stdio process across scopes and exposes every tool", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-mcp-stdio-"));
   const original = process.env.MCP_PARENT_SECRET; process.env.MCP_PARENT_SECRET = "parent-private";
   const pool = createMcpConnectionPool({ cwd: root });
   try {
     const config = configuration(root);
-    const [read, write] = await Promise.all([createMcpToolBindings([config], false, pool.connect), createMcpToolBindings([config], true, pool.connect)]);
-    assert.equal(read.length, 5); assert.equal(write.length, 6);
-    assert.equal(JSON.stringify(read).includes("mcp_private_token"), false);
-    const first = await call(counter(read)), second = await call(counter(write));
+    const [firstScope, secondScope] = await Promise.all([createMcpToolBindings([config], pool.connect), createMcpToolBindings([config], pool.connect)]);
+    assert.equal(firstScope.length, 6); assert.equal(secondScope.length, 6);
+    assert.equal(JSON.stringify(firstScope).includes("mcp_private_token"), false);
+    const first = await call(counter(firstScope)), second = await call(counter(secondScope));
+    const written = await call(firstScope.find(tool => tool.label.endsWith(" / write"))!);
+    assert.equal(written.count, second.count + 1);
     assert.equal(first.pid, second.pid); assert.equal(second.count, first.count + 1);
     assert.equal(first.cwd, root); assert.equal(first.inherited, false);
     await Promise.all([pool.close(), pool.close()]); stopped(first.pid);
-    await assert.rejects(counter(read).call({}), /mcp_session_closed/);
+    await assert.rejects(counter(firstScope).call({}), /mcp_session_closed/);
   } finally {
     await pool.close(); await rm(root, { recursive: true, force: true });
     if (original === undefined) delete process.env.MCP_PARENT_SECRET; else process.env.MCP_PARENT_SECRET = original;
@@ -51,7 +53,7 @@ test("keeps a pooled connection alive after the discovery request deadline", asy
     const config = configuration(root), discovery = await pool.connect(config, AbortSignal.timeout(1_000));
     await discovery.list();
     await pause(1_100);
-    const tools = await createMcpToolBindings([config], false, pool.connect);
+    const tools = await createMcpToolBindings([config], pool.connect);
     const result = await call(counter(tools)); assert.equal(result.pid, await pid(root));
     await pool.close(); stopped(result.pid);
   } finally { await pool.close(); await rm(root, { recursive: true, force: true }); }
@@ -61,7 +63,7 @@ test("hides stdio errors and cancels a call without losing the process", async (
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-mcp-errors-"));
   const pool = createMcpConnectionPool({ cwd: root });
   try {
-    const tools = await createMcpToolBindings([configuration(root)], false, pool.connect);
+    const tools = await createMcpToolBindings([configuration(root)], pool.connect);
     await assert.rejects(tools.find(tool => tool.label.endsWith(" / fail"))!.call({}), { message: "mcp_operation_failed" });
     await assert.rejects(tools.find(tool => tool.label.endsWith(" / tool_error"))!.call({}), { message: "mcp_tool_failed" });
     const controller = new AbortController();
@@ -93,7 +95,7 @@ test("closes pooled stdio processes while initialization is still pending", asyn
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-mcp-pending-"));
   const pool = createMcpConnectionPool({ cwd: root });
   try {
-    const pending = createMcpToolBindings([configuration(root, { MCP_FIXTURE_HANG: "1" })], false, pool.connect);
+    const pending = createMcpToolBindings([configuration(root, { MCP_FIXTURE_HANG: "1" })], pool.connect);
     const rejected = assert.rejects(pending, { message: "mcp_session_closed" });
     const child = await pid(root); await pool.close(); await rejected; stopped(child);
   } finally { await pool.close(); await rm(root, { recursive: true, force: true }); }

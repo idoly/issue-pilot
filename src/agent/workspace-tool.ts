@@ -1,12 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Value } from "typebox/value";
+import { Compile } from "typebox/compile";
 import type { Database } from "../db/client.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
 import { resolveDeploymentConfiguration } from "../configuration/credentials.ts";
 import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, mcpServices, repositories as repositoryCatalog } from "../db/schema.ts";
-import { capabilityTextResult } from "../capabilities/contracts.ts";
+import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
 import { SerialQueue } from "../serial.ts";
 import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
@@ -24,10 +24,12 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
     ...available.map(row => Type.Object({ operation: Type.Literal("describe"), service: Type.Literal(row.service.key), environment: Type.Literal(row.environment.key) }, { additionalProperties: false })),
     Type.Object({ operation: Type.Union([Type.Literal("include"), Type.Literal("remove")]), service: Type.Union(keys.map((key) => Type.Literal(key))) }, { additionalProperties: false }),
   ]);
+  const validateInput = Compile(schema);
   const queue = new SerialQueue();
-  return defineTool({ name: "workspace", label: "Cross-service workspace", description: "List code services and permitted investigation sources; development Issues can describe production/test services. Describe with an explicit source environment before service_query. include/remove manage repositories only in this Issue's code environment; investigations get read-only snapshots. Existing Issue branches are preserved. remove can detach an additional service only when its repositories are safe to remove.", parameters: schema,
+  return defineTool({ name: "workspace", label: "Cross-service workspace", description: "List code services and permitted investigation sources; development Issues can describe production/test services. Describe with an explicit source environment before service_query. include/remove manage repositories only in this Issue's code environment; investigations get read-only snapshots. Existing Issue branches are preserved. remove can detach an additional service only when its repositories are safe to remove.", parameters: schema, outputSchema: Type.Unknown(),
     execute: async (_id, raw, signal) => {
-      const input = Value.Parse(schema, raw) as { operation: "list" } | { operation: "describe"; service: string; environment: string } | { operation: "include" | "remove"; service: string };
+      if (!validateInput.Check(raw)) throw new Error("invalid_workspace_input");
+      const input = raw as { operation: "list" } | { operation: "describe"; service: string; environment: string } | { operation: "include" | "remove"; service: string };
       if (input.operation === "list") {
         const included = await issueServiceIds(database, issue);
         const names = new Map((await database.select().from(repositoryCatalog)).map((row) => [row.url, row.name]));
@@ -36,7 +38,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
           const deployment = await loadDeploymentRepositories(database, { serviceId: row.service.id, environmentId: row.environment.id });
           services.push({ key: row.service.key, name: row.service.name, environment: row.environment.key, entry: row.service.id === issue.serviceId && row.environment.id === issue.environmentId, included: row.environment.id === issue.environmentId && included.includes(row.service.id), configuredCapabilities: configuredCapabilities(row.environment.kind === "dev" ? {} : row.deployment.config), repositories: deployment.repositories.map(({ repository, baseBranch }) => ({ name: names.get(repository.url), baseBranch })) });
         }
-        return capabilityTextResult(JSON.stringify({ environment: environmentKind, services }), { operation: "list" });
+        return structuredJsonResult(capabilityTextResult(JSON.stringify({ environment: environmentKind, services }), { operation: "list" }));
       }
       if (input.operation === "describe") {
         const target = available.find(row => row.service.key === input.service && row.environment.key === input.environment);
@@ -46,7 +48,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         const names = new Map((await database.select().from(repositoryCatalog)).map(row => [row.url, row.name]));
         const repositories = definition.repositories.map(row => ({ name: names.get(row.repository.url) ?? row.repository.alias, url: row.repository.url, branch: row.baseBranch }));
         const context = deploymentContext(target.environment, target.deployment.config, mcp);
-        return capabilityTextResult(JSON.stringify({ service: target.service.key, name: target.service.name, environment: target.environment.key, repositories, description: [target.service.description, context].filter(Boolean).join("\n\n"), capabilities: configuredCapabilities(target.environment.kind === "dev" ? {} : resolveDeploymentConfiguration(target.deployment.config)), mcp: mcp.filter(row => target.deployment.config.mcpServices?.includes(row.id)) }), { operation: "describe" });
+        return structuredJsonResult(capabilityTextResult(JSON.stringify({ service: target.service.key, name: target.service.name, environment: target.environment.key, repositories, description: [target.service.description, context].filter(Boolean).join("\n\n"), capabilities: configuredCapabilities(target.environment.kind === "dev" ? {} : resolveDeploymentConfiguration(target.deployment.config)), mcp: mcp.filter(row => row.enabled) }), { operation: "describe" }));
       }
       return queue.run(async () => {
         signal?.throwIfAborted();
@@ -74,7 +76,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         }
         const rows = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
         const names = issueRepositoryWorkspaceNames(rows);
-        return capabilityTextResult(JSON.stringify({ service: target.service.key, operation: input.operation, repositories: rows.map((row) => ({ name: names.get(row.url), branch: row.workingBranch ?? row.baseBranch, path: row.localPath ?? path.join(runtimeRoot, names.get(row.url)!), writable: environmentKind === "dev" })) }), { operation: input.operation });
+        return structuredJsonResult(capabilityTextResult(JSON.stringify({ service: target.service.key, operation: input.operation, repositories: rows.map((row) => ({ name: names.get(row.url), branch: row.workingBranch ?? row.baseBranch, path: row.localPath ?? path.join(runtimeRoot, names.get(row.url)!), writable: environmentKind === "dev" })) }), { operation: input.operation }));
       });
     },
   });

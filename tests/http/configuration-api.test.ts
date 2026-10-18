@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
+import { createClient, type TransactionMode, type Transaction } from "@libsql/client";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadConfigurationCatalog } from "../../src/configuration/read.ts";
 import { openDatabase } from "../../src/db/client.ts";
@@ -10,17 +11,34 @@ import { createApiFixture, createIssue, createService, json, servicePayload, tes
 test("configuration snapshots do not block Workspace writes", async () => {
   const fixture = await createApiFixture();
   const connection = openDatabase(fixture.databaseFile);
+  const writer = createClient({ url: `file:${fixture.databaseFile}`, timeout: 25 });
+  const begin = connection.client.transaction.bind(connection.client);
+  let started!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let transaction: Transaction | undefined;
+  let snapshot: ReturnType<typeof loadConfigurationCatalog> | undefined;
+  connection.client.transaction = async (mode?: TransactionMode) => {
+    transaction = await begin(mode);
+    const commit = transaction.commit.bind(transaction);
+    transaction.commit = async () => { started(); await gate; return commit(); };
+    return transaction;
+  };
   try {
     await createService(fixture.app, "Snapshot", ["dev"]);
     await createIssue(fixture.app, "snapshot", "dev");
     fixture.engine.running.clear();
-    // The snapshot begins before the write, and must hold no writer lock across awaits.
-    const snapshot = loadConfigurationCatalog(connection.db);
-    const update = connection.client.execute("update issue_workspaces set status = 'preparing', runtime_ready = 0 returning issue_id");
-    const [catalog, result] = await Promise.all([snapshot, update]);
-    assert.equal(catalog.services.length, 1);
+    snapshot = loadConfigurationCatalog(connection.db);
+    await Promise.race([ready, snapshot]);
+    assert.ok(transaction && !transaction.closed);
+    const result = await writer.execute("update issue_workspaces set status = 'preparing', runtime_ready = 0 returning issue_id");
+    release();
+    assert.equal((await snapshot).services.length, 1);
     assert.equal(result.rows.length, 1);
-  } finally { connection.close(); await fixture.cleanup(); }
+  } finally {
+    release(); await snapshot?.catch(() => undefined);
+    writer.close(); connection.close(); await fixture.cleanup();
+  }
 });
 
 test("projects bootstrap user, environments, models, repositories, and deployments without internal fields", async () => {
@@ -29,7 +47,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);
     const currentUser = await fixture.app.inject({ method: "GET", url: "/api/me" });
     assert.equal(currentUser.statusCode, 200);
-    assert.deepEqual(await json(currentUser), { ...issuePilotConfig.bootstrapUser, role: "developer" });
+    assert.deepEqual(await json(currentUser), { ...issuePilotConfig.bootstrapUser });
     const users = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string }>;
     assert.deepEqual(users.map(({ subject }) => subject), [issuePilotConfig.bootstrapUser.subject]);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } })).statusCode, 400);
@@ -64,7 +82,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     };
     assert.deepEqual(config.environments.map(({ key }) => key).sort(), ["dev", "prod", "test"]);
     assert.equal(config.environments.some((environment) => "id" in environment || "kind" in environment), false);
-    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
+    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {} });
     assert.deepEqual(Object.keys(config.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     const service = config.services[0]!;
     assert.equal(service.key, "alpha");
@@ -198,8 +216,8 @@ test("validates the global model and repository ownership independently", async 
     await createService(fixture.app, "Alpha");
     await createService(fixture.app, "Beta");
     for (const [agent, expected] of [
-      [{ provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high" }, "agent_model_not_available"],
-      [{ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off" }, "agent_thinking_level_not_supported"],
+      [{ provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high", codemode: "off", runtime: {} }, "agent_model_not_available"],
+      [{ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off", codemode: "off", runtime: {} }, "agent_thinking_level_not_supported"],
     ] as const) {
       const response = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: agent });
       assert.equal(response.statusCode, 400);

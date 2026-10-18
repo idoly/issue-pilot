@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import pMap from "p-map";
 
 import type { Database } from "../db/client.ts";
@@ -41,7 +41,7 @@ export async function prepareIssueRuntimeBatch<T extends { id: string; key: stri
       await prepareRuntime(issue);
       return { issueKey: issue.key };
     } catch (error) {
-      await database.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).catch(() => undefined);
+      await database.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.runtimeReady, true))).catch(() => undefined);
       return { issueKey: issue.key, reason: errorMessage(error) };
     }
   }, { concurrency: options.concurrency ?? 1, stopOnError: false });

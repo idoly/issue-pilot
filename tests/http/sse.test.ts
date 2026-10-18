@@ -18,9 +18,7 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
-
-test("queues SSE payloads in order until a blocked response drains", async () => {
+test("queues SSE payloads in order until a blocked response drains", () => {
   const response = new FakeResponse();
   response.blockNextWrite = true;
   const writer = createOrderedSseWriter(response);
@@ -29,15 +27,13 @@ test("queues SSE payloads in order until a blocked response drains", async () =>
   writer.write(replay);
   writer.write("event: snapshot_ready\ndata: {}\n\n");
   writer.write("data: live\n\n");
-  await nextTurn();
   assert.deepEqual(response.payloads, [replay]);
 
   response.emit("drain");
-  await writer.idle();
   assert.deepEqual(response.payloads, [replay, "event: snapshot_ready\ndata: {}\n\n", "data: live\n\n"]);
 });
 
-test("treats synchronous socket write failures as a closed stream", async () => {
+test("treats synchronous socket write failures as a closed stream", () => {
   const response = new FakeResponse();
   let attempts = 0;
   response.write = () => {
@@ -50,22 +46,19 @@ test("treats synchronous socket write failures as a closed stream", async () => 
     throw new Error("cleanup_failed");
   });
   writer.write("data: first\n\n");
-  await writer.idle();
   assert.equal(attempts, 1);
   assert.match(String(failures[0]), /socket_closed/);
   writer.write("data: must-not-write\n\n");
-  await writer.idle();
   assert.equal(attempts, 1);
   assert.equal(failures.length, 1);
 });
 
-test("captures transport errors while the stream is idle", async () => {
+test("captures transport errors while the stream is idle", () => {
   const response = new FakeResponse();
   const failures: unknown[] = [];
   const writer = createOrderedSseWriter(response, (error) => failures.push(error));
 
   response.emit("error", new Error("idle_transport_failed"));
-  await writer.idle();
   writer.write("data: must-not-write\n\n");
 
   assert.deepEqual(response.payloads, []);
@@ -75,32 +68,32 @@ test("captures transport errors while the stream is idle", async () => {
   assert.equal(response.listenerCount("close"), 0);
 });
 
-test("stops a backpressured stream on transport error before socket flags update", async () => {
+test("stops a backpressured stream on transport error before socket flags update", () => {
   const response = new FakeResponse();
   response.blockNextWrite = true;
   const failures: unknown[] = [];
   const writer = createOrderedSseWriter(response, (error) => failures.push(error));
   writer.write("data: first\n\n");
   writer.write("data: must-not-write\n\n");
-  await nextTurn();
   response.emit("error", new Error("transport_failed"));
-  await writer.idle();
   assert.deepEqual(response.payloads, ["data: first\n\n"]);
   assert.equal(failures.length, 1);
   assert.match(String(failures[0]), /transport_failed/);
+  for (const event of ["drain", "close", "error"]) assert.equal(response.listenerCount(event), 0, event);
 });
 
-test("releases SSE backpressure waits when the client disconnects", async () => {
+test("releases SSE backpressure waits when the client disconnects", () => {
   const response = new FakeResponse();
   response.blockNextWrite = true;
   const writer = createOrderedSseWriter(response);
 
   writer.write("data: first\n\n");
   writer.write("data: must-not-write\n\n");
-  await nextTurn();
   response.destroyed = true;
   response.emit("close");
-  await writer.idle();
+  response.emit("drain");
+  writer.write("data: must-not-write-after-close\n\n");
 
   assert.deepEqual(response.payloads, ["data: first\n\n"]);
+  for (const event of ["drain", "close", "error"]) assert.equal(response.listenerCount(event), 0, event);
 });

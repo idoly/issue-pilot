@@ -1,10 +1,9 @@
 import "./code-browser.css";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
-import { structuredPatch } from "diff";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { createEffect, createMemo, createSignal, For, lazy, onCleanup, Show, untrack } from "solid-js";
 import { Button, Input, Modal } from "../ui";
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Pencil, Trash2 } from "../ui/icons";
-import { SourceLine, SourceText, sourceLanguageName } from "./SourceText";
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sourceLanguageName } from "./source-language";
 import { Codicon, EditorFileIcon } from "./EditorIcons";
 import { Portal } from "@solidjs/web";
 import { copyText } from "../ui/clipboard";
@@ -13,6 +12,9 @@ import watermark from "./editor-watermark.svg";
 import { HistoryGraph, historyGraph } from "./HistoryGraph";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { commitSourceChanges, createSourceDirectory, createSourceFile, deleteSourcePath, discardSourcePaths, errorMessage, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, loadSourceHistory, loadSourceRepositories, loadSourceTree, renameSourcePath, saveSourceFile, searchSource, stageSourcePaths, unstageSourcePaths, type SourceBlame, type SourceCommit, type SourceCommitFile, type SourceFile, type SourceHistoryCursor, type SourceRepository, type SourceSearchMatch, type SourceTreeEntry } from "../data/client";
+
+const SourceText = lazy(async () => ({ default: (await import("./SourceText")).SourceText }));
+const SourceDiff = lazy(async () => ({ default: (await import("./SourceDiff")).SourceDiff }));
 
 function SourceStatusIcon(props: { status: SourceCommitFile["status"]; untracked: boolean }) {
   const letter = () => props.untracked ? "U" : ({ added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C" })[props.status];
@@ -53,58 +55,12 @@ type SearchMatch = SourceSearchMatch & { repository: string };
 type View = "files" | "search" | "changes";
 type PathAction = { kind: "file" | "directory" | "rename" | "delete"; repository: string; path: string; directory: boolean };
 type Comparison = { title: string; path: string; staged: boolean; revision?: string; canOpen: boolean; before: string; after: string };
-type DiffRow = { before: number; after: number; kind: string; text: string };
 const normalizedText = (value: string) => value.replace(/\r\n/g, "\n");
 const changeLabel: Record<SourceCommitFile["status"], string> = { added: "新增", modified: "修改", deleted: "删除", renamed: "重命名", copied: "复制" };
 const changedPaths = (files: SourceCommitFile[]) => [...new Set(files.flatMap(file => file.previousPath ? [file.previousPath, file.path] : [file.path]))];
 async function loadChanges(key: string, repository: string, signal: AbortSignal) {
   const [working, staged] = await Promise.all([loadSourceDiff(key, repository, "", signal), loadSourceDiff(key, repository, "", signal, true)]);
   return { rows: [...staged.files.map(file => ({ file, staged: true })), ...working.files.map(file => ({ file, staged: false }))], truncated: working.truncated || staged.truncated };
-}
-
-function ComparisonView(props: { value: Comparison; toolbar: HTMLElement; onOpen: () => void; disabled: boolean }) {
-  const [split, setSplit] = createSignal(window.innerWidth > 1550, { ownedWrite: true });
-  const panes: Partial<Record<"before" | "after", HTMLDivElement>> = {};
-  const difference = createMemo(() => {
-    const beforeLines = props.value.before.split("\n").length, afterLines = props.value.after.split("\n").length;
-    const patch = structuredPatch("before", "after", props.value.before, props.value.after, "", "", { context: Math.max(beforeLines, afterLines), timeout: issuePilotConfig.web.sourceDiffMs });
-    if (!patch) return null;
-    const rows: DiffRow[] = [];
-    for (const hunk of patch.hunks) {
-      rows.push({ before: 0, after: 0, kind: "hunk", text: `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@` });
-      let before = hunk.oldStart, after = hunk.newStart;
-      for (const line of hunk.lines) {
-        const kind = line.startsWith("+") ? "added" : line.startsWith("-") ? "removed" : line.startsWith("\\") ? "notice" : "context";
-        rows.push({ before: kind === "added" || kind === "notice" ? 0 : before++, after: kind === "removed" || kind === "notice" ? 0 : after++, kind, text: kind === "notice" ? line : line.slice(1) });
-      }
-    }
-    const last = patch.hunks.at(-1);
-    if (last && props.value.before.endsWith("\n") && props.value.after.endsWith("\n") && last.oldStart + last.oldLines === beforeLines && last.newStart + last.newLines === afterLines) rows.push({ before: beforeLines, after: afterLines, kind: "context", text: "" });
-    if (!patch.hunks.length && props.value.after) props.value.after.split("\n").forEach((text, index) => rows.push({ before: index + 1, after: index + 1, kind: "context", text }));
-    const paired: Array<{ before: DiffRow | null; after: DiffRow | null }> = [];
-    for (let index = 0; index < rows.length;) {
-      const row = rows[index]!;
-      if (row.kind !== "added" && row.kind !== "removed") { paired.push({ before: row, after: row }); index++; continue; }
-      const removed: DiffRow[] = [], added: DiffRow[] = [];
-      while (index < rows.length && ["added", "removed"].includes(rows[index]!.kind)) {
-        const next = rows[index++]!;
-        (next.kind === "added" ? added : removed).push(next);
-      }
-      for (let offset = 0; offset < Math.max(removed.length, added.length); offset++) paired.push({ before: removed[offset] ?? null, after: added[offset] ?? null });
-    }
-    return { rows, paired, added: rows.filter(row => row.kind === "added").length, removed: rows.filter(row => row.kind === "removed").length };
-  });
-  const rulerRows = createMemo(() => difference()?.rows.filter(row => row.kind !== "hunk") ?? []);
-  const highlightPath = () => props.value.before.length + props.value.after.length <= issuePilotConfig.web.sourceHighlightCharacters ? props.value.path : "";
-  return <div class={`source-diff${props.value.revision ? " source-diff-revision" : ""}`} role="region" aria-label="代码差异"><Show when={difference()} fallback={<p class="source-diff-notice">差异计算超过时间限制，请打开文件查看完整内容。</p>}>{value => <>
-    <Portal mount={props.toolbar}><div class="source-diff-summary"><span class="added">+{value().added}</span><span class="removed">−{value().removed}</span><div><Button size="small" type="text" aria-pressed={split() ? "true" : "false"} onClick={() => setSplit(true)}>并排</Button><Button size="small" type="text" aria-pressed={split() ? "false" : "true"} onClick={() => setSplit(false)}>行内</Button><Button size="small" type="text" disabled={props.disabled || !props.value.canOpen} onClick={props.onOpen}>打开文件</Button></div></div></Portal>
-    <Show when={split()} fallback={<div class="source-diff-lines" tabindex="0"><For each={value().rows} fallback={<p class="source-diff-notice">没有内容差异</p>}>{row => <div class={`source-diff-line ${row.kind}`}><span class="line-number">{row.before || ""}</span><span class="line-number">{row.after || ""}</span><span aria-hidden="true">{row.kind === "added" ? "+" : row.kind === "removed" ? "−" : " "}</span><SourceLine text={row.text} path={highlightPath()} /></div>}</For></div>}>
-      <div class="source-diff-panes"><For each={["before", "after"] as const}>{side => <section class="source-diff-pane"><h3>{side === "before" ? "变更前" : "变更后"}</h3><div ref={element => { panes[side] = element; }} class="source-diff-lines" tabindex="0" onScroll={event => { const other = panes[side === "before" ? "after" : "before"]; if (other && other.scrollTop !== event.currentTarget.scrollTop) other.scrollTop = event.currentTarget.scrollTop; }}><For each={value().paired}>{pair => {
-        const row = pair[side];
-        return <div class={`source-diff-line split ${row?.kind ?? "empty"}`}><span class="line-number">{row?.[side] || ""}</span><SourceLine text={row?.text ?? ""} path={highlightPath()} /></div>;
-      }}</For></div></section>}</For></div>
-    </Show><div class="source-diff-ruler" aria-hidden="true"><For each={rulerRows()}>{(row, index) => <Show when={row.kind === "added" || row.kind === "removed"}><span class={row.kind} style={{ top: `min(${index() * 19}px, ${index() / rulerRows().length * 100}%)`, height: `min(19px, ${100 / rulerRows().length}%)` }} /></Show>}</For></div>
-  </>}</Show></div>;
 }
 
 function EditorEmpty(props: { onCommands: () => void; onFile: () => void; onSearch: () => void }) {
@@ -314,6 +270,7 @@ export default function CodeBrowser(props: { issueKey: string; repositoryVersion
       const loaded = await loadSourceFile(props.issueKey, name, path, request.signal);
       if (owner !== scope || sequence !== fileRequest || request.signal.aborted) return;
       setFile(loaded); setDraft(normalizedText(loaded.content)); setSaveBlocked(false);
+      setCursor({ line: target.line ?? 1, column: target.column ?? 1 });
       setReveal({ line: target.line ?? 1, column: target.column ?? 1, length: target.length ?? 0 });
       return loaded;
     } catch (cause) { if (owner === scope && sequence === fileRequest && !request.signal.aborted) report(cause); }
@@ -576,7 +533,7 @@ export default function CodeBrowser(props: { issueKey: string; repositoryVersion
           <div class="source-comparison-tools" ref={comparisonToolbar} />
           <div class="source-file-tools"><Show when={file() && !comparison()}><Button size="small" type="text" disabled={busy() || fileLoading()} onClick={() => { void openFile(file()!.path); }}>重新读取</Button><span class="source-save-status" aria-label="文件保存状态">{saving() ? "保存中…" : dirty() ? saveBlocked() ? "保存失败 · 草稿已保留" : "等待自动保存" : "已保存"}</span><Button size="small" type="text" disabled={!writable() || !dirty() || busy() || fileLoading()} onClick={save}>保存文件</Button></Show></div>
         </div>
-        <Show when={comparison()}>{value => <ComparisonView value={value()} toolbar={comparisonToolbar} disabled={busy() || panelLoading()} onOpen={() => { void openFile(value().path); }} />}</Show>
+        <Show when={comparison()}>{value => <SourceDiff value={value()} toolbar={comparisonToolbar} disabled={busy() || panelLoading() || !value().canOpen} onOpen={() => { void openFile(value().path); }} />}</Show>
         <Show when={searchDocument()}>{document => <SourceText path={`搜索结果 ${document().term}`} value={document().content} readonly onInput={() => {}} onSave={() => {}} onPosition={(line, column) => { setCursor({ line, column }); }} />}</Show>
         <Show when={!comparison() && !searchDocument()}>
           <Show when={fileLoading()}><div role="status">文件加载中…</div></Show>

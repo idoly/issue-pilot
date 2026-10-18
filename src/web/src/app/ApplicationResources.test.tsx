@@ -23,7 +23,7 @@ function deferred<Value>() {
 }
 
 const configuration = (name: string): Config => ({
-  agent: { provider: "provider", model: "model", thinkingLevel: "medium" },
+  agent: { provider: "provider", model: "model", thinkingLevel: "medium", codemode: "on", runtime: {} },
   agentModels: [],
   environments: [],
   services: [{ key: "orders", name, description: "", repositories: [], deployments: [] }],

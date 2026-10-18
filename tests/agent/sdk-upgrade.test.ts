@@ -12,6 +12,7 @@ import { sessionTranscript } from "../../src/agent/events.ts";
 const context: AgentSessionContext = {
   issueKey: "ISSUE-20261016-004", serviceKey: "fixture", environmentKey: "prod",
   model: { provider: "sdk-fixture", modelId: "sdk-model", thinkingLevel: "medium" },
+  codemode: "off",
   capabilities: [], canModifyCode: false, canWriteOutputs: false,
 };
 

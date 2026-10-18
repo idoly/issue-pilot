@@ -146,6 +146,18 @@ for (const stage of ["START TRANSACTION READ ONLY", "ROLLBACK", "close", "abort_
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("destroys a MySQL connection that finishes opening after cancellation", async () => {
+  const controller = new AbortController();
+  const fixture = connectionFixture([], []);
+  let finishOpening!: (connection: Connection) => void;
+  const pending = queryMysql({ config, statement: "SELECT 1" }, controller.signal, () => new Promise<Connection>((resolve) => { finishOpening = resolve; }));
+  controller.abort(new Error("cancelled_while_connecting"));
+  finishOpening(fixture.connection);
+  await assert.rejects(pending, /cancelled_while_connecting/);
+  assert.equal(fixture.destroyed(), true);
+  assert.deepEqual(fixture.statements, []);
+});
+
 test("destroys an active MySQL connection when the operation is aborted", async () => {
   const controller = new AbortController();
   const fixture = connectionFixture([], [], new Promise<void>(() => {}));

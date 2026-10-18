@@ -5,7 +5,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CAPABILITY_CREDENTIALS } from "../../../configuration/contracts";
 import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { ChevronRight, Pencil, Plus, Trash2 } from "../ui/icons";
-import { loadRepositories, loadServiceConfigurationDescription, loadMcpServices, type McpService, type ServiceInput, type ManagedRepository, createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
+import { loadRepositories, loadServiceConfigurationDescription, type ServiceInput, type ManagedRepository, createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
 import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
@@ -57,7 +57,6 @@ export interface ServiceRepositoryDraft {
 }
 
 export type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
-  mcpServices: string[];
   environmentKey: string;
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
 };
@@ -69,7 +68,7 @@ const newDmsDatabaseDraft = (): DmsDatabaseDraft => ({ instanceAlias: "", schema
 
 export function serviceDeploymentDraft(deployment: Service["deployments"][number]): ServiceDeploymentDraft {
   return {
-    environmentKey: deployment.environmentKey, mcpServices: [...(deployment.mcpServices ?? [])],
+    environmentKey: deployment.environmentKey,
     repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
     ...(deployment.nacos ? { nacos: { ...deployment.nacos, password: "", dataIds: [...deployment.nacos.dataIds], credentialEnabled: deployment.nacos.credentialConfigured } } : {}),
     ...(deployment.db ? { db: { databases: deployment.db.databases.map(database => ({ ...database, password: "", credentialEnabled: true })) } } : {}),
@@ -82,7 +81,7 @@ export function serviceDeploymentDraft(deployment: Service["deployments"][number
 }
 
 export function serializeServiceDeployment(deployment: ServiceDeploymentDraft, repositories: ServiceRepositoryDraft[]): ServiceInput["deployments"][number] {
-  return { environmentKey: deployment.environmentKey, mcpServices: [...deployment.mcpServices], capabilities: [...deployment.capabilities], repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...serializeCapabilityDraft(deployment) };
+  return { environmentKey: deployment.environmentKey, capabilities: [...deployment.capabilities], repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...serializeCapabilityDraft(deployment) };
 }
 
 export function deploymentValidationError(deployment: ServiceDeploymentDraft): string {
@@ -181,7 +180,6 @@ export function ServiceDeploymentEditorRow(props: {
   capability?: CapabilityName;
   initiallyExpanded?: boolean;
   serviceKey: string | null;
-  mcpServices: () => McpService[];
   index: number;
   deployment: ServiceDeploymentDraft;
   environmentName: string;
@@ -194,8 +192,6 @@ export function ServiceDeploymentEditorRow(props: {
   let currentDeployment = initialDeployment;
   const codeOnly = initialDeployment.environmentKey === "dev";
   const [expanded, setExpanded] = createSignal(untrack(() => props.initiallyExpanded ?? false), { ownedWrite: true });
-  const [mcpSelected, setMcpSelected] = createSignal(initialDeployment.mcpServices.length > 0, { ownedWrite: true });
-  const [mcpIds, setMcpIds] = createSignal([...initialDeployment.mcpServices], { ownedWrite: true });
   const [repositoryBranches, setRepositoryBranches] = createSignal(initialDeployment.repositoryBranches, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
   const credentialState = <Key extends CapabilityName>(key: Key, configured = false) => ({ credentialConfigured: configured, credentialEnabled: CAPABILITY_CREDENTIALS[key].required || configured });
@@ -275,9 +271,9 @@ export function ServiceDeploymentEditorRow(props: {
   return (
     <div class={`service-deployment-row${expanded() ? "" : " collapsed"}`}>
       <div class="deployment-environment" aria-label={`部署 ${props.index + 1} 环境`}><strong>{props.environmentName}</strong></div>
-      <div class="deployment-summary" aria-label={`部署 ${props.index + 1} 能力`}><div class="capability-labels"><Show when={codeOnly}><small>继承正式/测试能力</small></Show><For each={codeOnly ? [] : selectedCapabilities()}>{(key) => <button type="button" title={`移除 ${key} 能力`} aria-label={`移除 ${key} 能力`} onClick={() => removeCapability(key)}>{key}</button>}</For><Show when={!codeOnly && mcpSelected()}><button type="button" aria-label="移除 MCP 能力" onClick={() => { setMcpSelected(false); setMcpIds([]); update({ mcpServices: [] }); }}>MCP</button></Show></div></div>
+      <div class="deployment-summary" aria-label={`部署 ${props.index + 1} 能力`}><div class="capability-labels"><Show when={codeOnly}><small>继承正式/测试能力</small></Show><For each={codeOnly ? [] : selectedCapabilities()}>{(key) => <button type="button" title={`移除 ${key} 能力`} aria-label={`移除 ${key} 能力`} onClick={() => removeCapability(key)}>{key}</button>}</For></div></div>
       <Button class="icon-button deployment-toggle" type="text" shape="circle" icon={<ChevronRight size={15} />} title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((current) => !current)} />
-      <Show when={expanded()}><Show when={!codeOnly && (capabilityOptionsForEditor().some((capability) => !selectedCapabilities().includes(capability.key)) || !props.capability && !mcpSelected())}><div class="deployment-capabilities"><span>添加能力</span><div class="deployment-capability-options"><For each={capabilityOptionsForEditor().filter((capability) => !selectedCapabilities().includes(capability.key))}>{(capability) => <button type="button" class="deployment-capability-option" onClick={() => addCapability(capability.key)}>{capability.key}</button>}</For><Show when={!props.capability && !mcpSelected()}><button type="button" class="deployment-capability-option" disabled={!props.mcpServices().length} title="添加 MCP 类型能力" onClick={() => setMcpSelected(true)}>MCP</button></Show></div></div></Show>
+      <Show when={expanded()}><Show when={!codeOnly && capabilityOptionsForEditor().some((capability) => !selectedCapabilities().includes(capability.key))}><div class="deployment-capabilities"><span>添加能力</span><div class="deployment-capability-options"><For each={capabilityOptionsForEditor().filter((capability) => !selectedCapabilities().includes(capability.key))}>{(capability) => <button type="button" class="deployment-capability-option" onClick={() => addCapability(capability.key)}>{capability.key}</button>}</For></div></div></Show>
       <Show when={!props.capability}><div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} /></label>}</For></div></Show>
       <For each={codeOnly ? [] : capabilityOptions.filter((capability) => selectedCapabilities().includes(capability.key) && (!props.capability || props.capability === capability.key))}>{(capability) => <Switch>
         <Match when={capability.key === "nacos"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>nacos</code></div><label><span class="required-field">serverUrl</span><Input aria-label={`nacos serverUrl ${props.index + 1}`} value={nacosDraft().serverUrl} onInput={(event) => { updateNacos({ serverUrl: event.currentTarget.value }); }} /></label><label><span>namespace</span><Input aria-label={`nacos namespace ${props.index + 1}`} value={nacosDraft().namespace} onInput={(event) => { updateNacos({ namespace: event.currentTarget.value }); }} /></label><label><span class="required-field">group</span><Input aria-label={`nacos group ${props.index + 1}`} value={nacosDraft().group} onInput={(event) => { updateNacos({ group: event.currentTarget.value }); }} /></label><label><span class="required-field">dataIds</span><Input aria-label={`nacos dataIds ${props.index + 1}`} placeholder="多个 Data ID 用逗号分隔" value={nacosDraft().dataIds} onInput={(event) => { updateNacos({ dataIds: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>认证</span><Toggle aria-label={`nacos 认证 ${props.index + 1}`} checked={nacosDraft().credentialEnabled} onChange={(checked) => updateNacos({ credentialEnabled: checked })} /></div><Show when={nacosDraft().credentialEnabled}><label><span class="required-field">username</span><Input aria-label={`nacos username ${props.index + 1}`} value={nacosDraft().username} onInput={(event) => { updateNacos({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`nacos password ${props.index + 1}`} placeholder={nacosDraft().credentialConfigured ? "已配置" : ""} value={nacosDraft().password} onInput={(event) => { updateNacos({ password: event.currentTarget.value }); }} /></label></Show></div></Match>
@@ -287,7 +283,7 @@ export function ServiceDeploymentEditorRow(props: {
         <Match when={capability.key === "mq"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>mq</code></div><label><span class="required-field">host</span><Input aria-label={`mq host ${props.index + 1}`} value={mqDraft().host} onInput={(event) => { updateMq({ host: event.currentTarget.value }); }} /></label><label><span class="required-field">port</span><Input aria-label={`mq port ${props.index + 1}`} value={mqDraft().port} onInput={(event) => { updateMq({ port: event.currentTarget.value }); }} /></label><label><span class="required-field">managementPort</span><Input aria-label={`mq managementPort ${props.index + 1}`} value={mqDraft().managementPort} onInput={(event) => { updateMq({ managementPort: event.currentTarget.value }); }} /></label><label><span class="required-field">username</span><Input aria-label={`mq username ${props.index + 1}`} value={mqDraft().username} onInput={(event) => { updateMq({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`mq password ${props.index + 1}`} placeholder={mqDraft().credentialConfigured ? "已配置" : ""} value={mqDraft().password} onInput={(event) => { updateMq({ password: event.currentTarget.value }); }} /></label><label><span class="required-field">virtualHost</span><Input aria-label={`mq virtualHost ${props.index + 1}`} value={mqDraft().virtualHost} onInput={(event) => { updateMq({ virtualHost: event.currentTarget.value }); }} /></label></div></Match>
         <Match when={capability.key === "es"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>es</code></div><label><span class="required-field">url</span><Input aria-label={`es url ${props.index + 1}`} placeholder="http://es.example.com" value={esDraft().url} onInput={(event) => { updateEs({ url: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>认证</span><Toggle aria-label={`es 认证 ${props.index + 1}`} checked={esDraft().credentialEnabled} onChange={(checked) => updateEs({ credentialEnabled: checked })} /></div><Show when={esDraft().credentialEnabled}><label><span class="required-field">username</span><Input aria-label={`es username ${props.index + 1}`} value={esDraft().username} onInput={(event) => { updateEs({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`es password ${props.index + 1}`} placeholder={esDraft().credentialConfigured ? "已配置" : ""} value={esDraft().password} onInput={(event) => { updateEs({ password: event.currentTarget.value }); }} /></label></Show></div></Match>
         <Match when={capability.key === "sls"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>sls</code></div><label><span class="required-field">AccessKey ID</span><PasswordInput aria-label={`sls AccessKey ID ${props.index + 1}`} value={slsDraft().accessKeyId} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeyId: event.currentTarget.value })} /></label><label><span class="required-field">AccessKey Secret</span><PasswordInput aria-label={`sls AccessKey Secret ${props.index + 1}`} value={slsDraft().accessKeySecret} onInput={event => updateSls({ accessKeySecret: event.currentTarget.value })} /></label><label><span class="required-field">region</span><Input aria-label={`sls region ${props.index + 1}`} placeholder="cn-hangzhou" value={slsDraft().region} onInput={(event) => { updateSls({ region: event.currentTarget.value }); }} /></label><label><span class="required-field">project</span><Input aria-label={`sls project ${props.index + 1}`} value={slsDraft().project} onInput={(event) => { updateSls({ project: event.currentTarget.value }); }} /></label><label><span class="required-field">logstore</span><Input aria-label={`sls logstore ${props.index + 1}`} placeholder="多个名称用逗号分隔" value={slsDraft().logstores} onInput={(event) => { updateSls({ logstores: event.currentTarget.value }); }} /></label></div></Match>
-      </Switch>}</For><Show when={!codeOnly && !props.capability && mcpSelected()}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>MCP</code></div><label><span>已配置的 MCP 能力</span><Select mode="multiple" aria-label={`部署 ${props.index + 1} MCP 能力`} value={mcpIds()} options={props.mcpServices().map(row => ({ value: row.id, label: row.name + (row.enabled ? "" : " · 已关闭") }))} onChange={ids => { setMcpIds(ids); update({ mcpServices: ids }); }} /></label></div></Show></Show>
+      </Switch>}</For></Show>
     </div>
   );
 }
@@ -335,20 +331,19 @@ export function ConfigurationView() {
   };
   const environmentDrafts = (service?: Service): ServiceDeploymentDraft[] => ["dev", "test", "prod"].map(environmentKey => {
     const existing = service?.deployments.find(row => row.environmentKey === environmentKey);
-    return existing ? serviceDeploymentDraft(existing) : { environmentKey, mcpServices: [], capabilities: [], repositoryBranches: service?.repositories.map(repository => ({ repositoryKey: repository.id, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })) ?? [] };
+    return existing ? serviceDeploymentDraft(existing) : { environmentKey, capabilities: [], repositoryBranches: service?.repositories.map(repository => ({ repositoryKey: repository.id, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })) ?? [] };
   });
   const resetServiceForm = () => {
     setServiceName(""); setDescription(""); setServiceRepositories([]); setServiceDeployments(() => environmentDrafts()); setEditingServiceKey(null);
   };
   const [repositoryChoices, setRepositoryChoices] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
-  const [mcpChoices, setMcpChoices] = createSignal<McpService[]>([], { ownedWrite: true });
   const [repositoryLoading, setRepositoryLoading] = createSignal(false, { ownedWrite: true });
   const [repositoryError, setRepositoryError] = createSignal("", { ownedWrite: true });
   let repositoryGeneration = 0;
   const loadRepositoryChoices = () => {
     const generation = ++repositoryGeneration;
     setRepositoryLoading(true); setRepositoryError("");
-    void Promise.all([loadRepositories(), loadMcpServices()]).then(([rows, mcp]) => { if (generation === repositoryGeneration) { setRepositoryChoices(rows); setMcpChoices(mcp); } })
+    void loadRepositories().then(rows => { if (generation === repositoryGeneration) setRepositoryChoices(rows); })
       .catch((cause) => { if (generation === repositoryGeneration) setRepositoryError(errorMessage(cause)); })
       .finally(() => { if (generation === repositoryGeneration) setRepositoryLoading(false); });
   };
@@ -447,7 +442,7 @@ export function ConfigurationView() {
           <Show when={configurationError()}><div ref={element => { serviceErrorElement = element; }} class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">关联仓库</strong><span>可多选，仓库名称和地址统一在仓库配置中维护</span></div><span class="service-repository-count">已选 {serviceRepositories().length} 个</span></div><Show when={repositoryError()}><div class="workspace-error" role="alert">仓库加载失败：{repositoryError()}<Button size="small" onClick={loadRepositoryChoices}>重试</Button></div></Show><Select mode="multiple" aria-label="关联仓库" placeholder="选择已登记仓库（可多选）" loading={repositoryLoading()} value={serviceRepositories().map((repository) => repository.url)} options={repositoryOptions()} showSearch={{ filterOption: (query, option) => `${option.label} ${option.url}`.toLowerCase().includes(query.trim().toLowerCase()) }} optionRender={(option) => <span class="service-repository-option"><strong>{option.label}</strong><code>{option.url}</code></span>} onChange={selectRepositories} maxTagCount={4} listHeight={360} notFoundContent="暂无可选仓库，请先在仓库配置中添加" /><Show when={!repositoryLoading() && !repositoryError() && !repositoryChoices().length}><p class="service-form-empty">暂无已登记仓库，请先在“配置 → 仓库”中添加。</p></Show></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>在服务中设置各环境参数；开发环境仅配置分支，查询能力继承正式和测试</span></div></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow serviceKey={editingServiceKey()} mcpServices={mcpChoices} index={index()} deployment={deployment} repositories={serviceRepositories} repositoryName={repositoryName} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} />}</For></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>在服务中设置各环境参数；开发环境仅配置分支，查询能力继承正式和测试</span></div></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow serviceKey={editingServiceKey()} index={index()} deployment={deployment} repositories={serviceRepositories} repositoryName={repositoryName} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} />}</For></div></div>
           <label class="service-form-field"><span>服务描述（Markdown）</span><TextArea aria-label="项目描述" placeholder="记录业务知识、排查步骤和查询范例；分支和公开能力参数会自动附加到展示及 AI 读取的描述中。" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
         </div>

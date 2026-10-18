@@ -2,26 +2,26 @@ import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type, type Static } from "typebox";
-import { Value } from "typebox/value";
-import { capabilityResultText, capabilityTextResult } from "../capabilities/contracts.ts";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { capabilityResultText, capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 
 const schema = Type.Union([
   Type.Object({ operation: Type.Literal("list") }, { additionalProperties: false }),
   Type.Object({ operation: Type.Literal("publish"), sourcePath: Type.String({ minLength: 1 }), fileName: Type.String({ minLength: 1, maxLength: 255 }) }, { additionalProperties: false }),
 ]);
+const validateInput = Compile(schema);
 
 export function createOutputTool(store: IssueOutputStore, workDirectory: string) {
   return defineTool({
-    name: "output", label: "Issue outputs", parameters: schema,
+    name: "output", label: "Issue outputs", parameters: schema, outputSchema: Type.Unknown(),
     description: "List published outputs or publish a regular file from this Issue's working directory. Generate any file format with the native coding tools, then publish it by sourcePath and delivery fileName. Publication is atomic and returns metadata only.",
     promptGuidelines: ["Create files in the working directory and use publish for delivery. Name every published file in the final answer."],
-    execute: async (_id, raw, signal) => {
-      let input: Static<typeof schema>;
-      try { input = Value.Parse(schema, raw); } catch { throw new Error("invalid_output_input"); }
+    execute: async (_id, input, signal) => {
+      if (!validateInput.Check(input)) throw new Error("invalid_output_input");
       signal?.throwIfAborted();
-      if (input.operation === "list") return capabilityTextResult(capabilityResultText({ directory: store.directory, outputs: await store.list() }), { operation: "list" });
+      if (input.operation === "list") return structuredJsonResult(capabilityTextResult(capabilityResultText({ directory: store.directory, outputs: await store.list() }), { operation: "list" }));
       const root = await realpath(workDirectory);
       const source = await realpath(path.resolve(root, input.sourcePath));
       const relative = path.relative(root, source);
@@ -40,7 +40,7 @@ export function createOutputTool(store: IssueOutputStore, workDirectory: string)
           await handle.close();
           signal?.throwIfAborted();
         });
-        return capabilityTextResult(capabilityResultText({ output: { fileName: output.fileName, size: output.size, updatedAt: output.updatedAt } }), { operation: "publish", fileName: output.fileName });
+        return structuredJsonResult(capabilityTextResult(capabilityResultText({ output: { fileName: output.fileName, size: output.size, updatedAt: output.updatedAt } }), { operation: "publish", fileName: output.fileName }));
       } finally { await handle.close(); }
     },
   });

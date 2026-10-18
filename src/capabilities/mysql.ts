@@ -1,4 +1,5 @@
-import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type QueryError, type RowDataPacket } from "mysql2";
+import { promisify } from "node:util";
+import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type RowDataPacket } from "mysql2";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilitySignal, capabilityTextResult } from "./contracts.ts";
@@ -14,14 +15,8 @@ export function validateReadOnlyQuery(query: string): string {
 
 export type MysqlConnectionFactory = (options: ConnectionOptions) => Connection | Promise<Connection>;
 
-function execute(connection: Connection, statement: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    connection.query(statement, (error) => error ? reject(error) : resolve());
-  });
-}
-
-function end(connection: Connection): Promise<void> {
-  return new Promise((resolve, reject) => connection.end((error?: QueryError | null) => error ? reject(error) : resolve()));
+function execute(connection: Connection, statement: string) {
+  return promisify<string, unknown>(connection.query.bind(connection))(statement);
 }
 
 async function streamedRows(connection: Connection, statement: string): Promise<{ columns: string[]; rows: Array<Record<string, unknown>> }> {
@@ -91,7 +86,7 @@ async function withReadOnlyMysql<T>(config: MysqlDatabaseConfig, operation: (con
       bigNumberStrings: true,
       typeCast: (field) => field.string(),
     });
-    if (activeSignal.aborted) throw activeSignal.reason;
+    if (activeSignal.aborted) { abort(); throw activeSignal.reason; }
     await execute(connection, "START TRANSACTION READ ONLY");
     transactionActive = true;
     const result = await operation(connection);
@@ -104,7 +99,7 @@ async function withReadOnlyMysql<T>(config: MysqlDatabaseConfig, operation: (con
     throw error;
   } finally {
     activeSignal.removeEventListener("abort", abort);
-    if (connection && !destroyed) await end(connection);
+    if (connection && !destroyed) await promisify(connection.end.bind(connection))();
   }
 }
 

@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
@@ -31,14 +32,6 @@ function operationSignal(signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function abortPromise(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    const rejectAborted = () => reject(signal.reason instanceof Error ? signal.reason : new Error("dms_mcp_aborted"));
-    if (signal.aborted) rejectAborted();
-    else signal.addEventListener("abort", rejectAborted, { once: true });
-  });
-}
-
 function sameOriginFetch(origin: string, signal: AbortSignal) {
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const target = new URL(input instanceof Request ? input.url : input.toString());
@@ -63,8 +56,12 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       requestInit: { headers },
     });
     const candidate = new Client({ name: "issue-pilot", version: "0.1.0" });
+    let cancellation: ReturnType<typeof addAbortListener> | undefined;
     try {
-      await Promise.race([candidate.connect(transport), abortPromise(attemptSignal)]);
+      attemptSignal.throwIfAborted();
+      await Promise.race([candidate.connect(transport), new Promise<never>((_, reject) => {
+        cancellation = addAbortListener(attemptSignal, () => reject(attemptSignal.reason));
+      })]);
       if (signal.aborted) throw signal.reason;
       client = candidate;
       break;
@@ -78,6 +75,7 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
       throw new Error("dms_mcp_connection_failed");
     } finally {
+      cancellation?.[Symbol.dispose]();
       clearTimeout(handshakeTimer);
     }
   }

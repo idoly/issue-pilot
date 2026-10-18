@@ -22,7 +22,7 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
   app.get("/api/repositories", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     return runScopeExclusive(async () => {
-      const rows = await database.db.select().from(repositories).orderBy(asc(repositories.name), asc(repositories.url));
+      const rows = await database.db.select().from(repositories).orderBy(asc(repositories.url));
       const uses = await database.db.select({ url: serviceRepositories.url, serviceKey: services.key, serviceName: services.name }).from(serviceRepositories).innerJoin(services, eq(services.id, serviceRepositories.serviceId));
       return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), services: uses.filter((use) => use.url === row.url).map(({ serviceKey, serviceName }) => ({ key: serviceKey, name: serviceName })) }));
     });

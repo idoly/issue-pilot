@@ -5,7 +5,7 @@ import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
 
-const context: AgentSessionContext = { issueKey: "ISSUE-20260808-001", serviceKey: "orders", environmentKey: "prod", model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" }, capabilities: ["db", "redis", "dms"], canModifyCode: false, canWriteOutputs: false };
+const context: AgentSessionContext = { issueKey: "ISSUE-20260808-001", serviceKey: "orders", environmentKey: "prod", model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" }, codemode: "off", capabilities: ["db", "redis", "dms"], canModifyCode: false, canWriteOutputs: false };
 const config: DeploymentConfig = {
   db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "private-password" }] },
   redis: { host: "redis.example.test", port: 6379, username: "", database: 0 },
@@ -48,9 +48,10 @@ test("keeps native write/target restrictions after combining the dispatch entry"
 
 test("configured MCP calls share the query entry and remain scoped to the declared service", async () => {
   let received: unknown;
-  const [tool] = createCapabilityTools({ ...context, capabilities: [] }, {}, { mcpScopes: [{ environmentKey: "prod", serviceKey: "other", serviceName: "Other", tools: [{ name: "mcp_fixture", label: "Search", description: "Read docs", parameters: Type.Object({ query: Type.String() }, { additionalProperties: false }), async call(input) { received = input; return { content: [{ type: "text", text: "found" }], details: undefined }; } }] }] });
+  const [tool] = createCapabilityTools({ ...context, capabilities: [] }, {}, { mcpScopes: [{ environmentKey: "prod", serviceKey: "other", serviceName: "Other", tools: [{ name: "mcp_fixture", label: "Search", description: "Read docs", parameters: Type.Object({ query: Type.String() }, { additionalProperties: false }), async call(input) { received = input; return { content: [{ type: "text", text: JSON.stringify({ value: "found" }) }], details: undefined }; } }] }] });
   const result = await call(tool!, { service: "other", capability: "mcp", tool: "mcp_fixture", input: { query: "evidence" } });
   assert.deepEqual(received, { query: "evidence" });
+  assert.deepEqual(result.structuredContent, { value: "found" });
   assert.match(JSON.stringify(result.content), /found/);
   await assert.rejects(call(tool!, { service: "orders", capability: "mcp", tool: "mcp_fixture", input: { query: "evidence" } }), /invalid_service_query_input/);
 });

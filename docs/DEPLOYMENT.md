@@ -1,34 +1,62 @@
 # 部署
 
-## 应用拓扑
+部署先选择实际运行方式。当前工作站使用 user systemd 服务；仓库同时提供单容器 Kubernetes 清单。Vite 是开发服务，容器生产入口由 Fastify 同源提供页面、API 和入站 MCP。
 
-[Containerfile](../Containerfile) 构建单一应用镜像：生产 Node 进程运行 Fastify、SQLite、Agent 和项目工具 broker，同时提供编译后的 Solid 页面和本地代码浏览器。镜像包含 Node/npm、Git、ripgrep、OpenSSH、Java 8/Maven 和 Pi；SLS 使用 HTTPS SDK，没有额外 CLI。
+## 运行前提
 
-默认端口 3000。Vite 的 4173 仅用于前端开发，不是生产第二进程。模型 provider、Git remote 和能力目标的网络由应用访问；正式/测试查询及 Source 只读由应用 owner 强制执行。API、静态页面和入站 MCP 同源。
+源码开发与 CI 使用 Node 24.18.0，镜像使用 Node 26。后端直接运行 TypeScript，前端先通过 Vite 构建。Git、ripgrep、OpenSSH 以及目标项目需要的 npm、Java/Maven 由运行环境提供。
 
-镜像使用 node 用户。Kubernetes 清单采用单副本、Recreate、UID/GID 1000、只读根文件系统、禁止提权、移除 capabilities，不自动挂载 ServiceAccount token。不要以多副本共享同一 SQLite/state、宿主引擎 socket 或 privileged 模式绕过当前设计。
+[Containerfile](../Containerfile) 构建单一应用镜像，包含生产依赖、Git、Java 8/Maven 和 Pi CLI。Pi SDK 与 Monaco 的精确版本由 package/lockfile 固定。应用不启动每工单容器或额外格式执行服务，主机上的 Playwright/Podman 浏览器验证工具不属于 Agent 执行后端。
 
-## 持久挂载
+根配置基于应用安装目录解析，默认状态位于 `.issue-pilot`。Operator Pi 模型目录、认证、SSH known_hosts 和项目工具配置在受管 HOME 中；个人凭证在 SQLite，由应用按 owner 选取。state 路径没有环境变量覆盖。
 
-[deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml) 定义实际挂载和预算：
+## 源码与 systemd
+
+首次运行在新项目副本检查根配置、依赖和初始用户：
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build
+node --experimental-strip-types src/http/production.ts
+```
+
+默认应用端口 3000。前端开发使用 `npm run dev:web`，默认端口 4173，代理本机 3000 API。需要远程开发访问时，检查根配置监听地址和实际网络转发，不在文档中固定工作站 IP。
+
+本工作站已注册：
+
+| 服务 | 入口 |
+| --- | --- |
+| issue-pilot-api.service | node --experimental-strip-types src/http/production.ts |
+| issue-pilot-web.service | Vite，使用 src/web/vite.config.ts 与 strictPort |
+
+服务文件由宿主管理，不是仓库中的通用安装脚本。操作前核对 unit 的 WorkingDirectory、ExecStart 和实际 PID：
+
+```bash
+systemctl --user status issue-pilot-api.service issue-pilot-web.service --no-pager
+systemctl --user show issue-pilot-api.service issue-pilot-web.service --property=MainPID,ExecStart,WorkingDirectory --no-pager
+```
+
+已有状态的更新、提交切换或重启先按[运维](RUNBOOK.md)完成停机、一致备份和独立验证，再启动已选定版本。后台不会因修改 TS 文件自动重载，Vite HMR 也不能代替后端发布；不要在同一 state 上启动另一个 API。
+
+## 容器与挂载
+
+[deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml) 使用单副本、Recreate、UID/GID 1000、只读根文件系统，不自动挂载 ServiceAccount token，并移除容器 capabilities。
 
 | 宿主或 volume | 容器路径 | 内容 |
 | --- | --- | --- |
-| /var/lib/issue-pilot | /opt/issue-pilot/.issue-pilot | SQLite、工单文件、Git stores/worktrees、备份 |
-| /etc/issue-pilot，只读 | /home/node | Operator 运行配置、Pi 配置、SSH、npm/Maven 配置 |
+| /var/lib/issue-pilot | /opt/issue-pilot/.issue-pilot | DB、工单文件、Git stores、worktrees |
+| /etc/issue-pilot，只读 | /home/node | Operator Pi、SSH 和工具配置 |
 | tmp emptyDir | /tmp | 临时文件 |
-| npm-cache emptyDir | /home/node/.npm | 项目工具缓存 |
-| maven-cache emptyDir | /home/node/.m2/repository | Maven 依赖缓存 |
+| npm-cache emptyDir | /home/node/.npm | npm 缓存 |
+| maven-cache emptyDir | /home/node/.m2/repository | Maven 缓存 |
 
-根配置基于应用安装目录解析 state 路径，不能用环境变量改变它。宿主缓存挂载不表示所有工单共享可写依赖；实际项目命令、config 和 Issue 私有目录由 [project-tools.ts](../src/workspace/project-tools.ts)、[tool-runtime.ts](../src/tool-runtime.ts) 授权。
+准备目录、owner/mode、存储容量和带 `issue-pilot/state=true` 标签的节点。不同 volume 覆盖 HOME 中的缓存子目录，使配置只读而缓存可写。项目 wrapper 和 broker 继续管理工单命令及路径授权。
 
-部署前准备挂载目录、正确 owner/mode 和有持久存储的节点。清单选择 `issue-pilot/state=true` 节点。初始用户和默认值来自根配置；不要复制另一套环境变量配置。
+应用根 `.pi` 是独立资源目录，不等于 Operator HOME。当前镜像构建不复制该目录，现有清单也未单独挂载；使用应用 Skills、Prompts 或扩展时，应把资源及依赖部署到根配置指定的位置，例如只读挂载到 `/opt/issue-pilot/.pi`。
 
-Pi 模型目录和 Operator 凭证按 Pi runtime 的配置位置放在受管 HOME。个人开发模型 Key/SSH 和个人生产凭证保存在 SQLite，经应用配置维护，具体优先级见[配置](CONFIGURATION.md)。SSH 主机验证所需 known_hosts 必须可用，不能关闭验证解决连接问题。
-
-## 首次发布
-
-在独立构建 checkout 中执行：
+在独立构建 checkout 生成并发布镜像：
 
 ```bash
 npm ci
@@ -40,7 +68,7 @@ podman build -f Containerfile -t registry.example.com/issue-pilot:<version> .
 podman push registry.example.com/issue-pilot:<version>
 ```
 
-将镜像引用替换为审核后的 tag/digest，确认 namespace、节点标签、持久目录和可信入口，再应用清单：
+准备正确的 namespace、镜像引用、存储和入口后应用清单；已有数据的更新须先完成 Runbook 的备份与迁移演练。
 
 ```bash
 kubectl -n issue-pilot apply -f deploy/issue-pilot.yaml
@@ -48,28 +76,18 @@ kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 kubectl -n issue-pilot get deployment,pod,service
 ```
 
-上述命令是操作说明，不会自动为你准备 Ingress、namespace、DNS、证书或持久存储。已有数据的发布属于升级，先按[运维](RUNBOOK.md)停机、备份并验证迁移，不能直接套首次安装步骤。
+这些命令是对应运行方式的说明，不授权代理自行部署，也不会创建真实网关、DNS、证书或宿主配置。
 
-## 网络与身份
+## 网络、身份与可信执行
 
-Service 为 ClusterIP，外部入口使用可信 TLS/auth 网关。应用没有内置登录；`X-Issue-Pilot-Subject` 和浏览器用户选择器只是身份选择。网关必须校验已认证用户与该 header 的关系，不能把任意客户端头当认证结果。
+Service 为 ClusterIP，外部由可信 TLS/auth 网关转发。应用用户选择与身份头不是登录认证，网关必须约束已认证用户和 `X-Issue-Pilot-Subject` 的关系。保护 API、源码、下载、私有配置和 MCP，不把凭证、完整请求/响应或敏感结果加入访问日志。
 
-保护 API、源码、下载、配置描述和 MCP，避免公网直连应用端口。反向代理应禁用 SSE 缓冲，支持长连接及配置允许的上传/请求体；应用附件上传不设业务大小/数量上限，边缘限制由部署方明确设置。Agent 图片、MCP、成果预览和协议请求仍有独立预算。
+反向代理禁用 SSE 缓冲并允许长连接。附件上传在应用层不设业务大小/数量上限，边缘请求限制由部署方明确；Agent 图片、MCP 和预览预算另有配置。放行实际 provider、Git/SSH、能力目标及包仓库网络，外部 stdio MCP 的程序和依赖由配置者准备。
 
-网络放行按实际 provider、Git/SSH、能力目标和包仓库配置。业务查询可包含敏感结果，不把请求/响应 body、配置或认证头加入访问日志。
-
-## 代码执行
-
-Agent 直接使用应用容器中的 Pi 原生工具、Node/Shell 和已安装库。所有工单都有自己的 work 目录；正式数据处理通过通用文件发布交付成果。应用不按文件格式运行模型脚本，也不启动嵌套容器、VM 或每工单执行服务。
-
-应用和 Agent 代码共享容器内信任。只读根文件系统和容器资源限额仍按清单生效，但可写 state 挂载、HOME 配置与其他工单不是互相隔离的权限域。cwd 只组织工作，原生代码拥有应用用户权限；Source API 和内建查询的只读约束不构成对 Shell 的强制限制。
-
-生产镜像已包含 Node 和应用 runtime 依赖，原生 bash 通过 NODE_PATH 使用这些库。工作文件位于 issues/<key>/work，跨轮次保留；成果 publish 按字节原子复制到 outputs。Node/Git 操作使用同一容器，不需要额外容器引擎或执行后端配置。
+Agent 代码以应用用户身份执行，可访问容器内该用户可访问的状态和 HOME。只读根文件系统、容器限额和网络策略约束应用容器，不构成工单间隔离。Source API 的只读策略和内建证据查询校验仍是业务边界。
 
 ## 健康与关闭
 
-`GET /health` 返回 `{"ok":true}`。启动执行迁移、恢复、Git/runtime 校验和维护，进程存在不等于 ready；清单 startup/readiness/liveness probe 指向 /health。实际 probe、资源和终止宽限以 YAML 为准。
+`GET /health` 返回 `{"ok":true}`。启动先迁移、恢复、校验和准备 runtime，再进入正常服务；进程 active 不等于验收完成。关闭等待维护与 Agent，清理 session/model/broker，最后关闭数据库。优雅停止可能需要等待运行中工作，应保留足够终止宽限。
 
-SIGINT/SIGTERM 触发 Fastify 关闭，等待维护、Agent、session、model runtime、project broker 和数据库清理。Recreate 防止两个版本同时写 state；不要在旧进程未退出时启动第二个 API。
-
-发布后核对健康、Web/代码浏览器资源、SSE、数据库不变量、受管 Git/ref 与附件完整性。禁止用真实工单写消息作为默认 smoke；使用独立 state 或授权的最小只读检查。恢复和故障处理见[运维](RUNBOOK.md)。
+发布后核对数据库 integrity/FK、业务不变量、附件和持久文件、Git refs/worktrees、静态资源、SSE 与只读页面。Kubernetes 使用探针与 supervisor 状态，本地使用实际 systemd；不要用另一 checkout 指向真实状态来探测。

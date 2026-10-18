@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyIssueScopeTransition, createIssue, createUser, deleteService, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService, updateUser } from "./client";
+import { applyIssueScopeTransition, createIssue, createUser, deleteService, fetchOutput, fetchOutputBlob, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService, updateUser } from "./client";
+import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 
 describe("API client", () => {
   afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
@@ -105,6 +106,49 @@ describe("API client", () => {
 
     expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
     expect(fetch).toHaveBeenCalledWith("/api/issue-pins", expect.objectContaining({ signal: controller.signal }));
+  });
+
+  it("keeps exact byte views and immutable output blobs", async () => {
+    const expected = "订单🙂", bytes = new TextEncoder().encode(expected);
+    const backing = new Uint8Array(bytes.length + 4).fill(127); backing.set(bytes, 2);
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(backing.subarray(2, 3));
+      controller.enqueue(backing.subarray(3, bytes.length + 2));
+      controller.close();
+    } }));
+    const fetch = vi.fn().mockResolvedValue(response); vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+    const blob = await fetchOutputBlob("ISSUE-1", "report.txt", controller.signal);
+    backing.fill(0);
+    expect(blob.size).toBe(bytes.length);
+    expect(await blob.text()).toBe(expected);
+    expect(response.body!.locked).toBe(false);
+    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-1/outputs/report.txt", { signal: controller.signal });
+  });
+
+  it("cancels output streams at the preview limit and releases the body", async () => {
+    let reads = 0;
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(reads++ === 0 ? new Uint8Array(issuePilotConfig.web.outputPreviewBytes) : new Uint8Array([1])); },
+      cancel,
+    }, { highWaterMark: 0 }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    await expect(fetchOutputBlob("ISSUE-1", "report.bin")).rejects.toThrow("文件过大");
+    expect(reads).toBe(2); expect(cancel).toHaveBeenCalledOnce(); expect(response.body!.locked).toBe(false);
+  });
+
+  it("retains output read failures and releases the failed body", async () => {
+    const reason = new Error("fixture_read_failed");
+    const response = new Response(new ReadableStream<Uint8Array>({ pull(controller) { controller.error(reason); } }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    await expect(fetchOutputBlob("ISSUE-1", "report.bin")).rejects.toBe(reason);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  it("rejects incomplete UTF-8 instead of replacing invalid output text", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array([0xf0, 0x9f]))));
+    await expect(fetchOutput("ISSUE-1", "report.txt")).rejects.toMatchObject({ name: "TypeError" });
   });
 
   it("replaces an Issue's related Issues", async () => {
