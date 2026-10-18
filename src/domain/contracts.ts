@@ -78,7 +78,7 @@ export interface CapabilityConfiguration {
   dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   redis?: { host: string; port: number; username: string; password?: string; database: number };
-  mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string };
+  mq?: { host: string; managementPort: number; username: string; password: string; virtualHost: string };
   es?: { url: string; username: string; password?: string };
 }
 

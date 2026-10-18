@@ -1,6 +1,5 @@
 import themeData from "material-icon-theme/dist/material-icons.json";
 import { version } from "material-icon-theme/package.json";
-import "./editor-codicons.css";
 
 type IconTheme = {
   iconDefinitions: Record<string, { iconPath: string }>;
@@ -28,8 +27,4 @@ export function EditorFileIcon(props: { path: string; directory?: boolean; expan
     return file ? `/assets/editor-icons-${version}/${encodeURIComponent(file)}` : undefined;
   };
   return <img class="editor-file-icon" draggable={false} src={source()} alt="" aria-hidden="true" width="16" height="16" />;
-}
-
-export function Codicon(props: { name: string; size?: number }) {
-  return <i class={`codicon editor-codicon codicon-${props.name}`} aria-hidden="true" style={{ "font-size": `${props.size ?? 16}px` }} />;
 }

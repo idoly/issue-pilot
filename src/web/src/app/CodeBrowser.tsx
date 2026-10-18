@@ -1,10 +1,10 @@
 import "./code-browser.css";
 import { createEffect, createMemo, createSignal, For, lazy, onCleanup, Show, untrack } from "solid-js";
 import { Button, Input, Modal } from "../ui";
-import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Pencil, Trash2 } from "../ui/icons";
+import { Codicon, Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Pencil, Trash2 } from "../ui/icons";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { sourceLanguageName } from "./source-language";
-import { Codicon, EditorFileIcon } from "./EditorIcons";
+import { EditorFileIcon } from "./EditorIcons";
 import { Portal } from "@solidjs/web";
 import { copyText } from "../ui/clipboard";
 import { relativeTime } from "./model";

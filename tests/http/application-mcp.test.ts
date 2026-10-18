@@ -15,7 +15,9 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const issue = await createIssue(f.app, "mcp-app", "test", "MCP inspection");
     f.engine.running.clear();
     const before = f.engine.enqueued.length;
-    await new IssueOutputStore(f.root, String(issue.id)).write("result.csv", "id,value\n00123,complete\n");
+    const store = new IssueOutputStore(f.root, String(issue.id));
+    await store.write("result.csv", "id,value\n00123,complete\n");
+    await store.write("result.xlsx", "synthetic-private-workbook");
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
     const transport = new StreamableHTTPClientTransport(new URL(`${address}/mcp`));
     await client.connect(transport as Parameters<Client["connect"]>[0]);
@@ -47,6 +49,11 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.ok(text(outputs).includes("result.csv"));
     const read = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.csv", offset: 1, limit: 1 } });
     assert.ok(text(read).includes("00123,complete"));
+    const workbook = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.xlsx" } });
+    assert.equal(workbook.isError, undefined);
+    const content = workbook.content as Array<{ type: string; text: string }>;
+    assert.deepEqual(JSON.parse(content[0]!.text), { fileName: "result.xlsx", size: Buffer.byteLength("synthetic-private-workbook"), downloadPath: `/api/issues/${issue.id}/outputs/result.xlsx`, binary: true });
+    assert.doesNotMatch(text(workbook), /synthetic-private-workbook/);
     const invalid = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "../issues.db" } });
     assert.equal(invalid.isError, true);
     const unknown = await client.callTool({ name: "issue_create", arguments: {} });

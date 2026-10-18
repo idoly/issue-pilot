@@ -1,10 +1,12 @@
-import { render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { fetchOutput, type IssueDetail } from "../data/client";
 import { OutputPreview } from "./OutputPreview";
+
+afterEach(cleanup);
 
 const output = { fileName: "report.md", size: 100, updatedAt: "2026-10-02T00:00:00Z" };
 
@@ -30,6 +32,15 @@ describe("output preview", () => {
     finish(new Response("late content"));
     await Promise.resolve();
     expect(screen.queryByText("late content")).toBeNull();
+  });
+
+  it("offers an Excel download without fetching or parsing the workbook", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <OutputPreview issueKey="ISSUE-1" output={{ ...output, fileName: "report.xlsx" }} onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "此格式暂不支持预览，请下载查看");
+    expect(screen.getByRole("link", { name: "下载文件" }).getAttribute("href")).toBe("/api/issues/ISSUE-1/outputs/report.xlsx");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("refuses oversized files without requesting their contents", async () => {

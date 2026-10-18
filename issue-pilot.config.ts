@@ -48,7 +48,7 @@ export const issuePilotConfig = Object.freeze({
     dms: Object.freeze({ sseUrl: "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse" }),
     nacos: Object.freeze({ group: "DEFAULT_GROUP" }),
     redis: Object.freeze({ port: 6379, database: 0, scanResults: 50 }),
-    rabbitmq: Object.freeze({ port: 5672, managementPort: 15672, virtualHost: "/" }),
+    rabbitmq: Object.freeze({ managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
     agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, resourceDirectory: ".pi" }),

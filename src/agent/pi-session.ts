@@ -169,7 +169,7 @@ function sessionTools(options: StartPiSessionOptions, identityEnvironment: () =>
         AI_AGENT: "pi",
         PI_CODING_AGENT: "true",
         NODE_PATH: [path.resolve(import.meta.dirname, "../../node_modules"), context.env.NODE_PATH].filter(Boolean).join(path.delimiter),
-        ...(executableRoot ? { PATH: `${executableRoot}${path.delimiter}${context.env.PATH ?? ""}` } : {}),
+        PATH: [executableRoot, path.resolve(import.meta.dirname, "../../.venv/bin"), context.env.PATH].filter(Boolean).join(path.delimiter),
         ...gitEnvironment,
         ...identityEnvironment(),
       },

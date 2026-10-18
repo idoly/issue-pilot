@@ -34,9 +34,7 @@
 .source-tree-arrow { display: flex; width: 16px; flex: 0 0 16px; align-items: center; color: #8b949e; }
 .source-tree button:hover { background: #6e76811a; }
 .source-tree button.selected { background: #6e768166; }
-.source-tree button > svg { flex: 0 0 16px; color: #42baff; }
 .editor-file-icon { display: block; flex: 0 0 16px; object-fit: contain; }
-.source-browser .editor-codicon { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; }
 .source-path-actions { position: absolute; z-index: 4; top: 4px; right: 34px; }
 .source-path-actions > summary { display: grid; width: 24px; height: 26px; place-items: center; color: #8b949e; font-size: 18px; cursor: pointer; list-style: none; opacity: 0; }
 .source-path-actions > summary::-webkit-details-marker { display: none; }
@@ -55,7 +53,7 @@
 .source-file-tools > .ui-button { min-height: 20px; height: 20px; flex-shrink: 0; padding-inline: 6px; font-size: 11px; }
 .source-breadcrumb { min-width: 0; height: 22px; flex: 1; overflow: hidden; padding: 0 14px; color: #7d8590; font-size: 13px; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
 .source-breadcrumb > * { margin-right: 4px; }
-.source-breadcrumb > .editor-file-icon, .source-breadcrumb > .codicon { display: inline-block; vertical-align: middle; }
+.source-breadcrumb > .editor-file-icon, .source-breadcrumb > .ui-icon { display: inline-block; vertical-align: middle; }
 .source-breadcrumb > span:last-child { margin-right: 0; color: #c9d1d9; }
 .source-monaco-editor { position: relative; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
 .source-monaco-diff { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
@@ -92,7 +90,6 @@
 .source-change:hover { background: #6e76811a; }
 .source-change.selected { outline: 1px solid #1f6feb; outline-offset: -1px; background: #6e768166; }
 .source-change > button:first-child { display: flex; min-width: 0; height: 22px; flex: 1; align-items: center; gap: 6px; overflow: hidden; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
-.source-change > button:first-child > svg { color: #42baff; }
 .source-change-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-change-directory { overflow: hidden; color: #7d8590; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .source-change-actions { display: flex; height: 22px; align-items: center; }
@@ -108,7 +105,7 @@
 .source-history-tree { flex: 1; min-height: 0; overflow: auto; }
 .source-history .source-section-title { height: 21px; flex-basis: 21px; gap: 0; padding: 0 12px 0 2px; }
 .source-history .source-section-title > button:not(.ui-button) { height: 22px; line-height: 22px; }
-.source-history .source-section-title > .codicon:first-child { margin-right: 2px; }
+.source-history .source-section-title > .ui-icon:first-child { margin-right: 2px; }
 .source-history .source-section-title .ui-button { width: 20px; min-width: 20px; height: 20px; min-height: 20px; margin-left: 4px; padding: 2px; color: #7d8590; }
 .source-history-auto { display: flex; height: 20px; align-items: center; margin-left: auto; padding: 2px 4px 2px 2px; color: #7d8590; font-size: 11px; line-height: 16px; }
 .source-history-row, .source-history-file { position: relative; display: flex; width: 100%; height: 22px; align-items: center; padding-right: 12px; font: 13px/22px system-ui, Ubuntu, "Droid Sans", sans-serif; }
@@ -126,7 +123,7 @@
 .source-history-row .source-history-action, .source-history-file .source-history-action { display: none; width: 20px; min-width: 20px; height: 20px; min-height: 20px; margin-left: 4px; padding: 2px; }
 .source-history-row:hover .source-history-action, .source-history-row.selected .source-history-action, .source-history-row:focus-within .source-history-action, .source-history-file:hover .source-history-action, .source-history-file.selected .source-history-action, .source-history-file:focus-within .source-history-action { display: inline-flex; }
 .source-branch-label { display: flex; max-width: 122px; height: 18px; flex: 0 1 auto; align-items: center; overflow: hidden; margin-left: 4px; border-radius: 10px; background: #59a4f9; color: #010409; font-size: 12px; line-height: 18px; white-space: nowrap; }
-.source-branch-label > .codicon { box-sizing: content-box; width: 12px; height: 12px; padding: 3px; line-height: 12px; }
+.source-branch-label > .ui-icon { box-sizing: content-box; width: 12px; height: 12px; padding: 3px; line-height: 12px; }
 .source-branch-label > span { overflow: hidden; max-width: 104px; padding-right: 4px; text-overflow: ellipsis; }
 .source-history-files { position: relative; }
 .source-history-file::before { position: absolute; top: 0; bottom: 0; left: var(--history-indent); width: 1px; background: #21262d66; content: ""; pointer-events: none; }
@@ -167,11 +164,11 @@
 .source-search-results { min-height: 0; flex: 1; overflow: auto; }
 .source-search-repository-title, .source-search-file-title, .source-search-match { display: flex; width: 100%; min-width: 0; height: 22px; align-items: center; overflow: hidden; padding: 0 12px 0 19px; border: 0; background: transparent; color: inherit; font: 13px/22px system-ui, Ubuntu, "Droid Sans", sans-serif; list-style: none; text-align: left; cursor: pointer; }
 .source-search-repository-title { padding-left: 11px; }
-.source-search-repository-title > .codicon:first-child, .source-search-file-title > .codicon:first-child { margin-right: 3px; color: #7d8590; }
+.source-search-repository-title > .ui-icon:first-child, .source-search-file-title > .ui-icon:first-child { margin-right: 3px; color: #7d8590; }
 .source-search-repository-title > .editor-file-icon, .source-search-file-title > .editor-file-icon { margin-right: 6px; color: #8b9faa; }
 .source-search-repository-title > span:nth-last-child(2) { flex: 1; }
 .source-search-repository-title::-webkit-details-marker, .source-search-file-title::-webkit-details-marker { display: none; }
-.source-search-repository:not([open]) > summary > .codicon:first-child, .source-search-file:not([open]) > summary > .codicon:first-child { transform: rotate(-90deg); }
+.source-search-repository:not([open]) > summary > .ui-icon:first-child, .source-search-file:not([open]) > summary > .ui-icon:first-child { transform: rotate(-90deg); }
 .source-search-repository-title:hover, .source-search-file-title:hover, .source-search-match:hover { background: #6e76811a; }
 .source-search-match.selected { outline: 1px solid #1f6feb; outline-offset: -1px; background: #6e768166; }
 .source-search-count { display: block; position: relative; top: 1px; min-width: 18px; height: 18px; padding: 3px 5px; border-radius: 11px; background: #1f6feb; color: #fff; font-size: 11px; line-height: 11px; text-align: center; }

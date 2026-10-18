@@ -1,88 +1,60 @@
-import type { IconNode } from "lucide";
-import {
-  ArrowDown as ArrowDownNode,
-  CheckCircle2 as CheckCircle2Node,
-  ChevronDown as ChevronDownNode,
-  ChevronRight as ChevronRightNode,
-  Code2 as Code2Node,
-  Copy as CopyNode,
-  Download as DownloadNode,
-  Eye as EyeNode,
-  File as FileNode,
-  GitBranch as GitBranchNode,
-  MessageSquare as MessageSquareNode,
-  Maximize2 as Maximize2Node,
-  PanelBottom as PanelBottomNode,
-  PanelRight as PanelRightNode,
-  Paperclip as PaperclipNode,
-  Pencil as PencilNode,
-  Pin as PinNode,
-  Plus as PlusNode,
-  RefreshCw as RefreshCwNode,
-  Search as SearchNode,
-  Send as SendNode,
-  Trash2 as Trash2Node,
-  UserCheck as UserCheckNode,
-  UserPlus as UserPlusNode,
-  UserX as UserXNode,
-  X as XNode,
-  ZoomIn as ZoomInNode,
-  ZoomOut as ZoomOutNode,
-} from "lucide";
-import { Dynamic, type JSX } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
 import { omit } from "solid-js";
+import "monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
+import "./icons.css";
 
-interface IconProps extends Omit<JSX.SvgSVGAttributes<SVGSVGElement>, "children"> {
+// Names and code points from the pinned Monaco Codicon font.
+const glyphs = {
+  account: 0xeb99, "arrow-down": 0xea9a, attach: 0xec34, "case-sensitive": 0xeab1,
+  check: 0xeab2, "chevron-down": 0xeab4, "chevron-right": 0xeab6, "circle-slash": 0xeabd,
+  close: 0xea76, "cloud-download": 0xeac2, code: 0xeac4, comment: 0xea6b, copy: 0xebcc,
+  "diff-multiple": 0xec23, edit: 0xea73, eye: 0xea70, file: 0xea7b,
+  "git-branch": 0xec6f, "git-commit": 0xeafc, "go-to-file": 0xea94,
+  "layout-panel": 0xebf2, "layout-sidebar-right": 0xebf4, "lock-small": 0xebe7,
+  pass: 0xeba4, person: 0xea67, "person-add": 0xebcd, pin: 0xeb2b, plus: 0xea60,
+  refresh: 0xeb37, replace: 0xeb3d, "screen-full": 0xeb4c, search: 0xea6d, send: 0xec0f,
+  target: 0xebf8, trash: 0xea81, "vm-outline": 0xeb7a, "whole-word": 0xeb7e,
+  "zoom-in": 0xeb81, "zoom-out": 0xeb82,
+} as const;
+
+interface IconProps extends Omit<JSX.HTMLAttributes<HTMLElement>, "children" | "style"> {
   size?: number;
 }
 
-function createIcon(node: IconNode) {
-  return (props: IconProps) => {
-    const others = omit(props, "size");
-    return (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width={props.size ?? 24}
-        height={props.size ?? 24}
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        {...others}
-      >
-        {node.map(([tag, attributes]) => <Dynamic component={tag} {...attributes} />)}
-      </svg>
-    );
-  };
+export function Codicon(props: IconProps & { name: keyof typeof glyphs }) {
+  const others = omit(props, "name", "size", "class");
+  return <i aria-hidden="true" {...others} class={`ui-icon ${props.class ?? ""}`} data-icon={String.fromCodePoint(glyphs[props.name])} style={{ "font-size": `${props.size ?? 16}px` }} />;
 }
 
-export const ArrowDown = createIcon(ArrowDownNode);
-export const CheckCircle2 = createIcon(CheckCircle2Node);
-export const ChevronDown = createIcon(ChevronDownNode);
-export const ChevronRight = createIcon(ChevronRightNode);
-export const Code2 = createIcon(Code2Node);
-export const Copy = createIcon(CopyNode);
-export const Download = createIcon(DownloadNode);
-export const Eye = createIcon(EyeNode);
-export const File = createIcon(FileNode);
-export const GitBranch = createIcon(GitBranchNode);
-export const MessageSquare = createIcon(MessageSquareNode);
-export const Maximize2 = createIcon(Maximize2Node);
-export const PanelBottom = createIcon(PanelBottomNode);
-export const PanelRight = createIcon(PanelRightNode);
-export const Paperclip = createIcon(PaperclipNode);
-export const Pencil = createIcon(PencilNode);
-export const Pin = createIcon(PinNode);
-export const Plus = createIcon(PlusNode);
-export const RefreshCw = createIcon(RefreshCwNode);
-export const Search = createIcon(SearchNode);
-export const Send = createIcon(SendNode);
-export const Trash2 = createIcon(Trash2Node);
-export const UserCheck = createIcon(UserCheckNode);
-export const UserPlus = createIcon(UserPlusNode);
-export const UserX = createIcon(UserXNode);
-export const X = createIcon(XNode);
-export const ZoomIn = createIcon(ZoomInNode);
-export const ZoomOut = createIcon(ZoomOutNode);
+function createIcon(name: keyof typeof glyphs) {
+  return (props: IconProps) => <Codicon {...props} name={name} size={props.size ?? 24} />;
+}
+
+export const ArrowDown = createIcon("arrow-down");
+export const CheckCircle2 = createIcon("pass");
+export const ChevronDown = createIcon("chevron-down");
+export const ChevronRight = createIcon("chevron-right");
+export const Code2 = createIcon("code");
+export const Copy = createIcon("copy");
+export const Download = createIcon("cloud-download");
+export const Eye = createIcon("eye");
+export const File = createIcon("file");
+export const GitBranch = createIcon("git-branch");
+export const MessageSquare = createIcon("comment");
+export const Maximize2 = createIcon("screen-full");
+export const PanelBottom = createIcon("layout-panel");
+export const PanelRight = createIcon("layout-sidebar-right");
+export const Paperclip = createIcon("attach");
+export const Pencil = createIcon("edit");
+export const Pin = createIcon("pin");
+export const Plus = createIcon("plus");
+export const RefreshCw = createIcon("refresh");
+export const Search = createIcon("search");
+export const Send = createIcon("send");
+export const Trash2 = createIcon("trash");
+export const UserCheck = createIcon("person");
+export const UserPlus = createIcon("person-add");
+export const UserX = createIcon("circle-slash");
+export const X = createIcon("close");
+export const ZoomIn = createIcon("zoom-in");
+export const ZoomOut = createIcon("zoom-out");

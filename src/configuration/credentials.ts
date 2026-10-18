@@ -30,7 +30,7 @@ export function projectCapabilityConfiguration(configuration: CapabilityConfigur
     }
     const section = stored as Record<string, unknown>;
     const fields = CAPABILITY_CREDENTIALS[key].fields as readonly string[];
-    projected[key] = { ...Object.fromEntries(Object.entries(section).filter(([field]) => !fields.includes(field))), credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
+    projected[key] = { ...Object.fromEntries(Object.entries(section).filter(([field]) => !fields.includes(field) && !(key === "mq" && field === "port"))), credentialConfigured: Boolean(configuredCredentialValues(key, section)) };
   }
   return projected as ProjectedCapabilityConfiguration;
 }

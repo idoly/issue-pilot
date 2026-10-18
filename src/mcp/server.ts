@@ -12,7 +12,6 @@ import { ISSUE_PRIORITIES, ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
 import { sessionTranscript } from "../agent/events.ts";
-import { excelText, isExcelFile, parseExcel } from "../documents/excel.ts";
 import { issueSessionRoot } from "../workspace/state.ts";
 import { ensureCurrentSubject, requireIssue, type ApiRouteContext } from "../http/route-context.ts";
 
@@ -29,8 +28,8 @@ const definitions = [
   { name: "issue_create", description: "创建工单并自动入队处理，立即返回工单编号。服务和用户由 services_list/users_list 发现。生产数据处理与开发需要开发角色；不要在超时后盲目重试，先搜索确认是否已创建。", inputSchema: Type.Object({ title: Type.String({ minLength: 1, maxLength: 300, description: "工单标题" }), serviceKey: Type.String({ minLength: 1, maxLength: 100, description: "服务 key" }), workMode: Type.Union(ISSUE_WORK_MODES.map(mode => Type.Literal(mode)), { description: "production_analysis 正式调查；test_analysis 测试调查；production_data 生产数据处理；development_fix 开发修复；development_feature 功能开发" }), description: Type.Optional(Type.String({ maxLength: 10000, description: "问题背景、需要完成的工作和验收要求" })), priority: Type.Optional(Type.Union(ISSUE_PRIORITIES.map(priority => Type.Literal(priority)), { description: "默认 p2" })), assigneeSubject: Type.Optional(Type.Union([Type.String({ maxLength: 255 }), Type.Null()], { description: "处理人 subject，省略时未分配" })), ccSubjects: Type.Optional(Type.Array(Type.String({ maxLength: 255 }), { uniqueItems: true })), relatedIssueKeys: Type.Optional(Type.Array(key, { maxItems: issuePilotConfig.limits.relatedIssues, uniqueItems: true })) }, { additionalProperties: false }) },
   { name: "issue_message", description: "向指定工单的智能体发送补充信息、问题或继续处理要求。运行中进入引导/排队流程，空闲时继续处理，已解决工单拒绝。成功只表示已受理，随后读取 issue_get/issue_conversation 查看进展；响应不明时先核对对话，不自动重复发送。", inputSchema: Type.Object({ key, message: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.agentMessageChars, description: "发送给工单智能体的文本" }) }, { additionalProperties: false }) },
   { name: "issue_conversation", description: "分页读取工单对话和当前轮次进展，不包含内部提示词或凭证。offset 从 0 开始，nextOffset 指向后续内容；使用 issue_get 判断处理是否结束。", inputSchema: Type.Object({ key, ...paging }, { additionalProperties: false }) },
-  { name: "attachment_read", description: "按工单和附件 ID 读取文本或 Excel 附件，先校验完整性。offset 从 0 开始；二进制返回下载路径。附件 ID 从 issue_get 获取。", inputSchema: Type.Object({ key, attachmentId: Type.String(), ...linePaging }, { additionalProperties: false }) },
-  { name: "output_read", description: "按工单和文件名读取交付成果的文本或 Excel 内容，二进制返回下载路径。成果文件名从 issue_get 获取。", inputSchema: Type.Object({ key, fileName: Type.String({ minLength: 1, maxLength: 255 }), ...linePaging }, { additionalProperties: false }) },
+  { name: "attachment_read", description: "按工单和附件 ID 读取文本附件，先校验完整性。offset 从 0 开始；Excel 等二进制文件返回下载路径。附件 ID 从 issue_get 获取。", inputSchema: Type.Object({ key, attachmentId: Type.String(), ...linePaging }, { additionalProperties: false }) },
+  { name: "output_read", description: "按工单和文件名读取交付成果的文本内容，Excel 等二进制文件返回下载路径。成果文件名从 issue_get 获取。", inputSchema: Type.Object({ key, fileName: Type.String({ minLength: 1, maxLength: 255 }), ...linePaging }, { additionalProperties: false }) },
 ];
 const applicationTools = () => definitions.map(definition => ({ ...definition, annotations: { readOnlyHint: !mutations.has(definition.name), destructiveHint: false, ...mutations.has(definition.name) ? { idempotentHint: false } : {}, openWorldHint: mutations.has(definition.name) } }));
 type Input = Record<string, unknown>;
@@ -61,7 +60,6 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
   };
   const issue = async (key: string) => JSON.parse((await api(`/api/issues/${encodeURIComponent(key)}`)).body);
   const fileText = (content: Buffer, fileName: string, downloadPath: string, input: Input) => {
-    if (isExcelFile(fileName)) return { fileName, downloadPath, ...lines(excelText(parseExcel(content)), input) };
     if (!/\.(csv|tsv|jsonl?|sql|txt|md|log|ya?ml|xml|properties|html|css|[cm]?[jt]sx?)$/i.test(fileName)) return { fileName, size: content.length, downloadPath, binary: true };
     return { fileName, downloadPath, ...lines(new TextDecoder("utf-8", { fatal: true }).decode(content), input) };
   };

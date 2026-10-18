@@ -1,24 +1,6 @@
-# 运维
+# 运维手册
 
-先确认根配置、部署目录、运行进程和真实 state root。不要同时运行两个 API，或用另一 checkout 指向真实状态做实验。启动和重启会迁移、恢复及重建状态，操作前应理解[架构](ARCHITECTURE.md)与[部署方式](DEPLOYMENT.md)。
-
-## 状态分类
-
-工单目录使用规范化的小写 key，路径由 [state.ts](../src/workspace/state.ts) 生成。
-
-| 内容 | 类别 | 处理要求 |
-| --- | --- | --- |
-| issues.db，以及存在的 WAL/SHM | 持久 | 保留同一时点文件组或一致数据库备份 |
-| issues/<key>/agent | 持久 | Pi JSONL、active branch、DB binding 匹配 |
-| issues/<key>/attachments | 持久 | 文件与 DB 路径、size/hash、0400 mode 匹配 |
-| issues/<key>/outputs | 持久 | 发布成果，不随 runtime 清理 |
-| issues/<key>/work | 持久工作文件 | 脚本、中间结果和检查点跨轮次保留 |
-| git/repositories | 持久 | objects、本地 branches、worktree metadata |
-| workspaces/<key> | 有条件持久 | 活动开发内容，包括 staged/untracked |
-| issues/<key>/runtime、git/checkouts、wrapper、control socket | 生成 | 由 owner 校验、准备和回收，异常内容保留调查 |
-| backups、quarantine、未知目录 | Operator 证据 | 查清归属与事务阶段，不自动收编或删除 |
-
-基座 `.pi` 独立于 state，需备份资源及依赖。状态、备份和源码快照可能包含凭证、内部代码和业务数据，应使用私有目录，不上传普通测试 artifact。
+先确认根配置、部署目录、进程和真实 state root。状态分类见[数据存储设计](STORAGE.md#一致性与恢复单位)，运行方式见[部署指南](DEPLOYMENT.md)。启动会迁移和恢复状态，不能启动第二个 API 作为只读检查。
 
 ## 健康与活动检查
 
@@ -119,6 +101,8 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 删除临时测试、参考构建和依赖副本前，检查进程 cwd/argv/fd、持久数据引用、符号链接及 Git 归属。保留有效验证结果和删除清单，确认清理不会沿链接进入 live 状态。已发布迁移、运行目录、未知证据及当前资源不能因“没有代码引用”而删除。保留策略由 Operator 决定，备份脚本不顺手清理其他快照。
 
 ## 常见故障
+
+先判断应用能否响应，再检查身份、工作区和文件，最后排查模型/协议或 SSE/前端投影。`/health` 不验证每个工单和远程目标。创建或发消息响应不明时先查询确认，不盲目重复提交。
 
 | 症状或稳定错误 | 处理 |
 | --- | --- |

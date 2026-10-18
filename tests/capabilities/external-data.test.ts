@@ -126,7 +126,7 @@ test("reads RabbitMQ management data with encoded scope and credentials", async 
   const address = server.address();
   assert(address && typeof address === "object");
   try {
-    const config = { host: "127.0.0.1", port: 5672, managementPort: address.port, username: "reader", password: "secret", virtualHost: "/" };
+    const config = { host: "127.0.0.1", managementPort: address.port, username: "reader", password: "secret", virtualHost: "/" };
     const result = await readRabbitMq(config, { action: "bindings", queue: "orders" });
     const output = JSON.parse(result.content[0]!.text) as { output: unknown[] };
     assert.equal(output.output.length, 150);
@@ -160,7 +160,7 @@ test("rejects oversized native Redis and HTTP responses before returning them", 
   assert(httpAddress && typeof httpAddress === "object");
   try {
     await assert.rejects(() => readRedis({ host: "127.0.0.1", port: redisAddress.port, username: "", database: 0 }, { action: "get", key: "large" }), /capability_result_too_large/);
-    await assert.rejects(() => readRabbitMq({ host: "127.0.0.1", port: 5672, managementPort: httpAddress.port, username: "reader", password: "secret", virtualHost: "/" }, { action: "overview" }), /capability_result_too_large/);
+    await assert.rejects(() => readRabbitMq({ host: "127.0.0.1", managementPort: httpAddress.port, username: "reader", password: "secret", virtualHost: "/" }, { action: "overview" }), /capability_result_too_large/);
   } finally {
     await Promise.all([
       new Promise<void>((resolve) => redisServer.close(() => resolve())),

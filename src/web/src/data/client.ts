@@ -321,15 +321,10 @@ export function outputUrl(key: string, fileName: string): string {
 }
 
 export async function fetchOutput(key: string, fileName: string, signal?: AbortSignal): Promise<string> {
-  const blob = await fetchOutputBlob(key, fileName, signal);
-  return new TextDecoder("utf-8", { fatal: true }).decode(await blob.arrayBuffer());
-}
-
-export async function fetchOutputBlob(key: string, fileName: string, signal?: AbortSignal): Promise<Blob> {
   const response = await fetch(outputUrl(key, fileName), { ...(signal ? { signal } : {}) });
   if (!response.ok) throw await requestError(response);
   const reader = response.body?.getReader();
-  if (!reader) return new Blob();
+  if (!reader) return "";
   let bytes = 0;
   const chunks: BlobPart[] = [];
   try {
@@ -340,7 +335,7 @@ export async function fetchOutputBlob(key: string, fileName: string, signal?: Ab
       if (bytes > issuePilotConfig.web.outputPreviewBytes) throw new Error("文件过大，请下载查看完整内容");
       chunks.push(value);
     }
-    return new Blob(chunks);
+    return new TextDecoder("utf-8", { fatal: true }).decode(await new Blob(chunks).arrayBuffer());
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

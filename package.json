@@ -20,7 +20,6 @@
     "@alicloud/openapi-core": "1.0.8",
     "@alicloud/sls20201230": "5.12.0",
     "@darabonba/typescript": "1.0.5",
-    "@e965/xlsx": "^0.20.3",
     "@earendil-works/pi-ai": "1.3.0",
     "@earendil-works/pi-coding-agent": "1.3.0",
     "@earendil-works/pi-mcp": "1.3.0",
@@ -43,7 +42,6 @@
     "dompurify": "^3.4.17",
     "github-markdown-css": "5.9.0",
     "jsdom": "^30.1.3",
-    "lucide": "^1.58.0",
     "marked": "^18.1.1",
     "material-icon-theme": "5.39.0",
     "monaco-editor": "0.55.1",
@@ -54,7 +52,6 @@
   },
   "overrides": {
     "dompurify": "$dompurify",
-    "nanoid": "3.3.18",
     "seroval": "1.6.9",
     "seroval-plugins": "1.6.9",
     "undici": "8.12.2"
