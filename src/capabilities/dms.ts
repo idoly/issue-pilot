@@ -200,6 +200,8 @@ export async function queryDms(
   if (!database) throw new Error("dms_database_not_authorized");
   const boundedSignal = operationSignal(signal);
   const session = await connect(configured, boundedSignal);
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= session.close();
   try {
     const tool = uniqueTool(await session.listTools(boundedSignal), "executeScript", isReadOnlyScriptTool);
     if (!tool) throw new Error("dms_mcp_execute_script_unavailable");
@@ -208,11 +210,11 @@ export async function queryDms(
     boundedSignal.throwIfAborted();
     const text = JSON.stringify({ tool: tool.name, result }, null, 2);
     if (input.output) {
-      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); boundedSignal.throwIfAborted(); });
+      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); });
       return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
     }
     return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
   } finally {
-    await session.close();
+    await close();
   }
 }

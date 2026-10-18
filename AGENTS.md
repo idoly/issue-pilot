@@ -28,7 +28,7 @@ Before an authorized operational change, follow the Runbook, including its bound
 | Agent queue, reservations and recovery | src/agent/engine.ts |
 | Pi sessions and model runtime | src/agent/pi-session.ts, src/agent/model-runtime.ts |
 | Tool input and dispatch | src/agent/service-query-tool.ts, src/capabilities/registry.ts |
-| External protocols | src/capabilities, src/mcp/client.ts |
+| External protocols and Pi MCP integration | src/capabilities, src/mcp/client.ts, src/mcp/pi-extension.ts |
 | Inbound Issue MCP | src/mcp/server.ts |
 | Outputs and publication | src/outputs/store.ts, src/agent/output-tool.ts |
 | Git, projects, runtime and lifecycle | src/workspace |
@@ -50,10 +50,11 @@ Correctness comes first. Aim for code that a new maintainer three years from now
 4. Require a concrete maintenance benefit for every abstraction, module, interface and dependency. Prefer language, standard library, framework and official SDK capabilities.
 5. Allow limited repetition when semantics differ. Do not force unrelated behavior into one helper or add layers that only forward calls.
 6. Keep workflows traceable across a few related owners. Do not split files for length or rewrite reasonable implementations for style.
-7. Preserve boundaries, error meaning, transactions, concurrency, cancellation, idempotency and recovery. Do not swallow failures to make code shorter.
+7. Preserve boundaries, error meaning, transactions, concurrency, cancellation, idempotency, diagnostics and recovery. Do not hide failures or swallow errors to make code shorter.
 8. Evaluate common business changes for unnecessary cross-module impact; implement only current needs and justified extension points.
 9. Test behavior, boundaries and invariants. Do not create meaningless interfaces or tests that only mirror implementation.
 10. Prefer local, gradual evolution and necessary compatibility. Keep a reasonable design when a replacement has no demonstrated benefit.
+11. Identify obsolete code, files, directories, dependencies and configuration. Before deletion, verify static and dynamic references, builds, migrations and runtime effects; report uncertain uses and preserve them.
 
 A review-only request authorizes findings and recommendations, not source edits, dependency upgrades or architecture changes. Once changes are authorized, prioritize correctness, security and consistency, implement the minimum useful patch and validate it.
 
@@ -69,7 +70,7 @@ For each confirmed finding, give location, evidence, effect, reasonable trigger,
 - Personal production DMS/SLS groups override independently and completely. Missing groups use deployment configuration; they do not create absent targets.
 - Ordinary configuration GET projects credentials out. Developer-only selected descriptions/MCP configuration may expose their documented values; native DMS Authorization and SLS keys remain hidden. Secrets never enter prompts, tool input, argv, diagnostics or ordinary logs.
 - Native evidence queries retain exact source/target and read-only checks. Development queries explicitly select prod/test; code include/remove stays in the Issue environment.
-- Enabled external MCP services are global and expose all configured tools to all Issues. Read-only hints are descriptive, not authorization. Use the documented connection lifetime, schema and result checks.
+- Enabled external MCP services are global and expose all configured tools to all Issues through Pi's MCP extension. Read-only hints are descriptive, not authorization. Keep DB ownership, literal private configuration, transport compatibility, cancellation and input/result budgets; let Pi own discovery, dynamic registration, connections and shutdown.
 - Prod/test use read-only snapshots, active dev uses isolated worktrees, released dev restores from local working branches. Source API enforces repository policy; historical branch and workspace names remain history.
 - Agent native coding tools run as the trusted application user in persistent `issues/<key>/work`. Cwd organizes work and is not OS isolation; native code can bypass business file policies.
 - Use normal code and installed libraries for formats. Do not add format-specific executors, nested sandboxes or a selectable runtime framework without a concrete need.

@@ -79,7 +79,7 @@ unknown 在 HTTP、TypeBox 或协议响应边界解析，内部维持 typed call
 
 配置读快照使用原生 libSQL read transaction：当前 Drizzle adapter 忽略事务模式参数，适配器负责避免读占写锁。验证应使用独立 libSQL writer 与持有中的快照重叠，不能只测未并发的请求。
 
-Pi 在可修改参数的扩展钩子之前验证输入。service_query、workspace、output 因此保留 execute 入口同 schema 的编译校验，避免钩子引入非法输入后到达副作用。模型、会话、Codemode、工具嵌套与资源尽量使用公开 SDK API，不直接操作 agent.state 或从历史恢复额外工具权限。
+Pi 在可修改参数的扩展钩子之前验证输入。service_query、workspace、output 因此保留 execute 入口同 schema 的编译校验，避免钩子引入非法输入后到达副作用。外部 MCP 使用官方扩展，在发送前按已发现的工具 schema 校验钩子修改后的参数；回归覆盖直接调用与 Codemode 嵌套调用、动态工具变化和取消后的连接复用。模型、会话、Codemode、工具嵌套与资源尽量使用公开 SDK API，不直接操作 agent.state 或从历史恢复额外工具权限。
 
 Agent 失败清理属于同一工单的串行任务；复现要覆盖下一条工作、会话关闭、失败状态回写和排队消息恢复。模型超时区分 assistant 与 user/toolResult/custom，工具执行期间暂停。
 

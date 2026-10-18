@@ -98,7 +98,11 @@ MySQL/DMS 保留完整查询结果，不添加隐式行数限制或静默裁剪�
 
 局部更新时，HTTP 省略 headers 可保留原认证，显式空 headers 清除认证；目标/协议变化要明确提供新认证或清除。stdio 省略 command 仅用于保留已有启动配置，不能同时替换 args/env/cwd；替换时提供完整启动信息。编辑页面正常读取并提交完整配置。
 
-每个 Agent 会话按 MCP id 复用连接及子进程，调用有独立超时/取消，关闭会话释放池。调用前重新核对工具及 schema，保留工具数、结果预算、HTTPS 同源与重定向限制；错误稳定化，stderr 不进入日志。配置字符串不作为 Shell 表达式执行。
+每个 Agent 会话通过 Pi 的 `createMcpExtension()` 连接已启用配置。Pi 负责工具命名与注册、连接复用、重连、工具列表变化及关闭，并保留图片、结构化结果和原生 MCP resource 工具；外部工具以 `mcp__<id>__<tool>` 形式独立开放，不再包装成 service_query 的服务/环境分支。Codemode off 时使用 direct 曝光，模型直接调用 MCP；on/only 时使用 codemode 曝光，完整 MCP 工具声明不预先放入模型上下文，脚本通过 searchTools/describeTool 发现并调用工具及 resources。服务仍在会话启动后由 SDK 后台连接，调用时等待所需服务就绪；autoEnableCodemode 保持 false，全局开关不会被 MCP 连接改变。on 仍保留原生与应用直接工具，only 的声明隐藏由 SDK 处理。
+
+MCP 工具返回的业务失败保留 `CallToolResult.isError: true`，错误内容替换为稳定的 `mcp_tool_failed`，原始 content、structuredContent 和 _meta 不进入会话。Codemode 可检查结果的 isError 并继续处理其他成功结果；直接调用仍显示为失败。协议、网络、参数校验和预算错误继续作为异常，不转换为业务成功。
+
+[Pi 接入适配](../src/mcp/pi-extension.ts)只从数据库快照加载配置，不读取宿主或工单 mcp.json，也不开放另一套终端配置管理。HTTP/stdio 使用 Pi 官方传输，SSE 通过 MCP 官方 SDK 的兼容适配接入；保留 HTTPS 同源与禁止重定向、stdio 私有环境及字面配置值的行为；不执行配置中的 `!command` 或展开环境变量。适配层保留启动取消/超时、分页工具数和结果预算、错误稳定化及发送前参数校验，防止扩展钩子修改后绕过 schema。工具变化遵循 MCP 的 list_changed 通知，由 SDK 重新发现并注册，不在每次工具调用前另发一次 tools/list。超过 SDK 文本展示预算的结果附带完整临时文件路径，Codemode 仍接收完整结构，应用的结果字节上限继续生效。连接测试仍使用独立的只发现、不执行工具的协议客户端。
 
 已启用 MCP 的全部工具向所有工单开放，不按工单环境或 readOnlyHint/destructiveHint 过滤；只读标记只展示服务声明。外部 MCP 与内建只读证据查询是不同合同，配置者应理解其工具行为。
 
@@ -128,6 +132,8 @@ Codemode 的 off/on/only 由独立字段持有，默认 on。on 保留直接工�
 ## 入站工单 MCP
 
 外部客户端访问同源 `POST /mcp` 的无状态 Streamable HTTP；GET/DELETE 返回 405。连接身份沿用 HTTP 身份选择，认证仍由网关承担。
+
+端点页按当前访问入口和所选用户生成接入配置，支持 Pi/Cursor/Claude Code 的 `mcpServers` JSON、VS Code 的 `servers` JSON，以及 Codex TOML；可一键复制包含地址与身份头的完整配置。配置中的 `X-Issue-Pilot-Subject` 选择用户，不能代替入口认证；为其他用户分享配置前先切换身份，从客户端可访问的应用地址打开此页。工具列表提供名称及说明，写操作的受理与后续查询语义保持一致。
 
 | 工具 | 作用 |
 | --- | --- |

@@ -228,8 +228,8 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     try {
       const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
       if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new ApiError(400, "issue_scope_update_not_allowed");
+      return await runScopeExclusive(() => runIssueExclusive(engine, [issue.id], async (reservation) => {
       const editorSubject = await ensureCurrentSubject(database, request);
-      return await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
       const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
         database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
@@ -283,7 +283,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         reservation.enqueue(issue.id, issueMetadataUpdatePrompt({ issue: { ...currentIssue, ...issueValues }, service: issueService, environmentKey: issueEnvironment.key, attachments: attachmentDtos, attachmentPath: attachmentRoot }), false);
       }
         return serializeIssueSummary(await requireIssue(database, issue.key));
-      });
+      }));
     } finally {
       await removePendingAttachments(pendingAttachments);
     }

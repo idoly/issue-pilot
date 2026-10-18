@@ -19,10 +19,11 @@ import {
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentRuntimeConfiguration, DeploymentConfig } from "../domain/contracts.ts";
 import { agentResources } from "../configuration/pi-runtime.ts";
-import { createMcpConnectionPool, createMcpToolBindings, type McpConfiguration, type McpToolBinding } from "../mcp/client.ts";
+import type { McpConfiguration } from "../mcp/client.ts";
+import { createIssueMcpExtension } from "../mcp/pi-extension.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "./model-runtime.ts";
-import { createCapabilityTools, type ServiceToolScope, type ServiceMcpToolScope } from "./service-query-tool.ts";
+import { createCapabilityTools, type ServiceToolScope } from "./service-query-tool.ts";
 import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
 import { createOutputTool } from "./output-tool.ts";
 
@@ -44,7 +45,7 @@ export interface StartPiSessionOptions {
   gitIdentity?: GitCommitIdentity;
   serviceScopes?: ServiceToolScope[];
   workspaceTool?: ToolDefinition<any, any, any>;
-  mcpScopes?: Array<{ environmentKey: string; serviceKey: string; serviceName: string; configurations: McpConfiguration[] }>;
+  mcpConfigurations?: McpConfiguration[];
   outputStore?: IssueOutputStore;
   systemPrompt: string;
   modelResponseIdleMs?: number;
@@ -69,6 +70,8 @@ export async function createPrivateSessionManager(cwd: string, sessionDirectory:
   manager.setSessionFile(sessionFile);
   return manager;
 }
+
+const mcpResourceTools = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"];
 
 type JsonMessageUpdateEvent = Extract<JsonAgentSessionEvent, { type: "message_update" }>;
 
@@ -149,9 +152,9 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
   };
 }
 
-function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, mcpScopes: ServiceMcpToolScope[], settings: SettingsManager): ToolDefinition<any, any, any>[] {
+function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, settings: SettingsManager): ToolDefinition<any, any, any>[] {
   const { context, deploymentConfig, workspaceRoot, outputStore, executableRoot, gitEnvironment, serviceScopes } = options;
-  const tools = createCapabilityTools(context, deploymentConfig, { outputStore, serviceScopes, mcpScopes });
+  const tools = createCapabilityTools(context, deploymentConfig, { outputStore, serviceScopes });
   if (context.canWriteOutputs) {
     if (!outputStore) throw new Error("issue_output_store_required");
     tools.unshift(createOutputTool(outputStore, workspaceRoot));
@@ -235,7 +238,10 @@ export class PiSessionRuntime {
       cwd: workspaceRoot,
       agentDir: getAgentDir(),
       settingsManager,
-      extensionFactories: context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createCodemodeExtension({ models: false }) }],
+      extensionFactories: [
+        ...(context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createCodemodeExtension({ models: false }) }]),
+        { name: "issue-pilot-mcp", factory: createIssueMcpExtension(options.mcpConfigurations ?? [], context.codemode) },
+      ],
       additionalExtensionPaths: resources.extensions,
       additionalSkillPaths: resources.skills,
       additionalPromptTemplatePaths: resources.prompts,
@@ -256,25 +262,15 @@ export class PiSessionRuntime {
     const extensionTools = extensions.extensions.filter(extension => extension.path !== "<inline:issue-pilot-codemode>").flatMap(extension => [...extension.tools.values()].map(tool => tool.definition));
     const reserved = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "codemode", "service_query", "workspace", "output"]);
     for (const tool of extensionTools) {
-      if (reserved.has(tool.name)) throw new Error("agent_extension_tool_conflict");
+      if (reserved.has(tool.name) || tool.name.startsWith("mcp__") || mcpResourceTools.includes(tool.name)) throw new Error("agent_extension_tool_conflict");
       reserved.add(tool.name);
     }
 
-    const mcp = createMcpConnectionPool({ cwd: workspaceRoot });
     let activeSession: AgentSession | undefined;
     try {
-      const discovered = new Map<string, Promise<McpToolBinding[]>>();
-      const mcpScopes = await Promise.all((options.mcpScopes ?? []).map(async scope => ({
-        environmentKey: scope.environmentKey, serviceKey: scope.serviceKey, serviceName: scope.serviceName,
-        tools: (await Promise.all(scope.configurations.map(configuration => {
-          const key = configuration.id;
-          if (!discovered.has(key)) discovered.set(key, createMcpToolBindings([configuration], mcp.connect));
-          return discovered.get(key)!;
-        }))).flat(),
-      })));
-      const requiredTools = [...sessionToolAllowlist(context), ...(!context.capabilities.length && mcpScopes.some(scope => scope.tools.length) ? ["service_query"] : []), ...(options.workspaceTool ? [options.workspaceTool.name] : [])];
+      const requiredTools = [...sessionToolAllowlist(context), ...(options.workspaceTool ? [options.workspaceTool.name] : [])];
       const expectedTools = [...requiredTools, ...extensionTools.filter(tool => tool.defaultActive !== false && (!tool.exposure || tool.exposure === "direct" || tool.exposure === "model-only")).map(tool => tool.name)];
-      const allowedTools = [...requiredTools, ...extensionTools.filter(tool => tool.exposure !== "hidden").map(tool => tool.name)];
+      const allowedTools = [...requiredTools, ...extensionTools.filter(tool => tool.exposure !== "hidden").map(tool => tool.name), "mcp__*", ...mcpResourceTools];
       let identityEnvironment = gitIdentityEnvironment(options.gitIdentity);
       const { session } = await createAgentSession({
         cwd: workspaceRoot,
@@ -283,15 +279,15 @@ export class PiSessionRuntime {
         model,
         thinkingLevel: context.model.thinkingLevel,
         tools: allowedTools,
-        customTools: [...sessionTools(options, () => identityEnvironment, mcpScopes, settingsManager), ...(options.workspaceTool ? [options.workspaceTool] : [])],
+        customTools: [...sessionTools(options, () => identityEnvironment, settingsManager), ...(options.workspaceTool ? [options.workspaceTool] : [])],
         sessionManager: options.manager,
         settingsManager,
         resourceLoader,
       });
       activeSession = session;
       session.setActiveToolsByName(expectedTools);
-      await session.bindExtensions({});
       assertSessionState(session, context, options.manager.getSessionId(), expectedTools);
+      await session.bindExtensions({});
       let rejectIdle: ((error: Error) => void) | undefined;
       const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? issuePilotConfig.runtime.agent.modelResponseIdleMs, () => {
         const error = new Error("model_response_idle_timeout");
@@ -317,12 +313,11 @@ export class PiSessionRuntime {
         },
         stop: () => stopped ? Promise.resolve() : stop ??= (async () => {
           try { watchdog.stop(); unsubscribe(); await abortAndDispose(session); }
-          finally { await mcp.close(); stopped = true; }
+          finally { stopped = true; }
         })(),
       };
     } catch (error) {
-      try { if (activeSession) await abortAndDispose(activeSession); }
-      finally { await mcp.close(); }
+      if (activeSession) await abortAndDispose(activeSession);
       throw error;
     }
   }

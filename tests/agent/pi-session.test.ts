@@ -39,7 +39,16 @@ test("creates a private Pi session file before the first Agent prompt", async ()
 });
 
 function localMcp(root: string) {
-  return { environmentKey: "prod", serviceKey: "orders", serviceName: "Orders", configurations: [{ id: "local", name: "Local", url: "", authorization: "", transport: "stdio" as const, enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_PID_FILE: join(root, "pid") } } }] };
+  return [{ id: "local", name: "Local", url: "", authorization: "", transport: "stdio" as const, enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_PID_FILE: join(root, "pid") } } }];
+}
+
+async function waitForMcp(managed: Awaited<ReturnType<PiSessionRuntime["start"]>>) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const tools = managed.session.getAllTools().filter(tool => tool.name.startsWith("mcp__"));
+    if (tools.length) return tools;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("mcp_tools_not_ready");
 }
 
 function context(options: { writable: boolean; capability?: "db"; outputs?: boolean }): AgentSessionContext {
@@ -178,10 +187,11 @@ test("disposes an SDK session and stdio process even when abort fails during sto
     context: context({ writable: false }),
     deploymentConfig: {},
     workspaceRoot: root,
-    mcpScopes: [localMcp(root)],
+    mcpConfigurations: localMcp(root),
     systemPrompt: "",
     onEvent: () => undefined,
   });
+  await waitForMcp(managed);
   const child = Number(await readFile(join(root, "pid"), "utf8"));
   let disposed = false;
   const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
@@ -207,23 +217,23 @@ for (const environment of ["prod", "test", "dev"] as const) test(`exposes non-re
       manager: await createPrivateSessionManager(root, root),
       context: { ...context({ writable: environment === "dev" }), environmentKey: environment },
       deploymentConfig: {}, workspaceRoot: root,
-      mcpScopes: [{ ...localMcp(root), environmentKey: environment }],
+      mcpConfigurations: localMcp(root),
       systemPrompt: "", onEvent: () => undefined,
     });
-    assert.ok(managed.session.getActiveToolNames().includes("service_query"));
-    const query = managed.session.getAllTools().find(tool => tool.name === "service_query");
-    assert.match(JSON.stringify(query?.parameters), /Local \/ write/);
+    const tools = await waitForMcp(managed);
+    assert.ok(tools.some(tool => tool.name === "mcp__local__write"));
+    assert.ok(managed.session.getActiveToolNames().includes("mcp__local__write"));
+    assert.equal(managed.session.getActiveToolNames().includes("service_query"), false);
   } finally { await managed?.stop(); await rm(root, { recursive: true, force: true }); }
 });
 
-test("closes discovered stdio processes when Agent initialization fails", async () => {
+test("does not start stdio processes when Agent identity validation fails", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-start-"));
   try {
     await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-      manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, mcpScopes: [localMcp(root)], gitIdentity: { name: "", email: "test@example.test" }, systemPrompt: "", onEvent: () => undefined,
+      manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, mcpConfigurations: localMcp(root), gitIdentity: { name: "", email: "test@example.test" }, systemPrompt: "", onEvent: () => undefined,
     }), /invalid_git_commit_identity/);
-    const child = Number(await readFile(join(root, "pid"), "utf8"));
-    assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+    await assert.rejects(readFile(join(root, "pid")), { code: "ENOENT" });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

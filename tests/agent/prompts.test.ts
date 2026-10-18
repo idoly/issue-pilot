@@ -14,7 +14,8 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.match(prompt, /native read\/bash\/edit\/write\/grep\/find\/ls/);
     assert.match(prompt, /not an operating-system isolation boundary/);
     assert.doesNotMatch(prompt, /sandbox operation|output\.spreadsheet|sandbox export_output/);
-    assert.match(prompt, /Enabled external MCP tools are available in every Issue environment/);
+    assert.match(prompt, /global MCP servers expose separate mcp__ tools through Pi in every Issue environment/);
+    assert.doesNotMatch(prompt, /Call them through the Issue's entry service/);
     assert.doesNotMatch(prompt, /Production\/test MCP access is read-only/);
     if (mode !== "development") assert.match(prompt, /All repository workspaces are read-only/);
   }

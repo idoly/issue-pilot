@@ -776,19 +776,71 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.loadServiceConfigurationDescription).mockImplementation(loadDescription);
   });
 
-  test("shows the application MCP address and a simple tool description list", async () => {
+  test("copies application MCP configurations for JSON clients, VS Code and Codex", async () => {
+    const clipboard = await import("../ui/clipboard");
+    const copy = vi.spyOn(clipboard, "copyText").mockResolvedValue();
     render(() => <App initialView="configuration" />);
     const tabs = screen.getByRole("tablist", { name: "配置分类" });
     expect(within(tabs).getAllByRole("tab").at(-1)?.textContent).toBe("端点");
     fireEvent.click(within(tabs).getByRole("tab", { name: "端点" }));
     const panel = await screen.findByRole("region", { name: "端点说明" });
-    expect(await within(panel).findByText(`${window.location.origin}/mcp`)).toBeTruthy();
-    expect(await within(panel).findByText(/Streamable HTTP · 只读/)).toBeTruthy();
+    const connection = { type: "http", url: `${window.location.origin}/mcp`, headers: { "X-Issue-Pilot-Subject": "fixture-user" } };
+    const preview = () => within(panel).getByLabelText("MCP 客户端配置").textContent!;
+    await waitFor(() => expect(JSON.parse(preview())).toEqual({ mcpServers: { "issue-pilot": connection } }));
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    await waitFor(() => expect(copy).toHaveBeenLastCalledWith(preview()));
+    expect(await within(panel).findByRole("button", { name: "已复制配置" })).toBeTruthy();
+    fireEvent.click(within(panel).getByLabelText("接入客户端"));
+    fireEvent.click(await screen.findByRole("option", { name: "VS Code" }));
+    await waitFor(() => expect(JSON.parse(preview())).toEqual({ servers: { "issue-pilot": connection } }));
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    await waitFor(() => expect(copy).toHaveBeenLastCalledWith(preview()));
+    fireEvent.click(within(panel).getByLabelText("接入客户端"));
+    fireEvent.click(await screen.findByRole("option", { name: "Codex" }));
+    await waitFor(() => expect(preview()).toBe(`[mcp_servers.issue-pilot]\nurl = "${window.location.origin}/mcp"\nhttp_headers = { "X-Issue-Pilot-Subject" = "fixture-user" }`));
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    await waitFor(() => expect(copy).toHaveBeenLastCalledWith(preview()));
+    expect(within(panel).queryByRole("button", { name: "复制地址" })).toBeNull();
     expect(await within(panel).findByText("issue_get")).toBeTruthy();
     expect(within(panel).getByText("Read Issue details")).toBeTruthy();
-    expect(within(panel).getByRole("button", { name: "复制地址" })).toBeTruthy();
     expect(within(panel).queryByLabelText("搜索端点工具")).toBeNull();
     expect(within(panel).queryByText("完整输入格式")).toBeNull();
+  });
+
+  test("updates copied MCP identity when the selected user changes", async () => {
+    const clipboard = await import("../ui/clipboard");
+    const copy = vi.spyOn(clipboard, "copyText").mockResolvedValue();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(screen.getByRole("tab", { name: "端点" }));
+    const panel = await screen.findByRole("region", { name: "端点说明" });
+    await within(panel).findByLabelText("MCP 客户端配置");
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    await within(panel).findByRole("button", { name: "已复制配置" });
+    fireEvent.click(screen.getByLabelText("当前用户"));
+    fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
+    await waitFor(() => expect(within(panel).getByLabelText("MCP 客户端配置").textContent).toContain('"X-Issue-Pilot-Subject": "second-user"'));
+    expect(within(panel).queryByRole("button", { name: "已复制配置" })).toBeNull();
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    await waitFor(() => expect(JSON.parse(copy.mock.calls.at(-1)![0]).mcpServers["issue-pilot"].headers).toEqual({ "X-Issue-Pilot-Subject": "second-user" }));
+  });
+
+  test("keeps the MCP configuration available after copy failure and allows retry", async () => {
+    const client = await import("../data/client");
+    const clipboard = await import("../ui/clipboard");
+    const copy = vi.spyOn(clipboard, "copyText").mockRejectedValueOnce(new Error("clipboard_write_failed")).mockResolvedValue();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(screen.getByRole("tab", { name: "端点" }));
+    const panel = await screen.findByRole("region", { name: "端点说明" });
+    const preview = await within(panel).findByLabelText("MCP 客户端配置");
+    const requests = vi.mocked(client.loadApplicationEndpoints).mock.calls.length;
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    expect((await within(panel).findByRole("alert")).textContent).toContain("手动复制");
+    expect(within(panel).getByLabelText("MCP 客户端配置").textContent).toBe(preview.textContent);
+    fireEvent.click(within(panel).getByRole("button", { name: "复制配置" }));
+    await within(panel).findByRole("button", { name: "已复制配置" });
+    expect(within(panel).queryByRole("alert")).toBeNull();
+    expect(copy).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(client.loadApplicationEndpoints).mock.calls.length).toBe(requests);
   });
 
   test("keeps parsed DMS targets when replacing only the Token", async () => {
@@ -1033,8 +1085,9 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "添加用户" })).toBeTruthy());
     expect(screen.getByRole("tab", { name: "基座" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "服务" })).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("fixture-user")).toBeTruthy());
-    expect(screen.getByText("second-user")).toBeTruthy();
+    const userList = await screen.findByRole("region", { name: "用户列表" });
+    await waitFor(() => expect(within(userList).getByText("fixture-user")).toBeTruthy());
+    expect(within(userList).getByText("second-user")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "添加用户" }));
     const dialog = await waitFor(() => screen.getByRole("dialog", { name: "添加用户" }));

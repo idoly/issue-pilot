@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Type } from "typebox";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
@@ -46,12 +45,8 @@ test("keeps native write/target restrictions after combining the dispatch entry"
   await assert.rejects(call(exports!, { service: "orders", capability: "db", database: "orders", statement: "SELECT 1", output: { fileName: "batch.csv", format: "csv" } }), /issue_output_not_available/);
 });
 
-test("configured MCP calls share the query entry and remain scoped to the declared service", async () => {
-  let received: unknown;
-  const [tool] = createCapabilityTools({ ...context, capabilities: [] }, {}, { mcpScopes: [{ environmentKey: "prod", serviceKey: "other", serviceName: "Other", tools: [{ name: "mcp_fixture", label: "Search", description: "Read docs", parameters: Type.Object({ query: Type.String() }, { additionalProperties: false }), async call(input) { received = input; return { content: [{ type: "text", text: JSON.stringify({ value: "found" }) }], details: undefined }; } }] }] });
-  const result = await call(tool!, { service: "other", capability: "mcp", tool: "mcp_fixture", input: { query: "evidence" } });
-  assert.deepEqual(received, { query: "evidence" });
-  assert.deepEqual(result.structuredContent, { value: "found" });
-  assert.match(JSON.stringify(result.content), /found/);
-  await assert.rejects(call(tool!, { service: "orders", capability: "mcp", tool: "mcp_fixture", input: { query: "evidence" } }), /invalid_service_query_input/);
+test("keeps global MCP outside the service-scoped evidence query", async () => {
+  const [tool] = createCapabilityTools(context, config);
+  await assert.rejects(call(tool!, { service: "orders", capability: "mcp", tool: "mcp_fixture", input: {} }), /invalid_service_query_input/);
+  assert.deepEqual(createCapabilityTools({ ...context, capabilities: [] }, {}), []);
 });

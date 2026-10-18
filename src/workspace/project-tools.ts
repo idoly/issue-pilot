@@ -221,6 +221,7 @@ export class ProjectToolBroker {
     if (this.closing) throw new Error("project_tool_broker_closed");
     const issueKey = normalizeIssueKey(input.issueKey);
     return this.queue.run(issueKey, async () => {
+      signal?.throwIfAborted();
       const [issue] = await this.database.select({ id: issues.id, key: issues.key, type: issues.type, environmentKind: environments.kind })
         .from(issues).innerJoin(environments, eq(environments.id, issues.environmentId)).where(eq(issues.key, issueKey)).limit(1);
       if (!issue) throw new Error("issue_not_found");
@@ -238,6 +239,7 @@ export class ProjectToolBroker {
       const command = input.tool === "node"
         ? await this.nodeCommand(project, input.action, input.args)
         : await this.mavenCommand(project, input.action, input.args);
+      signal?.throwIfAborted();
       const execution = await this.tools.run({
         command: command.args,
         cwd: project,
@@ -293,17 +295,24 @@ export class ProjectToolBroker {
       response.writeHead(404); response.end("project tool endpoint not found\n"); return;
     }
     const abort = new AbortController();
-    request.once("aborted", () => abort.abort());
+    const cancel = () => { if (!response.writableEnded) abort.abort(); };
+    request.once("aborted", cancel);
+    response.once("close", cancel);
     try {
       const input = parseRequest(await requestBody(request));
       const result = await this.run(input, abort.signal);
+      if (abort.signal.aborted) return;
       response.writeHead(result.code === 0 ? 200 : 422);
       response.end(`${result.stdout}${result.stderr}`);
     } catch (error) {
+      if (abort.signal.aborted) return;
       const message = error instanceof Error ? error.message : "project_tool_failed";
       if (!stableRequestErrors.has(message)) this.reporter(error);
       response.writeHead(stableRequestErrors.has(message) ? 400 : 500);
       response.end(`${stableRequestErrors.has(message) ? message : "project_tool_failed"}\n`);
+    } finally {
+      request.off("aborted", cancel);
+      response.off("close", cancel);
     }
   }
 }

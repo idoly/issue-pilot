@@ -51,7 +51,7 @@ bare store 按 URL hash 共享 objects/refs。开发 worktree 独立保存 stage
 
 `workspace list/describe/include/remove` 管理同环境附加代码。服务范围意图保存在 `issue_service_scopes`，仓库按 URL 去重；同 URL 分支冲突拒绝，移除开发代码要求 clean。开发证据查询另行显式选择 prod/test，不改变代码所属环境。
 
-释放只处理 resolved、空闲、布局正确且 clean 的开发工单。批量移除失败使用原本地 ref/commit 恢复；成功清空 local_path、保留 working branch，再准备只读 runtime。重开只从本地工作分支恢复，不用远程分支或 reset 修复漂移。入口为 [lifecycle.ts](../src/workspace/lifecycle.ts)、[project.ts](../src/workspace/project.ts) 和 [git.ts](../src/workspace/git.ts)。
+释放只处理 resolved、空闲、布局正确且 clean 的开发工单。批量移除失败使用原本地 ref/commit 恢复；成功清空 local_path、保留 working branch，再准备只读 runtime。已记录 working branch 的准备与重开只复用本地仓库和分支，不 fetch；缺少本地 ref 时拒绝，不用远程分支或 reset 修复漂移。入口为 [lifecycle.ts](../src/workspace/lifecycle.ts)、[project.ts](../src/workspace/project.ts) 和 [git.ts](../src/workspace/git.ts)。
 
 ## 对话、关联和文件
 
@@ -59,15 +59,15 @@ bare store 按 URL hash 共享 objects/refs。开发 worktree 独立保存 stage
 
 附件上传先暂存并计算 hash，持久化后为 `0400` regular file。新增、删除属于 Issue 创建/编辑事务；删除先 quarantine，失败恢复，提交后 finalize。读取检查路径、类型、size/hash。粘贴到 Agent 的图片进入 Pi 消息，不进入附件表。
 
-成果以普通代码生成，再由 [output 工具](../src/agent/output-tool.ts)发布 work 目录中的 regular file。发布使用临时文件和原子替换，取消或失败保留旧交付；工作源文件继续保留。MySQL/DMS 可直接导出完整结果，Excel parser 服务于预览，不拥有脚本执行流程。
+成果以普通代码生成，再由 [output 工具](../src/agent/output-tool.ts)发布 work 目录中的 regular file。发布使用临时文件和原子替换，取消或失败保留旧交付；工作源文件继续保留。MySQL/DMS 可直接导出完整结果，完成连接收尾后才原子发布；Excel parser 服务于预览，不拥有脚本执行流程。
 
 ## Agent 与执行模型
 
 [engine.ts](../src/agent/engine.ts) 拥有每工单排队、活动计数、预约和业务状态；[pi-session.ts](../src/agent/pi-session.ts) 负责 Pi 会话、工具选择、模型运行时和资源生命周期。失败清理位于同一串行任务内，下一项工作等待会话关闭和失败状态回写；排队消息执行时检查捕获的会话是否仍有效，失效后重新打开。
 
-所有工单获得 Pi 原生 `read/bash/edit/write/grep/find/ls`，cwd 为私有 work。模型通过 prompt 中的受管绝对路径访问代码；Bash 保留当前 Git 身份、项目 wrapper PATH 和应用库路径。`service_query` 负责已配置集成，`workspace` 管理代码集合，正式数据处理额外获得 `output`。
+所有工单获得 Pi 原生 `read/bash/edit/write/grep/find/ls`，cwd 为私有 work。模型通过 prompt 中的受管绝对路径访问代码；Bash 保留当前 Git 身份、项目 wrapper PATH 和应用库路径。`service_query` 负责已配置的原生集成，`workspace` 管理代码集合，正式数据处理额外获得 `output`。全局外部 MCP 通过 [Pi 官方扩展适配](../src/mcp/pi-extension.ts)注册独立工具和 resources，由 SDK 管理发现、连接、重连和关闭；数据库与必要的传输、凭证及预算边界由应用持有。
 
-这是单应用容器内的可信代码执行。原生代码拥有应用用户权限，可以绕过业务文件策略，不能据 cwd、Source API 或 QuickJS 宣称工单间 OS 隔离。项目命令 broker 仍维护自己的命令授权边界。
+这是单应用容器内的可信代码执行。原生代码拥有应用用户权限，可以绕过业务文件策略，不能据 cwd、Source API 或 QuickJS 宣称工单间 OS 隔离。项目命令 broker 仍维护自己的命令授权边界；HTTP 客户端断开取消对应命令，排队任务在开始执行前再次检查取消。
 
 全局基座持有唯一模型、思考级别、Codemode 模式和 Pi settings。应用显式加载资源目录中的 Skills、Prompts、扩展和附加指令；SDK 负责命令展开、嵌套工具调用、取消及会话格式。模式、配置归属与凭证规则见[配置](CONFIGURATION.md)。
 
@@ -79,7 +79,7 @@ SSE 顺序为 JSONL 回放、当前未持久增量、`snapshot_ready`、缓冲/�
 
 [agent-stream.ts](../src/web/src/app/agent-stream.ts) 管理 EventSource、generation 和重连，[conversation.ts](../src/web/src/app/conversation.ts) 投影会话。[ApplicationResources.tsx](../src/web/src/app/ApplicationResources.tsx) 共享配置与用户，并持有 [基座编辑状态](../src/web/src/app/agent-configuration.ts)，使草稿、保存队列及错误跨页面保留；设置页负责显示和输入。Overview 唯一拥有首页请求和轮询，旧请求通过取消/generation 避免覆盖当前视图。
 
-CodeBrowser 拥有树、搜索、Git 操作和面板布局；Monaco 使用公开 API 处理编辑、定位、撤销和 diff。SourceText/SourceDiff 创建并释放 model/editor，保存保留 SHA-256、草稿、CRLF 和冲突语义，不加载 VS Code 扩展宿主。
+CodeBrowser 拥有树、搜索、Git 操作和面板布局；Monaco 使用公开 API 处理编辑、定位、撤销和 diff。Source API 对写入目标校验父目录，拒绝越界链接和 Git 控制路径；Git 文件参数按字面路径处理，重命名不覆盖自身或祖先/后代。SourceText/SourceDiff 创建并释放 model/editor，保存保留 SHA-256、草稿、CRLF 和冲突语义，不加载 VS Code 扩展宿主。
 
 ## 并发、启动与关闭
 
@@ -91,6 +91,6 @@ service/Issue scope write: scope queue -> Issue reservation
 release/reopen: lifecycle queue -> inspection queue -> Issue reservation
 ```
 
-等待后的授权在相关协调入口重新检查。配置快照显式使用 libSQL read transaction，避免普通读取占用写权限；不能用一个全局 mutex 替代所有锁。
+等待后的授权在相关协调入口重新检查。处理人、抄送人与附件的工单编辑遵循 scope queue → Issue reservation，避免与用户启停或凭证变更交错。配置快照显式使用 libSQL read transaction，避免普通读取占用写权限；不能用一个全局 mutex 替代所有锁。
 
-启动迁移并验证结构，恢复中断状态，检查 unmanaged state、校验共享 checkout，再准备各 Issue runtime、模型目录和维护任务。异常目录、dirty checkout 和分支漂移保留并拒绝相应操作，不猜测修复。关闭 drain 维护与 Agent，随后关闭会话、模型 runtime、broker 和数据库，清理失败聚合报告。发布和恢复按[运维](RUNBOOK.md)执行。
+启动迁移并验证结构，恢复中断状态，检查 unmanaged state、校验共享 checkout，再准备各 Issue runtime、模型目录和维护任务。恢复 SQL 与 schema 的 timestamp 列统一使用秒，不能写入毫秒值。异常目录、dirty checkout 和分支漂移保留并拒绝相应操作，不猜测修复。关闭 drain 维护与 Agent，随后关闭会话、模型 runtime、broker 和数据库，清理失败聚合报告。发布和恢复按[运维](RUNBOOK.md)执行。

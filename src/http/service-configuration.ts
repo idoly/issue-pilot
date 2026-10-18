@@ -89,16 +89,16 @@ async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: str
 export async function applyServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; prepared: PreparedServiceConfiguration; serviceUpdate?: { name: string; description: string } }): Promise<void> {
   const { executor, serviceId, prepared, serviceUpdate } = options;
   if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
-  const retainedRepositoryIds = new Set<string>();
+  const retainedRepositoryIds = new Set(prepared.parsed.repositories.flatMap(repository => repository.id ? [repository.id] : []));
+  for (const repository of prepared.existingRepositories) if (!retainedRepositoryIds.has(repository.id)) await executor.delete(serviceRepositories).where(eq(serviceRepositories.id, repository.id));
   const savedRepositoryByAlias = new Map<string, typeof serviceRepositories.$inferSelect>();
   for (const repository of prepared.parsed.repositories) {
     const [saved] = repository.id
       ? await executor.update(serviceRepositories).set({ alias: repository.alias, url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId))).returning()
       : await executor.insert(serviceRepositories).values({ serviceId, alias: repository.alias, url: repository.url }).returning();
     if (!saved) throw new Error("repository_save_failed");
-    retainedRepositoryIds.add(saved.id); savedRepositoryByAlias.set(repository.alias, saved);
+    savedRepositoryByAlias.set(repository.alias, saved);
   }
-  for (const repository of prepared.existingRepositories) if (!retainedRepositoryIds.has(repository.id)) await executor.delete(serviceRepositories).where(eq(serviceRepositories.id, repository.id));
   const retainedDeployments = new Set<string>();
   for (const input of prepared.parsed.deployments) {
     const environmentId = prepared.environmentsByKey.get(input.environmentKey)!.id;

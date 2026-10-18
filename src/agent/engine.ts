@@ -290,7 +290,7 @@ export class AgentEngine implements AgentController {
     const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyProductionCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key, owner.credentials) }));
     const deploymentConfig = serviceScopes.find(scope => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
     const mcpRows = await this.database.select().from(mcpServices);
-    const mcpScopes = [{ environmentKey: service.environmentKey, serviceKey: service.key, serviceName: service.name, configurations: mcpRows.filter(connection => connection.enabled) }];
+    const mcpConfigurations = mcpRows.filter(connection => connection.enabled);
     const context = createAgentSessionContext({
       issueKey: issue.key,
       issueType: issue.type,
@@ -317,7 +317,7 @@ export class AgentEngine implements AgentController {
       deploymentConfig,
       serviceScopes,
       workspaceTool: await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env),
-      mcpScopes,
+      mcpConfigurations,
       manager,
       ...(project.executableRoot ? { executableRoot: project.executableRoot } : {}),
       gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,

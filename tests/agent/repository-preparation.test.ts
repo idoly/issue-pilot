@@ -154,7 +154,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
-  const starts: Array<Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpScopes">> = [];
+  const starts: Array<Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpConfigurations">> = [];
   let sessionStops = 0;
   try {
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
@@ -190,7 +190,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(options: Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpScopes">): Promise<unknown>; close(): Promise<void> };
+      piRuntime: { start(options: Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpConfigurations">): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
@@ -270,7 +270,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     ]);
 
     for (const start of starts) {
-      assert.deepEqual(start.mcpScopes?.map(scope => ({ service: scope.serviceKey, environment: scope.environmentKey, ids: scope.configurations.map(row => row.id) })), [{ service: "orders", environment: start.context.environmentKey, ids: [globalMcp!.id] }]);
+      assert.deepEqual(start.mcpConfigurations?.map(row => row.id), [globalMcp!.id]);
     }
     await engine.close();
     assert.equal(sessionStops, 4);

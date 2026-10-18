@@ -184,6 +184,36 @@ test("serializes retries, status transitions, messages, and comments with one Is
   }
 });
 
+test("serializes Issue assignee changes with user deactivation", async () => {
+  const fixture = await createApiFixture();
+  let release!: () => void;
+  try {
+    await createService(fixture.app, "Assignment");
+    const actor = await fixture.app.inject({ method: "GET", url: "/api/me" }).then(json);
+    const headers = { "x-issue-pilot-subject": String(actor.subject) };
+    const created = await fixture.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "next-owner", name: "Next Owner", email: "next@example.test", role: "developer" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const issue = await fixture.app.inject({ method: "POST", url: "/api/issues", headers, payload: issuePayload("assignment") }).then(json);
+    fixture.engine.running.clear();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    fixture.engine.closeSessionHook = async () => { entered(); await gate; };
+    const edit = fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers, payload: { title: "Assign to next owner", description: "Keep owner valid", priority: "p1", assigneeSubject: "next-owner", ccSubjects: [] } });
+    await started;
+    const disable = fixture.app.inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { name: "Next Owner", email: "next@example.test", role: "developer", active: false } }).then(response => response);
+    const disabledBeforeEdit = await Promise.race([disable.then(() => true), new Promise<false>(resolve => setTimeout(() => resolve(false), 100))]);
+    release();
+    assert.equal((await edit).statusCode, 200);
+    assert.equal((await disable).statusCode, 409);
+    assert.equal(disabledBeforeEdit, false);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(json);
+    assert.equal(detail.assigneeSubject, "next-owner");
+    const users = await fixture.app.inject({ method: "GET", url: "/api/users" }).then(response => JSON.parse(response.body) as Array<{ subject: string }>);
+    assert.ok(users.some(user => user.subject === "next-owner"));
+  } finally { release?.(); await fixture.cleanup(); }
+});
+
 test("edits only Issue metadata and rejects scope fields", async () => {
   const fixture = await createApiFixture();
   try {

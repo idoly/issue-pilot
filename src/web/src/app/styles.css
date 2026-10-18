@@ -531,16 +531,24 @@ button, input, textarea { font: inherit; }
 .production-credentials-form h3 { margin: 0; align-self: center; color: #354b3d; font-size: 14px; }
 .production-credentials-form label { display: grid; min-width: 0; gap: 6px; color: #718079; font-size: 12px; }
 @media (max-width: 600px) { .production-credentials-form > div { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; } .production-credentials-form h3, .production-credentials-form label { grid-column: 1 / -1; } .production-credentials-form > div > button { grid-column: 2; } }
-.endpoint-description { padding: 20px 22px; }
-.endpoint-description > header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.endpoint-address { display: flex; align-items: center; gap: 14px; padding: 14px; margin-top: 14px; border: 1px solid #dfe7e2; border-radius: 6px; background: #f6f9f7; }
-.endpoint-address > code { min-width: 0; flex: 1; overflow-wrap: anywhere; color: #236a58; font-size: 13px; }
+.endpoint-description { padding: 24px; }
+.endpoint-description + .endpoint-description { border-top: 1px solid #dfe4e1; }
+.endpoint-config-toolbar > button { flex-shrink: 0; }
 .endpoint-guidance { color: #718079; font-size: 12px; line-height: 1.7; }
+.endpoint-config { padding: 18px; border: 1px solid #dfe7e2; border-radius: 6px; }
+.endpoint-config-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.endpoint-config-toolbar > .ui-select { width: min(320px, 100%); min-width: 0; }
+.endpoint-config pre { overflow-x: auto; margin: 14px 0; padding: 16px; border: 1px solid #e4ebe6; border-radius: 5px; background: #f6f8f7; color: #354b3d; font: 12px/1.7 var(--mono-font); tab-size: 2; }
+.endpoint-config pre code { font: inherit; }
+.endpoint-identity { margin: 14px 0 0; color: #4d5953; font-size: 12px; overflow-wrap: anywhere; }
+.endpoint-identity code { margin-left: 6px; color: #718079; }
+.endpoint-tools { margin-top: 24px; }
+.endpoint-tools > summary { padding-bottom: 12px; color: #415b4d; font-size: 12px; cursor: pointer; }
+.endpoint-tools > summary:focus-visible { outline: 2px solid #2b7d6d; outline-offset: 3px; }
 .endpoint-tool { display: grid; grid-template-columns: minmax(160px, .6fr) minmax(0, 1.4fr); align-items: baseline; gap: 16px; border-top: 1px solid #e4ebe6; padding: 12px 0; }
 .endpoint-tool > code { color: #415b4d; font-size: 12px; overflow-wrap: anywhere; }
 .endpoint-tool > p { margin: 0; color: #718079; font-size: 12px; line-height: 1.7; }
-@media (max-width: 600px) { .endpoint-tool { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
-@media (max-width: 600px) { .endpoint-description { padding: 16px; } .endpoint-address { align-items: flex-start; } }
+@media (max-width: 600px) { .endpoint-description { padding: 16px; } .endpoint-config { padding: 14px; } .endpoint-config-toolbar { align-items: stretch; flex-direction: column; gap: 10px; } .endpoint-config-toolbar > .ui-select { width: 100%; } .endpoint-config pre { padding: 12px; font-size: 11px; } .endpoint-tool { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
 .capability-configuration { display: grid; gap: 18px; }
 .capability-switch-list { overflow-x: auto; }
 .capability-table { width: 100%; min-width: 820px; border-collapse: collapse; text-align: left; font-size: 12px; }

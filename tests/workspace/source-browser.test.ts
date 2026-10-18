@@ -75,6 +75,12 @@ test("browses only registered Issue repository content", async () => {
     await browser.createFile(issue!, "application", "generated/value.ts", "export const value = 1;\n");
     await browser.renamePath(issue!, "application", "generated/value.ts", "generated/result.ts", false);
     assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    await browser.renamePath(issue!, "application", "generated/result.ts", "generated/result.ts", true);
+    assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    await browser.createDirectory(issue!, "application", "generated/child");
+    await browser.createFile(issue!, "application", "generated/child/evidence.txt", "preserve\n");
+    await assert.rejects(browser.renamePath(issue!, "application", "generated", "generated/child", true), /invalid_source_path/);
+    assert.equal(await readFile(path.join(repository, "generated", "child", "evidence.txt"), "utf8"), "preserve\n");
     const largeSource = "x".repeat(2 * 1024 * 1024 + 1);
     const largeFile = await browser.createFile(issue!, "application", "generated/large.txt", largeSource);
     assert.equal(largeFile.size, Buffer.byteLength(largeSource));
@@ -173,6 +179,8 @@ test("browses only registered Issue repository content", async () => {
     assert.ok(commands.some(({ args }) => args.includes("commit") && args.includes("Update source browser")));
 
     await assert.rejects(browser.file(issue!, "application", "../outside.txt"), /invalid_source_path/);
+    await assert.rejects(browser.createFile(issue!, "application", ".git/alternate-control", "must not write Git metadata\n"), /invalid_source_path/);
+    await assert.rejects(readFile(path.join(repository, ".git", "alternate-control")), { code: "ENOENT" });
     const outside = path.join(root, "outside.txt");
     await writeFile(outside, "secret\n", "utf8");
     await symlink(outside, path.join(repository, "outside-link"));
@@ -193,6 +201,9 @@ test("browses only registered Issue repository content", async () => {
     await prepareIssueRuntime(root, readOnlyIssue!.key, [{ name: "application", repositoryPath: readOnlyRepository }], "read");
     const snapshot = await browser.file(readOnlyIssue!, "application", "README.md");
     await assert.rejects(browser.writeFile(readOnlyIssue!, "application", "README.md", "changed\n", snapshot.sha256), /source_read_only/);
+    await symlink(readOnlyRepository, path.join(repository, "snapshot-link"), "dir");
+    await assert.rejects(browser.writeFile(issue!, "application", "snapshot-link/README.md", "must not replace snapshot\n", snapshot.sha256), /source_path_outside_repository/);
+    assert.equal(await readFile(path.join(readOnlyRepository, "README.md"), "utf8"), "# Snapshot\n");
     await assert.rejects(browser.createFile(readOnlyIssue!, "application", "new.txt", "new\n"), /source_read_only/);
     await assert.rejects(browser.stage(readOnlyIssue!, "application", ["README.md"]), /source_read_only/);
     await assert.rejects(browser.createCommit(readOnlyIssue!, "application", "Not allowed", { name: "Test User", email: "test@example.test" }), /source_read_only/);

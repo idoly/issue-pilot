@@ -10,7 +10,7 @@ export const issuePilotConfig = Object.freeze({
     locale: "zh-CN",
     timeZone: "Asia/Shanghai",
   }),
-  bootstrapUser: Object.freeze({ role: "developer" as const, isAdmin: true, subject: "zjj3753@xianhengguoji.com", name: "周俊杰", email: "zjj3753@xianhengguoji.com" }),
+  bootstrapUser: Object.freeze({ role: "developer" as const, isAdmin: true, subject: "yx4821@xianhengguoji.com", name: "严欣", email: "yx4821@xianhengguoji.com" }),
   http: Object.freeze({
     host: "0.0.0.0",
     port: 3000,

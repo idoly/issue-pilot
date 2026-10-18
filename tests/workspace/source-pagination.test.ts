@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -35,6 +35,22 @@ async function fixture() {
   await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
   return { root, database, issue: issue!, repository, git, browser: new SourceBrowser(database.db, root), close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
+
+test("treats bracket characters in source paths literally when staging and discarding", async () => {
+  const f = await fixture();
+  try {
+    for (const name of ["value[1].txt", "value1.txt"]) await writeFile(path.join(f.repository, name), "original\n");
+    await f.git(["add", "."]);
+    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "initial"]);
+    for (const name of ["value[1].txt", "value1.txt"]) await writeFile(path.join(f.repository, name), "changed\n");
+    await f.browser.stage(f.issue, "application", ["value[1].txt"]);
+    assert.equal(await f.git(["diff", "--cached", "--name-only"]), "value[1].txt");
+    await f.browser.unstage(f.issue, "application", ["value[1].txt"]);
+    await f.browser.discard(f.issue, "application", ["value[1].txt"]);
+    assert.equal(await readFile(path.join(f.repository, "value[1].txt"), "utf8"), "original\n");
+    assert.equal(await readFile(path.join(f.repository, "value1.txt"), "utf8"), "changed\n");
+  } finally { await f.close(); }
+});
 
 test("paginates a pinned history without losing or repeating commits when HEAD advances", async () => {
   const f = await fixture();

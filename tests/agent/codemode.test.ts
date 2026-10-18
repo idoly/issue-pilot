@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -161,25 +160,24 @@ test("batches structured service reads, validates each source and keeps intermed
   } finally { for (const finish of waiting.splice(0)) finish(); await managed?.stop(); await f.close(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
-test("calls scoped MCP tools from codemode and reuses the official stdio connection", async () => {
+test("calls native MCP tools from codemode and reuses the SDK stdio connection", async () => {
   const f = await fixture("on"); let managed;
-  const id = "counter-fixture", binding = (name: string) => `mcp_${createHash("sha256").update(`${id}\0${name}`).digest("hex").slice(0, 20)}`;
-  f.options.mcpScopes = [{ environmentKey: "prod", serviceKey: "entry", serviceName: "Entry", configurations: [{ id, name: "Counter", url: "", transport: "stdio", authorization: "", enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_SECRET: "private-mcp-fixture" } } }] }];
+  f.options.mcpConfigurations = [{ id: "counter-fixture", name: "Counter", url: "", transport: "stdio", authorization: "", enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_SECRET: "private-mcp-fixture" } } }];
   try {
-    f.faux.setResponses([call(`const first = await tools.service_query({environment:"prod",service:"entry",capability:"mcp",tool:${JSON.stringify(binding("counter"))},input:{}});
-      const second = await tools.service_query({environment:"prod",service:"entry",capability:"mcp",tool:${JSON.stringify(binding("counter"))},input:{}});
-      const written = await tools.service_query({environment:"prod",service:"entry",capability:"mcp",tool:${JSON.stringify(binding("write"))},input:{}});
-      const denied = await Promise.allSettled([tools.service_query({environment:"test",service:"entry",capability:"mcp",tool:${JSON.stringify(binding("write"))},input:{}})]);
+    f.faux.setResponses([call(`const first = await tools.mcp__counter_fixture__counter({});
+      const second = await tools.mcp__counter_fixture__counter({});
+      const written = await tools.mcp__counter_fixture__write({});
+      const denied = await Promise.allSettled([tools.mcp__counter_fixture__write({unexpected:true})]);
       return {sameProcess:first.structuredContent.pid===second.structuredContent.pid,count:second.structuredContent.count,written:written.structuredContent.count,denied:denied[0].status};`), context => {
         const text = JSON.stringify(context);
         assert.match(text, /sameProcess/); assert.match(text, /rejected/); assert.doesNotMatch(text, /private-mcp-fixture/);
         const message = context.messages.find(message => message.role === "toolResult" && message.toolName === "codemode");
         assert.ok(message && message.role === "toolResult"); assert.equal(message.isError, false);
         assert.match(JSON.stringify(message.content), /true/); assert.match(JSON.stringify(message.content), /2/); assert.match(JSON.stringify(message.content), /3/);
-        return fauxAssistantMessage("MCP calls reused the scoped process.");
+        return fauxAssistantMessage("MCP calls reused the SDK process.");
       }]);
     managed = await f.runtime.start(f.options); await managed.prompt("Read the configured MCP source.");
-    assert.equal(managed.session.getLastAssistantText(), "MCP calls reused the scoped process.");
+    assert.equal(managed.session.getLastAssistantText(), "MCP calls reused the SDK process.");
   } finally { await managed?.stop(); await f.close(); }
 });
 

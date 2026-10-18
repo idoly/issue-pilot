@@ -95,7 +95,7 @@ function normalizedRelativePath(value: string): string {
   if (value.length > 4096 || value.includes("\0") || path.isAbsolute(value)) throw new Error("invalid_source_path");
   const normalized = path.normalize(value || ".");
   if (normalized === ".") return "";
-  if (normalized.startsWith("..") || path.isAbsolute(normalized)) throw new Error("invalid_source_path");
+  if (normalized.startsWith("..") || path.isAbsolute(normalized) || normalized.split(path.sep).includes(".git")) throw new Error("invalid_source_path");
   return normalized;
 }
 
@@ -168,8 +168,7 @@ export class SourceBrowser {
     if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_source_hash");
     const selected = normalizedRelativePath(relativePath);
     if (!selected) throw new Error("source_path_not_file");
-    const candidate = path.resolve(context.root, selected);
-    if (!isInside(context.root, candidate)) throw new Error("invalid_source_path");
+    const candidate = await this.mutableDestination(context, selected, true);
     let metadata;
     try { metadata = await lstat(candidate); } catch (error) { missingPathError(error); }
     if (!metadata!.isFile()) throw new Error("source_path_not_file");
@@ -219,7 +218,9 @@ export class SourceBrowser {
     const context = await this.writableContext(issue, repositoryName);
     const source = await this.resolvePath(context.root, relativePath);
     if (source === context.root) throw new Error("invalid_source_path");
+    if (source === path.resolve(context.root, normalizedRelativePath(destinationPath))) return;
     const destination = await this.mutableDestination(context, destinationPath, overwrite);
+    if (isInside(source, destination) || isInside(destination, source)) throw new Error("invalid_source_path");
     if (overwrite) await rm(destination, { recursive: true, force: true });
     await rename(source, destination);
   }
@@ -455,7 +456,7 @@ export class SourceBrowser {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes,
-      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } as Record<string, string>,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" } as Record<string, string>,
     };
   }
 
@@ -612,7 +613,7 @@ export class SourceBrowser {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes: issuePilotConfig.limits.sourceBrowser.commandOutputBytes,
-      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "1" } as Record<string, string>,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "1", GIT_LITERAL_PATHSPECS: "1" } as Record<string, string>,
     };
   }
 

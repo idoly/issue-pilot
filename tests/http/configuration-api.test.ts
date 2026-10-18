@@ -193,6 +193,22 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
   }
 });
 
+test("reuses a removed repository alias without changing the retained repository identity", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alias", ["prod", "test"], ["https://example.test/alias-first.git", "https://example.test/alias-second.git"]);
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then(response => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }> }> };
+    const [retained, removed] = config.services[0]!.repositories;
+    const payload = { name: "Alias", description: "Keep first repository", repositories: [{ ...retained!, alias: removed!.alias }], deployments: ["prod", "test"].map(environmentKey => ({ environmentKey, repositoryBranches: [{ repositoryAlias: removed!.alias, baseBranch: "main" }], capabilities: [] })) };
+    const update = await fixture.app.inject({ method: "PATCH", url: "/api/services/alias", payload });
+    assert.equal(update.statusCode, 200, update.body);
+    const after = await fixture.app.inject({ method: "GET", url: "/api/config" }).then(response => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }>; deployments: Array<{ repositoryBranches: Array<{ repositoryId: string }> }> }> };
+    assert.deepEqual(after.services[0]!.repositories, [{ ...retained!, alias: removed!.alias }]);
+    assert.ok(after.services[0]!.deployments.every(deployment => deployment.repositoryBranches.length === 1 && deployment.repositoryBranches[0]!.repositoryId === retained!.id));
+    assert.equal((await fixture.app.inject({ method: "PATCH", url: "/api/services/alias", payload })).statusCode, 200);
+  } finally { await fixture.cleanup(); }
+});
+
 test("updates and deletes Service configuration directly", async () => {
   const fixture = await createApiFixture();
   try {

@@ -77,6 +77,39 @@ test("serializes repository operations across manager instances sharing one stat
   }
 });
 
+for (const missingBranch of [false, true]) test(`restores recorded development branches ${missingBranch ? "without replacing a missing ref" : "without contacting the remote"}`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-local-restore-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, "README.md"), "initial\n");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const input = { issueKey: "ISSUE-20261018-997", workspaceName: "local", url: remote, baseBranch: "main", mode: "hotfix" as const };
+    const prepared = await manager.prepare(input);
+    await writeFile(join(prepared.workspacePath, "local.txt"), "local commit\n");
+    await git(["-C", prepared.workspacePath, "add", "."]);
+    await git(["-C", prepared.workspacePath, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "local change"]);
+    const expected = await manager.remove(remote, prepared.workspacePath);
+    const restore = { ...input, workingBranch: prepared.workingBranch!, existingBaseCommit: prepared.baseCommit };
+    if (missingBranch) {
+      await git(["-C", prepared.cachePath, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`]);
+      await assert.rejects(manager.prepare(restore), /working_branch_not_found/);
+      await assert.rejects(access(prepared.workspacePath));
+      await assert.rejects(git(["-C", prepared.cachePath, "show-ref", "--verify", `refs/heads/${prepared.workingBranch}`]));
+    } else {
+      await rm(remote, { recursive: true, force: true });
+      await git(["-C", prepared.cachePath, "update-ref", "-d", "refs/remotes/origin/main"]);
+      const restored = await manager.prepare(restore);
+      assert.equal(await git(["-C", restored.workspacePath, "rev-parse", "HEAD"]), expected);
+      assert.equal(restored.baseCommit, prepared.baseCommit);
+      assert.equal(await readFile(join(restored.workspacePath, "local.txt"), "utf8"), "local commit\n");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("shares immutable latest baselines for read-only environments and creates prefixed dev branches", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-"));
   const source = join(root, "source");

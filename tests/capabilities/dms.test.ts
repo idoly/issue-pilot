@@ -94,6 +94,18 @@ test("persists complete DMS results to an Issue output and only returns a file s
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("preserves an earlier DMS output when closing the protocol session fails", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-close-"));
+  const store = new IssueOutputStore(root, "ISSUE-20261018-996"); let closes = 0;
+  const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; }, async close() { closes++; throw new Error("dms_close_failed"); } });
+  try {
+    await store.write("result.json", '{"previous":true}');
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), /dms_close_failed/);
+    assert.equal((await store.read("result.json")).toString(), '{"previous":true}');
+    assert.equal(closes, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("uses Authorization for both sides of the MCP SSE protocol", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ method: string; url: string; authorization: string | null; redirect?: RequestRedirect }> = [];

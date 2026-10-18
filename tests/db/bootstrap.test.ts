@@ -76,10 +76,14 @@ test("restores interrupted and ready workspaces when the application database re
     const recoveredIssues = Object.fromEntries((await reopened.db.select().from(issues)).map((issue) => [issue.key, issue]));
     assert.equal(recoveredIssues["ISSUE-20260809-001"]?.status, "open");
     assert.equal(recoveredIssues["ISSUE-20260809-002"]?.status, "pending");
+    for (const issue of Object.values(recoveredIssues)) {
+      assert.ok(Math.abs(issue.updatedAt.getTime() - Date.now()) < 5_000, issue.updatedAt.toISOString());
+    }
     const workspaces = Object.fromEntries((await reopened.db.select().from(issueWorkspaces)).map((workspace) => [workspace.issueId, workspace]));
     const interrupted = Object.values(workspaces).find((workspace) => workspace.issueId === recoveredIssues["ISSUE-20260809-001"]?.id);
     assert.equal(interrupted?.status, "failed");
     assert.equal(interrupted?.lastError, "agent_interrupted_by_api_restart");
+    assert.ok(interrupted && Math.abs(interrupted.updatedAt.getTime() - Date.now()) < 5_000, interrupted?.updatedAt.toISOString());
     const [bootstrapUser] = await reopened.db.select().from(subjects).where(eq(subjects.subject, issuePilotConfig.bootstrapUser.subject));
     assert.equal(bootstrapUser?.displayName, "Bootstrap renamed");
     const configuredEnvironments = Object.fromEntries((await reopened.db.select().from(environments)).map((environment) => [environment.key, environment.name]));
