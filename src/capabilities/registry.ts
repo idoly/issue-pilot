@@ -87,11 +87,11 @@ const slsQueryProperties = {
 };
 
 const databaseOutputSchema = Type.Object({
-  fileName: Type.String({ minLength: 1, maxLength: 255, description: "Durable Issue output file name." }),
+  fileName: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Durable Issue output basename within the filesystem UTF-8 byte limit." }),
   format: StringEnum(["csv", "jsonl"] as const),
 }, { additionalProperties: false });
 
-const dmsOutputSchema = Type.Object({ fileName: Type.String({ minLength: 1, maxLength: 255, description: "Save the complete MCP result as this Issue's JSON output instead of returning query rows to the conversation." }) }, { additionalProperties: false });
+const dmsOutputSchema = Type.Object({ fileName: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Save the complete MCP result as this Issue's JSON output instead of returning query rows to the conversation. The UTF-8 basename byte limit also applies." }) }, { additionalProperties: false });
 
 const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),

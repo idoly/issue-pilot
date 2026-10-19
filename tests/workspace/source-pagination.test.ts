@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -36,6 +36,91 @@ async function fixture() {
   return { root, database, issue: issue!, repository, git, browser: new SourceBrowser(database.db, root), close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
+for (const directory of [false, true]) test(`preserves an overwritten ${directory ? "directory" : "file"} when the source cannot be renamed`, { skip: process.getuid?.() === 0 }, async () => {
+  const f = await fixture();
+  const protectedDirectory = path.join(f.repository, "protected");
+  try {
+    await mkdir(protectedDirectory);
+    await writeFile(path.join(protectedDirectory, "source.txt"), "source data\n");
+    const destination = path.join(f.repository, "destination");
+    if (directory) await mkdir(destination);
+    const evidence = directory ? path.join(destination, "evidence.txt") : destination;
+    await writeFile(evidence, "preserve old destination\n");
+    await chmod(protectedDirectory, 0o500);
+    await assert.rejects(f.browser.renamePath(f.issue, "application", "protected/source.txt", "destination", true), { code: "EACCES" });
+    assert.equal(await readFile(evidence, "utf8"), "preserve old destination\n");
+    assert.equal(await readFile(path.join(protectedDirectory, "source.txt"), "utf8"), "source data\n");
+    assert.equal((await readdir(f.repository)).some(name => name.includes(".issue-pilot-")), false);
+  } finally { await chmod(protectedDirectory, 0o700).catch(() => {}); await f.close(); }
+});
+
+test("reports rename finalization failures and preserves the previous destination as recovery evidence", { skip: process.getuid?.() === 0 }, async () => {
+  const f = await fixture();
+  try {
+    await writeFile(path.join(f.repository, "source"), "new contents\n");
+    await mkdir(path.join(f.repository, "destination"));
+    await writeFile(path.join(f.repository, "destination", "evidence.txt"), "old contents\n");
+    await chmod(path.join(f.repository, "destination"), 0o500);
+    await assert.rejects(f.browser.renamePath(f.issue, "application", "source", "destination", true), /source_rename_finalize_failed/);
+    assert.equal(await readFile(path.join(f.repository, "destination"), "utf8"), "new contents\n");
+    const [backup] = (await readdir(f.repository)).filter(name => name.startsWith(".issue-pilot-rename-"));
+    assert.ok(backup);
+    assert.equal(await readFile(path.join(f.repository, backup, "evidence.txt"), "utf8"), "old contents\n");
+  } finally {
+    for (const name of await readdir(f.repository)) if (name.startsWith(".issue-pilot-rename-") || name === "destination") await chmod(path.join(f.repository, name), 0o700).catch(() => {});
+    await f.close();
+  }
+});
+
+test("replaces a nonempty source directory only after installing its replacement", async () => {
+  const f = await fixture();
+  try {
+    for (const name of ["source", "destination"]) {
+      await mkdir(path.join(f.repository, name));
+      await writeFile(path.join(f.repository, name, "value.txt"), name);
+    }
+    await f.browser.renamePath(f.issue, "application", "source", "destination", true);
+    assert.equal(await readFile(path.join(f.repository, "destination", "value.txt"), "utf8"), "source");
+    await assert.rejects(lstat(path.join(f.repository, "source")), { code: "ENOENT" });
+    assert.equal((await readdir(f.repository)).some(name => name.includes(".issue-pilot-")), false);
+  } finally { await f.close(); }
+});
+
+for (const operation of ["delete", "rename"] as const) test(`${operation}s source symlinks without changing their targets`, async () => {
+  const f = await fixture();
+  try {
+    const target = path.join(f.repository, "target.txt");
+    const link = path.join(f.repository, "link.txt");
+    await writeFile(target, "preserve target\n");
+    await symlink("target.txt", link);
+    if (operation === "delete") {
+      await f.browser.deletePath(f.issue, "application", "link.txt", false);
+      await assert.rejects(lstat(link), { code: "ENOENT" });
+    } else {
+      await f.browser.renamePath(f.issue, "application", "link.txt", "renamed-link.txt", false);
+      assert.equal(await readlink(path.join(f.repository, "renamed-link.txt")), "target.txt");
+      await assert.rejects(lstat(link), { code: "ENOENT" });
+    }
+    assert.equal(await readFile(target, "utf8"), "preserve target\n");
+    await symlink("missing.txt", path.join(f.repository, "dangling-link"));
+    await f.browser.deletePath(f.issue, "application", "dangling-link", false);
+    await assert.rejects(lstat(path.join(f.repository, "dangling-link")), { code: "ENOENT" });
+  } finally { await f.close(); }
+});
+
+test("rejects source reads through aliases to Git control paths", async () => {
+  const f = await fixture();
+  try {
+    await symlink(".git", path.join(f.repository, "control-alias"));
+    await symlink(".git/config", path.join(f.repository, "config-alias"));
+    await assert.rejects(f.browser.tree(f.issue, "application", "control-alias"), /invalid_source_path/);
+    await assert.rejects(f.browser.file(f.issue, "application", "config-alias"), /invalid_source_path/);
+    await assert.rejects(f.browser.createFile(f.issue, "application", "control-alias/new.txt", "forbidden"), /invalid_source_path|source_path_outside_repository/);
+    await f.browser.deletePath(f.issue, "application", "control-alias", false);
+    assert.ok((await lstat(path.join(f.repository, ".git"))).isDirectory());
+  } finally { await f.close(); }
+});
+
 test("treats bracket characters in source paths literally when staging and discarding", async () => {
   const f = await fixture();
   try {
@@ -49,6 +134,26 @@ test("treats bracket characters in source paths literally when staging and disca
     await f.browser.discard(f.issue, "application", ["value[1].txt"]);
     assert.equal(await readFile(path.join(f.repository, "value[1].txt"), "utf8"), "original\n");
     assert.equal(await readFile(path.join(f.repository, "value1.txt"), "utf8"), "changed\n");
+  } finally { await f.close(); }
+});
+
+test("reads history and commit changes for files deleted from the working tree", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(path.join(f.repository, "deleted.txt"), "historical contents\n");
+    await f.git(["add", "deleted.txt"]);
+    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Add historical file"]);
+    await rm(path.join(f.repository, "deleted.txt"));
+    await f.git(["add", "-A"]);
+    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Delete historical file"]);
+    const head = await f.git(["rev-parse", "HEAD"]);
+    const history = await f.browser.history(f.issue, "application", "deleted.txt");
+    assert.deepEqual(history.commits.map(commit => commit.subject), ["Delete historical file", "Add historical file"]);
+    assert.deepEqual(await f.browser.commit(f.issue, "application", head, "deleted.txt"), { files: [{ path: "deleted.txt", status: "deleted", previousPath: null }], truncated: false });
+    const compared = await f.browser.commitFile(f.issue, "application", head, "deleted.txt");
+    assert.equal(compared.before?.content, "historical contents\n");
+    assert.equal(compared.after, null);
+    await assert.rejects(f.browser.history(f.issue, "application", ".git/config"), /invalid_source_path/);
   } finally { await f.close(); }
 });
 

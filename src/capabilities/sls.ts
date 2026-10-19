@@ -1,11 +1,12 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilityTextResult } from "./contracts.ts";
 import { runReadWorker } from "./read-worker.ts";
+import { SLS_QUERY_ERRORS } from "./sls-errors.ts";
+export { SLS_QUERY_ERRORS };
 import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability.sls;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-export const SLS_QUERY_ERRORS = ["sls_query_failed", "sls_query_incomplete", "sls_query_invalid_response", "sls_sql_limit_required", "sls_scan_query_not_supported"] as const;
 
 export function prepareSlsQuery(input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">) {
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");

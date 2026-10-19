@@ -80,6 +80,26 @@ test("reads exact Nacos Data IDs over one authenticated bounded HTTP session", a
   }
 });
 
+for (const [serverUrl, origin] of [
+  ["http://nacos.example.test", "http://nacos.example.test:8848"],
+  ["http://nacos.example.test:80", "http://nacos.example.test"],
+  ["http://nacos.example.test:8080/", "http://nacos.example.test:8080"],
+  ["https://nacos.example.test", "https://nacos.example.test"],
+  ["http://[::1]:80/", "http://[::1]"],
+] as const) test(`retains the configured Nacos endpoint for ${serverUrl}`, async context => {
+  const requests: URL[] = [];
+  context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => {
+    const endpoint = new URL(input instanceof Request ? input.url : String(input));
+    requests.push(endpoint);
+    return endpoint.pathname.endsWith("/auth/login")
+      ? Response.json({ accessToken: "managed-token" })
+      : new Response("synthetic configuration");
+  });
+  await readNacos(connection(serverUrl, ["orders.yaml"]));
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every(endpoint => endpoint.origin === origin), requests.map(endpoint => endpoint.origin).join(", "));
+});
+
 test("rejects oversized Nacos responses", async () => {
   const server = await nacosServer();
   try {

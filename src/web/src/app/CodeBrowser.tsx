@@ -137,8 +137,9 @@ export default function CodeBrowser(props: { issueKey: string; repositoryVersion
     setCommitHover({ commit, left: Math.max(8, Math.min(rect.right + 8, window.innerWidth - width - 8)), top: Math.max(8, Math.min(rect.top, window.innerHeight - 240)) });
   };
   const copyCommit = async (commit: SourceCommit, detail: boolean) => {
-    try { await copyText(detail ? `${commit.hash}\n${commit.author}\n${new Date(commit.date).toLocaleString()}\n\n${commit.subject}` : commit.hash); setCopyStatus("已复制"); }
-    catch { setCopyStatus("复制失败，请选择文字后按 Ctrl+C"); }
+    const owner = commitHover();
+    try { await copyText(detail ? `${commit.hash}\n${commit.author}\n${new Date(commit.date).toLocaleString()}\n\n${commit.subject}` : commit.hash); if (commitHover() === owner) setCopyStatus("已复制"); }
+    catch { if (commitHover() === owner) setCopyStatus("复制失败，请选择文字后按 Ctrl+C"); }
   };
   onCleanup(cancelHoverHide);
   const [commitFiles, setCommitFiles] = createSignal<Record<string, SourceCommitFile[]>>({}, { ownedWrite: true });

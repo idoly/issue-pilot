@@ -63,7 +63,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
-      throw new ApiError(502, error instanceof Error && /^dms_[a-z_]+$/.test(error.message) ? error.message : "dms_scope_resolve_failed");
+      throw new ApiError(502, error instanceof Error && /^(?:dms_[a-z_]+|dms_mcp_http_[45]\d{2})$/.test(error.message) ? error.message : "dms_scope_resolve_failed");
     }
   });
   app.get("/api/catalog", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); return runScopeExclusive(() => loadConfigurationCatalog(database.db)); });

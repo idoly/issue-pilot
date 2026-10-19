@@ -51,7 +51,7 @@ flowchart LR
 
 Pi 的初始校验发生在可修改参数的钩子之前，因此应用工具保留 execute 入口校验；外部 MCP 也在发送前按已发现 schema 验证参数。
 
-MySQL/DMS 不静默截断完整结果。大结果需明确缩小 SQL 范围或导出文件；导出完成协议 rollback/close 后才发布，失败保留旧成果。Redis/SLS 等使用受限 Worker，具体目标、操作和预算见[配置与协议](CONFIGURATION.md#内建能力与工具)及[根配置](../issue-pilot.config.ts)。
+MySQL/DMS 不静默截断完整结果。DMS 先校验 SQL 再连接，握手阶段的短暂限流最多退避重试一次并保留 HTTP 状态；SQL 发送后不自动重放。MySQL 的操作预算和取消一直覆盖连接关闭阶段，取消时销毁连接，避免关闭回调挂起。大结果需明确缩小 SQL 范围或导出文件；导出完成协议 rollback/close 后才发布，失败保留旧成果。Redis/SLS 等使用受限 Worker，具体目标、操作和预算见[配置与协议](CONFIGURATION.md#内建能力与工具)及[根配置](../issue-pilot.config.ts)。
 
 ## MCP 与 Codemode
 
@@ -71,13 +71,13 @@ Codemode 让模型用脚本编排现有工具，仍走同一工具管线：
 | on | 原生、应用直接工具，以及 Codemode | searchTools/describeTool 按需发现 |
 | only | SDK 隐藏其他模型工具声明，主要通过 Codemode | 同样按需发现和调用 |
 
-on/only 不预先把全部 MCP schema 放入上下文。`service_query`、`workspace`、`output` 返回结构化结果，独立读取可并行，依赖结果或发布同一文件时顺序执行，只返回模型需要的字段。
+on/only 不预先把全部 MCP schema 放入上下文。Codemode 脚本使用进程级、可取消的 FIFO 执行资源队列，一次执行一个脚本，为 SDK 的第二个 Worker 槽位保留退出缓冲；默认最多等待 120 秒、排队 32 个，预算归根配置 `limits.codemode`。等待超时或取消的脚本不执行，不自动重放；脚本内部独立工具调用仍可并行。`service_query`、`workspace`、`output` 返回结构化结果，独立读取可并行，依赖结果或发布同一文件时顺序执行，只返回模型需要的字段。
 
 ## 文件处理与会话
 
 模型通过普通脚本处理文件，应用不提供格式专用执行器。Bash PATH 包含应用 `.venv` 和项目 wrapper，Node 可使用应用已安装的包；当前 Git 身份随调用环境注入。
 
-Python/openpyxl 用于读取、创建和修改 `.xlsx`，支持写入及保留公式，不计算公式结果。旧 `.xls` 不在支持范围内，网页不解析或预览 Excel。发布和文件事务见[数据存储设计](STORAGE.md#文件写入与发布)。
+Python/openpyxl 用于读取、创建和修改 `.xlsx`，支持写入及保留公式，不计算公式结果。旧 `.xls` 不在支持范围内，网页不解析或预览 Excel，文件列表仅提供下载；超出预览大小限制的成果同样不显示预览入口。附件和成果弹窗统一使用下载与关闭操作，只有加载失败时提供重试。发布和文件事务见[数据存储设计](STORAGE.md#文件写入与发布)。
 
 每工单 Pi JSONL 保存消息和分支，恢复时读取 active branch，不从历史消息恢复额外工具权限。只读仓库会话轮次结束后关闭，下一轮准备当前快照并恢复对话；开发空闲会话可以复用。模型响应超时只计等待模型输出，工具执行期间暂停。
 

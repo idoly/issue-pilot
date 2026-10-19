@@ -89,6 +89,44 @@ test("manages active users in SQLite without rewriting historical identities", a
   }
 });
 
+test("patches only provided user fields without restoring stale profile values", async () => {
+  const fixture = await createApiFixture();
+  try {
+    const created = await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "partial-user", name: "Original", email: "original@example.test", role: "test" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const patch = (payload: Record<string, unknown>, subject = "partial-user") => fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(subject)}`, headers: bootstrapHeaders, payload });
+    assert.equal((await patch({ name: "Current", email: "current@example.test", role: "developer", active: true })).statusCode, 200);
+    const disabled = await patch({ active: false });
+    assert.equal(disabled.statusCode, 200, disabled.body);
+    const values = await json(disabled);
+    assert.equal(values.name, "Current"); assert.equal(values.email, "current@example.test"); assert.equal(values.role, "developer"); assert.equal(values.active, false);
+    const renamed = await patch({ name: "Renamed" });
+    assert.equal(renamed.statusCode, 200, renamed.body);
+    const renamedValues = await json(renamed);
+    assert.equal(renamedValues.name, "Renamed"); assert.equal(renamedValues.email, "current@example.test"); assert.equal(renamedValues.role, "developer"); assert.equal(renamedValues.active, false);
+    for (const [payload, error] of [[{ active: false }, "last_active_user"], [{ role: "product" }, "last_active_developer"], [{ isAdmin: false }, "last_active_admin"]] as const) {
+      const protectedUser = await patch(payload, issuePilotConfig.bootstrapUser.subject);
+      assert.equal(protectedUser.statusCode, 409, protectedUser.body); assert.equal((await json(protectedUser)).error, error);
+    }
+    const empty = await patch({});
+    assert.equal(empty.statusCode, 400, empty.body); assert.equal((await json(empty)).error, "invalid_user_update");
+  } finally { await fixture.cleanup(); }
+});
+
+test("validates provided user fields before closing their Issue sessions", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Patch validation");
+    const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: bootstrapHeaders, payload: issuePayload("patch-validation") });
+    assert.equal(created.statusCode, 201, created.body); fixture.engine.running.clear();
+    for (const invalid of [{ role: "unsupported" }, { isAdmin: "true" }]) {
+      const response = await fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`, headers: bootstrapHeaders, payload: { name: issuePilotConfig.bootstrapUser.name, email: issuePilotConfig.bootstrapUser.email, active: true, ...invalid } });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.deepEqual(fixture.engine.closedSessions, []);
+    }
+  } finally { await fixture.cleanup(); }
+});
+
 test("rejects a user change when the actor loses the developer role while queued", { timeout: 10_000 }, async () => {
   const fixture = await createApiFixture();
   const database = openDatabase(fixture.databaseFile);

@@ -1,10 +1,10 @@
 import { Button, Modal, Skeleton } from "../ui";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { errorMessage, fetchOutput, outputUrl, type IssueDetail } from "../data/client";
 import { Download } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
+import { outputPreviewUnavailable } from "./file-preview";
 
 type IssueOutput = IssueDetail["outputs"][number];
 
@@ -13,6 +13,7 @@ export function OutputPreview(props: { issueKey: string; output: IssueOutput | n
   const [loading, setLoading] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [attempt, setAttempt] = createSignal(0, { ownedWrite: true });
+  const unavailable = () => props.output ? outputPreviewUnavailable(props.output) : undefined;
   let controller: AbortController | undefined;
   let generation = 0;
   createEffect(() => ({ issueKey: props.issueKey, output: props.output, attempt: attempt() }), ({ issueKey, output }) => {
@@ -20,14 +21,7 @@ export function OutputPreview(props: { issueKey: string; output: IssueOutput | n
     const current = ++generation;
     setText(""); setError(""); setLoading(false);
     if (!output) return;
-    if (!/\.(csv|json|jsonl|sql|txt|md|markdown|log|ya?ml|xml|tsv)$/i.test(output.fileName)) {
-      setError("此格式暂不支持预览，请下载查看");
-      return;
-    }
-    if (output.size > issuePilotConfig.web.outputPreviewBytes) {
-      setError("文件过大，请下载查看完整内容");
-      return;
-    }
+    if (outputPreviewUnavailable(output)) return;
     controller = new AbortController();
     setLoading(true);
     const request = fetchOutput(issueKey, output.fileName, controller.signal).then((content) => {
@@ -43,17 +37,18 @@ export function OutputPreview(props: { issueKey: string; output: IssueOutput | n
   });
   onCleanup(() => { generation += 1; controller?.abort(); });
 
-  return <Modal width={960} open={Boolean(props.output)} title={props.output?.fileName ?? "成果文件预览"} okText="关闭" cancelText="取消" onOk={props.onClose} onCancel={props.onClose}>
+  return <Modal width={960} open={Boolean(props.output)} title={props.output?.fileName ?? "成果文件预览"} onOk={props.onClose} onCancel={props.onClose} footer={<>
+    <Show when={props.output}>{output => <a class="ui-button" data-variant="outlined" href={outputUrl(props.issueKey, output().fileName)} download={output().fileName}><Download size={15} />下载文件</a>}</Show>
+    <Button type="primary" onClick={props.onClose}>关闭</Button>
+  </>}>
     <div class="attachment-preview">
-      <div class="attachment-preview-toolbar">
-        <Show when={error()}><Button onClick={() => setAttempt((value) => value + 1)}>重试</Button></Show>
-        <Show when={props.output}>{(output) => <a class="attachment-download-link" href={outputUrl(props.issueKey, output().fileName)} download={output().fileName}><Download size={15} />下载文件</a>}</Show>
-      </div>
-      <Show when={!loading()} fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
-        <Show when={!error()} fallback={<div class="workspace-error" role="alert">{error()}</div>}>
-          <Show when={text()} fallback={<div class="empty-band">文件内容为空</div>}>
-            <Show when={/\.(md|markdown)$/i.test(props.output?.fileName ?? "")} fallback={<pre class="attachment-text-preview" tabindex="0">{text()}</pre>}>
-              <div class="output-markdown-preview"><Markdown source={text()} /></div>
+      <Show when={!unavailable()} fallback={<div class="attachment-preview-message" role="status"><p>{unavailable()}</p></div>}>
+        <Show when={!loading()} fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
+          <Show when={!error()} fallback={<div class="attachment-preview-message is-error" role="alert"><p>{error()}</p><Button onClick={() => setAttempt(value => value + 1)}>重试</Button></div>}>
+            <Show when={text()} fallback={<div class="attachment-preview-message">文件内容为空</div>}>
+              <Show when={/\.(md|markdown)$/i.test(props.output?.fileName ?? "")} fallback={<pre class="attachment-text-preview" tabindex="0">{text()}</pre>}>
+                <div class="output-markdown-preview"><Markdown source={text()} /></div>
+              </Show>
             </Show>
           </Show>
         </Show>

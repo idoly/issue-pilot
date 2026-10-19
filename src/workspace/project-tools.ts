@@ -143,7 +143,7 @@ async function removeStaleSocket(socketPath: string): Promise<void> {
 export class ProjectToolBroker {
   readonly socketPath: string;
   private readonly queue = new KeyedSerialQueue();
-  private readonly database: Database;
+  private readonly database: () => Database;
   private readonly stateRoot: string;
   private readonly tools: ToolRuntime;
   private readonly runtime: ProjectToolRuntime;
@@ -153,13 +153,13 @@ export class ProjectToolBroker {
   private closing = false;
 
   constructor(
-    database: Database,
+    database: Database | (() => Database),
     stateRoot: string,
     tools: ToolRuntime = processToolRuntime,
     runtime: ProjectToolRuntime = issuePilotConfig.runtime.projectTools,
     reporter: (error: unknown) => void = () => undefined,
   ) {
-    this.database = database;
+    this.database = typeof database === "function" ? database : () => database;
     this.stateRoot = path.resolve(stateRoot);
     this.tools = tools;
     this.runtime = runtime;
@@ -222,11 +222,12 @@ export class ProjectToolBroker {
     const issueKey = normalizeIssueKey(input.issueKey);
     return this.queue.run(issueKey, async () => {
       signal?.throwIfAborted();
-      const [issue] = await this.database.select({ id: issues.id, key: issues.key, type: issues.type, environmentKind: environments.kind })
+      const database = this.database();
+      const [issue] = await database.select({ id: issues.id, key: issues.key, type: issues.type, environmentKind: environments.kind })
         .from(issues).innerJoin(environments, eq(environments.id, issues.environmentId)).where(eq(issues.key, issueKey)).limit(1);
       if (!issue) throw new Error("issue_not_found");
       if (issue.environmentKind !== "dev" || !ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(issue.type as "defect_fix" | "feature_development")) throw new Error("workspace_not_development");
-      const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
+      const repositories = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
       if (classifyRepositoryState(repositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
       const repository = repositories.find((candidate) => candidate.workspaceName === input.repository);
       if (!repository?.localPath) throw new Error("workspace_repository_missing");
@@ -307,9 +308,11 @@ export class ProjectToolBroker {
     } catch (error) {
       if (abort.signal.aborted) return;
       const message = error instanceof Error ? error.message : "project_tool_failed";
-      if (!stableRequestErrors.has(message)) this.reporter(error);
-      response.writeHead(stableRequestErrors.has(message) ? 400 : 500);
-      response.end(`${stableRequestErrors.has(message) ? message : "project_tool_failed"}\n`);
+      const unavailable = message === "project_tool_broker_not_ready" || message === "project_tool_broker_closed";
+      const known = unavailable || stableRequestErrors.has(message);
+      if (!known) this.reporter(error);
+      response.writeHead(unavailable ? 503 : known ? 400 : 500);
+      response.end(`${known ? message : "project_tool_failed"}\n`);
     } finally {
       request.off("aborted", cancel);
       response.off("close", cancel);

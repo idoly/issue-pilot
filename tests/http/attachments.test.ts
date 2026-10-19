@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs, { access, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { access, chmod, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
@@ -58,6 +58,19 @@ test("rolls back only empty state claimed for a failed Issue creation", async ()
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("accepts only readonly 0400 attachment files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-modes-"));
+  try {
+    const attachmentRoot = path.join(root, "attachments"); await mkdir(attachmentRoot, { mode: 0o700 });
+    const file = path.join(attachmentRoot, "evidence.txt"); await writeFile(file, "evidence", { mode: 0o400 });
+    assert.equal(await resolveSecureAttachmentFile(attachmentRoot, file, 8), file);
+    for (const mode of [0o600, 0o500, 0o4400]) {
+      await chmod(file, mode);
+      await assert.rejects(resolveSecureAttachmentFile(attachmentRoot, file, 8), /insecure_issue_attachment_file/);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("rejects an attachment symlink while preserving its target and evidence", async () => {

@@ -1,4 +1,4 @@
-import { type Accessor, type ParentProps, createContext, createSignal, useContext } from "solid-js";
+import { type Accessor, type ParentProps, createContext, createSignal, onCleanup, useContext } from "solid-js";
 
 import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
 import { createAgentConfigurationEditor } from "./agent-configuration";
@@ -57,20 +57,27 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   const agentEditor = createAgentConfigurationEditor(
     () => configuration().agent,
     () => {
-      currentUser(); // Track selection changes; requests use the stored header identity.
+      currentUser(); // Track selection changes; requests use this page's pinned identity.
       return currentUserSubject();
     },
     async () => (await refreshConfiguration()).agent,
   );
-  let peopleGeneration = 0;
+  let peopleGeneration = 0, disposed = false;
+  onCleanup(() => { disposed = true; peopleGeneration++; });
   const refreshPeople = async () => {
+    if (disposed) throw new DOMException("Application resources were disposed", "AbortError");
     const owner = ++peopleGeneration;
     try {
       const users = await loadUsers();
       if (owner !== peopleGeneration) return users;
-      if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) setCurrentUserSubject(null);
+      if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) {
+        setCurrentUser(null);
+        setCurrentUserSubject(null, false);
+      }
       const currentUser = await loadCurrentUser();
       if (owner !== peopleGeneration) return users;
+      // Pin the resolved identity without replacing another tab's remembered choice.
+      setCurrentUserSubject(currentUser.subject, false);
       setPeople(users);
       setCurrentUser(currentUser);
       setPeopleError("");

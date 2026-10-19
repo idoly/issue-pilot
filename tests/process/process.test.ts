@@ -9,6 +9,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { executeLocalCommand } from "../../src/process.ts";
 
+test("rejects an already cancelled command before attempting to spawn", async () => {
+  const reason = new Error("cancelled_before_spawn");
+  const command = `${process.execPath}.must-not-run`;
+  await assert.rejects(executeLocalCommand(command, [], { signal: AbortSignal.abort(reason) }), error => error === reason);
+  await assert.rejects(executeLocalCommand(command, []), { code: "ENOENT" });
+});
+
 test("bounds output and applies scoped environment overrides for local capability processes", async () => {
   const normal = await executeLocalCommand(process.execPath, ["-e", "process.stdout.write('ok')"]);
   assert.equal(normal.stdout, "ok");

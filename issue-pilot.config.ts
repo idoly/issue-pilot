@@ -68,6 +68,8 @@ export const issuePilotConfig = Object.freeze({
     }),
   }),
   limits: Object.freeze({
+    filesystemNameBytes: 255,
+    codemode: Object.freeze({ queueWaitMs: 120_000, queueEntries: 32 }),
     mcpServer: Object.freeze({ requestBytes: 1024 * 1024, responseBytes: 1024 * 1024, pageItems: 100, textLines: 1000 }),
     agentMessageChars: 50_000,
     relatedIssues: 20,
@@ -101,7 +103,7 @@ export const issuePilotConfig = Object.freeze({
       connectionMs: 10_000,
       database: Object.freeze({ queryChars: 20_000, databases: 20 }),
       mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
-      dms: Object.freeze({ executionMs: 120_000, databases: 20 }),
+      dms: Object.freeze({ executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
       elasticsearch: Object.freeze({ results: 200 }),
       nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
       redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),

@@ -358,7 +358,7 @@ export class IssueProjectManager {
     const existingNames = issueRepositoryWorkspaceNames(existingRepositories);
     const targetUrls = new Set(repositories.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositories.filter((repository) => !targetUrls.has(repository.url));
-    for (const repository of removedRepositories) await this.worktrees.assertClean(repository.url, repository.localPath!);
+    for (const repository of removedRepositories) await this.worktrees.assertClean(repository.url, repository.localPath!, repository.workingBranch!);
 
     const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url), existingNames);
     const mode = developmentWorktreeMode(issue.type);

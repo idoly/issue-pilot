@@ -34,7 +34,7 @@ flowchart LR
 
 工单绑定入口服务、环境和类型，必须匹配一个有效的服务部署。创建请求的 `workMode` 决定环境与类型，数据库不另存一份当前 work mode；映射见[配置与协议](CONFIGURATION.md#处理方式)。
 
-创建时先暂存附件并独占 claim 空工单目录，再事务保存 Issue、唯一 Workspace、关联和附件元数据，提交后入队。Agent 选择并校验 owner 凭证，准备工作区，恢复或新建 Pi 会话，然后开始处理。
+创建时先暂存附件，再按当天编号范围使用索引计算下一序号，独占 claim 空工单目录，并事务保存 Issue、唯一 Workspace、关联和附件元数据，提交后入队。Agent 选择并校验 owner 凭证，准备工作区，恢复或新建 Pi 会话，然后开始处理。
 
 ```mermaid
 stateDiagram-v2
@@ -53,7 +53,7 @@ Workspace 独立记录 `not_created/preparing/running/ready/stopped/failed`。`r
 
 入口服务不是跨服务调查的资源边界。`workspace include/remove` 管理同环境代码，开发工单可以显式查询 prod/test 证据，查询来源不会改变代码环境。
 
-范围变更使用 plan/apply，结合工单更新时间与 plan hash 拒绝过期方案；支持正式/测试重绑、同服务调查转开发修复及保持 branch mode 的开发跨服务迁移。数据库提交与 Git/文件准备、回滚和最终化分别协调，并保存审计。
+范围变更使用 plan/apply，结合工单更新时间与 plan hash 拒绝过期方案；页面切换目标时丢弃旧预检响应，提交变更期间锁定目标。支持正式/测试重绑、同服务调查转开发修复及保持 branch mode 的开发跨服务迁移。数据库提交与 Git/文件准备、回滚和最终化分别协调，并保存审计。
 
 ## 实时对话与页面状态
 
@@ -74,7 +74,7 @@ sequenceDiagram
 
 先订阅再读快照，避免读取期间丢事件；快照已有的独立 usage 条目按 Pi entry ID 去重。写入器按 FIFO 发送，底层 `write()` 返回 false 时等待 `drain`，连接关闭后清理监听和待发帧。
 
-前端通过 generation 和取消信号拒绝旧连接、旧请求覆盖当前页面。基座草稿、保存队列和失败信息归 `ApplicationResources` 持有，切页保留，身份变化取消旧身份尚未提交的工作。首页 Overview 单独拥有首页请求和轮询。
+前端按身份、工单和请求序号隔离异步结果，保留等待期间的新草稿。基座草稿、保存队列和失败信息归 `ApplicationResources` 持有，切页保留；服务与 MCP 编辑器在身份/权限变化或关闭时清理敏感草稿，普通资料刷新不打断编辑。用户编辑器在身份或权限变化时关闭，并隔离旧请求的错误与忙碌状态；成功写入后继续刷新共享用户资料，卸载后不再加载本地用户列表。仓库草稿在同一身份和角色的资料刷新时保留。首页 Overview 单独拥有首页请求和轮询。附件预览关闭或换文件时取消下载，复制失败不隐藏已加载内容。
 
 入口：[agent-routes.ts](../src/http/agent-routes.ts)、[sse.ts](../src/http/sse.ts)、[agent-stream.ts](../src/web/src/app/agent-stream.ts)、[ApplicationResources.tsx](../src/web/src/app/ApplicationResources.tsx)。
 
@@ -88,6 +88,7 @@ sequenceDiagram
 | lifecycle queue | 释放、重开、转换与迁移 |
 | 每工单 inspection queue | 同一工单的深检与生命周期操作 |
 | repository queue | 同一 state root + URL hash 的 Git store 操作 |
+| Codemode 执行资源队列 | 进程级脚本 Worker 入场、等待预算与取消，不代替工单和配置队列 |
 
 锁顺序固定：
 
@@ -97,13 +98,13 @@ sequenceDiagram
 释放/重开：lifecycle queue → inspection queue → Issue reservation
 ```
 
-预约遇到活动工单会拒绝；不能用一个全局 mutex 替代这些协调范围。等待队列后需重新检查相关授权。失败任务先停止会话并清理资源，再回写状态，防止旧轮次覆盖新轮次。排队消息执行时也要确认捕获的会话仍有效。
+预约遇到活动工单会拒绝；不能用一个全局 mutex 替代这些协调范围。等待队列后需重新检查相关授权。应用外部命令执行器在创建进程前检查取消，没有 PID 时不发送终止信号。失败任务先停止会话并清理资源，再回写状态，防止旧轮次覆盖新轮次。排队消息执行时也要确认捕获的会话仍有效。
 
 ## 代码浏览与运行生命周期
 
-Monaco 负责文本编辑和差异显示，不加载 VS Code 扩展宿主。Source API 拒绝越界链接和 `.git` 路径，Git 文件参数按字面处理；保存用 SHA-256 检测冲突，前端保留草稿。原生工具的执行边界见 [Agent 与能力](AGENT.md#执行边界)。
+Monaco 负责文本编辑和差异显示，不加载 VS Code 扩展宿主。变更列表保持单行并优先显示文件名，窄侧栏隐藏同行目录，完整路径保留现有悬浮提示。Source API 检查读取的解析路径和写入父目录，拒绝越界访问及 `.git` 别名；删除、重命名操作链接本身，不跟随链接操作目标；覆盖重命名先隔离旧目标，失败时恢复，最终化失败保留备份并报告。Git 文件参数按字面处理；保存用 SHA-256 检测冲突，前端保留草稿。历史查询读取 Git 记录，不要求文件仍存在于当前工作树。原生工具的执行边界见 [Agent 与能力](AGENT.md#执行边界)。
 
-启动顺序为：数据库迁移与中断状态恢复 → 检查未知目录和共享 checkout → 启动项目 broker → 准备工单 runtime → 确认模型基座 → 维护与路由 → 监听 HTTP。单个 runtime 可以被报告为 blocked，`/health` 成功不代表全部工单资源或远程服务正常。
+默认启动顺序为：占有项目 broker 控制 Socket → 数据库迁移与中断状态恢复 → 检查未知目录和共享 checkout → 准备工单 runtime → 确认模型基座 → 维护与路由 → broker 就绪并监听 HTTP。竞争实例在数据库恢复与目录清理之前拒绝；启动期间的项目命令返回 503，不接触尚未就绪的数据库。单个 runtime 可以被报告为 blocked，`/health` 成功不代表全部工单资源或远程服务正常。
 
 队列在内存中，进程重启不会自动恢复未完成的模型调用；持久工单和会话支持后续重试或继续。关闭时先等待维护与 Agent 活动，再释放会话/MCP、模型运行时、broker，最后关闭数据库，清理错误聚合报告。
 

@@ -20,7 +20,7 @@ export function text(value: unknown, name: string, maximum = 10_000): string {
 export function optionalText(value: unknown, maximum = 10_000): string | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value !== "string" || value.length > maximum) throw new ApiError(400, "invalid_text");
-  return value.trim();
+  return value.trim() || null;
 }
 
 export function strings(value: unknown, name: string): string[] {

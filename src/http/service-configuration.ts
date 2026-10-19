@@ -1,4 +1,4 @@
-import { or, and, eq, inArray } from "drizzle-orm";
+import { or, eq, inArray } from "drizzle-orm";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { resolveConfiguredCapabilitySections } from "../configuration/credentials.ts";
 import type { Database } from "../db/client.ts";
@@ -89,13 +89,23 @@ async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: str
 export async function applyServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; prepared: PreparedServiceConfiguration; serviceUpdate?: { name: string; description: string } }): Promise<void> {
   const { executor, serviceId, prepared, serviceUpdate } = options;
   if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
-  const retainedRepositoryIds = new Set(prepared.parsed.repositories.flatMap(repository => repository.id ? [repository.id] : []));
-  for (const repository of prepared.existingRepositories) if (!retainedRepositoryIds.has(repository.id)) await executor.delete(serviceRepositories).where(eq(serviceRepositories.id, repository.id));
+  const existingById = new Map(prepared.existingRepositories.map(repository => [repository.id, repository]));
+  const unchanged = new Set(prepared.parsed.repositories.filter(repository => {
+    const existing = repository.id ? existingById.get(repository.id) : undefined;
+    return existing?.alias === repository.alias && existing.url === repository.url;
+  }).map(repository => repository.id!));
+  const rebuild = unchanged.size !== prepared.existingRepositories.length || unchanged.size !== prepared.parsed.repositories.length;
+  // Rebuild changed sets in request order, keeping IDs and creation times.
+  // This permits swaps without temporary URLs that violate the catalog FK;
+  // deployment branch bindings are rebuilt below in the same transaction.
+  if (rebuild) await executor.delete(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId));
   const savedRepositoryByAlias = new Map<string, typeof serviceRepositories.$inferSelect>();
   for (const repository of prepared.parsed.repositories) {
-    const [saved] = repository.id
-      ? await executor.update(serviceRepositories).set({ alias: repository.alias, url: repository.url, updatedAt: new Date() }).where(and(eq(serviceRepositories.id, repository.id), eq(serviceRepositories.serviceId, serviceId))).returning()
-      : await executor.insert(serviceRepositories).values({ serviceId, alias: repository.alias, url: repository.url }).returning();
+    const existing = repository.id ? existingById.get(repository.id) : undefined;
+    const saved = !rebuild ? existing : (await executor.insert(serviceRepositories).values({
+      ...(existing ? { id: existing.id, createdAt: existing.createdAt, ...(unchanged.has(existing.id) ? { updatedAt: existing.updatedAt } : {}) } : {}),
+      serviceId, alias: repository.alias, url: repository.url,
+    }).returning())[0];
     if (!saved) throw new Error("repository_save_failed");
     savedRepositoryByAlias.set(repository.alias, saved);
   }

@@ -186,7 +186,7 @@ button, input, textarea { font: inherit; }
 .source-detail-panel .issue-facts > div { padding: 9px 10px; }
 .app-content.source-expanded .source-detail-panel .ui-tag { border-color: #30363d; background: #6e76811a; color: #e6edf3; }
 .source-detail-panel .issue-facts > div, .source-detail-panel .issue-branch-row, .source-detail-panel .issue-attachment-list, .source-detail-panel .comment-list { border-color: #30363d; background: #0d1117; }
-.source-detail-panel .issue-branch-row code, .source-detail-panel .attachment-preview-trigger, .source-detail-panel .attachment-download-link { color: #c9d1d9; }
+.source-detail-panel .issue-branch-row code, .source-detail-panel .attachment-preview-trigger, .source-detail-panel .attachment-file-info, .source-detail-panel .attachment-download-link { color: #c9d1d9; }
 .source-detail-panel .issue-attachment-row, .source-detail-panel .comment-row { border-color: #30363d; }
 .source-detail-panel .repository-band, .source-detail-panel .attachment-band, .source-detail-panel .comments-band { margin-bottom: 16px; }
 .source-detail-panel .ui-button, .source-detail-panel .ui-segmented, .source-detail-panel .comment-actions, .source-detail-panel .markdown-editor-toolbar { border-color: #30363d; background: #6e76811a; color: #e6edf3; }
@@ -234,7 +234,8 @@ button, input, textarea { font: inherit; }
 .issue-attachment-row:hover { background: #f6faf8; }
 .issue-attachment-row:last-child { border-bottom: 0; }
 .attachment-preview-trigger { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 4px; border: 0; background: transparent; color: #35423c; text-align: left; cursor: pointer; }
-.attachment-preview-trigger > span { display: grid; min-width: 0; gap: 3px; }
+.attachment-file-info { display: grid; min-width: 0; gap: 3px; color: #35423c; }
+.issue-attachment-row > .attachment-file-info { padding: 6px 4px; }
 .attachment-preview-trigger > .ui-icon { flex: 0 0 auto; color: #71817a; }
 .attachment-preview-trigger:hover strong { color: #176b5b; }
 .issue-attachment-row strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -246,13 +247,11 @@ button, input, textarea { font: inherit; }
 .scope-transition-repository strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .scope-transition-repository small { min-width: 0; color: #6f7c76; font: 10px/1.5 var(--mono-font); overflow-wrap: anywhere; text-align: right; }
 .scope-transition-preview > p { grid-column: 1 / -1; margin-bottom: 0; }
-.attachment-download-link { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 5px; color: #64736c; }
-.attachment-preview-toolbar .attachment-download-link { width: auto; min-width: max-content; flex-shrink: 0; gap: 6px; padding-inline: 10px; white-space: nowrap; }
-.attachment-preview-toolbar .attachment-download-link > .ui-icon { flex-shrink: 0; }
+.attachment-download-link { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 5px; color: #64736c; text-decoration: none; }
 .attachment-download-link:hover { background: #edf4f1; color: #176b5b; }
-.output-markdown-preview { max-height: 65vh; overflow: auto; padding: 12px; }
+.output-markdown-preview { max-height: 65vh; overflow: auto; padding: 14px; border: 1px solid #dfe5e2; border-radius: 6px; }
 .attachment-preview { min-height: 180px; }
-.attachment-preview-toolbar { display: flex; min-height: 32px; align-items: center; justify-content: flex-end; gap: 3px; padding-bottom: 8px; }
+.attachment-preview-toolbar { display: flex; min-height: 32px; align-items: center; justify-content: flex-end; gap: 8px; padding-bottom: 12px; }
 .attachment-text-preview { max-height: min(62vh, 620px); margin: 0; overflow: auto; padding: 14px; border: 1px solid #dfe5e2; border-radius: 5px; background: #f7f9f8; color: #26332d; font: 12px/1.6 var(--mono-font); letter-spacing: 0; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .attachment-zoom-value { min-width: 48px; height: 26px; padding: 0 5px; border: 0; background: transparent; color: #52615a; font: 12px/1 var(--app-font); letter-spacing: 0; cursor: pointer; }
 .attachment-zoom-value:hover { color: #176b5b; }
@@ -263,8 +262,9 @@ button, input, textarea { font: inherit; }
 .attachment-image-stage { display: flex; min-width: 100%; min-height: 100%; align-items: center; justify-content: center; pointer-events: none; }
 .attachment-image-preview { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
 .attachment-pdf-preview { width: 100%; height: min(68vh, 720px); border: 1px solid #dfe5e2; }
-.attachment-preview-unsupported { display: grid; min-height: 180px; place-items: center; align-content: center; gap: 10px; color: #66736d; }
-.attachment-preview-unsupported a { display: inline-flex; align-items: center; gap: 6px; color: #176b5b; }
+.attachment-preview-message { box-sizing: border-box; display: flex; min-height: 180px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; border: 1px solid #dfe5e2; border-radius: 6px; background: #f7f9f8; color: #66736d; text-align: center; font: 13px/1.6 var(--app-font); }
+.attachment-preview-message p { margin: 0; }
+.attachment-preview-message.is-error { border-color: #efb5b0; background: #fff2f0; color: #a52d28; }
 .comment-list { max-height: 280px; overflow-y: auto; border: 1px solid #e1e5e3; border-radius: 7px; scrollbar-gutter: stable; }
 .comment-row { padding: 12px; border-bottom: 1px solid #e7eae8; }
 .comment-row:last-child { border-bottom: 0; }

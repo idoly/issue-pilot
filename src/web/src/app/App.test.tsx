@@ -191,10 +191,11 @@ vi.mock("../data/client", async (importOriginal) => {
 });
 
 import { EventSourceMock } from "../test-setup";
+import { setCurrentUserSubject } from "../data/client";
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
-  afterEach(() => { cleanup(); localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); setCurrentUserSubject(null); localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); });
 
   test("shows operational attention and workload on the home dashboard and opens an Issue", async () => {
     const client = await import("../data/client");
@@ -760,6 +761,80 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   });
 
+  test("keeps a service draft when the current user's details refresh without a permission change", async () => {
+    const client = await import("../data/client");
+    render(() => <App initialView="configuration" />);
+    await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test"));
+    let finish!: (user: Awaited<ReturnType<typeof client.loadCurrentUser>>) => void;
+    vi.mocked(client.loadCurrentUser).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refreshed = { subject: "fixture-user", name: "Updated User", email: "owner@example.test", role: "developer" as const };
+    try {
+      fireEvent.click(screen.getByRole("tab", { name: "用户" }));
+      const users = await screen.findByRole("region", { name: "用户列表" });
+      const row = within(users).getByText("fixture-user").closest(".user-table-row") as HTMLElement;
+      fireEvent.click(within(row).getByRole("button", { name: "编辑" }));
+      const userDialog = await screen.findByRole("dialog", { name: "编辑用户" });
+      fireEvent.click(within(userDialog).getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(finish).toBeTypeOf("function"));
+      fireEvent.click(screen.getByRole("tab", { name: "服务" }));
+      const panel = document.querySelector(".service-panel") as HTMLElement;
+      fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
+      const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+      fireEvent.input(within(dialog).getByLabelText("服务名称"), { target: { value: "preserved service draft" } });
+      finish(refreshed);
+      await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.getAttribute("title")).toContain("Updated User"));
+      expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(dialog);
+      expect(within(dialog).getByLabelText("服务名称")).toHaveProperty("value", "preserved service draft");
+    } finally { finish?.(refreshed); }
+  });
+
+  test("clears service credential drafts when the selected identity changes", async () => {
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    const panel = document.querySelector(".service-panel") as HTMLElement;
+    fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    const password = await within(dialog).findByLabelText("db password 2-1");
+    fireEvent.input(password, { target: { value: "old-identity-private-draft" } });
+    fireEvent.click(screen.getByLabelText("当前用户"));
+    fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
+    expect(password.isConnected).toBe(false);
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑" }));
+    const currentDialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(currentDialog).getByRole("button", { name: "展开部署2" }));
+    expect(await within(currentDialog).findByLabelText("db password 2-1")).toHaveProperty("value", "");
+  });
+
+  for (const outcome of ["success", "failure"] as const) test(`ignores an old identity's service-save ${outcome} after a new editor opens`, async () => {
+    const client = await import("../data/client");
+    let finish!: () => void;
+    vi.mocked(client.updateService).mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = outcome === "success" ? resolve : () => reject(new Error("old_service_save_failed")); }));
+    render(() => <App initialView="configuration" />);
+    try {
+      fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+      const panel = document.querySelector(".service-panel") as HTMLElement;
+      fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
+      const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+      const save = within(dialog).getByRole("button", { name: "保存" });
+      await waitFor(() => expect(save).toHaveProperty("disabled", false));
+      fireEvent.click(save);
+      await waitFor(() => expect(finish).toBeTypeOf("function"));
+      fireEvent.click(screen.getByLabelText("当前用户"));
+      fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
+      fireEvent.click(within(panel).getByRole("button", { name: "编辑" }));
+      const current = await screen.findByRole("dialog", { name: "编辑服务" });
+      fireEvent.input(within(current).getByLabelText("服务名称"), { target: { value: "new identity draft" } });
+      finish();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(current);
+      expect(within(current).getByLabelText("服务名称")).toHaveProperty("value", "new identity draft");
+      expect(screen.queryByText("old_service_save_failed")).toBeNull();
+    } finally { finish?.(); }
+  });
+
   test("shows developer configuration credentials and removes them when switching to a product user", async () => {
     const client = await import("../data/client");
     const users = await client.loadUsers();
@@ -767,12 +842,16 @@ describe("issue pilot workspace", () => {
     const loadDescription = vi.mocked(client.loadServiceConfigurationDescription).getMockImplementation()!;
     vi.mocked(client.loadServiceConfigurationDescription).mockResolvedValue({ context: "### 测试环境\n\n#### MySQL\n\n| 配置项 | 值 |\n| --- | --- |\n| 密码 | <code>synthetic-private-password</code> |" });
     render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await screen.findByText("synthetic-private-password");
     expect(document.querySelector(".service-description table")).toBeTruthy();
     const selector = screen.getByLabelText("当前用户");
     fireEvent.click(selector);
     fireEvent.click(await screen.findByRole("option", { name: "Viewer · viewer@example.test" }));
     await waitFor(() => expect(screen.queryByText("synthetic-private-password")).toBeNull());
+    const panel = document.querySelector(".service-panel") as HTMLElement;
+    expect(within(panel).getByRole("button", { name: "编辑" })).toHaveProperty("disabled", true);
+    expect(within(panel).getByRole("button", { name: "添加" })).toHaveProperty("disabled", true);
     vi.mocked(client.loadServiceConfigurationDescription).mockImplementation(loadDescription);
   });
 
@@ -841,6 +920,24 @@ describe("issue pilot workspace", () => {
     expect(within(panel).queryByRole("alert")).toBeNull();
     expect(copy).toHaveBeenCalledTimes(2);
     expect(vi.mocked(client.loadApplicationEndpoints).mock.calls.length).toBe(requests);
+  });
+
+  test("shows the upstream DMS rate limit while resolving a database", async () => {
+    const client = await import("../data/client");
+    const configuration = structuredClone(await client.loadConfig());
+    const deployment = configuration.services[0]!.deployments[0]!;
+    deployment.capabilities.push("dms");
+    deployment.dms = { url: "https://dms.example.test/sse", credentialConfigured: true, databases: [{ instanceAlias: "SRM", schemaName: "srm", instanceId: "i1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" }] };
+    vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
+    vi.mocked(client.resolveDmsScope).mockRejectedValueOnce(new Error("dms_mcp_http_429"));
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await screen.findByRole("tablist", { name: "服务列表" });
+    fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    fireEvent.input(await within(dialog).findByLabelText("dms database 2-1"), { target: { value: "changed_schema" } });
+    await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("请求被限流（HTTP 429）"));
   });
 
   test("keeps parsed DMS targets when replacing only the Token", async () => {
@@ -1106,7 +1203,7 @@ describe("issue pilot workspace", () => {
     const newUserRow = await waitFor(() => screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement);
     expect(newUserRow).toBeTruthy();
     fireEvent.click(within(newUserRow).getByRole("button", { name: "停用" }));
-    await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { name: "新用户", email: "new.user@example.test", active: false, role: "product" }));
+    await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { active: false }));
     await waitFor(() => expect(within(screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement).getByText("停用")).toBeTruthy());
   });
 

@@ -48,7 +48,10 @@ export function CapabilityManagement() {
     catch (cause) { if (owner === generation && id === request) setError(displayError(cause)); }
     finally { if (owner === generation && id === request) setLoading(false); }
   };
-  createEffect(() => currentUser()?.subject, () => { generation++; editorController?.abort(); setLoadingEditor(false); setConfiguring(null); setSwitches([]); setMcp([]); setOpen(false); setEditing(null); setDeleting(false); setTested(null); setJsonText(""); setError(""); setBusy(false); void load(); });
+  createEffect(() => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}:${Boolean(currentUser()?.isAdmin)}`, (identity, previous) => {
+    if (identity === previous) return;
+    generation++; editorController?.abort(); setLoadingEditor(false); setConfiguring(null); setSwitches([]); setMcp([]); setOpen(false); setEditing(null); setDeleting(false); setTested(null); setJsonText(""); setError(""); setBusy(false); void load();
+  });
   onCleanup(() => { generation++; editorController?.abort(); });
   const perform = async (action: (isCurrent: () => boolean) => Promise<unknown>) => {
     if (busy()) return; const owner = generation; setBusy(true); setError("");

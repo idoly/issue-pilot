@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { issueOutputRoot } from "../workspace/state.ts";
 
-const outputNamePattern = /^[^/\\\0]{1,255}$/;
+const outputNamePattern = /^[^/\\\0]+$/;
 
 export interface IssueOutput {
   fileName: string;
@@ -14,7 +15,7 @@ export interface IssueOutput {
 }
 
 export function outputFileName(value: string): string {
-  if (!outputNamePattern.test(value) || value === "." || value === ".." || value !== path.basename(value)) throw new Error("invalid_output_file_name");
+  if (!outputNamePattern.test(value) || Buffer.byteLength(value) > issuePilotConfig.limits.filesystemNameBytes || value === "." || value === ".." || value !== path.basename(value)) throw new Error("invalid_output_file_name");
   return value;
 }
 

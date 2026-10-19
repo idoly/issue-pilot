@@ -10,6 +10,8 @@ const text = (result: unknown): string => JSON.stringify(result);
 test("serves application reads over stateless Streamable HTTP without starting an Agent", async () => {
   const f = await createApiFixture();
   const client = new Client({ name: "external-fixture", version: "1" });
+  let workbookDownloads = 0;
+  f.app.addHook("onRequest", async request => { if (request.url.endsWith("/outputs/result.xlsx")) workbookDownloads++; });
   try {
     await createService(f.app, "MCP App", ["test"]);
     const issue = await createIssue(f.app, "mcp-app", "test", "MCP inspection");
@@ -18,6 +20,9 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const store = new IssueOutputStore(f.root, String(issue.id));
     await store.write("result.csv", "id,value\n00123,complete\n");
     await store.write("result.xlsx", "synthetic-private-workbook");
+    assert.equal((await f.app.inject({ method: "GET", url: `/api/issues/${issue.id}/outputs/result.xlsx` })).statusCode, 200);
+    assert.equal(workbookDownloads, 1);
+    workbookDownloads = 0;
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
     const transport = new StreamableHTTPClientTransport(new URL(`${address}/mcp`));
     await client.connect(transport as Parameters<Client["connect"]>[0]);
@@ -54,6 +59,7 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const content = workbook.content as Array<{ type: string; text: string }>;
     assert.deepEqual(JSON.parse(content[0]!.text), { fileName: "result.xlsx", size: Buffer.byteLength("synthetic-private-workbook"), downloadPath: `/api/issues/${issue.id}/outputs/result.xlsx`, binary: true });
     assert.doesNotMatch(text(workbook), /synthetic-private-workbook/);
+    assert.equal(workbookDownloads, 0);
     const invalid = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "../issues.db" } });
     assert.equal(invalid.isError, true);
     const unknown = await client.callTool({ name: "issue_create", arguments: {} });

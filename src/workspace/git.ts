@@ -150,18 +150,18 @@ export class WorktreeManager {
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
-  async assertClean(url: string, workspacePath: string): Promise<void> {
+  async assertClean(url: string, workspacePath: string, expectedBranch?: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
-    await this.serialized(repositoryKey, () => this.assertCleanLocked(resolvedWorkspace));
+    await this.serialized(repositoryKey, () => this.assertCleanLocked(resolvedWorkspace, expectedBranch));
   }
 
-  async remove(url: string, workspacePath: string): Promise<string> {
+  async remove(url: string, workspacePath: string, expectedBranch?: string): Promise<string> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
     return this.serialized(repositoryKey, async () => {
       const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-      await this.assertCleanLocked(resolvedWorkspace);
+      await this.assertCleanLocked(resolvedWorkspace, expectedBranch);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
@@ -174,8 +174,12 @@ export class WorktreeManager {
     });
   }
 
-  private async assertCleanLocked(resolvedWorkspace: string): Promise<void> {
+  private async assertCleanLocked(resolvedWorkspace: string, expectedBranch?: string): Promise<void> {
     if (!await pathExists(resolvedWorkspace)) throw new Error("workspace_repository_missing");
+    if (expectedBranch !== undefined) {
+      const branch = (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
+      if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
+    }
     const dirty = (await this.git(["-C", resolvedWorkspace, "status", "--porcelain"])).trim();
     if (dirty) throw new Error("workspace_has_changes");
   }
@@ -221,7 +225,7 @@ export class WorktreeManager {
       const rollbackErrors: unknown[] = [];
       for (const createdWorktree of created.reverse()) {
         try {
-          if (await pathExists(createdWorktree.workspacePath)) await this.remove(createdWorktree.input.url, createdWorktree.workspacePath);
+          if (await pathExists(createdWorktree.workspacePath)) await this.remove(createdWorktree.input.url, createdWorktree.workspacePath, createdWorktree.input.workingBranch ?? `${createdWorktree.input.mode}-${normalizeIssueKey(createdWorktree.input.issueKey).toLowerCase()}`);
         } catch (rollbackError) { rollbackErrors.push(rollbackError); }
       }
       for (const [workspaceRoot, existed] of workspaceRoots) {
@@ -237,12 +241,12 @@ export class WorktreeManager {
   }
 
   async removeBatch(input: RemoveWorktreeBatchInput): Promise<void> {
-    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.url, worktree.workspacePath)));
+    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.url, worktree.workspacePath, worktree.workingBranch)));
     const removed: Array<{ worktree: RemoveWorktreeBatchInput["worktrees"][number]; commit: string }> = [];
     try {
       for (const worktree of input.worktrees) {
         try {
-          const commit = await this.remove(worktree.url, worktree.workspacePath);
+          const commit = await this.remove(worktree.url, worktree.workspacePath, worktree.workingBranch);
           removed.push({ worktree, commit });
         } catch (error) {
           if (error instanceof WorktreeRemovalFailure) removed.push({ worktree, commit: error.commit });

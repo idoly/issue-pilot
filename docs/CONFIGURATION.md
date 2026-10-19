@@ -29,7 +29,7 @@
 
 ## 身份与权限
 
-可信网关负责认证，`X-Issue-Pilot-Subject` 与页面选择器用于选择用户；未提供时使用首个活跃用户。`isAdmin` 独立于 product/test/developer 角色，不自动授予开发能力。
+可信网关负责认证，`X-Issue-Pilot-Subject` 与页面选择器用于选择用户；未提供时使用首个活跃用户。页面解析出用户后固定请求身份，其他标签页的选择不会改变当前页面的请求；localStorage 只记住供新页面初始化的显式选择。失活用户先退出页面上下文，再解析默认用户，卸载后的响应不能覆盖新选择。`isAdmin` 独立于 product/test/developer 角色，不自动授予开发能力。
 
 | 操作 | 要求 |
 | --- | --- |
@@ -41,21 +41,21 @@
 | 维护个人模型 Key、SSH 私钥 | 当前 developer 本人 |
 | 维护个人正式 DMS/SLS 凭证 | 当前活跃用户本人 |
 
-用户变更须保留活跃用户、developer、管理用户，以及至少一名同时具备开发和管理权限的活跃用户。
+用户变更须保留活跃用户、developer、管理用户，以及至少一名同时具备开发和管理权限的活跃用户。`PATCH /api/users/:subject` 只更新提供的字段，空更新被拒绝；启停按钮只提交 `active`，避免用旧列表覆盖姓名、邮箱或角色。所有提供的字段在关闭工单会话前完成校验。
 
 ## 凭证与 owner
 
 工单 owner 为 assignee，未分配时为 reporter，必须活跃；开发和正式数据处理要求 owner 为 developer。
 
-- developer owner 在所有环境都使用个人模型 Key 和 SSH 私钥，缺少或失败时不回退到共享身份；SSH 主机身份必须验证。
+- developer owner 在所有环境都使用个人模型 Key 和 SSH 私钥，缺少或失败时不回退到共享身份；SSH 主机身份必须验证。模型 Key 编辑跟随全局 provider，保存时显式提交界面显示的 provider；切换服务商只清理模型 Key 草稿，保留 SSH 和生产凭证草稿。
 - 其他 owner 使用 Operator 模型运行时与宿主 Git 环境。
 - 个人正式 DMS/SLS 覆盖独立判断，各自完整替换对应组；没有覆盖组时用部署配置。只覆盖已有目标，不凭个人凭证创建新目标，失败不换身份重试。
 
 普通 GET 隐藏密码、Authorization 和 SLS keys，返回配置状态。开发者专用服务说明可展示选定原生密码和 MCP 认证，原生 DMS Authorization、SLS keys 仍隐藏。完整 MCP 编辑配置有独立权限。
 
-服务能力使用 `credentialUpdate`：`preserve` 保留已有凭证，`replace` 提供完整 `values`，`clear` 清除可选凭证。DMS URL、MySQL 数据库 URL 等目标匹配规则仍需通过；MySQL 每个数据库独立更新。空输入不代表清除，必需凭证不能 clear。
+服务能力使用 `credentialUpdate`：`preserve` 保留已有凭证，`replace` 提供完整 `values`，`clear` 清除可选凭证。DMS URL、MySQL 数据库 URL 等目标匹配规则仍需通过；MySQL 每个数据库独立更新。空输入不代表清除，必需凭证不能 clear。个人 DMS/SLS 保存响应只清理仍与提交内容相同的输入，等待期间的新草稿保留并提示未保存。初始状态加载不覆盖已输入的 DMS 地址，同一用户资料刷新不清空凭证草稿。
 
-凭证不能进入 Agent prompt、原生能力工具输入或普通诊断日志。查询结果、JSONL 和备份也可能敏感。开发部署只配置代码，旧开发能力配置作为私有归档保留，不投影或执行。
+凭证不能进入 Agent prompt、原生能力工具输入或普通诊断日志。数据库异常日志移除 SQL 和参数，仅保留稳定诊断与 SQLite 错误码。查询结果、JSONL 和备份也可能敏感。开发部署只配置代码，旧开发能力配置作为私有归档保留，不投影或执行。
 
 ## 内建能力与工具
 
@@ -71,7 +71,11 @@
 | DMS | HTTPS MCP URL、显式数据库集合 | 只读 executeScript、完整 JSON 导出 |
 | SLS | region、project、logstores | 官方 SDK GetLogsV2，检查完整性 |
 
-RabbitMQ 旧 AMQP `port` 字段被忽略，不再展示或保存。目标和输入 schema 见 [registry.ts](../src/capabilities/registry.ts)，预算见根配置。
+RabbitMQ 旧 AMQP `port` 字段被忽略，不再展示或保存。Nacos 在 HTTP 地址未指定端口时使用 8848；显式端口（包括 `:80`）保持不变，HTTPS 默认 443。目标和输入 schema 见 [registry.ts](../src/capabilities/registry.ts)，预算见根配置。
+
+DMS 握手保留安全的上游 HTTP 状态，例如 `dms_mcp_http_429`；不把响应正文、URL 或认证信息拼进连接错误。每次操作最多尝试两次握手，首次握手超时或 HTTP 429 可重试一次；429 优先遵守 `Retry-After`（秒数或 HTTP 日期），再加随机退避。缺少有效提示时等待 1–2 秒；等待上限默认 5 秒，服务端要求更久时直接报告限流。等待和连接均受原有取消与总预算约束，401/403 等错误不重试，已发送的 SQL 不自动重放。参数由根配置的 `limits.capability.dms` 维护。
+
+SLS 错误只保留 SDK 结构化字段中可验证的诊断，不透出原始 message、请求正文、认证头或密钥；未知异常保持 `sls_query_failed`。例如 `sls_access_denied`、`sls_signature_mismatch`、`sls_invalid_access_key`、`sls_request_time_expired` 分别提示权限、签名、AccessKey 或请求时间问题；`sls_project_not_found`、`sls_logstore_not_found`、`sls_index_unavailable` 提示目标或索引不可用；`sls_rate_limited`、`sls_quota_exceeded`、`sls_http_429` 保留限流/额度线索。其他安全 HTTP 状态使用 `sls_http_NNN`，DNS、连接和证书错误分别使用 `sls_dns_failed`、`sls_network_failed`、`sls_tls_failed`。Worker 模块缺失或无法初始化使用 `capability_worker_initialization_failed`，与远程查询失败区分。查询失败不自动重放；分页中途失败也不返回前面已读页作为完整结果。
 
 ## 全局外部 MCP
 
@@ -130,5 +134,7 @@ RabbitMQ 旧 AMQP `port` 字段被忽略，不再展示或保存。目标和输�
 | issue_create / issue_message | 创建工单、补充消息，异步受理 |
 | issue_conversation | 分页读取对话与当前进展 |
 | attachment_read / output_read | 读取文本，Excel 等二进制返回下载路径 |
+
+二进制成果的 `output_read` 使用已校验的成果元数据返回下载信息，不把文件内容读入 MCP 响应；附件读取仍保留完整性校验。
 
 创建和发消息不幂等，超时先查询确认再决定是否重试。输入 schema、分页和响应预算以 [server.ts](../src/mcp/server.ts) 为准。

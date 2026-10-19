@@ -5,11 +5,12 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { capabilityResultText, capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 
 const schema = Type.Union([
   Type.Object({ operation: Type.Literal("list") }, { additionalProperties: false }),
-  Type.Object({ operation: Type.Literal("publish"), sourcePath: Type.String({ minLength: 1 }), fileName: Type.String({ minLength: 1, maxLength: 255 }) }, { additionalProperties: false }),
+  Type.Object({ operation: Type.Literal("publish"), sourcePath: Type.String({ minLength: 1 }), fileName: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Delivery basename; the UTF-8 byte limit also applies." }) }, { additionalProperties: false }),
 ]);
 const validateInput = Compile(schema);
 

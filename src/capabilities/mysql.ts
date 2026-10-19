@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import { promisify } from "node:util";
 import { createConnection, type Connection, type ConnectionOptions, type FieldPacket, type RowDataPacket } from "mysql2";
 
@@ -98,8 +99,19 @@ async function withReadOnlyMysql<T>(config: MysqlDatabaseConfig, operation: (con
     if (connection && !destroyed && transactionActive) await execute(connection, "ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
-    activeSignal.removeEventListener("abort", abort);
-    if (connection && !destroyed) await promisify(connection.end.bind(connection))();
+    let cancellation: ReturnType<typeof addAbortListener> | undefined;
+    try {
+      if (connection && !destroyed) {
+        const aborted = new Promise<never>((_, reject) => {
+          cancellation = addAbortListener(activeSignal, () => reject(activeSignal.reason));
+        });
+        await Promise.race([promisify(connection.end.bind(connection))(), aborted]);
+      }
+    } finally {
+      cancellation?.[Symbol.dispose]();
+      activeSignal.removeEventListener("abort", abort);
+      activeSignal.throwIfAborted();
+    }
   }
 }
 

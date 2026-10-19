@@ -391,6 +391,26 @@ describe("native code browser", () => {
     expect(await within(hover).findByText("已复制")).toBeTruthy();
   });
 
+  for (const outcome of ["success", "failure"] as const) it(`ignores clipboard ${outcome} from a different commit hover`, async () => {
+    const secondHash = "d".repeat(40);
+    api.loadSourceHistory.mockResolvedValue({ commits: [
+      { hash: revision, shortHash: "cccccccc", parents: [secondHash], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "First commit" },
+      { hash: secondHash, shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Second commit" },
+    ], truncated: false });
+    let finish!: () => void;
+    vi.mocked(copyText).mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = outcome === "success" ? resolve : () => reject(new Error("clipboard_failed")); }));
+    mount(true);
+    try {
+      fireEvent.mouseEnter(await screen.findByRole("button", { name: /First commit, Fixture/ }));
+      fireEvent.click(within(await screen.findByRole("tooltip", { name: "提交信息" })).getByRole("button", { name: "复制提交号" }));
+      await waitFor(() => expect(finish).toBeTypeOf("function"));
+      fireEvent.mouseEnter(screen.getByRole("button", { name: /Second commit, Fixture/ }));
+      const current = await waitFor(() => { const tooltip = screen.getByRole("tooltip", { name: "提交信息" }); expect(tooltip.textContent).toContain(secondHash); return tooltip; });
+      finish(); await new Promise(resolve => setTimeout(resolve, 0));
+      expect(current.textContent).not.toContain("已复制"); expect(current.textContent).not.toContain("复制失败");
+    } finally { finish?.(); }
+  });
+
   it("searches every repository and reveals the selected Unicode match", async () => {
     api.loadSourceRepositories.mockResolvedValue(["app", "other"].map(name => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
     api.searchSource.mockImplementation(async (_key: string, repository: string) => ({ matches: repository === "other" ? [{ path: "result.txt", line: 2, column: 4, preview: "订单 needle" }] : [], truncated: false }));

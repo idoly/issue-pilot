@@ -26,6 +26,9 @@ export function serviceSaveErrorMessage(error: unknown): string {
     duplicate_dms_database_schema: "DMS schema 不能重复",
     duplicate_dms_database_id: "同一个 DMS 数据库不能配置多次",
     dms_mcp_connection_failed: "无法连接 DMS MCP，请检查 URL 和 Authorization",
+    dms_mcp_http_429: "DMS MCP 请求被限流（HTTP 429），请稍后重试；频繁发生时请检查入口请求量和服务额度",
+    dms_mcp_http_401: "DMS MCP 认证失败（HTTP 401），请检查 Authorization",
+    dms_mcp_http_403: "DMS MCP 拒绝访问（HTTP 403），请检查凭证权限",
     dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
     dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
     dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
@@ -290,6 +293,8 @@ export function ServiceDeploymentEditorRow(props: {
 
 export function ConfigurationView() {
   const { currentUser, configuration, configurationLoaded, refreshCatalog, refreshConfiguration, configurationError: resourceError } = useApplicationResources();
+  const canConfigure = () => currentUser()?.role === "developer";
+  let editorGeneration = 0;
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
   const [description, setDescription] = createSignal("", { ownedWrite: true });
@@ -300,12 +305,12 @@ export function ConfigurationView() {
   const [deleteTarget, setDeleteTarget] = createSignal<{ kind: "service"; key: string; name: string } | null>(null, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
-  const refresh = async () => {
+  const refresh = async (owner: number) => {
     try {
       await Promise.all([refreshConfiguration(), refreshCatalog()]);
-      setConfigurationError("");
+      if (owner === editorGeneration) setConfigurationError("");
     } catch (error) {
-      setConfigurationError(errorMessage(error));
+      if (owner === editorGeneration) setConfigurationError(errorMessage(error));
     }
   };
   createEffect(
@@ -324,7 +329,7 @@ export function ConfigurationView() {
       if (!controller.signal.aborted) setConfigurationDescription({ serviceKey: service.key, subject: user.subject, context: value.context });
     }).catch(() => { if (!controller.signal.aborted) setDescriptionError("无法读取完整配置，请刷新重试"); });
   });
-  onCleanup(() => { descriptionController?.abort(); });
+  onCleanup(() => { editorGeneration++; descriptionController?.abort(); });
   const visibleConfigurationDescription = () => {
     const value = configurationDescription();
     return currentUser()?.role === "developer" && value?.serviceKey === selectedServiceKey() && value.subject === currentUser()?.subject ? value.context : undefined;
@@ -336,6 +341,11 @@ export function ConfigurationView() {
   const resetServiceForm = () => {
     setServiceName(""); setDescription(""); setServiceRepositories([]); setServiceDeployments(() => environmentDrafts()); setEditingServiceKey(null);
   };
+  const closeServiceEditor = () => { setServiceOpen(false); resetServiceForm(); setConfigurationError(""); };
+  createEffect(() => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}`, (identity, previous) => {
+    if (identity === previous) return;
+    editorGeneration++; closeServiceEditor(); setDeleteTarget(null); setSaving(false);
+  });
   const [repositoryChoices, setRepositoryChoices] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
   const [repositoryLoading, setRepositoryLoading] = createSignal(false, { ownedWrite: true });
   const [repositoryError, setRepositoryError] = createSignal("", { ownedWrite: true });
@@ -395,7 +405,8 @@ export function ConfigurationView() {
     window.requestAnimationFrame(() => serviceErrorElement?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
   };
   const saveService = async () => {
-    if (saving()) return;
+    if (saving() || !canConfigure()) return;
+    const owner = editorGeneration;
     const validationError = serviceValidationError();
     if (validationError) { showServiceSaveError(validationError); return; }
     setSaving(true); setConfigurationError("");
@@ -408,43 +419,44 @@ export function ConfigurationView() {
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
       else await createService(definition);
-      await refresh();
-      setServiceOpen(false); resetServiceForm();
+      await refresh(owner);
+      if (owner === editorGeneration) closeServiceEditor();
     } catch (error) {
-      showServiceSaveError(serviceSaveErrorMessage(error));
-    } finally { setSaving(false); }
+      if (owner === editorGeneration) showServiceSaveError(serviceSaveErrorMessage(error));
+    } finally { if (owner === editorGeneration) setSaving(false); }
   };
   const confirmDelete = async () => {
     const target = deleteTarget();
-    if (!target) return;
+    if (!target || saving() || !canConfigure()) return;
+    const owner = editorGeneration;
     setSaving(true); setConfigurationError("");
     try {
       await deleteService(target.key);
-      setDeleteTarget(null);
-      await refresh();
+      if (owner === editorGeneration) setDeleteTarget(null);
+      await refresh(owner);
     } catch (error) {
-      setConfigurationError(serviceSaveErrorMessage(error));
-    } finally { setSaving(false); }
+      if (owner === editorGeneration) setConfigurationError(serviceSaveErrorMessage(error));
+    } finally { if (owner === editorGeneration) setSaving(false); }
   };
   return (
     <main class="configuration-workspace">
       <Show when={!configurationLoaded()}><section class="queue-loading configuration-loading"><Show when={resourceError()} fallback={<Skeleton active paragraph={{ rows: 10 }} />}><div class="workspace-error" role="alert"><span>{resourceError()}</span><Button onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show></section></Show>
       <section class="service-panel" hidden={!configurationLoaded()}>
-        <div class="service-tabs"><div class="service-tabs-inner"><div class="service-tab-list" role="tablist" aria-label="服务列表"><For each={configuration().services}>{(service) => <button type="button" role="tab" aria-selected={selectedServiceKey() === service.key ? "true" : "false"} class={selectedServiceKey() === service.key ? "selected" : ""} onClick={() => setSelectedServiceKey(service.key)}>{service.name}</button>}</For></div><div class="service-tab-actions"><Button icon={<Plus size={14} />} onClick={openNewService}>添加</Button><Show when={selectedService()}>{(service) => <Button type="primary" icon={<Pencil size={14} />} onClick={() => openServiceEditor(service())}>编辑</Button>}</Show></div></div></div>
+        <div class="service-tabs"><div class="service-tabs-inner"><div class="service-tab-list" role="tablist" aria-label="服务列表"><For each={configuration().services}>{(service) => <button type="button" role="tab" aria-selected={selectedServiceKey() === service.key ? "true" : "false"} class={selectedServiceKey() === service.key ? "selected" : ""} onClick={() => setSelectedServiceKey(service.key)}>{service.name}</button>}</For></div><div class="service-tab-actions"><Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>添加</Button><Show when={selectedService()}>{(service) => <Button type="primary" icon={<Pencil size={14} />} disabled={!canConfigure()} onClick={() => openServiceEditor(service())}>编辑</Button>}</Show></div></div></div>
         <Show when={resourceError()}><div class="workspace-error" role="alert">{resourceError()}</div></Show>
         <Show when={selectedService()} fallback={<div class="empty-band">暂无服务</div>}>{(service) => (<>
           <Show when={descriptionError()}><div class="workspace-error" role="alert">{descriptionError()}<Button size="small" onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show>
           <ServiceOverview service={service()} configurationDescription={visibleConfigurationDescription()} repositories={repositoryChoices()} environments={configuration().environments} />
         </>)}</Show>
       </section>
-      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} okButtonProps={{ disabled: repositoryLoading() || Boolean(repositoryError()) }} onOk={() => { void saveService(); }} onCancel={() => setServiceOpen(false)}>
+      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} okButtonProps={{ disabled: repositoryLoading() || Boolean(repositoryError()) }} onOk={() => { void saveService(); }} onCancel={closeServiceEditor}>
         <div class="service-form">
           <Show when={configurationError()}><div ref={element => { serviceErrorElement = element; }} class="create-error" role="alert">{configurationError()}</div></Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">关联仓库</strong><span>可多选，仓库名称和地址统一在仓库配置中维护</span></div><span class="service-repository-count">已选 {serviceRepositories().length} 个</span></div><Show when={repositoryError()}><div class="workspace-error" role="alert">仓库加载失败：{repositoryError()}<Button size="small" onClick={loadRepositoryChoices}>重试</Button></div></Show><Select mode="multiple" aria-label="关联仓库" placeholder="选择已登记仓库（可多选）" loading={repositoryLoading()} value={serviceRepositories().map((repository) => repository.url)} options={repositoryOptions()} showSearch={{ filterOption: (query, option) => `${option.label} ${option.url}`.toLowerCase().includes(query.trim().toLowerCase()) }} optionRender={(option) => <span class="service-repository-option"><strong>{option.label}</strong><code>{option.url}</code></span>} onChange={selectRepositories} maxTagCount={4} listHeight={360} notFoundContent="暂无可选仓库，请先在仓库配置中添加" /><Show when={!repositoryLoading() && !repositoryError() && !repositoryChoices().length}><p class="service-form-empty">暂无已登记仓库，请先在“配置 → 仓库”中添加。</p></Show></div>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>在服务中设置各环境参数；开发环境仅配置分支，查询能力继承正式和测试</span></div></div><div class="service-deployment-editor"><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow serviceKey={editingServiceKey()} index={index()} deployment={deployment} repositories={serviceRepositories} repositoryName={repositoryName} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} />}</For></div></div>
           <label class="service-form-field"><span>服务描述（Markdown）</span><TextArea aria-label="项目描述" placeholder="记录业务知识、排查步骤和查询范例；分支和公开能力参数会自动附加到展示及 AI 读取的描述中。" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
-          <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { setServiceOpen(false); setDeleteTarget({ kind: "service", key: editingServiceKey()!, name: serviceName() }); }}>删除服务</Button></div></Show>
+          <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { const target = { kind: "service" as const, key: editingServiceKey()!, name: serviceName() }; closeServiceEditor(); setDeleteTarget(target); }}>删除服务</Button></div></Show>
         </div>
       </Modal>
       <Modal open={Boolean(deleteTarget())} title="删除服务" okText="确认删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onOk={() => { void confirmDelete(); }} onCancel={() => { setDeleteTarget(null); setConfigurationError(""); }}>

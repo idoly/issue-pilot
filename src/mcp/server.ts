@@ -39,6 +39,7 @@ const page = <T>(rows: T[], input: Input) => {
   const items = rows.slice(offset, offset + limit);
   return { total: rows.length, offset, items, nextOffset: offset + items.length < rows.length ? offset + items.length : null };
 };
+const isTextFile = (fileName: string) => /\.(csv|tsv|jsonl?|sql|txt|md|log|ya?ml|xml|properties|html|css|[cm]?[jt]sx?)$/i.test(fileName);
 const lines = (text: string, input: Input) => page(text.split(/\r?\n/), { ...input, limit: input.limit ?? 200 });
 const bounded = (value: unknown) => {
   const text = JSON.stringify(value);
@@ -60,7 +61,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
   };
   const issue = async (key: string) => JSON.parse((await api(`/api/issues/${encodeURIComponent(key)}`)).body);
   const fileText = (content: Buffer, fileName: string, downloadPath: string, input: Input) => {
-    if (!/\.(csv|tsv|jsonl?|sql|txt|md|log|ya?ml|xml|properties|html|css|[cm]?[jt]sx?)$/i.test(fileName)) return { fileName, size: content.length, downloadPath, binary: true };
+    if (!isTextFile(fileName)) return { fileName, size: content.length, downloadPath, binary: true };
     return { fileName, downloadPath, ...lines(new TextDecoder("utf-8", { fatal: true }).decode(content), input) };
   };
   const call = async (name: string, input: Input): Promise<unknown> => {
@@ -97,6 +98,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       const file = detail.outputs.find((file: { fileName: string }) => file.fileName === input.fileName);
       if (!file) throw new Error("issue_output_not_found");
       const downloadPath = `/api/issues/${key}/outputs/${encodeURIComponent(file.fileName)}`;
+      if (!isTextFile(file.fileName)) return { fileName: file.fileName, size: file.size, downloadPath, binary: true };
       return fileText((await api(downloadPath)).rawPayload, file.fileName, downloadPath, input);
     }
     throw new Error("mcp_tool_not_found");

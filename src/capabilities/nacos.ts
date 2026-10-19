@@ -7,7 +7,8 @@ const limits = issuePilotConfig.limits.capability;
 
 function nacosOrigin(value: string): string {
   const server = new URL(value);
-  if (!server.port) server.port = server.protocol === "https:" ? "443" : "8848";
+  // URL.port omits an explicit :80; do not replace it with Nacos's default.
+  if (server.protocol === "http:" && !server.port && !/:\d+\/?$/.test(value)) server.port = "8848";
   return server.origin;
 }
 

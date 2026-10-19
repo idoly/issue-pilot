@@ -1,10 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyIssueScopeTransition, createIssue, createUser, deleteService, fetchOutput, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService, updateUser } from "./client";
+import { applyIssueScopeTransition, createIssue, createUser, currentUserSubject, deleteService, fetchOutput, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updatePersonalCredentials, updateService, updateUser } from "./client";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 
 describe("API client", () => {
-  afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
+  afterEach(() => { setCurrentUserSubject(null); localStorage.clear(); vi.unstubAllGlobals(); });
+
+  it("keeps this page's request identity when another tab changes the remembered user", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ modelProviders: ["fixture"], gitSshConfigured: false }))
+      .mockResolvedValueOnce(Response.json({ subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" }));
+    vi.stubGlobal("fetch", fetch);
+    setCurrentUserSubject("alice");
+    localStorage.setItem("issue-pilot.current-user", "bob");
+    await updatePersonalCredentials({ model: { provider: "fixture", mode: "replace", apiKey: "alice-private-key" } });
+    expect(currentUserSubject()).toBe("alice");
+    expect(new Headers(fetch.mock.calls[0]![1].headers).get("X-Issue-Pilot-Subject")).toBe("alice");
+    setCurrentUserSubject("bob");
+    await loadCurrentUser();
+    expect(new Headers(fetch.mock.calls[1]![1].headers).get("X-Issue-Pilot-Subject")).toBe("bob");
+  });
 
   it("creates an issue and its initial attachments in one request", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 201 }));

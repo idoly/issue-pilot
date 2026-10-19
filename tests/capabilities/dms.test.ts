@@ -227,16 +227,96 @@ test("retries a stalled SSE handshake once without repeating tool calls", async 
   }
 });
 
-test("does not retry an SSE authorization failure", async () => {
+for (const status of [401, 403, 404, 503]) test(`preserves HTTP ${status} without retrying or exposing the error body`, async () => {
   const originalFetch = globalThis.fetch;
-  let gets = 0;
-  globalThis.fetch = async () => { gets += 1; return new Response(null, { status: 403 }); };
+  let requests = 0, cancellations = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response(new ReadableStream({ cancel() { cancellations++; } }), { status });
+  };
   try {
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000), 20), /dms_mcp_connection_failed/);
-    assert.equal(gets, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000), 20), { message: `dms_mcp_http_${status}` });
+    assert.equal(requests, 1); assert.equal(cancellations, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const retryAfter of ["120", new Date(Date.now() + 3_600_000).toUTCString()]) test(`does not retry earlier than a long Retry-After (${retryAfter})`, async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response("private upstream detail", { status: 429, headers: { "retry-after": retryAfter } }); };
+  try {
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000)), { message: "dms_mcp_http_429" });
+    assert.equal(requests, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const failurePhase of ["SSE", "initialize", "discovery", "query"] as const) test(failurePhase === "query" ? "does not replay SQL after an executeScript HTTP 429" : failurePhase === "discovery" ? "reports HTTP 429 during tool discovery without retrying or executing SQL" : `retries a transient ${failurePhase} HTTP 429 before executing SQL exactly once`, { timeout: 5_000 }, async () => {
+  const originalFetch = globalThis.fetch, encoder = new TextEncoder();
+  let gets = 0, initializes = 0, queries = 0, failed = false;
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const send = (value: unknown) => stream.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(value)}\n\n`));
+  const limited = () => { failed = true; return new Response("private upstream detail", { status: 429, headers: { "retry-after": "0" } }); };
+  globalThis.fetch = async (input, init) => {
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (method === "GET") {
+      gets++;
+      if (failurePhase === "SSE" && !failed) return limited();
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        stream = controller; controller.enqueue(encoder.encode("event: endpoint\ndata: /messages?session=limited\n\n"));
+      } }), { headers: { "content-type": "text/event-stream" } });
+    }
+    const request = JSON.parse(String(init?.body)) as { id: number; method: string; params?: { name: string } };
+    if (request.method === "initialize") {
+      initializes++;
+      if (failurePhase === "initialize" && !failed) return limited();
+      send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } });
+    } else if (request.method === "tools/list") {
+      if (failurePhase === "discovery") return limited();
+      send({ jsonrpc: "2.0", id: request.id, result: { tools: [executeScriptTool] } });
+    }
+    else if (request.method === "tools/call") {
+      queries++; assert.equal(request.params?.name, "executeScript");
+      if (failurePhase === "query") return limited();
+      send({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "[]" }] } });
+    }
+    return new Response(null, { status: 202 });
+  };
+  try {
+    const query = queryDms({ schema: "orders", script: "SELECT 1" }, configured, AbortSignal.timeout(4_000));
+    if (failurePhase === "query" || failurePhase === "discovery") await assert.rejects(query, { message: "dms_mcp_http_429" });
+    else await query;
+    assert.equal(gets, failurePhase === "query" || failurePhase === "discovery" ? 1 : 2);
+    assert.equal(initializes, failurePhase === "initialize" ? 2 : 1); assert.equal(queries, failurePhase === "discovery" ? 0 : 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("stops repeated rate limits after two handshakes", { timeout: 5_000 }, async () => {
+  const originalFetch = globalThis.fetch; let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response("private upstream detail", { status: 429, headers: { "retry-after": "0" } }); };
+  try {
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(4_000)), error => error instanceof Error && error.message === "dms_mcp_http_429" && error.cause === undefined);
+    assert.equal(requests, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("honors cancellation during rate-limit backoff", async () => {
+  const originalFetch = globalThis.fetch; let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response(null, { status: 429, headers: { "retry-after": "1" } }); };
+  try {
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(30)), { message: "dms_mcp_timeout" });
+    assert.equal(requests, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("preserves a caller cancellation while waiting to retry without Retry-After", async () => {
+  const originalFetch = globalThis.fetch, controller = new AbortController(), reason = new Error("caller_cancelled");
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response(null, { status: 429 }); };
+  const timer = setTimeout(() => controller.abort(reason), 30);
+  try {
+    await assert.rejects(connectDmsMcp(configured, controller.signal), error => error === reason);
+    assert.equal(requests, 1);
+  } finally { clearTimeout(timer); globalThis.fetch = originalFetch; }
 });
 
 test("calls only MCP executeScript and binds it to the configured deployment database", async () => {
@@ -255,6 +335,7 @@ test("rejects writes, multiple statements, missing scope, and unavailable execut
   await assert.rejects(queryDms({ schema: "orders", script: "UPDATE suppliers SET active = 1" }, configured, undefined, fixture.connect), /database_query_must_be_read_only/);
   await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1; SELECT 2" }, configured, undefined, fixture.connect), /database_query_must_be_one_statement_without_comments/);
   await assert.rejects(queryDms({ schema: "unknown", script: "SELECT 1" }, configured, undefined, fixture.connect), /dms_database_not_authorized/);
+  assert.equal(fixture.connections.length, 0, "invalid queries must not consume a DMS handshake");
 
   const unavailable = fixtureSession({ async listTools() { return [readOnlyTool]; } });
   await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, unavailable.connect), /dms_mcp_execute_script_unavailable/);

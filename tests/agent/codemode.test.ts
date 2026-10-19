@@ -33,6 +33,37 @@ function declaredTools(context: TranscriptContext) {
 }
 const call = (code: string, id = "script") => fauxAssistantMessage(fauxToolCall("codemode", { code }, { id }), { stopReason: "toolUse" });
 
+test("queues Codemode scripts across three sessions instead of exceeding SDK workers", { timeout: 15_000 }, async () => {
+  let active = 0, peak = 0, requests = 0;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const server = createServer((_request, response) => {
+    requests++; active++; peak = Math.max(peak, active);
+    const timer = setTimeout(() => { timers.delete(timer); active--; response.writeHead(200, { "content-type": "text/plain" }); response.end("synthetic evidence"); }, 200);
+    timers.add(timer);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const fixtures: Awaited<ReturnType<typeof fixture>>[] = [], sessions: Awaited<ReturnType<PiSessionRuntime["start"]>>[] = [];
+  try {
+    for (let index = 0; index < 3; index++) {
+      const f = await fixture("on"); fixtures.push(f);
+      f.options.context.capabilities = ["nacos"];
+      f.options.deploymentConfig = { nacos: { serverUrl: `http://127.0.0.1:${address.port}`, namespace: "", group: "DEFAULT_GROUP", dataIds: ["app.yaml"], username: "" } };
+      f.faux.setResponses([call('return await tools.service_query({environment:"prod",service:"entry",capability:"nacos"});'), fauxAssistantMessage("Script finished.")]);
+      sessions.push(await f.runtime.start(f.options));
+    }
+    await Promise.all(sessions.map(managed => managed.prompt("Read the configured evidence.")));
+    assert.equal(requests, 3);
+    assert.equal(peak, 1);
+    for (const f of fixtures) assert.deepEqual(f.events.filter(event => event.type === "tool_execution_end" && event.isError), []);
+  } finally {
+    for (const managed of sessions) await managed.stop();
+    for (const f of fixtures) await f.close();
+    for (const timer of timers) clearTimeout(timer);
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 for (const mode of ["off", "on", "only"] as const) test(`loads the explicit ${mode} codemode selection without host extension discovery`, async () => {
   const f = await fixture(mode); let managed;
   try {

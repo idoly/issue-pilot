@@ -50,7 +50,7 @@ book.save('delivery.xlsx')
 book.close()
 Path('opaque.bin').write_bytes(bytes([0, 255, 1, 2]))
 print('files generated')` }),
-      call("bash", { command: "python3 process.py" }),
+      call("bash", { command: "python3 -m pip --version && pip --version && python3 process.py" }),
       call("output", { operation: "publish", sourcePath: "delivery.xlsx", fileName: "delivery.xlsx" }),
       call("output", { operation: "publish", sourcePath: "opaque.bin", fileName: "opaque.bin" }),
       transcript => { assert.ok(!JSON.stringify(transcript).includes("synthetic-private-row")); return fauxAssistantMessage("Delivered files."); },

@@ -19,6 +19,13 @@ npm run build
 git diff --check
 ```
 
+若运行中的 API 直接提供本工作区的 `src/web/dist`，验证构建应使用独立输出目录，避免新页面与尚未更新的后端混用。浏览器夹具和镜像产物比较使用该独立目录：
+
+```bash
+web_build_root="$(mktemp -d /tmp/issue-pilot-web.XXXXXX)"
+npm run build -- --outDir "$web_build_root"
+```
+
 资源受限时使用等价入口限制并发：
 
 ```bash

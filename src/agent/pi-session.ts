@@ -4,7 +4,6 @@ import { writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
-  createCodemodeExtension,
   createBashToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
@@ -20,6 +19,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentRuntimeConfiguration, DeploymentConfig } from "../domain/contracts.ts";
 import { agentResources } from "../configuration/pi-runtime.ts";
 import type { McpConfiguration } from "../mcp/client.ts";
+import { createIssueCodemodeExtension } from "./codemode-extension.ts";
 import { createIssueMcpExtension } from "../mcp/pi-extension.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "./model-runtime.ts";
@@ -239,7 +239,7 @@ export class PiSessionRuntime {
       agentDir: getAgentDir(),
       settingsManager,
       extensionFactories: [
-        ...(context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createCodemodeExtension({ models: false }) }]),
+        ...(context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createIssueCodemodeExtension() }]),
         { name: "issue-pilot-mcp", factory: createIssueMcpExtension(options.mcpConfigurations ?? [], context.codemode) },
       ],
       additionalExtensionPaths: resources.extensions,

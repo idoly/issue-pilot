@@ -77,6 +77,30 @@ test("serializes repository operations across manager instances sharing one stat
   }
 });
 
+for (const detached of [false, true]) test(`refuses batch removal when a clean worktree ${detached ? "is detached" : "has changed branches"}`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-release-drift-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const issueKey = "ISSUE-20261018-996";
+    const first = await manager.prepare({ issueKey, workspaceName: "first", url: remote, baseBranch: "main", mode: "hotfix" });
+    // A second repository gives the same Issue a separate worktree and ref.
+    const otherRemote = join(root, "other.git");
+    await git(["clone", "--bare", source, otherRemote]);
+    const second = await manager.prepare({ issueKey, workspaceName: "second", url: otherRemote, baseBranch: "main", mode: "hotfix" });
+    await git(["-C", second.workspacePath, ...(detached ? ["checkout", "--detach"] : ["switch", "-c", "manual-branch"])]);
+    let finalized = false;
+    await assert.rejects(manager.removeBatch({ issueKey, mode: "hotfix", worktrees: [first, second].map((worktree, index) => ({ workspaceName: index ? "second" : "first", url: index ? otherRemote : remote, workingBranch: worktree.workingBranch!, workspacePath: worktree.workspacePath })), finalize: async () => { finalized = true; } }), /workspace_branch_does_not_match_issue_policy/);
+    assert.equal(finalized, false);
+    await access(first.workspacePath); await access(second.workspacePath);
+    assert.equal(await git(["-C", first.workspacePath, "branch", "--show-current"]), first.workingBranch);
+    assert.equal(await git(["-C", second.workspacePath, "branch", "--show-current"]), detached ? "" : "manual-branch");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 for (const missingBranch of [false, true]) test(`restores recorded development branches ${missingBranch ? "without replacing a missing ref" : "without contacting the remote"}`, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-local-restore-"));
   try {

@@ -29,7 +29,7 @@ erDiagram
   service_repositories ||--o{ service_deployment_repositories : binds
 ```
 
-`service_deployments` 的服务/环境组合唯一，`config` JSON 保存原生能力目标与凭证。全局模型配置、原生能力开关和外部 MCP 分别保存在 `global_agent_configuration`、`capability_switches`、`mcp_services`。用户与个人凭证由 `subjects`、`user_credentials` 保存。
+`service_deployments` 的服务/环境组合唯一，`config` JSON 保存原生能力目标与凭证。服务仓库的 alias/URL 可以在一次配置事务中交换；变化的绑定保留原 ID 和创建时间，部署分支关联在同一事务内重建。全局模型配置、原生能力开关和外部 MCP 分别保存在 `global_agent_configuration`、`capability_switches`、`mcp_services`。用户与个人凭证由 `subjects`、`user_credentials` 保存。
 
 ```mermaid
 erDiagram
@@ -84,7 +84,7 @@ erDiagram
 
 ## 文件写入与发布
 
-附件先暂存并计算 size/hash，再写入工单事务对应的持久文件和元数据。持久文件为私有 `0400` regular file，读取校验路径、类型、size 和 SHA-256。删除先 quarantine，事务失败恢复，提交后 finalize；失败的回滚或最终化必须报告，保留证据。
+附件先暂存并计算 size/hash，再写入工单事务对应的持久文件和元数据。原始文件名完整保留在元数据和下载响应中；物理存储名含 UUID，按 UTF-8 字节限制裁剪描述部分并保留可容纳的扩展名，避免 UUID 前缀使长文件名超出文件系统限制。持久文件为私有 `0400` regular file，读取校验路径、类型、精确的 `0400` 权限、size 和 SHA-256；不自动修复异常权限。删除先 quarantine，事务失败恢复，提交后 finalize；失败的回滚或最终化必须报告，保留证据。
 
 粘贴到 Agent 的图片属于 Pi 消息，不进入附件表。
 
@@ -102,7 +102,7 @@ sequenceDiagram
   Note over Work,Output: 源文件保留；失败保留旧交付
 ```
 
-成果文件名限制在本工单 outputs 内。MySQL/DMS 导出复用成果存储，但先完成协议收尾再发布。SQLite 事务不会撤销文件移动或 Git 操作，因此各 owner 分别承担 prepare、rollback 和 finalize。
+成果文件名限制在本工单 outputs 内，按根配置 `limits.filesystemNameBytes` 校验 UTF-8 字节数（默认 255），超限在生产者执行前拒绝。MySQL/DMS 导出复用成果存储，但先完成协议收尾再发布。SQLite 事务不会撤销文件移动或 Git 操作，因此各 owner 分别承担 prepare、rollback 和 finalize。
 
 ## Git 与工作区
 
@@ -124,7 +124,7 @@ flowchart LR
   Release -->|重开| Active
 ```
 
-初次或只读准备按需 fetch 远程分支；已记录 working branch 的准备和重开只使用本地 store/ref，不 fetch，也不在 ref 缺失时回退到远程或 reset。释放前检查布局和 staged/untracked 状态，批量移除失败按原 ref/commit 恢复。
+初次或只读准备按需 fetch 远程分支；已记录 working branch 的准备和重开只使用本地 store/ref，不 fetch，也不在 ref 缺失时回退到远程或 reset。释放前检查布局、当前分支和 staged/untracked 状态；分支不匹配或 detached 时拒绝，批量移除失败按原 ref/commit 恢复。
 
 `issue_service_scopes` 保存 include/remove 的服务意图，仓库按 URL 去重，同 URL 分支冲突拒绝。意图先持久化，再准备跨介质资源；失败保留事实供重试，不伪造完成状态。
 

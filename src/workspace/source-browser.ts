@@ -209,20 +209,34 @@ export class SourceBrowser {
 
   async deletePath(issue: IssueReference, repositoryName: string, relativePath: string, recursive: boolean): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const candidate = await this.resolvePath(context.root, relativePath);
-    if (candidate === context.root) throw new Error("invalid_source_path");
+    const candidate = await this.mutableSource(context, relativePath);
     await rm(candidate, { recursive, force: false });
   }
 
   async renamePath(issue: IssueReference, repositoryName: string, relativePath: string, destinationPath: string, overwrite: boolean): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const source = await this.resolvePath(context.root, relativePath);
-    if (source === context.root) throw new Error("invalid_source_path");
+    const source = await this.mutableSource(context, relativePath);
     if (source === path.resolve(context.root, normalizedRelativePath(destinationPath))) return;
     const destination = await this.mutableDestination(context, destinationPath, overwrite);
     if (isInside(source, destination) || isInside(destination, source)) throw new Error("invalid_source_path");
-    if (overwrite) await rm(destination, { recursive: true, force: true });
-    await rename(source, destination);
+    let previous: string | undefined;
+    if (overwrite) {
+      const backup = path.join(path.dirname(destination), `.issue-pilot-rename-${randomUUID()}.previous`);
+      try { await rename(destination, backup); previous = backup; }
+      catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
+    }
+    try { await rename(source, destination); }
+    catch (error) {
+      if (previous) {
+        try { await rename(previous, destination); }
+        catch (rollbackError) { throw new Error("source_rename_rollback_failed", { cause: new AggregateError([error, rollbackError], "source_rename_rollback_failed") }); }
+      }
+      throw error;
+    }
+    if (previous) {
+      try { await rm(previous, { recursive: true, force: true }); }
+      catch (error) { throw new Error("source_rename_finalize_failed", { cause: error }); }
+    }
   }
 
   async stage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
@@ -342,7 +356,6 @@ export class SourceBrowser {
     signal?.throwIfAborted();
     const context = cursor ? (await this.revisionContext(issue, repositoryName, cursor.revision)).source : await this.context(issue, repositoryName);
     const selected = normalizedRelativePath(relativePath);
-    if (selected) await this.resolvePath(context.root, selected);
     let revision = cursor?.revision;
     if (!revision) {
       const head = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "rev-parse", "--verify", "HEAD"], { ...this.commandOptions(), ...(signal ? { signal } : {}) });
@@ -376,7 +389,6 @@ export class SourceBrowser {
   async commit(issue: IssueReference, repositoryName: string, revision: string, relativePath = ""): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
     const context = await this.revisionContext(issue, repositoryName, revision);
     const selected = normalizedRelativePath(relativePath);
-    if (selected) await this.resolvePath(context.source.root, selected);
     try {
       const files = await this.changedFiles(context, selected);
       const limit = issuePilotConfig.limits.sourceBrowser.changeFiles;
@@ -592,6 +604,12 @@ export class SourceBrowser {
     });
   }
 
+  private async mutableSource(context: SourceContext, relativePath: string): Promise<string> {
+    const candidate = await this.mutableDestination(context, relativePath, true);
+    try { await lstat(candidate); } catch (error) { missingPathError(error); }
+    return candidate;
+  }
+
   private async mutableDestination(context: SourceContext, relativePath: string, allowExisting = false): Promise<string> {
     const selected = normalizedRelativePath(relativePath);
     if (!selected) throw new Error("invalid_source_path");
@@ -658,6 +676,7 @@ export class SourceBrowser {
     let resolved: string;
     try { resolved = await realpath(candidate); } catch (error) { missingPathError(error); }
     if (!isInside(root, resolved)) throw new Error("source_path_outside_repository");
+    normalizedRelativePath(path.relative(root, resolved));
     return resolved;
   }
 }

@@ -23,7 +23,7 @@ export function IssueQueue(props: {
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [pinError, setPinError] = createSignal("", { ownedWrite: true });
   const [pinnedIssueKeys, setPinnedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
-  const [pinningIssueKey, setPinningIssueKey] = createSignal("", { ownedWrite: true });
+  const [pinningIssueKeys, setPinningIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
   const [status, setStatus] = createSignal<QueueStatusFilter>("all", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
@@ -44,16 +44,18 @@ export function IssueQueue(props: {
     }).sort((left, right) => Number(pinned.has(right.id)) - Number(pinned.has(left.id)));
   });
   const togglePinned = async (issueKey: string) => {
-    const pinned = pinnedIssueKeys().includes(issueKey);
-    setPinningIssueKey(issueKey);
+    if (pinningIssueKeys().includes(issueKey)) return;
+    const pinned = pinnedIssueKeys().includes(issueKey), owner = pinRequest;
+    setPinningIssueKeys(current => [...current, issueKey]);
     setPinError("");
     try {
       await setIssuePinned(issueKey, !pinned);
+      if (owner !== pinRequest) return;
       setPinnedIssueKeys((current) => pinned ? current.filter((key) => key !== issueKey) : [...current, issueKey]);
     } catch (error) {
-      setPinError(errorMessage(error));
+      if (owner === pinRequest) setPinError(errorMessage(error));
     } finally {
-      setPinningIssueKey("");
+      if (owner === pinRequest) setPinningIssueKeys(current => current.filter(key => key !== issueKey));
     }
   };
   let listRequest = 0;
@@ -75,10 +77,8 @@ export function IssueQueue(props: {
   createEffect(() => props.userSubject, (subject) => {
     const currentRequest = ++pinRequest;
     setPinError("");
-    if (!subject) {
-      setPinnedIssueKeys([]);
-      return;
-    }
+    setPinnedIssueKeys([]); setPinningIssueKeys([]);
+    if (!subject) return;
     void listIssuePins().then((pinned) => {
       if (currentRequest === pinRequest) setPinnedIssueKeys(pinned);
     }).catch((error) => {
@@ -239,7 +239,7 @@ export function IssueQueue(props: {
                     class={`queue-pin${pinned() ? " pinned" : ""}`}
                     aria-label={`${pinned() ? "取消固定" : "固定"} ${issue.id}`}
                     title={pinned() ? "取消固定" : "固定到顶部"}
-                    disabled={pinningIssueKey() === issue.id}
+                    disabled={pinningIssueKeys().includes(issue.id)}
                     onClick={(event) => { event.stopPropagation(); void togglePinned(issue.id); }}
                   ><Pin size={14} aria-hidden="true" /></button>
                   <ChevronRight class="queue-chevron" size={16} aria-hidden="true" />

@@ -515,7 +515,7 @@ export class WorkspaceLifecycleManager {
       else try {
         issueRepositoryWorkspaceNames(repositories);
         await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
-        for (const repository of repositories) await this.worktrees.assertClean(repository.url, repository.localPath!);
+        for (const repository of repositories) await this.worktrees.assertClean(repository.url, repository.localPath!, repository.workingBranch!);
       } catch (error) {
         blockedReason = errorMessage(error);
       }

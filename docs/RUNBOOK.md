@@ -118,6 +118,12 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 | model_response_idle_timeout | 检查 provider/网络，保留 JSONL，按工单 retry 继续 |
 | 配置 409 | 等待相关 Agent/预约结束，草稿保留后重试，不直接写 DB |
 | Source 不可用 | 检查 runtime、仓库布局、权限和静态资源，保留失败证据 |
+| `Codemode worker limit reached` / `codemode_queue_timeout` | SDK 的 Worker 限制按进程共享，退出中的 Worker 也占槽位；检查并发脚本与长期未结束的工具调用。应用新版本按资源队列等待，`on` 模式也可直接使用原生工具；不要通过增大 Worker 上限掩盖未退出任务 |
+| `ModuleNotFoundError: No module named 'openpyxl'` / `pip: command not found` | 核对实际 Python 路径、应用根 `.venv` 和 API 启动版本；可先使用应用 `.venv/bin/python3` 的绝对路径。旧进程按发布流程更新后加载 Bash PATH 注入 |
+| `sls_access_denied` / `sls_invalid_access_key` / `sls_signature_mismatch` | 核对实际 owner 的个人或部署凭证、RAM `log:GetLogStoreLogs` 权限及签名配置；失败不切换其他身份 |
+| `sls_request_time_expired` / `sls_project_not_found` / `sls_logstore_not_found` | 分别核对系统时间，或已配置的 region/project/logstore；不猜测或自动更换目标 |
+| `sls_rate_limited` / `sls_quota_exceeded` / `sls_http_429` | 查 SLS 服务端请求量、并发和额度；不自动重放查询 |
+| `capability_worker_initialization_failed` | 核对运行版本、Worker 模块和安装依赖；该错误不能用于判断查询语法或云端权限 |
 | 查询不完整、超预算或异常大 | 检查来源、SQL 范围、LIMIT 和成果导出，不返回裁剪后的假完整结果 |
 
 DMS 核对部署或个人 URL/Authorization、同源消息通道及数据库映射；SLS 核对 region/project/logstore 和所选身份。失败不切换凭证重试。SSE 顺序为持久/当前回放 → snapshot_ready → live/heartbeat；检查代理缓冲、超时和 Web generation，重启不会恢复未持久事件。

@@ -7,6 +7,20 @@ import { test } from "node:test";
 import { IssueOutputStore, listIssueOutputs, resolveIssueOutput } from "../../src/outputs/store.ts";
 import { issueOutputRoot } from "../../src/workspace/state.ts";
 
+test("enforces output filename limits in UTF-8 bytes before running a producer", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-output-name-bytes-"));
+  const store = new IssueOutputStore(root, "ISSUE-20261019-001");
+  let generated = false;
+  try {
+    const valid = "界".repeat(83) + ".json", invalid = "界".repeat(84) + ".json";
+    await store.write(valid, "complete");
+    assert.equal((await store.read(valid)).toString(), "complete");
+    await assert.rejects(store.generate(invalid, async append => { generated = true; await append("must not run"); }), { message: "invalid_output_file_name" });
+    assert.equal(generated, false);
+    assert.deepEqual((await store.list()).map(output => output.fileName), [valid]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("lists recent outputs first with stable filename order for equal timestamps", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-output-order-"));
   const issueKey = "ISSUE-20260929-002";

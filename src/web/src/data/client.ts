@@ -20,7 +20,7 @@ export interface Person { subject: string; name: string; email: string; role: Us
 export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; databaseId: string }
 export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
 export interface ManagedUserInput { subject: string; name: string; email: string; role?: UserRole; isAdmin?: boolean }
-export interface ManagedUserUpdate { name: string; email: string; active: boolean; role?: UserRole; isAdmin?: boolean }
+export interface ManagedUserUpdate { name?: string; email?: string; active?: boolean; role?: UserRole; isAdmin?: boolean }
 export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export interface PersonalCredentialUpdate {
   production?: {
@@ -138,15 +138,19 @@ export interface IssueCreateInput extends IssueMetadataInput {
 }
 
 const currentUserStorageKey = "issue-pilot.current-user";
+let selectedSubject: string | null | undefined;
 
 export function currentUserSubject(): string | null {
-  return typeof localStorage === "undefined" ? null : localStorage.getItem(currentUserStorageKey);
+  if (selectedSubject === undefined) selectedSubject = typeof localStorage === "undefined" ? null : localStorage.getItem(currentUserStorageKey);
+  return selectedSubject;
 }
 
-export function setCurrentUserSubject(subject: string | null): void {
-  if (typeof localStorage === "undefined") return;
-  if (subject) localStorage.setItem(currentUserStorageKey, subject);
-  else localStorage.removeItem(currentUserStorageKey);
+export function setCurrentUserSubject(subject: string | null, remember = true): void {
+  if (remember && typeof localStorage !== "undefined") {
+    if (subject) localStorage.setItem(currentUserStorageKey, subject);
+    else localStorage.removeItem(currentUserStorageKey);
+  }
+  selectedSubject = subject;
 }
 
 async function requestError(response: Response): Promise<Error> {
@@ -342,8 +346,8 @@ export async function fetchOutput(key: string, fileName: string, signal?: AbortS
   }
 }
 
-export async function fetchAttachment(key: string, attachmentId: string): Promise<Blob> {
-  const response = await fetch(attachmentUrl(key, attachmentId));
+export async function fetchAttachment(key: string, attachmentId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(attachmentUrl(key, attachmentId), signal ? { signal } : undefined);
   if (!response.ok) throw await requestError(response);
   return response.blob();
 }

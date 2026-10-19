@@ -32,7 +32,10 @@ export function RepositoryManagement() {
   const [deleting, setDeleting] = createSignal<ManagedRepository | null>(null, { ownedWrite: true });
   let generation = 0;
   const load = async () => { setLoading(true); try { setRows(await loadRepositories()); } finally { setLoading(false); } };
-  createEffect(() => currentUser()?.subject, () => { generation += 1; setOpen(false); setDeleting(null); setSaving(false); setError(""); });
+  createEffect(() => ({ subject: currentUser()?.subject, role: currentUser()?.role }), (identity, previous) => {
+    if (identity.subject === previous?.subject && identity.role === previous?.role) return;
+    generation += 1; setOpen(false); setDeleting(null); setSaving(false); setError("");
+  });
   const edit = (row?: ManagedRepository) => { setEditing(row?.id ?? null); setName(row?.name ?? ""); setUrl(row?.url ?? ""); setError(""); setOpen(true); };
   const save = async () => {
     if (saving() || !name().trim() || !url().trim()) return;

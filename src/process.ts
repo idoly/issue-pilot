@@ -25,6 +25,7 @@ export interface CommandExecutor {
 }
 
 export async function executeLocalCommand(command: string, args: string[], options: CommandExecutionOptions = {}): Promise<CommandExecutionResult> {
+  options.signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const usesProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
@@ -48,7 +49,8 @@ export async function executeLocalCommand(command: string, args: string[], optio
       operation();
     };
     const signalProcess = (signal: NodeJS.Signals) => {
-      if (!usesProcessGroup || child.pid === undefined) {
+      if (child.pid === undefined) return;
+      if (!usesProcessGroup) {
         child.kill(signal);
         return;
       }

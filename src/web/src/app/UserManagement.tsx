@@ -1,5 +1,5 @@
 import { Button, Modal, Select, Skeleton, Toggle, Tag } from "../ui";
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { createUser, errorMessage, loadManagedUsers, updateUser, type ManagedUser, type UserRole } from "../data/client";
 import { Pencil, UserCheck, UserPlus, UserX } from "../ui/icons";
@@ -33,7 +33,7 @@ function localDate(value: string): string {
 
 export function UserManagement() {
   const { refreshPeople, currentUser } = useApplicationResources();
-  const canManage = () => currentUser()?.role === "developer";
+  const canManage = (user?: Pick<ManagedUser, "isAdmin">) => currentUser()?.role === "developer" && (!user?.isAdmin || currentUser()?.isAdmin === true);
   const [isAdmin, setIsAdmin] = createSignal(false, { ownedWrite: true });
   const [role, setRole] = createSignal<UserRole>("product", { ownedWrite: true });
   const [users, setUsers] = createSignal<ManagedUser[]>([], { ownedWrite: true });
@@ -50,7 +50,8 @@ export function UserManagement() {
   let subjectInput!: HTMLInputElement;
   let nameInput!: HTMLInputElement;
   let emailInput!: HTMLInputElement;
-  let loadGeneration = 0;
+  let loadGeneration = 0, contextGeneration = 0, disposed = false;
+  onCleanup(() => { disposed = true; contextGeneration++; loadGeneration++; });
 
   const load = async () => {
     const generation = ++loadGeneration;
@@ -70,7 +71,17 @@ export function UserManagement() {
     }
   };
 
+  createEffect(() => ({ subject: currentUser()?.subject, role: currentUser()?.role, isAdmin: Boolean(currentUser()?.isAdmin) }), (identity, previous) => {
+    if (identity.subject === previous?.subject && identity.role === previous?.role && identity.isAdmin === previous?.isAdmin) return;
+    contextGeneration++; loadGeneration++;
+    setModalOpen(false); setEditingSubject(null); setSubject(""); setName(""); setEmail(""); setRole("product"); setIsAdmin(false); setActive(true);
+    setSaving(false); setChangingSubject(""); setError(""); setUsers([]);
+    if (identity.subject) void load().catch(() => undefined);
+    else setLoading(false);
+  });
+
   const openCreate = () => {
+    if (!canManage()) return;
     setEditingSubject(null);
     setSubject("");
     setName("");
@@ -82,6 +93,7 @@ export function UserManagement() {
   };
 
   const openEdit = (user: ManagedUser) => {
+    if (!canManage(user)) return;
     setEditingSubject(user.subject);
     setSubject(user.subject);
     setName(user.name);
@@ -93,41 +105,42 @@ export function UserManagement() {
   };
 
   const save = async () => {
-    if (saving()) return;
+    if (saving() || !modalOpen() || !canManage({ isAdmin: isAdmin() })) return;
+    const editing = editingSubject(), target = users().find(user => user.subject === editing);
+    if (editing && (!target || !canManage(target))) return;
+    const owner = contextGeneration;
     setSaving(true);
     setError("");
     try {
-      const editing = editingSubject();
       const values = { subject: subjectInput.value.trim(), name: nameInput.value.trim(), email: emailInput.value.trim() };
       const management = currentUser()?.isAdmin && (editing || isAdmin()) ? { isAdmin: isAdmin() } : {};
       if (editing) await updateUser(editing, { name: values.name, email: values.email, active: active(), role: role(), ...management });
       else await createUser({ ...values, role: role(), ...management });
-      setModalOpen(false);
+      if (owner === contextGeneration) setModalOpen(false);
       await refreshPeople();
-      await load();
+      if (!disposed) await load();
     } catch (saveError) {
-      setError(message(saveError));
+      if (owner === contextGeneration) setError(message(saveError));
     } finally {
-      setSaving(false);
+      if (owner === contextGeneration) setSaving(false);
     }
   };
 
   const changeActive = async (user: ManagedUser) => {
-    if (changingSubject()) return;
+    if (changingSubject() || !canManage(user)) return;
+    const owner = contextGeneration;
     setChangingSubject(user.subject);
     setError("");
     try {
-      await updateUser(user.subject, { name: user.name, email: user.email, active: !user.active, role: user.role });
+      await updateUser(user.subject, { active: !user.active });
       await refreshPeople();
-      await load();
+      if (!disposed) await load();
     } catch (changeError) {
-      setError(message(changeError));
+      if (owner === contextGeneration) setError(message(changeError));
     } finally {
-      setChangingSubject("");
+      if (owner === contextGeneration) setChangingSubject("");
     }
   };
-
-  void load().catch(() => undefined);
 
   return (
     <div class="user-management">
@@ -148,7 +161,7 @@ export function UserManagement() {
                 <div class="user-role-cell"><Tag>{({ product: "产品", test: "测试", developer: "开发" })[user.role]}</Tag><Show when={user.isAdmin}><Tag>管理</Tag></Show></div>
                 <div class="user-status-cell"><Tag color={user.active ? "green" : "default"}>{user.active ? "启用" : "停用"}</Tag></div>
                 <time>{localDate(user.updatedAt)}</time>
-                <Show when={canManage() && (!user.isAdmin || currentUser()?.isAdmin)}><div class="user-row-actions">
+                <Show when={canManage(user)}><div class="user-row-actions">
                   <Button size="small" icon={<Pencil size={14} />} onClick={() => openEdit(user)}>编辑</Button>
                   <Button size="small" loading={changingSubject() === user.subject} icon={user.active ? <UserX size={14} /> : <UserCheck size={14} />} onClick={() => { void changeActive(user); }}>{user.active ? "停用" : "启用"}</Button>
                 </div></Show>

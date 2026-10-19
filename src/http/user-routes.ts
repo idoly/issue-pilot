@@ -154,35 +154,43 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     await requireDeveloper(database, request);
     const subject = userSubject(request.params.subject);
     const input = record(request.body);
-    const update = { displayName: userName(input.name), email: userEmail(input.email), active: userActive(input.active), updatedAt: new Date() };
+    const update = {
+      ...(input.name === undefined ? {} : { displayName: userName(input.name) }),
+      ...(input.email === undefined ? {} : { email: userEmail(input.email) }),
+      ...(input.active === undefined ? {} : { active: userActive(input.active) }),
+      ...(input.role === undefined ? {} : { role: choice(input.role, "user_role", USER_ROLES) }),
+      ...(input.isAdmin === undefined ? {} : { isAdmin: userAdmin(input.isAdmin) }),
+    };
+    if (!Object.keys(update).length) throw new ApiError(400, "invalid_user_update");
     return changeUser(subject, async () => {
       const actor = await requireDeveloper(database, request);
       const [existing] = await database.db.select({ isAdmin: subjects.isAdmin }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
-      if (existing?.isAdmin || input.isAdmin === true) await requireAdmin(database, request);
+      if (existing?.isAdmin || update.isAdmin === true) await requireAdmin(database, request);
       return actor;
     }, () => database.db.transaction(async (transaction) => {
       const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
       if (!existing) throw new ApiError(404, "user_not_found");
-      if (existing.active && !update.active) {
+      const active = update.active ?? existing.active;
+      const nextRole = update.role ?? existing.role;
+      const isAdmin = update.isAdmin ?? existing.isAdmin;
+      if (existing.active && !active) {
         const activeUsers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).limit(2);
         if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
       }
-      const nextRole = input.role === undefined ? existing.role : choice(input.role, "user_role", USER_ROLES);
-      const isAdmin = input.isAdmin === undefined ? existing.isAdmin : userAdmin(input.isAdmin);
-      if (existing.active && existing.isAdmin && (!update.active || !isAdmin)) {
+      if (existing.active && existing.isAdmin && (!active || !isAdmin)) {
         const administrators = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.active, true))).limit(2);
         if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
       }
-      if (existing.active && existing.role === "developer" && (!update.active || nextRole !== "developer")) {
+      if (existing.active && existing.role === "developer" && (!active || nextRole !== "developer")) {
         const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
         if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
       }
       // Changing management access requires both developer and isAdmin.
-      if (existing.active && existing.isAdmin && existing.role === "developer" && (!update.active || !isAdmin || nextRole !== "developer")) {
+      if (existing.active && existing.isAdmin && existing.role === "developer" && (!active || !isAdmin || nextRole !== "developer")) {
         const managers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
         if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
       }
-      const [updated] = await transaction.update(subjects).set({ ...update, role: nextRole, isAdmin }).where(eq(subjects.subject, subject)).returning();
+      const [updated] = await transaction.update(subjects).set({ ...update, updatedAt: new Date() }).where(eq(subjects.subject, subject)).returning();
       return serializeManagedUser(updated!);
     }));
   });

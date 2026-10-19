@@ -158,6 +158,30 @@ test("destroys a MySQL connection that finishes opening after cancellation", asy
   assert.deepEqual(fixture.statements, []);
 });
 
+for (const output of [false, true]) test(`cancels MySQL ${output ? "export" : "query"} while connection shutdown is pending`, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-mysql-close-cancel-"));
+  const controller = new AbortController(), fixture = connectionFixture([], []);
+  const store = new IssueOutputStore(root, "ISSUE-20261018-002");
+  let started!: () => void, finishClose: (() => void) | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  const closing = new Promise<void>(resolve => { started = resolve; });
+  fixture.connection.end = callback => { finishClose = () => callback?.(null); started(); };
+  await store.write("result.jsonl", "old-delivery");
+  const pending = output
+    ? exportMysql({ config, statement: "SELECT 1", output: { fileName: "result.jsonl", format: "jsonl" }, store }, controller.signal, () => fixture.connection)
+    : queryMysql({ config, statement: "SELECT 1" }, controller.signal, () => fixture.connection);
+  try {
+    await closing;
+    controller.abort(new Error("cancelled_while_closing"));
+    const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("mysql_close_did_not_cancel")), 200); });
+    await assert.rejects(Promise.race([pending, deadline]), /cancelled_while_closing/);
+    assert.equal(fixture.destroyed(), true);
+    if (output) assert.equal((await store.read("result.jsonl")).toString(), "old-delivery");
+  } finally {
+    clearTimeout(timer); finishClose?.(); await pending.catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("destroys an active MySQL connection when the operation is aborted", async () => {
   const controller = new AbortController();
   const fixture = connectionFixture([], [], new Promise<void>(() => {}));
