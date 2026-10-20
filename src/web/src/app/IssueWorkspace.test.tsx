@@ -4,8 +4,8 @@ import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { createSignal } from "solid-js";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
-const state = vi.hoisted(() => ({ plan: vi.fn(), comment: vi.fn(), create: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), planIssueScopeTransition: state.plan, addIssueComment: state.comment, createIssue: state.create }));
+const state = vi.hoisted(() => ({ plan: vi.fn(), comment: vi.fn(), create: vi.fn(), list: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
+vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), planIssueScopeTransition: state.plan, addIssueComment: state.comment, createIssue: state.create, listIssues: state.list }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({
   currentUser: () => state.user(), people: () => [], peopleError: () => "",
   catalog: () => ({ environments: [{ key: "prod", name: "正式" }, { key: "test", name: "测试" }], services: [
@@ -20,6 +20,33 @@ function plan(current: boolean): IssueScopeTransitionPlan {
   return { planHash: `sha256:${"a".repeat(64)}`, expectedIssueUpdatedAt: issue.updatedAt, action: "rebind_read_only", current: { service: issue.service, workMode: "production_analysis", repositoryAccess: "read" }, target: { service: current ? { key: "inventory", name: "Inventory" } : issue.service, workMode: current ? "test_analysis" : "production_analysis", repositoryAccess: "read" }, repositories: { retained: [], removed: [], added: [{ name: current ? "current-plan-repository" : "stale-plan-repository", url: "https://example.test/repo.git", baseBranch: "main" }] }, branch: null, session: { closeCurrent: true, preserveConversation: true }, preserved: ["attachments", "comments", "conversation"], warnings: [] };
 }
 afterEach(() => { cleanup(); vi.resetAllMocks(); vi.unstubAllGlobals(); state.user = () => ({ subject: "developer", role: "developer" }); });
+
+for (const outcome of ["success", "failure"] as const) for (const currentPending of [false, true]) it(`ignores a closed related editor's ${outcome} while the new load is ${currentPending ? "pending" : "complete"}`, async () => {
+  let finishOld!: () => void, finishCurrent!: () => void;
+  const candidates = (count: number) => Array.from({ length: count }, (_, index) => ({ ...issue, id: `ISSUE-20261017-00${index + 1}`, workspaceStatus: "ready", agentRunning: false, resolvedAt: null }));
+  state.list.mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finishOld = outcome === "success" ? () => resolve(candidates(1)) : () => reject(new Error("closed_related_load_failed"));
+  }));
+  state.list.mockImplementationOnce(() => new Promise(resolve => { finishCurrent = () => resolve(candidates(2)); }));
+  render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "编辑关联" }));
+    const old = await screen.findByRole("dialog", { name: "编辑关联工单" });
+    await waitFor(() => expect(state.list).toHaveBeenCalledOnce());
+    fireEvent.click(within(old).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑关联工单" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "编辑关联" }));
+    const current = await screen.findByRole("dialog", { name: "编辑关联工单" });
+    await waitFor(() => expect(state.list).toHaveBeenCalledTimes(2));
+    if (!currentPending) { finishCurrent(); await within(current).findByText("关联工单（2 个可选，最多选择 20 个）"); }
+    finishOld(); await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByText("closed_related_load_failed")).toBeNull();
+    expect(within(current).queryByText("关联工单（1 个可选，最多选择 20 个）")).toBeNull();
+    expect(within(current).getByRole("button", { name: "保存关联" })).toHaveProperty("disabled", currentPending);
+    if (currentPending) finishCurrent();
+    await within(current).findByText("关联工单（2 个可选，最多选择 20 个）");
+  } finally { finishOld?.(); finishCurrent?.(); }
+});
 
 it("preserves a newer comment draft while an earlier comment is being published", async () => {
   let finish!: () => void;
