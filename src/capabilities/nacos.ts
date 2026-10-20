@@ -5,27 +5,19 @@ import type { CapabilityConfig } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability;
 
-export interface NacosConnection {
-  serverUrl: string;
-  namespace: string;
-  group: string;
-  username: string;
-  password: string;
-  dataIds: string[];
-}
-
 function nacosOrigin(value: string): string {
   const server = new URL(value);
-  if (!server.port) server.port = server.protocol === "https:" ? "443" : "8848";
+  // URL.port omits an explicit :80; do not replace it with Nacos's default.
+  if (server.protocol === "http:" && !server.port && !/:\d+\/?$/.test(value)) server.port = "8848";
   return server.origin;
 }
 
-async function nacosAccessToken(origin: string, connection: NacosConnection, signal: AbortSignal): Promise<string> {
+async function nacosAccessToken(origin: string, connection: CapabilityConfig<"nacos">, signal: AbortSignal): Promise<string> {
   if (!connection.username) return "";
   const response = await fetch(new URL("/nacos/v1/auth/login", origin), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ username: connection.username, password: connection.password }),
+    body: new URLSearchParams({ username: connection.username, password: connection.password ?? "" }),
     redirect: "error",
     signal,
   });
@@ -40,7 +32,7 @@ async function nacosAccessToken(origin: string, connection: NacosConnection, sig
   return token;
 }
 
-export async function readNacosConfigurations(connection: NacosConnection, signal?: AbortSignal): Promise<Array<{ dataId: string; group: string; content: string | null }>> {
+export async function readNacos(connection: CapabilityConfig<"nacos">, signal?: AbortSignal) {
   const origin = nacosOrigin(connection.serverUrl);
   const activeSignal = capabilitySignal(signal);
   const accessToken = await nacosAccessToken(origin, connection, activeSignal);
@@ -66,17 +58,5 @@ export async function readNacosConfigurations(connection: NacosConnection, signa
     remainingBytes -= Buffer.byteLength(content);
     configurations.push({ dataId, group: connection.group, content });
   }
-  return configurations;
-}
-
-export async function readNacos(config: CapabilityConfig<"nacos">, signal?: AbortSignal) {
-  const configurations = await readNacosConfigurations({
-    serverUrl: config.serverUrl,
-    namespace: config.namespace,
-    group: config.group,
-    dataIds: config.dataIds,
-    username: config.username,
-    password: config.password ?? "",
-  }, signal);
   return capabilityTextResult(capabilityResultText({ configurations }), {});
 }

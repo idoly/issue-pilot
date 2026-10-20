@@ -1,3 +1,5 @@
+import type { SettingsManager } from "@earendil-works/pi-coding-agent";
+
 export const USER_ROLES = ["product", "test", "developer"] as const;
 export type UserRole = typeof USER_ROLES[number];
 export function canCreateDevelopmentIssues(role: UserRole): boolean { return role === "developer"; }
@@ -22,6 +24,10 @@ export function normalizeIssueKey(value: string): string {
   return normalized;
 }
 
+export const MCP_TRANSPORTS = ["streamable_http", "sse", "stdio"] as const;
+export type McpTransport = typeof MCP_TRANSPORTS[number];
+export interface McpStdioConfiguration { command: string; args: string[]; env: Record<string, string>; cwd?: string }
+
 export const CAPABILITY_KEYS = ["nacos", "db", "redis", "mq", "es", "dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
 export const CAPABILITY_TYPES = { nacos: "http", db: "database", redis: "redis", mq: "http", es: "http", dms: "mcp", sls: "http" } as const;
@@ -29,7 +35,19 @@ export const CAPABILITY_TYPES = { nacos: "http", db: "database", redis: "redis",
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];
 
+export const AGENT_CODEMODE_MODES = ["off", "on", "only"] as const;
+export type AgentCodemodeMode = typeof AGENT_CODEMODE_MODES[number];
+
+export const AGENT_PI_SETTING_KEYS = ["compaction", "retry", "branchSummary", "steeringMode", "followUpMode", "thinkingBudgets", "transport", "httpIdleTimeoutMs", "websocketConnectTimeoutMs", "cacheWarming", "images", "shellPath", "shellCommandPrefix", "codemode"] as const;
+type PiSettings = NonNullable<Parameters<typeof SettingsManager.inMemory>[0]>;
+export type AgentPiSettings = Omit<Pick<PiSettings, typeof AGENT_PI_SETTING_KEYS[number]>, "codemode"> & { codemode?: { inlineBudget?: number } };
+export interface AgentRuntimeConfiguration {
+  settings?: AgentPiSettings;
+}
+
 export interface AgentConfiguration {
+  runtime: AgentRuntimeConfiguration;
+  codemode: AgentCodemodeMode;
   provider: string;
   model: string;
   thinkingLevel: AgentThinkingLevel;
@@ -60,7 +78,7 @@ export interface CapabilityConfiguration {
   dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   redis?: { host: string; port: number; username: string; password?: string; database: number };
-  mq?: { host: string; port: number; managementPort: number; username: string; password: string; virtualHost: string };
+  mq?: { host: string; managementPort: number; username: string; password: string; virtualHost: string };
   es?: { url: string; username: string; password?: string };
 }
 
@@ -68,6 +86,7 @@ export type DeploymentConfig = CapabilityConfiguration;
 export type StoredDeploymentConfig = CapabilityConfiguration & {
   /** Private pre-upgrade development settings; never projected or executed. */
   archivedDevelopment?: unknown;
+  /** Historical deployment bindings; MCP availability is now global. */
   mcpServices?: string[];
 };
 

@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
 import type { CapabilityConfig } from "./registry.ts";
+import { slsFailureCode, slsHttpErrorCode } from "./sls-errors.ts";
 import type { SlsQuery } from "./sls.ts";
 
 const require = createRequire(import.meta.url);
@@ -13,16 +14,19 @@ export type SlsSdkFactory = (config: ConstructorParameters<typeof Client>[0]) =>
 
 /** Only the signed, read-only GetLogsV2 endpoint is exposed by this adapter. */
 export async function readSlsHttp(configured: CapabilityConfig<"sls">, query: SlsQuery, createClient: SlsSdkFactory = config => new Client(config)) {
-  const client = createClient(new $OpenApiUtil.Config({ accessKeyId: configured.accessKeyId, accessKeySecret: configured.accessKeySecret, endpoint: `${configured.region}.log.aliyuncs.com`, protocol: "https" }));
+  let client: ReturnType<SlsSdkFactory>;
+  try { client = createClient(new $OpenApiUtil.Config({ accessKeyId: configured.accessKeyId, accessKeySecret: configured.accessKeySecret, endpoint: `${configured.region}.log.aliyuncs.com`, protocol: "https" })); }
+  catch (error) { throw new Error(slsFailureCode(error)); }
   const runtime = new RuntimeOptions({ autoretry: false, ignoreSSL: false, readTimeout: limits.sls.executionMs, connectTimeout: limits.connectionMs, keepAlive: false });
   const records: unknown[] = [];
   let analysis = false;
   while (true) {
     let response;
     try { response = await client.getLogsV2WithOptions(configured.project, query.logstore, new GetLogsV2Request({ from: query.from, to: query.to, query: query.query, line: limits.sls.pageResults, offset: records.length, reverse: true }), new GetLogsV2Headers({}), runtime); }
-    catch { throw new Error("sls_query_failed"); }
+    catch (error) { throw new Error(slsFailureCode(error)); }
     const page = response.body?.data, meta = response.body?.meta;
-    if (response.statusCode !== 200 || !Array.isArray(page) || !meta || typeof meta.hasSQL !== "boolean") throw new Error("sls_query_invalid_response");
+    if (response.statusCode !== 200) throw new Error(slsHttpErrorCode(response.statusCode) ?? "sls_query_invalid_response");
+    if (!Array.isArray(page) || !meta || typeof meta.hasSQL !== "boolean") throw new Error("sls_query_invalid_response");
     const progress = meta.progress ?? response.headers?.["x-log-progress"];
     if (typeof progress !== "string" || progress.toLowerCase() !== "complete") throw new Error("sls_query_incomplete");
     if ((meta.mode ?? 0) !== 0) throw new Error("sls_scan_query_not_supported");

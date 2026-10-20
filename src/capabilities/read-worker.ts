@@ -2,6 +2,7 @@ import { Worker } from "node:worker_threads";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 let workers = 0;
+const initializationErrors = new Set(["MODULE_NOT_FOUND", "ERR_MODULE_NOT_FOUND", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX"]);
 export interface ReadWorkerResult { text: string; details?: Record<string, unknown> }
 
 /** SDK requests stay off the host heap and close their sockets on cancellation. */
@@ -12,7 +13,7 @@ export function runReadWorker(module: URL, data: unknown, heap: { oldGenerationM
   let worker: Worker;
   try {
     worker = new Worker(module, { execArgv: ["--experimental-strip-types"], env: { ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}) }, workerData: data, resourceLimits: { maxOldGenerationSizeMb: heap.oldGenerationMb, maxYoungGenerationSizeMb: heap.youngGenerationMb } });
-  } catch { workers--; return Promise.reject(new Error(failure)); }
+  } catch { workers--; return Promise.reject(new Error("capability_worker_initialization_failed")); }
   worker.once("exit", () => { workers--; });
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -29,7 +30,12 @@ export function runReadWorker(module: URL, data: unknown, heap: { oldGenerationM
         }
       });
     });
-    worker.once("error", (error: Error & { code?: string }) => finish(() => reject(new Error(error.code === "ERR_WORKER_OUT_OF_MEMORY" ? "capability_result_too_large" : failure))));
+    worker.once("error", (error: Error & { code?: string }) => finish(() => {
+      let code = failure;
+      if (error.code === "ERR_WORKER_OUT_OF_MEMORY") code = "capability_result_too_large";
+      else if (error.code && initializationErrors.has(error.code)) code = "capability_worker_initialization_failed";
+      reject(new Error(code));
+    }));
     worker.once("exit", () => { if (!settled) finish(() => reject(new Error(failure))); });
     if (signal.aborted) abort();
   });

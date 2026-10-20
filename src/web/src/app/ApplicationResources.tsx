@@ -1,14 +1,16 @@
-import { type Accessor, type ParentProps, createContext, createSignal, useContext } from "solid-js";
+import { type Accessor, type ParentProps, createContext, createSignal, onCleanup, useContext } from "solid-js";
 
 import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
+import { createAgentConfigurationEditor } from "./agent-configuration";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
-const emptyConfiguration = (): Config => ({ agent: { provider: "", model: "", thinkingLevel: "off" }, environments: [], services: [], agentModels: [] });
+const emptyConfiguration = (): Config => ({ agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {} }, environments: [], services: [], agentModels: [] });
 
 interface ApplicationResources {
   catalog: Accessor<ConfigCatalog>;
   configuration: Accessor<Config>;
   configurationLoaded: Accessor<boolean>;
+  agentEditor: ReturnType<typeof createAgentConfigurationEditor>;
   people: Accessor<Person[]>;
   currentUser: Accessor<Person | null>;
   catalogError: Accessor<string>;
@@ -52,15 +54,30 @@ export function ApplicationResourcesProvider(props: ParentProps) {
 
   const refreshCatalog = latestLoader(loadCatalog, setCatalog, setCatalogError);
   const refreshConfiguration = latestLoader(loadConfig, (value) => { setConfiguration(value); setConfigurationLoaded(true); }, setConfigurationError);
-  let peopleGeneration = 0;
+  const agentEditor = createAgentConfigurationEditor(
+    () => configuration().agent,
+    () => {
+      currentUser(); // Track selection changes; requests use this page's pinned identity.
+      return currentUserSubject();
+    },
+    async () => (await refreshConfiguration()).agent,
+  );
+  let peopleGeneration = 0, disposed = false;
+  onCleanup(() => { disposed = true; peopleGeneration++; });
   const refreshPeople = async () => {
+    if (disposed) throw new DOMException("Application resources were disposed", "AbortError");
     const owner = ++peopleGeneration;
     try {
       const users = await loadUsers();
       if (owner !== peopleGeneration) return users;
-      if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) setCurrentUserSubject(null);
+      if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) {
+        setCurrentUser(null);
+        setCurrentUserSubject(null, false);
+      }
       const currentUser = await loadCurrentUser();
       if (owner !== peopleGeneration) return users;
+      // Pin the resolved identity without replacing another tab's remembered choice.
+      setCurrentUserSubject(currentUser.subject, false);
       setPeople(users);
       setCurrentUser(currentUser);
       setPeopleError("");
@@ -82,7 +99,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   void refreshPeople().catch(() => undefined);
 
   return (
-    <ResourcesContext value={{ catalog, configuration, configurationLoaded, people, currentUser, catalogError, configurationError, peopleError, refreshCatalog, refreshConfiguration, refreshPeople, selectCurrentUser }}>
+    <ResourcesContext value={{ catalog, configuration, configurationLoaded, agentEditor, people, currentUser, catalogError, configurationError, peopleError, refreshCatalog, refreshConfiguration, refreshPeople, selectCurrentUser }}>
       {props.children}
     </ResourcesContext>
   );

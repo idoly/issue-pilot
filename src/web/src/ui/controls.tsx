@@ -56,11 +56,11 @@ export function Badge(props: { status?: "default" | "processing" | "warning" | "
   return <span class="ui-badge" data-status={props.status ?? "default"}><i aria-hidden="true" /><span class="ui-badge-status-text">{props.text}</span></span>;
 }
 
-export function Toggle(props: { checked: boolean; disabled?: boolean; size?: "small"; "aria-label": string; onChange: (checked: boolean) => void }) {
+export function Toggle(props: { checked: boolean; disabled?: boolean; "aria-label": string; onChange: (checked: boolean) => void }) {
   return <button type="button" class="ui-switch" role="switch" aria-label={props["aria-label"]} aria-checked={props.checked ? "true" : "false"} disabled={props.disabled} onClick={() => props.onChange(!props.checked)}><span /></button>;
 }
 
-export function Segmented<const T extends string>(props: { options: Array<{ value: T; label: JSX.Element }>; value: T; onChange: (value: T) => void; size?: "small"; "aria-label": string }) {
+export function Segmented<const T extends string>(props: { options: Array<{ value: T; label: JSX.Element }>; value: T; onChange: (value: T) => void; "aria-label": string }) {
   return <div class="ui-segmented" role="radiogroup" aria-label={props["aria-label"]}><For each={props.options}>{(option, index) => <button type="button" role="radio" aria-checked={props.value === option.value ? "true" : "false"} tabindex={props.value === option.value ? 0 : -1} onClick={() => props.onChange(option.value)} onKeyDown={(event) => {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     event.preventDefault();

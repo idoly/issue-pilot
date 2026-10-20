@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { rename } from "node:fs/promises";
 import path from "node:path";
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -190,9 +190,9 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       const issueId = randomUUID();
       return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
         const prefix = `ISSUE-${regionalDateStamp()}-`;
-        const existingIssueKeys = await database.db.select({ key: issues.key }).from(issues);
-        const sequence = Math.max(0, ...existingIssueKeys.flatMap(({ key }) => key.startsWith(prefix) ? [Number(key.slice(prefix.length)) || 0] : [])) + 1;
-        const issueKey = `${prefix}${String(sequence).padStart(3, "0")}`;
+        const [next] = await database.db.select({ sequence: sql<number>`coalesce(max(cast(substr(${issues.key}, ${prefix.length + 1}) as integer)), 0) + 1` })
+          .from(issues).where(and(gte(issues.key, prefix), lt(issues.key, `${prefix}\uffff`)));
+        const issueKey = `${prefix}${String(next!.sequence).padStart(3, "0")}`;
         const writtenObjectKeys: string[] = [];
         await claimIssueRoot(stateRoot, issueKey);
         let issue: typeof issues.$inferSelect;
@@ -228,8 +228,8 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     try {
       const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
       if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new ApiError(400, "issue_scope_update_not_allowed");
+      return await runScopeExclusive(() => runIssueExclusive(engine, [issue.id], async (reservation) => {
       const editorSubject = await ensureCurrentSubject(database, request);
-      return await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
       const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
         database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
@@ -283,7 +283,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
         reservation.enqueue(issue.id, issueMetadataUpdatePrompt({ issue: { ...currentIssue, ...issueValues }, service: issueService, environmentKey: issueEnvironment.key, attachments: attachmentDtos, attachmentPath: attachmentRoot }), false);
       }
         return serializeIssueSummary(await requireIssue(database, issue.key));
-      });
+      }));
     } finally {
       await removePendingAttachments(pendingAttachments);
     }

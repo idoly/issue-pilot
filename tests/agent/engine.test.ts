@@ -194,6 +194,51 @@ test("closes a streaming session when an accepted steer cannot be recorded", asy
   assert.equal(engine.isRunning("issue-1"), false);
 });
 
+test("finishes failed run cleanup before starting queued work", { timeout: 5_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-order-"));
+  const events: string[] = [];
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
+  const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
+  const engine = new AgentEngine(database as never, root);
+  const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
+  internal.sessions.set("issue-1", { async stop() { events.push("cleanup-start"); entered(); await gate; events.push("cleanup-end"); } });
+  try {
+    internal.schedule("issue-1", async () => { events.push("first"); throw new Error("first_run_failed"); });
+    internal.schedule("issue-1", async () => { events.push("second"); });
+    await ready; await new Promise<void>(resolve => setImmediate(resolve));
+    assert.deepEqual(events, ["first", "cleanup-start"]);
+    release(); await waitFor(() => !engine.isRunning("issue-1"));
+    assert.deepEqual(events, ["first", "cleanup-start", "cleanup-end", "second"]);
+  } finally { release(); await waitFor(() => !engine.isRunning("issue-1")); await engine.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("reopens a session for a queued message after the preceding round failed", { timeout: 5_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-queued-"));
+  let started!: () => void, fail!: () => void, stopping!: () => void, release!: () => void;
+  const prompting = new Promise<void>(resolve => { started = resolve; }), failure = new Promise<void>(resolve => { fail = resolve; });
+  const stopped = new Promise<void>(resolve => { stopping = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "pending" }] }) }) }), transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
+  const engine = new AgentEngine(database as never, root), recorded: string[] = [], reopened: Array<string | undefined> = [];
+  const internal = engine as unknown as { sessions: Map<string, unknown>; run(issueId: string, message?: string): Promise<void> };
+  internal.run = async (_issueId, message) => { reopened.push(message); };
+  internal.sessions.set("issue-1", {
+    streaming: false,
+    session: { sessionManager: { appendCustomEntry(_type: string, data: { message: string }) { recorded.push(data.message); } } },
+    async prompt() { started(); await failure; throw new Error("first_round_failed"); },
+    async stop() { stopping(); await gate; },
+  });
+  try {
+    await engine.send("issue-1", "first"); await prompting;
+    await engine.send("issue-1", "second"); fail(); await stopped;
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.deepEqual(reopened, []);
+    release(); await waitFor(() => !engine.isRunning("issue-1"));
+    assert.deepEqual(recorded, ["first"]); assert.deepEqual(reopened, ["second"]);
+  } finally { fail(); release(); await waitFor(() => !engine.isRunning("issue-1")); await engine.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("reports background cleanup failures without leaking logger errors", async () => {
   const reported: unknown[] = [];
   const database = { async transaction() { throw new Error("reporting_failed"); } };

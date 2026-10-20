@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +9,43 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
+
+test("allocates numeric Issue sequences beyond three digits within the current date", async () => {
+  const fixture = await createApiFixture();
+  const database = openDatabase(fixture.databaseFile);
+  try {
+    await createService(fixture.app, "Sequence", ["test"]);
+    const first = await createIssue(fixture.app, "sequence", "test");
+    const prefix = String(first.id).slice(0, -3);
+    const [original] = await database.db.select().from(issues).where(eq(issues.key, String(first.id)));
+    for (const key of [`${prefix}099`, `${prefix}999`, `${prefix}1000`, "ISSUE-19000101-999999"]) {
+      const id = randomUUID();
+      await database.db.transaction(async tx => {
+        await tx.insert(issues).values({ ...original!, id, key });
+        await tx.insert(issueWorkspaces).values({ issueId: id });
+      });
+    }
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1001`);
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1002`);
+  } finally { database.close(); await fixture.cleanup(); }
+});
+
+test("treats whitespace-only optional Issue fields as empty", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Optional", ["test"]);
+    const response = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...issuePayload("optional", "test"), description: " \t ", assigneeSubject: " \t " } });
+    assert.equal(response.statusCode, 201, response.body);
+    const created = await json(response);
+    assert.equal(created.assigneeSubject, null);
+    fixture.engine.running.clear();
+    const updated = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${created.id}`, payload: { title: "Optional fields", description: " \t ", priority: "p2", assigneeSubject: " \t ", ccSubjects: [] } });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.equal((await json(updated)).assigneeSubject, null);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` });
+    assert.equal((await json(detail)).description, "");
+  } finally { await fixture.cleanup(); }
+});
 
 test("creates each Issue work mode and rejects ambiguous scope input", async () => {
   const fixture = await createApiFixture();
@@ -182,6 +220,36 @@ test("serializes retries, status transitions, messages, and comments with one Is
   } finally {
     await fixture.cleanup();
   }
+});
+
+test("serializes Issue assignee changes with user deactivation", async () => {
+  const fixture = await createApiFixture();
+  let release!: () => void;
+  try {
+    await createService(fixture.app, "Assignment");
+    const actor = await fixture.app.inject({ method: "GET", url: "/api/me" }).then(json);
+    const headers = { "x-issue-pilot-subject": String(actor.subject) };
+    const created = await fixture.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "next-owner", name: "Next Owner", email: "next@example.test", role: "developer" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const issue = await fixture.app.inject({ method: "POST", url: "/api/issues", headers, payload: issuePayload("assignment") }).then(json);
+    fixture.engine.running.clear();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    fixture.engine.closeSessionHook = async () => { entered(); await gate; };
+    const edit = fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers, payload: { title: "Assign to next owner", description: "Keep owner valid", priority: "p1", assigneeSubject: "next-owner", ccSubjects: [] } });
+    await started;
+    const disable = fixture.app.inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { name: "Next Owner", email: "next@example.test", role: "developer", active: false } }).then(response => response);
+    const disabledBeforeEdit = await Promise.race([disable.then(() => true), new Promise<false>(resolve => setTimeout(() => resolve(false), 100))]);
+    release();
+    assert.equal((await edit).statusCode, 200);
+    assert.equal((await disable).statusCode, 409);
+    assert.equal(disabledBeforeEdit, false);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(json);
+    assert.equal(detail.assigneeSubject, "next-owner");
+    const users = await fixture.app.inject({ method: "GET", url: "/api/users" }).then(response => JSON.parse(response.body) as Array<{ subject: string }>);
+    assert.ok(users.some(user => user.subject === "next-owner"));
+  } finally { release?.(); await fixture.cleanup(); }
 });
 
 test("edits only Issue metadata and rejects scope fields", async () => {

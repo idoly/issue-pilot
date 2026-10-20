@@ -1,17 +1,16 @@
 import { eq } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues, subjects } from "../db/schema.ts";
-import type { AgentFooterStats } from "../domain/contracts.ts";
+import { agentSessions, issues } from "../db/schema.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { authorizeWorkMode, ensureCurrentSubject, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { authorizeWorkMode, requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -65,11 +64,13 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
 
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    const { provider, model, thinkingLevel } = await loadGlobalAgentConfiguration(database.db);
+    const { provider, model, thinkingLevel, runtime } = await loadGlobalAgentConfiguration(database.db);
+    const autoCompact = SettingsManager.inMemory(runtime.settings).getCompactionEnabled();
     const configuredModel = (await modelCatalog.list()).find((candidate) => candidate.provider === provider && candidate.id === model);
     const contextWindow = configuredModel?.contextWindow ?? 0;
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const sessionReady = Boolean(binding && await pathExists(binding.sessionFile));
+    if (reply.raw.destroyed) { reply.hijack(); return; }
     const liveEvents = subscribeBufferedAgentEvents(events, issue.id);
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let hijacked = false;
@@ -81,16 +82,16 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       if (heartbeat) clearInterval(heartbeat);
       liveEvents.unsubscribe();
     };
+    reply.raw.once("close", cleanup);
     try {
-      const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
-      if (!currentIssue) throw new ApiError(404, "issue_not_found");
+      // Read durable and in-flight events together before awaiting newer Issue state.
       const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];
-      const footer: AgentFooterStats = manager ? sessionFooterStats(manager, contextWindow) : {
-        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
-        latestCacheHitRate: null, contextPercent: 0, contextWindow, autoCompact: true,
-      };
-      reply.raw.once("close", cleanup);
+      const footer = sessionFooterStats(manager, contextWindow, autoCompact);
+      const currentEvents = events.replayCurrent(issue.id);
+      const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
+      if (cleaned) { reply.hijack(); return; }
+      if (!currentIssue) throw new ApiError(404, "issue_not_found");
       reply.hijack();
       hijacked = true;
       reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
@@ -103,12 +104,15 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       });
       const sent = new Set<string>();
       const send = (event: RunEvent) => {
-        if (sent.has(event.id)) return;
-        sent.add(event.id);
+        const key = event.event.type === "entry_appended" ? event.event.entry.id : event.id;
+        if (sent.has(key)) return;
+        sent.add(key);
         writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
       };
       for (const event of transcript) send(event);
-      for (const event of events.replayCurrent(issue.id)) send(event);
+      // Snapshot totals also include hidden entries, such as cache-warming usage.
+      for (const entry of manager?.getEntries() ?? []) sent.add(entry.id);
+      for (const event of currentEvents) send(event);
       writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
@@ -125,9 +129,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     if (issue.type === "data_processing") await authorizeWorkMode(database, request, "production_data");
     const { message, images } = await readAgentMessage(request);
-    const subject = await ensureCurrentSubject(database, request);
-    const [person] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (!person) throw new ApiError(400, "invalid_current_subject");
+    const person = await requireCurrentUser(database, request);
     try {
       await engine.send(issue.id, message, {
         name: person.displayName ?? person.subject,

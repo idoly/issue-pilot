@@ -16,7 +16,7 @@ async function requireWebFile(root: string, name: string): Promise<void> {
 
 export async function registerWebRoutes(app: FastifyInstance, configuredRoot: string): Promise<void> {
   const root = path.resolve(configuredRoot);
-  await Promise.all([requireWebFile(root, "index.html"), requireWebFile(root, "vscode.html")]);
+  await requireWebFile(root, "index.html");
   await app.register(fastifyStatic, {
     root,
     prefix: "/",
@@ -24,22 +24,22 @@ export async function registerWebRoutes(app: FastifyInstance, configuredRoot: st
     immutable: true,
     allowedPath: (name) => {
       const relative = name.replace(/^\/+/, "");
-      return relative === "index.html" || relative === "vscode.html" || relative.startsWith("assets/");
+      return relative === "index.html" || relative.startsWith("assets/");
     },
     setHeaders(reply, file) {
       reply.header("X-Content-Type-Options", "nosniff");
       if (file.endsWith(".html")) reply.header("Cache-Control", "private, no-cache, no-store, must-revalidate");
     },
   });
-  const sendHtml = (name: "index.html" | "vscode.html") => (_request: FastifyRequest, reply: FastifyReply) => {
+  const sendHtml = (_request: FastifyRequest, reply: FastifyReply) => {
     reply.header("Cache-Control", "private, no-cache, no-store, must-revalidate");
-    return reply.sendFile(name, { maxAge: 0, immutable: false });
+    return reply.sendFile("index.html", { maxAge: 0, immutable: false });
   };
-  app.get("/", sendHtml("index.html"));
-  app.get("/vscode.html", sendHtml("vscode.html"));
+  app.get("/", sendHtml);
   app.setNotFoundHandler((request, reply) => {
     const acceptsHtml = request.headers.accept?.split(",").some((value) => value.trim().startsWith("text/html")) ?? false;
-    if ((request.method === "GET" || request.method === "HEAD") && !request.url.startsWith("/api/") && acceptsHtml) return sendHtml("index.html")(request, reply);
+    const requestedPath = request.url.split("?")[0] ?? "/";
+    if ((request.method === "GET" || request.method === "HEAD") && !requestedPath.startsWith("/api/") && !path.extname(requestedPath) && acceptsHtml) return sendHtml(request, reply);
     return reply.code(404).send({ error: "not_found" });
   });
 }

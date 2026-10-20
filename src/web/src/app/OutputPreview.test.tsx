@@ -1,10 +1,12 @@
-import { render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { fetchOutput, type IssueDetail } from "../data/client";
 import { OutputPreview } from "./OutputPreview";
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const output = { fileName: "report.md", size: 100, updatedAt: "2026-10-02T00:00:00Z" };
 
@@ -32,12 +34,38 @@ describe("output preview", () => {
     expect(screen.queryByText("late content")).toBeNull();
   });
 
+  it("offers an Excel download without fetching or parsing the workbook", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <OutputPreview issueKey="ISSUE-1" output={{ ...output, fileName: "report.xlsx" }} onClose={() => {}} />);
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "此格式暂不支持预览，请下载查看");
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+    expect(screen.getByRole("link", { name: "下载文件" }).getAttribute("href")).toBe("/api/issues/ISSUE-1/outputs/report.xlsx");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("refuses oversized files without requesting their contents", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     render(() => <OutputPreview issueKey="ISSUE-1" output={{ ...output, size: issuePilotConfig.web.outputPreviewBytes + 1 }} onClose={() => {}} />);
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "文件过大，请下载查看完整内容");
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "文件过大，请下载查看完整内容");
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed download and keeps one close action in the footer", async () => {
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValueOnce(new Response("Recovered output"));
+    vi.stubGlobal("fetch", fetchMock);
+    const close = vi.fn();
+    render(() => <OutputPreview issueKey="ISSUE-1" output={{ ...output, fileName: "report.txt" }} onClose={close} />);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await screen.findByText("Recovered output");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("previews text larger than the previous 2 MiB limit", async () => {

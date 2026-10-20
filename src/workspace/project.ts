@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, ne, notInArray, or } from "drizzle-orm";
 import { rmdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -58,14 +58,17 @@ export interface PreparedDevelopmentScopeMigration extends PreparedDevelopmentCo
 type IssueRepositoryWriter = Pick<Database, "insert" | "delete">;
 type IssueRepositoryReplacement = Pick<IssueRepository, "url" | "baseBranch" | "workingBranch" | "localPath" | "workspaceName" | "commitBefore">;
 
-async function replaceIssueRepositoryRows(
+export async function replaceIssueRepositoryRows(
   writer: IssueRepositoryWriter,
   issueId: string,
   existing: IssueRepository[],
   replacements: IssueRepositoryReplacement[],
   now: Date,
 ): Promise<void> {
+  const previousByUrl = new Map(existing.map(row => [row.url, row]));
   for (const { url, ...state } of replacements) {
+    const previous = previousByUrl.get(url);
+    if (previous && Object.entries(state).every(([key, value]) => previous[key as keyof typeof state] === value)) continue;
     await writer.insert(issueRepositories).values({ issueId, url, ...state }).onConflictDoUpdate({
       target: [issueRepositories.issueId, issueRepositories.url],
       set: { ...state, updatedAt: now },
@@ -119,7 +122,7 @@ export class IssueProjectManager {
       }
       runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, snapshots, "read", relatedIssues);
     }
-    await this.database.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    await this.database.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: new Date() }).where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     return runtimeRoot;
   }
 
@@ -283,8 +286,8 @@ export class IssueProjectManager {
         workspaceName: null,
         commitBefore: checkout.baseCommit,
       })), now);
-      await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
-      await transaction.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
+      await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(and(eq(agentSessions.issueId, issue.id), ne(agentSessions.workspacePath, runtimeRoot)));
+      await transaction.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: now }).where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     });
     if (databaseQueue) await databaseQueue.run(saveRuntimeState);
     else await saveRuntimeState();
@@ -355,7 +358,7 @@ export class IssueProjectManager {
     const existingNames = issueRepositoryWorkspaceNames(existingRepositories);
     const targetUrls = new Set(repositories.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositories.filter((repository) => !targetUrls.has(repository.url));
-    for (const repository of removedRepositories) await this.worktrees.assertClean(repository.url, repository.localPath!);
+    for (const repository of removedRepositories) await this.worktrees.assertClean(repository.url, repository.localPath!, repository.workingBranch!);
 
     const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url), existingNames);
     const mode = developmentWorktreeMode(issue.type);

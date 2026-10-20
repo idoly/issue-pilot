@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -60,6 +61,28 @@ async function fixture() {
   return { root, database, issue: issue!, repository, runtime };
 }
 
+test("keeps the project broker unavailable until startup supplies its database", async () => {
+  const value = await fixture(); let ready = false, calls = 0;
+  const diagnostics: unknown[] = [];
+  const broker = new ProjectToolBroker(() => { if (!ready) throw new Error("project_tool_broker_not_ready"); return value.database.db; }, value.root, { async run() { calls++; return { stdout: "ready\n", stderr: "", code: 0, killed: false }; } }, value.runtime, error => diagnostics.push(error));
+  const fields = ["node", value.issue.key, "application", "", "test"];
+  const body = ["issue-pilot-project-tool-v1", ...fields.map(field => Buffer.from(field).toString("base64")), ""].join("\n");
+  const send = () => new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+    const request = httpRequest({ socketPath: broker.socketPath, path: "/v1/project-tools", method: "POST", headers: { "content-type": "application/vnd.issue-pilot.project-tool" } }, response => {
+      let content = ""; response.setEncoding("utf8"); response.on("data", chunk => { content += chunk; }); response.on("end", () => resolve({ status: response.statusCode, body: content }));
+    });
+    request.on("error", reject); request.end(body);
+  });
+  try {
+    await broker.start();
+    assert.deepEqual(await send(), { status: 503, body: "project_tool_broker_not_ready\n" });
+    assert.equal(calls, 0);
+    ready = true;
+    assert.deepEqual(await send(), { status: 200, body: "ready\n" });
+    assert.equal(calls, 1); assert.deepEqual(diagnostics, []);
+  } finally { await broker.close(); await value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("runs Agent and Code browser project wrappers through the scoped process broker", async () => {
   const value = await fixture();
   const calls: Array<{ command: string; args: string[]; options: CommandExecutionOptions; config: string }> = [];
@@ -119,6 +142,47 @@ test("runs Agent and Code browser project wrappers through the scoped process br
     await rm(value.root, { recursive: true, force: true });
   }
   await assert.rejects(stat(path.join(value.root, "control", "project-tools.sock")), /ENOENT/);
+});
+
+test("cancels a project command when its HTTP client disconnects after sending the body", async () => {
+  const value = await fixture();
+  let started!: () => void, canceled!: () => void, finish!: () => void;
+  const running = new Promise<void>(resolve => { started = resolve; });
+  const aborted = new Promise<void>(resolve => { canceled = resolve; });
+  const broker = new ProjectToolBroker(value.database.db, value.root, {
+    async run(options) {
+      started();
+      await new Promise<void>(resolve => { finish = resolve; options.signal!.addEventListener("abort", () => { canceled(); resolve(); }, { once: true }); });
+      return { stdout: "", stderr: "", code: 1, killed: true };
+    },
+  }, value.runtime);
+  let request: ReturnType<typeof httpRequest> | undefined;
+  try {
+    await broker.start();
+    const fields = ["node", value.issue.key, "application", "", "test"];
+    const body = ["issue-pilot-project-tool-v1", ...fields.map(field => Buffer.from(field).toString("base64")), ""].join("\n");
+    request = httpRequest({ socketPath: broker.socketPath, path: "/v1/project-tools", method: "POST", headers: { "Content-Type": "application/vnd.issue-pilot.project-tool" } });
+    request.on("error", () => {}); request.end(body);
+    await running; request.destroy();
+    const stopped = await Promise.race([aborted.then(() => true), new Promise<false>(resolve => setTimeout(() => resolve(false), 100))]);
+    assert.equal(stopped, true);
+  } finally { request?.destroy(); finish?.(); await broker.close(); await value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("does not start a queued project command after its caller cancels", async () => {
+  const value = await fixture(); let release!: () => void, calls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const broker = new ProjectToolBroker(value.database.db, value.root, { async run() { calls++; if (calls === 1) await gate; return { stdout: "", stderr: "", code: 0, killed: false }; } }, value.runtime);
+  const request = { tool: "node" as const, issueKey: value.issue.key, repository: "application", project: "", action: "test", args: [] };
+  try {
+    const first = broker.run(request);
+    while (!calls) await new Promise(resolve => setImmediate(resolve));
+    const controller = new AbortController();
+    const second = broker.run(request, controller.signal);
+    const canceled = assert.rejects(second, { name: "AbortError" });
+    controller.abort(); release(); await first; await canceled;
+    assert.equal(calls, 1);
+  } finally { release(); await broker.close(); await value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
 test("serializes project processes for the same Issue", async () => {

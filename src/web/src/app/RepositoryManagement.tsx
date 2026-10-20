@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { Button, Input, Modal, Skeleton, Tag } from "../ui";
 import { createRepository, deleteRepository, errorMessage, loadRepositories, updateRepository, type ManagedRepository } from "../data/client";
 import { Pencil, Plus, Trash2 } from "../ui/icons";
@@ -15,10 +15,13 @@ const errors: Record<string, string> = {
 };
 const message = (error: unknown) => errors[errorMessage(error)] ?? errorMessage(error);
 
+const addressPrefix = (url: string) => url.slice(0, Math.max(url.lastIndexOf("/"), url.includes("://") ? -1 : url.indexOf(":")) + 1);
+
 export function RepositoryManagement() {
   const { currentUser, refreshConfiguration, refreshCatalog } = useApplicationResources();
   const canManage = () => currentUser()?.role === "developer";
   const [rows, setRows] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
+  const sortedRows = createMemo(() => [...rows()].sort((left, right) => addressPrefix(left.url).localeCompare(addressPrefix(right.url)) || left.url.localeCompare(right.url)));
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [open, setOpen] = createSignal(false, { ownedWrite: true });
@@ -29,7 +32,10 @@ export function RepositoryManagement() {
   const [deleting, setDeleting] = createSignal<ManagedRepository | null>(null, { ownedWrite: true });
   let generation = 0;
   const load = async () => { setLoading(true); try { setRows(await loadRepositories()); } finally { setLoading(false); } };
-  createEffect(() => currentUser()?.subject, () => { generation += 1; setOpen(false); setDeleting(null); setSaving(false); setError(""); });
+  createEffect(() => ({ subject: currentUser()?.subject, role: currentUser()?.role }), (identity, previous) => {
+    if (identity.subject === previous?.subject && identity.role === previous?.role) return;
+    generation += 1; setOpen(false); setDeleting(null); setSaving(false); setError("");
+  });
   const edit = (row?: ManagedRepository) => { setEditing(row?.id ?? null); setName(row?.name ?? ""); setUrl(row?.url ?? ""); setError(""); setOpen(true); };
   const save = async () => {
     if (saving() || !name().trim() || !url().trim()) return;
@@ -57,7 +63,7 @@ export function RepositoryManagement() {
     <Show when={error() && !open() && !deleting()}><div class="user-management-error" role="alert">{error()}</div></Show>
     <Show when={!loading()} fallback={<div class="user-management-loading"><Skeleton active paragraph={{ rows: 6 }} /></div>}>
       <div class="repository-catalog-table"><div class="repository-catalog-head"><span>名称</span><span>地址</span><span>引用服务</span><span>操作</span></div>
-        <For each={rows()} fallback={<div class="empty-band">暂无仓库，先添加仓库再在服务中选择</div>}>{(row) => <div class="repository-catalog-row"><strong>{row.name}</strong><code>{row.url}</code><div class="repository-service-tags"><For each={row.services} fallback={<span class="muted">未引用</span>}>{(service) => <Tag>{service.name}</Tag>}</For></div><div class="user-row-actions repository-actions"><Button size="small" icon={<Pencil size={13} />} disabled={!canManage()} title={canManage() ? "编辑仓库" : "仅开发角色可维护仓库"} onClick={() => edit(row)}>编辑</Button><Button size="small" icon={<Trash2 size={13} />} disabled={!canManage() || Boolean(row.services.length)} title={!canManage() ? "仅开发角色可维护仓库" : row.services.length ? "请先从服务配置移除引用" : "删除仓库"} onClick={() => { setError(""); setDeleting(row); }}>删除</Button></div></div>}</For>
+        <For each={sortedRows()} fallback={<div class="empty-band">暂无仓库，先添加仓库再在服务中选择</div>}>{(row) => <div class="repository-catalog-row"><strong>{row.name}</strong><code>{row.url}</code><div class="repository-service-tags"><For each={row.services} fallback={<span class="muted">未引用</span>}>{(service) => <Tag>{service.name}</Tag>}</For></div><div class="user-row-actions repository-actions"><Button size="small" icon={<Pencil size={13} />} disabled={!canManage()} title={canManage() ? "编辑仓库" : "仅开发角色可维护仓库"} onClick={() => edit(row)}>编辑</Button><Button size="small" icon={<Trash2 size={13} />} disabled={!canManage() || Boolean(row.services.length)} title={!canManage() ? "仅开发角色可维护仓库" : row.services.length ? "请先从服务配置移除引用" : "删除仓库"} onClick={() => { setError(""); setDeleting(row); }}>删除</Button></div></div>}</For>
       </div>
     </Show>
     <Modal open={open()} title={editing() ? "编辑仓库" : "添加仓库"} okText="保存" confirmLoading={saving()} okButtonProps={{ disabled: !name().trim() || !url().trim() }} onOk={() => { void save(); }} onCancel={() => setOpen(false)}>

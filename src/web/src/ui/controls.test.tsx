@@ -50,6 +50,17 @@ describe("local UI controls", () => {
     view.unmount();
   });
 
+  for (const state of [{ disabled: true }, { loading: true }]) it(`ignores keyboard removal while ${state.disabled ? "disabled" : "loading"}`, () => {
+    const change = vi.fn();
+    const view = render(() => <Select mode="multiple" aria-label="锁定选择" value={["a"]} onChange={change} options={[{ value: "a", label: "Alpha" }]} {...state} />);
+    const trigger = screen.getByRole("combobox", { name: "锁定选择" });
+    fireEvent.keyDown(trigger, { key: "Backspace" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(change).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    view.unmount();
+  });
+
   it("traps dialog focus and restores parent and opener focus across nested dialogs", async () => {
     const [open, setOpen] = createSignal(false, { ownedWrite: true });
     const [nested, setNested] = createSignal(false, { ownedWrite: true });

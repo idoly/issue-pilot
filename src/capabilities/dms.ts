@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { addAbortListener } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
@@ -31,24 +33,37 @@ function operationSignal(signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function abortPromise(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    const rejectAborted = () => reject(signal.reason instanceof Error ? signal.reason : new Error("dms_mcp_aborted"));
-    if (signal.aborted) rejectAborted();
-    else signal.addEventListener("abort", rejectAborted, { once: true });
-  });
+function cancellationError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason.name === "TimeoutError" ? new Error("dms_mcp_timeout") : signal.reason;
+  return new Error("dms_mcp_aborted");
 }
 
-function sameOriginFetch(origin: string, signal: AbortSignal) {
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value?.trim()) return undefined;
+  if (/^\d+$/.test(value.trim())) return Number(value) * 1_000;
+  const date = /[a-z]/i.test(value) ? Date.parse(value) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
+type DmsHttpFailure = { status: number; retryAfterMs: number | undefined };
+
+function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (failure: DmsHttpFailure) => void) {
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const target = new URL(input instanceof Request ? input.url : input.toString());
     if (target.protocol !== "https:" || target.origin !== origin) throw new Error("invalid_dms_mcp_target");
     const requestSignal = init?.signal ? AbortSignal.any([init.signal, signal]) : signal;
-    return fetch(input, { ...init, redirect: "error", signal: requestSignal });
+    const response = await fetch(input, { ...init, redirect: "error", signal: requestSignal });
+    if (response.status >= 400 && response.status <= 599) {
+      onHttpFailure({ status: response.status, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers.get("retry-after")) : undefined });
+      void response.body?.cancel().catch(() => undefined);
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      if (method !== "GET") throw new Error(`dms_mcp_http_${response.status}`);
+    }
+    return response;
   };
 }
 
-export async function connectDmsMcp(configured: DmsConnectionConfiguration, signal: AbortSignal, firstHandshakeMs = 12_000): Promise<DmsMcpSession> {
+export async function connectDmsMcp(configured: DmsConnectionConfiguration, signal: AbortSignal, firstHandshakeMs: number = limits.firstHandshakeMs): Promise<DmsMcpSession> {
   const target = new URL(configured.url);
   if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash) throw new Error("invalid_dms_mcp_target");
   const headers = { Authorization: configured.authorization };
@@ -58,27 +73,41 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
     const handshakeTimer = attempt === 0 ? setTimeout(() => handshakeController.abort(new DOMException("DMS handshake timed out", "TimeoutError")), firstHandshakeMs) : undefined;
     handshakeTimer?.unref();
     const attemptSignal = AbortSignal.any([signal, handshakeController.signal]);
+    let httpFailure: DmsHttpFailure | undefined, backoff: number | undefined;
     const transport = new SSEClientTransport(target, {
-      fetch: sameOriginFetch(target.origin, attemptSignal),
+      fetch: sameOriginFetch(target.origin, attemptSignal, failure => { httpFailure = failure; }),
       requestInit: { headers },
     });
     const candidate = new Client({ name: "issue-pilot", version: "0.1.0" });
+    let cancellation: ReturnType<typeof addAbortListener> | undefined;
     try {
-      await Promise.race([candidate.connect(transport), abortPromise(attemptSignal)]);
+      attemptSignal.throwIfAborted();
+      await Promise.race([candidate.connect(transport), new Promise<never>((_, reject) => {
+        cancellation = addAbortListener(attemptSignal, () => reject(attemptSignal.reason));
+      })]);
       if (signal.aborted) throw signal.reason;
       client = candidate;
       break;
     } catch {
       await transport.close().catch(() => undefined);
-      if (signal.aborted) {
-        if (signal.reason instanceof Error && signal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
-        throw signal.reason instanceof Error ? signal.reason : new Error("dms_mcp_aborted");
+      if (signal.aborted) throw cancellationError(signal);
+      if (httpFailure) {
+        const minimumDelay = httpFailure.retryAfterMs ?? limits.retryDelayMs;
+        if (attempt === 0 && httpFailure.status === 429 && minimumDelay <= limits.maxRetryDelayMs) {
+          backoff = minimumDelay + Math.floor(Math.random() * Math.min(limits.retryDelayMs, limits.maxRetryDelayMs - minimumDelay));
+        } else throw new Error(`dms_mcp_http_${httpFailure.status}`);
+      } else {
+        if (attempt === 0 && attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") continue;
+        if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
+        throw new Error("dms_mcp_connection_failed");
       }
-      if (attempt === 0 && attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") continue;
-      if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
-      throw new Error("dms_mcp_connection_failed");
     } finally {
+      cancellation?.[Symbol.dispose]();
       clearTimeout(handshakeTimer);
+    }
+    if (backoff !== undefined) {
+      try { await delay(backoff, undefined, { signal }); }
+      catch { throw cancellationError(signal); }
     }
   }
   if (!client) throw new Error("dms_mcp_timeout");
@@ -201,20 +230,23 @@ export async function queryDms(
   const database = configured.databases.find(({ schemaName }) => schemaName === input.schema);
   if (!database) throw new Error("dms_database_not_authorized");
   const boundedSignal = operationSignal(signal);
+  const args = executeScriptArguments(input, database.databaseId);
   const session = await connect(configured, boundedSignal);
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= session.close();
   try {
     const tool = uniqueTool(await session.listTools(boundedSignal), "executeScript", isReadOnlyScriptTool);
     if (!tool) throw new Error("dms_mcp_execute_script_unavailable");
-    const result = await session.callTool(tool.name, executeScriptArguments(input, database.databaseId), boundedSignal);
+    const result = await session.callTool(tool.name, args, boundedSignal);
     if (result && typeof result === "object" && "isError" in result && result.isError === true) throw new Error("dms_mcp_tool_failed");
     boundedSignal.throwIfAborted();
     const text = JSON.stringify({ tool: tool.name, result }, null, 2);
     if (input.output) {
-      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); boundedSignal.throwIfAborted(); });
+      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); });
       return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
     }
     return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
   } finally {
-    await session.close();
+    await close();
   }
 }

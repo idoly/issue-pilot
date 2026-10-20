@@ -2,7 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TSchema } from "typebox";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../domain/contracts.ts";
+import type { CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
 
 const defaults = issuePilotConfig.defaults;
 const limits = issuePilotConfig.limits.capability;
@@ -87,11 +87,11 @@ const slsQueryProperties = {
 };
 
 const databaseOutputSchema = Type.Object({
-  fileName: Type.String({ minLength: 1, maxLength: 255, description: "Durable Issue output file name." }),
+  fileName: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Durable Issue output basename within the filesystem UTF-8 byte limit." }),
   format: StringEnum(["csv", "jsonl"] as const),
 }, { additionalProperties: false });
 
-const dmsOutputSchema = Type.Object({ fileName: Type.String({ minLength: 1, maxLength: 255, description: "Save the complete MCP result as this Issue's JSON output instead of returning query rows to the conversation." }) }, { additionalProperties: false });
+const dmsOutputSchema = Type.Object({ fileName: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Save the complete MCP result as this Issue's JSON output instead of returning query rows to the conversation. The UTF-8 basename byte limit also applies." }) }, { additionalProperties: false });
 
 const capabilityInputSchemas = {
   nacos: Type.Object({}, { additionalProperties: false }),
@@ -182,7 +182,7 @@ const definitions = {
     inputSchema: capabilityInputSchemas.mq,
     parseConfiguration(value) {
       const input = inputRecord(value);
-      return { host: requiredText(input.host, "mq_host", 255), port: boundedInteger(input.port ?? defaults.rabbitmq.port, "mq_port", 1, 65_535), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: requiredText(input.username, "mq_username", 500), password: requiredText(input.password, "mq_password"), virtualHost: requiredText(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
+      return { host: requiredText(input.host, "mq_host", 255), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: requiredText(input.username, "mq_username", 500), password: requiredText(input.password, "mq_password"), virtualHost: requiredText(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
     },
   },
   es: {
@@ -262,8 +262,4 @@ export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, 
 
 export function parseCapabilityConfiguration<Key extends CapabilityName>(key: Key, value: unknown): CapabilityConfig<Key> {
   return capabilityDefinitions[key].parseConfiguration(value);
-}
-
-export function storedCapabilitySections(input: CapabilityConfiguration): CapabilityConfiguration {
-  return Object.fromEntries(CAPABILITY_KEYS.flatMap((key) => input[key] ? [[key, input[key]]] : [])) as CapabilityConfiguration;
 }

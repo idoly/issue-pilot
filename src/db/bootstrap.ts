@@ -40,27 +40,27 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
     const [existingSubject] = await database.db.select({ subject: subjects.subject }).from(subjects).limit(1);
     if (!existingSubject) {
       const user = issuePilotConfig.bootstrapUser;
-      await database.db.insert(subjects).values({ subject: user.subject, displayName: user.name, email: user.email, role: user.role });
+      await database.db.insert(subjects).values({ subject: user.subject, displayName: user.name, email: user.email, role: user.role, isAdmin: user.isAdmin });
     }
     await database.client.execute({
-      sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() * 1000 WHERE status != 'resolved' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
+      sql: "UPDATE issues SET status = 'open', updated_at = unixepoch() WHERE status NOT IN ('resolved', 'open') AND id IN (SELECT issue_id FROM issue_workspaces WHERE status IN ('preparing', 'running', 'failed'))",
       args: [],
     });
     await database.client.execute({
-      sql: "UPDATE issue_workspaces SET status = 'failed', last_error = coalesce(last_error, 'agent_interrupted_by_api_restart'), updated_at = unixepoch() * 1000 WHERE status IN ('preparing', 'running')",
+      sql: "UPDATE issue_workspaces SET status = 'failed', last_error = coalesce(last_error, 'agent_interrupted_by_api_restart'), updated_at = unixepoch() WHERE status IN ('preparing', 'running')",
       args: [],
     });
     await database.client.execute({
-      sql: "UPDATE issues SET status = 'pending', updated_at = unixepoch() * 1000 WHERE status = 'in_progress' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status = 'ready')",
+      sql: "UPDATE issues SET status = 'pending', updated_at = unixepoch() WHERE status = 'in_progress' AND id IN (SELECT issue_id FROM issue_workspaces WHERE status = 'ready')",
       args: [],
     });
 
     for (const kind of ENVIRONMENT_KINDS) {
       const definition = { key: kind, name: issuePilotConfig.defaults.environments[kind], kind };
       const [existing] = await database.db.select().from(environments).where(eq(environments.key, kind)).limit(1);
-      if (existing) {
+      if (existing && (existing.name !== definition.name || existing.kind !== kind)) {
         await database.db.update(environments).set({ name: definition.name, kind, updatedAt: new Date() }).where(eq(environments.id, existing.id));
-      } else {
+      } else if (!existing) {
         await database.db.insert(environments).values(definition);
       }
     }

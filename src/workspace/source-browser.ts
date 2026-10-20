@@ -43,6 +43,9 @@ export interface SourceCommit {
   subject: string;
 }
 
+export interface SourceHistoryCursor { revision: string; offset: number }
+export interface SourceHistoryPage { commits: SourceCommit[]; truncated: boolean; nextCursor: SourceHistoryCursor | null }
+
 type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
 
 export interface SourceCommitFile {
@@ -92,7 +95,7 @@ function normalizedRelativePath(value: string): string {
   if (value.length > 4096 || value.includes("\0") || path.isAbsolute(value)) throw new Error("invalid_source_path");
   const normalized = path.normalize(value || ".");
   if (normalized === ".") return "";
-  if (normalized.startsWith("..") || path.isAbsolute(normalized)) throw new Error("invalid_source_path");
+  if (normalized.startsWith("..") || path.isAbsolute(normalized) || normalized.split(path.sep).includes(".git")) throw new Error("invalid_source_path");
   return normalized;
 }
 
@@ -165,8 +168,7 @@ export class SourceBrowser {
     if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_source_hash");
     const selected = normalizedRelativePath(relativePath);
     if (!selected) throw new Error("source_path_not_file");
-    const candidate = path.resolve(context.root, selected);
-    if (!isInside(context.root, candidate)) throw new Error("invalid_source_path");
+    const candidate = await this.mutableDestination(context, selected, true);
     let metadata;
     try { metadata = await lstat(candidate); } catch (error) { missingPathError(error); }
     if (!metadata!.isFile()) throw new Error("source_path_not_file");
@@ -207,18 +209,34 @@ export class SourceBrowser {
 
   async deletePath(issue: IssueReference, repositoryName: string, relativePath: string, recursive: boolean): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const candidate = await this.resolvePath(context.root, relativePath);
-    if (candidate === context.root) throw new Error("invalid_source_path");
+    const candidate = await this.mutableSource(context, relativePath);
     await rm(candidate, { recursive, force: false });
   }
 
   async renamePath(issue: IssueReference, repositoryName: string, relativePath: string, destinationPath: string, overwrite: boolean): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const source = await this.resolvePath(context.root, relativePath);
-    if (source === context.root) throw new Error("invalid_source_path");
+    const source = await this.mutableSource(context, relativePath);
+    if (source === path.resolve(context.root, normalizedRelativePath(destinationPath))) return;
     const destination = await this.mutableDestination(context, destinationPath, overwrite);
-    if (overwrite) await rm(destination, { recursive: true, force: true });
-    await rename(source, destination);
+    if (isInside(source, destination) || isInside(destination, source)) throw new Error("invalid_source_path");
+    let previous: string | undefined;
+    if (overwrite) {
+      const backup = path.join(path.dirname(destination), `.issue-pilot-rename-${randomUUID()}.previous`);
+      try { await rename(destination, backup); previous = backup; }
+      catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
+    }
+    try { await rename(source, destination); }
+    catch (error) {
+      if (previous) {
+        try { await rename(previous, destination); }
+        catch (rollbackError) { throw new Error("source_rename_rollback_failed", { cause: new AggregateError([error, rollbackError], "source_rename_rollback_failed") }); }
+      }
+      throw error;
+    }
+    if (previous) {
+      try { await rm(previous, { recursive: true, force: true }); }
+      catch (error) { throw new Error("source_rename_finalize_failed", { cause: error }); }
+    }
   }
 
   async stage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
@@ -250,46 +268,71 @@ export class SourceBrowser {
     await this.gitMutation(context, ["-c", `user.name=${author.name.trim()}`, "-c", `user.email=${author.email.trim()}`, "commit", "-m", value], "source_commit_failed");
   }
 
-  async search(issue: IssueReference, repositoryName: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}): Promise<{ matches: SourceSearchMatch[]; truncated: boolean }> {
+  async search(issue: IssueReference, repositoryName: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean; signal?: AbortSignal } = {}): Promise<{ matches: SourceSearchMatch[]; truncated: boolean }> {
     const value = query.trim();
     if (!value || value.length > issuePilotConfig.limits.sourceBrowser.searchQueryCharacters || value.includes("\0")) throw new Error("invalid_source_query");
+    options.signal?.throwIfAborted();
     const context = await this.context(issue, repositoryName);
-    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.searchExecutable, [
-      "--json", "--no-config", "--hidden", "--fixed-strings", "--line-number", "--column", "--max-columns", "1000", "--max-columns-preview",
-      ...(options.caseSensitive === false ? ["--ignore-case"] : []),
-      ...(options.wordMatch === true ? ["--word-regexp"] : []),
-      "--glob", "!.git", "--glob", "!.git/**", "--", value, ".",
-    ], { cwd: context.root, timeout: issuePilotConfig.limits.sourceBrowser.commandMs, maxOutputBytes: null });
-    if (result.killed) throw new Error("source_search_timeout");
-    if (result.code !== 0 && result.code !== 1) throw new Error("source_search_failed");
+    const cutoff = new AbortController(), signal = options.signal ? AbortSignal.any([cutoff.signal, options.signal]) : cutoff.signal;
     const matches: SourceSearchMatch[] = [];
-    for (const line of result.stdout.split("\n")) {
-      if (!line) continue;
+    let pending = "", truncated = false;
+    const parseLine = (line: string) => {
+      if (!line || truncated) return;
       let event: { type?: string; data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number; submatches?: Array<{ start?: number }> } };
       try { event = JSON.parse(line) as typeof event; } catch { throw new Error("invalid_source_search_response"); }
-      if (event.type !== "match") continue;
+      if (event.type !== "match") return;
+      if (matches.length === issuePilotConfig.limits.sourceBrowser.searchMatches) { truncated = true; cutoff.abort(); return; }
       const data = event.data;
-      const resultPath = data?.path?.text;
-      const preview = data?.lines?.text;
-      const lineNumber = data?.line_number;
-      const column = data?.submatches?.[0]?.start;
+      const resultPath = data?.path?.text, preview = data?.lines?.text, lineNumber = data?.line_number, column = data?.submatches?.[0]?.start;
       if (!resultPath || typeof preview !== "string" || !Number.isSafeInteger(lineNumber) || !Number.isSafeInteger(column)) throw new Error("invalid_source_search_response");
       const normalized = sourcePath(normalizedRelativePath(resultPath.replace(/^\.\//, "")));
-      matches.push({ path: normalized, line: lineNumber!, column: column! + 1, preview: preview.replace(/[\r\n]+$/, "").slice(0, 1000) });
+      matches.push({ path: normalized, line: lineNumber!, column: Buffer.from(preview).subarray(0, column!).toString("utf8").length + 1, preview: preview.replace(/[\r\n]+$/, "").slice(0, 1000) });
+    };
+    const consume = (chunk: string) => {
+      if (truncated) return;
+      pending += chunk;
+      let end: number;
+      while ((end = pending.indexOf("\n")) >= 0 && !truncated) { const line = pending.slice(0, end); pending = pending.slice(end + 1); parseLine(line); }
+      if (truncated) pending = "";
+    };
+    try {
+      const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.searchExecutable, [
+        "--json", "--no-config", "--hidden", "--fixed-strings", "--line-number", "--column", "--max-columns", "1000", "--max-columns-preview",
+        ...(options.caseSensitive === false ? ["--ignore-case"] : []),
+        ...(options.wordMatch === true ? ["--word-regexp"] : []),
+        "--glob", "!.git", "--glob", "!.git/**", "--", value, ".",
+      ], { cwd: context.root, timeout: issuePilotConfig.limits.sourceBrowser.commandMs, maxOutputBytes: issuePilotConfig.limits.sourceBrowser.commandOutputBytes, signal, onStdout: consume });
+      options.signal?.throwIfAborted();
+      if (result.stdout) consume(result.stdout);
+      if (!truncated && pending) parseLine(pending);
+      if (!truncated && result.killed) throw new Error("source_search_timeout");
+      if (!truncated && result.code !== 0 && result.code !== 1) throw new Error("source_search_failed");
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      if (!(error instanceof Error) || error.message !== "command_output_too_large") throw error;
+      truncated = true;
     }
-    return { matches, truncated: false };
+    return { matches, truncated };
   }
 
   async blame(issue: IssueReference, repositoryName: string, relativePath: string, line: number): Promise<SourceBlame> {
     const context = await this.context(issue, repositoryName);
     const selected = sourcePath(normalizedRelativePath(relativePath));
     if (!selected || !Number.isSafeInteger(line) || line < 1) throw new Error("invalid_source_line");
-    await this.resolvePath(context.root, selected);
+    const absolute = await this.resolvePath(context.root, selected);
+    const content = await readFile(absolute, "utf8"), lineCount = content.split("\n").length;
+    if (line > lineCount) throw new Error("invalid_source_line");
+    const withoutCommit = (subject: string): SourceBlame => ({ path: selected, line, commit: null, shortCommit: null, author: "", date: null, subject });
+    if (!content || content.endsWith("\n") && line === lineCount) return withoutCommit(content ? "文件末尾" : "空文件");
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [
       "-C", context.root, "blame", "--line-porcelain", "--root", "-L", `${line},${line}`, "--", selected,
     ], this.commandOptions());
     if (result.killed) throw new Error("source_blame_timeout");
-    if (result.code !== 0) throw new Error("source_blame_failed");
+    if (result.code !== 0) {
+      const tracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "ls-files", "--error-unmatch", "--", selected], this.commandOptions());
+      if (!tracked.killed && tracked.code === 1) return withoutCommit("未提交变更");
+      throw new Error("source_blame_failed");
+    }
     const lines = result.stdout.split("\n");
     const hash = lines[0]?.split(" ")[0] ?? "";
     const author = lines.find((entry) => entry.startsWith("author "))?.slice(7) ?? "";
@@ -308,13 +351,23 @@ export class SourceBrowser {
     };
   }
 
-  async history(issue: IssueReference, repositoryName: string, relativePath = ""): Promise<{ commits: SourceCommit[]; truncated: boolean }> {
-    const context = await this.context(issue, repositoryName);
+  async history(issue: IssueReference, repositoryName: string, relativePath = "", cursor?: SourceHistoryCursor, signal?: AbortSignal): Promise<SourceHistoryPage> {
+    if (cursor && (!/^[a-f0-9]{40}$/.test(cursor.revision) || !Number.isSafeInteger(cursor.offset) || cursor.offset <= 0)) throw new Error("invalid_source_history_cursor");
+    signal?.throwIfAborted();
+    const context = cursor ? (await this.revisionContext(issue, repositoryName, cursor.revision)).source : await this.context(issue, repositoryName);
     const selected = normalizedRelativePath(relativePath);
-    if (selected) await this.resolvePath(context.root, selected);
+    let revision = cursor?.revision;
+    if (!revision) {
+      const head = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "rev-parse", "--verify", "HEAD"], { ...this.commandOptions(), ...(signal ? { signal } : {}) });
+      if (head.killed) throw new Error("source_history_timeout");
+      if (head.code !== 0) throw new Error("source_history_failed");
+      revision = head.stdout.trim();
+      if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("invalid_source_history_response");
+    }
+    const offset = cursor?.offset ?? 0;
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [
-      "-C", context.root, "log", `-${issuePilotConfig.limits.sourceBrowser.historyCommits + 1}`, "--date=iso-strict", "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1e", "--", ...(selected ? [selected] : []),
-    ], { timeout: issuePilotConfig.limits.sourceBrowser.commandMs, maxOutputBytes: issuePilotConfig.limits.sourceBrowser.commandOutputBytes, environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } as Record<string, string> });
+      "-C", context.root, "log", `-${issuePilotConfig.limits.sourceBrowser.historyCommits + 1}`, `--skip=${offset}`, "--date=iso-strict", "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1e", revision, "--", ...(selected ? [selected] : []),
+    ], { ...this.commandOptions(), ...(signal ? { signal } : {}) });
     if (result.killed) throw new Error("source_history_timeout");
     if (result.code !== 0) throw new Error("source_history_failed");
     const commits: SourceCommit[] = [];
@@ -329,13 +382,13 @@ export class SourceBrowser {
       commits.push({ hash, shortHash: hash.slice(0, 8), parents, author, date, subject });
     }
     const truncated = commits.length > issuePilotConfig.limits.sourceBrowser.historyCommits;
-    return { commits: commits.slice(0, issuePilotConfig.limits.sourceBrowser.historyCommits), truncated };
+    const page = commits.slice(0, issuePilotConfig.limits.sourceBrowser.historyCommits);
+    return { commits: page, truncated, nextCursor: truncated ? { revision, offset: offset + page.length } : null };
   }
 
   async commit(issue: IssueReference, repositoryName: string, revision: string, relativePath = ""): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
     const context = await this.revisionContext(issue, repositoryName, revision);
     const selected = normalizedRelativePath(relativePath);
-    if (selected) await this.resolvePath(context.source.root, selected);
     try {
       const files = await this.changedFiles(context, selected);
       const limit = issuePilotConfig.limits.sourceBrowser.changeFiles;
@@ -415,7 +468,7 @@ export class SourceBrowser {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes,
-      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } as Record<string, string>,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" } as Record<string, string>,
     };
   }
 
@@ -551,6 +604,12 @@ export class SourceBrowser {
     });
   }
 
+  private async mutableSource(context: SourceContext, relativePath: string): Promise<string> {
+    const candidate = await this.mutableDestination(context, relativePath, true);
+    try { await lstat(candidate); } catch (error) { missingPathError(error); }
+    return candidate;
+  }
+
   private async mutableDestination(context: SourceContext, relativePath: string, allowExisting = false): Promise<string> {
     const selected = normalizedRelativePath(relativePath);
     if (!selected) throw new Error("invalid_source_path");
@@ -572,7 +631,7 @@ export class SourceBrowser {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes: issuePilotConfig.limits.sourceBrowser.commandOutputBytes,
-      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "1" } as Record<string, string>,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "1", GIT_LITERAL_PATHSPECS: "1" } as Record<string, string>,
     };
   }
 
@@ -617,6 +676,7 @@ export class SourceBrowser {
     let resolved: string;
     try { resolved = await realpath(candidate); } catch (error) { missingPathError(error); }
     if (!isInside(root, resolved)) throw new Error("source_path_outside_repository");
+    normalizedRelativePath(path.relative(root, resolved));
     return resolved;
   }
 }

@@ -9,7 +9,7 @@ const configuration: CapabilityConfiguration = {
   nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "operator", password: "nacos-secret" },
   db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "db-secret" }] },
   redis: { host: "redis.example.test", port: 6379, username: "reader", password: "redis-secret", database: 0 },
-  mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", password: "mq-secret", virtualHost: "/" },
+  mq: { host: "mq.example.test", managementPort: 15672, username: "reader", password: "mq-secret", virtualHost: "/" },
   es: { url: "https://es.example.test", username: "reader", password: "es-secret" },
   dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
   sls: { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "orders-test", logstores: ["application"] },
@@ -41,6 +41,12 @@ test("projects and preserves every capability credential through the shared cont
     assert.deepEqual(resolved[key], configuration[key]);
   }
   assert.equal(JSON.stringify(projected).includes("secret"), false);
+});
+
+test("ignores historical RabbitMQ AMQP ports when projecting and saving configuration", () => {
+  const historical = { ...configuration, mq: { ...configuration.mq!, port: 5672 } };
+  assert.equal("port" in projectCapabilityConfiguration(historical).mq!, false);
+  assert.deepEqual(resolveConfiguredCapabilitySections({ mq: { ...publicInput("mq", { mode: "preserve" }), port: "unused" } }, ["mq"], historical).mq, configuration.mq);
 });
 
 test("clears only optional credentials and rejects preservation without stored values", () => {

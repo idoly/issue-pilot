@@ -2,9 +2,8 @@ FROM docker.io/library/node:26-bookworm-slim AS build
 
 WORKDIR /build
 COPY package.json package-lock.json ./
-COPY packages/workbench ./packages/workbench
 RUN npm ci
-COPY issue-pilot.config.ts tsconfig.json ./
+COPY issue-pilot.config.ts tsconfig.json requirements.txt ./
 COPY drizzle ./drizzle
 COPY src ./src
 RUN npm run build \
@@ -26,13 +25,15 @@ RUN apt-get update \
 FROM docker.io/library/node:26-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl libexpat1 openssh-client perl ripgrep \
+    && apt-get install --yes --no-install-recommends ca-certificates curl libexpat1 openssh-client perl python3 python3-venv ripgrep \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=maven /opt/java/openjdk /opt/java/openjdk
 COPY --from=maven /usr/share/maven /usr/share/maven
 COPY --from=git /opt/git /opt/git
 COPY --from=build /build /opt/issue-pilot
-RUN ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
+RUN python3 -m venv /opt/issue-pilot/.venv \
+    && /opt/issue-pilot/.venv/bin/python3 -m pip install --no-cache-dir -r /opt/issue-pilot/requirements.txt \
+    && ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
     && ln -s /opt/issue-pilot/node_modules/.bin/pi /usr/local/bin/pi
 
 WORKDIR /opt/issue-pilot
@@ -40,7 +41,7 @@ ENV NODE_ENV=production \
     HOME=/home/node \
     JAVA_HOME=/opt/java/openjdk \
     MAVEN_HOME=/usr/share/maven \
-    PATH=/opt/git/bin:/opt/java/openjdk/bin:/usr/share/maven/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/issue-pilot/.venv/bin:/opt/git/bin:/opt/java/openjdk/bin:/usr/share/maven/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 USER node
 EXPOSE 3000
 CMD ["node", "--experimental-strip-types", "src/http/production.ts"]

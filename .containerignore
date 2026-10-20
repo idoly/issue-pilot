@@ -1,4 +1,5 @@
 .git
+.venv
 .issue-pilot
 node_modules
 src/web/dist

@@ -135,14 +135,15 @@ export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string
   return {
     activate(nextSink: RunEventListener): void {
       if (sink) throw new Error("agent_event_subscription_already_active");
-      sink = nextSink;
-      const buffered = pending;
-      pending = [];
-      for (const event of buffered) {
+      // Keep events published during replay behind the existing backlog.
+      sink = (event) => { pending.push(event); };
+      for (const event of pending) {
         if (bus.deliver(nextSink, event)) continue;
         unsubscribe();
         break;
       }
+      pending = [];
+      sink = nextSink;
     },
     unsubscribe,
   };

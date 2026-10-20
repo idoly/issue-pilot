@@ -386,6 +386,34 @@
       "when": 1791072000000,
       "tag": "0054_personal_production_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1791158400000,
+      "tag": "0055_mcp_stdio",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1791244800000,
+      "tag": "0056_agent_codemode",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1791331200000,
+      "tag": "0057_agent_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1791417600000,
+      "tag": "0058_management_role",
+      "breakpoints": true
     }
   ]
 }

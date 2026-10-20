@@ -18,7 +18,7 @@ function hasValidUsage(message: { role: string; stopReason?: string; usage?: Usa
     && Boolean(message.usage && calculateContextTokens(message.usage) > 0);
 }
 
-export function sessionFooterStats(manager: SessionManager, contextWindow: number, autoCompact = true): AgentFooterStats {
+export function sessionFooterStats(manager: SessionManager | undefined, contextWindow: number, autoCompact: boolean): AgentFooterStats {
   const stats: AgentFooterStats = {
     input: 0,
     output: 0,
@@ -26,11 +26,12 @@ export function sessionFooterStats(manager: SessionManager, contextWindow: numbe
     cacheWrite: 0,
     cost: 0,
     latestCacheHitRate: null,
-    contextPercent: null,
+    contextPercent: manager ? null : 0,
     contextWindow,
     autoCompact,
   };
 
+  if (!manager) return stats;
   for (const entry of manager.getEntries()) {
     if (entry.type === "message" && entry.message.role === "assistant") {
       addUsage(stats, entry.message.usage);

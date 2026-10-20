@@ -15,6 +15,16 @@ const directories: string[] = [];
 
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
+test("retains seed environment timestamps when startup does not change their values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-bootstrap-stamps-")); directories.push(root);
+  const file = join(root, "issues.db"), unchangedAt = new Date(2_000);
+  const initial = await openApplicationDatabase(file);
+  await initial.db.update(environments).set({ updatedAt: unchangedAt }); await initial.close();
+  const reopened = await openApplicationDatabase(file);
+  try { assert.ok((await reopened.db.select().from(environments)).every(row => row.updatedAt.getTime() === unchangedAt.getTime())); }
+  finally { await reopened.close(); }
+});
+
 test("keeps application paths and workspace defaults in the project configuration", () => {
   assert.equal(applicationConfig.databaseFile, join(applicationConfig.stateRoot, "issues.db"));
   assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");
@@ -28,7 +38,7 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
   assert.deepEqual(applicationConfig.limits.capability.database, { queryChars: 20_000, databases: 20 });
   assert.equal(applicationConfig.defaults.dms.sseUrl, "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse");
-  assert.deepEqual(applicationConfig.limits.capability.dms, { executionMs: 120_000, databases: 20 });
+  assert.deepEqual(applicationConfig.limits.capability.dms, { executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
   assert.equal(applicationConfig.web.host, "0.0.0.0");
@@ -66,10 +76,14 @@ test("restores interrupted and ready workspaces when the application database re
     const recoveredIssues = Object.fromEntries((await reopened.db.select().from(issues)).map((issue) => [issue.key, issue]));
     assert.equal(recoveredIssues["ISSUE-20260809-001"]?.status, "open");
     assert.equal(recoveredIssues["ISSUE-20260809-002"]?.status, "pending");
+    for (const issue of Object.values(recoveredIssues)) {
+      assert.ok(Math.abs(issue.updatedAt.getTime() - Date.now()) < 5_000, issue.updatedAt.toISOString());
+    }
     const workspaces = Object.fromEntries((await reopened.db.select().from(issueWorkspaces)).map((workspace) => [workspace.issueId, workspace]));
     const interrupted = Object.values(workspaces).find((workspace) => workspace.issueId === recoveredIssues["ISSUE-20260809-001"]?.id);
     assert.equal(interrupted?.status, "failed");
     assert.equal(interrupted?.lastError, "agent_interrupted_by_api_restart");
+    assert.ok(interrupted && Math.abs(interrupted.updatedAt.getTime() - Date.now()) < 5_000, interrupted?.updatedAt.toISOString());
     const [bootstrapUser] = await reopened.db.select().from(subjects).where(eq(subjects.subject, issuePilotConfig.bootstrapUser.subject));
     assert.equal(bootstrapUser?.displayName, "Bootstrap renamed");
     const configuredEnvironments = Object.fromEntries((await reopened.db.select().from(environments)).map((environment) => [environment.key, environment.name]));

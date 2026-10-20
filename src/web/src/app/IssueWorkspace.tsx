@@ -1,6 +1,7 @@
 import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "../ui";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
+import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Send } from "../ui/icons";
 import { canUseIssueWorkMode, addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
@@ -9,9 +10,20 @@ import { useApplicationResources } from "./ApplicationResources";
 import { OutputPreview } from "./OutputPreview";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
+import { attachmentPreviewKind, outputPreviewUnavailable } from "./file-preview";
 import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workModeLabel, workModeOptions } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
+
+function IssueFileRow(props: { fileName: string; detail: string; href: string; icon: JSX.Element; onPreview: (() => void) | undefined }) {
+  return <div class="issue-attachment-row" title={props.fileName}>
+    {props.icon}
+    <Show when={props.onPreview} fallback={<span class="attachment-file-info"><strong>{props.fileName}</strong><small>{props.detail} · 仅下载</small></span>}>
+      <button type="button" class="attachment-preview-trigger" aria-label={`预览 ${props.fileName}`} onClick={props.onPreview}><span class="attachment-file-info"><strong>{props.fileName}</strong><small>{props.detail}</small></span><Eye size={15} /></button>
+    </Show>
+    <a class="attachment-download-link" href={props.href} download={props.fileName} title={`下载 ${props.fileName}`} aria-label={`下载 ${props.fileName}`}><Download size={15} /></a>
+  </div>;
+}
 
 const dateTimeOptions = {
   timeZone: issuePilotConfig.regional.timeZone,
@@ -70,7 +82,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
-  let issueGeneration = 0;
+  let issueGeneration = 0, scopePlanRequest = 0;
   createEffect(() => props.issue.id, (issueId, previousIssueId) => {
     if (previousIssueId === undefined || issueId === previousIssueId) return;
     issueGeneration += 1;
@@ -152,25 +164,24 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     const environmentKind = issueScopeForWorkMode(scopeMode()).environmentKind;
     return catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === environmentKind));
   });
-  const resetScopePlan = () => { setScopePlan(null); setScopeError(""); };
+  const resetScopePlan = () => { scopePlanRequest++; setScopePlanning(false); setScopePlan(null); setScopeError(""); };
   const openScopeTransition = (workMode = currentWorkMode() ?? "production_analysis") => {
     setScopeMode(workMode);
     setScopeService(props.issue.service.key);
-    setScopePlan(null);
-    setScopeError("");
+    resetScopePlan();
     setScopeOpen(true);
   };
   const requestScopePlan = async () => {
     if (!scopeService()) return;
     const issueId = props.issue.id;
-    const generation = issueGeneration;
+    const generation = issueGeneration, request = ++scopePlanRequest;
     setScopePlanning(true); setScopeError("");
     try {
       const plan = await planIssueScopeTransition(issueId, { serviceKey: scopeService(), workMode: scopeMode() });
-      if (issueGeneration === generation) setScopePlan(plan);
+      if (issueGeneration === generation && request === scopePlanRequest) setScopePlan(plan);
     } catch (error) {
-      if (issueGeneration === generation) setScopeError(errorMessage(error));
-    } finally { if (issueGeneration === generation) setScopePlanning(false); }
+      if (issueGeneration === generation && request === scopePlanRequest) setScopeError(errorMessage(error));
+    } finally { if (issueGeneration === generation && request === scopePlanRequest) setScopePlanning(false); }
   };
   const applyScopeTransition = async () => {
     const plan = scopePlan();
@@ -336,7 +347,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           <div class="band-title"><File size={16} /><h2 id="outputs-title">成果文件</h2><span>{outputs().length}</span></div>
           <div class="issue-attachment-list">
             <For each={outputs()} fallback={<div class="empty-band">Agent 尚未生成成果文件</div>}>
-              {(output) => <div class="issue-attachment-row"><File size={15} /><button type="button" class="attachment-preview-trigger" aria-label={`预览 ${output.fileName}`} onClick={() => setPreviewOutput(output)}><span><strong>{output.fileName}</strong><small>{fileSize(output.size)} · {localDateTime(output.updatedAt, false)}</small></span><Eye size={15} /></button><a class="attachment-download-link" href={outputUrl(props.issue.id, output.fileName)} download={output.fileName} title={`下载 ${output.fileName}`} aria-label={`下载 ${output.fileName}`}><Download size={15} /></a></div>}
+              {(output) => <IssueFileRow fileName={output.fileName} detail={`${fileSize(output.size)} · ${localDateTime(output.updatedAt, false)}`} href={outputUrl(props.issue.id, output.fileName)} icon={<File size={15} />} onPreview={outputPreviewUnavailable(output) ? undefined : () => setPreviewOutput(output)} />}
             </For>
           </div>
         </section>
@@ -346,7 +357,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
         <div class="issue-attachment-list">
           <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
-            {(attachment) => <div class="issue-attachment-row"><Paperclip size={15} /><button type="button" class="attachment-preview-trigger" aria-label={`预览 ${attachment.fileName}`} onClick={() => setPreviewAttachment(attachment)}><span><strong>{attachment.fileName}</strong><small>{attachment.mediaType} · {fileSize(attachment.size)}</small></span><Eye size={15} /></button><a class="attachment-download-link" href={attachmentUrl(props.issue.id, attachment.id)} download={attachment.fileName} title={`下载 ${attachment.fileName}`} aria-label={`下载 ${attachment.fileName}`}><Download size={15} /></a></div>}
+            {(attachment) => <IssueFileRow fileName={attachment.fileName} detail={`${attachment.mediaType} · ${fileSize(attachment.size)}`} href={attachmentUrl(props.issue.id, attachment.id)} icon={<Paperclip size={15} />} onPreview={attachmentPreviewKind(attachment) === "unsupported" ? undefined : () => setPreviewAttachment(attachment)} />}
           </For>
         </div>
       </section>
@@ -359,7 +370,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           </For>
         </div>
         <div class="comment-editor">
-          <div class="markdown-editor-toolbar"><Segmented size="small" aria-label="评论编辑模式" value={commentMode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={(value) => setCommentMode(value as "edit" | "preview")} /></div>
+          <div class="markdown-editor-toolbar"><Segmented aria-label="评论编辑模式" value={commentMode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={(value) => setCommentMode(value as "edit" | "preview")} /></div>
           <Show when={commentMode() === "edit"} fallback={<div class="comment-markdown-preview"><Show when={commentBody().trim()} fallback={<span class="muted">暂无内容</span>}><Markdown source={commentBody()} /></Show></div>}>
             <TextArea aria-label="添加评论或备注" placeholder="添加评论或备注" autoSize={{ minRows: 3, maxRows: 8 }} value={commentBody()} onInput={(event) => setCommentBody(event.currentTarget.value)} />
           </Show>
@@ -387,7 +398,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       </Modal>
       <Modal open={scopeOpen()} title="变更处理范围" okText={scopePlan() ? "确认变更" : "预检变更"} cancelText="取消" confirmLoading={scopePlanning() || scopeApplying()} cancelButtonProps={{ disabled: scopePlanning() || scopeApplying() }} okButtonProps={{ disabled: !scopeService() }} onOk={() => { void applyScopeTransition(); }} onCancel={() => { if (!scopePlanning() && !scopeApplying()) setScopeOpen(false); }}>
         <div class="create-issue-form compact-issue-form">
-          <label><span>目标处理方式</span><Select aria-label="目标处理方式" value={scopeMode()} onChange={(value) => {
+          <label><span>目标处理方式</span><Select aria-label="目标处理方式" disabled={scopeApplying()} value={scopeMode()} onChange={(value) => {
             const selected = selectedChoice(value, availableScopeModes().map((option) => option.value));
             if (!selected) return;
             setScopeMode(selected);
@@ -396,7 +407,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
             setScopeService((current) => candidates.some((service) => service.key === current) ? current : candidates[0]?.key ?? "");
             resetScopePlan();
           }} options={availableScopeModes()} /></label>
-          <label><span>目标服务</span><Select aria-label="目标服务" value={scopeService()} onChange={(value) => { const selected = selectedChoice(value, availableScopeServices().map((service) => service.key)); if (selected) { setScopeService(selected); resetScopePlan(); } }} options={availableScopeServices().map((service) => ({ value: service.key, label: service.name }))} /></label>
+          <label><span>目标服务</span><Select aria-label="目标服务" disabled={scopeApplying()} value={scopeService()} onChange={(value) => { const selected = selectedChoice(value, availableScopeServices().map((service) => service.key)); if (selected) { setScopeService(selected); resetScopePlan(); } }} options={availableScopeServices().map((service) => ({ value: service.key, label: service.name }))} /></label>
           <Show when={scopePlan()}>{(plan) => <section class="repository-band scope-transition-preview" aria-label="范围变更预览">
             <div class="band-title"><GitBranch size={16} /><h2>{workModeLabel[plan().current.workMode]} → {workModeLabel[plan().target.workMode]}</h2></div>
             <div class="scope-transition-repositories">

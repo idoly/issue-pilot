@@ -3,7 +3,11 @@ import { createRequire } from "node:module";
 import { test } from "node:test";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilityDefinitions } from "../../src/capabilities/registry.ts";
-import { prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { SLS_QUERY_ERRORS, prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
 import { readSlsHttp, type SlsSdkFactory } from "../../src/capabilities/sls-http.ts";
 import { runReadWorker } from "../../src/capabilities/read-worker.ts";
 
@@ -61,6 +65,89 @@ test("SLS HTTPS uses the official signed SDK, preserves complete pages and keeps
   await assert.rejects(read(base), /capability_result_too_large/);
   const schema = capabilityDefinitions.sls.inputSchema as unknown as { properties: Record<string, unknown> };
   assert.equal("limit" in schema.properties, false);
+});
+
+for (const [fields, expected] of [
+  [{ code: "Unauthorized", statusCode: 403 }, "sls_access_denied"],
+  [{ code: "SignatureNotMatch", statusCode: 403 }, "sls_signature_mismatch"],
+  [{ code: "AccessKeyIdNotExist", statusCode: 403 }, "sls_invalid_access_key"],
+  [{ code: "ProjectNotExist", statusCode: 404 }, "sls_project_not_found"],
+  [{ code: "LogStoreNotExist", statusCode: 404 }, "sls_logstore_not_found"],
+  [{ code: "BadRequest", statusCode: 400 }, "sls_invalid_request"],
+  [{ code: "RequestTimeExpired", statusCode: 403 }, "sls_request_time_expired"],
+  [{ code: "Throttling", statusCode: 429 }, "sls_rate_limited"],
+  [{ code: "QuotaExceed", statusCode: 403 }, "sls_quota_exceeded"],
+  [{ code: "RequestTimeout" }, "sls_query_timeout"],
+  [{ code: "private-remote-code", statusCode: 503 }, "sls_http_503"],
+  [{ code: "private-remote-code", statusCode: "404" }, "sls_http_404"],
+  [{ data: { Code: "SignatureNotMatch", statusCode: 403, message: "fixture-secret" } }, "sls_signature_mismatch"],
+  [{ cause: { code: "ENOTFOUND", message: "private hostname" } }, "sls_dns_failed"],
+  [{ code: "ECONNRESET" }, "sls_network_failed"],
+  [{ code: "CERT_HAS_EXPIRED" }, "sls_tls_failed"],
+] as const) test(`SLS preserves safe diagnostic ${expected}`, async () => {
+  let calls = 0;
+  const remote = Object.assign(new Error("fixture-key fixture-secret private query text"), fields);
+  const factory: SlsSdkFactory = () => ({ async getLogsV2WithOptions() { calls++; throw remote; } });
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), error => error instanceof Error && error.message === expected && error.cause === undefined);
+  assert.equal(calls, 1, "failed evidence queries are not automatically replayed");
+});
+
+for (const [failure, expected] of [
+  [{ code: "SignatureNotMatch", statusCode: 403, message: "fixture-secret" }, "sls_signature_mismatch"],
+  [{ code: "private-code", statusCode: 429, message: "fixture-secret" }, "sls_http_429"],
+] as const) test(`SLS diagnostic ${expected} survives the worker allowlist without private details`, async () => {
+  const result = runReadWorker(new URL("../helpers/sls-worker.ts", import.meta.url), { configured, query: prepareSlsQuery(base, configured), hang: false, failure }, issuePilotConfig.runtime.slsWorker, AbortSignal.timeout(10_000), "sls_query_failed", SLS_QUERY_ERRORS);
+  await assert.rejects(result, { message: expected });
+});
+
+test("reports a missing evidence worker module as initialization failure", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-missing-worker-"));
+  try {
+    await assert.rejects(runReadWorker(pathToFileURL(path.join(root, "missing.ts")), {}, issuePilotConfig.runtime.slsWorker, AbortSignal.timeout(5_000), "sls_query_failed"), { message: "capability_worker_initialization_failed" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("reports uncloneable evidence worker input as initialization failure", async () => {
+  await assert.rejects(runReadWorker(new URL("../helpers/sls-worker.ts", import.meta.url), { invalid: () => undefined }, issuePilotConfig.runtime.slsWorker, AbortSignal.timeout(5_000), "sls_query_failed"), { message: "capability_worker_initialization_failed" });
+});
+
+test("SLS sanitizes client initialization failures before any request", async () => {
+  const remote = Object.assign(new Error("fixture-key fixture-secret private configuration"), { code: "ClientConfigError" });
+  const factory: SlsSdkFactory = () => { throw remote; };
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), error => error instanceof Error && error.message === "sls_client_configuration_invalid" && error.cause === undefined);
+});
+
+test("SLS decodes the SDK's actual response error without exposing its private details", async () => {
+  const sdk = createRequire(import.meta.url)("@alicloud/tea-typescript") as typeof import("@alicloud/tea-typescript");
+  const remote = sdk.newError({ code: "SignatureNotMatch", message: "fixture-key fixture-secret private upstream detail", data: { statusCode: 403, requestId: "synthetic-request" } });
+  const factory: SlsSdkFactory = () => ({ async getLogsV2WithOptions() { throw remote; } });
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), error => error instanceof Error && error.message === "sls_signature_mismatch" && error.cause === undefined);
+});
+
+test("SLS discards earlier pages when a later page fails", async () => {
+  const offsets: number[] = [];
+  const factory: SlsSdkFactory = () => ({ async getLogsV2WithOptions(_project, _logstore, request) {
+    offsets.push(request.offset ?? 0);
+    if (offsets.length > 1) throw Object.assign(new Error("private error message"), { code: "Unauthorized", statusCode: 403 });
+    return new GetLogsV2Response({ statusCode: 200, body: { data: Array.from({ length: 100 }, (_, index) => ({ message: `row-${index}` })), meta: { progress: "Complete", hasSQL: false, mode: 0 } } });
+  } });
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), { message: "sls_access_denied" });
+  assert.deepEqual(offsets, [0, 100]);
+});
+
+test("SLS preserves a non-throwing SDK HTTP failure", async () => {
+  const factory: SlsSdkFactory = () => ({ async getLogsV2WithOptions() { return new GetLogsV2Response({ statusCode: 429 }); } });
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), { message: "sls_http_429" });
+});
+
+test("SLS error classification does not read raw messages or echo cyclic unknown errors", async () => {
+  const remote = Object.assign(new Error(), { code: "ClientConfigError" });
+  Object.defineProperty(remote, "message", { get() { throw new Error("must_not_read_remote_message"); } });
+  let failure: Error = remote;
+  const factory: SlsSdkFactory = () => ({ async getLogsV2WithOptions() { throw failure; } });
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), { message: "sls_client_configuration_invalid" });
+  failure = new Error("fixture-secret private query"); failure.cause = failure;
+  await assert.rejects(readSlsHttp(configured, prepareSlsQuery(base, configured), factory), { message: "sls_query_failed" });
 });
 
 test("SLS SDK errors are stable and do not echo credential-like remote errors", async () => {

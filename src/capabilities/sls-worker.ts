@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { readSlsHttp } from "./sls-http.ts";
-import { SLS_QUERY_ERRORS, type SlsQuery } from "./sls.ts";
+import { SLS_QUERY_ERRORS } from "./sls-errors.ts";
+import type { SlsQuery } from "./sls.ts";
 import type { CapabilityConfig } from "./registry.ts";
 
 const input = workerData as { configured: CapabilityConfig<"sls">; query: SlsQuery };

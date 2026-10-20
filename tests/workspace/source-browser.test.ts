@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { CommandExecutor } from "../../src/process.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
@@ -45,6 +46,7 @@ test("browses only registered Issue repository content", async () => {
           code: 0, stderr: "", killed: false,
           stdout: `${JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "export const ready = true;\n" }, line_number: 1, submatches: [{ start: 13 }] } })}\n`,
         };
+        if (args.includes("rev-parse")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\n` };
         if (args.includes("log")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\x1f${"a".repeat(40)}\x1fTest User\x1f2026-08-15T08:00:00+08:00\x1fFix source browser\x1e\n` };
         if (args.includes("blame")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} 1 1 1\nauthor Test User\nauthor-mail <test@example.test>\nauthor-time 1786752000\nauthor-tz +0800\nsummary Fix source browser\nfilename src/index.ts\n\texport const ready = true;\n` };
         if (args.includes("merge-base")) return { code: args.includes("c".repeat(40)) ? 1 : 0, stderr: "", killed: false, stdout: "" };
@@ -73,6 +75,12 @@ test("browses only registered Issue repository content", async () => {
     await browser.createFile(issue!, "application", "generated/value.ts", "export const value = 1;\n");
     await browser.renamePath(issue!, "application", "generated/value.ts", "generated/result.ts", false);
     assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    await browser.renamePath(issue!, "application", "generated/result.ts", "generated/result.ts", true);
+    assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    await browser.createDirectory(issue!, "application", "generated/child");
+    await browser.createFile(issue!, "application", "generated/child/evidence.txt", "preserve\n");
+    await assert.rejects(browser.renamePath(issue!, "application", "generated", "generated/child", true), /invalid_source_path/);
+    assert.equal(await readFile(path.join(repository, "generated", "child", "evidence.txt"), "utf8"), "preserve\n");
     const largeSource = "x".repeat(2 * 1024 * 1024 + 1);
     const largeFile = await browser.createFile(issue!, "application", "generated/large.txt", largeSource);
     assert.equal(largeFile.size, Buffer.byteLength(largeSource));
@@ -89,7 +97,7 @@ test("browses only registered Issue repository content", async () => {
     await browser.search(issue!, "application", "ready", { caseSensitive: false, wordMatch: true });
     const completeSearchBrowser = new SourceBrowser(database.db, root, {
       async execute(_command, _args, options) {
-        assert.equal(options?.maxOutputBytes, null);
+        assert.equal(options?.maxOutputBytes, issuePilotConfig.limits.sourceBrowser.commandOutputBytes);
         const matches = Array.from({ length: 250 }, (_, index) => JSON.stringify({ type: "match", data: { path: { text: `./src/result-${index}.ts` }, lines: { text: "export const ready = true;\n" }, line_number: index + 1, submatches: [{ start: 13 }] } }));
         return { code: 0, stderr: "", killed: false, stdout: `${matches.join("\n")}\n` };
       },
@@ -98,12 +106,25 @@ test("browses only registered Issue repository content", async () => {
     assert.equal(completeSearch.matches.length, 250);
     assert.deepEqual(completeSearch.matches.at(-1), { path: "src/result-249.ts", line: 250, column: 14, preview: "export const ready = true;" });
     assert.equal(completeSearch.truncated, false);
+    const unicodeSearch = new SourceBrowser(database.db, root, {
+      async execute() {
+        return { code: 0, stderr: "", killed: false, stdout: JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "订单😀 ready\n" }, line_number: 1, submatches: [{ start: 11 }] } }) + "\n" };
+      },
+    });
+    assert.deepEqual((await unicodeSearch.search(issue!, "application", "ready")).matches, [{ path: "src/index.ts", line: 1, column: 6, preview: "订单😀 ready" }]);
     assert.deepEqual(await browser.blame(issue!, "application", "src/index.ts", 1), {
       path: "src/index.ts", line: 1, commit: "b".repeat(40), shortCommit: "b".repeat(8), author: "Test User", date: "2026-08-15T00:00:00.000Z", subject: "Fix source browser",
     });
+    const endOfFile = await browser.blame(issue!, "application", "src/index.ts", 2);
+    assert.equal(endOfFile.subject, "文件末尾"); assert.equal(endOfFile.commit, null);
+    await assert.rejects(browser.blame(issue!, "application", "src/index.ts", 3), /invalid_source_line/);
+    const untrackedBlame = new SourceBrowser(database.db, root, {
+      async execute(_command, args) { return { code: args.includes("blame") ? 128 : 1, stdout: "", stderr: "", killed: false }; },
+    });
+    assert.equal((await untrackedBlame.blame(issue!, "application", "src/index.ts", 1)).subject, "未提交变更");
     assert.deepEqual(await browser.history(issue!, "application"), {
       commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Test User", date: "2026-08-15T08:00:00+08:00", subject: "Fix source browser" }],
-      truncated: false,
+      truncated: false, nextCursor: null,
     });
     assert.deepEqual(await browser.commit(issue!, "application", "b".repeat(40)), {
       files: [
@@ -158,6 +179,8 @@ test("browses only registered Issue repository content", async () => {
     assert.ok(commands.some(({ args }) => args.includes("commit") && args.includes("Update source browser")));
 
     await assert.rejects(browser.file(issue!, "application", "../outside.txt"), /invalid_source_path/);
+    await assert.rejects(browser.createFile(issue!, "application", ".git/alternate-control", "must not write Git metadata\n"), /invalid_source_path/);
+    await assert.rejects(readFile(path.join(repository, ".git", "alternate-control")), { code: "ENOENT" });
     const outside = path.join(root, "outside.txt");
     await writeFile(outside, "secret\n", "utf8");
     await symlink(outside, path.join(repository, "outside-link"));
@@ -178,6 +201,9 @@ test("browses only registered Issue repository content", async () => {
     await prepareIssueRuntime(root, readOnlyIssue!.key, [{ name: "application", repositoryPath: readOnlyRepository }], "read");
     const snapshot = await browser.file(readOnlyIssue!, "application", "README.md");
     await assert.rejects(browser.writeFile(readOnlyIssue!, "application", "README.md", "changed\n", snapshot.sha256), /source_read_only/);
+    await symlink(readOnlyRepository, path.join(repository, "snapshot-link"), "dir");
+    await assert.rejects(browser.writeFile(issue!, "application", "snapshot-link/README.md", "must not replace snapshot\n", snapshot.sha256), /source_path_outside_repository/);
+    assert.equal(await readFile(path.join(readOnlyRepository, "README.md"), "utf8"), "# Snapshot\n");
     await assert.rejects(browser.createFile(readOnlyIssue!, "application", "new.txt", "new\n"), /source_read_only/);
     await assert.rejects(browser.stage(readOnlyIssue!, "application", ["README.md"]), /source_read_only/);
     await assert.rejects(browser.createCommit(readOnlyIssue!, "application", "Not allowed", { name: "Test User", email: "test@example.test" }), /source_read_only/);

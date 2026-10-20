@@ -12,7 +12,7 @@ import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
 import { AGENT_THINKING_LEVELS, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
 
-export const testAgent = { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" as const };
+export const testAgent = { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" as const, codemode: "off" as const, runtime: {} };
 
 export const modelCatalog = {
   async list() {

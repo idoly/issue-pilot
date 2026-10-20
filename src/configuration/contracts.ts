@@ -1,4 +1,4 @@
-import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName, StoredDeploymentConfig } from "../domain/contracts.ts";
+import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
 
 export const CAPABILITY_CREDENTIALS = {
   nacos: { fields: ["password"], required: false },
@@ -48,7 +48,7 @@ export interface ConfigurationCatalog {
   services: ServiceCatalogItem[];
 }
 
-export type ServiceCapabilityConfiguration = ProjectedCapabilityConfiguration & Pick<StoredDeploymentConfig, "mcpServices">;
+export type ServiceCapabilityConfiguration = ProjectedCapabilityConfiguration;
 
 interface ServiceDeployment extends ServiceCapabilityConfiguration {
   environmentKey: string;
@@ -77,7 +77,6 @@ export interface ServiceConfigurationInput {
   repositories: Array<{ id?: string; alias: string; url: string }>;
   deployments: Array<CapabilityConfigurationInput & {
     environmentKey: string;
-    mcpServices?: string[];
     repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
     capabilities: CapabilityName[];
   }>;

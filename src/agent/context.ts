@@ -1,9 +1,10 @@
-import { CAPABILITY_KEYS, configuredCapabilities, ISSUE_TYPES_BY_ENVIRONMENT, normalizeIssueKey, type CapabilityName, type AgentConfiguration, type AgentThinkingLevel, type DeploymentConfig, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, configuredCapabilities, ISSUE_TYPES_BY_ENVIRONMENT, normalizeIssueKey, type CapabilityName, type AgentConfiguration, type AgentCodemodeMode, type AgentThinkingLevel, type DeploymentConfig, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 
 export interface AgentSessionContext {
   issueKey: string;
   serviceKey: string;
   environmentKey: string;
+  codemode: AgentCodemodeMode;
   model: { provider: string; modelId: string; thinkingLevel: AgentThinkingLevel };
   capabilities: ReturnType<typeof configuredCapabilities>;
   canModifyCode: boolean;
@@ -11,10 +12,7 @@ export interface AgentSessionContext {
 }
 
 export function sessionToolAllowlist(context: AgentSessionContext): string[] {
-  const localTools = context.canModifyCode
-    ? ["read", "bash", "edit", "write", "grep", "find", "ls"]
-    : ["read", "grep", "find", "ls"];
-  return [...localTools, "sandbox", ...(context.canWriteOutputs ? ["output"] : []), ...(context.capabilities.length ? ["service_query"] : [])];
+  return ["read", "bash", "edit", "write", "grep", "find", "ls", ...(context.codemode !== "off" ? ["codemode"] : []), ...(context.canWriteOutputs ? ["output"] : []), ...(context.capabilities.length ? ["service_query"] : [])];
 }
 
 export function createAgentSessionContext(input: {
@@ -36,6 +34,7 @@ export function createAgentSessionContext(input: {
     serviceKey: input.serviceKey,
     environmentKey: input.environmentKey,
     model: { provider: agent.provider, modelId: agent.model, thinkingLevel: agent.thinkingLevel },
+    codemode: agent.codemode,
     capabilities: CAPABILITY_KEYS.filter((key) => input.enabledCapabilities.includes(key) && [input.deploymentConfig, ...(input.additionalDeploymentConfigs ?? [])].some((config) => configuredCapabilities(config).includes(key))),
     canModifyCode: writableIssue && input.repositoryAccess.length > 0 && input.repositoryAccess.every((access) => access === "write"),
     canWriteOutputs: input.environmentKind === "prod" && input.issueType === "data_processing",

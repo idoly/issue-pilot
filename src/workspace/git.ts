@@ -150,18 +150,18 @@ export class WorktreeManager {
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
-  async assertClean(url: string, workspacePath: string): Promise<void> {
+  async assertClean(url: string, workspacePath: string, expectedBranch?: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
-    await this.serialized(repositoryKey, () => this.assertCleanLocked(resolvedWorkspace));
+    await this.serialized(repositoryKey, () => this.assertCleanLocked(resolvedWorkspace, expectedBranch));
   }
 
-  async remove(url: string, workspacePath: string): Promise<string> {
+  async remove(url: string, workspacePath: string, expectedBranch?: string): Promise<string> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
     return this.serialized(repositoryKey, async () => {
       const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-      await this.assertCleanLocked(resolvedWorkspace);
+      await this.assertCleanLocked(resolvedWorkspace, expectedBranch);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
@@ -174,8 +174,12 @@ export class WorktreeManager {
     });
   }
 
-  private async assertCleanLocked(resolvedWorkspace: string): Promise<void> {
+  private async assertCleanLocked(resolvedWorkspace: string, expectedBranch?: string): Promise<void> {
     if (!await pathExists(resolvedWorkspace)) throw new Error("workspace_repository_missing");
+    if (expectedBranch !== undefined) {
+      const branch = (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
+      if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
+    }
     const dirty = (await this.git(["-C", resolvedWorkspace, "status", "--porcelain"])).trim();
     if (dirty) throw new Error("workspace_has_changes");
   }
@@ -221,7 +225,7 @@ export class WorktreeManager {
       const rollbackErrors: unknown[] = [];
       for (const createdWorktree of created.reverse()) {
         try {
-          if (await pathExists(createdWorktree.workspacePath)) await this.remove(createdWorktree.input.url, createdWorktree.workspacePath);
+          if (await pathExists(createdWorktree.workspacePath)) await this.remove(createdWorktree.input.url, createdWorktree.workspacePath, createdWorktree.input.workingBranch ?? `${createdWorktree.input.mode}-${normalizeIssueKey(createdWorktree.input.issueKey).toLowerCase()}`);
         } catch (rollbackError) { rollbackErrors.push(rollbackError); }
       }
       for (const [workspaceRoot, existed] of workspaceRoots) {
@@ -237,12 +241,12 @@ export class WorktreeManager {
   }
 
   async removeBatch(input: RemoveWorktreeBatchInput): Promise<void> {
-    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.url, worktree.workspacePath)));
+    await Promise.all(input.worktrees.map((worktree) => this.assertClean(worktree.url, worktree.workspacePath, worktree.workingBranch)));
     const removed: Array<{ worktree: RemoveWorktreeBatchInput["worktrees"][number]; commit: string }> = [];
     try {
       for (const worktree of input.worktrees) {
         try {
-          const commit = await this.remove(worktree.url, worktree.workspacePath);
+          const commit = await this.remove(worktree.url, worktree.workspacePath, worktree.workingBranch);
           removed.push({ worktree, commit });
         } catch (error) {
           if (error instanceof WorktreeRemovalFailure) removed.push({ worktree, commit: error.commit });
@@ -349,16 +353,19 @@ export class WorktreeManager {
 
   private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {
     await mkdir(this.workspacesRoot, { recursive: true });
-    const cachePath = await this.updateCache(input, repositoryKey);
+    const cachePath = input.workingBranch ? resolve(this.repositoriesRoot, repositoryKey) : await this.updateCache(input, repositoryKey);
+    if (input.workingBranch && !await pathExists(cachePath)) throw new Error("repository_cache_not_found");
 
     const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
     const workspacePath = this.resolveIssueWorkspacePath(issueRoot, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     await this.git(["check-ref-format", "--branch", workingBranch]);
     if (!workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
+    const branchExists = await execFileAsync("git", ["-C", cachePath, "show-ref", "--verify", "--quiet", `refs/heads/${workingBranch}`]).then(() => true, () => false);
+    if (input.workingBranch && !branchExists) throw new Error("working_branch_not_found");
     const baseRef = `origin/${input.baseBranch}`;
-    const upstreamCommit = (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
-    let baseCommit = input.existingBaseCommit ?? upstreamCommit;
+    const upstreamCommit = input.workingBranch ? undefined : (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
+    let baseCommit = input.existingBaseCommit ?? upstreamCommit ?? (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim();
 
     const workspaceExists = await pathExists(workspacePath);
     if (workspaceExists && !await pathExists(resolve(workspacePath, ".git"))) throw new Error("workspace_is_not_git_worktree");
@@ -366,14 +373,13 @@ export class WorktreeManager {
       await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", workspacePath]);
       const currentBranch = (await this.git(["-C", workspacePath, "branch", "--show-current"])).trim();
       if (currentBranch !== workingBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
-      if (!input.existingBaseCommit) baseCommit = (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim();
+      if (!input.existingBaseCommit && !input.workingBranch) baseCommit = (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim();
     } else {
       await mkdir(dirname(workspacePath), { recursive: true });
-      const branchExists = await execFileAsync("git", ["-C", cachePath, "show-ref", "--verify", "--quiet", `refs/heads/${workingBranch}`]).then(() => true, () => false);
       await this.git(branchExists
         ? ["-C", cachePath, "worktree", "add", "--relative-paths", workspacePath, workingBranch]
         : ["-C", cachePath, "worktree", "add", "--relative-paths", "-b", workingBranch, workspacePath, baseRef]);
-      baseCommit = upstreamCommit;
+      if (!input.workingBranch) baseCommit = upstreamCommit!;
     }
     const upstream = await execFileAsync("git", ["-C", workspacePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim(), () => "");
     if (upstream && upstream !== `origin/${workingBranch}`) await this.git(["-C", workspacePath, "branch", "--unset-upstream"]);

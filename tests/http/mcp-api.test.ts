@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { eq } from "drizzle-orm";
+import { openDatabase } from "../../src/db/client.ts";
+import { serviceDeployments, services } from "../../src/db/schema.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const input = { name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialUpdate: { mode: "replace", values: { authorization: "Bearer secret-token" } } };
@@ -38,6 +41,29 @@ test("manages MCP configs without returning credentials and reserves all running
     assert.equal(JSON.parse(cleared.body).credentialConfigured, false);
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/mcp-services/${row.id}`, headers })).statusCode, 204);
   } finally { await f.cleanup(); }
+});
+
+test("MCP availability is global and historical deployment bindings do not block deletion", async () => {
+  const f = await createApiFixture(), database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "Global", ["test"]);
+    const added = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: { ...input, enabled: true } });
+    assert.equal(added.statusCode, 201, added.body);
+    const id = added.json().id;
+    const [service] = await database.db.select().from(services).where(eq(services.key, "global"));
+    await database.db.update(serviceDeployments).set({ config: { mcpServices: [id, "obsolete-binding"] } }).where(eq(serviceDeployments.serviceId, service!.id));
+    const config = (await f.app.inject({ method: "GET", url: "/api/config" })).json();
+    const projected = config.services.find((row: { key: string }) => row.key === "global");
+    assert.equal("mcpServices" in projected.deployments[0], false);
+    assert.match(projected.context, /MCP（全局）/);
+    const bind = await f.app.inject({ method: "PATCH", url: "/api/services/global", headers, payload: { name: projected.name, description: projected.description, repositories: projected.repositories, deployments: projected.deployments.map((row: object) => ({ ...row, mcpServices: [id] })) } });
+    assert.equal(bind.statusCode, 400, bind.body);
+    assert.equal(bind.json().error, "mcp_services_are_global");
+    assert.equal((await f.app.inject({ method: "DELETE", url: `/api/mcp-services/${id}`, headers })).statusCode, 204);
+    const after = await f.app.inject({ method: "GET", url: "/api/config" });
+    assert.equal(after.statusCode, 200, after.body);
+    assert.doesNotMatch(after.body, /obsolete-binding/);
+  } finally { database.close(); await f.cleanup(); }
 });
 
 test("rejects unsafe MCP URLs and unauthorized changes", async () => {

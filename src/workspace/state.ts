@@ -11,8 +11,8 @@ import { normalizeIssueKey } from "../domain/contracts.ts";
 const execFileAsync = promisify(execFile);
 const stateTaskOptions = { concurrency: issuePilotConfig.workspace.taskConcurrency, stopOnError: false } as const;
 
-type DisposableSharedCheckout = { checkout: string; commit: string };
-type DisposableSharedRepository = { repositoryRoot: string; commonDirectory: string; checkouts: DisposableSharedCheckout[] };
+type SharedCheckout = { checkout: string; commit: string };
+type SharedRepository = { commonDirectory: string; checkouts: SharedCheckout[] };
 
 export interface RepositoryStateRecord {
   localPath: string | null;
@@ -51,6 +51,10 @@ function issuesRoot(stateRoot: string): string {
 
 export function issueRoot(stateRoot: string, issueKey: string): string {
   return path.join(issuesRoot(stateRoot), issueSegment(issueKey));
+}
+
+export function issueWorkDirectory(stateRoot: string, issueKey: string): string {
+  return path.join(issueRoot(stateRoot, issueKey), "work");
 }
 
 export function issueSessionRoot(stateRoot: string, issueKey: string): string {
@@ -115,7 +119,7 @@ async function directoryNames(directory: string): Promise<string[]> {
   }
 }
 
-async function removeDisposableSharedCheckouts(stateRoot: string): Promise<void> {
+async function validateSharedCheckouts(stateRoot: string): Promise<void> {
   const checkoutRoot = sharedCheckoutsRoot(stateRoot);
   let repositoryEntries;
   try { repositoryEntries = await readdir(checkoutRoot, { withFileTypes: true }); }
@@ -125,40 +129,29 @@ async function removeDisposableSharedCheckouts(stateRoot: string): Promise<void>
   }
   const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
   const gitEnvironment = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
-  const disposableRepositories: DisposableSharedRepository[] = [];
+  const sharedRepositories: SharedRepository[] = [];
   for (const repositoryEntry of repositoryEntries) {
     if (!repositoryEntry.isDirectory() || !/^[0-9a-f]{20}$/.test(repositoryEntry.name)) throw new Error("shared_checkout_changed");
     const repositoryRoot = path.join(checkoutRoot, repositoryEntry.name);
     const commonDirectory = path.join(repositoriesRoot(stateRoot), repositoryEntry.name);
     const commitEntries = await readdir(repositoryRoot, { withFileTypes: true });
     if (!commitEntries.length || commitEntries.some((entry) => !entry.isDirectory() || !/^[0-9a-f]{40}$/.test(entry.name))) throw new Error("shared_checkout_changed");
-    disposableRepositories.push({
-      repositoryRoot,
+    sharedRepositories.push({
       commonDirectory,
       checkouts: commitEntries.map((entry) => ({ checkout: path.join(repositoryRoot, entry.name), commit: entry.name })),
     });
   }
-  const disposableCheckouts = disposableRepositories.flatMap(({ commonDirectory, checkouts }) =>
+  const checkouts = sharedRepositories.flatMap(({ commonDirectory, checkouts }) =>
     checkouts.map((checkout) => ({ ...checkout, commonDirectory }))
   );
   try {
-    await pMap(disposableCheckouts, async ({ checkout, commit, commonDirectory }) => {
+    await pMap(checkouts, async ({ checkout, commit, commonDirectory }) => {
       const [head, status, actualCommonDirectory] = await Promise.all([
         execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
         execFileAsync("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored=matching"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
         execFileAsync("git", ["-C", checkout, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
       ]);
       if (head.stdout.trim() !== commit || status.stdout.trim() || path.resolve(checkout, actualCommonDirectory.stdout.trim()) !== commonDirectory) throw new Error("shared_checkout_changed");
-    }, stateTaskOptions);
-  } catch (error) {
-    throw new Error("shared_checkout_changed", { cause: error });
-  }
-  try {
-    await pMap(disposableRepositories, async ({ repositoryRoot, commonDirectory, checkouts }) => {
-      for (const { checkout } of checkouts) {
-        await execFileAsync("git", ["-C", commonDirectory, "worktree", "remove", checkout], { encoding: "utf8", timeout: gitOperationMs, maxBuffer: gitOutputBytes });
-      }
-      await rmdir(repositoryRoot);
     }, stateTaskOptions);
   } catch (error) {
     throw new Error("shared_checkout_changed", { cause: error });
@@ -197,7 +190,7 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
     }
   }
   if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
-  await removeDisposableSharedCheckouts(stateRoot);
+  await validateSharedCheckouts(stateRoot);
   await pMap(await directoryNames(managedIssuesRoot), async (entry) => {
     if (!active.has(entry.toLowerCase())) return;
     const managedIssueRoot = path.join(managedIssuesRoot, entry);

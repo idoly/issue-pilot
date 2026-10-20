@@ -1,151 +1,101 @@
 # Agent Guide
 
-This is the entry point for coding agents working in Issue Pilot. It describes how to inspect, change, and verify the repository without damaging durable application state.
+Issue Pilot manages durable Issues, Git worktrees, attachments, outputs and Pi conversations. Read [Architecture](docs/ARCHITECTURE.md) and [Development](docs/DEVELOPMENT.md), then the relevant [Configuration](docs/CONFIGURATION.md), [Deployment](docs/DEPLOYMENT.md) or [Runbook](docs/RUNBOOK.md). Read current owning code before changing behavior.
 
-## Read order
+## Before work
 
-Before changing code:
+1. Run `git status --short`. Preserve existing changes and compare the final result against a task-specific baseline.
+2. Locate the owner, domain contracts, root configuration, schema and focused tests.
+3. Classify affected state as durable, conditionally durable or generated.
+4. Keep the patch scoped. Commit, push, restart or mutate live state only when authorized by the user; existing session authorization remains valid.
 
-1. Read [Architecture](docs/ARCHITECTURE.md) for ownership, state transitions, Git/runtime behavior, concurrency, and security boundaries.
-2. Read [Development](docs/DEVELOPMENT.md) for module owners, change recipes, tests, and review checks.
-3. Read the task-specific owner document:
-   - [Configuration](docs/CONFIGURATION.md) for Service, Deployment, global model, capability, and credential behavior.
-   - [Deployment](docs/DEPLOYMENT.md) for the image, Kubernetes process, mounts, networking, and topology.
-   - [Runbook](docs/RUNBOOK.md) for health checks, backup, upgrade, recovery, retention, and troubleshooting.
+The checkout's `.issue-pilot` can contain real credentials, JSONL, attachments, local branches, dirty worktrees and recovery evidence. Never use it as a test fixture. Tests inject temporary roots through `buildApi({ stateRoot, databaseFile })` or manager constructors. A manual isolated server needs an independent project copy and its own root configuration; there is no state path environment override.
 
-Use `README.md` only as the product overview. Current owning code is authoritative; these documents explain its contracts. Do not recreate point-in-time audit inventories as architecture documents.
+Before an authorized operational change, follow the Runbook, including its bounded backup retention and post-verification rotation policy. Do not accumulate a new large snapshot for every agent round or routine check. Preserve unknown paths, database-unrepresented directories, changed checkouts and dirty worktrees. Do not repair branch/path drift by guessing, reset, remote fallback or silent metadata updates.
 
-## Start safely
+## Owners
 
-1. Run `git status --short` and separate existing work from your changes.
-2. Locate the owning module and focused tests.
-3. Read current root config, domain contracts, schema, and owner helpers; do not infer behavior from old migrations.
-4. Classify affected data as durable, conditionally durable, or generated.
-5. Keep the implementation scoped to the requested behavior.
-
-Never revert unrelated user changes. Do not commit or push unless explicitly requested.
-
-## Protect real state
-
-The checkout's `.issue-pilot` can contain real Issues, Deployment credentials, attachments, Pi JSONL, local branches, active worktrees, backups, and legacy evidence. Never use it for tests or experiments.
-
-Production entry points resolve state from `issue-pilot.config.ts`; there is no environment-variable override. Automated tests inject temporary roots through `buildApi({ stateRoot, databaseFile })` or manager constructors. A manually isolated server requires a separate project copy whose root config points at separate state.
-
-Do not start, stop, migrate, copy, or call destructive routes against active state unless the task explicitly authorizes an operational change and the Runbook recovery path has been checked. Dirty, untracked, running, invalid-layout, changed-checkout, unmanaged, and database-unrepresented evidence must be preserved.
-
-## Authoritative facts
-
-| Fact | Owner |
+| Concern | Source |
 | --- | --- |
-| Paths, ports, defaults, retention, runtime, limits | `issue-pilot.config.ts` |
-| Image contents | `Containerfile` |
-| Kubernetes mounts, resources, probes | `deploy/issue-pilot.yaml` |
-| Business enums and shared predicates | `src/domain/contracts.ts` |
-| Current database model | `src/db/schema.ts` |
-| Upgrade order | Immutable `drizzle/*.sql` and `drizzle/meta/_journal.json` |
-| User, Issue, Service, Deployment, Repository, Workspace, Attachment, global Agent model | SQLite |
-| Deployment Repository join/order | `src/workspace/deployment.ts` |
-| Repository state and managed paths | `src/workspace/state.ts` |
-| Project preparation | `src/workspace/project.ts` |
-| Dev code after release | Local bare-store working branch |
-| Prod/test code | Latest fetched current Deployment base-branch commit |
-| Conversation | Per-Issue Pi JSONL active branch |
-| Attachment integrity | Durable file plus DB object key, size, SHA-256 |
-| Capability save parser and input schema | `src/capabilities/registry.ts` |
-| Unified query tool metadata and dispatch | `src/pi/tools.ts` |
-| Credential fields and update protocol | `src/configuration/contracts.ts`, `credentials.ts` |
-| Tool registration and dispatch | `src/pi/tools.ts` and protocol clients |
-| Runtime and wrappers | `src/workspace/runtime.ts`, `project-wrappers.ts` |
-| Source authorization | `src/workspace/source-browser.ts` |
+| Paths, defaults, budgets and retention | issue-pilot.config.ts, src/config.ts |
+| Roles, work modes, states and business predicates | src/domain/contracts.ts |
+| Current database and immutable upgrades | src/db/schema.ts, src/db/bootstrap.ts, drizzle/ |
+| Configuration, projection and credentials | src/configuration |
+| HTTP identity and authorization | src/http/route-context.ts |
+| HTTP coordination | src/http/*-routes.ts |
+| Service prepare/apply | src/http/service-configuration.ts |
+| Attachment transactions | src/http/attachment-store.ts |
+| Agent queue, reservations and recovery | src/agent/engine.ts |
+| Pi sessions and model runtime | src/agent/pi-session.ts, src/agent/model-runtime.ts |
+| Tool input and dispatch | src/agent/service-query-tool.ts, src/capabilities/registry.ts |
+| External protocols and Pi MCP integration | src/capabilities, src/mcp/client.ts, src/mcp/pi-extension.ts |
+| Inbound Issue MCP | src/mcp/server.ts |
+| Outputs and publication | src/outputs/store.ts, src/agent/output-tool.ts |
+| Git, projects, runtime and lifecycle | src/workspace |
+| Web requests and DTOs | src/web/src/data/client.ts |
+| Shared data and Agent editing state | ApplicationResources.tsx, agent-configuration.ts |
+| SSE and conversation projection | agent-stream.ts, conversation.ts, AgentPanel.tsx |
+| Code browser | CodeBrowser.tsx, SourceText.tsx, SourceDiff.tsx, monaco.ts, src/workspace/source-browser.ts |
+| Browser verification | scripts/playwright.sh |
 
-Do not create a second source for these facts.
+Routes coordinate owners; they do not reimplement Git, protocols, attachment storage or command authorization. Prefer public Pi APIs and small local helpers over new generic layers.
 
-## Module ownership
+## Design and review
 
-| Change | Start here |
-| --- | --- |
-| Enum, state, priority, type, predicate | `src/domain/contracts.ts` |
-| Table, index, trigger, constraint | `src/db/schema.ts` plus a new migration |
-| HTTP boundary | `src/http/*-routes.ts` and focused route tests |
-| User lifecycle | `src/http/user-routes.ts`, `UserManagement.tsx` |
-| Configuration DTO/projection/credential merge | `src/configuration` |
-| Service configuration prepare/apply | `src/http/service-configuration.ts` |
-| Attachment transaction/store | `src/http/attachment-store.ts` |
-| Agent queue, reservation, state, session | `src/agent` |
-| Model catalog and tool registration | `src/pi` |
-| Capability config/input | `src/capabilities/registry.ts` |
-| Capability protocol | Corresponding `src/capabilities/*.ts` client |
-| Generic process execution | `src/process.ts` |
-| Authorized commands/environment | `src/tool-runtime.ts` |
-| Git/worktree/runtime/release/reopen | `src/workspace` |
-| Web request/DTO | `src/web/src/data/client.ts` |
-| SSE transport state | `src/web/src/app/agent-stream.ts` |
-| Event projection | `src/web/src/app/conversation.ts` |
-| Capability form serialization | `src/web/src/app/configuration-model.ts` |
-| Shared Web resources | `src/web/src/app/ApplicationResources.tsx` |
-| Workbench | `src/web/src/vscode`, `CodeBrowser.tsx` |
-| Browser harness | `scripts/playwright.sh` |
+Correctness comes first. Aim for code that a new maintainer three years from now can understand and safely change with a small, local diff. Avoid both unnecessary abstraction and oversimplification through hard-coded or scattered business rules.
 
-Routes coordinate owners, reservations, and transactions. They must not reimplement Git, attachment storage, command authorization, or external protocols.
+1. Choose the simplest implementation that completely satisfies current requirements. Fewer lines alone do not prove better design.
+2. Isolate real variation points. Use data, configuration or mappings where they fit; do not anticipate unlikely features or build speculative extension frameworks.
+3. Give each business rule a clear owner. Distinguish identity, roles, permissions and behavior. Keep stable, closed types as enums.
+4. Require a concrete maintenance benefit for every abstraction, module, interface and dependency. Prefer language, standard library, framework and official SDK capabilities.
+5. Allow limited repetition when semantics differ. Do not force unrelated behavior into one helper or add layers that only forward calls.
+6. Keep workflows traceable across a few related owners. Do not split files for length or rewrite reasonable implementations for style.
+7. Preserve boundaries, error meaning, transactions, concurrency, cancellation, idempotency, diagnostics and recovery. Do not hide failures or swallow errors to make code shorter.
+8. Evaluate common business changes for unnecessary cross-module impact; implement only current needs and justified extension points.
+9. Test behavior, boundaries and invariants. Do not create meaningless interfaces or tests that only mirror implementation.
+10. Prefer local, gradual evolution and necessary compatibility. Keep a reasonable design when a replacement has no demonstrated benefit.
+11. Identify obsolete code, files, directories, dependencies and configuration. Before deletion, verify static and dynamic references, builds, migrations and runtime effects; report uncertain uses and preserve them.
 
-## Required invariants
+A review-only request authorizes findings and recommendations, not source edits, dependency upgrades or architecture changes. Once changes are authorized, prioritize correctness, security and consistency, implement the minimum useful patch and validate it.
 
-- Issue keys are `ISSUE-YYYYMMDD-NNN...` in the configured regional time zone.
-- Issue creation claims a new empty Issue root before DB insert and never adopts unmanaged state.
-- Every Issue has exactly one Workspace row.
-- `status = resolved` if and only if `resolved_at` is non-null.
-- Every Issue scope has a matching Service/Environment Deployment.
-- One global Agent provider/model/thinking level applies to every Service and Environment; Deployments contain no Agent override.
-- Prod/test is `read_only`; active dev is `development_workspace`; released dev is `development_snapshot`.
-- Released dev restores only from local working branches, never a remote Issue-branch fallback.
-- Existing dev `base_branch` and `workspace_name` remain Issue history.
-- Writable dependencies and outputs are not shared across Issues.
-- Each Attachment has one durable `0400` copy and no runtime copy/link.
-- Attachment writes occur only in Issue create/edit transactions. Clipboard images sent to Agent are Pi message content persisted in JSONL, not Attachment objects.
-- Unsafe or unknown filesystem/Git state fails explicitly and remains evidence.
-- Runtime, wrappers, and immutable checkouts are generated atomically and remain rebuildable.
-- Config GET returns credential configuration status and omits stored secrets. Credentials must not enter logs, monitoring, diagnostics, Agent context, prompt, tool schema/input, or process arguments.
-- Pi tools parse input once with TypeBox and invoke typed protocol clients directly.
-- DMS Agent access goes through service_query with environment/service/schema. The server injects DatabaseId into executeScript and enforces read-only SQL. Development Issues may investigate prod/test sources; other Issues stay in their own environment.
-- API, migration, Git, runtime, Source Browser, and project-tool broker use one state root.
-- Published migrations and journal entries are immutable.
+For each confirmed finding, give location, evidence, effect, reasonable trigger, minimum remedy, tradeoff and verification. Prioritize P0/P1/P2/P3 by actual impact, likelihood and repair cost. Distinguish reproduced failures, predictable risks and theoretical concerns. Do not manufacture findings or force a refactor. Report overall conclusion, findings, overdesign, oversimplification, designs to retain and a minimal improvement plan, including coverage and gaps.
+
+## Required contracts
+
+- Issue keys use `ISSUE-YYYYMMDD-NNN...` in the configured time zone. Creation claims an empty Issue root and inserts exactly one Workspace.
+- Issue scope must match a Service/Environment Deployment. `resolved` and non-null `resolved_at` are equivalent.
+- One global Agent model, thinking level and Codemode setting applies to all services/environments; deployments have no model override.
+- Business roles remain product/test/developer. `isAdmin` is independent. User mutations protect active users, developers, managers and at least one active developer with management access.
+- Credential owner is assignee, else reporter, and must be active. Developer owners use personal model/SSH identity; failed or missing credentials never fall back to another identity.
+- Personal production DMS/SLS groups override independently and completely. Missing groups use deployment configuration; they do not create absent targets.
+- Ordinary configuration GET projects credentials out. Developer-only selected descriptions/MCP configuration may expose their documented values; native DMS Authorization and SLS keys remain hidden. Secrets never enter prompts, tool input, argv, diagnostics or ordinary logs.
+- Native evidence queries retain exact source/target and read-only checks. Development queries explicitly select prod/test; code include/remove stays in the Issue environment.
+- Enabled external MCP services are global and expose all configured tools to all Issues through Pi's MCP extension. Read-only hints are descriptive, not authorization. Keep DB ownership, literal private configuration, transport compatibility, cancellation and input/result budgets; let Pi own discovery, dynamic registration, connections and shutdown.
+- Prod/test use read-only snapshots, active dev uses isolated worktrees, released dev restores from local working branches. Source API enforces repository policy; historical branch and workspace names remain history.
+- Agent native coding tools run as the trusted application user in persistent `issues/<key>/work`. Cwd organizes work and is not OS isolation; native code can bypass business file policies.
+- Use normal code and installed libraries for formats. Do not add format-specific executors, nested sandboxes or a selectable runtime framework without a concrete need.
+- Attachments have one durable 0400 regular file validated against DB size/hash. Writes belong to Issue transactions. Pasted Agent images belong to Pi messages, not attachment storage.
+- Outputs publish atomically from regular work files, preserving working sources and old deliveries on failure. Runtime/wrappers/checkouts are generated; abnormal or unknown state still requires owner inspection.
+- Per-Issue serialization includes failure cleanup. Queued work cannot reuse a disposed session or overwrite a newer round with old failure state.
+- Web Agent drafts, saves and failures belong to application resources, so page navigation does not discard them. Identity changes cancel unsent work for the old identity.
+- Unknown tool input is parsed at the boundary; protocol response and authorization checks stay with the owner. Keep execute checks needed after mutable Pi hooks.
+- Published migration SQL and journal entries are immutable. Do not automatically parse legacy layouts, adopt directories or repair state.
 
 ## Concurrency
 
-Keep lock domains separate:
-
-- Agent run and steering: per Issue.
-- Issue reservation: affected Issue set.
-- Configuration scope queue: API instance.
-- Lifecycle queue: API instance, followed by per-Issue inspection.
-- Git operation: resolved state root plus Repository URL hash.
-
-Required order:
+Keep Agent activity, Issue-set reservation, API configuration scope, lifecycle, per-Issue inspection and repository operations distinct. Repository keys include state root and URL hash.
 
 ```text
-configuration read: scope queue -> SQLite snapshot transaction
-Service/Issue scope write: scope queue -> Issue reservation
+configuration read: scope queue -> SQLite read snapshot
+service/Issue scope write: scope queue -> Issue reservation
 release/reopen: lifecycle queue -> inspection queue -> Issue reservation
 ```
 
-Do not reverse this order or replace the domains with one global mutex.
+Do not reverse these orders or replace them with a global mutex. Reauthorize after relevant queue waits. SQLite rollback does not restore files or Git; owners must prepare, roll back and finalize each medium.
 
-## No automatic compatibility
+## Verification and completion
 
-The runtime supports only the current state model. Do not add old-key parsing, automatic directory moves, metadata repair, mixed-state guessing, remote branch fallback, or silent truncation.
-
-On invariant failure:
-
-1. Stop before deleting state.
-2. Return one stable error.
-3. Preserve paths, refs, rows, and files.
-4. Document an Operator-controlled recovery when needed.
-
-Published database migrations are the only supported upgrade contracts.
-
-## Verification
-
-Repository-wide changes normally require:
+For code changes run focused behavior tests and applicable full checks:
 
 ```bash
 npm run typecheck
@@ -154,24 +104,6 @@ npm run build
 git diff --check
 ```
 
-Dependency, runtime, capability-security, or container changes also require:
+On constrained machines use backend `--test-concurrency=2` and Vitest `--maxWorkers=1` as described in Development. Runtime, dependency, protocol security or container changes also require production dependency audit, browser harness status and available deployment health checks. Real-state operations require integrity/FK, file modes, Git refs/worktrees and unmanaged-directory checks from the Runbook.
 
-```bash
-npm audit --omit=dev --audit-level=high
-scripts/playwright.sh status
-kubectl -n issue-pilot get deployment,pod,service
-```
-
-Schema or real-state operations additionally require SQLite integrity/FK checks, file-mode checks, Git HEAD/ref consistency, and unmanaged-directory checks. Follow the Runbook.
-
-## Completion
-
-Before finishing:
-
-- Re-read the latest request.
-- Inspect the final diff for unrelated changes, generated output, state, and secrets.
-- Check failure, retry, abort, rollback/finalize, shutdown, and repeated calls where relevant.
-- Confirm durable state is unchanged or recoverable through a documented procedure.
-- Confirm Web DTOs and interactions match the API.
-- Update the one owning document; link to it instead of copying detailed contracts elsewhere.
-- Report changed behavior, verification, and anything not verified.
+Cover failure, retry, cancellation, repeated calls, rollback/finalize and shutdown where relevant. Keep HTTP and Web DTOs aligned and update the owning document. Inspect the final diff for unrelated work, state, generated artifacts and secrets. Report changes, checks and material gaps; do not claim tests prove all code safe or every unused path found.

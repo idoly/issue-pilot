@@ -11,10 +11,10 @@ import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
-import type { AgentSessionContext } from "../../src/agent/context.ts";
+import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, mcpServices, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
+import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
-import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRuntimeRoot, issueWorkDirectory, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -154,7 +154,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
-  const starts: Array<{ context: AgentSessionContext; workspaceRoot: string }> = [];
+  const starts: Array<Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpConfigurations">> = [];
   let sessionStops = 0;
   try {
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
@@ -164,6 +164,8 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const dev = environmentRows.find((environment) => environment.kind === "dev")!;
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
     await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
+    const [globalMcp] = await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
+    await database.db.insert(mcpServices).values({ name: "Disabled tools", url: "https://disabled.example.test/mcp", transport: "streamable_http", enabled: false });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     await registerTestRepositories(database.db, remotes);
     const repositories = await database.db.insert(serviceRepositories).values([
@@ -171,7 +173,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { serviceId: service!.id, alias: "orders-secondary", url: remotes[1] },
     ]).returning();
     const deployments = await database.db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: prod.id, config: {} },
+      { serviceId: service!.id, environmentId: prod.id, config: { mcpServices: ["obsolete-binding"] } },
       { serviceId: service!.id, environmentId: dev.id, config: {} },
     ]).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
@@ -188,7 +190,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
 
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(options: { context: AgentSessionContext; workspaceRoot: string }): Promise<unknown>; close(): Promise<void> };
+      piRuntime: { start(options: Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpConfigurations">): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
@@ -212,12 +214,13 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(prodRepository!.workingBranch, null);
     assert.equal(prodRepository!.localPath, null);
     assert.equal(prodWorkspace!.runtimeReady, true);
-    assert.equal(prodSession!.workspacePath, issueRuntimeRoot(stateRoot, prodIssue!.key));
+    assert.equal(prodSession!.workspacePath, issueWorkDirectory(stateRoot, prodIssue!.key));
     const prodRuntimeName = repositoryWorkspaceNames(remotes).get(remotes[0])!;
     assert.equal(starts[0]!.context.canModifyCode, false);
     assert.equal(sessionStops, 1);
-    assert.equal(starts[0]!.workspaceRoot, issueRuntimeRoot(stateRoot, prodIssue!.key));
-    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(starts[0]!.workspaceRoot, prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
+    assert.equal(starts[0]!.workspaceRoot, issueWorkDirectory(stateRoot, prodIssue!.key));
+    await writeFile(path.join(starts[0]!.workspaceRoot, "notes.txt"), "retain analysis");
+    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRuntimeRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
     await assert.rejects(access(issueWorkspaceRoot(stateRoot, prodIssue!.key)));
 
     const firstProdCommit = prodRepository.commitBefore;
@@ -234,6 +237,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(refreshedProdRepository.commitBefore, await git(["-C", source, "rev-parse", "prod"]));
     assert.equal(refreshedProdRepositoryByUrl.get(remotes[1])!.commitBefore, firstSecondaryCommit);
     assert.equal(sessionStops, 2);
+    assert.equal(await readFile(path.join(starts[1]!.workspaceRoot, "notes.txt"), "utf8"), "retain analysis");
 
     await internal.run(devIssue!.id);
     const devRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));
@@ -265,6 +269,9 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { url: remotes[1], baseBranch: "prod" },
     ]);
 
+    for (const start of starts) {
+      assert.deepEqual(start.mcpConfigurations?.map(row => row.id), [globalMcp!.id]);
+    }
     await engine.close();
     assert.equal(sessionStops, 4);
   } finally {

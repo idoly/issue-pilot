@@ -75,6 +75,22 @@ test("buffers live events until session replay is ready", () => {
   assert.equal(errors.length, 1);
 });
 
+test("keeps buffered events ahead of events published while replay is being delivered", () => {
+  const bus = new AgentEventBus(), received: string[] = [];
+  const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
+  const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
+  bus.publish(event("first")); bus.publish(event("second"));
+  subscription.activate(envelope => {
+    received.push(envelope.id);
+    if (envelope.id === "first") {
+      assert.throws(() => subscription.activate(() => undefined), /agent_event_subscription_already_active/);
+      bus.publish(event("third"));
+    }
+  });
+  bus.publish(event("fourth")); subscription.unsubscribe(); bus.publish(event("after-close"));
+  assert.deepEqual(received, ["first", "second", "third", "fourth"]);
+});
+
 test("retains only the current non-durable Agent state for reconnecting clients", () => {
   const bus = new AgentEventBus();
   const event = (id: string, wireEvent: RunEvent["event"]): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: wireEvent });
@@ -178,7 +194,7 @@ test("calculates Pi footer totals, cache hit rate, and context usage", () => {
     timestamp: Date.now(),
   });
 
-  assert.deepEqual(sessionFooterStats(manager, 20_000), {
+  assert.deepEqual(sessionFooterStats(manager, 20_000, true), {
     input: 500, output: 500, cacheRead: 9_500, cacheWrite: 0, cost: 0.35,
     latestCacheHitRate: 95, contextPercent: 52.5, contextWindow: 20_000, autoCompact: true,
   });
@@ -189,7 +205,7 @@ test("includes SDK usage entries without exposing internal context edits in visi
   const id = manager.appendMessage({ role: "assistant", api: "openai-responses", provider: "test", model: "test-model", content: [{ type: "text", text: "Original visible answer" }], stopReason: "stop", usage, timestamp: Date.now() });
   manager.appendContextEdit(id, null);
   manager.appendUsage("cache_warm", "test", "test-model", { ...usage, input: 0, output: 0, cacheRead: 100, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01 } });
-  const stats = sessionFooterStats(manager, 20000);
+  const stats = sessionFooterStats(manager, 20000, true);
   assert.equal(stats.cacheRead, usage.cacheRead + 100);
   assert.equal(stats.cost, usage.cost.total + 0.01);
   assert.equal(manager.buildSessionContext().messages.some((message) => message.role === "assistant"), false);

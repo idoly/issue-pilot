@@ -20,7 +20,7 @@ export function DescriptionField(props: { value: () => string; inputLabel: strin
       <div class="description-field-header"><span>描述</span><Button class="icon-button" type="text" shape="circle" icon={<Maximize2 size={14} />} title={props.expandLabel} aria-label={props.expandLabel} onClick={open} /></div>
       <TextArea aria-label={props.inputLabel} autoSize={{ minRows: 3, maxRows: 5 }} value={props.value()} onInput={(event) => props.onChange(event.currentTarget.value)} />
       <Modal open={expanded()} title="编辑描述" okText="应用" cancelText="取消" onOk={() => { props.onChange(draft()); setExpanded(false); }} onCancel={() => setExpanded(false)}>
-        <div class="markdown-editor-toolbar"><Segmented size="small" aria-label="描述编辑模式" value={mode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={setMode} /></div>
+        <div class="markdown-editor-toolbar"><Segmented aria-label="描述编辑模式" value={mode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={setMode} /></div>
         <Show when={mode() === "edit"} fallback={<div class="description-markdown-preview"><Show when={draft().trim()} fallback={<span class="muted">暂无内容</span>}><Markdown source={draft()} /></Show></div>}>
           <TextArea class="description-expanded-input" aria-label="放大描述编辑器" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} />
         </Show>
@@ -70,7 +70,6 @@ export function RelatedIssueSelect(props: {
         maxTagCount={2}
         listHeight={420}
         popupClass="related-issue-popup"
-        popupMatchSelectWidth
         placeholder="搜索工单号、标题或服务"
         notFoundContent="没有匹配的工单"
       />

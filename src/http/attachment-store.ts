@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, lstat, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { MultipartFile } from "@fastify/multipart";
 import type { Database } from "../db/client.ts";
 import { issueAttachments } from "../db/schema.ts";
@@ -23,24 +24,25 @@ export async function readMultipartAttachment(part: MultipartFile): Promise<Pend
   if (!fileName) throw new ApiError(400, "invalid_attachment_name");
   const stagingRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-"));
   const temporaryPath = path.join(stagingRoot, randomUUID());
-  const handle = await open(temporaryPath, "wx", 0o600);
   const sha256 = createHash("sha256");
   let size = 0;
+  let handle: FileHandle | undefined;
   try {
+    handle = await open(temporaryPath, "wx", 0o600);
     for await (const chunk of part.file) {
       const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      await handle.write(content);
+      await handle.writeFile(content);
       sha256.update(content);
       size += content.length;
     }
     if (part.file.truncated) throw new Error("attachment_stream_truncated");
+    await handle.close();
+    return { fileName, mediaType: part.mimetype, temporaryPath, size, sha256: sha256.digest("hex") };
   } catch (error) {
-    await handle.close().catch(() => undefined);
+    await handle?.close().catch(() => undefined);
     await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-  await handle.close();
-  return { fileName, mediaType: part.mimetype, temporaryPath, size, sha256: sha256.digest("hex") };
 }
 
 export async function removePendingAttachments(pendingAttachments: PendingAttachment[]): Promise<void> {
@@ -50,8 +52,8 @@ export async function removePendingAttachments(pendingAttachments: PendingAttach
 
 export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
   const attachmentPath = path.resolve(objectKey);
-  const metadata = await stat(attachmentPath).catch(() => undefined);
-  if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o077) !== 0 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
+  const metadata = await lstat(attachmentPath).catch(() => undefined);
+  if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o7777) !== 0o400 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
   return attachmentPath;
 }
 
@@ -102,6 +104,18 @@ export async function finalizeQuarantinedAttachments(
   if (failures.length) throw new Error("attachment_finalize_failed", { cause: new AggregateError(failures, "attachment_finalize_failed") });
 }
 
+function attachmentObjectName(fileName: string): string {
+  const prefix = `${randomUUID()}-`;
+  const budget = issuePilotConfig.limits.filesystemNameBytes - Buffer.byteLength(prefix);
+  const suffix = path.extname(fileName);
+  const extension = Buffer.byteLength(suffix) <= budget ? suffix : "";
+  const base = extension ? fileName.slice(0, -extension.length) : fileName;
+  const available = budget - Buffer.byteLength(extension);
+  // Streaming decode omits an incomplete trailing UTF-8 sequence.
+  const name = new TextDecoder().decode(Buffer.from(base).subarray(0, available), { stream: true });
+  return `${prefix}${name}${extension}`;
+}
+
 export async function writePendingAttachments(
   executor: AttachmentWriter,
   stateRoot: string,
@@ -116,7 +130,7 @@ export async function writePendingAttachments(
   await Promise.all([chmod(path.dirname(attachmentRoot), 0o700), chmod(attachmentRoot, 0o700)]);
   const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
   for (const pendingAttachment of pendingAttachments) {
-    const objectKey = path.join(attachmentRoot, `${randomUUID()}-${pendingAttachment.fileName}`);
+    const objectKey = path.join(attachmentRoot, attachmentObjectName(pendingAttachment.fileName));
     writtenObjectKeys.push(objectKey);
     await copyFile(pendingAttachment.temporaryPath, objectKey, constants.COPYFILE_EXCL);
     await chmod(objectKey, 0o400);

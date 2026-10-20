@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 
-import { createClient } from "redis";
+import { createClient } from "@redis/client";
 
 import { capabilityResultText } from "./contracts.ts";
 

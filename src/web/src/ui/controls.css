@@ -1,6 +1,6 @@
 :root { --ui-primary: #176b5b; --ui-primary-hover: #248171; --ui-border: #d9dfdc; --ui-muted: #74807a; --ui-font: var(--app-font, system-ui, sans-serif); }
-.ui-button { display: inline-flex; flex: 0 0 auto; min-width: 32px; height: 32px; align-items: center; justify-content: center; gap: var(--ui-button-icon-gap, 7px); padding: 0 var(--ui-button-padding-inline, 12px); border: 1px solid var(--ui-button-default-border-color, var(--ui-border)); border-radius: 6px; background: var(--ui-button-default-bg, #fff); color: var(--ui-button-default-color, #35423c); font: 13px/1 var(--ui-font); white-space: nowrap; cursor: pointer; transition: background-color 120ms, border-color 120ms; }
-.ui-button > svg { flex-shrink: 0; }
+.ui-button { box-sizing: border-box; text-decoration: none; display: inline-flex; flex: 0 0 auto; min-width: 32px; height: 32px; align-items: center; justify-content: center; gap: var(--ui-button-icon-gap, 7px); padding: 0 var(--ui-button-padding-inline, 12px); border: 1px solid var(--ui-button-default-border-color, var(--ui-border)); border-radius: 6px; background: var(--ui-button-default-bg, #fff); color: var(--ui-button-default-color, #35423c); font: 13px/1 var(--ui-font); white-space: nowrap; cursor: pointer; transition: background-color 120ms, border-color 120ms; }
+.ui-button > .ui-icon { flex-shrink: 0; }
 .ui-button:hover:not(:disabled) { border-color: var(--ui-primary); background: var(--ui-button-default-hover-bg, #f0f6f3); color: var(--ui-button-default-hover-color, var(--ui-primary)); }
 .ui-button[data-variant="solid"] { border-color: var(--ui-primary); background: var(--ui-primary); color: #fff; }
 .ui-button[data-variant="solid"]:hover:not(:disabled) { border-color: var(--ui-primary-hover); background: var(--ui-primary-hover); color: #fff; }
@@ -55,7 +55,7 @@
 .ui-modal-footer { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid #e5e9e7; }
 .ui-select { display: block; min-width: 0; width: 100%; color: #35423c; font: 12px/1.5 var(--ui-font); }
 .ui-select-selector { display: flex; width: 100%; min-width: 0; min-height: 32px; align-items: center; gap: 7px; padding: 4px 9px; border: 1px solid var(--ui-border); border-radius: 6px; background: #fff; outline: none; cursor: pointer; }
-.ui-select-selector > svg { flex: 0 0 auto; color: #859087; }
+.ui-select-selector > .ui-icon { flex: 0 0 auto; color: #859087; }
 .ui-select-selector[aria-expanded="true"] { border-color: var(--ui-primary); }
 .ui-select-content { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px; }
 .ui-select-placeholder { color: #9aa59f; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

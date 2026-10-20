@@ -1,4 +1,4 @@
-import type { InjectOptions } from "light-my-request";
+import type { InjectOptions } from "fastify";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -37,7 +37,7 @@ test("personal credentials are private, independently updated and never returned
   const inject = (input: InjectOptions) => f.app.inject({ ...input, headers: { "x-issue-pilot-subject": owner, ...input.headers } });
   try {
     const second = "second@example.test";
-    await inject({ method: "POST", url: "/api/users", payload: { subject: second, name: "Second", email: second, role: "developer" } });
+    await inject({ method: "POST", url: "/api/users", payload: { subject: second, name: "Second", email: second, role: "developer", isAdmin: true } });
     const https = await inject({ method: "PUT", url: "/api/me/credentials", payload: { git: { mode: "replace", type: "https", username: "no", token: "no" } } });
     assert.equal(https.statusCode, 400);
     const first = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { provider: "fixture", mode: "replace", apiKey: "first-secret" }, git: { mode: "replace", type: "ssh", privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture-private-key\n-----END OPENSSH PRIVATE KEY-----" } } });
@@ -58,7 +58,7 @@ test("personal credentials are private, independently updated and never returned
     const unchanged = await inject({ method: "GET", url: "/api/me/credentials", headers: { "x-issue-pilot-subject": second } });
     assert.deepEqual(JSON.parse(unchanged.body).modelProviders, ["fixture"]);
     const noElevate = await inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, payload: { name: "Owner", email: owner, active: true, role: "product" } });
-    // Another developer remains, so explicitly changing the owner's role is allowed.
+    // Another administrator remains, so explicitly changing the owner's role is allowed.
     assert.equal(noElevate.statusCode, 200, noElevate.body);
     const productionOnly = await inject({ method: "GET", url: "/api/me/credentials" });
     assert.equal(productionOnly.statusCode, 200);

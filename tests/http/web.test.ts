@@ -8,7 +8,7 @@ import { buildApi } from "../../src/http/api.ts";
 
 const projectTools = { async start() {}, async close() {} };
 
-test("serves the production Web and Workbench from the API origin", async () => {
+test("serves the production Web and keeps unlisted files private", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-web-"));
   const webRoot = path.join(root, "web");
   const stateRoot = path.join(root, "state");
@@ -16,7 +16,7 @@ test("serves the production Web and Workbench from the API origin", async () => 
     await Promise.all([mkdir(path.join(webRoot, "assets"), { recursive: true }), mkdir(stateRoot)]);
     await Promise.all([
       writeFile(path.join(webRoot, "index.html"), "<!doctype html><title>Issue Pilot</title>"),
-      writeFile(path.join(webRoot, "vscode.html"), "<!doctype html><title>Workbench</title>"),
+      writeFile(path.join(webRoot, "unlisted.html"), "<!doctype html><title>Unlisted</title>"),
       writeFile(path.join(webRoot, "assets", "app-123.js"), "globalThis.issuePilot = true;"),
       writeFile(path.join(webRoot, "private.txt"), "not public"),
     ]);
@@ -28,10 +28,8 @@ test("serves the production Web and Workbench from the API origin", async () => 
       assert.equal(index.headers["cache-control"], "private, no-cache, no-store, must-revalidate");
       assert.equal(index.headers["x-content-type-options"], "nosniff");
 
-      const workbench = await app.inject({ method: "GET", url: "/vscode.html?issue=ISSUE-20260815-001" });
-      assert.equal(workbench.statusCode, 200);
-      assert.match(workbench.body, /Workbench/);
-      assert.equal(workbench.headers["cache-control"], "private, no-cache, no-store, must-revalidate");
+      const removedPage = await app.inject({ method: "GET", url: "/unlisted.html?issue=ISSUE-20260815-001", headers: { accept: "text/html" } });
+      assert.equal(removedPage.statusCode, 404);
 
       const asset = await app.inject({ method: "GET", url: "/assets/app-123.js" });
       assert.equal(asset.statusCode, 200);
@@ -62,8 +60,8 @@ test("fails startup when the configured Web build is incomplete", async () => {
   const stateRoot = path.join(root, "state");
   try {
     await Promise.all([mkdir(webRoot), mkdir(stateRoot)]);
-    await writeFile(path.join(webRoot, "index.html"), "<!doctype html>");
-    await assert.rejects(buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, projectTools, webRoot }), /web_build_file_missing:vscode\.html/);
+    await writeFile(path.join(webRoot, "assets-only.js"), "void 0;");
+    await assert.rejects(buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, projectTools, webRoot }), /web_build_file_missing:index\.html/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -124,6 +124,15 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     assert.equal(path.relative(sharedCheckoutsRoot(root), checkoutRoot).startsWith(".."), false);
     assert.equal(workspace!.runtimeReady, true);
     assert.equal(session!.workspacePath, issueRuntimeRoot(root, issue!.key));
+    const unchangedAt = new Date(2_000);
+    await database.db.update(issueRepositories).set({ updatedAt: unchangedAt }).where(eq(issueRepositories.issueId, issue!.id));
+    await database.db.update(issueWorkspaces).set({ updatedAt: unchangedAt }).where(eq(issueWorkspaces.issueId, issue!.id));
+    await database.db.update(agentSessions).set({ updatedAt: unchangedAt }).where(eq(agentSessions.issueId, issue!.id));
+    assert.deepEqual(await prepareReadOnlyIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
+    for (const table of [issueRepositories, issueWorkspaces, agentSessions]) {
+      const [unchanged] = await database.db.select({ updatedAt: table.updatedAt }).from(table);
+      assert.equal(unchanged!.updatedAt.getTime(), unchangedAt.getTime());
+    }
 
     const extraRemote = path.join(root, "extra.git");
     await git(["clone", "--bare", remote, extraRemote]);

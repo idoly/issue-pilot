@@ -1,5 +1,5 @@
 import { Button, Modal, Select, Skeleton, Toggle, Tag } from "../ui";
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { createUser, errorMessage, loadManagedUsers, updateUser, type ManagedUser, type UserRole } from "../data/client";
 import { Pencil, UserCheck, UserPlus, UserX } from "../ui/icons";
@@ -8,6 +8,8 @@ import { useApplicationResources } from "./ApplicationResources";
 
 const userErrors: Record<string, string> = {
   developer_role_required: "只有开发角色可以管理用户或配置个人凭证",
+  admin_role_required: "只有管理角色可以维护管理用户",
+  last_active_admin: "至少保留一名启用的开发管理用户，以维护管理权限",
   invalid_user_role: "请选择产品、测试或开发角色",
   conflict: "用户标识已存在",
   invalid_user_subject: "用户标识格式无效",
@@ -31,7 +33,8 @@ function localDate(value: string): string {
 
 export function UserManagement() {
   const { refreshPeople, currentUser } = useApplicationResources();
-  const canManage = () => currentUser()?.role === "developer";
+  const canManage = (user?: Pick<ManagedUser, "isAdmin">) => currentUser()?.role === "developer" && (!user?.isAdmin || currentUser()?.isAdmin === true);
+  const [isAdmin, setIsAdmin] = createSignal(false, { ownedWrite: true });
   const [role, setRole] = createSignal<UserRole>("product", { ownedWrite: true });
   const [users, setUsers] = createSignal<ManagedUser[]>([], { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
@@ -47,7 +50,8 @@ export function UserManagement() {
   let subjectInput!: HTMLInputElement;
   let nameInput!: HTMLInputElement;
   let emailInput!: HTMLInputElement;
-  let loadGeneration = 0;
+  let loadGeneration = 0, contextGeneration = 0, disposed = false;
+  onCleanup(() => { disposed = true; contextGeneration++; loadGeneration++; });
 
   const load = async () => {
     const generation = ++loadGeneration;
@@ -67,63 +71,76 @@ export function UserManagement() {
     }
   };
 
+  createEffect(() => ({ subject: currentUser()?.subject, role: currentUser()?.role, isAdmin: Boolean(currentUser()?.isAdmin) }), (identity, previous) => {
+    if (identity.subject === previous?.subject && identity.role === previous?.role && identity.isAdmin === previous?.isAdmin) return;
+    contextGeneration++; loadGeneration++;
+    setModalOpen(false); setEditingSubject(null); setSubject(""); setName(""); setEmail(""); setRole("product"); setIsAdmin(false); setActive(true);
+    setSaving(false); setChangingSubject(""); setError(""); setUsers([]);
+    if (identity.subject) void load().catch(() => undefined);
+    else setLoading(false);
+  });
+
   const openCreate = () => {
+    if (!canManage()) return;
     setEditingSubject(null);
     setSubject("");
     setName("");
     setEmail("");
     setActive(true);
-    setRole("product");
+    setRole("product"); setIsAdmin(false);
     setError("");
     setModalOpen(true);
   };
 
   const openEdit = (user: ManagedUser) => {
+    if (!canManage(user)) return;
     setEditingSubject(user.subject);
     setSubject(user.subject);
     setName(user.name);
     setEmail(user.email);
     setActive(user.active);
-    setRole(user.role);
+    setRole(user.role); setIsAdmin(Boolean(user.isAdmin));
     setError("");
     setModalOpen(true);
   };
 
   const save = async () => {
-    if (saving()) return;
+    if (saving() || !modalOpen() || !canManage({ isAdmin: isAdmin() })) return;
+    const editing = editingSubject(), target = users().find(user => user.subject === editing);
+    if (editing && (!target || !canManage(target))) return;
+    const owner = contextGeneration;
     setSaving(true);
     setError("");
     try {
-      const editing = editingSubject();
       const values = { subject: subjectInput.value.trim(), name: nameInput.value.trim(), email: emailInput.value.trim() };
-      if (editing) await updateUser(editing, { name: values.name, email: values.email, active: active(), role: role() });
-      else await createUser({ ...values, role: role() });
-      setModalOpen(false);
+      const management = currentUser()?.isAdmin && (editing || isAdmin()) ? { isAdmin: isAdmin() } : {};
+      if (editing) await updateUser(editing, { name: values.name, email: values.email, active: active(), role: role(), ...management });
+      else await createUser({ ...values, role: role(), ...management });
+      if (owner === contextGeneration) setModalOpen(false);
       await refreshPeople();
-      await load();
+      if (!disposed) await load();
     } catch (saveError) {
-      setError(message(saveError));
+      if (owner === contextGeneration) setError(message(saveError));
     } finally {
-      setSaving(false);
+      if (owner === contextGeneration) setSaving(false);
     }
   };
 
   const changeActive = async (user: ManagedUser) => {
-    if (changingSubject()) return;
+    if (changingSubject() || !canManage(user)) return;
+    const owner = contextGeneration;
     setChangingSubject(user.subject);
     setError("");
     try {
-      await updateUser(user.subject, { name: user.name, email: user.email, active: !user.active, role: user.role });
+      await updateUser(user.subject, { active: !user.active });
       await refreshPeople();
-      await load();
+      if (!disposed) await load();
     } catch (changeError) {
-      setError(message(changeError));
+      if (owner === contextGeneration) setError(message(changeError));
     } finally {
-      setChangingSubject("");
+      if (owner === contextGeneration) setChangingSubject("");
     }
   };
-
-  void load().catch(() => undefined);
 
   return (
     <div class="user-management">
@@ -141,10 +158,10 @@ export function UserManagement() {
               <div class="user-table-row">
                 <div class="user-cell-primary"><span class="user-avatar" aria-hidden="true">{user.name.slice(0, 1)}</span><span class="user-cell-copy"><strong>{user.name}</strong><span>{user.email}</span></span></div>
                 <code>{user.subject}</code>
-                <div class="user-role-cell"><Tag>{({ product: "产品", test: "测试", developer: "开发" })[user.role]}</Tag></div>
+                <div class="user-role-cell"><Tag>{({ product: "产品", test: "测试", developer: "开发" })[user.role]}</Tag><Show when={user.isAdmin}><Tag>管理</Tag></Show></div>
                 <div class="user-status-cell"><Tag color={user.active ? "green" : "default"}>{user.active ? "启用" : "停用"}</Tag></div>
                 <time>{localDate(user.updatedAt)}</time>
-                <Show when={canManage()}><div class="user-row-actions">
+                <Show when={canManage(user)}><div class="user-row-actions">
                   <Button size="small" icon={<Pencil size={14} />} onClick={() => openEdit(user)}>编辑</Button>
                   <Button size="small" loading={changingSubject() === user.subject} icon={user.active ? <UserX size={14} /> : <UserCheck size={14} />} onClick={() => { void changeActive(user); }}>{user.active ? "停用" : "启用"}</Button>
                 </div></Show>
@@ -159,6 +176,7 @@ export function UserManagement() {
           <label><span>姓名</span><input ref={nameInput} class="user-input" aria-label="用户姓名" value={name()} onInput={(event) => setName(event.currentTarget.value)} /></label>
           <label><span>邮箱</span><input ref={emailInput} class="user-input" aria-label="用户邮箱" value={email()} inputmode="email" onInput={(event) => setEmail(event.currentTarget.value)} /></label>
           <label><span>角色</span><Select aria-label="用户角色" value={role()} options={[{ value: "product", label: "产品" }, { value: "test", label: "测试" }, { value: "developer", label: "开发" }]} onChange={(value) => setRole(value as UserRole)} /></label>
+          <Show when={currentUser()?.isAdmin}><div class="user-active-field"><span>全局管理</span><Toggle aria-label="全局管理" checked={isAdmin()} onChange={setIsAdmin} /></div></Show>
           <Show when={editingSubject()}><div class="user-active-field"><span>启用</span><Toggle aria-label="用户启用状态" checked={active()} onChange={setActive} /></div></Show>
           <Show when={error()}>{(value) => <div class="form-error" role="alert">{value()}</div>}</Show>
         </div>

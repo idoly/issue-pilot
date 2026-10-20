@@ -8,6 +8,8 @@ interface ModalProps {
   title: string;
   width?: number;
   children?: JSX.Element;
+  footerExtra?: JSX.Element;
+  footer?: JSX.Element;
   okText?: string;
   cancelText?: string;
   confirmLoading?: boolean;
@@ -62,7 +64,7 @@ function ModalContent(props: ModalProps) {
     <div ref={panel} class="ui-modal-container" role="dialog" aria-modal="true" aria-labelledby={id} tabindex={-1} style={{ width: `${props.width ?? 560}px` }}>
       <header class="ui-modal-header"><h2 id={id}>{props.title}</h2><Button type="text" shape="circle" icon={<X size={18} />} aria-label="关闭弹窗" disabled={props.confirmLoading || props.cancelButtonProps?.disabled} onClick={cancel} /></header>
       <div class="ui-modal-body">{props.children}</div>
-      <footer class="ui-modal-footer"><Button disabled={props.cancelButtonProps?.disabled || props.confirmLoading} onClick={cancel}>{props.cancelText ?? "取消"}</Button><Button type="primary" danger={props.okButtonProps?.danger} disabled={props.okButtonProps?.disabled} loading={props.confirmLoading} onClick={props.onOk}>{props.okText ?? "确定"}</Button></footer>
+      <footer class="ui-modal-footer">{props.footer === undefined ? <><Button disabled={props.cancelButtonProps?.disabled || props.confirmLoading} onClick={cancel}>{props.cancelText ?? "取消"}</Button><Button type="primary" danger={props.okButtonProps?.danger} disabled={props.okButtonProps?.disabled} loading={props.confirmLoading} onClick={props.onOk}>{props.okText ?? "确定"}</Button></> : props.footer}{props.footerExtra}</footer>
     </div>
   </div></Portal>;
 }

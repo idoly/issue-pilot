@@ -24,6 +24,24 @@ function issueMultipart(boundary: string, issue: Record<string, unknown>, fileNa
   ].join("\r\n"));
 }
 
+for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt"]) test(`preserves long attachment names without exceeding filesystem limits (${Buffer.byteLength(fileName)} UTF-8 bytes)`, async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Long names");
+    const boundary = "long-attachment-name", content = "long filename evidence";
+    const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: issueMultipart(boundary, issuePayload("long-names"), fileName, content) });
+    assert.equal(created.statusCode, 201, created.body);
+    const issue = await json(created);
+    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(response => response.json<{ attachments: Array<{ id: string; fileName: string }> }>());
+    assert.equal(detail.attachments[0]!.fileName, fileName);
+    const root = issueAttachmentRoot(fixture.root, String(issue.id)), files = await readdir(root);
+    assert.equal(files.length, 1); assert.ok(Buffer.byteLength(files[0]!) <= 255); assert.equal(path.extname(files[0]!), ".txt"); assert.ok(!files[0]!.includes("\ufffd"));
+    const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${detail.attachments[0]!.id}` });
+    assert.equal(download.statusCode, 200, download.body); assert.equal(download.body, content);
+    assert.ok(String(download.headers["content-disposition"]).includes(encodeURIComponent(fileName)));
+  } finally { await fixture.cleanup(); }
+});
+
 test("creates initial attachments atomically and rolls back the claimed Issue root", async () => {
   const fixture = await createApiFixture();
   try {
@@ -117,6 +135,7 @@ test("serves only verified attachment files and exposes no independent write rou
     const file = path.join(root, (await readdir(root))[0]!);
     await chmod(file, 0o600);
     await writeFile(file, "evidencf", "utf8");
+    await chmod(file, 0o400);
     assert.equal((await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${attachmentId}` })).statusCode, 500);
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/sync` })).statusCode, 404);
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/attachments` })).statusCode, 404);

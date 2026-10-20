@@ -8,7 +8,6 @@ type CommonProps<Option extends SelectOption> = {
   "aria-label": string;
   disabled?: boolean;
   loading?: boolean;
-  size?: "small";
   placeholder?: string;
   allowClear?: boolean;
   onClear?: () => void;
@@ -17,7 +16,7 @@ type CommonProps<Option extends SelectOption> = {
   labelRender?: (option: Option) => JSX.Element;
   maxTagCount?: number;
   popupClass?: string;
-  popupMatchSelectWidth?: boolean | number;
+  popupMatchSelectWidth?: number;
   listHeight?: number;
   notFoundContent?: string;
 };
@@ -37,6 +36,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
   let popup: HTMLDivElement | undefined;
   let search: HTMLInputElement | undefined;
   const multiple = () => props.mode === "multiple";
+  const inactive = () => props.disabled || props.loading;
   const searchable = () => props.showSearch !== false && (Boolean(props.showSearch) || multiple());
   const selected = () => Array.isArray(props.value) ? props.value : props.value === undefined ? [] : [props.value];
   const optionByValue = (value: string) => props.options.find((option) => option.value === value);
@@ -47,7 +47,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
   const place = () => {
     if (!open() || !trigger) return;
     const rect = trigger.getBoundingClientRect();
-    const width = Math.min(typeof props.popupMatchSelectWidth === "number" ? props.popupMatchSelectWidth : Math.max(rect.width, 160), window.innerWidth - 16);
+    const width = Math.min(props.popupMatchSelectWidth ?? Math.max(rect.width, 160), window.innerWidth - 16);
     const below = window.innerHeight - rect.bottom - 12;
     const above = rect.top - 12;
     const height = Math.min(props.listHeight ?? 300, Math.max(below, above) - (searchable() ? 45 : 0));
@@ -56,12 +56,12 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
   };
   const close = (focus = false) => { setOpen(false); setQuery(""); if (focus) trigger.focus(); };
   const show = () => {
-    if (props.disabled || props.loading) return;
+    if (inactive()) return;
     setOpen(true); setActive(Math.max(0, visible().findIndex((option) => selected().includes(option.value)))); place();
     queueMicrotask(() => { if (open()) { place(); search?.focus(); } });
   };
   const choose = (option: Option) => {
-    if (props.disabled || props.loading || option.disabled) return;
+    if (inactive() || option.disabled) return;
     if (props.mode === "multiple") {
       props.onChange(selected().includes(option.value) ? selected().filter((value) => value !== option.value) : [...selected(), option.value]);
       setQuery("");
@@ -80,7 +80,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
     popup?.querySelector<HTMLElement>(`[data-option-index="${next}"]`)?.scrollIntoView?.({ block: "nearest" });
   };
   const onKeyDown: JSX.EventHandler<HTMLElement, KeyboardEvent> = (event) => {
-    if (event.isComposing) return;
+    if (event.isComposing || inactive()) return;
     if (event.key === "Escape" && open()) { event.preventDefault(); event.stopPropagation(); close(true); return; }
     if (event.key === "Tab") { close(true); return; }
     if (event.key === "Backspace" && props.mode === "multiple" && !query() && selected().length) { event.preventDefault(); props.onChange(selected().slice(0, -1)); return; }
@@ -105,14 +105,14 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
     return option ? props.labelRender?.(option) ?? option.label : value;
   };
   return <div ref={root} class={`ui-select ${multiple() ? "ui-select-multiple" : ""} ${props.disabled ? "is-disabled" : ""}`}>
-    <div ref={trigger} class="ui-select-selector" role="combobox" tabindex={props.disabled ? -1 : 0} aria-label={props["aria-label"]} aria-expanded={open() ? "true" : "false"} aria-controls={open() ? `${id}-list` : undefined} aria-haspopup="listbox" aria-disabled={props.disabled || props.loading ? "true" : undefined} aria-activedescendant={open() && visible()[active()] ? `${id}-option-${active()}` : undefined} onKeyDown={onKeyDown} onClick={() => open() ? close() : show()}>
+    <div ref={trigger} class="ui-select-selector" role="combobox" tabindex={inactive() ? -1 : 0} aria-label={props["aria-label"]} aria-expanded={open() ? "true" : "false"} aria-controls={open() ? `${id}-list` : undefined} aria-haspopup="listbox" aria-disabled={inactive() ? "true" : undefined} aria-activedescendant={open() && visible()[active()] ? `${id}-option-${active()}` : undefined} onKeyDown={onKeyDown} onClick={() => open() ? close() : show()}>
       <span class="ui-select-content"><Show when={selected().length} fallback={<span class="ui-select-placeholder">{props.placeholder ?? "请选择"}</span>}>
         <Show when={multiple()} fallback={<span class="ui-select-item-content">{label(selected()[0]!)}</span>}>
-          <For each={selected().slice(0, props.maxTagCount ?? Number.POSITIVE_INFINITY)}>{(value) => <span class="ui-select-token"><span>{label(value)}</span><button type="button" tabindex={-1} aria-label={`移除 ${value}`} disabled={props.disabled || props.loading} onClick={(event) => { event.stopPropagation(); if (props.mode === "multiple") props.onChange(selected().filter((item) => item !== value)); }}><X size={11} /></button></span>}</For>
+          <For each={selected().slice(0, props.maxTagCount ?? Number.POSITIVE_INFINITY)}>{(value) => <span class="ui-select-token"><span>{label(value)}</span><button type="button" tabindex={-1} aria-label={`移除 ${value}`} disabled={inactive()} onClick={(event) => { event.stopPropagation(); if (props.mode === "multiple") props.onChange(selected().filter((item) => item !== value)); }}><X size={11} /></button></span>}</For>
           <Show when={selected().length > (props.maxTagCount ?? Number.POSITIVE_INFINITY)}><span class="ui-select-token">+{selected().length - (props.maxTagCount ?? 0)}</span></Show>
         </Show>
       </Show></span>
-      <Show when={props.allowClear && selected().length}><button type="button" class="ui-select-clear" disabled={props.disabled || props.loading} aria-label={`清除 ${props["aria-label"]}`} onClick={(event) => { event.stopPropagation(); props.onClear?.(); }}><X size={12} /></button></Show><ChevronDown size={13} />
+      <Show when={props.allowClear && selected().length}><button type="button" class="ui-select-clear" disabled={inactive()} aria-label={`清除 ${props["aria-label"]}`} onClick={(event) => { event.stopPropagation(); props.onClear?.(); }}><X size={12} /></button></Show><ChevronDown size={13} />
     </div>
     <Show when={open()}><Portal><div ref={popup} class={`ui-select-popup ${props.popupClass ?? ""}`} style={position()} onKeyDown={onKeyDown}>
       <Show when={searchable()}><input ref={search} class="ui-select-search" aria-label={`搜索 ${props["aria-label"]}`} role="searchbox" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0); }} /></Show>

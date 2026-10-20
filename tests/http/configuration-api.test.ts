@@ -1,26 +1,60 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import { inspect } from "node:util";
 import { test } from "node:test";
 
+import { createClient, type TransactionMode, type Transaction } from "@libsql/client";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadConfigurationCatalog } from "../../src/configuration/read.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { createApiFixture, createIssue, createService, json, servicePayload, testAgent } from "./fixture.ts";
 
+test("DMS scope errors preserve upstream HTTP status without private response details", async () => {
+  const fixture = await createApiFixture(), originalFetch = globalThis.fetch;
+  let upstreamStatus = 429;
+  globalThis.fetch = async () => new Response("private-dms-token private-upstream-detail", { status: upstreamStatus, headers: { "retry-after": "120" } });
+  try {
+    for (const status of [429, 403, 503]) {
+      upstreamStatus = status;
+      const response = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: { url: "https://dms.example.test/sse", authorization: "Bearer private-dms-token", environmentKey: "prod", instanceAlias: "ORDERS-PROD", schemaName: "orders" } });
+      assert.equal(response.statusCode, 502, response.body);
+      assert.equal((await json(response)).error, `dms_mcp_http_${status}`);
+      assert.doesNotMatch(response.body, /private-dms-token|private-upstream-detail/);
+    }
+  } finally { globalThis.fetch = originalFetch; await fixture.cleanup(); }
+});
+
 test("configuration snapshots do not block Workspace writes", async () => {
   const fixture = await createApiFixture();
   const connection = openDatabase(fixture.databaseFile);
+  const writer = createClient({ url: `file:${fixture.databaseFile}`, timeout: 25 });
+  const begin = connection.client.transaction.bind(connection.client);
+  let started!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let transaction: Transaction | undefined;
+  let snapshot: ReturnType<typeof loadConfigurationCatalog> | undefined;
+  connection.client.transaction = async (mode?: TransactionMode) => {
+    transaction = await begin(mode);
+    const commit = transaction.commit.bind(transaction);
+    transaction.commit = async () => { started(); await gate; return commit(); };
+    return transaction;
+  };
   try {
     await createService(fixture.app, "Snapshot", ["dev"]);
     await createIssue(fixture.app, "snapshot", "dev");
     fixture.engine.running.clear();
-    // The snapshot begins before the write, and must hold no writer lock across awaits.
-    const snapshot = loadConfigurationCatalog(connection.db);
-    const update = connection.client.execute("update issue_workspaces set status = 'preparing', runtime_ready = 0 returning issue_id");
-    const [catalog, result] = await Promise.all([snapshot, update]);
-    assert.equal(catalog.services.length, 1);
+    snapshot = loadConfigurationCatalog(connection.db);
+    await Promise.race([ready, snapshot]);
+    assert.ok(transaction && !transaction.closed);
+    const result = await writer.execute("update issue_workspaces set status = 'preparing', runtime_ready = 0 returning issue_id");
+    release();
+    assert.equal((await snapshot).services.length, 1);
     assert.equal(result.rows.length, 1);
-  } finally { connection.close(); await fixture.cleanup(); }
+  } finally {
+    release(); await snapshot?.catch(() => undefined);
+    writer.close(); connection.close(); await fixture.cleanup();
+  }
 });
 
 test("projects bootstrap user, environments, models, repositories, and deployments without internal fields", async () => {
@@ -29,7 +63,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);
     const currentUser = await fixture.app.inject({ method: "GET", url: "/api/me" });
     assert.equal(currentUser.statusCode, 200);
-    assert.deepEqual(await json(currentUser), { ...issuePilotConfig.bootstrapUser, role: "developer" });
+    assert.deepEqual(await json(currentUser), { ...issuePilotConfig.bootstrapUser });
     const users = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string }>;
     assert.deepEqual(users.map(({ subject }) => subject), [issuePilotConfig.bootstrapUser.subject]);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } })).statusCode, 400);
@@ -64,7 +98,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     };
     assert.deepEqual(config.environments.map(({ key }) => key).sort(), ["dev", "prod", "test"]);
     assert.equal(config.environments.some((environment) => "id" in environment || "kind" in environment), false);
-    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" });
+    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {} });
     assert.deepEqual(Object.keys(config.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     const service = config.services[0]!;
     assert.equal(service.key, "alpha");
@@ -175,6 +209,84 @@ test("redacts stored credentials and applies explicit preserve, replace, and cle
   }
 });
 
+for (const field of ["alias", "url"] as const) test(`swaps repository ${field} values without replacing their identities`, async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Swap", ["prod", "test"], ["https://example.test/swap-first.git", "https://example.test/swap-second.git"]);
+    const load = async () => JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/config" })).body).services[0] as { repositories: Array<{ id: string; alias: string; url: string }>; deployments: Array<{ environmentKey: string; repositoryBranches: Array<{ repositoryId: string; baseBranch: string }> }> };
+    const initial = await load();
+    const repositories = initial.repositories.map((repository, index) => ({ ...repository, [field]: initial.repositories[1 - index]![field] }));
+    const payload = { name: "Swap", description: "Swap existing bindings", repositories, deployments: ["prod", "test"].map(environmentKey => ({ environmentKey, capabilities: [], repositoryBranches: repositories.map((repository, index) => ({ repositoryAlias: repository.alias, baseBranch: index ? "release" : "main" })) })) };
+    const update = await fixture.app.inject({ method: "PATCH", url: "/api/services/swap", payload });
+    assert.equal(update.statusCode, 200, update.body);
+    const saved = await load();
+    assert.deepEqual([...saved.repositories].sort((a, b) => a.id.localeCompare(b.id)), [...repositories].sort((a, b) => a.id.localeCompare(b.id)));
+    for (const deployment of saved.deployments) for (const [index, repository] of repositories.entries()) {
+      assert.equal(deployment.repositoryBranches.find(branch => branch.repositoryId === repository.id)?.baseBranch, index ? "release" : "main");
+    }
+    assert.equal((await fixture.app.inject({ method: "PATCH", url: "/api/services/swap", payload })).statusCode, 200);
+    const beforeFailure = await load();
+    const sqlite = new DatabaseSync(fixture.databaseFile);
+    sqlite.exec("CREATE TRIGGER reject_repository_insert BEFORE INSERT ON service_repositories BEGIN SELECT RAISE(ABORT, 'fixture_repository_insert_failed'); END");
+    sqlite.close();
+    const failed = await fixture.app.inject({ method: "PATCH", url: "/api/services/swap", payload: { ...payload, name: "Must roll back", repositories: initial.repositories } });
+    assert.equal(failed.statusCode, 500);
+    assert.deepEqual(await load(), beforeFailure);
+  } finally { await fixture.cleanup(); }
+});
+
+test("keeps repository order when changing only one binding", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Order", ["test"], ["https://example.test/order-first.git", "https://example.test/order-second.git"]);
+    const load = async () => JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/config" })).body).services[0].repositories as Array<{ id: string; alias: string; url: string }>;
+    const repositories = (await load()).map((repository, index) => index ? repository : { ...repository, alias: "renamed" });
+    const response = await fixture.app.inject({ method: "PATCH", url: "/api/services/order", payload: { name: "Order", description: "", repositories, deployments: [{ environmentKey: "test", capabilities: [], repositoryBranches: repositories.map(repository => ({ repositoryAlias: repository.alias, baseBranch: "main" })) }] } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.deepEqual(await load(), repositories);
+  } finally { await fixture.cleanup(); }
+});
+
+test("does not log configuration credentials when a database write fails", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Logging", ["test"]);
+    const configuration = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/config" })).body);
+    const repository = configuration.services[0].repositories[0];
+    const sqlite = new DatabaseSync(fixture.databaseFile);
+    sqlite.exec("CREATE TRIGGER reject_deployment_update BEFORE UPDATE ON service_deployments BEGIN SELECT RAISE(ABORT, 'fixture_write_failed'); END");
+    sqlite.close();
+    const logs: string[] = [];
+    fixture.app.log.error = (error: unknown) => { logs.push(inspect(error)); };
+    for (const password of ["fixture-private-password", "issue_deployment_required"]) {
+      logs.length = 0;
+      const response = await fixture.app.inject({ method: "PATCH", url: "/api/services/logging", payload: {
+        name: "Logging", description: "", repositories: [repository], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: repository.alias, baseBranch: "main" }], capabilities: ["db"], db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", credentialUpdate: { mode: "replace", values: { password } } }] } }],
+      } });
+      assert.equal(response.statusCode, 500, "credential values must not be interpreted as database errors");
+      assert.ok(logs.length > 0);
+      assert.equal((response.body + logs.join("\n")).includes(password), false);
+      assert.match(logs.join("\n"), /database_operation_failed:SQLITE_CONSTRAINT/);
+    }
+  } finally { await fixture.cleanup(); }
+});
+
+test("reuses a removed repository alias without changing the retained repository identity", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alias", ["prod", "test"], ["https://example.test/alias-first.git", "https://example.test/alias-second.git"]);
+    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then(response => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }> }> };
+    const [retained, removed] = config.services[0]!.repositories;
+    const payload = { name: "Alias", description: "Keep first repository", repositories: [{ ...retained!, alias: removed!.alias }], deployments: ["prod", "test"].map(environmentKey => ({ environmentKey, repositoryBranches: [{ repositoryAlias: removed!.alias, baseBranch: "main" }], capabilities: [] })) };
+    const update = await fixture.app.inject({ method: "PATCH", url: "/api/services/alias", payload });
+    assert.equal(update.statusCode, 200, update.body);
+    const after = await fixture.app.inject({ method: "GET", url: "/api/config" }).then(response => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }>; deployments: Array<{ repositoryBranches: Array<{ repositoryId: string }> }> }> };
+    assert.deepEqual(after.services[0]!.repositories, [{ ...retained!, alias: removed!.alias }]);
+    assert.ok(after.services[0]!.deployments.every(deployment => deployment.repositoryBranches.length === 1 && deployment.repositoryBranches[0]!.repositoryId === retained!.id));
+    assert.equal((await fixture.app.inject({ method: "PATCH", url: "/api/services/alias", payload })).statusCode, 200);
+  } finally { await fixture.cleanup(); }
+});
+
 test("updates and deletes Service configuration directly", async () => {
   const fixture = await createApiFixture();
   try {
@@ -198,8 +310,8 @@ test("validates the global model and repository ownership independently", async 
     await createService(fixture.app, "Alpha");
     await createService(fixture.app, "Beta");
     for (const [agent, expected] of [
-      [{ provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high" }, "agent_model_not_available"],
-      [{ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off" }, "agent_thinking_level_not_supported"],
+      [{ provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high", codemode: "off", runtime: {} }, "agent_model_not_available"],
+      [{ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off", codemode: "off", runtime: {} }, "agent_thinking_level_not_supported"],
     ] as const) {
       const response = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: agent });
       assert.equal(response.statusCode, 400);

@@ -9,6 +9,8 @@ export interface CommandExecutionOptions {
   environment?: Readonly<Record<string, string>>;
   maxOutputBytes?: number | null;
   input?: Uint8Array;
+  /** Consume stdout as it arrives instead of retaining it in the result. */
+  onStdout?: (chunk: string) => void;
 }
 
 export interface CommandExecutionResult {
@@ -23,6 +25,7 @@ export interface CommandExecutor {
 }
 
 export async function executeLocalCommand(command: string, args: string[], options: CommandExecutionOptions = {}): Promise<CommandExecutionResult> {
+  options.signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const usesProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
@@ -37,6 +40,7 @@ export async function executeLocalCommand(command: string, args: string[], optio
     let settled = false;
     let outputBytes = 0;
     let outputLimitExceeded = false;
+    let streamError: Error | undefined;
     const finish = (operation: () => void) => {
       if (settled) return;
       settled = true;
@@ -45,7 +49,8 @@ export async function executeLocalCommand(command: string, args: string[], optio
       operation();
     };
     const signalProcess = (signal: NodeJS.Signals) => {
-      if (!usesProcessGroup || child.pid === undefined) {
+      if (child.pid === undefined) return;
+      if (!usesProcessGroup) {
         child.kill(signal);
         return;
       }
@@ -81,12 +86,18 @@ export async function executeLocalCommand(command: string, args: string[], optio
     if (options.input) child.stdin?.end(options.input);
     child.stdout!.setEncoding("utf8");
     child.stderr!.setEncoding("utf8");
-    child.stdout!.on("data", capture((chunk) => { stdout += chunk; }));
+    child.stdout!.on("data", capture((chunk) => {
+      if (!options.onStdout) { stdout += chunk; return; }
+      try { options.onStdout(chunk); }
+      catch (error) { streamError = error instanceof Error ? error : new Error("command_output_processing_failed"); terminate(); }
+    }));
     child.stderr!.on("data", capture((chunk) => { stderr += chunk; }));
     child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => finish(() => outputLimitExceeded
-      ? reject(new Error("command_output_too_large"))
-      : resolve({ stdout, stderr, code: code ?? 1, killed })));
+    child.on("close", (code) => finish(() => streamError
+      ? reject(streamError)
+      : outputLimitExceeded
+        ? reject(new Error("command_output_too_large"))
+        : resolve({ stdout, stderr, code: code ?? 1, killed })));
     if (options.signal?.aborted) terminate();
   });
 }
