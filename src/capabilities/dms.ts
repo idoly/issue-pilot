@@ -242,7 +242,7 @@ export async function queryDms(
     boundedSignal.throwIfAborted();
     const text = JSON.stringify({ tool: tool.name, result }, null, 2);
     if (input.output) {
-      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); });
+      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal);
       return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
     }
     return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });

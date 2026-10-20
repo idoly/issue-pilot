@@ -10,8 +10,9 @@ import type { Connection, ConnectionOptions, FieldPacket, RowDataPacket } from "
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { exportMysql, queryMysql, readMysql, validateReadOnlyQuery, type MysqlConnectionFactory } from "../../src/capabilities/mysql.ts";
 import { IssueOutputStore, resolveIssueOutput } from "../../src/outputs/store.ts";
+import { resolveConfiguredCapabilitySections } from "../../src/configuration/credentials.ts";
 
-function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }>, wait?: Promise<void>, options: { failStatement?: string; endError?: Error; onEnd?: () => void } = {}) {
+function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }>, wait?: Promise<void>, options: { failStatement?: string; queryError?: Error; endError?: Error; onEnd?: () => void } = {}) {
   const statements: string[] = [];
   let ended = false;
   let destroyed = false;
@@ -25,6 +26,7 @@ function connectionFixture(rows: RowDataPacket[], fields: Array<{ name: string }
         queueMicrotask(() => query.emit("fields", fields as FieldPacket[]));
         return Readable.from((async function* () {
           if (wait) await Promise.race([wait, new Promise<void>((resolve) => { releaseWait = resolve; })]);
+          if (options.queryError) throw options.queryError;
           for (const row of rows) yield row;
         })(), { objectMode: true });
       };
@@ -86,6 +88,67 @@ test("streams MySQL reads inside a server-enforced read-only transaction", async
   assert.equal(fixture.ended(), true);
 });
 
+test("passes significant MySQL password whitespace from configuration to the driver unchanged", async () => {
+  const password = "  driver-private-password \t";
+  const stored = resolveConfiguredCapabilitySections({ db: { databases: [{ url: config.url, username: config.username, credentialUpdate: { mode: "replace", values: { password } } }] } }, ["db"]);
+  const fixture = connectionFixture([{ id: "1" } as RowDataPacket], [{ name: "id" }]);
+  let options: ConnectionOptions | undefined;
+  const result = await readMysql(stored.db!, { database: "orders", statement: "SELECT id FROM orders" }, undefined, undefined, value => { options = value; return fixture.connection; });
+  assert.equal(options?.password, password);
+  assert.doesNotMatch(JSON.stringify(result), /driver-private-password/);
+  assert.equal(fixture.ended(), true);
+});
+
+test("retains both MySQL values with unique column aliases", async () => {
+  const fixture = connectionFixture([{ left_id: "first", right_id: "second" } as RowDataPacket], [{ name: "left_id" }, { name: "right_id" }]);
+  const result = await queryMysql({ config, statement: "SELECT a.id AS left_id, b.id AS right_id FROM a JOIN b" }, undefined, () => fixture.connection);
+  assert.deepEqual(result.columns, ["left_id", "right_id"]);
+  assert.deepEqual(result.rows, [{ left_id: "first", right_id: "second" }]);
+  assert.equal(fixture.ended(), true);
+});
+
+for (const empty of [false, true]) test(`rejects duplicate MySQL result columns for ${empty ? "empty" : "nonempty"} results and preserves exports`, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-mysql-columns-"));
+  const fields = [{ name: "id" }, { name: "id" }];
+  const rows = empty ? [] : [{ id: "second-column-value" } as RowDataPacket];
+  try {
+    const queried = connectionFixture(rows, fields);
+    await assert.rejects(queryMysql({ config, statement: "SELECT a.id, b.id FROM a JOIN b" }, undefined, () => queried.connection), /database_query_duplicate_columns/);
+    assert.equal(queried.ended(), true);
+    assert.equal(queried.statements.at(-1), "ROLLBACK");
+    const store = new IssueOutputStore(root, "ISSUE-20261018-991");
+    for (const format of ["csv", "jsonl"] as const) {
+      const name = `result.${format}`;
+      await store.write(name, "old-delivery");
+      const exported = connectionFixture(rows, fields);
+      await assert.rejects(exportMysql({ config, statement: "SELECT a.id, b.id FROM a JOIN b", output: { fileName: name, format }, store }, undefined, () => exported.connection), /database_query_duplicate_columns/);
+      assert.equal((await store.read(name)).toString(), "old-delivery");
+      assert.equal(exported.ended(), true);
+      assert.equal(exported.statements.at(-1), "ROLLBACK");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("retains empty-result columns and format-specific headers", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-mysql-empty-"));
+  const fields = [{ name: "id" }, { name: "note" }];
+  try {
+    const queried = connectionFixture([], fields);
+    const result = await queryMysql({ config, statement: "SELECT id, note FROM orders WHERE 1 = 0" }, undefined, () => queried.connection);
+    assert.deepEqual(result.columns, ["id", "note"]);
+    assert.deepEqual(result.rows, []);
+    const store = new IssueOutputStore(root, "ISSUE-20261019-008");
+    for (const format of ["csv", "jsonl"] as const) {
+      const fixture = connectionFixture([], fields), fileName = `empty.${format}`;
+      const output = await exportMysql({ config, statement: "SELECT id, note FROM orders WHERE 1 = 0", output: { fileName, format }, store }, undefined, () => fixture.connection);
+      assert.equal(output.rows, 0);
+      assert.deepEqual(output.columns, ["id", "note"]);
+      assert.equal((await store.read(fileName)).toString(), format === "csv" ? '"id","note"\n' : "");
+      assert.equal(fixture.ended(), true);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("returns every MySQL row without a row or result-byte cap", async () => {
   const rows = Array.from({ length: 600 }, (_, id) => ({ id: String(id), value: "x".repeat(2000) }) as RowDataPacket);
   const fixture = connectionFixture(rows, [{ name: "id" }, { name: "value" }]);
@@ -144,6 +207,45 @@ for (const stage of ["START TRANSACTION READ ONLY", "ROLLBACK", "close", "abort_
     assert.ok(fixture.ended());
     if (stage === "START TRANSACTION READ ONLY") assert.deepEqual(fixture.statements, [stage]);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const output of [false, true]) for (const rollbackFails of [false, true]) test(`keeps MySQL query and cleanup errors for ${output ? "export" : "query"}, rollback failure ${rollbackFails}`, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-mysql-errors-"));
+  const primary = new Error("fixture_query_failed"), closing = new Error("fixture_shutdown_failed");
+  const fixture = connectionFixture([], [{ name: "id" }], undefined, { queryError: primary, endError: closing, ...(rollbackFails ? { failStatement: "ROLLBACK" } : {}) });
+  const store = new IssueOutputStore(root, "ISSUE-20261019-009");
+  try {
+    await store.write("result.jsonl", "old-delivery");
+    const pending = output
+      ? exportMysql({ config, statement: "SELECT id FROM orders", output: { fileName: "result.jsonl", format: "jsonl" }, store }, undefined, () => fixture.connection)
+      : queryMysql({ config, statement: "SELECT id FROM orders" }, undefined, () => fixture.connection);
+    await assert.rejects(pending, error => {
+      assert(error instanceof AggregateError);
+      assert.equal(error.message, primary.message);
+      assert.equal(error.errors[0], primary);
+      assert.equal(error.errors.at(-1), closing);
+      assert.equal(error.errors.length, rollbackFails ? 3 : 2);
+      if (rollbackFails) assert.equal(error.errors[1].message, "fixture_statement_failed");
+      return true;
+    });
+    assert.equal(fixture.ended(), true);
+    assert.deepEqual(fixture.statements, ["START TRANSACTION READ ONLY", "SELECT id FROM orders", "ROLLBACK"]);
+    assert.equal((await store.read("result.jsonl")).toString(), "old-delivery");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const phase of ["query", "close"] as const) test(`preserves the original single MySQL ${phase} error`, async () => {
+  const failure = new Error(`fixture_${phase}_failed`);
+  const fixture = connectionFixture([], [], undefined, phase === "query" ? { queryError: failure } : { endError: failure });
+  await assert.rejects(queryMysql({ config, statement: "SELECT 1" }, undefined, () => fixture.connection), error => error === failure);
+  assert.equal(fixture.ended(), true);
+});
+
+test("retains caller cancellation when MySQL query and shutdown also fail", async () => {
+  const controller = new AbortController(), reason = new Error("caller_cancelled_at_shutdown");
+  const fixture = connectionFixture([], [], undefined, { queryError: new Error("query_failed"), endError: new Error("shutdown_failed"), onEnd: () => controller.abort(reason) });
+  await assert.rejects(queryMysql({ config, statement: "SELECT 1" }, controller.signal, () => fixture.connection), error => error === reason);
+  assert.equal(fixture.destroyed(), true);
 });
 
 test("destroys a MySQL connection that finishes opening after cancellation", async () => {

@@ -3,7 +3,7 @@ import { rmdir } from "node:fs/promises";
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { Database } from "../db/client.ts";
+import { readInBatches, type Database } from "../db/client.ts";
 import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces, services } from "../db/schema.ts";
 import { SerialQueue } from "../serial.ts";
 import type { StoredDeploymentConfig, EnvironmentKind, IssueType } from "../domain/contracts.ts";
@@ -240,9 +240,8 @@ export class IssueProjectManager {
 
   async hydrateReadOnlyRuntimes(issues: ProjectIssue[]): Promise<RuntimePreparationResult> {
     const preparations: ReadOnlyDeploymentPreparationCache = new Map();
-    const repositoryRows = issues.length
-      ? await this.database.select().from(issueRepositories).where(inArray(issueRepositories.issueId, issues.map(({ id }) => id)))
-      : [];
+    const repositoryRows = await readInBatches(issues.map(({ id }) => id), batch =>
+      this.database.select().from(issueRepositories).where(inArray(issueRepositories.issueId, batch)));
     const repositoriesByIssue = new Map<string, IssueRepository[]>();
     for (const repository of repositoryRows) {
       const repositories = repositoriesByIssue.get(repository.issueId) ?? [];

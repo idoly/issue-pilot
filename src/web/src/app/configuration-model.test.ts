@@ -42,6 +42,15 @@ describe("capability deployment serialization", () => {
     expect(serialized.dms).toEqual(dms);
     expect(JSON.stringify(serialized)).not.toMatch(/secret|accessKeyId|accessKeySecret|authorization|password/);
   });
+  it("keeps significant password whitespace in credential replacements", () => {
+    const value = structuredClone(draft), password = "  literal-password \t";
+    for (const key of ["nacos", "redis", "mq", "es"] as const) value[key]!.password = password;
+    value.db!.databases[0]!.password = password;
+    const result = serializeCapabilityDraft(value);
+    for (const key of ["nacos", "redis", "mq", "es"] as const) expect(result[key]?.credentialUpdate).toEqual(replace({ password }));
+    expect(result.db?.databases[0]?.credentialUpdate).toEqual(replace({ password }));
+  });
+
   it("clears optional credentials and omits unselected capabilities", () => {
     expect(serializeCapabilityDraft({ ...draft, capabilities: ["nacos"], nacos: { ...draft.nacos!, username: "", credentialEnabled: false } })).toEqual({ nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "", credentialUpdate: { mode: "clear" } } });
     expect(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] })).toEqual({ dms });

@@ -7,6 +7,7 @@ import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { readInBatches } from "../db/client.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
@@ -120,10 +121,10 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     const environmentIds = [...new Set(selectedIssues.map((issue) => issue.environmentId))];
     const issueIds = selectedIssues.map((issue) => issue.id);
     const [assigneeRows, serviceRows, environmentRows, workspaceRows] = await Promise.all([
-      assigneeSubjects.length ? database.db.select().from(subjects).where(inArray(subjects.subject, assigneeSubjects)) : [],
-      serviceIds.length ? database.db.select({ id: services.id, key: services.key, name: services.name }).from(services).where(inArray(services.id, serviceIds)) : [],
-      environmentIds.length ? database.db.select({ id: environments.id, key: environments.key }).from(environments).where(inArray(environments.id, environmentIds)) : [],
-      issueIds.length ? database.db.select({ issueId: issueWorkspaces.issueId, status: issueWorkspaces.status }).from(issueWorkspaces).where(inArray(issueWorkspaces.issueId, issueIds)) : [],
+      readInBatches(assigneeSubjects, batch => database.db.select().from(subjects).where(inArray(subjects.subject, batch))),
+      readInBatches(serviceIds, batch => database.db.select({ id: services.id, key: services.key, name: services.name }).from(services).where(inArray(services.id, batch))),
+      readInBatches(environmentIds, batch => database.db.select({ id: environments.id, key: environments.key }).from(environments).where(inArray(environments.id, batch))),
+      readInBatches(issueIds, batch => database.db.select({ issueId: issueWorkspaces.issueId, status: issueWorkspaces.status }).from(issueWorkspaces).where(inArray(issueWorkspaces.issueId, batch))),
     ]);
     const assignees = new Map(assigneeRows.map((assignee) => [assignee.subject, assignee]));
     const serviceById = new Map(serviceRows.map((service) => [service.id, service]));

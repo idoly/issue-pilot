@@ -23,3 +23,12 @@ export function openDatabase(file = applicationConfig.databaseFile) {
 
 export type DatabaseConnection = ReturnType<typeof openDatabase>;
 export type Database = DatabaseConnection["db"];
+
+/** Leave room for other bound values and stay below SQLite's variable limit. */
+export async function readInBatches<Input, Row>(values: readonly Input[], select: (batch: Input[]) => PromiseLike<Row[]>): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (let offset = 0; offset < values.length; offset += 500) {
+    rows.push(...await select(values.slice(offset, offset + 500)));
+  }
+  return rows;
+}

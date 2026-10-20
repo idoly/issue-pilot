@@ -50,7 +50,8 @@ export function createPiModelRuntime(agentDir = getAgentDir(), personal?: { prov
         if (personal) {
           try {
             const models = JSON.parse(await readFile(modelsPath, "utf8"), (key, value) => {
-              if (key === "apiKey" || /^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(key)) return undefined;
+              // Operator headers may contain arbitrary authentication, including custom token names.
+              if (key === "apiKey" || key === "headers" || /^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(key)) return undefined;
               return value;
             });
             modelsPath = join(directory, "models.json");

@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
 import { canUseIssueWorkMode, createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
@@ -59,7 +59,7 @@ export function IssueQueue(props: {
     }
   };
   let listRequest = 0;
-  createEffect(() => props.refreshToken, () => {
+  const loadIssues = () => {
     const currentRequest = ++listRequest;
     setLoading(true);
     setLoadError("");
@@ -72,7 +72,8 @@ export function IssueQueue(props: {
     }).finally(() => {
       if (currentRequest === listRequest) setLoading(false);
     });
-  });
+  };
+  createEffect(() => props.refreshToken, () => loadIssues());
   let pinRequest = 0;
   createEffect(() => props.userSubject, (subject) => {
     const currentRequest = ++pinRequest;
@@ -111,6 +112,16 @@ export function IssueQueue(props: {
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
+  let contextGeneration = 0, relatedRequest = 0;
+  onCleanup(() => { contextGeneration++; listRequest++; pinRequest++; relatedRequest++; });
+  const closeCreateIssue = () => { relatedRequest++; setCreateOpen(false); setRelatedLoading(false); };
+  createEffect(() => ({ subject: props.userSubject, role: currentUser()?.role }), (context, previous) => {
+    if (!previous || context.subject === previous.subject && context.role === previous.role) return;
+    contextGeneration++;
+    closeCreateIssue(); setSaving(false); setCreateError("");
+    setTitle(""); setDescription(""); setPriority("p2"); setAssigneeSubject(context.subject || null); setCcSubjects([]);
+    setAttachments([]); setRelatedIssueKeys([]); setRelatedCandidates([]);
+  });
   const availableWorkModes = createMemo(() => workModeOptions.filter((option) => {
     if (!canUseIssueWorkMode(currentUser()?.role ?? "product", option.value)) return false;
     const environmentKind = issueScopeForWorkMode(option.value).environmentKind;
@@ -122,12 +133,14 @@ export function IssueQueue(props: {
   });
   const relatedIssues = createMemo(() => relatedCandidates());
   const openCreateIssue = () => {
+    if (!props.userSubject || saving()) return;
+    const owner = contextGeneration, request = ++relatedRequest;
     setCreateError("");
     setCreateOpen(true);
     setRelatedLoading(true);
-    void listIssues().then(setRelatedCandidates)
-      .catch((error) => setCreateError(errorMessage(error)))
-      .finally(() => setRelatedLoading(false));
+    void listIssues().then(value => { if (owner === contextGeneration && request === relatedRequest) setRelatedCandidates(value); })
+      .catch((error) => { if (owner === contextGeneration && request === relatedRequest) setCreateError(errorMessage(error)); })
+      .finally(() => { if (owner === contextGeneration && request === relatedRequest) setRelatedLoading(false); });
   };
   createEffect(
     () => ({ currentMode: workMode(), modes: availableWorkModes(), services: catalog().services }),
@@ -139,7 +152,8 @@ export function IssueQueue(props: {
     },
   );
   const submitIssue = async () => {
-    if (!title().trim() || !service()) return;
+    if (!props.userSubject || saving() || !title().trim() || !service()) return;
+    const owner = contextGeneration;
     setSaving(true);
     setCreateError("");
     try {
@@ -153,17 +167,19 @@ export function IssueQueue(props: {
         serviceKey: service(),
         relatedIssueKeys: relatedIssueKeys(),
       }, attachments());
+      if (owner !== contextGeneration) return;
+      loadIssues();
       setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
       props.onSelect(issue.id);
-      setCreateOpen(false);
+      closeCreateIssue();
       setTitle("");
       setDescription("");
       setAttachments([]);
       setRelatedIssueKeys([]);
     } catch (error) {
-      setCreateError(errorMessage(error));
+      if (owner === contextGeneration) setCreateError(errorMessage(error));
     } finally {
-      setSaving(false);
+      if (owner === contextGeneration) setSaving(false);
     }
   };
   return (
@@ -177,7 +193,7 @@ export function IssueQueue(props: {
           value={query()}
           onInput={(event) => setQuery(event.currentTarget.value)}
         />
-        <Button class="icon-button" type="primary" shape="circle" icon={<Plus size={16} />} title="新建工单" aria-label="新建工单" onClick={openCreateIssue} />
+        <Button class="icon-button" type="primary" shape="circle" icon={<Plus size={16} />} title="新建工单" aria-label="新建工单" disabled={!props.userSubject} onClick={openCreateIssue} />
       </div>
       <div class="queue-filter">
         <div class="queue-filter-controls">
@@ -250,7 +266,7 @@ export function IssueQueue(props: {
           </Show>
         </Show>
       </div>
-      <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={() => setCreateOpen(false)} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
+      <Modal open={createOpen()} title="新建工单" okText="创建" cancelText="取消" onOk={() => { void submitIssue(); }} onCancel={closeCreateIssue} confirmLoading={saving()} okButtonProps={{ disabled: !title().trim() || !service() }}>
         <div class="create-issue-form compact-issue-form new-issue-form">
           <label><span>处理方式</span><Select aria-label="工单处理方式" value={workMode()} onChange={(value) => { const selected = selectedChoice(value, availableWorkModes().map((option) => option.value)); if (selected) setWorkMode(selected); }} options={availableWorkModes()} /></label>
           <label><span>入口服务</span><Select aria-label="工单服务" value={service()} onChange={(value) => { const selected = selectedChoice(value, availableServices().map((item) => item.key)); if (selected) setService(selected); }} options={availableServices().map((item) => ({ value: item.key, label: item.name }))} /></label>

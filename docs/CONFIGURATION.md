@@ -29,7 +29,7 @@
 
 ## 身份与权限
 
-可信网关负责认证，`X-Issue-Pilot-Subject` 与页面选择器用于选择用户；未提供时使用首个活跃用户。页面解析出用户后固定请求身份，其他标签页的选择不会改变当前页面的请求；localStorage 只记住供新页面初始化的显式选择。失活用户先退出页面上下文，再解析默认用户，卸载后的响应不能覆盖新选择。`isAdmin` 独立于 product/test/developer 角色，不自动授予开发能力。
+可信网关负责认证，`X-Issue-Pilot-Subject` 与页面选择器用于选择用户；未提供时解析首个活跃用户，并在同一请求内固定该 subject；首次并行检查共享同一个未完成的身份解析。后续授权仍重新检查活跃状态和角色；用户失活时拒绝当前请求，不切换到下一默认用户。入站 MCP 将本次请求解析出的 subject 显式传给内部 API。页面解析出用户后固定请求身份，其他标签页的选择不会改变当前页面的请求；localStorage 只记住供新页面初始化的显式选择。失活用户先退出页面上下文，再解析默认用户，卸载后的响应不能覆盖新选择。`isAdmin` 独立于 product/test/developer 角色，不自动授予开发能力。
 
 | 操作 | 要求 |
 | --- | --- |
@@ -41,19 +41,19 @@
 | 维护个人模型 Key、SSH 私钥 | 当前 developer 本人 |
 | 维护个人正式 DMS/SLS 凭证 | 当前活跃用户本人 |
 
-用户变更须保留活跃用户、developer、管理用户，以及至少一名同时具备开发和管理权限的活跃用户。`PATCH /api/users/:subject` 只更新提供的字段，空更新被拒绝；启停按钮只提交 `active`，避免用旧列表覆盖姓名、邮箱或角色。所有提供的字段在关闭工单会话前完成校验。
+用户变更须保留活跃用户、developer、管理用户，以及至少一名同时具备开发和管理权限的活跃用户。`PATCH /api/users/:subject` 只更新提供的字段，空更新被拒绝；启停按钮只提交 `active`，避免用旧列表覆盖姓名、邮箱或角色。所有提供的字段在关闭工单会话前完成校验。个人凭证更新也先校验模型、SSH 和生产凭证各组输入，再关闭关联会话并写入；关闭失败不保存凭证，预约释放后可重试。
 
 ## 凭证与 owner
 
 工单 owner 为 assignee，未分配时为 reporter，必须活跃；开发和正式数据处理要求 owner 为 developer。
 
-- developer owner 在所有环境都使用个人模型 Key 和 SSH 私钥，缺少或失败时不回退到共享身份；SSH 主机身份必须验证。模型 Key 编辑跟随全局 provider，保存时显式提交界面显示的 provider；切换服务商只清理模型 Key 草稿，保留 SSH 和生产凭证草稿。
+- developer owner 在所有环境都使用个人模型 Key 和 SSH 私钥，缺少或失败时不回退到共享身份；个人模型 runtime 不继承 Operator 的 apiKey 或自定义 headers（provider 与 model 层均移除），避免认证头混用；共享的 endpoint、模型参数继续使用。需要额外路由/认证头的模型接入必须先明确个人身份协议，不能依赖 Operator 私有头。SSH 主机身份必须验证。模型 Key 编辑跟随全局 provider，保存时显式提交界面显示的 provider；切换服务商只清理模型 Key 草稿，保留 SSH 和生产凭证草稿。
 - 其他 owner 使用 Operator 模型运行时与宿主 Git 环境。
 - 个人正式 DMS/SLS 覆盖独立判断，各自完整替换对应组；没有覆盖组时用部署配置。只覆盖已有目标，不凭个人凭证创建新目标，失败不换身份重试。
 
 普通 GET 隐藏密码、Authorization 和 SLS keys，返回配置状态。开发者专用服务说明可展示选定原生密码和 MCP 认证，原生 DMS Authorization、SLS keys 仍隐藏。完整 MCP 编辑配置有独立权限。
 
-服务能力使用 `credentialUpdate`：`preserve` 保留已有凭证，`replace` 提供完整 `values`，`clear` 清除可选凭证。DMS URL、MySQL 数据库 URL 等目标匹配规则仍需通过；MySQL 每个数据库独立更新。空输入不代表清除，必需凭证不能 clear。个人 DMS/SLS 保存响应只清理仍与提交内容相同的输入，等待期间的新草稿保留并提示未保存。初始状态加载不覆盖已输入的 DMS 地址，同一用户资料刷新不清空凭证草稿。
+服务能力使用 `credentialUpdate`：`preserve` 保留已有凭证，`replace` 提供完整 `values`，`clear` 清除可选凭证。DMS URL、MySQL 数据库 URL 等目标匹配规则仍需通过；MySQL 每个数据库独立更新。空输入不代表清除，必需凭证不能 clear。Nacos、MySQL、Redis、RabbitMQ 和 Elasticsearch 密码通过校验后按原字符串保存与执行，保留首尾有效空白；旧版本已裁剪并保存的密码无法自动还原，需要重新填写。个人 DMS/SLS 保存响应只清理仍与提交内容相同的输入，等待期间的新草稿保留并提示未保存。初始状态加载不覆盖已输入的 DMS 地址，同一用户资料刷新不清空凭证草稿。
 
 凭证不能进入 Agent prompt、原生能力工具输入或普通诊断日志。数据库异常日志移除 SQL 和参数，仅保留稳定诊断与 SQLite 错误码。查询结果、JSONL 和备份也可能敏感。开发部署只配置代码，旧开发能力配置作为私有归档保留，不投影或执行。
 
@@ -64,14 +64,14 @@
 | 能力 | 配置目标 | 操作 |
 | --- | --- | --- |
 | Nacos | 地址、namespace、group、dataIds | 读取配置 |
-| MySQL | 多数据库 URL 和独立凭证 | 单条只读 SQL、READ ONLY transaction、CSV/JSONL 导出 |
+| MySQL | 多数据库 URL 和独立凭证 | 单条只读 SQL、READ ONLY transaction、CSV/JSONL 导出；结果列名须唯一，连接查询使用 AS 别名 |
 | Redis | host、port、database | 受限只读命令 |
 | RabbitMQ | 管理地址、managementPort、vhost | 管理 HTTP 读取，不消费消息 |
 | Elasticsearch | URL | search/count/mapping |
 | DMS | HTTPS MCP URL、显式数据库集合 | 只读 executeScript、完整 JSON 导出 |
 | SLS | region、project、logstores | 官方 SDK GetLogsV2，检查完整性 |
 
-RabbitMQ 旧 AMQP `port` 字段被忽略，不再展示或保存。Nacos 在 HTTP 地址未指定端口时使用 8848；显式端口（包括 `:80`）保持不变，HTTPS 默认 443。目标和输入 schema 见 [registry.ts](../src/capabilities/registry.ts)，预算见根配置。
+RabbitMQ 旧 AMQP `port` 字段被忽略，不再展示或保存。按 vhost/queue 查询时拒绝值为 `.` 或 `..` 的对应路径段，避免 URL 标准化改变查询目标；此类名称暂不支持，其他队列名称按字面保留，包括首尾空格和纯空格名称，并分别编码，避免查询另一个队列。Nacos 在 HTTP 地址未指定端口时使用 8848；显式端口（包括 `:80`）保持不变，HTTPS 默认 443。目标和输入 schema 见 [registry.ts](../src/capabilities/registry.ts)，预算见根配置。
 
 DMS 握手保留安全的上游 HTTP 状态，例如 `dms_mcp_http_429`；不把响应正文、URL 或认证信息拼进连接错误。每次操作最多尝试两次握手，首次握手超时或 HTTP 429 可重试一次；429 优先遵守 `Retry-After`（秒数或 HTTP 日期），再加随机退避。缺少有效提示时等待 1–2 秒；等待上限默认 5 秒，服务端要求更久时直接报告限流。等待和连接均受原有取消与总预算约束，401/403 等错误不重试，已发送的 SQL 不自动重放。参数由根配置的 `limits.capability.dms` 维护。
 

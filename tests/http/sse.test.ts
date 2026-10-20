@@ -33,6 +33,27 @@ test("queues SSE payloads in order until a blocked response drains", () => {
   assert.deepEqual(response.payloads, [replay, "event: snapshot_ready\ndata: {}\n\n", "data: live\n\n"]);
 });
 
+test("preserves queued and reentrant frames across repeated backpressure", () => {
+  const response = new FakeResponse();
+  response.blockNextWrite = true;
+  const writer = createOrderedSseWriter(response);
+  writer.write("first");
+  writer.write("second");
+  writer.write("third");
+  response.blockNextWrite = true;
+  response.emit("drain");
+  assert.deepEqual(response.payloads, ["first", "second"]);
+  const originalWrite = response.write.bind(response);
+  response.write = (payload) => {
+    if (payload === "third") writer.write("reentrant");
+    return originalWrite(payload);
+  };
+  writer.write("fourth");
+  response.emit("drain");
+  writer.write("last");
+  assert.deepEqual(response.payloads, ["first", "second", "third", "fourth", "reentrant", "last"]);
+});
+
 test("treats synchronous socket write failures as a closed stream", () => {
   const response = new FakeResponse();
   let attempts = 0;

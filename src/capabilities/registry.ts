@@ -41,6 +41,11 @@ function optionalText(value: unknown, maximum = 10_000): string {
   return value.trim();
 }
 
+function passwordText(value: unknown, name: string, required = false): string {
+  const parsed = required ? requiredText(value, name) : optionalText(value);
+  return parsed ? value as string : "";
+}
+
 function stringList(value: unknown, name: string): string[] {
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.length > 0)) fail(`invalid_${name}`);
   return value as string[];
@@ -48,7 +53,7 @@ function stringList(value: unknown, name: string): string[] {
 
 function optionalCredentials(input: Record<string, unknown>, name: string) {
   const username = optionalText(input.username, 500);
-  const password = optionalText(input.password);
+  const password = passwordText(input.password, `${name}_password`);
   if (Boolean(username) !== Boolean(password)) fail(`invalid_${name}_credentials`);
   return { username, ...(password ? { password } : {}) };
 }
@@ -161,7 +166,7 @@ const definitions = {
         let database = "";
         try { database = decodeURIComponent(parsed.pathname.slice(1)); } catch { return fail("invalid_db_url"); }
         if (!parsed.port || Number(parsed.port) < 1 || !/^\/[^/]+$/.test(parsed.pathname) || !database || database.includes("/")) fail("invalid_db_url");
-        return { url, database, username: requiredText(databaseInput.username, "db_username", 500), password: requiredText(databaseInput.password, "db_password") };
+        return { url, database, username: requiredText(databaseInput.username, "db_username", 500), password: passwordText(databaseInput.password, "db_password", true) };
       });
       if (new Set(databases.map(({ url }) => url)).size !== databases.length) fail("duplicate_db_url");
       if (new Set(databases.map(({ database }) => database)).size !== databases.length) fail("duplicate_db_database");
@@ -173,7 +178,7 @@ const definitions = {
     inputSchema: capabilityInputSchemas.redis,
     parseConfiguration(value) {
       const input = inputRecord(value);
-      const password = optionalText(input.password);
+      const password = passwordText(input.password, "redis_password");
       return { host: requiredText(input.host, "redis_host", 255), port: boundedInteger(input.port ?? defaults.redis.port, "redis_port", 1, 65_535), username: optionalText(input.username, 500), ...(password ? { password } : {}), database: boundedInteger(input.database ?? defaults.redis.database, "redis_database", 0, 1_000_000) };
     },
   },
@@ -182,7 +187,7 @@ const definitions = {
     inputSchema: capabilityInputSchemas.mq,
     parseConfiguration(value) {
       const input = inputRecord(value);
-      return { host: requiredText(input.host, "mq_host", 255), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: requiredText(input.username, "mq_username", 500), password: requiredText(input.password, "mq_password"), virtualHost: requiredText(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
+      return { host: requiredText(input.host, "mq_host", 255), managementPort: boundedInteger(input.managementPort ?? defaults.rabbitmq.managementPort, "mq_management_port", 1, 65_535), username: requiredText(input.username, "mq_username", 500), password: passwordText(input.password, "mq_password", true), virtualHost: requiredText(input.virtualHost ?? defaults.rabbitmq.virtualHost, "mq_virtual_host", 255) };
     },
   },
   es: {

@@ -36,6 +36,20 @@ async function fixture() {
   return { root, database, issue: issue!, repository, git, browser: new SourceBrowser(database.db, root), close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
+test("saves long ASCII and Unicode file names using bounded temporary names", async () => {
+  const f = await fixture();
+  try {
+    for (const name of [`${"a".repeat(240)}.txt`, `${"文".repeat(80)}.txt`]) {
+      const created = await f.browser.createFile(f.issue, "application", name, "old contents");
+      const saved = await f.browser.writeFile(f.issue, "application", name, "new contents", created.sha256);
+      assert.equal(saved.content, "new contents");
+      assert.equal((await f.browser.file(f.issue, "application", name)).content, "new contents");
+      await assert.rejects(f.browser.writeFile(f.issue, "application", name, "stale contents", created.sha256), /source_file_changed/);
+    }
+    assert.equal((await readdir(f.repository)).some(name => name.startsWith(".issue-pilot-")), false);
+  } finally { await f.close(); }
+});
+
 for (const directory of [false, true]) test(`preserves an overwritten ${directory ? "directory" : "file"} when the source cannot be renamed`, { skip: process.getuid?.() === 0 }, async () => {
   const f = await fixture();
   const protectedDirectory = path.join(f.repository, "protected");
@@ -137,6 +151,38 @@ test("treats bracket characters in source paths literally when staging and disca
   } finally { await f.close(); }
 });
 
+test("rejects a directory as a source blame file", async () => {
+  const f = await fixture();
+  try {
+    await mkdir(path.join(f.repository, "folder"));
+    await assert.rejects(f.browser.blame(f.issue, "application", "folder", 1), /source_path_not_file/);
+  } finally { await f.close(); }
+});
+
+test("rejects a FIFO blame target without opening or waiting for it", { skip: process.platform === "win32" }, async () => {
+  const f = await fixture();
+  try {
+    const fifo = path.join(f.repository, "pipe.txt");
+    const created = await executeLocalCommand("mkfifo", [fifo]);
+    assert.equal(created.code, 0, created.stderr);
+    const script = `
+      import { SourceBrowser } from ${JSON.stringify(new URL("../../src/workspace/source-browser.ts", import.meta.url).href)};
+      import { openDatabase } from ${JSON.stringify(new URL("../../src/db/client.ts", import.meta.url).href)};
+      const database = openDatabase(process.argv[1]);
+      try {
+        await new SourceBrowser(database.db, process.argv[2]).blame({ id: process.argv[3], key: process.argv[4] }, "application", "pipe.txt", 1);
+        console.log("unexpected_success");
+      } catch (error) { console.log(error.message); }
+      finally { await database.close(); }
+    `;
+    // A separate process makes a regression's blocking FIFO read safe to terminate.
+    const result = await executeLocalCommand(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, path.join(f.root, "issues.db"), f.root, f.issue.id, f.issue.key], { timeout: 2_000 });
+    assert.equal(result.killed, false, "blame must reject nonregular files without blocking");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "source_path_not_file");
+  } finally { await f.close(); }
+});
+
 test("reads history and commit changes for files deleted from the working tree", async () => {
   const f = await fixture();
   try {
@@ -154,6 +200,45 @@ test("reads history and commit changes for files deleted from the working tree",
     assert.equal(compared.before?.content, "historical contents\n");
     assert.equal(compared.after, null);
     await assert.rejects(f.browser.history(f.issue, "application", ".git/config"), /invalid_source_path/);
+  } finally { await f.close(); }
+});
+
+test("labels staged and unstaged comparisons with their actual Git versions", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(path.join(f.repository, "versions.txt"), "head contents\n");
+    await f.git(["add", "versions.txt"]);
+    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Initial version"]);
+    await writeFile(path.join(f.repository, "versions.txt"), "index contents\n");
+    await f.git(["add", "versions.txt"]);
+    await writeFile(path.join(f.repository, "versions.txt"), "working contents\n");
+    const staged = await f.browser.diffFile(f.issue, "application", "versions.txt", true);
+    assert.deepEqual(staged.before, { path: "versions.txt", version: "head", content: "head contents\n" });
+    assert.deepEqual(staged.after, { path: "versions.txt", version: "index", content: "index contents\n" });
+    const working = await f.browser.diffFile(f.issue, "application", "versions.txt");
+    assert.deepEqual(working.before, { path: "versions.txt", version: "index", content: "index contents\n" });
+    assert.deepEqual(working.after, { path: "versions.txt", version: "working-tree", content: "working contents\n" });
+  } finally { await f.close(); }
+});
+
+test("reads literal Unicode replacement characters from Git and rejects malformed text bytes", async () => {
+  const f = await fixture();
+  try {
+    const file = path.join(f.repository, "unicode.txt");
+    await writeFile(file, "before � text\n");
+    await f.git(["add", "unicode.txt"]);
+    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Unicode text"]);
+    await writeFile(file, "after � text\n");
+    await f.git(["add", "unicode.txt"]);
+    assert.equal((await f.browser.file(f.issue, "application", "unicode.txt")).content, "after � text\n");
+    const compared = await f.browser.diffFile(f.issue, "application", "unicode.txt", true);
+    assert.equal(compared.before?.content, "before � text\n");
+    assert.equal(compared.after?.content, "after � text\n");
+    for (const bytes of [Buffer.from([0xff]), Buffer.from([0xe4, 0xb8]), Buffer.from([0])]) {
+      await writeFile(file, bytes);
+      await f.git(["add", "unicode.txt"]);
+      await assert.rejects(f.browser.diffFile(f.issue, "application", "unicode.txt", true), /source_file_binary/);
+    }
   } finally { await f.close(); }
 });
 

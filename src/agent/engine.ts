@@ -415,8 +415,11 @@ export class AgentEngine implements AgentController {
     const personalGit = this.personalGit.get(issueId);
     this.personalGit.delete(issueId);
     this.sessions.delete(issueId);
-    try { await managed?.stop(); }
-    finally { await personalGit?.close(); }
+    const failures: unknown[] = [];
+    try { await managed?.stop(); } catch (error) { failures.push(error); }
+    try { await personalGit?.close(); } catch (error) { failures.push(error); }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "agent_session_close_failed");
   }
 
   private publishStatus(issueId: string, status: "complete" | "error"): void {

@@ -20,17 +20,27 @@ function execute(connection: Connection, statement: string) {
   return promisify<string, unknown>(connection.query.bind(connection))(statement);
 }
 
-async function streamedRows(connection: Connection, statement: string): Promise<{ columns: string[]; rows: Array<Record<string, unknown>> }> {
+async function readRows(
+  connection: Connection,
+  statement: string,
+  consume: (columns: string[], row: Record<string, unknown>) => void | Promise<void>,
+): Promise<string[]> {
   let columns: string[] = [];
-  const rows: Array<Record<string, unknown>> = [];
+  let columnError: Error | undefined;
   const query = connection.query(statement);
-  query.once("fields", (fields: FieldPacket[]) => { columns = fields.map((field) => field.name); });
+  query.once("fields", (fields: FieldPacket[]) => {
+    columns = fields.map((field) => field.name);
+    if (new Set(columns).size !== columns.length) columnError = new Error("database_query_duplicate_columns");
+  });
   for await (const streamedRow of query.stream({ highWaterMark: 1 })) {
+    if (columnError) throw columnError;
     const rowData = streamedRow as RowDataPacket;
     const record = Object.fromEntries(columns.map((column) => [column, rowData[column] ?? null]));
-    rows.push(record);
+    const consumed = consume(columns, record);
+    if (consumed) await consumed;
   }
-  return { columns, rows };
+  if (columnError) throw columnError;
+  return columns;
 }
 
 function csvCell(value: unknown): string {
@@ -38,21 +48,26 @@ function csvCell(value: unknown): string {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-async function exportedRows(connection: Connection, statement: string, format: "csv" | "jsonl", append: OutputAppender): Promise<{ columns: string[]; rows: number }> {
-  let columns: string[] = [];
+type MysqlOutput = NonNullable<CapabilityInputs["db"]["output"]>;
+
+async function exportedRows(connection: Connection, statement: string, format: MysqlOutput["format"], append: OutputAppender): Promise<{ columns: string[]; rows: number }> {
   let rows = 0;
   let headerWritten = false;
-  const query = connection.query(statement);
-  query.once("fields", (fields: FieldPacket[]) => { columns = fields.map((field) => field.name); });
-  for await (const streamedRow of query.stream({ highWaterMark: 1 })) {
-    const rowData = streamedRow as RowDataPacket;
-    const record = Object.fromEntries(columns.map((column) => [column, rowData[column] ?? null]));
-    if (format === "csv") {
-      if (!headerWritten) { await append(`${columns.map(csvCell).join(",")}\n`); headerWritten = true; }
-      await append(`${columns.map((column) => csvCell(record[column])).join(",")}\n`);
-    } else await append(`${JSON.stringify(record)}\n`);
+  const columns = await readRows(connection, statement, async (columns, record) => {
+    switch (format) {
+      case "csv":
+        if (!headerWritten) { await append(`${columns.map(csvCell).join(",")}\n`); headerWritten = true; }
+        await append(`${columns.map((column) => csvCell(record[column])).join(",")}\n`);
+        break;
+      case "jsonl":
+        await append(`${JSON.stringify(record)}\n`);
+        break;
+      default:
+        format satisfies never;
+        throw new Error("unsupported_mysql_output_format");
+    }
     rows += 1;
-  }
+  });
   if (format === "csv" && !headerWritten && columns.length) await append(`${columns.map(csvCell).join(",")}\n`);
   return { columns, rows };
 }
@@ -65,6 +80,7 @@ async function withReadOnlyMysql<T>(config: MysqlDatabaseConfig, operation: (con
   let connection: Connection | undefined;
   let destroyed = false;
   let transactionActive = false;
+  const failures: unknown[] = [];
   const activeSignal = capabilitySignal(signal);
   const abort = () => {
     destroyed = true;
@@ -96,7 +112,11 @@ async function withReadOnlyMysql<T>(config: MysqlDatabaseConfig, operation: (con
     transactionActive = false;
     return result;
   } catch (error) {
-    if (connection && !destroyed && transactionActive) await execute(connection, "ROLLBACK").catch(() => undefined);
+    failures.push(error);
+    if (connection && !destroyed && transactionActive) {
+      try { await execute(connection, "ROLLBACK"); }
+      catch (rollbackError) { failures.push(rollbackError); }
+    }
     throw error;
   } finally {
     let cancellation: ReturnType<typeof addAbortListener> | undefined;
@@ -107,25 +127,34 @@ async function withReadOnlyMysql<T>(config: MysqlDatabaseConfig, operation: (con
         });
         await Promise.race([promisify(connection.end.bind(connection))(), aborted]);
       }
+    } catch (error) {
+      failures.push(error);
     } finally {
       cancellation?.[Symbol.dispose]();
       activeSignal.removeEventListener("abort", abort);
+      // Cancellation keeps its original reason; other failures are combined below.
       activeSignal.throwIfAborted();
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      const primary = failures[0];
+      throw new AggregateError(failures, primary instanceof Error ? primary.message : "mysql_operation_cleanup_failed");
     }
   }
 }
 
 export async function queryMysql(input: { config: MysqlDatabaseConfig; statement: string }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
-  const result = await withReadOnlyMysql(input.config, connection => streamedRows(connection, input.statement), signal, connectionFactory);
-  return { ...result, runtime: "node" as const };
+  const rows: Array<Record<string, unknown>> = [];
+  const columns = await withReadOnlyMysql(input.config, connection => readRows(connection, input.statement, (_columns, row) => { rows.push(row); }), signal, connectionFactory);
+  return { columns, rows, runtime: "node" as const };
 }
 
-export async function exportMysql(input: { config: MysqlDatabaseConfig; statement: string; output: { fileName: string; format: "csv" | "jsonl" }; store: IssueOutputStore }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
+export async function exportMysql(input: { config: MysqlDatabaseConfig; statement: string; output: MysqlOutput; store: IssueOutputStore }, signal?: AbortSignal, connectionFactory: MysqlConnectionFactory = createConnection) {
   const output = await input.store.generate(input.output.fileName, async append => {
     const result = await withReadOnlyMysql(input.config, connection => exportedRows(connection, input.statement, input.output.format, append), signal, connectionFactory);
     signal?.throwIfAborted();
     return result;
-  });
+  }, signal);
   return { fileName: output.fileName, format: input.output.format, size: output.size, columns: output.result.columns, rows: output.result.rows, runtime: "node" as const };
 }
 

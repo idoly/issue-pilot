@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { ProcessToolRuntime } from "../../src/tool-runtime.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
-import type { CommandExecutionOptions, CommandExecutor } from "../../src/process.ts";
+import { executeLocalCommand, type CommandExecutionOptions, type CommandExecutor } from "../../src/process.ts";
 import { prepareProjectWrappers } from "../../src/workspace/project-wrappers.ts";
 import { ProjectToolBroker, type ProjectToolRuntime } from "../../src/workspace/project-tools.ts";
 import { issueRuntimeRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
@@ -60,6 +60,35 @@ async function fixture() {
   };
   return { root, database, issue: issue!, repository, runtime };
 }
+
+test("creates private project caches beneath group-writable volume roots", async () => {
+  const value = await fixture();
+  const volume = path.join(value.root, "volume");
+  await mkdir(volume, { mode: 0o2775 });
+  await chmod(volume, 0o2775);
+  const nodeCache = path.join(volume, "npm", "issue-pilot");
+  const mavenCache = path.join(volume, "maven", "issue-pilot");
+  const calls: string[][] = [];
+  const broker = new ProjectToolBroker(value.database.db, value.root, { async run(options) {
+    calls.push([...options.command]);
+    return { stdout: "ok", stderr: "", code: 0, killed: false };
+  } }, { ...value.runtime, node: { ...value.runtime.node, npmCache: nodeCache }, maven: { ...value.runtime.maven, repository: mavenCache } });
+  const input = { issueKey: value.issue.key, repository: "application", project: "", action: "test", args: [] };
+  try {
+    await broker.run({ ...input, tool: "node" });
+    await broker.run({ ...input, tool: "maven" });
+    for (const cache of [nodeCache, mavenCache]) {
+      const metadata = await stat(cache);
+      assert.equal(metadata.mode & 0o077, 0);
+      assert.equal(metadata.uid, process.getuid?.());
+    }
+    assert.equal((await stat(volume)).mode & 0o7777, 0o2775);
+    assert.equal(calls.length, 2);
+    await chmod(nodeCache, 0o2775);
+    await assert.rejects(broker.run({ ...input, tool: "node" }), /insecure_project_tool_cache/);
+    assert.equal(calls.length, 2);
+  } finally { await broker.close(); await value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
 
 test("keeps the project broker unavailable until startup supplies its database", async () => {
   const value = await fixture(); let ready = false, calls = 0;
@@ -182,6 +211,68 @@ test("does not start a queued project command after its caller cancels", async (
     const canceled = assert.rejects(second, { name: "AbortError" });
     controller.abort(); release(); await first; await canceled;
     assert.equal(calls, 1);
+  } finally { release(); await broker.close(); await value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+for (const scenario of ["parallel-start", "close-during-start", "failed-start", "restart-during-close"] as const) test(`cleans up broker ownership during ${scenario}`, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-broker-lifecycle-"));
+  try {
+    const script = `
+      import { ProjectToolBroker } from ${JSON.stringify(new URL("../../src/workspace/project-tools.ts", import.meta.url).href)};
+      import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+      const broker = new ProjectToolBroker(() => { throw new Error("database_not_used"); }, process.argv[1]);
+      const failing = process.argv[2] === "failed-start";
+      if (failing) { await mkdir(process.argv[1] + "/control"); await writeFile(broker.socketPath, "preserve unrelated file"); }
+      const first = broker.start();
+      let operations;
+      if (process.argv[2] === "restart-during-close") {
+        await first;
+        operations = [broker.close(), broker.start(), broker.close()];
+      } else operations = process.argv[2] === "close-during-start" ? [first, broker.close(), broker.close()] : [first, broker.start()];
+      const results = await Promise.allSettled(operations);
+      await broker.close();
+      let preserved;
+      if (failing) {
+        preserved = (await readFile(broker.socketPath, "utf8")) === "preserve unrelated file";
+        await rm(broker.socketPath);
+        await broker.start(); await broker.close();
+      }
+      const remaining = await lstat(broker.socketPath).then(() => true, error => { if(error.code === "ENOENT") return false; throw error; });
+      console.log(JSON.stringify({ outcomes: results.map(result => result.status), remaining, ...(failing ? { preserved } : {}) }));
+    `;
+    // Isolate a regression that can leave an unreachable listening server behind.
+    const result = await executeLocalCommand(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, root, scenario], { timeout: 3_000 });
+    assert.equal(result.killed, false, result.stdout || result.stderr);
+    assert.equal(result.code, 0, result.stderr);
+    const outcomes = scenario === "failed-start" ? ["rejected", "rejected"] : scenario === "parallel-start" ? ["fulfilled", "fulfilled"] : ["fulfilled", "fulfilled", "fulfilled"];
+    assert.deepEqual(JSON.parse(result.stdout), { outcomes, remaining: false, ...(scenario === "failed-start" ? { preserved: true } : {}) });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("all concurrent broker close calls wait for active work and allow a later restart", async () => {
+  const value = await fixture();
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const running = new Promise<void>(resolve => { started = resolve; });
+  const broker = new ProjectToolBroker(value.database.db, value.root, {
+    async run() { started(); await gate; return { stdout: "", stderr: "", code: 0, killed: false }; },
+  }, value.runtime);
+  try {
+    await broker.start();
+    const command = broker.run({ tool: "node", issueKey: value.issue.key, repository: "application", project: "", action: "test", args: [] });
+    await running;
+    const firstClose = broker.close();
+    let secondFinished = false;
+    const secondClose = broker.close().then(() => { secondFinished = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(secondFinished, false, "a repeated close must wait for the same shutdown");
+    release();
+    await Promise.all([command, firstClose, secondClose]);
+    await assert.rejects(stat(broker.socketPath), { code: "ENOENT" });
+    await broker.start();
+    assert.ok((await stat(broker.socketPath)).isSocket());
+    await Promise.all([broker.close(), broker.close()]);
+    await assert.rejects(stat(broker.socketPath), { code: "ENOENT" });
   } finally { release(); await broker.close(); await value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

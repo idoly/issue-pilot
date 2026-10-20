@@ -42,10 +42,11 @@ export function createOrderedSseWriter(
   const pump = () => {
     if (pumping || closed || removeDrainListener) return;
     pumping = true;
+    let consumed = 0;
     try {
-      while (!closed && !removeDrainListener && queue.length) {
+      while (!closed && !removeDrainListener && consumed < queue.length) {
         if (target.destroyed || target.writableEnded) { close(); break; }
-        const next = queue.shift()!;
+        const next = queue[consumed++]!;
         let accepted: boolean;
         try { accepted = target.write(next); }
         catch (error) { fail(error); break; }
@@ -60,6 +61,7 @@ export function createOrderedSseWriter(
         target.once("drain", onDrain);
       }
     } finally {
+      queue.splice(0, consumed);
       pumping = false;
     }
   };

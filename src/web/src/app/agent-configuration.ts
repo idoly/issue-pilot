@@ -12,17 +12,18 @@ export function createAgentConfigurationEditor(
   const [draft, setDraft] = createSignal(copy(untrack(configuration)), { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
-  let pending: { value: AgentConfiguration; subject: string | null } | undefined, failed: typeof pending;
+  let generation = 0;
+  let pending: { value: AgentConfiguration; subject: string | null; generation: number } | undefined, failed: typeof pending;
   let timer: ReturnType<typeof setTimeout> | undefined, active = false, disposed = false, subject = untrack(identity);
   createEffect(() => ({ agent: configuration(), subject: identity() }), value => {
     const changedUser = subject !== value.subject; subject = value.subject;
-    if (changedUser) { clearTimeout(timer); timer = undefined; pending = failed = undefined; setError(""); }
+    if (changedUser) { generation++; clearTimeout(timer); timer = undefined; pending = failed = undefined; setError(""); }
     if (changedUser || !active && !pending) setDraft(copy(value.agent));
   });
   const update = (value: AgentConfiguration) => {
     if (JSON.stringify(value) === JSON.stringify(draft())) return;
     setDraft(value); setError(""); failed = undefined;
-    pending = { value, subject: identity() };
+    pending = { value, subject: identity(), generation };
     clearTimeout(timer);
     timer = setTimeout(() => { timer = undefined; void save(); }, saveDelayMs);
   };
@@ -30,18 +31,18 @@ export function createAgentConfigurationEditor(
     if (active || !pending || pending === failed) return;
     clearTimeout(timer); timer = undefined;
     const job = pending; pending = undefined;
-    if (job.subject !== identity()) return;
+    if (job.generation !== generation || job.subject !== identity()) return;
     active = true;
     if (!disposed) { setSaving(true); setError(""); }
     try {
       await updateGlobalAgent(job.value);
-      if (!disposed && job.subject === identity()) {
+      if (!disposed && job.generation === generation && job.subject === identity()) {
         // The application resource loader displays refresh failures separately.
         const saved = await refresh().catch(() => undefined);
-        if (saved && !disposed && !pending && job.subject === identity()) setDraft(copy(saved));
+        if (saved && !disposed && !pending && job.generation === generation && job.subject === identity()) setDraft(copy(saved));
       }
     } catch (cause) {
-      if (job.subject === identity()) {
+      if (job.generation === generation && job.subject === identity()) {
         failed = job; pending ??= job;
         if (!disposed) {
           const code = errorMessage(cause);

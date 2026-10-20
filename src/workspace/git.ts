@@ -300,7 +300,7 @@ export class WorktreeManager {
 
   private async prepareSharedLocked(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<PreparedWorktree> {
     const cachePath = await this.updateCache(input, repositoryKey);
-    const baseCommit = (await this.git(["-C", cachePath, "rev-parse", `origin/${input.baseBranch}`])).trim();
+    const baseCommit = (await this.git(["-C", cachePath, "rev-parse", `refs/remotes/origin/${input.baseBranch}`])).trim();
     const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
   }
@@ -309,8 +309,8 @@ export class WorktreeManager {
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
     if (!await pathExists(cachePath)) throw new Error("repository_cache_not_found");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
-    const baseCommit = await this.git(["-C", cachePath, "rev-parse", `refs/heads/${input.workingBranch}`])
-      .then((value) => value.trim(), () => { throw new Error("working_branch_not_found"); });
+    if (!await this.hasBranch(cachePath, input.workingBranch)) throw new Error("working_branch_not_found");
+    const baseCommit = (await this.git(["-C", cachePath, "rev-parse", `refs/heads/${input.workingBranch}`])).trim();
     const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: input.workingBranch, baseCommit };
   }
@@ -326,7 +326,7 @@ export class WorktreeManager {
       await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", workspacePath]);
       const [head, dirty] = await Promise.all([
         this.git(["-C", workspacePath, "rev-parse", "HEAD"]).then((value) => value.trim()),
-        execFileAsync("git", ["-C", workspacePath, "status", "--porcelain"], { encoding: "utf8" }).then(({ stdout }) => stdout.trim()),
+        this.git(["-C", workspacePath, "status", "--porcelain", "--untracked-files=all", "--ignored=matching"]).then((value) => value.trim()),
       ]);
       if (head !== commit || dirty) throw new Error("shared_checkout_changed");
     } else {
@@ -361,9 +361,9 @@ export class WorktreeManager {
     const workingBranch = input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     await this.git(["check-ref-format", "--branch", workingBranch]);
     if (!workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
-    const branchExists = await execFileAsync("git", ["-C", cachePath, "show-ref", "--verify", "--quiet", `refs/heads/${workingBranch}`]).then(() => true, () => false);
+    const branchExists = await this.hasBranch(cachePath, workingBranch);
     if (input.workingBranch && !branchExists) throw new Error("working_branch_not_found");
-    const baseRef = `origin/${input.baseBranch}`;
+    const baseRef = `refs/remotes/origin/${input.baseBranch}`;
     const upstreamCommit = input.workingBranch ? undefined : (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
     let baseCommit = input.existingBaseCommit ?? upstreamCommit ?? (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim();
 
@@ -391,6 +391,16 @@ export class WorktreeManager {
     if (dirname(desiredPath) !== issueRoot) throw new Error("workspace_path_outside_issue_root");
     if (existingWorkspacePath && resolve(existingWorkspacePath) !== desiredPath) throw new Error("workspace_path_does_not_match_repository");
     return desiredPath;
+  }
+
+  private async hasBranch(cachePath: string, branch: string): Promise<boolean> {
+    try {
+      await this.git(["-C", cachePath, "show-ref", "--exists", `refs/heads/${branch}`]);
+      return true;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === 2) return false;
+      throw error;
+    }
   }
 
   private async git(args: string[]): Promise<string> {

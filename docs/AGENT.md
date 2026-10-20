@@ -51,7 +51,7 @@ flowchart LR
 
 Pi 的初始校验发生在可修改参数的钩子之前，因此应用工具保留 execute 入口校验；外部 MCP 也在发送前按已发现 schema 验证参数。
 
-MySQL/DMS 不静默截断完整结果。DMS 先校验 SQL 再连接，握手阶段的短暂限流最多退避重试一次并保留 HTTP 状态；SQL 发送后不自动重放。MySQL 的操作预算和取消一直覆盖连接关闭阶段，取消时销毁连接，避免关闭回调挂起。大结果需明确缩小 SQL 范围或导出文件；导出完成协议 rollback/close 后才发布，失败保留旧成果。Redis/SLS 等使用受限 Worker，具体目标、操作和预算见[配置与协议](CONFIGURATION.md#内建能力与工具)及[根配置](../issue-pilot.config.ts)。
+MySQL/DMS 不静默截断完整结果。DMS 先校验 SQL 再连接，握手阶段的短暂限流最多退避重试一次并保留 HTTP 状态；SQL 发送后不自动重放。MySQL 的操作预算和取消一直覆盖连接关闭阶段，取消时销毁连接，避免关闭回调挂起。未取消时，单一查询或收尾错误保持原错误对象；查询、回滚和关闭多处失败则聚合保留诊断，消息仍沿用首要错误。调用方取消保持原取消原因。大结果需明确缩小 SQL 范围或导出文件；导出完成协议 rollback/close 后才发布，失败保留旧成果。Redis/SLS 等使用受限 Worker，具体目标、操作和预算见[配置与协议](CONFIGURATION.md#内建能力与工具)及[根配置](../issue-pilot.config.ts)。
 
 ## MCP 与 Codemode
 

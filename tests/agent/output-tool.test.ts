@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -29,6 +30,31 @@ test("publishes any file bytes atomically without a format-specific operation", 
     await assert.rejects(invoke(tool, { operation: "publish", sourcePath: "data.custom", fileName: "../escape" }), /invalid_output_file_name/);
     assert.deepEqual(await readFile(path.join(work, "data.custom")), bytes);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("preserves working sources and old delivery when publication is cancelled during temporary-file close", async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-publish-close-cancel-")), work = path.join(root, "work");
+  await mkdir(work);
+  const store = new IssueOutputStore(root, "ISSUE-20261019-006"), controller = new AbortController();
+  const reason = new Error("cancelled_at_publication"), openFile = fs.open;
+  const source = path.join(work, "source.txt");
+  await writeFile(source, "working evidence");
+  await store.write("result.txt", "old-delivery");
+  try {
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await openFile(...args);
+      if (String(args[0]).startsWith(path.join(path.dirname(store.directory), ".output-"))) {
+        const close = handle.close.bind(handle);
+        context.mock.method(handle, "close", async () => { await close(); controller.abort(reason); });
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(invoke(createOutputTool(store, work), { operation: "publish", sourcePath: "source.txt", fileName: "result.txt" }, controller.signal), error => error === reason);
+    assert.equal((await store.read("result.txt")).toString(), "old-delivery");
+    assert.equal(await readFile(source, "utf8"), "working evidence");
+    assert.equal((await readdir(path.dirname(store.directory))).some(name => name.startsWith(".output-")), false);
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("rejects sources outside the working directory and preserves old output on cancellation", async () => {

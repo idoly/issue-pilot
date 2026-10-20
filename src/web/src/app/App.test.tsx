@@ -300,7 +300,9 @@ describe("issue pilot workspace", () => {
       vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role });
       const view = render(() => <App initialView="issues" />);
       const queue = await screen.findByLabelText("工单队列");
-      fireEvent.click(within(queue).getByRole("button", { name: "新建工单" }));
+      const create = within(queue).getByRole("button", { name: "新建工单" });
+      await waitFor(() => expect(create).toHaveProperty("disabled", false));
+      fireEvent.click(create);
       const dialog = await screen.findByRole("dialog", { name: "新建工单" });
       fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
       const listbox = await screen.findByRole("listbox");
@@ -329,7 +331,9 @@ describe("issue pilot workspace", () => {
     render(() => <App initialView="issues" />);
 
     const queue = screen.getByLabelText("工单队列");
-    fireEvent.click(within(queue).getByRole("button", { name: "新建工单" }));
+    const create = within(queue).getByRole("button", { name: "新建工单" });
+    await waitFor(() => expect(create).toHaveProperty("disabled", false));
+    fireEvent.click(create);
     const dialog = await screen.findByRole("dialog", { name: "新建工单" });
     await waitFor(() => expect(within(dialog).getByLabelText("关联工单")).toBeTruthy());
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
@@ -1131,13 +1135,16 @@ describe("issue pilot workspace", () => {
     const client = await import("../data/client");
     const now = new Date().toISOString();
     const urls = ["git@example.test:team/sub/z.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/a.git"];
-    vi.mocked(client.loadRepositories).mockResolvedValueOnce(urls.map((url, index) => ({ id: `repo-${index}`, name: `Repository ${3 - index}`, url, createdAt: now, updatedAt: now, services: [] })));
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
-    const panel = await screen.findByRole("region", { name: "仓库管理" });
-    await within(panel).findByText("git@example.test:team/sub/z.git");
-    expect(panel.querySelector(".repository-catalog-group")).toBeNull();
-    expect([...panel.querySelectorAll(".repository-catalog-row > code")].map(row => row.textContent)).toEqual(["git@example.test:team/a.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/sub/z.git"]);
+    const loadRepositories = vi.mocked(client.loadRepositories), original = loadRepositories.getMockImplementation()!;
+    loadRepositories.mockResolvedValue(urls.map((url, index) => ({ id: `repo-${index}`, name: `Repository ${3 - index}`, url, createdAt: now, updatedAt: now, services: [] })));
+    try {
+      render(() => <App initialView="configuration" />);
+      fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
+      const panel = await screen.findByRole("region", { name: "仓库管理" });
+      await within(panel).findByText("git@example.test:team/sub/z.git");
+      expect(panel.querySelector(".repository-catalog-group")).toBeNull();
+      expect([...panel.querySelectorAll(".repository-catalog-row > code")].map(row => row.textContent)).toEqual(["git@example.test:team/a.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/sub/z.git"]);
+    } finally { loadRepositories.mockImplementation(original); }
   });
 
   test("manages repositories from their own settings tab and selects registered URLs in services", async () => {

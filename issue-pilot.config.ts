@@ -58,11 +58,11 @@ export const issuePilotConfig = Object.freeze({
     projectTools: Object.freeze({
       node: Object.freeze({
         npmConfig: ".npmrc",
-        npmCache: ".npm",
+        npmCache: ".npm/issue-pilot",
       }),
       maven: Object.freeze({
         settings: ".m2/settings.xml",
-        repository: ".m2/repository",
+        repository: ".m2/repository/issue-pilot",
       }),
       executionMs: 30 * 60 * 1000,
     }),

@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "../ui";
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
@@ -83,8 +83,9 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
   let issueGeneration = 0, scopePlanRequest = 0;
-  createEffect(() => props.issue.id, (issueId, previousIssueId) => {
-    if (previousIssueId === undefined || issueId === previousIssueId) return;
+  onCleanup(() => { issueGeneration++; scopePlanRequest++; });
+  createEffect(() => ({ issueId: props.issue.id, subject: currentUser()?.subject, role: currentUser()?.role }), (context, previous) => {
+    if (!previous || context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role) return;
     issueGeneration += 1;
     setEditOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setScopeOpen(false); setScopePlan(null); setScopePlanning(false); setScopeApplying(false); setScopeError("");
@@ -100,7 +101,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     setEditError(""); setEditOpen(true);
   };
   const saveIssue = async () => {
-    if (!editTitle().trim()) return;
+    if (editSaving() || !editTitle().trim()) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
     const input = { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), assigneeSubject: editAssignee(), ccSubjects: [...editCc()] };
@@ -112,21 +113,21 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       if (issueGeneration !== generation) return;
       setRemovedAttachmentIds([]); setEditAttachments([]);
       await props.onUpdated();
-      setEditOpen(false);
+      if (issueGeneration === generation) setEditOpen(false);
     } catch (error) {
       if (issueGeneration === generation) setEditError(errorMessage(error));
     } finally { if (issueGeneration === generation) setEditSaving(false); }
   };
   const submitComment = async () => {
     const body = commentBody().trim();
-    if (!body) return;
+    if (commentSaving() || !body) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
     setCommentSaving(true); setCommentError("");
     try {
       await addIssueComment(issueId, body);
       if (issueGeneration !== generation) return;
-      setCommentBody(""); setCommentMode("edit");
+      if (commentBody().trim() === body) { setCommentBody(""); setCommentMode("edit"); }
       await props.onUpdated();
     } catch (error) {
       if (issueGeneration === generation) setCommentError(errorMessage(error));
