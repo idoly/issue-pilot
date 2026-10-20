@@ -68,6 +68,7 @@ async function secureFile(candidate: string): Promise<string> {
 }
 
 async function secureDirectory(candidate: string): Promise<string> {
+  await mkdir(candidate, { recursive: true, mode: 0o700 });
   const resolved = await realpath(candidate);
   const metadata = await stat(resolved);
   const uid = process.getuid?.();
@@ -151,6 +152,8 @@ export class ProjectToolBroker {
   private server: Server | undefined;
   private socketIdentity: { dev: bigint; ino: bigint } | undefined;
   private closing = false;
+  private closePromise: Promise<void> | undefined;
+  private startPromise: Promise<void> | undefined;
 
   constructor(
     database: Database | (() => Database),
@@ -167,13 +170,25 @@ export class ProjectToolBroker {
     this.socketPath = path.join(this.stateRoot, "control", "project-tools.sock");
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    const previousClose = this.closePromise;
+    this.closePromise = undefined;
+    const starting = this.startLocked(previousClose);
+    this.startPromise = starting;
+    const settled = () => { if (this.startPromise === starting) this.startPromise = undefined; };
+    void starting.then(settled, settled);
+    return starting;
+  }
+
+  private async startLocked(previousClose?: Promise<void>): Promise<void> {
+    await previousClose;
     if (this.server) return;
     const controlRoot = path.dirname(this.socketPath);
     await mkdir(controlRoot, { recursive: true, mode: 0o700 });
     await chmod(controlRoot, 0o700);
     await removeStaleSocket(this.socketPath);
-    this.closing = false;
+    this.closing = this.closePromise !== undefined;
     const server = createServer((request, response) => { void this.handle(request, response); });
     this.server = server;
     try {
@@ -195,9 +210,14 @@ export class ProjectToolBroker {
     }
   }
 
-  async close(): Promise<void> {
-    if (this.closing) return;
+  close(): Promise<void> {
+    return this.closePromise ??= this.closeLocked(this.startPromise);
+  }
+
+  private async closeLocked(starting?: Promise<void>): Promise<void> {
     this.closing = true;
+    // Startup owns its error cleanup; shutdown must still drain work after a failed start.
+    await starting?.catch(() => undefined);
     const server = this.server;
     this.server = undefined;
     if (server) await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

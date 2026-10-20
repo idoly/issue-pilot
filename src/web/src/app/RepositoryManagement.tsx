@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, Modal, Skeleton, Tag } from "../ui";
 import { createRepository, deleteRepository, errorMessage, loadRepositories, updateRepository, type ManagedRepository } from "../data/client";
 import { Pencil, Plus, Trash2 } from "../ui/icons";
@@ -30,11 +30,25 @@ export function RepositoryManagement() {
   const [url, setUrl] = createSignal("", { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [deleting, setDeleting] = createSignal<ManagedRepository | null>(null, { ownedWrite: true });
-  let generation = 0;
-  const load = async () => { setLoading(true); try { setRows(await loadRepositories()); } finally { setLoading(false); } };
+  let generation = 0, loadGeneration = 0;
+  onCleanup(() => { generation++; loadGeneration++; });
+  const load = async () => {
+    const owner = generation, request = ++loadGeneration;
+    setLoading(true);
+    try {
+      const value = await loadRepositories();
+      if (owner === generation && request === loadGeneration) { setRows(value); setError(""); }
+    } catch (cause) {
+      if (owner === generation && request === loadGeneration) setError(message(cause));
+    } finally {
+      if (owner === generation && request === loadGeneration) setLoading(false);
+    }
+  };
   createEffect(() => ({ subject: currentUser()?.subject, role: currentUser()?.role }), (identity, previous) => {
     if (identity.subject === previous?.subject && identity.role === previous?.role) return;
     generation += 1; setOpen(false); setDeleting(null); setSaving(false); setError("");
+    if (identity.subject) void load();
+    else { setRows([]); setLoading(false); }
   });
   const edit = (row?: ManagedRepository) => { setEditing(row?.id ?? null); setName(row?.name ?? ""); setUrl(row?.url ?? ""); setError(""); setOpen(true); };
   const save = async () => {
@@ -57,7 +71,6 @@ export function RepositoryManagement() {
     catch (cause) { if (current === generation) setError(message(cause)); }
     finally { if (current === generation) setSaving(false); }
   };
-  void load().catch((cause) => setError(message(cause)));
   return <section class="user-management-card repository-management" aria-label="仓库管理">
     <header class="user-management-header"><div><strong>仓库</strong><span>统一维护仓库地址，服务选择引用 · 共 {rows().length} 个</span></div><Button type="primary" icon={<Plus size={14} />} disabled={!canManage()} title={canManage() ? "添加仓库" : "仅开发角色可维护仓库"} onClick={() => edit()}>添加仓库</Button></header>
     <Show when={error() && !open() && !deleting()}><div class="user-management-error" role="alert">{error()}</div></Show>

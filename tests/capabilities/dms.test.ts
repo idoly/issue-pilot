@@ -106,6 +106,69 @@ test("preserves an earlier DMS output when closing the protocol session fails", 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const output of [false, true]) for (const phase of ["discovery", "query", "close", "discovery-and-close", "query-and-close"] as const) test(`retains DMS ${phase} failures during ${output ? "export" : "query"}`, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-errors-"));
+  const store = new IssueOutputStore(root, "ISSUE-20261020-991");
+  const primary = new Error("dms_mcp_tool_failed"), cleanup = new Error("private fixture cleanup detail");
+  let closes = 0, queries = 0;
+  const fixture = fixtureSession({
+    async listTools() { if (phase.startsWith("discovery")) throw primary; return [executeScriptTool]; },
+    async callTool() { queries++; if (phase.startsWith("query")) throw primary; return { content: [] }; },
+    async close() { closes++; if (phase.includes("close")) throw cleanup; },
+  });
+  try {
+    await store.write("result.json", "old-delivery");
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { output: { fileName: "result.json" } } : {}) }, configured, undefined, fixture.connect, store), error => {
+      if (phase.endsWith("-and-close")) {
+        assert(error instanceof AggregateError);
+        assert.equal(error.message, primary.message);
+        assert.deepEqual(error.errors, [primary, cleanup]);
+        assert.doesNotMatch(error.message, /private fixture/);
+      } else assert.equal(error, phase === "close" ? cleanup : primary);
+      return true;
+    });
+    assert.equal(closes, 1);
+    assert.equal(queries, phase.startsWith("discovery") ? 0 : 1);
+    assert.equal((await store.read("result.json")).toString(), "old-delivery");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const output of [false, true]) test(`retains DMS caller cancellation when ${output ? "export" : "query"} and close fail`, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-cancel-close-"));
+  const store = new IssueOutputStore(root, "ISSUE-20261020-992");
+  const controller = new AbortController(), reason = new Error("caller_cancelled");
+  let closes = 0;
+  const fixture = fixtureSession({
+    async listTools() { return [executeScriptTool]; },
+    async callTool() { controller.abort(reason); throw reason; },
+    async close() { closes++; throw new Error("private fixture cleanup detail"); },
+  });
+  try {
+    await store.write("result.json", "old-delivery");
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { output: { fileName: "result.json" } } : {}) }, configured, controller.signal, fixture.connect, store), error => error === reason);
+    assert.equal(closes, 1);
+    assert.equal((await store.read("result.json")).toString(), "old-delivery");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const phase of ["single", "double", "cancel"] as const) test(`retains DMS scope resolution ${phase} failure during cleanup`, async () => {
+  const controller = new AbortController(), primary = new Error("dms_mcp_scope_resolve_failed"), cleanup = new Error("private fixture cleanup detail");
+  let closes = 0;
+  const fixture = fixtureSession({
+    async listTools() { if (phase === "cancel") controller.abort(primary); throw primary; },
+    async close() { closes++; if (phase !== "single") throw cleanup; },
+  });
+  await assert.rejects(resolveDmsScope(configured, "ORDERS-PROD", "orders", controller.signal, fixture.connect), error => {
+    if (phase === "double") {
+      assert(error instanceof AggregateError);
+      assert.equal(error.message, primary.message);
+      assert.deepEqual(error.errors, [primary, cleanup]);
+    } else assert.equal(error, primary);
+    return true;
+  });
+  assert.equal(closes, 1);
+});
+
 test("uses Authorization for both sides of the MCP SSE protocol", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ method: string; url: string; authorization: string | null; redirect?: RequestRedirect }> = [];

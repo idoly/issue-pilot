@@ -132,10 +132,35 @@ test("reads RabbitMQ management data with encoded scope and credentials", async 
     assert.equal(output.output.length, 150);
     assert.equal(requests[0]?.url, "/api/queues/%2F/orders/bindings");
     assert.equal(requests[0]?.authorization, `Basic ${Buffer.from("reader:secret").toString("base64")}`);
+    for (const queue of [".", ".."]) {
+      for (const action of ["queue", "bindings"] as const) await assert.rejects(readRabbitMq(config, { action, queue }), /invalid_mq_queue/);
+    }
+    for (const virtualHost of [".", ".."]) {
+      await assert.rejects(readRabbitMq({ ...config, virtualHost }, { action: "queues" }), /invalid_mq_virtual_host/);
+    }
+    assert.equal(requests.length, 1, "invalid scope must fail before sending credentials or querying another scope");
+    await readRabbitMq(config, { action: "queue", queue: "%2e%2e/orders" });
+    assert.equal(requests[1]?.url, "/api/queues/%2F/%252e%252e%2Forders");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("keeps RabbitMQ queue names literal, including significant whitespace", async () => {
+  const requests: string[] = [];
+  const server = createServer((request, response) => { requests.push(request.url ?? ""); response.setHeader("content-type", "application/json"); response.end("{}"); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert(address && typeof address === "object");
+  const config = { host: "127.0.0.1", managementPort: address.port, username: "reader", password: "secret", virtualHost: "/" };
+  try {
+    const names = [" orders ", " ", " .. ", "订单/ready?%#"];
+    for (const queue of names) {
+      for (const action of ["queue", "bindings"] as const) await readRabbitMq(config, { action, queue });
+    }
+    assert.deepEqual(requests, names.flatMap(queue => [`/api/queues/%2F/${encodeURIComponent(queue)}`, `/api/queues/%2F/${encodeURIComponent(queue)}/bindings`]));
+    await assert.rejects(readRabbitMq(config, { action: "queue", queue: "" }), /invalid_mq_queue/);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
 test("rejects oversized native Redis and HTTP responses before returning them", async () => {

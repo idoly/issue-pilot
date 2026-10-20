@@ -29,11 +29,26 @@ export function serializePerson(person: typeof subjects.$inferSelect) {
   return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "", role: person.role, ...(person.isAdmin ? { isAdmin: true } : {}) };
 }
 
+// Share implicit selection, including an in-flight lookup; authorization always reloads the user.
+const defaultRequestSubjects = new WeakMap<object, Promise<string>>();
+
 export async function requireCurrentUser(database: ApiRouteContext["database"], request?: Pick<FastifyRequest, "headers">) {
   const requested = request?.headers["x-issue-pilot-subject"];
   if (Array.isArray(requested)) throw new ApiError(400, "invalid_current_subject");
-  const [user] = requested
-    ? await database.db.select().from(subjects).where(and(eq(subjects.subject, requested), eq(subjects.active, true))).limit(1)
+  let selected = requested;
+  if (!selected && request) {
+    let selection = defaultRequestSubjects.get(request);
+    if (!selection) {
+      selection = database.db.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.createdAt), asc(subjects.subject)).limit(1).then(([user]) => {
+        if (!user) throw new ApiError(400, "invalid_current_subject");
+        return user.subject;
+      });
+      defaultRequestSubjects.set(request, selection);
+    }
+    selected = await selection;
+  }
+  const [user] = selected
+    ? await database.db.select().from(subjects).where(and(eq(subjects.subject, selected), eq(subjects.active, true))).limit(1)
     : await database.db.select().from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.createdAt), asc(subjects.subject)).limit(1);
   if (!user) throw new ApiError(400, "invalid_current_subject");
   return user;

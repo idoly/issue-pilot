@@ -59,8 +59,10 @@ podman push registry.example.com/issue-pilot:<version>
 | `/var/lib/issue-pilot` hostPath | `/opt/issue-pilot/.issue-pilot` | 全部业务 state |
 | `/etc/issue-pilot`，只读 hostPath | `/home/node` | Operator Pi、SSH、工具配置 |
 | tmp emptyDir | `/tmp` | 临时文件 |
-| npm-cache emptyDir | `/home/node/.npm` | npm 缓存 |
-| maven-cache emptyDir | `/home/node/.m2/repository` | Maven 缓存 |
+| npm-cache emptyDir | `/home/node/.npm` | 缓存卷；broker 在其下创建私有 `issue-pilot` 子目录 |
+| maven-cache emptyDir | `/home/node/.m2/repository` | 缓存卷；broker 在其下创建私有 `issue-pilot` 子目录 |
+
+默认项目缓存使用 `.npm/issue-pilot` 和 `.m2/repository/issue-pilot`，broker 按应用 UID 创建 `0700` 子目录，检查 owner 且拒绝 group/other 写入。fsGroup 管理的卷根可为组可写，但不能直接用作 broker 缓存路径；已有不安全目录会拒绝，不自动 chmod。自定义根配置也须遵守此规则，旧缓存不会自动搬迁。
 
 准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。应用 `.pi` 资源独立于 Operator HOME；当前镜像不复制它，清单也未挂载，需要资源时明确部署到根配置位置，例如只读挂载 `/opt/issue-pilot/.pi`。
 

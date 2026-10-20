@@ -14,6 +14,8 @@ async function httpJson(config: CapabilityConfig<"mq">, requestPath: string, sig
 function rabbitMqPath(action: "overview" | "queues" | "queue" | "bindings", virtualHost: string, queue?: string): string {
   const encodedVirtualHost = encodeURIComponent(virtualHost);
   if (action === "overview") return "/api/overview";
+  // WHATWG URLs normalize even percent-encoded dot segments, changing the target scope.
+  if (virtualHost === "." || virtualHost === "..") throw new Error("invalid_mq_virtual_host");
   if (action === "queues") return `/api/queues/${encodedVirtualHost}`;
   const encodedQueue = encodeURIComponent(queue!);
   return action === "queue"
@@ -22,8 +24,8 @@ function rabbitMqPath(action: "overview" | "queues" | "queue" | "bindings", virt
 }
 
 export async function readRabbitMq(config: CapabilityConfig<"mq">, input: CapabilityInputs["mq"], signal?: AbortSignal) {
-  const queue = input.queue?.trim();
-  if ((input.action === "queue" || input.action === "bindings") && (!queue || queue.includes("\0"))) throw new Error("invalid_mq_queue");
+  const queue = input.queue;
+  if ((input.action === "queue" || input.action === "bindings") && (!queue || queue === "." || queue === ".." || queue.includes("\0"))) throw new Error("invalid_mq_queue");
   const requestPath = rabbitMqPath(input.action, config.virtualHost, queue);
   const response = await httpJson(config, requestPath, signal);
   return capabilityTextResult(capabilityResultText({ action: input.action, output: response }), { virtualHost: config.virtualHost });

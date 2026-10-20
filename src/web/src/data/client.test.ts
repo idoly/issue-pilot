@@ -252,6 +252,18 @@ describe("API client", () => {
     expect(headers.get("X-Issue-Pilot-Sha256")).toBe("a".repeat(64));
   });
 
+  it("accepts HEAD-to-index metadata for staged file comparisons", async () => {
+    const response = {
+      file: { status: "modified", path: "src/index.ts", previousPath: null },
+      before: { path: "src/index.ts", version: "head", content: "head\n" },
+      after: { path: "src/index.ts", version: "index", content: "staged\n" },
+    };
+    const fetch = vi.fn().mockResolvedValue(Response.json(response));
+    vi.stubGlobal("fetch", fetch);
+    await expect(loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/index.ts", undefined, true)).resolves.toEqual(response);
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("X-Issue-Pilot-Staged")).toBe("true");
+  });
+
   it("rejects stale source commit response contracts", async () => {
     const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ content: "raw patch", truncated: false }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);

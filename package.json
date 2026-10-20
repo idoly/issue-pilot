@@ -12,7 +12,7 @@
   "scripts": {
     "dev:web": "vite --config src/web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test tests/**/*.test.ts && vitest run --config src/web/vite.config.ts --environment jsdom",
+    "test": "node --experimental-strip-types --test 'tests/**/*.test.ts' && vitest run --config src/web/vite.config.ts --environment jsdom",
     "build": "vite build --config src/web/vite.config.ts",
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts"
   },

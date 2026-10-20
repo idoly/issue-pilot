@@ -133,8 +133,8 @@ export function registerApplicationMcp(context: ApiRouteContext) {
     return { endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: false, tools: applicationTools() }] };
   });
   context.app.post("/mcp", { logLevel: "silent", bodyLimit: limits.requestBytes }, async (request, reply) => {
-    await ensureCurrentSubject(context.database, request);
-    const server = createApplicationMcpServer(context, request);
+    const subject = await ensureCurrentSubject(context.database, request);
+    const server = createApplicationMcpServer(context, { headers: { "x-issue-pilot-subject": subject } });
     const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
     reply.raw.setHeader("Cache-Control", "private, no-store"); reply.hijack();
     reply.raw.once("close", () => { void transport.close().catch(() => {}); void server.close().catch(() => {}); });

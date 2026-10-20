@@ -9,6 +9,8 @@ export interface CommandExecutionOptions {
   environment?: Readonly<Record<string, string>>;
   maxOutputBytes?: number | null;
   input?: Uint8Array;
+  /** Reject malformed stdout instead of replacing invalid UTF-8 bytes. */
+  strictStdoutUtf8?: boolean;
   /** Consume stdout as it arrives instead of retaining it in the result. */
   onStdout?: (chunk: string) => void;
 }
@@ -84,13 +86,27 @@ export async function executeLocalCommand(command: string, args: string[], optio
       if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") terminate();
     });
     if (options.input) child.stdin?.end(options.input);
-    child.stdout!.setEncoding("utf8");
     child.stderr!.setEncoding("utf8");
-    child.stdout!.on("data", capture((chunk) => {
+    const captureStdout = capture((chunk) => {
       if (!options.onStdout) { stdout += chunk; return; }
       try { options.onStdout(chunk); }
       catch (error) { streamError = error instanceof Error ? error : new Error("command_output_processing_failed"); terminate(); }
-    }));
+    });
+    if (options.strictStdoutUtf8) {
+      const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+      const decode = (chunk?: Buffer) => {
+        if (streamError || killed) return;
+        let text: string;
+        try { text = decoder.decode(chunk, { stream: chunk !== undefined }); }
+        catch { streamError = new Error("command_stdout_not_utf8"); terminate(); return; }
+        if (text) captureStdout(text);
+      };
+      child.stdout!.on("data", decode);
+      child.stdout!.on("end", () => decode());
+    } else {
+      child.stdout!.setEncoding("utf8");
+      child.stdout!.on("data", captureStdout);
+    }
     child.stderr!.on("data", capture((chunk) => { stderr += chunk; }));
     child.on("error", (error) => finish(() => reject(error)));
     child.on("close", (code) => finish(() => streamError

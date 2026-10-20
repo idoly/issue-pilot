@@ -52,7 +52,6 @@ test("browses only registered Issue repository content", async () => {
         if (args.includes("merge-base")) return { code: args.includes("c".repeat(40)) ? 1 : 0, stderr: "", killed: false, stdout: "" };
         if (args.includes("rev-list")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} ${"a".repeat(40)}\n` };
         if (args.includes("--name-status")) return { code: 0, stderr: "", killed: false, stdout: "M\0src/index.ts\0R100\0README.md\0GUIDE.md\0" };
-        if (args.includes("cat-file") && args.includes("-s")) return { code: 0, stderr: "", killed: false, stdout: "28\n" };
         if (args.includes("cat-file") && args.includes("blob")) return { code: 0, stderr: "", killed: false, stdout: /^(a|:)/.test(args.at(-1)!) ? "export const ready = false;\n" : "export const ready = true;\n" };
         if (args.includes("ls-files") && !args.includes("--others")) return { code: 0, stderr: "", killed: false, stdout: "src/index.ts\0" };
         return { code: 0, stderr: "", killed: false, stdout: "" };
@@ -81,6 +80,14 @@ test("browses only registered Issue repository content", async () => {
     await browser.createFile(issue!, "application", "generated/child/evidence.txt", "preserve\n");
     await assert.rejects(browser.renamePath(issue!, "application", "generated", "generated/child", true), /invalid_source_path/);
     assert.equal(await readFile(path.join(repository, "generated", "child", "evidence.txt"), "utf8"), "preserve\n");
+    const longName = `${"文".repeat(83)}.ts`;
+    const longFile = await browser.createFile(issue!, "application", `generated/${longName}`, "before\n");
+    assert.equal((await browser.writeFile(issue!, "application", `generated/${longName}`, "after\n", longFile.sha256)).content, "after\n");
+    await browser.createDirectory(issue!, "application", "..notes");
+    const dottedFile = await browser.createFile(issue!, "application", "..notes/value.ts", "notes\n");
+    assert.equal((await browser.file(issue!, "application", "..notes/value.ts")).sha256, dottedFile.sha256);
+    await browser.renamePath(issue!, "application", "..notes/value.ts", "..notes/renamed.ts", false);
+    await browser.deletePath(issue!, "application", "..notes", true);
     const largeSource = "x".repeat(2 * 1024 * 1024 + 1);
     const largeFile = await browser.createFile(issue!, "application", "generated/large.txt", largeSource);
     assert.equal(largeFile.size, Buffer.byteLength(largeSource));

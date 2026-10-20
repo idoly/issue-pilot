@@ -29,7 +29,7 @@ npm run build -- --outDir "$web_build_root"
 资源受限时使用等价入口限制并发：
 
 ```bash
-node --experimental-strip-types --test --test-concurrency=2 tests/**/*.test.ts
+node --experimental-strip-types --test --test-concurrency=2 'tests/**/*.test.ts'
 npx vitest run --config src/web/vite.config.ts --environment jsdom --maxWorkers=1
 ```
 
@@ -50,6 +50,8 @@ scripts/playwright.sh status
 | Playwright | 实际浏览器编辑、布局、字体和加载 |
 | 容器/部署验收 | 运行时、权限、挂载和恢复流程 |
 
+测试脚本将递归 glob 作为一个带引号的参数交给 Node 发现文件，覆盖 tests 根目录与多层子目录，不依赖 shell 的 globstar 设置。
+
 测试按 agent/http/workspace/capabilities/db 等目录组织。faux provider 可驱动真实工具管线；Python 文件回归使用真实 openpyxl 和临时工单。按风险覆盖失败、重试、取消、重复调用、回滚、最终化和关闭，迁移覆盖 fresh DB 与升级。
 
 文档变更检查链接、锚点、图的解析与渲染，并核对 owner 代码。完成检查后只在新改动、失败或未解决风险需要时扩大验证。
@@ -69,7 +71,7 @@ scripts/playwright.sh status
 | 成果与发布 | outputs/store.ts、agent/output-tool.ts |
 | Web DTO、请求、SSE | web/src/data/client.ts、app/agent-stream.ts |
 | 共享草稿、配置编辑 | ApplicationResources.tsx、agent-configuration.ts |
-| 代码浏览 | CodeBrowser.tsx、SourceText.tsx、SourceDiff.tsx、monaco.ts |
+| 代码浏览 | CodeBrowser.tsx、SourceText.tsx、SourceDiff.tsx、monaco.ts、workspace/source-browser.ts；共用 DTO/枚举：workspace/source-contracts.ts |
 
 ## 隔离与变更边界
 

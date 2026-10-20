@@ -72,6 +72,31 @@ test("attempts to stop every session when closing", async () => {
   assert.deepEqual(stopped, ["issue-1", "issue-2"]);
 });
 
+for (const [sessionFails, gitFails] of [[true, true], [true, false], [false, true]]) test(`retains session and Git cleanup failures (${sessionFails}, ${gitFails})`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-cleanup-"));
+  const engine = new AgentEngine({} as never, root);
+  const internal = engine as unknown as { sessions: Map<string, unknown>; personalGit: Map<string, unknown> };
+  const sessionError = new Error("fixture_session_stop_failed"), gitError = new Error("fixture_git_cleanup_failed");
+  const calls: string[] = [];
+  internal.sessions.set("issue-1", { async stop() { calls.push("session"); if (sessionFails) throw sessionError; } });
+  internal.personalGit.set("issue-1", { env: {}, async close() { calls.push("git"); if (gitFails) throw gitError; } });
+  try {
+    await assert.rejects(engine.runExclusive(["issue-1"], reservation => reservation.closeSession("issue-1")), error => {
+      if (sessionFails && gitFails) {
+        assert(error instanceof AggregateError);
+        assert.equal(error.message, "agent_session_close_failed");
+        assert.deepEqual(error.errors, [sessionError, gitError]);
+      } else assert.equal(error, sessionFails ? sessionError : gitError);
+      return true;
+    });
+    assert.deepEqual(calls, ["session", "git"]);
+    assert.equal(internal.sessions.has("issue-1"), false);
+    assert.equal(internal.personalGit.has("issue-1"), false);
+    await engine.runExclusive(["issue-1"], reservation => reservation.closeSession("issue-1"));
+    assert.deepEqual(calls, ["session", "git"]);
+  } finally { await engine.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("does not record queued user messages after an issue becomes resolved", async () => {
   let status = "pending";
   let recorded = 0;

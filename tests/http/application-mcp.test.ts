@@ -3,6 +3,10 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { openDatabase } from "../../src/db/client.ts";
+import { subjects } from "../../src/db/schema.ts";
+import { eq } from "drizzle-orm";
 import { IssueOutputStore } from "../../src/outputs/store.ts";
 
 const text = (result: unknown): string => JSON.stringify(result);
@@ -80,6 +84,33 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.equal(f.engine.enqueued.length, before);
     assert.equal((await f.app.inject({ method: "GET", url: "/mcp" })).statusCode, 405);
   } finally { await client.close(); await f.cleanup(); }
+});
+
+test("pins the default MCP identity for internal API dispatch without falling back after deactivation", async () => {
+  const f = await createApiFixture(), database = openDatabase(f.databaseFile);
+  const client = new Client({ name: "identity-fixture", version: "1" });
+  const owner = issuePilotConfig.bootstrapUser.subject;
+  let armed = false, forwardedSubject: string | string[] | undefined;
+  f.app.addHook("onRequest", async request => {
+    if (!armed || request.url !== "/api/me") return;
+    armed = false; forwardedSubject = request.headers["x-issue-pilot-subject"];
+    await database.db.update(subjects).set({ active: false }).where(eq(subjects.subject, owner));
+  });
+  try {
+    const created = await f.app.inject({ method: "POST", url: "/api/users", headers: { "x-issue-pilot-subject": owner }, payload: { subject: "zz-mcp-next-user", name: "Next", email: "next@example.test", role: "developer", isAdmin: true } });
+    assert.equal(created.statusCode, 201, created.body);
+    assert.equal(JSON.parse((await f.app.inject({ method: "GET", url: "/api/me" })).body).subject, owner);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`)) as Parameters<Client["connect"]>[0]);
+    armed = true;
+    const result = await client.callTool({ name: "users_list", arguments: {} });
+    assert.equal(result.isError, true, JSON.stringify(result));
+    assert.match(JSON.stringify(result), /invalid_current_subject/);
+    assert.equal(forwardedSubject, owner);
+    const next = await f.app.inject({ method: "GET", url: "/api/me" });
+    assert.equal(next.statusCode, 200, next.body);
+    assert.equal(JSON.parse(next.body).subject, "zz-mcp-next-user");
+  } finally { await client.close(); await database.close(); await f.cleanup(); }
 });
 
 test("MCP rejects an inactive or invalid selected identity before protocol dispatch", async () => {

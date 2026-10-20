@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -27,11 +28,15 @@ async function secureOutputRoot(stateRoot: string, issueKey: string): Promise<st
   return root;
 }
 
+function serializeOutput(fileName: string, metadata: Stats): IssueOutput {
+  if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_issue_output_file");
+  return { fileName, size: metadata.size, updatedAt: metadata.mtime.toISOString() };
+}
+
 async function outputMetadata(root: string, fileName: string): Promise<IssueOutput> {
   const target = path.join(root, outputFileName(fileName));
-  const metadata = await lstat(target);
-  if (!metadata.isFile() || (metadata.mode & 0o077) !== 0 || path.dirname(target) !== root) throw new Error("insecure_issue_output_file");
-  return { fileName, size: metadata.size, updatedAt: metadata.mtime.toISOString() };
+  if (path.dirname(target) !== root) throw new Error("insecure_issue_output_file");
+  return serializeOutput(fileName, await lstat(target));
 }
 
 export async function listIssueOutputs(stateRoot: string, issueKey: string): Promise<IssueOutput[]> {
@@ -84,27 +89,30 @@ export class IssueOutputStore {
     return this.generate(fileName, async (append) => { await append(content); });
   }
 
-  async generate<T>(fileName: string, producer: (append: OutputAppender) => Promise<T>): Promise<IssueOutput & { result: T }> {
+  async generate<T>(fileName: string, producer: (append: OutputAppender) => Promise<T>, signal?: AbortSignal): Promise<IssueOutput & { result: T }> {
     const selected = outputFileName(fileName);
+    signal?.throwIfAborted();
     return this.queue.run(selected, async () => {
+      signal?.throwIfAborted();
       const root = await secureOutputRoot(this.stateRoot, this.issueKey);
       const target = path.join(root, selected);
       const temporary = path.join(path.dirname(root), `.output-${randomUUID()}.tmp`);
       let handle;
       try {
-        await lstat(target).then((metadata) => {
-          if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_issue_output_file");
-        }, (error) => {
+        await lstat(target).then((metadata) => { serializeOutput(selected, metadata); }, (error) => {
           if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
           throw error;
         });
         handle = await open(temporary, "wx", 0o600);
+        signal?.throwIfAborted();
         const append: OutputAppender = async (content) => { await handle!.writeFile(content); };
         const result = await producer(append);
+        const output = serializeOutput(selected, await handle.stat());
         await handle.close();
         handle = undefined;
+        signal?.throwIfAborted();
         await rename(temporary, target);
-        return { ...await outputMetadata(root, selected), result };
+        return { ...output, result };
       } catch (error) {
         await handle?.close().catch(() => undefined);
         await rm(temporary, { force: true }).catch(() => undefined);

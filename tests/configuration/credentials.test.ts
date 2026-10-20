@@ -49,6 +49,20 @@ test("ignores historical RabbitMQ AMQP ports when projecting and saving configur
   assert.deepEqual(resolveConfiguredCapabilitySections({ mq: { ...publicInput("mq", { mode: "preserve" }), port: "unused" } }, ["mq"], historical).mq, configuration.mq);
 });
 
+test("preserves significant password whitespace when replacing and resaving native credentials", () => {
+  const keys = ["nacos", "db", "redis", "mq", "es"] as const;
+  for (const key of keys) {
+    const password = "  fixture-private-password \t";
+    const input = publicInput(key, { mode: "replace", values: { password } });
+    const replaced = resolveConfiguredCapabilitySections({ [key]: input }, [key], configuration);
+    const storedPassword = key === "db" ? replaced.db!.databases[0]!.password : replaced[key]!.password;
+    assert.equal(storedPassword, password, `${key} replacement must preserve password bytes`);
+    const preserved = resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], replaced);
+    assert.deepEqual(preserved, replaced, `${key} preserve must not normalize saved passwords`);
+    assert.doesNotMatch(JSON.stringify(projectCapabilityConfiguration(replaced)), /fixture-private-password/);
+  }
+});
+
 test("clears only optional credentials and rejects preservation without stored values", () => {
   for (const key of CAPABILITY_KEYS) {
     const section = publicInput(key, { mode: "clear" });

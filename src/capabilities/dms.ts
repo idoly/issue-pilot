@@ -38,6 +38,24 @@ function cancellationError(signal: AbortSignal): Error {
   return new Error("dms_mcp_aborted");
 }
 
+async function withDmsSession<T>(session: DmsMcpSession, signal: AbortSignal, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= Promise.resolve().then(() => session.close());
+  let failure: { error: unknown } | undefined;
+  try { return await operation(close); }
+  catch (error) { failure = { error }; throw error; }
+  finally {
+    try { await close(); }
+    catch (cleanupError) {
+      signal.throwIfAborted();
+      // An export may have already awaited this same close failure before publication.
+      if (!failure || failure.error === cleanupError) throw cleanupError;
+      const primary = failure.error;
+      throw new AggregateError([primary, cleanupError], primary instanceof Error ? primary.message : "dms_mcp_operation_cleanup_failed");
+    }
+  }
+}
+
 function retryAfterMs(value: string | null): number | undefined {
   if (!value?.trim()) return undefined;
   if (/^\d+$/.test(value.trim())) return Number(value) * 1_000;
@@ -181,10 +199,10 @@ export interface DmsScopeResolution {
   databaseId: string;
 }
 
-export async function resolveDmsScope(configured: DmsConnectionConfiguration, instanceAlias: string, schemaName: string, signal?: AbortSignal): Promise<DmsScopeResolution> {
+export async function resolveDmsScope(configured: DmsConnectionConfiguration, instanceAlias: string, schemaName: string, signal?: AbortSignal, connect: ConnectDmsMcp = connectDmsMcp): Promise<DmsScopeResolution> {
   const boundedSignal = operationSignal(signal);
-  const session = await connectDmsMcp(configured, boundedSignal);
-  try {
+  const session = await connect(configured, boundedSignal);
+  return withDmsSession(session, boundedSignal, async () => {
     const tools = await session.listTools(boundedSignal);
     const instanceTool = uniqueTool(tools, "listInstances", isReadOnlyTool);
     const databaseTool = uniqueTool(tools, "getDatabase", isReadOnlyTool);
@@ -210,9 +228,7 @@ export async function resolveDmsScope(configured: DmsConnectionConfiguration, in
     const resolvedSchema = typeof database.SchemaName === "string" ? database.SchemaName.trim() : "";
     if (!databaseId || resolvedInstanceId !== instanceId || resolvedSchema !== normalizedSchema) throw new Error("dms_mcp_scope_resolve_invalid_response");
     return { instanceId, instanceHost, instancePort, databaseId };
-  } finally {
-    await session.close();
-  }
+  });
 }
 
 export async function queryDms(
@@ -232,9 +248,7 @@ export async function queryDms(
   const boundedSignal = operationSignal(signal);
   const args = executeScriptArguments(input, database.databaseId);
   const session = await connect(configured, boundedSignal);
-  let closing: Promise<void> | undefined;
-  const close = () => closing ??= session.close();
-  try {
+  return withDmsSession(session, boundedSignal, async (close) => {
     const tool = uniqueTool(await session.listTools(boundedSignal), "executeScript", isReadOnlyScriptTool);
     if (!tool) throw new Error("dms_mcp_execute_script_unavailable");
     const result = await session.callTool(tool.name, args, boundedSignal);
@@ -242,11 +256,9 @@ export async function queryDms(
     boundedSignal.throwIfAborted();
     const text = JSON.stringify({ tool: tool.name, result }, null, 2);
     if (input.output) {
-      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); });
+      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal);
       return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
     }
     return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
-  } finally {
-    await close();
-  }
+  });
 }

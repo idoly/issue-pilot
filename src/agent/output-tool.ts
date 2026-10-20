@@ -40,7 +40,7 @@ export function createOutputTool(store: IssueOutputStore, workDirectory: string)
           }
           await handle.close();
           signal?.throwIfAborted();
-        });
+        }, signal);
         return structuredJsonResult(capabilityTextResult(capabilityResultText({ output: { fileName: output.fileName, size: output.size, updatedAt: output.updatedAt } }), { operation: "publish", fileName: output.fileName }));
       } finally { await handle.close(); }
     },

@@ -97,12 +97,14 @@ sequenceDiagram
   participant Temp as 临时文件
   participant Output as outputs 目标
   Store->>Work: 校验受管路径与 regular file
-  Store->>Temp: 复制、完成写入并关闭
+  Store->>Temp: 复制、完成写入并校验元数据与权限
+  Store->>Temp: 关闭临时文件
+  Store->>Store: 检查取消
   Store->>Output: 原子 rename 替换
-  Note over Work,Output: 源文件保留；失败保留旧交付
+  Note over Work,Output: 源文件保留；替换前失败保留旧交付
 ```
 
-成果文件名限制在本工单 outputs 内，按根配置 `limits.filesystemNameBytes` 校验 UTF-8 字节数（默认 255），超限在生产者执行前拒绝。MySQL/DMS 导出复用成果存储，但先完成协议收尾再发布。SQLite 事务不会撤销文件移动或 Git 操作，因此各 owner 分别承担 prepare、rollback 和 finalize。
+成果文件名限制在本工单 outputs 内，按根配置 `limits.filesystemNameBytes` 校验 UTF-8 字节数（默认 255），超限在生产者执行前拒绝。MySQL/DMS 导出复用成果存储，但先完成协议收尾再发布。存储 owner 从临时文件句柄取得并验证返回元数据，在关闭临时文件后、原子替换前检查取消，替换后直接返回已取得的元数据。原生发布和 MySQL/DMS 导出传递调用方取消信号；排队任务在执行前检查取消，不启动已取消的生产者。已经提交的 rename 不自动回滚，活动生产者仍须响应取消并完成清理。SQLite 事务不会撤销文件移动或 Git 操作，因此各 owner 分别承担 prepare、rollback 和 finalize。
 
 ## Git 与工作区
 
@@ -124,7 +126,7 @@ flowchart LR
   Release -->|重开| Active
 ```
 
-初次或只读准备按需 fetch 远程分支；已记录 working branch 的准备和重开只使用本地 store/ref，不 fetch，也不在 ref 缺失时回退到远程或 reset。释放前检查布局、当前分支和 staged/untracked 状态；分支不匹配或 detached 时拒绝，批量移除失败按原 ref/commit 恢复。
+初次或只读准备按需 fetch 远程分支，并以完整 `refs/remotes/origin/<branch>` 解析基线，避免同名标签遮蔽。共享 checkout 在启动检查和运行中复用时都检查 HEAD、已跟踪修改、untracked 和 ignored 内容；异常时拒绝复用并保留现场。已记录 working branch 的准备和重开只使用本地 store/ref，不 fetch，也不在 ref 缺失时回退到远程或 reset。分支存在性检查仅把 `show-ref --exists` 的返回码 2 视为确实缺失；损坏 ref、缺失对象及其他 Git 执行错误继续报告，不作为可缺省的关联快照处理。释放前检查布局、当前分支和 staged/untracked 状态；分支不匹配或 detached 时拒绝，批量移除失败按原 ref/commit 恢复。
 
 `issue_service_scopes` 保存 include/remove 的服务意图，仓库按 URL 去重，同 URL 分支冲突拒绝。意图先持久化，再准备跨介质资源；失败保留事实供重试，不伪造完成状态。
 

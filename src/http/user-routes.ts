@@ -46,13 +46,12 @@ function serializeManagedUser(user: typeof subjects.$inferSelect) {
 export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">): void {
   const { app, database, engine, runScopeExclusive } = context;
 
-  const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: () => Promise<T>) => runScopeExclusive(async () => {
+  const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) => runScopeExclusive(async () => {
     await authorize();
     const affected = await database.db.select({ id: issues.id }).from(issues).where(or(eq(issues.reporterSubject, subject), eq(issues.assigneeSubject, subject)));
-    return runIssueExclusive(engine, affected.map(({ id }) => id), async (reservation) => {
+    return runIssueExclusive(engine, affected.map(({ id }) => id), (reservation) => change(async () => {
       for (const { id } of affected) await reservation.closeSession(id);
-      return change();
-    });
+    }));
   });
 
   app.get("/api/me/credentials", async (request, reply) => {
@@ -68,7 +67,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const input = record(request.body);
     if (input.model || input.git) await requireDeveloper(database, request);
     if (Object.keys(input).some((key) => !["model", "git", "production"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
-    const result = await changeUser(subject, () => input.model || input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async () => {
+    const result = await changeUser(subject, () => input.model || input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async (closeSessions) => {
       const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
       const values = { modelApiKeys: { ...existing?.modelApiKeys }, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
       if (input.model) {
@@ -105,6 +104,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
           }
         } catch (error) { if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message); throw error; }
       }
+      await closeSessions();
       const [saved] = await database.db.insert(userCredentials).values({ subject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } }).returning();
       const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
       const status = credentialStatus(saved);
@@ -167,31 +167,34 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       const [existing] = await database.db.select({ isAdmin: subjects.isAdmin }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
       if (existing?.isAdmin || update.isAdmin === true) await requireAdmin(database, request);
       return actor;
-    }, () => database.db.transaction(async (transaction) => {
-      const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-      if (!existing) throw new ApiError(404, "user_not_found");
-      const active = update.active ?? existing.active;
-      const nextRole = update.role ?? existing.role;
-      const isAdmin = update.isAdmin ?? existing.isAdmin;
-      if (existing.active && !active) {
-        const activeUsers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).limit(2);
-        if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
-      }
-      if (existing.active && existing.isAdmin && (!active || !isAdmin)) {
-        const administrators = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.active, true))).limit(2);
-        if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
-      }
-      if (existing.active && existing.role === "developer" && (!active || nextRole !== "developer")) {
-        const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
-        if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
-      }
-      // Changing management access requires both developer and isAdmin.
-      if (existing.active && existing.isAdmin && existing.role === "developer" && (!active || !isAdmin || nextRole !== "developer")) {
-        const managers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
-        if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
-      }
-      const [updated] = await transaction.update(subjects).set({ ...update, updatedAt: new Date() }).where(eq(subjects.subject, subject)).returning();
-      return serializeManagedUser(updated!);
-    }));
+    }, async (closeSessions) => {
+      await closeSessions();
+      return database.db.transaction(async (transaction) => {
+        const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+        if (!existing) throw new ApiError(404, "user_not_found");
+        const active = update.active ?? existing.active;
+        const nextRole = update.role ?? existing.role;
+        const isAdmin = update.isAdmin ?? existing.isAdmin;
+        if (existing.active && !active) {
+          const activeUsers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).limit(2);
+          if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
+        }
+        if (existing.active && existing.isAdmin && (!active || !isAdmin)) {
+          const administrators = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.active, true))).limit(2);
+          if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+        }
+        if (existing.active && existing.role === "developer" && (!active || nextRole !== "developer")) {
+          const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
+          if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
+        }
+        // Changing management access requires both developer and isAdmin.
+        if (existing.active && existing.isAdmin && existing.role === "developer" && (!active || !isAdmin || nextRole !== "developer")) {
+          const managers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
+          if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+        }
+        const [updated] = await transaction.update(subjects).set({ ...update, updatedAt: new Date() }).where(eq(subjects.subject, subject)).returning();
+        return serializeManagedUser(updated!);
+      });
+    });
   });
 }

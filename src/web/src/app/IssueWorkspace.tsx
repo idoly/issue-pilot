@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "../ui";
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
@@ -82,9 +82,10 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
-  let issueGeneration = 0, scopePlanRequest = 0;
-  createEffect(() => props.issue.id, (issueId, previousIssueId) => {
-    if (previousIssueId === undefined || issueId === previousIssueId) return;
+  let issueGeneration = 0, scopePlanRequest = 0, relatedRequest = 0;
+  onCleanup(() => { issueGeneration++; scopePlanRequest++; relatedRequest++; });
+  createEffect(() => ({ issueId: props.issue.id, subject: currentUser()?.subject, role: currentUser()?.role }), (context, previous) => {
+    if (!previous || context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role) return;
     issueGeneration += 1;
     setEditOpen(false); setEditAttachments([]); setRemovedAttachmentIds([]); setEditSaving(false); setEditError("");
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setScopeOpen(false); setScopePlan(null); setScopePlanning(false); setScopeApplying(false); setScopeError("");
@@ -100,7 +101,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     setEditError(""); setEditOpen(true);
   };
   const saveIssue = async () => {
-    if (!editTitle().trim()) return;
+    if (editSaving() || !editTitle().trim()) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
     const input = { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), assigneeSubject: editAssignee(), ccSubjects: [...editCc()] };
@@ -112,21 +113,21 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       if (issueGeneration !== generation) return;
       setRemovedAttachmentIds([]); setEditAttachments([]);
       await props.onUpdated();
-      setEditOpen(false);
+      if (issueGeneration === generation) setEditOpen(false);
     } catch (error) {
       if (issueGeneration === generation) setEditError(errorMessage(error));
     } finally { if (issueGeneration === generation) setEditSaving(false); }
   };
   const submitComment = async () => {
     const body = commentBody().trim();
-    if (!body) return;
+    if (commentSaving() || !body) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
     setCommentSaving(true); setCommentError("");
     try {
       await addIssueComment(issueId, body);
       if (issueGeneration !== generation) return;
-      setCommentBody(""); setCommentMode("edit");
+      if (commentBody().trim() === body) { setCommentBody(""); setCommentMode("edit"); }
       await props.onUpdated();
     } catch (error) {
       if (issueGeneration === generation) setCommentError(errorMessage(error));
@@ -232,16 +233,18 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const canCreateFollowUp = () => props.issue.environmentKey === "dev" && !props.issue.agentRunning && ["ready", "stopped"].includes(props.issue.workspace.status) && props.issue.workspace.sourceAvailable && productionServices().length > 0;
   const canEditRelatedIssues = () => props.issue.status !== "resolved";
   const selectableRelatedIssues = createMemo(() => relatedCandidates().filter((candidate) => candidate.id !== props.issue.id));
+  const closeRelatedEditor = () => { relatedRequest++; setRelatedOpen(false); setRelatedLoading(false); };
   const openRelatedEditor = async () => {
+    const generation = issueGeneration, request = ++relatedRequest;
     setRelatedKeys((props.issue.relatedIssues ?? []).map(({ id }) => id));
+    setRelatedCandidates([]);
     setRelatedError(""); setRelatedOpen(true); setRelatedLoading(true);
-    const generation = issueGeneration;
     try {
       const candidates = await listIssues();
-      if (issueGeneration === generation) setRelatedCandidates(candidates);
+      if (issueGeneration === generation && request === relatedRequest) setRelatedCandidates(candidates);
     } catch (error) {
-      if (issueGeneration === generation) setRelatedError(errorMessage(error));
-    } finally { if (issueGeneration === generation) setRelatedLoading(false); }
+      if (issueGeneration === generation && request === relatedRequest) setRelatedError(errorMessage(error));
+    } finally { if (issueGeneration === generation && request === relatedRequest) setRelatedLoading(false); }
   };
   const saveRelatedIssues = async () => {
     const issueId = props.issue.id;
@@ -251,7 +254,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       await updateIssueRelatedIssues(issueId, relatedKeys());
       if (issueGeneration !== generation) return;
       await props.onUpdated();
-      if (issueGeneration === generation) setRelatedOpen(false);
+      if (issueGeneration === generation) closeRelatedEditor();
     } catch (error) {
       if (issueGeneration === generation) setRelatedError(errorMessage(error));
     } finally { if (issueGeneration === generation) setRelatedSaving(false); }
@@ -379,7 +382,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       </section>
       <OutputPreview issueKey={props.issue.id} output={previewOutput()} onClose={() => setPreviewOutput(null)} />
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
-      <Modal open={relatedOpen()} title="编辑关联工单" okText="保存关联" cancelText="取消" confirmLoading={relatedSaving()} cancelButtonProps={{ disabled: relatedSaving() }} okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }} onOk={() => { void saveRelatedIssues(); }} onCancel={() => { if (!relatedSaving()) setRelatedOpen(false); }}>
+      <Modal open={relatedOpen()} title="编辑关联工单" okText="保存关联" cancelText="取消" confirmLoading={relatedSaving()} cancelButtonProps={{ disabled: relatedSaving() }} okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }} onOk={() => { void saveRelatedIssues(); }} onCancel={() => { if (!relatedSaving()) closeRelatedEditor(); }}>
         <div class="create-issue-form related-issue-form">
           <label><span>关联工单（{selectableRelatedIssues().length} 个可选，最多选择 {issuePilotConfig.limits.relatedIssues} 个）</span><RelatedIssueSelect candidates={selectableRelatedIssues()} value={relatedKeys()} loading={relatedLoading()} inputLabel="编辑关联工单" onChange={setRelatedKeys} /></label>
           <p>保存后当前 Agent session 会关闭，并以所选工单的 metadata 和可用 Pi 对话重建只读上下文；只有具备本地开发分支的工单会附带代码快照，附件不会复制。</p>

@@ -121,6 +121,7 @@ for (const missingBranch of [false, true]) test(`restores recorded development b
     if (missingBranch) {
       await git(["-C", prepared.cachePath, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`]);
       await assert.rejects(manager.prepare(restore), /working_branch_not_found/);
+      await assert.rejects(manager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }), /working_branch_not_found/);
       await assert.rejects(access(prepared.workspacePath));
       await assert.rejects(git(["-C", prepared.cachePath, "show-ref", "--verify", `refs/heads/${prepared.workingBranch}`]));
     } else {
@@ -131,6 +132,83 @@ for (const missingBranch of [false, true]) test(`restores recorded development b
       assert.equal(restored.baseCommit, prepared.baseCommit);
       assert.equal(await readFile(join(restored.workspacePath, "local.txt"), "utf8"), "local commit\n");
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const malformed of [true, false]) test(`does not disguise ${malformed ? "a malformed ref" : "a ref to a missing object"} as a missing branch during restore or snapshot preparation`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-corrupt-ref-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const input = { issueKey: "ISSUE-20261018-992", workspaceName: "application", url: remote, baseBranch: "main", mode: "hotfix" as const };
+    const prepared = await manager.prepare(input);
+    await manager.remove(remote, prepared.workspacePath, prepared.workingBranch!);
+    const ref = join(prepared.cachePath, "refs", "heads", prepared.workingBranch!);
+    const evidence = malformed ? "invalid-ref-evidence\n" : `${"a".repeat(40)}\n`;
+    await writeFile(ref, evidence);
+    for (const operation of [
+      () => manager.prepare({ ...input, workingBranch: prepared.workingBranch!, existingBaseCommit: prepared.baseCommit }),
+      () => manager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }),
+    ]) {
+      await assert.rejects(operation(), error => error instanceof Error && error.message !== "working_branch_not_found" && "code" in error && error.code === (malformed ? 1 : 128));
+      assert.equal(await readFile(ref, "utf8"), evidence);
+      await assert.rejects(access(prepared.workspacePath));
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("refuses to reuse a shared checkout containing ignored files and preserves the evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-shared-ignored-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, ".gitignore"), "private-cache/\n");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const prepared = await manager.prepareShared({ url: remote, baseBranch: "main" });
+    const evidence = join(prepared.workspacePath, "private-cache", "evidence.txt");
+    await mkdir(join(prepared.workspacePath, "private-cache"));
+    await writeFile(evidence, "preserve ignored evidence\n");
+    assert.equal(await git(["-C", prepared.workspacePath, "status", "--porcelain"]), "");
+    await assert.rejects(manager.prepareShared({ url: remote, baseBranch: "main" }), /shared_checkout_changed/);
+    assert.equal(await readFile(evidence, "utf8"), "preserve ignored evidence\n");
+    assert.equal(await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]), prepared.baseCommit);
+    await rm(join(prepared.workspacePath, "private-cache"), { recursive: true });
+    assert.equal((await manager.prepareShared({ url: remote, baseBranch: "main" })).workspacePath, prepared.workspacePath);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const development of [false, true]) test(`uses the configured remote branch despite a shadowing tag for ${development ? "development" : "read-only"} preparation`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-ref-shadow-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, "value.txt"), "old baseline\n");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "old"]);
+    const old = await git(["-C", source, "rev-parse", "HEAD"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const initial = await manager.prepareShared({ url: remote, baseBranch: "main" });
+    // Tags can arrive during ordinary fetches and Git resolves them before remote shorthand.
+    await git(["-C", initial.cachePath, "tag", "origin/main", old]);
+    await writeFile(join(source, "value.txt"), "current baseline\n");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "current"]);
+    await git(["-C", source, "push", remote, "main"]);
+    const expected = await git(["-C", source, "rev-parse", "HEAD"]);
+    const prepared = development
+      ? await manager.prepare({ issueKey: "ISSUE-20261018-993", workspaceName: "application", url: remote, baseBranch: "main", mode: "hotfix" })
+      : await manager.prepareShared({ url: remote, baseBranch: "main" });
+    assert.equal(prepared.baseCommit, expected);
+    assert.equal(await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]), expected);
+    assert.equal(await readFile(join(prepared.workspacePath, "value.txt"), "utf8"), "current baseline\n");
+    assert.equal(await git(["-C", initial.cachePath, "rev-parse", "refs/tags/origin/main"]), old);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

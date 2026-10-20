@@ -41,6 +41,33 @@ test("streams stdout without retaining it and stops a cancelled producer", async
   await assert.rejects(executeLocalCommand(process.execPath, ["-e", "process.stdout.write('AI');setInterval(()=>{},1000)"], { onStdout: () => { throw new Error("consumer_failed"); } }), /consumer_failed/);
 });
 
+test("strict stdout decoding preserves valid split UTF-8, BOMs and replacement characters", async () => {
+  const expected = "\ufeff订单🙂 �\n", input = Buffer.from(expected);
+  const script = "const bytes=require('node:fs').readFileSync(0);let i=0;const write=()=>{if(i===bytes.length)return;process.stdout.write(bytes.subarray(i,++i));setTimeout(write,1)};write()";
+  const complete = await executeLocalCommand(process.execPath, ["-e", script], { input, strictStdoutUtf8: true });
+  assert.equal(complete.stdout, expected);
+  const chunks: string[] = [];
+  const streamed = await executeLocalCommand(process.execPath, ["-e", script], { input, strictStdoutUtf8: true, onStdout: chunk => chunks.push(chunk) });
+  assert.equal(chunks.join(""), expected);
+  assert.equal(streamed.stdout, "");
+});
+
+for (const bytes of [[0x61, 0xff], [0xf0, 0x9f]]) test(`rejects malformed stdout UTF-8 ${bytes.join(",")}`, async () => {
+  const command = ["-e", `process.stdout.write(Buffer.from(${JSON.stringify(bytes)}))`];
+  await assert.rejects(executeLocalCommand(process.execPath, command, { strictStdoutUtf8: true }), /command_stdout_not_utf8/);
+  assert.equal((await executeLocalCommand(process.execPath, command)).stdout, Buffer.from(bytes).toString("utf8"));
+});
+
+test("strict stdout decoding retains byte limits, cancellation and consumer failures", async () => {
+  await assert.rejects(executeLocalCommand(process.execPath, ["-e", "process.stdout.write('订单')"], { strictStdoutUtf8: true, maxOutputBytes: 3 }), /command_output_too_large/);
+  await assert.rejects(executeLocalCommand(process.execPath, ["-e", "process.stdout.write('valid');setInterval(()=>{},1000)"], { strictStdoutUtf8: true, onStdout: () => { throw new Error("consumer_failed"); } }), /consumer_failed/);
+  const controller = new AbortController();
+  const stopped = await executeLocalCommand(process.execPath, ["-e", "process.stdout.write('valid');setInterval(()=>{},1000)"], { strictStdoutUtf8: true, signal: controller.signal, onStdout: () => controller.abort() });
+  assert.equal(stopped.killed, true);
+  const interrupted = await executeLocalCommand(process.execPath, ["-e", "process.stdout.write(Buffer.from([0xf0]));setInterval(()=>{},1000)"], { strictStdoutUtf8: true, timeout: 100 });
+  assert.equal(interrupted.killed, true);
+});
+
 test("passes binary stdin without argv exposure and tolerates an early reader exit", async () => {
   const input = Buffer.from(Array.from({ length: 1024 }, (_, index) => index % 256));
   const result = await executeLocalCommand(process.execPath, ["-e", "const fs=require('fs'),crypto=require('crypto');process.stdout.write(JSON.stringify({hash:crypto.createHash('sha256').update(fs.readFileSync(0)).digest('hex'),args:process.argv.slice(1)}))"], { input });

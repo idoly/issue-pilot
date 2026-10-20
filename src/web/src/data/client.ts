@@ -1,5 +1,6 @@
-import type { SourceHistoryCursor, SourceHistoryPage } from "../../../workspace/source-browser";
-export type { SourceHistoryCursor } from "../../../workspace/source-browser";
+import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
+import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
+export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
@@ -85,20 +86,6 @@ export interface IssueDetail extends IssueListItem {
   reporter?: Person;
   comments: IssueComment[];
 }
-
-export interface SourceRepository { name: string; url: string; branch: string; access: "read" | "write" }
-export interface SourceTreeEntry { name: string; path: string; type: "directory" | "file" | "symlink" | "other"; size: number | null }
-export interface SourceTree { path: string; entries: SourceTreeEntry[]; truncated: boolean }
-export interface SourceFile { path: string; content: string; size: number; sha256: string }
-export interface SourceSearchMatch { path: string; line: number; column: number; preview: string }
-export interface SourceCommit { hash: string; shortHash: string; parents: string[]; author: string; date: string; subject: string }
-export interface SourceBlame { path: string; line: number; commit: string | null; shortCommit: string | null; author: string; date: string | null; subject: string }
-type SourceCommitFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied";
-export interface SourceCommitFile { status: SourceCommitFileStatus; path: string; previousPath: string | null }
-interface SourceRevisionFile { path: string; revision: string; content: string }
-interface SourceWorkspaceFile { path: string; version: "index" | "working-tree"; content: string }
-export interface SourceCommitFileComparison { file: SourceCommitFile; before: SourceRevisionFile | null; after: SourceRevisionFile | null }
-export interface SourceWorkspaceFileComparison { file: SourceCommitFile; before: SourceWorkspaceFile | null; after: SourceWorkspaceFile | null }
 
 export interface IssueScopeTransitionPlan {
   planHash: string;
@@ -196,8 +183,8 @@ function sourceResponseRecord(value: unknown, code: string): Record<string, unkn
 
 function sourceCommitFile(value: unknown, code: string): SourceCommitFile {
   const file = sourceResponseRecord(value, code);
-  if (!["added", "modified", "deleted", "renamed", "copied"].includes(String(file.status)) || typeof file.path !== "string" || !file.path || (file.previousPath !== null && typeof file.previousPath !== "string")) throw new Error(code);
-  return { status: file.status as SourceCommitFileStatus, path: file.path, previousPath: file.previousPath as string | null };
+  if (!SOURCE_COMMIT_FILE_STATUSES.includes(file.status as SourceCommitFile["status"]) || typeof file.path !== "string" || !file.path || (file.previousPath !== null && typeof file.previousPath !== "string")) throw new Error(code);
+  return { status: file.status as SourceCommitFile["status"], path: file.path, previousPath: file.previousPath as string | null };
 }
 
 function sourceRevisionFile(value: unknown, code: string): SourceRevisionFile | null {
@@ -210,7 +197,7 @@ function sourceRevisionFile(value: unknown, code: string): SourceRevisionFile | 
 function sourceWorkspaceFile(value: unknown, code: string): SourceWorkspaceFile | null {
   if (value === null) return null;
   const file = sourceResponseRecord(value, code);
-  if (typeof file.path !== "string" || !file.path || !["index", "working-tree"].includes(String(file.version)) || typeof file.content !== "string") throw new Error(code);
+  if (typeof file.path !== "string" || !file.path || !SOURCE_WORKSPACE_FILE_VERSIONS.includes(file.version as SourceWorkspaceFile["version"]) || typeof file.content !== "string") throw new Error(code);
   return { path: file.path, version: file.version as SourceWorkspaceFile["version"], content: file.content };
 }
 
@@ -245,7 +232,7 @@ export const searchSource = (key: string, repository: string, query: string, opt
 }, signal) as Promise<{ matches: SourceSearchMatch[]; truncated: boolean }>;
 export const loadSourceBlame = (key: string, repository: string, path: string, line: number, signal?: AbortSignal) => sourceRequest(key, "blame", repository, { Path: path, Line: String(line) }, signal) as Promise<SourceBlame>;
 export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal, cursor?: SourceHistoryCursor) => sourceRequest(key, "history", repository, { Path: path, ...(cursor ? { Revision: cursor.revision, Offset: String(cursor.offset) } : {}) }, signal) as Promise<SourceHistoryPage>;
-export async function loadSourceCommit(key: string, repository: string, revision: string, path = "", signal?: AbortSignal): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
+export async function loadSourceCommit(key: string, repository: string, revision: string, path = "", signal?: AbortSignal): Promise<SourceChanges> {
   const code = "source_commit_response_invalid";
   const response = sourceResponseRecord(await sourceRequest(key, "commit", repository, { Revision: revision, Path: path }, signal), code);
   if (!Array.isArray(response.files) || typeof response.truncated !== "boolean") throw new Error(code);
@@ -259,7 +246,7 @@ export async function loadSourceCommitFile(key: string, repository: string, revi
   if (!before && !after) throw new Error(code);
   return { file: sourceCommitFile(response.file, code), before, after };
 }
-export async function loadSourceDiff(key: string, repository: string, path = "", signal?: AbortSignal, staged = false): Promise<{ files: SourceCommitFile[]; truncated: boolean }> {
+export async function loadSourceDiff(key: string, repository: string, path = "", signal?: AbortSignal, staged = false): Promise<SourceChanges> {
   const code = "source_diff_response_invalid";
   const response = sourceResponseRecord(await sourceRequest(key, "diff", repository, { Path: path, Staged: String(staged) }, signal), code);
   if (!Array.isArray(response.files) || typeof response.truncated !== "boolean") throw new Error(code);
