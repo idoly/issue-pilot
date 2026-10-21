@@ -75,6 +75,10 @@ RabbitMQ 旧 AMQP `port` 字段被忽略，不再展示或保存。按 vhost/que
 
 DMS 握手保留安全的上游 HTTP 状态，例如 `dms_mcp_http_429`；不把响应正文、URL 或认证信息拼进连接错误。每次操作最多尝试两次握手，首次握手超时或 HTTP 429 可重试一次；429 优先遵守 `Retry-After`（秒数或 HTTP 日期），再加随机退避。缺少有效提示时等待 1–2 秒；等待上限默认 5 秒，服务端要求更久时直接报告限流。等待和连接均受原有取消与总预算约束，401/403 等错误不重试，已发送的 SQL 不自动重放。参数由根配置的 `limits.capability.dms` 维护。
 
+DMS 查询失败通过 `service_query` 的错误 JSON 返回稳定 `error` 和脱敏 `diagnostics`：`phase`（connect/discovery/execute/publish/close）、总 `elapsedMs`、各阶段 `phaseElapsedMs`、`sqlDispatchAttempted`，以及有有效上游提示时的 `retryAfterSeconds`。各阶段计时包含其内部等待，publish 可能包含 close，不能把这些时间直接求和。`sqlDispatchAttempted` 只表示已调用 SQL 发送入口，不证明服务端接收或执行；输出不存在也不证明 SQL 未执行。原始 SDK 错误、认证头、目标 URL 和 SQL 不进入该错误 JSON。调用方取消保留原取消语义。连接、发现、查询和发布仍共用 120 秒预算，不增加 SQL 自动重试。
+
+批量 DMS 任务使用串行、有间隔的查询，根据耗时与失败调整批量和间隔；固定间隔不是已确认的上游配额。Agent 提示要求保留检查点和成功结果，优先遵守 `retryAfterSeconds`，缺少提示时有限退避；核对结果后才能主动重查只读批次，同一批次重查一次仍失败则拆分或暂停。连续两次恢复探测失败，或单轮累计五次 DMS 调用失败即保存断点并停止，探测成功不清零累计失败数。这些是 Agent 执行指引，不是服务端限流器。未完成值须与成功查询确认的零值或无记录区分，验证新文件后再发布。
+
 SLS 错误只保留 SDK 结构化字段中可验证的诊断，不透出原始 message、请求正文、认证头或密钥；未知异常保持 `sls_query_failed`。例如 `sls_access_denied`、`sls_signature_mismatch`、`sls_invalid_access_key`、`sls_request_time_expired` 分别提示权限、签名、AccessKey 或请求时间问题；`sls_project_not_found`、`sls_logstore_not_found`、`sls_index_unavailable` 提示目标或索引不可用；`sls_rate_limited`、`sls_quota_exceeded`、`sls_http_429` 保留限流/额度线索。其他安全 HTTP 状态使用 `sls_http_NNN`，DNS、连接和证书错误分别使用 `sls_dns_failed`、`sls_network_failed`、`sls_tls_failed`。Worker 模块缺失或无法初始化使用 `capability_worker_initialization_failed`，与远程查询失败区分。查询失败不自动重放；分页中途失败也不返回前面已读页作为完整结果。
 
 ## 全局外部 MCP

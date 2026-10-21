@@ -2,7 +2,7 @@ import { defineTool, type AgentToolResult, type ToolDefinition } from "@earendil
 import { Type, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import { structuredJsonResult } from "../capabilities/contracts.ts";
-import { queryDms } from "../capabilities/dms.ts";
+import { DmsOperationError, queryDms } from "../capabilities/dms.ts";
 import { readElasticsearch } from "../capabilities/elasticsearch.ts";
 import { readMysql } from "../capabilities/mysql.ts";
 import { readNacos } from "../capabilities/nacos.ts";
@@ -42,7 +42,10 @@ export function createCapabilityTools(context: Pick<AgentSessionContext, "servic
   return [defineTool({
     name: "service_query", label: "Query service evidence", parameters: schema, outputSchema: Type.Unknown(),
     description: "Query evidence from a configured environment and service. Development Issues can read production/test sources; other Issues stay in their own environment. Use workspace list/describe to read service investigation notes before choosing a capability. Credentials and targets are injected by the server. Native operations remain read-only. External MCP servers expose separate tools through Pi.",
-    promptGuidelines: ["When codemode is enabled, service_query resolves to structured JSON data. Batch independent evidence reads with Promise.allSettled and return only the fields needed for the answer. Await calls that depend on an earlier result or publish the same file."],
+    promptGuidelines: [
+      "When codemode is enabled, service_query resolves to structured JSON data. Batch independent non-DMS evidence reads with Promise.allSettled and return only the fields needed for the answer. Await calls that depend on an earlier result or publish the same file.",
+      "Run DMS batches serially with spacing. Adjust batch size and spacing from observed latency and failures; do not assume a fixed request quota. On DMS failure, the error JSON contains error and diagnostics (phase, elapsedMs, phaseElapsedMs, sqlDispatchAttempted, optional retryAfterSeconds). A dispatch attempt does not prove server execution. Honor retryAfterSeconds when present; otherwise use bounded backoff. Never automatically replay SQL with an unknown result.",
+    ],
     execute: async (_id, raw, signal): Promise<AgentToolResult<unknown>> => {
       signal?.throwIfAborted();
       if (!validateInput.Check(raw)) throw new Error("invalid_service_query_input");
@@ -50,7 +53,13 @@ export function createCapabilityTools(context: Pick<AgentSessionContext, "servic
       const scope = scopes.find(scope => scope.serviceKey === input.service && scope.environmentKey === input.environment);
       const capability = input.capability as CapabilityName;
       if (!scope || !context.capabilities.includes(capability) || !scope.config[capability]) throw new Error("service_capability_not_available");
-      return structuredJsonResult(await runTool(scope.config, capability, input as unknown as CapabilityInputs[CapabilityName], signal, outputStore));
+      try {
+        return structuredJsonResult(await runTool(scope.config, capability, input as unknown as CapabilityInputs[CapabilityName], signal, outputStore));
+      } catch (error) {
+        if (!(error instanceof DmsOperationError)) throw error;
+        // Only expose stable codes and measured metadata, never the SDK error or its cause.
+        throw new Error(JSON.stringify({ error: error.message, diagnostics: error.diagnostics }));
+      }
     },
   })];
 }

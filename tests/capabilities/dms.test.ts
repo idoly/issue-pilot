@@ -5,7 +5,7 @@ import path from "node:path";
 import { IssueOutputStore } from "../../src/outputs/store.ts";
 import { test } from "node:test";
 
-import { connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
+import { DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
 
 const configured = {
   url: "https://dms.example.test/sse",
@@ -100,7 +100,7 @@ test("preserves an earlier DMS output when closing the protocol session fails", 
   const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; }, async close() { closes++; throw new Error("dms_close_failed"); } });
   try {
     await store.write("result.json", '{"previous":true}');
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), /dms_close_failed/);
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), /dms_mcp_operation_failed/);
     assert.equal((await store.read("result.json")).toString(), '{"previous":true}');
     assert.equal(closes, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -119,12 +119,16 @@ for (const output of [false, true]) for (const phase of ["discovery", "query", "
   try {
     await store.write("result.json", "old-delivery");
     await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { output: { fileName: "result.json" } } : {}) }, configured, undefined, fixture.connect, store), error => {
+      assert(error instanceof DmsOperationError);
+      const original = error.cause;
+      assert.equal(error.diagnostics.phase, phase.startsWith("discovery") ? "discovery" : phase.startsWith("query") ? "execute" : "close");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, !phase.startsWith("discovery"));
       if (phase.endsWith("-and-close")) {
-        assert(error instanceof AggregateError);
-        assert.equal(error.message, primary.message);
-        assert.deepEqual(error.errors, [primary, cleanup]);
-        assert.doesNotMatch(error.message, /private fixture/);
-      } else assert.equal(error, phase === "close" ? cleanup : primary);
+        assert(original instanceof AggregateError);
+        assert.equal(original.message, primary.message);
+        assert.deepEqual(original.errors, [primary, cleanup]);
+      } else assert.equal(original, phase === "close" ? cleanup : primary);
+      assert.doesNotMatch(error.message, /private fixture/);
       return true;
     });
     assert.equal(closes, 1);
@@ -310,6 +314,36 @@ for (const retryAfter of ["120", new Date(Date.now() + 3_600_000).toUTCString()]
   try {
     await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000)), { message: "dms_mcp_http_429" });
     assert.equal(requests, 1);
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured), error => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_http_429");
+      assert.equal(error.diagnostics.phase, "connect");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, false);
+      assert.ok(error.diagnostics.retryAfterSeconds! >= (retryAfter === "120" ? 120 : 3500));
+      assert.ok(error.diagnostics.phaseElapsedMs.connect! >= 0);
+      return true;
+    });
+    assert.equal(requests, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const retryAfter of ["not-a-date", "-1", "99999999999999999999999999"]) test(`omits an invalid Retry-After without adding retries (${retryAfter})`, { timeout: 5_000 }, async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response("private upstream detail", { status: 429, headers: { "retry-after": retryAfter } });
+  };
+  try {
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured), error => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_http_429");
+      assert.equal(error.diagnostics.phase, "connect");
+      assert.equal(error.diagnostics.retryAfterSeconds, undefined);
+      assert.equal(error.diagnostics.sqlDispatchAttempted, false);
+      return true;
+    });
+    assert.equal(requests, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -346,7 +380,15 @@ for (const failurePhase of ["SSE", "initialize", "discovery", "query"] as const)
   };
   try {
     const query = queryDms({ schema: "orders", script: "SELECT 1" }, configured, AbortSignal.timeout(4_000));
-    if (failurePhase === "query" || failurePhase === "discovery") await assert.rejects(query, { message: "dms_mcp_http_429" });
+    if (failurePhase === "query" || failurePhase === "discovery") await assert.rejects(query, error => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_http_429");
+      assert.equal(error.diagnostics.phase, failurePhase === "query" ? "execute" : "discovery");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, failurePhase === "query");
+      assert.equal(error.diagnostics.retryAfterSeconds, 0);
+      assert.equal(queries, failurePhase === "query" ? 1 : 0);
+      return true;
+    });
     else await query;
     assert.equal(gets, failurePhase === "query" || failurePhase === "discovery" ? 1 : 2);
     assert.equal(initializes, failurePhase === "initialize" ? 2 : 1); assert.equal(queries, failurePhase === "discovery" ? 0 : 1);
@@ -380,6 +422,48 @@ test("preserves a caller cancellation while waiting to retry without Retry-After
     await assert.rejects(connectDmsMcp(configured, controller.signal), error => error === reason);
     assert.equal(requests, 1);
   } finally { clearTimeout(timer); globalThis.fetch = originalFetch; }
+});
+
+for (const phase of ["discovery", "execute"] as const) test(`measures a ${phase} timeout without repeating SQL`, async () => {
+  let queries = 0;
+  const timeout = new Error("dms_mcp_timeout");
+  const fixture = fixtureSession({
+    async listTools() { if (phase === "discovery") throw timeout; return [executeScriptTool]; },
+    async callTool() { queries++; throw timeout; },
+  });
+  await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, fixture.connect), error => {
+    assert(error instanceof DmsOperationError);
+    assert.equal(error.message, "dms_mcp_timeout");
+    assert.equal(error.cause, timeout);
+    assert.equal(error.diagnostics.phase, phase);
+    assert.equal(error.diagnostics.sqlDispatchAttempted, phase === "execute");
+    assert.ok(error.diagnostics.phaseElapsedMs[phase]! >= 0);
+    assert.ok(error.diagnostics.phaseElapsedMs.close! >= 0);
+    return true;
+  });
+  assert.equal(queries, phase === "execute" ? 1 : 0);
+  assert.equal(fixture.closes(), 1);
+});
+
+test("distinguishes publication failure from SQL failure and preserves the previous delivery", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-publish-"));
+  const store = new IssueOutputStore(root, "ISSUE-20261021-997");
+  const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; } });
+  try {
+    await store.write("result.json", "previous-delivery");
+    store.generate = async () => { throw new Error("private filesystem detail"); };
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), error => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_operation_failed");
+      assert.equal(error.diagnostics.phase, "publish");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, true);
+      assert.doesNotMatch(JSON.stringify(error.diagnostics), /private/);
+      return true;
+    });
+    assert.equal(fixture.calls.length, 1);
+    assert.equal(fixture.closes(), 1);
+    assert.equal((await store.read("result.json")).toString(), "previous-delivery");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("calls only MCP executeScript and binds it to the configured deployment database", async () => {

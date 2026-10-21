@@ -45,6 +45,31 @@ test("keeps native write/target restrictions after combining the dispatch entry"
   await assert.rejects(call(exports!, { service: "orders", capability: "db", database: "orders", statement: "SELECT 1", output: { fileName: "batch.csv", format: "csv" } }), /issue_output_not_available/);
 });
 
+test("returns safe DMS diagnostics to the agent without SDK details or credentials", async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response("private upstream detail", { status: 429, headers: { "retry-after": "120" } });
+  };
+  try {
+    const [tool] = createCapabilityTools(context, config);
+    await assert.rejects(call(tool!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), error => {
+      assert(error instanceof Error);
+      const result = JSON.parse(error.message);
+      assert.equal(result.error, "dms_mcp_http_429");
+      assert.equal(result.diagnostics.phase, "connect");
+      assert.equal(result.diagnostics.retryAfterSeconds, 120);
+      assert.equal(result.diagnostics.sqlDispatchAttempted, false);
+      assert.ok(result.diagnostics.elapsedMs >= result.diagnostics.phaseElapsedMs.connect);
+      assert.doesNotMatch(error.message, /private|example|Bearer|SELECT/);
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+    assert.equal(requests, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("keeps global MCP outside the service-scoped evidence query", async () => {
   const [tool] = createCapabilityTools(context, config);
   await assert.rejects(call(tool!, { service: "orders", capability: "mcp", tool: "mcp_fixture", input: {} }), /invalid_service_query_input/);

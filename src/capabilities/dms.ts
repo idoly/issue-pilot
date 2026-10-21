@@ -38,7 +38,7 @@ function cancellationError(signal: AbortSignal): Error {
   return new Error("dms_mcp_aborted");
 }
 
-async function withDmsSession<T>(session: DmsMcpSession, signal: AbortSignal, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
+async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, signal: AbortSignal, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
   let closing: Promise<void> | undefined;
   const close = () => closing ??= Promise.resolve().then(() => session.close());
   let failure: { error: unknown } | undefined;
@@ -58,12 +58,44 @@ async function withDmsSession<T>(session: DmsMcpSession, signal: AbortSignal, op
 
 function retryAfterMs(value: string | null): number | undefined {
   if (!value?.trim()) return undefined;
-  if (/^\d+$/.test(value.trim())) return Number(value) * 1_000;
+  if (/^\d+$/.test(value.trim())) {
+    const milliseconds = Number(value) * 1_000;
+    return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  }
   const date = /[a-z]/i.test(value) ? Date.parse(value) : NaN;
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
 type DmsHttpFailure = { status: number; retryAfterMs: number | undefined };
+
+class DmsHttpError extends Error {
+  readonly retryAfterSeconds: number | undefined;
+  constructor(failure: DmsHttpFailure) {
+    super(`dms_mcp_http_${failure.status}`);
+    this.retryAfterSeconds = failure.retryAfterMs === undefined ? undefined : Math.ceil(failure.retryAfterMs / 1_000);
+  }
+}
+
+type DmsPhase = "connect" | "discovery" | "execute" | "publish" | "close";
+export interface DmsDiagnostics {
+  phase: DmsPhase;
+  elapsedMs: number;
+  phaseElapsedMs: Partial<Record<DmsPhase, number>>;
+  sqlDispatchAttempted: boolean;
+  retryAfterSeconds?: number;
+}
+
+export class DmsOperationError extends Error {
+  readonly diagnostics: DmsDiagnostics;
+  constructor(diagnostics: DmsDiagnostics, cause: unknown) {
+    // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
+    const code = cause instanceof Error ? cause.message : "";
+    const safeCode = /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed)$/.test(code)
+      || ["invalid_dms_mcp_target", "invalid_output_file_name", "insecure_issue_output_root", "insecure_issue_output_file"].includes(code);
+    super(safeCode ? code : "dms_mcp_operation_failed", { cause });
+    this.diagnostics = diagnostics;
+  }
+}
 
 function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (failure: DmsHttpFailure) => void) {
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -72,10 +104,11 @@ function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (fa
     const requestSignal = init?.signal ? AbortSignal.any([init.signal, signal]) : signal;
     const response = await fetch(input, { ...init, redirect: "error", signal: requestSignal });
     if (response.status >= 400 && response.status <= 599) {
-      onHttpFailure({ status: response.status, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers.get("retry-after")) : undefined });
+      const failure = { status: response.status, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers.get("retry-after")) : undefined };
+      onHttpFailure(failure);
       void response.body?.cancel().catch(() => undefined);
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-      if (method !== "GET") throw new Error(`dms_mcp_http_${response.status}`);
+      if (method !== "GET") throw new DmsHttpError(failure);
     }
     return response;
   };
@@ -113,7 +146,7 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
         const minimumDelay = httpFailure.retryAfterMs ?? limits.retryDelayMs;
         if (attempt === 0 && httpFailure.status === 429 && minimumDelay <= limits.maxRetryDelayMs) {
           backoff = minimumDelay + Math.floor(Math.random() * Math.min(limits.retryDelayMs, limits.maxRetryDelayMs - minimumDelay));
-        } else throw new Error(`dms_mcp_http_${httpFailure.status}`);
+        } else throw new DmsHttpError(httpFailure);
       } else {
         if (attempt === 0 && attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") continue;
         if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
@@ -247,18 +280,48 @@ export async function queryDms(
   if (!database) throw new Error("dms_database_not_authorized");
   const boundedSignal = operationSignal(signal);
   const args = executeScriptArguments(input, database.databaseId);
-  const session = await connect(configured, boundedSignal);
-  return withDmsSession(session, boundedSignal, async (close) => {
-    const tool = uniqueTool(await session.listTools(boundedSignal), "executeScript", isReadOnlyScriptTool);
-    if (!tool) throw new Error("dms_mcp_execute_script_unavailable");
-    const result = await session.callTool(tool.name, args, boundedSignal);
-    if (result && typeof result === "object" && "isError" in result && result.isError === true) throw new Error("dms_mcp_tool_failed");
-    boundedSignal.throwIfAborted();
-    const text = JSON.stringify({ tool: tool.name, result }, null, 2);
-    if (input.output) {
-      const output = await outputStore!.generate(input.output.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal);
-      return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
-    }
-    return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
-  });
+  const started = performance.now();
+  const phaseElapsedMs: DmsDiagnostics["phaseElapsedMs"] = {};
+  let failedPhase: DmsPhase | undefined;
+  let sqlDispatchAttempted = false;
+  let httpError: DmsHttpError | undefined;
+  const phase = async <T>(name: DmsPhase, operation: () => Promise<T>): Promise<T> => {
+    const phaseStarted = performance.now();
+    try { return await operation(); }
+    catch (error) {
+      failedPhase ??= name;
+      if (error instanceof DmsHttpError) httpError ??= error;
+      throw error;
+    } finally { phaseElapsedMs[name] = Math.round(performance.now() - phaseStarted); }
+  };
+  try {
+    const session = await phase("connect", () => connect(configured, boundedSignal));
+    return await withDmsSession({ close: () => phase("close", () => session.close()) }, boundedSignal, async (close) => {
+      const tool = uniqueTool(await phase("discovery", () => session.listTools(boundedSignal)), "executeScript", isReadOnlyScriptTool);
+      if (!tool) { failedPhase = "discovery"; throw new Error("dms_mcp_execute_script_unavailable"); }
+      const result = await phase("execute", async () => {
+        // This records a dispatch attempt, not proof the server received or executed SQL.
+        sqlDispatchAttempted = true;
+        const response = await session.callTool(tool.name, args, boundedSignal);
+        if (response && typeof response === "object" && "isError" in response && response.isError === true) throw new Error("dms_mcp_tool_failed");
+        boundedSignal.throwIfAborted();
+        return response;
+      });
+      const text = JSON.stringify({ tool: tool.name, result }, null, 2);
+      if (input.output) {
+        const output = await phase("publish", () => outputStore!.generate(input.output!.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal));
+        return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
+      }
+      return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new DmsOperationError({
+      phase: failedPhase ?? "execute",
+      elapsedMs: Math.round(performance.now() - started),
+      phaseElapsedMs,
+      sqlDispatchAttempted,
+      ...(httpError?.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: httpError.retryAfterSeconds }),
+    }, boundedSignal.aborted ? cancellationError(boundedSignal) : error);
+  }
 }

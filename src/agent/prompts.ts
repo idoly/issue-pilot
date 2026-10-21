@@ -91,6 +91,9 @@ export function agentSystemPrompt(context: AgentSessionContext): string {
     ...(context.canWriteOutputs ? [
       "- Generate deliverable files in the working directory, then use output publish with sourcePath and fileName. The application publishes complete files atomically; do not write directly into the outputs directory.",
       "- Use output list to find saved query results and their directory. Read them with ordinary code, reconcile every batch and preserve checkpoints. A prepared batch plan is not a completed delivery; report exact remaining work if interrupted.",
+      "- For bulk DMS work, resume from verified checkpoints and query only unfinished inputs. Run batches serially with spacing, adjusting size and spacing from observed latency and failures. Do not treat a chosen interval as a proven upstream quota.",
+      "- Honor DMS retryAfterSeconds when present; otherwise back off before a minimal read-only probe. Missing output does not prove SQL was not executed. Reconcile saved results before a deliberate read-only retry; never replay an uncertain query automatically. After one retry of the same batch, split it or pause. Stop and save checkpoints after two failed recovery probes in a row or five failed DMS calls in a turn; count failures even when an intervening probe succeeds.",
+      "- Preserve previous deliveries until new files are verified and published. Distinguish unfinished inputs from successfully verified zero values or no matching records. Report newly completed, total completed, remaining counts and checkpoint locations.",
       "- DMS and MySQL can export complete query results through service_query output. Process those files using native tools, publish the resulting files, and name every delivery in the final answer.",
     ] : []),
     "- Treat tool availability and tool validation as hard authorization boundaries.",
