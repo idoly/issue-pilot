@@ -87,7 +87,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       return page([...transcript, ...context.events.replayCurrent(row.id).filter(event => !seen.has(event.id))], input);
     }
     const detail = await issue(key);
-    if (name === "issue_get") { delete detail.workspace?.lastError; return detail; }
+    if (name === "issue_get") { delete detail.workspace?.lastError; delete detail.workingDirectory; return detail; }
     if (name === "attachment_read") {
       const file = detail.attachments.find((file: { id: string }) => file.id === input.attachmentId);
       if (!file) throw new Error("attachment_not_found");

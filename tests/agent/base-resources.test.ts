@@ -14,7 +14,7 @@ async function fixture() {
   const faux = fauxProvider({ provider: "base-fixture", models: [{ id: "fixture", contextWindow: 64000 }], tokensPerSecond: 100000 }); models.registerNativeProvider(faux.provider);
   const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
   const manager = await createPrivateSessionManager(root, path.join(root, "sessions"));
-  const options = { manager, workspaceRoot: root, context: { issueKey: "ISSUE-20261017-001", serviceKey: "fixture", environmentKey: "prod", codemode: "on" as const, model: { provider: "base-fixture", modelId: "fixture", thinkingLevel: "off" as const }, capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Issue policy stays present.", onEvent: () => {} };
+  const options = { agentDirectory: root, manager, workspaceRoot: root, context: { issueKey: "ISSUE-20261017-001", serviceKey: "fixture", environmentKey: "prod", codemode: "on" as const, model: { provider: "base-fixture", modelId: "fixture", thinkingLevel: "off" as const }, capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Issue policy stays present.", onEvent: () => {} };
   return { root, options, faux, runtime, close: async () => { await runtime.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
@@ -43,7 +43,7 @@ export default pi => {
       fauxAssistantMessage(fauxToolCall("codemode", { code: "return await tools.example_deferred({});" }), { stopReason: "toolUse" }),
       context => { assert.match(JSON.stringify(context), /deferred evidence/); return fauxAssistantMessage("Deferred tool called."); },
     ]);
-    managed = await f.runtime.start({ ...f.options, resourceDirectory: f.root, runtime: base });
+    managed = await f.runtime.start({ ...f.options, runtime: base });
     assert.equal(await readFile(started, "utf8"), "started");
     assert.ok(managed.session.getActiveToolNames().includes("example_echo"));
     assert.equal(managed.session.getActiveToolNames().includes("example_deferred"), false);
@@ -59,14 +59,33 @@ export default pi => {
   } finally { await managed?.stop(); await f.close(); }
 });
 
+test("loads global Pi instructions and settings without executing Issue-local extensions", async () => {
+  const f = await fixture(); let managed;
+  try {
+    const global = path.join(f.root, "global-pi"), work = path.join(f.root, "issue-work");
+    await mkdir(global); await mkdir(path.join(work, ".pi", "extensions"), { recursive: true });
+    await writeFile(path.join(global, "AGENTS.md"), "Global user instructions marker.");
+    await writeFile(path.join(global, "settings.json"), JSON.stringify({ shellPath: "/bin/bash", retry: { enabled: false } }));
+    await writeFile(path.join(work, ".pi", "extensions", "untrusted.ts"), "export default () => { throw new Error('issue-local-extension-must-not-run'); };\n");
+    f.faux.setResponses([context => {
+      assert.match(JSON.stringify(context), /Global user instructions marker/);
+      return fauxAssistantMessage("Global resources verified.");
+    }]);
+    managed = await f.runtime.start({ ...f.options, agentDirectory: global, workspaceRoot: work });
+    assert.equal(managed.session.settingsManager.getRetrySettings().enabled, false);
+    await managed.prompt("Read the global instructions.");
+    assert.equal(managed.session.getLastAssistantText(), "Global resources verified.");
+  } finally { await managed?.stop(); await f.close(); }
+});
+
 test("reports extension loading and protected tool conflicts without leaking extension errors", async () => {
   const f = await fixture();
   try {
     await mkdir(path.join(f.root, "extensions"));
     const broken = path.join(f.root, "extensions", "broken.ts"); await writeFile(broken, "export default () => { throw new Error('private-extension-error'); };\n");
-    await assert.rejects(f.runtime.start({ ...f.options, resourceDirectory: f.root }), { message: "agent_extension_load_failed" });
+    await assert.rejects(f.runtime.start(f.options), { message: "agent_extension_load_failed" });
     await rm(broken);
     const conflict = path.join(f.root, "extensions", "conflict.ts"); await writeFile(conflict, "import { Type } from 'typebox'; export default pi => pi.registerTool({name:'service_query',label:'Conflict',description:'Conflict',parameters:Type.Object({}),execute:async()=>({content:[],details:undefined})});\n");
-    await assert.rejects(f.runtime.start({ ...f.options, resourceDirectory: f.root }), { message: "agent_extension_tool_conflict" });
+    await assert.rejects(f.runtime.start(f.options), { message: "agent_extension_tool_conflict" });
   } finally { await f.close(); }
 });

@@ -3,11 +3,6 @@ import { Type, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import { structuredJsonResult } from "../capabilities/contracts.ts";
 import { DmsOperationError, queryDms } from "../capabilities/dms.ts";
-import { readElasticsearch } from "../capabilities/elasticsearch.ts";
-import { readMysql } from "../capabilities/mysql.ts";
-import { readNacos } from "../capabilities/nacos.ts";
-import { readRabbitMq } from "../capabilities/rabbitmq.ts";
-import { readRedis } from "../capabilities/redis.ts";
 import { capabilityToolInputSchema, type CapabilityInputs } from "../capabilities/registry.ts";
 import { readSlsLogs } from "../capabilities/sls.ts";
 import type { IssueOutputStore } from "../outputs/store.ts";
@@ -15,13 +10,8 @@ import type { AgentSessionContext } from "./context.ts";
 import type { CapabilityName, DeploymentConfig } from "../domain/contracts.ts";
 
 export interface ServiceToolScope { environmentKey: string; serviceKey: string; serviceName: string; config: DeploymentConfig }
-async function runTool(config: DeploymentConfig, capability: CapabilityName, input: CapabilityInputs[CapabilityName], signal?: AbortSignal, outputStore?: IssueOutputStore) {
+async function runTool(config: DeploymentConfig, capability: CapabilityName, input: CapabilityInputs[CapabilityName], signal?: AbortSignal, outputStore?: IssueOutputStore): Promise<AgentToolResult<unknown>> {
   switch (capability) {
-    case "nacos": return readNacos(config.nacos!, signal);
-    case "db": return readMysql(config.db!, input as CapabilityInputs["db"], signal, outputStore);
-    case "redis": return readRedis(config.redis!, input as CapabilityInputs["redis"], signal);
-    case "mq": return readRabbitMq(config.mq!, input as CapabilityInputs["mq"], signal);
-    case "es": return readElasticsearch(config.es!, input as CapabilityInputs["es"], signal);
     case "dms": return queryDms(input as CapabilityInputs["dms"], config.dms!, signal, undefined, outputStore);
     case "sls": return readSlsLogs(input as CapabilityInputs["sls"], config.sls!, signal);
   }
@@ -33,8 +23,10 @@ export function createCapabilityTools(context: Pick<AgentSessionContext, "servic
   const schemas: TSchema[] = [];
   for (const scope of scopes) for (const capability of context.capabilities) {
     if (!scope.config[capability]) continue;
-    const schema = capabilityToolInputSchema(capability, scope.config[capability]!, { outputEnabled: context.canWriteOutputs && (capability === "db" || capability === "dms") });
-    schemas.push(Type.Object({ environment: Type.Literal(scope.environmentKey), service: Type.Literal(scope.serviceKey, { description: scope.serviceName }), capability: Type.Literal(capability), ...(schema as unknown as { properties: Record<string, TSchema> }).properties }, { additionalProperties: false }));
+    const schema = capabilityToolInputSchema(capability, scope.config[capability]!, { outputEnabled: context.canWriteOutputs && capability === "dms" });
+    const union = schema as unknown as { anyOf?: TSchema[] };
+    const variants = Array.isArray(union.anyOf) ? union.anyOf : [schema];
+    for (const variant of variants) schemas.push(Type.Object({ environment: Type.Literal(scope.environmentKey), service: Type.Literal(scope.serviceKey, { description: scope.serviceName }), capability: Type.Literal(capability), ...(variant as unknown as { properties: Record<string, TSchema> }).properties }, { additionalProperties: false }));
   }
   if (!schemas.length) return [];
   const schema = schemas.length === 1 ? schemas[0]! : Type.Union(schemas);

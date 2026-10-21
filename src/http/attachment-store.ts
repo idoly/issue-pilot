@@ -61,6 +61,7 @@ export function serializeAttachment(attachment: typeof issueAttachments.$inferSe
   return {
     id: attachment.id,
     fileName: attachment.fileName,
+    workingFileName: path.basename(attachment.objectKey),
     mediaType: attachment.mediaType,
     size: attachment.size,
     sha256: attachment.sha256,

@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
-import { issueRuntimeRoot, issueSessionRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -123,7 +123,7 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     const checkoutRoot = await git(["-C", path.join(issueRuntimeRoot(root, issue!.key), "remote"), "rev-parse", "--show-toplevel"]);
     assert.equal(path.relative(sharedCheckoutsRoot(root), checkoutRoot).startsWith(".."), false);
     assert.equal(workspace!.runtimeReady, true);
-    assert.equal(session!.workspacePath, issueRuntimeRoot(root, issue!.key));
+    assert.equal(session!.workspacePath, issueWorkspaceRoot(root, issue!.key));
     const unchangedAt = new Date(2_000);
     await database.db.update(issueRepositories).set({ updatedAt: unchangedAt }).where(eq(issueRepositories.issueId, issue!.id));
     await database.db.update(issueWorkspaces).set({ updatedAt: unchangedAt }).where(eq(issueWorkspaces.issueId, issue!.id));

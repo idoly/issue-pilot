@@ -54,7 +54,7 @@ export function issueRoot(stateRoot: string, issueKey: string): string {
 }
 
 export function issueWorkDirectory(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "work");
+  return issueWorkspaceRoot(stateRoot, issueKey);
 }
 
 export function issueSessionRoot(stateRoot: string, issueKey: string): string {
@@ -81,11 +81,20 @@ export async function claimIssueRoot(stateRoot: string, issueKey: string): Promi
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:issues/${path.basename(root)}`);
     throw error;
   }
+  try {
+    await mkdir(workspacesRoot(stateRoot), { recursive: true, mode: 0o700 });
+    await mkdir(issueWorkDirectory(stateRoot, issueKey), { mode: 0o700 });
+  } catch (error) {
+    try { await rmdir(root); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "issue_state_rollback_failed"); }
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:workspaces/${path.basename(root)}`);
+    throw error;
+  }
 }
 
 export async function removeEmptyIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
   const failures: unknown[] = [];
-  for (const directory of [issueAttachmentRoot(stateRoot, issueKey), issueRoot(stateRoot, issueKey)]) {
+  for (const directory of [issueAttachmentRoot(stateRoot, issueKey), issueRoot(stateRoot, issueKey), issueWorkDirectory(stateRoot, issueKey)]) {
     try { await rmdir(directory); }
     catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) failures.push(error);
@@ -176,8 +185,9 @@ export function assertManagedIssueWorkspacePaths(workspaceRoot: string, localPat
 export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, localPaths: string[]): Promise<void> {
   const expectedEntries = managedIssueWorkspaceEntries(workspaceRoot, localPaths);
   const entries = await readdir(workspaceRoot, { withFileTypes: true });
-  if (entries.some((entry) => !expectedEntries.has(entry.name))) throw new Error("workspace_has_untracked_files");
-  if (entries.some((entry) => !entry.isDirectory()) || entries.length !== expectedEntries.size) throw new Error("workspace_repository_missing");
+  // Working files and user-created directories share this root with repositories.
+  // Only registered repository entries must be present and must be real directories.
+  if ([...expectedEntries].some((name) => !entries.some((entry) => entry.name === name && entry.isDirectory()))) throw new Error("workspace_repository_missing");
 }
 
 export async function pruneState(stateRoot: string, issueKeys: string[]): Promise<void> {

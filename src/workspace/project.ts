@@ -1,5 +1,4 @@
 import { and, asc, eq, inArray, isNotNull, ne, notInArray, or } from "drizzle-orm";
-import { rmdir } from "node:fs/promises";
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -108,8 +107,7 @@ export class IssueProjectManager {
     const names = issueRepositoryWorkspaceNames(repositories);
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     let runtimeRoot: string;
-    if (await pathExists(workspaceRoot)) {
-      if (classifyRepositoryState(repositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
+    if (classifyRepositoryState(repositories) === "development_workspace" && await pathExists(workspaceRoot)) {
       await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
       runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })), "write", relatedIssues);
       await prepareProjectWrappers(runtimeRoot);
@@ -156,10 +154,8 @@ export class IssueProjectManager {
       });
     } catch (error) {
       let cleanupFailed = error instanceof WorktreeRollbackFailure;
-      try { await rmdir(workspaceRoot); }
-      catch (cleanupError) {
-        if (!(cleanupError && typeof cleanupError === "object" && "code" in cleanupError && cleanupError.code === "ENOENT")) cleanupFailed = true;
-      }
+      // The working directory may contain persistent files unrelated to repository restore.
+      // Worktree rollback owns its paths; do not remove the Issue directory here.
       try { await recoverRuntime(); } catch { cleanupFailed = true; }
       if (cleanupFailed) throw new Error("workspace_restore_cleanup_failed", { cause: error });
       throw error;
@@ -285,7 +281,8 @@ export class IssueProjectManager {
         workspaceName: null,
         commitBefore: checkout.baseCommit,
       })), now);
-      await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(and(eq(agentSessions.issueId, issue.id), ne(agentSessions.workspacePath, runtimeRoot)));
+      const workDirectory = issueWorkspaceRoot(this.stateRoot, issue.key);
+      await transaction.update(agentSessions).set({ workspacePath: workDirectory, updatedAt: now }).where(and(eq(agentSessions.issueId, issue.id), ne(agentSessions.workspacePath, workDirectory)));
       await transaction.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: now }).where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     });
     if (databaseQueue) await databaseQueue.run(saveRuntimeState);
@@ -306,7 +303,8 @@ export class IssueProjectManager {
     ]);
     if (classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
     const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
-    if (await pathExists(workspaceRoot)) throw new Error("workspace_path_already_exists");
+    // Read-only Issues already have working files here. Worktree preparation claims
+    // individual repository paths and refuses collisions without removing those files.
     const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url));
     try {
       return await this.worktrees.prepareBatch({

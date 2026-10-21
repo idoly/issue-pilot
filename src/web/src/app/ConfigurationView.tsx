@@ -1,4 +1,4 @@
-import { Button, Input, PasswordInput, Modal, Select, Skeleton, Toggle, TextArea } from "../ui";
+import { Button, Input, PasswordInput, Modal, Select, Skeleton, TextArea } from "../ui";
 import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, Show, snapshot, Switch, untrack } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
@@ -14,11 +14,6 @@ export function serviceSaveErrorMessage(error: unknown): string {
   const code = errorMessage(error);
   const messages: Record<string, string> = {
     dms_credentials_target_changed: "DMS URL 已变更，请填写该地址的新 Authorization",
-    invalid_db_password: "请填写数据库密码",
-    invalid_db_databases: "请至少配置一个且不超过 20 个 MySQL 数据库",
-    duplicate_db_database: "MySQL database 名不能重复",
-    duplicate_db_url: "同一个 MySQL URL 不能配置多次",
-    db_database_not_authorized: "所选 MySQL 数据库未授权",
     invalid_dms_url: "请填写有效的 DMS MCP HTTPS URL",
     invalid_dms_authorization: "请填写完整的 Bearer 格式 DMS MCP Authorization",
     invalid_dms_database: "DMS 数据库解析结果无效，请重新填写",
@@ -33,7 +28,6 @@ export function serviceSaveErrorMessage(error: unknown): string {
     dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
     dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
     invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
-    invalid_mq_password: "请填写 RabbitMQ 密码",
     credential_required: "该能力必须配置凭据",
     credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
     invalid_credential_replacement: "请填写完整的新凭据",
@@ -64,8 +58,6 @@ export type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
 };
 
-type DbDatabaseDraft = NonNullable<ServiceDeploymentDraft["db"]>["databases"][number];
-const newDbDatabaseDraft = (): DbDatabaseDraft => ({ url: "", username: "", password: "", credentialConfigured: false, credentialEnabled: true });
 type DmsDatabaseDraft = NonNullable<ServiceDeploymentDraft["dms"]>["databases"][number];
 const newDmsDatabaseDraft = (): DmsDatabaseDraft => ({ instanceAlias: "", schemaName: "", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" });
 
@@ -73,13 +65,8 @@ export function serviceDeploymentDraft(deployment: Service["deployments"][number
   return {
     environmentKey: deployment.environmentKey,
     repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
-    ...(deployment.nacos ? { nacos: { ...deployment.nacos, password: "", dataIds: [...deployment.nacos.dataIds], credentialEnabled: deployment.nacos.credentialConfigured } } : {}),
-    ...(deployment.db ? { db: { databases: deployment.db.databases.map(database => ({ ...database, password: "", credentialEnabled: true })) } } : {}),
     ...(deployment.dms ? { dms: { ...deployment.dms, authorization: "", credentialEnabled: true, databases: deployment.dms.databases.map(database => ({ ...database })) } } : {}),
     ...(deployment.sls ? { sls: { ...deployment.sls, accessKeyId: "", accessKeySecret: "", credentialEnabled: true, logstores: [...deployment.sls.logstores] } } : {}),
-    ...(deployment.redis ? { redis: { ...deployment.redis, password: "", credentialEnabled: deployment.redis.credentialConfigured } } : {}),
-    ...(deployment.mq ? { mq: { ...deployment.mq, password: "", credentialEnabled: true } } : {}),
-    ...(deployment.es ? { es: { ...deployment.es, password: "", credentialEnabled: deployment.es.credentialConfigured } } : {}),
   };
 }
 
@@ -90,8 +77,6 @@ export function serializeServiceDeployment(deployment: ServiceDeploymentDraft, r
 export function deploymentValidationError(deployment: ServiceDeploymentDraft): string {
   if (deployment.repositoryBranches.some(branch => !branch.baseBranch.trim())) return "请填写所有仓库分支";
   if (deployment.environmentKey === "dev") return "";
-  if (deployment.capabilities.includes("nacos") && !deployment.nacos?.dataIds.length) return "请填写 Nacos dataIds";
-  if (deployment.capabilities.includes("db") && (!deployment.db?.databases.length || deployment.db.databases.some(database => !database.url.trim() || !database.username.trim() || (!database.password.trim() && !database.credentialConfigured)))) return "请填写所有 MySQL 数据库连接信息";
   if (deployment.capabilities.includes("dms")) {
     if (!deployment.dms?.url.trim()) return "请填写 DMS 地址";
     if (!deployment.dms.databases.length) return "请添加 DMS 数据库";
@@ -107,24 +92,6 @@ function cloneDeploymentDraft(deployment: ServiceDeploymentDraft): ServiceDeploy
 }
 
 const capabilityOptions: Array<{ key: CapabilityName }> = CAPABILITY_KEYS.map(key => ({ key }));
-
-function DbDatabaseEditorRow(props: {
-  deploymentIndex: number;
-  databaseIndex: number;
-  database: DbDatabaseDraft;
-  only: boolean;
-  onChange: (database: DbDatabaseDraft) => void;
-  onDelete: () => void;
-}) {
-  let current = { ...props.database };
-  const [database, setDatabase] = createSignal(current, { ownedWrite: true });
-  const update = (change: Partial<DbDatabaseDraft>) => {
-    current = { ...current, ...change };
-    setDatabase(current);
-    props.onChange(current);
-  };
-  return <div class="db-database-row"><label><span class="required-field">url</span><Input aria-label={`db url ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="mysql://host:3306/database" value={database().url} onInput={(event) => update({ url: event.currentTarget.value })} /></label><label><span class="required-field">username</span><Input aria-label={`db username ${props.deploymentIndex}-${props.databaseIndex}`} value={database().username} onInput={(event) => update({ username: event.currentTarget.value })} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`db password ${props.deploymentIndex}-${props.databaseIndex}`} placeholder={database().credentialConfigured ? "已配置" : ""} value={database().password} onInput={(event) => update({ password: event.currentTarget.value })} /></label><Button class="icon-button" type="text" shape="circle" icon={<Trash2 size={13} />} title={`删除 MySQL 数据库 ${props.databaseIndex}`} aria-label={`删除 MySQL 数据库 ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete} /></div>;
-}
 
 function DmsDatabaseEditorRow(props: {
   deploymentIndex: number;
@@ -198,22 +165,11 @@ export function ServiceDeploymentEditorRow(props: {
   const [repositoryBranches, setRepositoryBranches] = createSignal(initialDeployment.repositoryBranches, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
   const credentialState = <Key extends CapabilityName>(key: Key, configured = false) => ({ credentialConfigured: configured, credentialEnabled: CAPABILITY_CREDENTIALS[key].required || configured });
-  const [nacosDraft, setNacosDraft] = createSignal({ serverUrl: initialDeployment.nacos?.serverUrl ?? "", namespace: initialDeployment.nacos?.namespace ?? "", group: initialDeployment.nacos?.group ?? issuePilotConfig.defaults.nacos.group, dataIds: initialDeployment.nacos?.dataIds?.join(", ") ?? "", username: initialDeployment.nacos?.username ?? "", password: initialDeployment.nacos?.password ?? "", ...credentialState("nacos", initialDeployment.nacos?.credentialConfigured) }, { ownedWrite: true });
-  let currentDbDraft = { databases: initialDeployment.db?.databases?.map((database) => ({ ...database, password: "", credentialEnabled: true })) ?? [newDbDatabaseDraft()] };
-  const [dbDraft, setDbDraft] = createSignal(currentDbDraft, { ownedWrite: true });
   let currentDmsDraft = { url: initialDeployment.dms?.url ?? issuePilotConfig.defaults.dms.sseUrl, authorization: "", ...credentialState("dms", initialDeployment.dms?.credentialConfigured), databases: initialDeployment.dms?.databases?.map(database => ({ ...database })) ?? [newDmsDatabaseDraft()] };
   const [dmsDraft, setDmsDraft] = createSignal(currentDmsDraft, { ownedWrite: true });
   const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: "", accessKeySecret: "", ...credentialState("sls", initialDeployment.sls?.credentialConfigured), region: initialDeployment.sls?.region ?? "", project: initialDeployment.sls?.project ?? "", logstores: initialDeployment.sls?.logstores.join(", ") ?? "" }, { ownedWrite: true });
-  const [redisDraft, setRedisDraft] = createSignal({ host: initialDeployment.redis?.host ?? "", port: String(initialDeployment.redis?.port ?? issuePilotConfig.defaults.redis.port), username: initialDeployment.redis?.username ?? "", password: initialDeployment.redis?.password ?? "", database: String(initialDeployment.redis?.database ?? issuePilotConfig.defaults.redis.database), ...credentialState("redis", initialDeployment.redis?.credentialConfigured) }, { ownedWrite: true });
-  const [mqDraft, setMqDraft] = createSignal({ host: initialDeployment.mq?.host ?? "", managementPort: String(initialDeployment.mq?.managementPort ?? issuePilotConfig.defaults.rabbitmq.managementPort), username: initialDeployment.mq?.username ?? "", password: initialDeployment.mq?.password ?? "", virtualHost: initialDeployment.mq?.virtualHost ?? issuePilotConfig.defaults.rabbitmq.virtualHost, ...credentialState("mq", initialDeployment.mq?.credentialConfigured) }, { ownedWrite: true });
-  const [esDraft, setEsDraft] = createSignal({ url: initialDeployment.es?.url ?? "", username: initialDeployment.es?.username ?? "", password: initialDeployment.es?.password ?? "", ...credentialState("es", initialDeployment.es?.credentialConfigured) }, { ownedWrite: true });
-  const nacos = (value = nacosDraft()) => ({ ...value, serverUrl: value.serverUrl.trim(), namespace: value.namespace.trim(), group: value.group.trim(), dataIds: [...new Set(value.dataIds.split(",").map((item) => item.trim()).filter(Boolean))], username: value.username.trim() });
-  const db = (value = dbDraft()) => ({ databases: value.databases.map((database) => ({ ...database, url: database.url.trim(), username: database.username.trim() })) });
   const dms = (value = dmsDraft()) => ({ ...value, databases: value.databases.map((database) => ({ instanceAlias: database.instanceAlias.trim(), schemaName: database.schemaName.trim(), instanceId: database.instanceId.trim(), instanceHost: database.instanceHost.trim(), instancePort: database.instancePort.trim(), databaseId: database.databaseId.trim() })) });
   const sls = (value = slsDraft()) => ({ ...value, region: value.region.trim(), project: value.project.trim(), logstores: value.logstores.split(",").map((item) => item.trim()).filter(Boolean) });
-  const redis = (value = redisDraft()) => ({ ...value, host: value.host.trim(), port: Number(value.port), username: value.username.trim(), database: Number(value.database) });
-  const mq = (value = mqDraft()) => ({ ...value, host: value.host.trim(), managementPort: Number(value.managementPort), username: value.username.trim(), virtualHost: value.virtualHost.trim() });
-  const es = (value = esDraft()) => ({ ...value, url: value.url.trim(), username: value.username.trim() });
   const update = (change: Partial<ServiceDeploymentDraft>) => {
     currentDeployment = { ...currentDeployment, ...change };
     props.onChange(cloneDeploymentDraft(currentDeployment));
@@ -233,17 +189,6 @@ export function ServiceDeploymentEditorRow(props: {
     setRepositoryBranches(next);
     update({ repositoryBranches: next });
   };
-  const updateNacos = (change: Partial<ReturnType<typeof nacosDraft>>) => { const draft = { ...nacosDraft(), ...change }; setNacosDraft(draft); update({ nacos: nacos(draft) }); };
-  const updateDb = (change: Partial<ReturnType<typeof dbDraft>>) => { currentDbDraft = { ...currentDbDraft, ...change }; setDbDraft(currentDbDraft); update({ db: db(currentDbDraft) }); };
-  const addDbDatabase = () => {
-    if (dbDraft().databases.length >= issuePilotConfig.limits.capability.database.databases) return;
-    updateDb({ databases: [...dbDraft().databases, newDbDatabaseDraft()] });
-  };
-  const updateDbDatabase = (database: DbDatabaseDraft, next: DbDatabaseDraft) => {
-    Object.assign(database, next);
-    updateDb({ databases: [...dbDraft().databases] });
-  };
-  const removeDbDatabase = (database: DbDatabaseDraft) => updateDb({ databases: dbDraft().databases.filter((candidate) => candidate !== database) });
   const updateDms = (change: Partial<ReturnType<typeof dmsDraft>>) => { currentDmsDraft = { ...currentDmsDraft, ...change }; setDmsDraft(currentDmsDraft); update({ dms: dms(currentDmsDraft) }); };
   const addDmsDatabase = () => {
     if (dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases) return;
@@ -255,15 +200,12 @@ export function ServiceDeploymentEditorRow(props: {
   };
   const removeDmsDatabase = (database: DmsDatabaseDraft) => updateDms({ databases: dmsDraft().databases.filter((candidate) => candidate !== database) });
   const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
-  const updateRedis = (change: Partial<ReturnType<typeof redisDraft>>) => { const draft = { ...redisDraft(), ...change }; setRedisDraft(draft); update({ redis: redis(draft) }); };
-  const updateMq = (change: Partial<ReturnType<typeof mqDraft>>) => { const draft = { ...mqDraft(), ...change }; setMqDraft(draft); update({ mq: mq(draft) }); };
-  const updateEs = (change: Partial<ReturnType<typeof esDraft>>) => { const draft = { ...esDraft(), ...change }; setEsDraft(draft); update({ es: es(draft) }); };
   const capabilityOptionsForEditor = () => props.capability ? capabilityOptions.filter(row => row.key === props.capability) : capabilityOptions;
   const addCapability = (key: CapabilityName) => {
     if (selectedCapabilities().includes(key)) return;
     const capabilities = [...selectedCapabilities(), key];
     setSelectedCapabilities(capabilities);
-    update({ capabilities, ...(key === "nacos" ? { nacos: nacos() } : {}), ...(key === "db" ? { db: db() } : {}), ...(key === "dms" ? { dms: dms() } : {}), ...(key === "sls" ? { sls: sls() } : {}), ...(key === "redis" ? { redis: redis() } : {}), ...(key === "mq" ? { mq: mq() } : {}), ...(key === "es" ? { es: es() } : {}) });
+    update({ capabilities, ...(key === "dms" ? { dms: dms() } : {}), ...(key === "sls" ? { sls: sls() } : {}) });
   };
   createEffect(() => props.capability, capability => { if (capability) untrack(() => addCapability(capability)); });
   const removeCapability = (key: CapabilityName) => {
@@ -279,12 +221,7 @@ export function ServiceDeploymentEditorRow(props: {
       <Show when={expanded()}><Show when={!codeOnly && capabilityOptionsForEditor().some((capability) => !selectedCapabilities().includes(capability.key))}><div class="deployment-capabilities"><span>添加能力</span><div class="deployment-capability-options"><For each={capabilityOptionsForEditor().filter((capability) => !selectedCapabilities().includes(capability.key))}>{(capability) => <button type="button" class="deployment-capability-option" onClick={() => addCapability(capability.key)}>{capability.key}</button>}</For></div></div></Show>
       <Show when={!props.capability}><div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} /></label>}</For></div></Show>
       <For each={codeOnly ? [] : capabilityOptions.filter((capability) => selectedCapabilities().includes(capability.key) && (!props.capability || props.capability === capability.key))}>{(capability) => <Switch>
-        <Match when={capability.key === "nacos"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>nacos</code></div><label><span class="required-field">serverUrl</span><Input aria-label={`nacos serverUrl ${props.index + 1}`} value={nacosDraft().serverUrl} onInput={(event) => { updateNacos({ serverUrl: event.currentTarget.value }); }} /></label><label><span>namespace</span><Input aria-label={`nacos namespace ${props.index + 1}`} value={nacosDraft().namespace} onInput={(event) => { updateNacos({ namespace: event.currentTarget.value }); }} /></label><label><span class="required-field">group</span><Input aria-label={`nacos group ${props.index + 1}`} value={nacosDraft().group} onInput={(event) => { updateNacos({ group: event.currentTarget.value }); }} /></label><label><span class="required-field">dataIds</span><Input aria-label={`nacos dataIds ${props.index + 1}`} placeholder="多个 Data ID 用逗号分隔" value={nacosDraft().dataIds} onInput={(event) => { updateNacos({ dataIds: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>认证</span><Toggle aria-label={`nacos 认证 ${props.index + 1}`} checked={nacosDraft().credentialEnabled} onChange={(checked) => updateNacos({ credentialEnabled: checked })} /></div><Show when={nacosDraft().credentialEnabled}><label><span class="required-field">username</span><Input aria-label={`nacos username ${props.index + 1}`} value={nacosDraft().username} onInput={(event) => { updateNacos({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`nacos password ${props.index + 1}`} placeholder={nacosDraft().credentialConfigured ? "已配置" : ""} value={nacosDraft().password} onInput={(event) => { updateNacos({ password: event.currentTarget.value }); }} /></label></Show></div></Match>
-        <Match when={capability.key === "db"}><div class="deployment-capability-settings db-capability-settings"><div class="capability-settings-head"><code>db</code></div><div class="db-database-editor"><div class="db-database-editor-head"><div><strong>数据库范围</strong><span>每个数据库独立配置只读账号；URL 路径中的 database 名是 Agent selector</span></div><Button icon={<Plus size={13} />} disabled={dbDraft().databases.length >= issuePilotConfig.limits.capability.database.databases} onClick={addDbDatabase}>添加 MySQL 数据库</Button></div><div class="db-database-list"><For each={dbDraft().databases}>{(database, databaseIndex) => <DbDatabaseEditorRow deploymentIndex={props.index + 1} databaseIndex={databaseIndex() + 1} database={database} only={dbDraft().databases.length === 1} onChange={(next) => updateDbDatabase(database, next)} onDelete={() => removeDbDatabase(database)} />}</For></div></div></div></Match>
         <Match when={capability.key === "dms"}><div class="deployment-capability-settings dms-capability-settings"><div class="capability-settings-head"><code>dms</code></div><label><span class="required-field">地址</span><Input aria-label={`dms 地址 ${props.index + 1}`} value={dmsDraft().url} onInput={event => updateDms({ url: event.currentTarget.value })} /></label><label><span class="required-field">Token</span><PasswordInput aria-label={`dms Token ${props.index + 1}`} value={dmsDraft().authorization} placeholder={dmsDraft().credentialConfigured ? "已配置，留空保留" : "Bearer token"} onInput={event => updateDms({ authorization: event.currentTarget.value })} /></label><div class="dms-database-editor"><div class="dms-database-editor-head"><div><strong>数据库范围</strong><span>Agent 直接选择已授权 schema，每个 alias/schema 由后台解析</span></div><Button icon={<Plus size={13} />} disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>添加 DMS 数据库</Button></div><div class="dms-database-list"><For each={dmsDraft().databases}>{(database, databaseIndex) => <DmsDatabaseEditorRow deploymentIndex={props.index + 1} databaseIndex={databaseIndex() + 1} database={database} connection={() => ({ url: dmsDraft().url, authorization: dmsDraft().authorization, environmentKey: initialDeployment.environmentKey, ...(props.serviceKey ? { serviceKey: props.serviceKey } : {}) })} only={dmsDraft().databases.length === 1} onChange={(next) => updateDmsDatabase(database, next)} onDelete={() => removeDmsDatabase(database)} />}</For></div></div></div></Match>
-        <Match when={capability.key === "redis"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>redis</code></div><label><span class="required-field">host</span><Input aria-label={`redis host ${props.index + 1}`} value={redisDraft().host} onInput={(event) => { updateRedis({ host: event.currentTarget.value }); }} /></label><label><span class="required-field">port</span><Input aria-label={`redis port ${props.index + 1}`} value={redisDraft().port} onInput={(event) => { updateRedis({ port: event.currentTarget.value }); }} /></label><label><span>username</span><Input aria-label={`redis username ${props.index + 1}`} value={redisDraft().username} onInput={(event) => { updateRedis({ username: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>密码</span><Toggle aria-label={`redis 密码 ${props.index + 1}`} checked={redisDraft().credentialEnabled} onChange={(checked) => updateRedis({ credentialEnabled: checked })} /></div><Show when={redisDraft().credentialEnabled}><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`redis password ${props.index + 1}`} placeholder={redisDraft().credentialConfigured ? "已配置" : ""} value={redisDraft().password} onInput={(event) => { updateRedis({ password: event.currentTarget.value }); }} /></label></Show><label><span class="required-field">database</span><Input aria-label={`redis database ${props.index + 1}`} value={redisDraft().database} onInput={(event) => { updateRedis({ database: event.currentTarget.value }); }} /></label></div></Match>
-        <Match when={capability.key === "mq"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>mq</code></div><label><span class="required-field">host</span><Input aria-label={`mq host ${props.index + 1}`} value={mqDraft().host} onInput={(event) => { updateMq({ host: event.currentTarget.value }); }} /></label><label><span class="required-field">managementPort</span><Input aria-label={`mq managementPort ${props.index + 1}`} value={mqDraft().managementPort} onInput={(event) => { updateMq({ managementPort: event.currentTarget.value }); }} /></label><label><span class="required-field">username</span><Input aria-label={`mq username ${props.index + 1}`} value={mqDraft().username} onInput={(event) => { updateMq({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`mq password ${props.index + 1}`} placeholder={mqDraft().credentialConfigured ? "已配置" : ""} value={mqDraft().password} onInput={(event) => { updateMq({ password: event.currentTarget.value }); }} /></label><label><span class="required-field">virtualHost</span><Input aria-label={`mq virtualHost ${props.index + 1}`} value={mqDraft().virtualHost} onInput={(event) => { updateMq({ virtualHost: event.currentTarget.value }); }} /></label></div></Match>
-        <Match when={capability.key === "es"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>es</code></div><label><span class="required-field">url</span><Input aria-label={`es url ${props.index + 1}`} placeholder="http://es.example.com" value={esDraft().url} onInput={(event) => { updateEs({ url: event.currentTarget.value }); }} /></label><div class="deployment-capability-field"><span>认证</span><Toggle aria-label={`es 认证 ${props.index + 1}`} checked={esDraft().credentialEnabled} onChange={(checked) => updateEs({ credentialEnabled: checked })} /></div><Show when={esDraft().credentialEnabled}><label><span class="required-field">username</span><Input aria-label={`es username ${props.index + 1}`} value={esDraft().username} onInput={(event) => { updateEs({ username: event.currentTarget.value }); }} /></label><label><span class="required-field">password</span><PasswordInput autocomplete="off" aria-label={`es password ${props.index + 1}`} placeholder={esDraft().credentialConfigured ? "已配置" : ""} value={esDraft().password} onInput={(event) => { updateEs({ password: event.currentTarget.value }); }} /></label></Show></div></Match>
         <Match when={capability.key === "sls"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>sls</code></div><label><span class="required-field">AccessKey ID</span><PasswordInput aria-label={`sls AccessKey ID ${props.index + 1}`} value={slsDraft().accessKeyId} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeyId: event.currentTarget.value })} /></label><label><span class="required-field">AccessKey Secret</span><PasswordInput aria-label={`sls AccessKey Secret ${props.index + 1}`} value={slsDraft().accessKeySecret} onInput={event => updateSls({ accessKeySecret: event.currentTarget.value })} /></label><label><span class="required-field">region</span><Input aria-label={`sls region ${props.index + 1}`} placeholder="cn-hangzhou" value={slsDraft().region} onInput={(event) => { updateSls({ region: event.currentTarget.value }); }} /></label><label><span class="required-field">project</span><Input aria-label={`sls project ${props.index + 1}`} value={slsDraft().project} onInput={(event) => { updateSls({ project: event.currentTarget.value }); }} /></label><label><span class="required-field">logstore</span><Input aria-label={`sls logstore ${props.index + 1}`} placeholder="多个名称用逗号分隔" value={slsDraft().logstores} onInput={(event) => { updateSls({ logstores: event.currentTarget.value }); }} /></label></div></Match>
       </Switch>}</For></Show>
     </div>
@@ -293,7 +230,7 @@ export function ServiceDeploymentEditorRow(props: {
 
 export function ConfigurationView() {
   const { currentUser, configuration, configurationLoaded, refreshCatalog, refreshConfiguration, configurationError: resourceError } = useApplicationResources();
-  const canConfigure = () => currentUser()?.role === "developer";
+  const canConfigure = () => currentUser()?.role === "developer" && !configuration().fileManaged?.services;
   let editorGeneration = 0;
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
@@ -440,6 +377,7 @@ export function ConfigurationView() {
   };
   return (
     <main class="configuration-workspace">
+      <Show when={configuration().fileManaged?.services}><div class="empty-band">服务与仓库由 service.yaml 管理；修改文件后重启生效。</div></Show>
       <Show when={!configurationLoaded()}><section class="queue-loading configuration-loading"><Show when={resourceError()} fallback={<Skeleton active paragraph={{ rows: 10 }} />}><div class="workspace-error" role="alert"><span>{resourceError()}</span><Button onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show></section></Show>
       <section class="service-panel" hidden={!configurationLoaded()}>
         <div class="service-tabs"><div class="service-tabs-inner"><div class="service-tab-list" role="tablist" aria-label="服务列表"><For each={configuration().services}>{(service) => <button type="button" role="tab" aria-selected={selectedServiceKey() === service.key ? "true" : "false"} class={selectedServiceKey() === service.key ? "selected" : ""} onClick={() => setSelectedServiceKey(service.key)}>{service.name}</button>}</For></div><div class="service-tab-actions"><Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>添加</Button><Show when={selectedService()}>{(service) => <Button type="primary" icon={<Pencil size={14} />} disabled={!canConfigure()} onClick={() => openServiceEditor(service())}>编辑</Button>}</Show></div></div></div>

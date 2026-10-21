@@ -2,19 +2,18 @@ import { addAbortListener, EventEmitter } from "node:events";
 import { devNull } from "node:os";
 import path from "node:path";
 import { createMcpExtension, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { McpHttpError, McpSessionExpiredError, StdioTransport, StreamableHttpTransport, type JsonRpcMessage, type McpTransport } from "@earendil-works/pi-mcp";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentCodemodeMode } from "../domain/contracts.ts";
-import { createMcpFetch, createMcpTransport, type McpConfiguration, type McpTool } from "./client.ts";
+import { createMcpTransport, type McpConfiguration, type McpTool } from "./client.ts";
 
 const limits = issuePilotConfig.limits.capability;
 type Validators = Map<string, ReturnType<typeof Compile>>;
 
-/** Pi owns discovery, tool registration, reconnects and shutdown; DB configuration stays authoritative. */
+/** Pi owns discovery and lifecycle; the application's validated configuration projection is authoritative. */
 export function createIssueMcpExtension(configurations: McpConfiguration[], codemode: AgentCodemodeMode): ExtensionFactory {
   const configured = structuredClone(configurations.filter(configuration => configuration.enabled));
   const exposure = codemode === "off" ? "direct" : "codemode";
@@ -35,18 +34,14 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
       if (!stored) throw new Error("mcp_service_not_configured");
       const configuration = stored.stdio ? { ...stored, stdio: { ...stored.stdio, cwd: path.resolve(cwd, stored.stdio.cwd ?? ".") } } : stored;
       const lifetime = new AbortController();
-      const legacy = configuration.transport === "sse" ? createMcpTransport(configuration, lifetime.signal) : undefined;
-      const native: McpTransport | undefined = legacy ? undefined : configuration.transport === "stdio"
-        ? new StdioTransport({ ...configuration.stdio!, env: { ...getDefaultEnvironment(), ...configuration.stdio!.env }, inheritEnv: false, stderr: "pipe" })
-        : new StreamableHttpTransport({ url: configuration.url, headers: configuration.authorization ? { Authorization: configuration.authorization } : {}, fetch: createMcpFetch(configuration, lifetime.signal) });
-      const transport = legacy ?? native!;
+      const transport = createMcpTransport(configuration, lifetime.signal);
       const events = new EventEmitter();
       let validators: Validators = new Map();
       const requests = new Map<string | number, Validators>();
       const pages = new Map<string, Validators>();
       let closing: Promise<void> | undefined;
       const close = () => closing ??= (async () => { lifetime.abort(); await transport.close(); })();
-      const onMessage = (message: JsonRpcMessage) => {
+      const onMessage = (message: JSONRPCMessage) => {
         if ("method" in message || !("id" in message) || message.id === undefined) { events.emit("message", message); return; }
         const previous = requests.get(message.id); requests.delete(message.id);
         try {
@@ -82,10 +77,8 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
       };
       const onError = () => { events.emit("failure", new Error("mcp_connection_failed")); };
       const onClose = () => { events.emit("close"); };
-      if (legacy) {
-        legacy.onmessage = message => { onMessage(message as JsonRpcMessage); };
-        legacy.onerror = onError; legacy.onclose = onClose;
-      } else { native!.onMessage(onMessage); native!.onError(onError); native!.onClose(onClose); }
+      transport.onmessage = onMessage;
+      transport.onerror = onError; transport.onclose = onClose;
       return {
         async start() {
           const signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(limits.mcp.executionMs)]);
@@ -108,11 +101,11 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
             if (message.method === "tools/call" && !validators.get(input?.name ?? "")?.Check(input?.arguments ?? {})) throw new Error("invalid_mcp_tool_input");
           }
           try {
-            if (legacy) await legacy.send(message as JSONRPCMessage);
-            else await native!.send(message, options);
+            await transport.send(message as JSONRPCMessage);
           } catch (error) {
-            if (error instanceof McpSessionExpiredError) throw new McpSessionExpiredError();
-            if (error instanceof McpHttpError) throw new McpHttpError(error.status, "mcp_operation_failed");
+            // Drop an expired transport so a later call reconnects. Do not replay an
+            // operation whose execution result is unknown merely to hide the failure.
+            if (error instanceof StreamableHTTPError && error.code === 404) await close();
             throw new Error("mcp_operation_failed");
           }
         },

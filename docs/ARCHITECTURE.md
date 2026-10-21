@@ -28,7 +28,7 @@ flowchart LR
 | 文件存储 | 附件事务和成果发布 | [attachment-store.ts](../src/http/attachment-store.ts)、[store.ts](../src/outputs/store.ts) |
 | 配置 | 凭证选择、配置更新与公开投影 | [src/configuration](../src/configuration) |
 
-路由协调这些 owner，不重新实现 Git、协议或文件存储。入站 MCP 复用 HTTP 业务入口。模型调用可以启动 Bash、Node、Python、Git、stdio MCP 子进程，部分证据查询使用 Worker。
+路由协调这些 owner，不重新实现 Git、协议或文件存储。入站 MCP 复用 HTTP 业务入口。模型调用可以启动 Bash、Node、Python、Git、stdio MCP 和 aliyun CLI 子进程；Codemode 使用 Pi 的脚本 Worker。
 
 ## 工单流程
 
@@ -108,7 +108,7 @@ sequenceDiagram
 
 Monaco 负责文本编辑和差异显示，不加载 VS Code 扩展宿主。变更列表保持单行并优先显示文件名，窄侧栏隐藏同行目录，完整路径保留现有悬浮提示。Source API 检查读取的解析路径和写入父目录，拒绝越界访问及 `.git` 别名；行归属查询读取前检查普通文件，拒绝目录、FIFO 等特殊文件；删除、重命名操作链接本身，不跟随链接操作目标；覆盖重命名先隔离旧目标，失败时恢复，最终化失败保留备份并报告。Git 文件参数按字面处理；保存用 SHA-256 检测冲突，同目录临时文件使用固定长度的随机名称，支持接近文件系统名称上限的源文件，前端保留草稿。路径越界按 `..` 路径段判断，允许 `..notes` 等合法名称。历史查询读取 Git 记录，不要求文件仍存在于当前工作树；版本内容直接通过一次 `cat-file blob` 读取，并按原始字节流严格解码 UTF-8，拒绝无效编码而允许合法的 U+FFFD 字符。暂存差异的版本来源为 HEAD → Index，工作区差异为 Index → Working Tree。共用 DTO、变更状态和文件版本枚举归 [source-contracts.ts](../src/workspace/source-contracts.ts)；Source owner 与 Web 客户端共同依赖这个轻量契约模块，Web 按共享枚举校验响应。原生工具的执行边界见 [Agent 与能力](AGENT.md#执行边界)。
 
-默认启动顺序为：占有项目 broker 控制 Socket → 数据库迁移与中断状态恢复 → 检查未知目录和共享 checkout → 准备工单 runtime → 确认模型基座 → 维护与路由 → broker 就绪并监听 HTTP。竞争实例在数据库恢复与目录清理之前拒绝；启动期间的项目命令返回 503，不接触尚未就绪的数据库。单个 runtime 可以被报告为 blocked，`/health` 成功不代表全部工单资源或远程服务正常。
+默认启动顺序为：占有项目 broker 控制 Socket → 数据库迁移与中断状态恢复 → 私有配置文件校验与事务投影 → 检查未知目录和共享 checkout → 准备工单 runtime → 确认模型基座 → 维护与路由 → broker 就绪并监听 HTTP。竞争实例在数据库恢复与目录清理之前拒绝；启动期间的项目命令返回 503，不接触尚未就绪的数据库。单个 runtime 可以被报告为 blocked，`/health` 成功不代表全部工单资源或远程服务正常。
 
 队列在内存中，进程重启不会自动恢复未完成的模型调用；持久工单和会话支持后续重试或继续。关闭时先等待维护与 Agent 活动，再释放会话/MCP、模型运行时、broker，最后关闭数据库，清理错误聚合报告。单工单会话停止和个人 Git 临时身份清理都会尝试执行；单一失败保留原错误，多重失败聚合报告，避免后一个清理异常覆盖前一个。项目工具 broker 的并发启动调用共享同一次初始化，启动期间关闭会等待初始化及其错误清理结束；重复关闭调用共享同一次清理结果，均等待连接、队列和 Socket 清理完成。同一 broker 再次启动前等待上次关闭结束，新生命周期的关闭不会复用上轮已完成的关闭结果。
 

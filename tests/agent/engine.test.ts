@@ -15,6 +15,28 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error("condition_not_met");
 }
 
+test("bounds concurrent Issue rounds while retaining reservations and draining queued work on close", async () => {
+  const engine = new AgentEngine({} as never, ".issue-pilot", undefined, undefined, undefined, 1);
+  const releases: Array<() => void> = [], started: string[] = [];
+  (engine as unknown as { run(id: string): Promise<void> }).run = async id => {
+    started.push(id);
+    await new Promise<void>(resolve => releases.push(resolve));
+  };
+  engine.enqueue("first"); engine.enqueue("second");
+  await waitFor(() => started.length === 1);
+  assert.deepEqual(started, ["first"]);
+  assert.equal(engine.isRunning("second"), true);
+  await assert.rejects(engine.runExclusive(["second"], async () => undefined), /issue_already_running/);
+  let closed = false;
+  const closing = engine.close().then(() => { closed = true; });
+  releases.shift()!();
+  await waitFor(() => started.length === 2);
+  assert.equal(closed, false);
+  releases.shift()!(); await closing;
+  assert.equal(engine.isRunning("second"), false);
+  assert.equal(closed, true);
+});
+
 test("selects repository preparation modes from environment and issue type", () => {
   assert.equal(repositoryPreparationMode("prod", "smart_analysis"), "shared");
   assert.equal(repositoryPreparationMode("test", "smart_analysis"), "shared");

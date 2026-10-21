@@ -1,0 +1,51 @@
+version: 1
+
+# Relative to the application's .issue-pilot data root.
+issuesDirectory: workspaces
+
+agent:
+  provider: xhgj
+  model: your-model-id
+  thinkingLevel: medium
+  codemode: on
+
+automation:
+  maxConcurrentIssues: 3
+
+repositories:
+  srm-server:
+    url: git@example.com:srm/srm-server.git
+
+services:
+  srm:
+    name: SRM
+    environments:
+      dev:
+        repositories:
+          srm-server: prod
+      test:
+        repositories:
+          srm-server: test
+        mysql:
+          - host: db-test.example.com
+            port: 3306
+            username: reader
+            password: "${MYSQL_PASSWORD}"
+            database: srm
+        sls:
+          test:
+            region: cn-hangzhou
+            project: example-test
+            logstores: [srm]
+      prod:
+        repositories:
+          srm-server: prod
+        dms:
+          prod:
+            alias: RDS-SRM
+            schema: srm
+        sls:
+          prod:
+            region: cn-hangzhou
+            project: example-production
+            logstores: [srm-api, srm-batch]

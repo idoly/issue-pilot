@@ -76,8 +76,15 @@ test("atomically switches development repository sets across preparation and fin
     const unmanagedEvidence = path.join(issueWorkspaceRoot(stateRoot, unmanagedIssue!.key), "operator-evidence.txt");
     await mkdir(path.dirname(unmanagedEvidence), { recursive: true });
     await writeFile(unmanagedEvidence, "preserve\n", "utf8");
-    await assert.rejects(internal.run(unmanagedIssue!.id), /workspace_has_untracked_files/);
+    const collision = path.join(issueWorkspaceRoot(stateRoot, unmanagedIssue!.key), repositoryWorkspaceNames(remotes).get(remotes[0]!)!);
+    await mkdir(collision);
+    await writeFile(path.join(collision, "operator-file.txt"), "do not adopt");
+    await assert.rejects(internal.run(unmanagedIssue!.id), /workspace_path_already_exists/);
+    assert.equal(await readFile(path.join(collision, "operator-file.txt"), "utf8"), "do not adopt");
     assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, unmanagedIssue!.id))).length, 0);
+    await rm(collision, { recursive: true });
+    await internal.run(unmanagedIssue!.id);
+    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, unmanagedIssue!.id))).length, remotes.length);
     assert.equal(await readFile(unmanagedEvidence, "utf8"), "preserve\n");
 
     await internal.run(issue!.id);
@@ -221,7 +228,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(starts[0]!.workspaceRoot, issueWorkDirectory(stateRoot, prodIssue!.key));
     await writeFile(path.join(starts[0]!.workspaceRoot, "notes.txt"), "retain analysis");
     assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRuntimeRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
-    await assert.rejects(access(issueWorkspaceRoot(stateRoot, prodIssue!.key)));
+    await access(issueWorkspaceRoot(stateRoot, prodIssue!.key));
 
     const firstProdCommit = prodRepository.commitBefore;
     const firstSecondaryCommit = prodRepositoryByUrl.get(remotes[1])!.commitBefore;

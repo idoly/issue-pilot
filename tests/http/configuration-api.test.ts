@@ -113,100 +113,41 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
   }
 });
 
-test("redacts stored credentials and applies explicit preserve, replace, and clear updates", async () => {
+test("redacts DMS/SLS credentials and enforces preserve, replace and required-credential updates", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
-    const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { services: Array<{ repositories: Array<{ id: string; alias: string; url: string }> }> };
-    const initialService = config.services[0]!;
-    const repository = initialService.repositories[0]!;
-    const replace = (values: Record<string, string>) => ({ mode: "replace", values });
-    const payload = {
-      name: "Alpha configured",
-      description: "all capabilities",
-      repositories: [{ ...repository, alias: "alpha-api" }],
-      deployments: [{
-        environmentKey: "test",
-        repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }],
-        capabilities: ["es", "mq", "redis", "db", "nacos"],
-        nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["alpha.yaml"], username: "operator", credentialUpdate: replace({ password: "nacos-secret" }) },
-        db: { databases: [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: replace({ password: "db-secret" }) }] },
-        redis: { host: "redis.example.test", port: 6379, username: "", database: 0, credentialUpdate: replace({ password: "redis-secret" }) },
-        mq: { host: "mq.example.test", port: 5672, managementPort: 15672, username: "reader", virtualHost: "/", credentialUpdate: replace({ password: "mq-secret" }) },
-        es: { url: "http://es.example.test/proxy", username: "", credentialUpdate: { mode: "clear" } },
-      }],
-    };
-    const update = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
-    assert.equal(update.statusCode, 200, update.body);
-
+    const current = (await fixture.app.inject({ method: "GET", url: "/api/config" })).json();
+    const repository = current.services[0].repositories[0];
+    const sls = { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialUpdate: { mode: "replace", values: { accessKeyId: "sls-key", accessKeySecret: "sls-secret" } } };
+    const dms = { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ALPHA", schemaName: "alpha" }], credentialUpdate: { mode: "replace", values: { authorization: "Bearer dms-token" } } };
+    const payload = { name: "Alpha configured", description: "active capabilities", repositories: [{ ...repository, alias: "alpha-api" }], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }], capabilities: ["dms", "sls"], dms, sls }] };
+    const updated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
+    assert.equal(updated.statusCode, 200, updated.body);
     const response = await fixture.app.inject({ method: "GET", url: "/api/config" });
-    const saved = JSON.parse(response.body) as { services: Array<{ deployments: Array<Record<string, unknown>> }> };
-    const savedService = saved.services[0]!;
-    const deployment = savedService.deployments[0]!;
-    assert.deepEqual(deployment.capabilities, ["nacos", "db", "redis", "mq", "es"]);
-    assert.deepEqual(deployment.db, { databases: [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialConfigured: true }] });
-    assert.equal("dms" in deployment, false);
-    assert.equal("playwright" in deployment, false);
-    assert.equal("sls" in deployment, false);
-    assert.deepEqual(deployment.es, { url: "http://es.example.test/proxy", username: "", credentialConfigured: false });
-    const secrets = ["nacos-secret", "db-secret", "redis-secret", "mq-secret", "dms-token", "sls-key", "sls-secret"];
-    assert.equal(secrets.some((secret) => response.body.includes(secret)), false);
-
-
-    const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
-    const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, string>>;
-    sqlite.close();
-    assert.equal("playwright" in stored, false);
-    assert.equal((stored.db!.databases as unknown as Array<{ password: string }>)[0]!.password, "db-secret");
-    assert.equal("dms" in stored, false);
-
-    const preserve = <Value extends Record<string, unknown>>(section: Value) => {
-      const { credentialUpdate: _credentialUpdate, ...configuration } = section;
-      return { ...configuration, credentialUpdate: { mode: "preserve" } };
-    };
-    const originalDeployment = payload.deployments[0]!;
-    const preservedPayload = {
-      ...payload,
-      deployments: [{
-        ...originalDeployment,
-        nacos: preserve(originalDeployment.nacos),
-        db: { databases: originalDeployment.db.databases.map((database) => preserve(database)) },
-        redis: preserve(originalDeployment.redis),
-        mq: preserve(originalDeployment.mq),
-      }],
-    };
-    const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: preservedPayload });
+    const deployment = response.json().services[0].deployments[0];
+    assert.deepEqual(deployment.capabilities, ["dms", "sls"]);
+    assert.equal(deployment.dms.credentialConfigured, true);
+    assert.equal(deployment.sls.credentialConfigured, true);
+    assert.doesNotMatch(response.body, /dms-token|sls-key|sls-secret/);
+    const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], dms: { ...dms, credentialUpdate: { mode: "preserve" } }, sls: { ...sls, credentialUpdate: { mode: "preserve" } } }] } });
     assert.equal(preserved.statusCode, 200, preserved.body);
-    const afterPreserve = new DatabaseSync(fixture.databaseFile, { readOnly: true });
-    const preservedConfig = JSON.parse(afterPreserve.prepare("SELECT config FROM service_deployments").get()!.config as string) as Record<string, Record<string, unknown>>;
-    afterPreserve.close();
-    assert.equal((preservedConfig.db!.databases as Array<{ password: string }>)[0]!.password, "db-secret");
-    assert.equal("dms" in preservedConfig, false);
-
-    const cleared = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
-      ...payload,
-      deployments: [{ ...originalDeployment, capabilities: ["nacos"], nacos: { ...originalDeployment.nacos, username: "", credentialUpdate: { mode: "clear" } } }],
-    } });
-    assert.equal(cleared.statusCode, 200, cleared.body);
-    const clearedConfig = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((result) => JSON.parse(result.body)) as { services: Array<{ deployments: Array<{ nacos: Record<string, unknown> }> }> };
-    const clearedService = clearedConfig.services[0]!;
-    assert.equal(clearedService.deployments[0]!.nacos.credentialConfigured, false);
-
-    for (const [section, error] of [
-      [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "clear" } }, "credential_required"],
-      [{ url: "mysql://db.example.test:3306/alpha", username: "reader", password: "forbidden", credentialUpdate: { mode: "preserve" } }, "credential_fields_not_allowed"],
-      [{ url: "mysql://db.example.test:3306/alpha", username: "reader", credentialUpdate: { mode: "replace", values: { password: "" } } }, "invalid_db_password"],
+    const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
+    try {
+      const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string);
+      assert.equal(stored.sls.accessKeySecret, "sls-secret");
+      assert.equal(stored.dms.authorization, "Bearer dms-token");
+    } finally { sqlite.close(); }
+    for (const [section, expected] of [
+      [{ ...sls, credentialUpdate: { mode: "clear" } }, "credential_required"],
+      [{ ...sls, accessKeySecret: "forbidden", credentialUpdate: { mode: "preserve" } }, "credential_fields_not_allowed"],
+      [{ ...sls, credentialUpdate: { mode: "replace", values: { accessKeyId: "key" } } }, "invalid_credential_replacement"],
     ] as const) {
-      const invalid = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: {
-        ...payload,
-        deployments: [{ ...payload.deployments[0], capabilities: ["db"], db: { databases: [section] } }],
-      } });
+      const invalid = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], capabilities: ["sls"], sls: section }] } });
       assert.equal(invalid.statusCode, 400);
-      assert.equal((await json(invalid)).error, error);
+      assert.equal(invalid.json().error, expected);
     }
-  } finally {
-    await fixture.cleanup();
-  }
+  } finally { await fixture.cleanup(); }
 });
 
 for (const field of ["alias", "url"] as const) test(`swaps repository ${field} values without replacing their identities`, async () => {
@@ -261,7 +202,7 @@ test("does not log configuration credentials when a database write fails", async
     for (const password of ["fixture-private-password", "issue_deployment_required"]) {
       logs.length = 0;
       const response = await fixture.app.inject({ method: "PATCH", url: "/api/services/logging", payload: {
-        name: "Logging", description: "", repositories: [repository], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: repository.alias, baseBranch: "main" }], capabilities: ["db"], db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", credentialUpdate: { mode: "replace", values: { password } } }] } }],
+        name: "Logging", description: "", repositories: [repository], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: repository.alias, baseBranch: "main" }], capabilities: ["sls"], sls: { region: "cn-test", project: "orders-test", logstores: ["application"], credentialUpdate: { mode: "replace", values: { accessKeyId: "fixture-key", accessKeySecret: password } } } }],
       } });
       assert.equal(response.statusCode, 500, "credential values must not be interpreted as database errors");
       assert.ok(logs.length > 0);

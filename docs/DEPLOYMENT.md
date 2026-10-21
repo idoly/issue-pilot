@@ -1,6 +1,6 @@
 # 部署指南
 
-生产使用一个内置 Node、Python/openpyxl、Git 和 Java/Maven 的应用镜像。Fastify 同源提供网页、API、SSE 和入站 MCP，业务数据独立持久化。已有状态升级先按[运维手册](RUNBOOK.md)备份和演练。
+生产使用一个内置 Node、Python/openpyxl、Git、Java/Maven 和 aliyun CLI 的应用镜像。Fastify 同源提供网页、API、SSE 和入站 MCP，业务数据独立持久化。已有状态升级先按[运维手册](RUNBOOK.md)备份和演练。
 
 ## 部署结构
 
@@ -10,7 +10,7 @@ flowchart LR
   Gateway --> App[单个应用容器：Fastify + Pi + 内置运行时]
   App <--> State[持久 state：DB / JSONL / 文件 / Git]
   Home[Operator HOME：模型 / SSH / 工具配置] --> App
-  Resources[应用 .pi 资源] --> App
+  Resources[用户全局 Pi 配置] --> App
   App <--> Cache[临时空间与缓存]
   App <--> Remote[模型 / Git / 证据系统 / MCP]
 ```
@@ -21,7 +21,7 @@ flowchart LR
 
 ## 首次本地运行
 
-开发与 CI 使用 Node 24.18.0，需要 Python 3.8+（支持 venv）、Git、ripgrep、OpenSSH，以及目标项目需要的 npm、Java/Maven。在新项目副本检查[根配置](../issue-pilot.config.ts)，准备模型凭证和 SSH 配置后执行：
+开发与 CI 使用 Node 24.18.0，需要 Python 3.8+（支持 venv）、Git、ripgrep、OpenSSH、aliyun CLI（镜像固定 3.4.11），以及目标项目需要的 npm、Java/Maven。在新项目副本检查[根配置](../issue-pilot.config.ts)，准备模型凭证和 SSH 配置后执行：
 
 ```bash
 npm ci
@@ -33,7 +33,7 @@ node --experimental-strip-types src/http/production.ts
 
 默认端口 3000。前端开发另运行 `npm run dev:web`，默认 4173，代理本机 API。修改 TS 文件不会自动重载后端，Vite HMR 不能代替发布。
 
-默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
+默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。可将示例配置以 `0600` 权限放入其中的 `service.yaml`、`user.yaml` 和 `mcp.json`；文件管理的配置在页面只读，重启时校验并事务更新运行投影。已有状态必须先准备配置和工作目录迁移方案，不能直接搬动 Git worktree。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
 
 已有工作站的 user systemd unit 为 `issue-pilot-api.service` 和 `issue-pilot-web.service`，由宿主管理，仓库不提供通用安装脚本。操作前核对 WorkingDirectory、ExecStart 和 PID：
 
@@ -64,7 +64,7 @@ podman push registry.example.com/issue-pilot:<version>
 
 默认项目缓存使用 `.npm/issue-pilot` 和 `.m2/repository/issue-pilot`，broker 按应用 UID 创建 `0700` 子目录，检查 owner 且拒绝 group/other 写入。fsGroup 管理的卷根可为组可写，但不能直接用作 broker 缓存路径；已有不安全目录会拒绝，不自动 chmod。自定义根配置也须遵守此规则，旧缓存不会自动搬迁。
 
-准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。应用 `.pi` 资源独立于 Operator HOME；当前镜像不复制它，清单也未挂载，需要资源时明确部署到根配置位置，例如只读挂载 `/opt/issue-pilot/.pi`。
+准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。全局 Pi 资源位于 Operator HOME 中的 `~/.pi/agent`，随 HOME 配置挂载；不再为应用单独挂载 `.pi` 资源目录。
 
 准备 namespace、配置、网关和数据后部署；已有数据先完成运维流程：
 

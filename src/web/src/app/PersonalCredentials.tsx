@@ -16,6 +16,7 @@ export function PersonalCredentials() {
   const [busy, setBusy] = createSignal(false, { ownedWrite: true });
   const [message, setMessage] = createSignal("", { ownedWrite: true });
   let generation = 0;
+  const fileManaged = () => Boolean(configuration().fileManaged?.userSubject && configuration().fileManaged?.userSubject === currentUser()?.subject);
   const provider = () => configurationLoaded() ? configuration().agent.provider : status()?.provider;
   createEffect(() => ({ subject: currentUser()?.subject, role: currentUser()?.role }), ({ subject, role }, previous) => {
     if (subject === previous?.subject && role === previous?.role) return;
@@ -28,7 +29,7 @@ export function PersonalCredentials() {
     if (previous !== undefined && value !== previous) { setApiKey(""); setMessage(""); }
   });
   const save = async () => {
-    if (busy() || !status() || (!apiKey().trim() && !sshKey().trim())) return;
+    if (fileManaged() || busy() || !status() || (!apiKey().trim() && !sshKey().trim())) return;
     const key = apiKey().trim(), targetProvider = key ? provider() : undefined;
     if (key && !targetProvider) { setMessage("模型服务商尚未就绪，请稍后重试"); return; }
     const current = generation;
@@ -47,7 +48,7 @@ export function PersonalCredentials() {
     } finally { if (current === generation) setBusy(false); }
   };
   const saveProduction = async (kind: "dms" | "sls") => {
-    if (busy() || !status()) return;
+    if (fileManaged() || busy() || !status()) return;
     const dms = { url: dmsUrl().trim(), authorization: dmsToken().trim() };
     const sls = { accessKeyId: slsId().trim(), accessKeySecret: slsSecret().trim() };
     if (kind === "dms" && !dms.authorization && dms.url !== (status()?.productionDmsUrl ?? "")) { setProductionMessage("修改 DMS 地址时请同时填写 Token"); return; }
@@ -80,6 +81,7 @@ export function PersonalCredentials() {
   return <Show when={currentUser()}>
     <section class="user-management-card personal-credentials" aria-label="我的凭证">
       <header class="user-management-header"><div><strong>我的凭证</strong><span>留空保留；生产查询优先使用个人配置，未配置时使用服务配置。</span></div></header>
+      <Show when={!fileManaged()} fallback={<div class="empty-band">个人凭证由 user.yaml 管理；修改后重启生效。</div>}>
       <div class="production-credentials-form personal-credentials-form">
         <Show when={currentUser()?.role === "developer"}><div>
           <h3>开发</h3>
@@ -89,6 +91,7 @@ export function PersonalCredentials() {
         </div></Show>
       <div><h3>DMS</h3><label><span>地址</span><Input aria-label="生产 DMS 地址" value={dmsUrl()} placeholder="https://example.com/sse" onInput={event => setDmsUrl(event.currentTarget.value)} /></label><label><span>Token</span><PasswordInput aria-label="生产 DMS Token" autocomplete="off" value={dmsToken()} placeholder={status()?.productionDmsConfigured ? "已配置，留空保留" : "Bearer token"} onInput={event => setDmsToken(event.currentTarget.value)} /></label><Button aria-label="保存 DMS 生产凭证" type="primary" loading={busy()} disabled={!status() || busy() || !dmsUrl().trim() || !dmsToken().trim()} onClick={() => { void saveProduction("dms"); }}>保存</Button></div>
       <div><h3>SLS</h3><label><span>AccessKey ID</span><PasswordInput aria-label="生产 SLS AccessKey ID" autocomplete="off" value={slsId()} placeholder={status()?.productionSlsConfigured ? "已配置，留空保留" : "未配置"} onInput={event => setSlsId(event.currentTarget.value)} /></label><label><span>AccessKey Secret</span><PasswordInput aria-label="生产 SLS AccessKey Secret" autocomplete="off" value={slsSecret()} onInput={event => setSlsSecret(event.currentTarget.value)} /></label><Button aria-label="保存 SLS 生产凭证" type="primary" loading={busy()} disabled={!status() || busy() || !slsId().trim() || !slsSecret().trim()} onClick={() => { void saveProduction("sls"); }}>保存</Button></div></div>
+      </Show>
       <Show when={message()}><div class="personal-credentials-message" role="status">{message()}</div></Show>
       <Show when={productionMessage()}><div class="personal-credentials-message" role="status">{productionMessage()}</div></Show>
     </section>

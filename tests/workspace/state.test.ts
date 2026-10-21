@@ -41,7 +41,7 @@ test("classifies repository persistence states without mixed-mode fallbacks", ()
   assert.equal(classifyRepositoryState([{ localPath: null, workingBranch: "" }]), "invalid");
 });
 
-test("requires workspace layouts to exactly match registered repository directories", async () => {
+test("validates registered repositories while allowing Issue working files and directories", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-workspace-layout-"));
   const workspaceRoot = path.join(root, "workspaces", "issue-20260810-001");
   const alpha = path.join(workspaceRoot, "alpha");
@@ -58,7 +58,9 @@ test("requires workspace layouts to exactly match registered repository director
 
     const extra = path.join(workspaceRoot, "extra");
     await mkdir(extra);
-    await assert.rejects(assertManagedIssueWorkspaceLayout(workspaceRoot, [alpha]), /workspace_has_untracked_files/);
+    await writeFile(path.join(workspaceRoot, "checkpoint.json"), "{}\n");
+    await assertManagedIssueWorkspaceLayout(workspaceRoot, [alpha]);
+    assert.equal(await readFile(path.join(workspaceRoot, "checkpoint.json"), "utf8"), "{}\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

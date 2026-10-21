@@ -1,13 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { DefaultPackageManager, DefaultResourceLoader, getAgentDir, getPackageDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { AGENT_PI_SETTING_KEYS, type AgentRuntimeConfiguration } from "../domain/contracts.ts";
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
-
-const projectRoot = path.resolve(import.meta.dirname, "../..");
 type SettingsSchema = Record<string, unknown> & { properties?: Record<string, SettingsSchema>; patternProperties?: Record<string, SettingsSchema>; anyOf?: SettingsSchema[] };
 const nativeSchema = JSON.parse(readFileSync(path.join(getPackageDir(), "schemas/settings.schema.json"), "utf8")) as { properties: Record<string, SettingsSchema> };
 // Keep the SDK's field contracts, reject unknown/deprecated settings, and bound numeric budgets.
@@ -31,39 +27,19 @@ export function parseAgentRuntime(value: unknown): AgentRuntimeConfiguration {
   if (!Value.Check(runtimeSchema, value)) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
   return structuredClone(value) as AgentRuntimeConfiguration;
 }
-export const agentResourceDirectory = path.resolve(projectRoot, issuePilotConfig.runtime.agent.resourceDirectory);
-export async function agentResources(directory?: string) {
-  const roots = { skills: [] as string[], prompts: [] as string[], extensions: [] as string[], instructions: "" };
-  if (!directory || !existsSync(directory)) return roots;
-  for (const kind of ["skills", "prompts"] as const) {
-    const location = path.join(directory, kind);
-    if (existsSync(location)) roots[kind].push(location);
-  }
-  const discovered = await new DefaultPackageManager({ cwd: directory, agentDir: directory, settingsManager: SettingsManager.inMemory({}, { projectTrusted: false }) }).resolve();
-  const extensionRoot = path.join(directory, "extensions");
-  roots.extensions = discovered.extensions.filter(extension => {
-    const relative = path.relative(extensionRoot, extension.path);
-    return extension.enabled && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-  }).map(extension => extension.path);
-  const append = path.join(directory, "APPEND_SYSTEM.md");
-  if (existsSync(append)) roots.instructions = await readFile(append, "utf8");
-  return roots;
-}
-export async function inspectAgentResources(directory = agentResourceDirectory) {
-  const resources = await agentResources(directory);
-  const loader = new DefaultResourceLoader({
-    cwd: projectRoot, agentDir: getAgentDir(), settingsManager: SettingsManager.inMemory(),
-    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    additionalSkillPaths: resources.skills, additionalPromptTemplatePaths: resources.prompts, systemPrompt: "", appendSystemPrompt: [],
-  });
+export async function inspectAgentResources(directory = getAgentDir()) {
+  const settingsManager = SettingsManager.create(directory, directory, { projectTrusted: false });
+  const discovered = await new DefaultPackageManager({ cwd: directory, agentDir: directory, settingsManager }).resolve();
+  // Inspection discovers extension paths without executing user code in an HTTP GET.
+  const loader = new DefaultResourceLoader({ cwd: directory, agentDir: directory, settingsManager, noExtensions: true, noThemes: true });
   await loader.reload();
   const skills = loader.getSkills(), prompts = loader.getPrompts();
   return {
     directory,
     skills: skills.skills.map(skill => ({ name: skill.name, description: skill.description, path: skill.filePath })),
     prompts: prompts.prompts.map(prompt => ({ name: prompt.name, description: prompt.description, path: prompt.filePath })),
-    extensions: resources.extensions,
-    hasAdditionalInstructions: Boolean(resources.instructions),
+    extensions: discovered.extensions.filter(extension => extension.enabled).map(extension => extension.path),
+    hasAdditionalInstructions: Boolean(loader.getSystemPrompt() || loader.getAppendSystemPrompt().length || loader.getAgentsFiles().agentsFiles.length),
     diagnostics: [...skills.diagnostics, ...prompts.diagnostics].map(diagnostic => ({ type: diagnostic.type, path: diagnostic.path, message: diagnostic.message })),
   };
 }

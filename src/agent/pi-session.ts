@@ -17,7 +17,6 @@ import {
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentRuntimeConfiguration, DeploymentConfig } from "../domain/contracts.ts";
-import { agentResources } from "../configuration/pi-runtime.ts";
 import type { McpConfiguration } from "../mcp/client.ts";
 import { createIssueCodemodeExtension } from "./codemode-extension.ts";
 import { createIssueMcpExtension } from "../mcp/pi-extension.ts";
@@ -35,7 +34,7 @@ export interface GitCommitIdentity {
 export interface StartPiSessionOptions {
   manager: SessionManager;
   context: AgentSessionContext;
-  resourceDirectory?: string;
+  agentDirectory?: string;
   runtime?: AgentRuntimeConfiguration;
   deploymentConfig: DeploymentConfig;
   workspaceRoot: string;
@@ -229,30 +228,23 @@ export class PiSessionRuntime {
       throw new Error(`configured_model_unavailable:${model.provider}/${model.id}`);
     }
 
+    const agentDirectory = options.agentDirectory ?? getAgentDir();
+    const globalSettings = SettingsManager.create(agentDirectory, agentDirectory, { projectTrusted: false }).getSettings();
     const settingsManager = SettingsManager.inMemory({
+      ...globalSettings,
       ...configuration.settings,
-      codemode: { ...configuration.settings?.codemode, mode: context.codemode === "only" ? "only" : "on" },
-    });
-    const resources = await agentResources(options.resourceDirectory);
+      codemode: { ...globalSettings.codemode, ...configuration.settings?.codemode, mode: context.codemode === "only" ? "only" : "on" },
+    }, { projectTrusted: false });
     const resourceLoader = new DefaultResourceLoader({
-      cwd: workspaceRoot,
-      agentDir: getAgentDir(),
+      cwd: agentDirectory,
+      agentDir: agentDirectory,
       settingsManager,
       extensionFactories: [
         ...(context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createIssueCodemodeExtension() }]),
         { name: "issue-pilot-mcp", factory: createIssueMcpExtension(options.mcpConfigurations ?? [], context.codemode) },
       ],
-      additionalExtensionPaths: resources.extensions,
-      additionalSkillPaths: resources.skills,
-      additionalPromptTemplatePaths: resources.prompts,
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
       noThemes: true,
-      noContextFiles: true,
-      systemPrompt: "",
-      appendSystemPrompt: [options.systemPrompt],
-      appendSystemPromptOverride: base => resources.instructions ? [...base, resources.instructions] : base,
+      appendSystemPromptOverride: base => [...base, options.systemPrompt],
     });
     await resourceLoader.reload();
     const extensions = resourceLoader.getExtensions();
@@ -274,7 +266,7 @@ export class PiSessionRuntime {
       let identityEnvironment = gitIdentityEnvironment(options.gitIdentity);
       const { session } = await createAgentSession({
         cwd: workspaceRoot,
-        agentDir: getAgentDir(),
+        agentDir: agentDirectory,
         modelRuntime,
         model,
         thinkingLevel: context.model.thinkingLevel,

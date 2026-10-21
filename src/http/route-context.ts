@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
+import type { FileConfigurationState } from "../configuration/contracts.ts";
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { AgentEventBus } from "../agent/events.ts";
 import type { DatabaseConnection } from "../db/client.ts";
@@ -21,6 +22,7 @@ export interface ApiRouteContext {
   events: AgentEventBus;
   workspaces: WorkspaceLifecycleManager;
   scopeTransitions: IssueScopeTransitionManager;
+  fileConfiguration?: FileConfigurationState;
   sourceBrowser: SourceBrowser;
   runScopeExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }

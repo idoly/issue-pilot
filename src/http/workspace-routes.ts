@@ -1,3 +1,4 @@
+import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/working-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
 import { ScopeTransitionRefusal } from "../workspace/scope-transition.ts";
@@ -18,6 +19,42 @@ function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["wor
 
 export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   const { app, database, workspaces, scopeTransitions, runScopeExclusive } = context;
+
+  const relativeWorkPath = (value: unknown, optional = false): string => {
+    if (value === undefined && optional) return "";
+    if (typeof value !== "string" || value.length > 4096 || (!optional && !value.length)) throw new ApiError(400, "invalid_issue_file_path");
+    return value;
+  };
+  const workFileError = (error: unknown): never => {
+    const code = error instanceof Error ? error.message : "";
+    if (["invalid_issue_file_path", "invalid_issue_work_directory", "issue_file_not_directory", "issue_file_not_regular"].includes(code)) throw new ApiError(400, code);
+    if (code === "issue_file_directory_too_large") throw new ApiError(413, code);
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new ApiError(404, "issue_file_not_found");
+    throw error;
+  };
+  app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", async (request, reply) => {
+    const issue = await requireIssue(database, request.params.key);
+    const relative = relativeWorkPath(request.query.path, true);
+    reply.header("Cache-Control", "private, no-store");
+    try { return await listIssueWorkFiles(context.stateRoot, issue.key, relative); }
+    catch (error) {
+      if (!relative && error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+      return workFileError(error);
+    }
+  });
+  app.get<{ Params: { key: string }; Querystring: { path: string } }>("/api/issues/:key/files/download", { logLevel: "silent" }, async (request, reply) => {
+    const issue = await requireIssue(database, request.params.key);
+    const relative = relativeWorkPath(request.query.path);
+    try {
+      const file = await openIssueWorkFile(context.stateRoot, issue.key, relative);
+      reply.header("Cache-Control", "private, no-store");
+      reply.header("Content-Type", "application/octet-stream");
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Content-Length", file.size);
+      reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+      return reply.send(file.handle.createReadStream({ autoClose: true }));
+    } catch (error) { return workFileError(error); }
+  });
 
   app.get("/api/workspaces/stats", async () => {
     const stats = await workspaces.stats();

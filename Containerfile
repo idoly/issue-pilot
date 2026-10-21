@@ -6,6 +6,8 @@ RUN npm ci
 COPY issue-pilot.config.ts tsconfig.json requirements.txt ./
 COPY drizzle ./drizzle
 COPY src ./src
+COPY scripts ./scripts
+COPY examples ./examples
 RUN npm run build \
     && npm prune --omit=dev \
     && find src/web -mindepth 1 -maxdepth 1 ! -name dist -exec rm -rf '{}' +
@@ -27,6 +29,12 @@ FROM docker.io/library/node:26-bookworm-slim
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl libexpat1 openssh-client perl python3 python3-venv ripgrep \
     && rm -rf /var/lib/apt/lists/*
+ARG ALIYUN_CLI_VERSION=3.4.11
+RUN curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-${ALIYUN_CLI_VERSION}-$(dpkg --print-architecture).tgz" --output /tmp/aliyun.tgz \
+    && tar --extract --gzip --file /tmp/aliyun.tgz --directory /usr/local/bin aliyun \
+    && chmod 0755 /usr/local/bin/aliyun \
+    && test "$(aliyun version)" = "$ALIYUN_CLI_VERSION" \
+    && rm -f /tmp/aliyun.tgz
 COPY --from=maven /opt/java/openjdk /opt/java/openjdk
 COPY --from=maven /usr/share/maven /usr/share/maven
 COPY --from=git /opt/git /opt/git

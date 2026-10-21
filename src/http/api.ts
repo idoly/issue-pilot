@@ -8,6 +8,8 @@ import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
+import { requireCurrentUser } from "./route-context.ts";
+import { applyFileConfiguration } from "../configuration/file-configuration.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import type { Database, DatabaseConnection } from "../db/client.ts";
 import { issues } from "../db/schema.ts";
@@ -111,6 +113,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const databaseStartedAt = performance.now();
     const database = await openApplicationDatabase(databaseFile);
     connection = database;
+    const fileConfiguration = await applyFileConfiguration(database.db, stateRoot);
     app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
     const pruneStartedAt = performance.now();
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
@@ -132,7 +135,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await ensureGlobalAgentConfiguration(database.db, modelCatalog);
     await app.register(multipart, { limits: { fileSize: Infinity, files: Infinity, fields: Infinity, parts: Infinity, fieldSize: Infinity } });
     const events = options.events ?? new AgentEventBus((error) => app.log.error(errorDiagnostic(error)));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(errorDiagnostic(error)), sharedModelRuntime());
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(errorDiagnostic(error)), sharedModelRuntime(), fileConfiguration.maxConcurrentIssues);
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -170,7 +173,19 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);
     const scopeTransitions = new IssueScopeTransitionManager(database.db, engine, workspaces);
-    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive };
+    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive, fileConfiguration };
+    app.addHook("preHandler", async request => {
+      if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+      const url = request.url.split("?")[0]!;
+      const serviceMutation = /^\/api\/(?:services|repositories)(?:\/|$)/.test(url) || url === "/api/config/agent";
+      const mcpTest = request.method === "POST" && /^\/api\/mcp-services\/[^/]+\/test$/.test(url);
+      const mcpMutation = /^\/api\/mcp-services(?:\/|$)/.test(url) && !mcpTest;
+      if (fileConfiguration.services && serviceMutation || fileConfiguration.mcp && mcpMutation) throw new ApiError(409, "configuration_managed_by_files");
+      if (url === "/api/me/credentials" && fileConfiguration.userSubject) {
+        const user = await requireCurrentUser(database, request);
+        if (user.subject === fileConfiguration.userSubject) throw new ApiError(409, "credentials_managed_by_user_file");
+      }
+    });
     app.get("/health", async () => ({ ok: true }));
     registerUserRoutes(routeContext);
     registerRepositoryRoutes(routeContext);

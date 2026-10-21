@@ -25,6 +25,7 @@ function GlobalAgentConfiguration() {
     <Show when={configurationLoaded()} fallback={<Show when={!configurationError()}><section class="user-management-loading"><Skeleton active paragraph={{ rows: 10 }} /></section></Show>}>
       <section class="global-model-card" aria-label="全局 Agent 基座">
         <div class="global-model-body">
+          <Show when={!configuration().fileManaged?.services} fallback={<div class="empty-band">Agent 选择由 service.yaml 管理，资源读取全局 Pi 配置。<br />{draft().provider} / {draft().model} / {draft().thinkingLevel}</div>}>
           <div class="global-model-form">
             <label><span>模型服务商</span><Select aria-label="全局模型 provider" value={draft().provider} options={providers().map(provider => ({ value: provider, label: provider }))} onChange={value => { const provider = selectedChoice(value, providers()); if (!provider) return; const model = configuration().agentModels.find(candidate => candidate.provider === provider); if (model) updateDraft({ ...draft(), provider, model: model.id, thinkingLevel: model.thinkingLevels.includes("medium") ? "medium" : model.thinkingLevels[0]! }); }} /></label>
             <label><span>模型</span><Select aria-label="全局模型 model" value={draft().model} options={models().map(model => ({ value: model.id, label: model.id }))} onChange={value => { const model = models().find(candidate => candidate.id === value); if (!model) return; const current = draft(); updateDraft({ ...current, model: model.id, thinkingLevel: model.thinkingLevels.includes(current.thinkingLevel) ? current.thinkingLevel : model.thinkingLevels[0]! }); }} /></label>
@@ -37,6 +38,7 @@ function GlobalAgentConfiguration() {
             <div class="global-model-status" role="status">{saving() ? "保存中…" : saveError() ? "尚未保存" : "修改后自动保存"}</div>
           </div>
           <Show when={saveError()}>{value => <div class="form-error" role="alert">{value()}<Button size="small" onClick={retry}>重试</Button></div>}</Show>
+          </Show>
         </div>
       </section>
     </Show>

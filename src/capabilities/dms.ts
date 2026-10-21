@@ -90,7 +90,7 @@ export class DmsOperationError extends Error {
   constructor(diagnostics: DmsDiagnostics, cause: unknown) {
     // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
     const code = cause instanceof Error ? cause.message : "";
-    const safeCode = /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed)$/.test(code)
+    const safeCode = /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed)$/.test(code)
       || ["invalid_dms_mcp_target", "invalid_output_file_name", "insecure_issue_output_root", "insecure_issue_output_file"].includes(code);
     super(safeCode ? code : "dms_mcp_operation_failed", { cause });
     this.diagnostics = diagnostics;
@@ -264,6 +264,23 @@ export async function resolveDmsScope(configured: DmsConnectionConfiguration, in
   });
 }
 
+const resolvedFileTargets = new WeakMap<object, { url: string; authorization: string; targets: Map<string, DmsScopeResolution> }>();
+
+async function resolveFileTarget(configured: CapabilityConfig<"dms">, database: CapabilityConfig<"dms">["databases"][number], signal: AbortSignal, connect: ConnectDmsMcp): Promise<DmsScopeResolution> {
+  let cache = resolvedFileTargets.get(configured);
+  if (!cache || cache.url !== configured.url || cache.authorization !== configured.authorization) {
+    cache = { url: configured.url, authorization: configured.authorization, targets: new Map() };
+    resolvedFileTargets.set(configured, cache);
+  }
+  const key = JSON.stringify([database.instanceAlias, database.schemaName]);
+  const existing = cache.targets.get(key);
+  if (existing) return existing;
+  // Cache only completed metadata, never share a caller's in-flight cancellation.
+  const resolved = await resolveDmsScope(configured, database.instanceAlias, database.schemaName, signal, connect);
+  cache.targets.set(key, resolved);
+  return resolved;
+}
+
 export async function queryDms(
   input: CapabilityInputs["dms"],
   configured: CapabilityConfig<"dms">,
@@ -295,7 +312,13 @@ export async function queryDms(
     } finally { phaseElapsedMs[name] = Math.round(performance.now() - phaseStarted); }
   };
   try {
-    const session = await phase("connect", () => connect(configured, boundedSignal));
+    const session = await phase("connect", async () => {
+      if (!database.databaseId) {
+        const resolved = await resolveFileTarget(configured, database, boundedSignal, connect);
+        args.database_id = resolved.databaseId;
+      }
+      return connect(configured, boundedSignal);
+    });
     return await withDmsSession({ close: () => phase("close", () => session.close()) }, boundedSignal, async (close) => {
       const tool = uniqueTool(await phase("discovery", () => session.listTools(boundedSignal)), "executeScript", isReadOnlyScriptTool);
       if (!tool) { failedPhase = "discovery"; throw new Error("dms_mcp_execute_script_unavailable"); }
@@ -310,7 +333,7 @@ export async function queryDms(
       const text = JSON.stringify({ tool: tool.name, result }, null, 2);
       if (input.output) {
         const output = await phase("publish", () => outputStore!.generate(input.output!.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal));
-        return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json" } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
+        return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json", downloadPath: outputStore!.downloadPath(output.fileName) } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
       }
       return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
     });

@@ -5,7 +5,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_STATUSES, agentStreamUrl, sendAgentMessage, type AgentFooterStats, type IssueDetail, type IssueStatus, type RunEvent } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
-import { Markdown } from "../ui/Markdown";
+import { IssueMarkdown } from "./IssueMarkdown";
 import { activityForEvent, applyAgentEvent, assistantNotice, codemodeCalls, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
@@ -34,7 +34,7 @@ function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> 
   </div>;
 }
 
-function SessionSummaryEntry(props: { entry: Extract<ConversationEntry, { kind: "summary" }> }) {
+function SessionSummaryEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "summary" }> }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
   const label = () => props.entry.summaryType === "compaction" ? "compaction" : "branch";
   const description = () => props.entry.summaryType === "compaction"
@@ -44,13 +44,13 @@ function SessionSummaryEntry(props: { entry: Extract<ConversationEntry, { kind: 
     <button type="button" aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((value) => !value)}>
       <strong>[{label()}]</strong><span>{description()}</span><ChevronRight class={expanded() ? "expanded" : ""} size={14} />
     </button>
-    <Show when={expanded()}><div class="agent-summary-content"><Markdown source={props.entry.summary} /></div></Show>
+    <Show when={expanded()}><div class="agent-summary-content"><IssueMarkdown issue={props.issue} source={props.entry.summary} /></div></Show>
   </section>;
 }
 
-function CustomMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "custom" }> }) {
+function CustomMessageEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "custom" }> }) {
   return <section class="agent-custom-message"><strong>[{props.entry.label}]</strong><For each={props.entry.blocks}>{(block) => block.type === "text"
-    ? <Markdown source={block.value} />
+    ? <IssueMarkdown issue={props.issue} source={block.value} />
     : <img class="agent-inline-image" src={`data:${block.mimeType};base64,${block.data}`} alt="Custom message" />}</For></section>;
 }
 
@@ -59,21 +59,21 @@ function BashMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "ba
   return <section class={`agent-tool ${failed() ? "error" : "complete"}`}><strong class="agent-bash-command">$ {props.entry.command}</strong><Show when={props.entry.output}><pre class="agent-tool-output">{props.entry.output}</pre></Show><Show when={props.entry.truncated}><div class="agent-tool-timing">Output truncated</div></Show></section>;
 }
 
-function AssistantBlock(props: { block: Extract<ConversationEntry, { kind: "assistant" }>["blocks"][number]; streaming: boolean }) {
-  const content = () => props.streaming ? <div class="agent-streaming-block">{props.block.value}</div> : <Markdown source={props.block.value} />;
+function AssistantBlock(props: { issue: IssueDetail; block: Extract<ConversationEntry, { kind: "assistant" }>["blocks"][number]; streaming: boolean }) {
+  const content = () => props.streaming ? <div class="agent-streaming-block">{props.block.value}</div> : <IssueMarkdown issue={props.issue} source={props.block.value} />;
   return <Show when={props.block.type === "thinking"} fallback={content()}><div class="agent-thinking">{content()}</div></Show>;
 }
 
-function ConversationItem(props: { entry: ConversationEntry }) {
+function ConversationItem(props: { issue: IssueDetail; entry: ConversationEntry }) {
   return <Switch>
-    <Match when={props.entry.kind === "user"}>{() => { const entry = props.entry as Extract<ConversationEntry, { kind: "user" }>; return <div class="agent-message user"><Markdown source={entry.text} /><For each={entry.images ?? []}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="用户粘贴的图片" />}</For></div>; }}</Match>
+    <Match when={props.entry.kind === "user"}>{() => { const entry = props.entry as Extract<ConversationEntry, { kind: "user" }>; return <div class="agent-message user"><IssueMarkdown issue={props.issue} source={entry.text} /><For each={entry.images ?? []}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="用户粘贴的图片" />}</For></div>; }}</Match>
     <Match when={props.entry.kind === "assistant"}>{() => {
       const entry = props.entry as Extract<ConversationEntry, { kind: "assistant" }>;
-      return <div class="agent-message assistant"><For each={entry.blocks}>{(block) => <AssistantBlock block={block} streaming={entry.streaming === true} />}</For><Show when={assistantNotice(entry)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div>;
+      return <div class="agent-message assistant"><For each={entry.blocks}>{(block) => <AssistantBlock issue={props.issue} block={block} streaming={entry.streaming === true} />}</For><Show when={assistantNotice(entry)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div>;
     }}</Match>
     <Match when={props.entry.kind === "tool"}><ToolEntry entry={props.entry as Extract<ConversationEntry, { kind: "tool" }>} /></Match>
-    <Match when={props.entry.kind === "summary"}><SessionSummaryEntry entry={props.entry as Extract<ConversationEntry, { kind: "summary" }>} /></Match>
-    <Match when={props.entry.kind === "custom"}><CustomMessageEntry entry={props.entry as Extract<ConversationEntry, { kind: "custom" }>} /></Match>
+    <Match when={props.entry.kind === "summary"}><SessionSummaryEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "summary" }>} /></Match>
+    <Match when={props.entry.kind === "custom"}><CustomMessageEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "custom" }>} /></Match>
     <Match when={props.entry.kind === "bash"}><BashMessageEntry entry={props.entry as Extract<ConversationEntry, { kind: "bash" }>} /></Match>
   </Switch>;
 }
@@ -160,9 +160,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const running = () => processing();
   const canSend = () => issueStatus() !== "resolved";
   const usageText = () => footerText(footer());
-  const codeRoot = () => props.issue.environmentKey === "dev"
-    ? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`
-    : `~/.issue-pilot/issues/${props.issue.id.toLowerCase()}/runtime`;
+  const codeRoot = () => props.issue.workingDirectory ?? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`;
   const developmentRepositoriesPending = () => props.issue.environmentKey === "dev"
     && (!props.issue.repositories.length || props.issue.repositories.some((repository) => !repository.workingBranch));
   const clearUnread = () => {
@@ -431,7 +429,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   return <section ref={panel} class="agent-panel" aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
     <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) clearUnread(); }}>
       <div class="agent-conversation" role="log" aria-live="polite">
-        <For each={entries()}>{(entry) => <ConversationItem entry={entry} />}</For>
+        <For each={entries()}>{(entry) => <ConversationItem issue={props.issue} entry={entry} />}</For>
         <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>
       </div>
       <Show when={queue().steering.length || queue().followUp.length}><div class="agent-queue"><For each={queue().steering}>{(message) => <span><strong>Steering:</strong> {message}</span>}</For><For each={queue().followUp}>{(message) => <span><strong>Follow-up:</strong> {message}</span>}</For></div></Show>

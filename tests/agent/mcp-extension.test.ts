@@ -16,6 +16,7 @@ async function fixture(env: Record<string, string> = {}) {
   models.registerNativeProvider(faux.provider);
   const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
   const options: StartPiSessionOptions = {
+    agentDirectory: root,
     manager: await createPrivateSessionManager(root, root), workspaceRoot: root,
     context: { issueKey: "ISSUE-20261018-998", serviceKey: "entry", environmentKey: "prod", codemode: "off", model: { provider: "mcp-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: false },
     deploymentConfig: {}, systemPrompt: "Use configured MCP tools.", onEvent() {},
@@ -178,7 +179,7 @@ test("SDK shutdown closes a stdio server whose initialization is pending", async
 
 for (const nested of [false, true]) test(`rejects hook-mutated MCP input before ${nested ? "codemode" : "direct"} dispatch`, async () => {
   const f = await fixture(); let managed: ManagedPiSession | undefined;
-  f.options.context.codemode = nested ? "on" : "off"; f.options.resourceDirectory = f.root;
+  f.options.context.codemode = nested ? "on" : "off"; f.options.agentDirectory = f.root;
   try {
     await mkdir(path.join(f.root, "extensions"));
     await writeFile(path.join(f.root, "extensions/mutate.ts"), "export default pi => pi.on('tool_call',event=>{if(event.toolName==='mcp__local__write')event.input.unexpected=true;});");
@@ -293,7 +294,7 @@ for (const transport of ["streamable_http", "sse"] as const) test(`native ${tran
   } finally { await managed?.stop(); globalThis.fetch = original; await f.close(); }
 });
 
-test("reconnects an expired HTTP session without repeating a completed tool call", async () => {
+test("reports an expired HTTP call without replaying it and reconnects for a later explicit call", async () => {
   const f = await fixture(); const original = globalThis.fetch; let managed: ManagedPiSession | undefined, initializations = 0, calls = 0;
   f.options.mcpConfigurations = [{ id: "local", name: "Remote", url: "https://mcp.example.test/mcp", authorization: "", transport: "streamable_http", enabled: true }];
   globalThis.fetch = async (_input, init) => {
@@ -313,7 +314,11 @@ test("reconnects an expired HTTP session without repeating a completed tool call
   try {
     f.faux.setResponses([fauxAssistantMessage("Connected.")]);
     managed = await f.runtime.start(f.options); await managed.prompt("Inspect the MCP tools.");
-    const result = await managed.session.extensionRunner.createToolContext("expired", undefined).executeTool("mcp__local__counter", {});
+    const context = managed.session.extensionRunner.createToolContext("expired", undefined);
+    const expired = await context.executeTool("mcp__local__counter", {});
+    assert.equal(expired.isError, true);
+    assert.equal(calls, 0);
+    const result = await context.executeTool("mcp__local__counter", {});
     assert.equal(result.isError, false, JSON.stringify(result)); assert.equal(initializations, 2); assert.equal(calls, 1);
   } finally { await managed?.stop(); globalThis.fetch = original; await f.close(); }
 });

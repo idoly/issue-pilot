@@ -414,6 +414,13 @@
       "when": 1791417600000,
       "tag": "0058_management_role",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1792540800000,
+      "tag": "0059_retire_native_adapters",
+      "breakpoints": true
     }
   ]
 }

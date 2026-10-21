@@ -8,7 +8,6 @@
 curl -fsS http://127.0.0.1:3000/health
 systemctl --user status issue-pilot-api.service issue-pilot-web.service --no-pager
 systemctl --user show issue-pilot-api.service issue-pilot-web.service --property=MainPID,ExecStart,WorkingDirectory --no-pager
-scripts/playwright.sh status
 ```
 
 Kubernetes 部署改查实际 namespace 的 deployment、pod、service、探针和日志，不与本地 supervisor 命令混用。健康应返回 `{"ok":true}`，但 active/Running 不能代替数据库、文件、Git 和页面验收。
@@ -44,7 +43,7 @@ install -d -m 0700 "$issue_backup_root"
 rsync -a --exclude=/control/project-tools.sock -- "$issue_state_root/" "$issue_backup_root/state/"
 ```
 
-同时保存匹配的代码、根配置及应用 `.pi`。若使用 link-dest 节省空间，仅允许备份之间共享硬链接，不能把可写 live 文件链接成备份；不能对共享 inode 原地覆盖或统一 chmod。复制后检查完整性、模式和可恢复性。
+同时保存匹配的代码、根配置、私有 YAML/MCP 文件和用户全局 Pi 配置。若使用 link-dest 节省空间，仅允许备份之间共享硬链接，不能把可写 live 文件链接成备份；不能对共享 inode 原地覆盖或统一 chmod。复制后检查完整性、模式和可恢复性。
 
 ## 数据库核对
 
@@ -100,12 +99,43 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 
 删除临时测试、参考构建和依赖副本前，检查进程 cwd/argv/fd、持久数据引用、符号链接及 Git 归属。保留有效验证结果和删除清单，确认清理不会沿链接进入 live 状态。已发布迁移、运行目录、未知证据及当前资源不能因“没有代码引用”而删除。保留策略由 Operator 决定，备份脚本不顺手清理其他快照。
 
+## 配置文件准备
+
+用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，把当前有效的凭证归到指定用户；多个不同凭证组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。已退役的 Playwright MCP 不进入草稿。输出目录必须与真实 state root 不同，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
+
+```bash
+node --experimental-strip-types scripts/prepare-configuration.ts \
+  --state-root /path/to/application/.issue-pilot \
+  --output /path/to/private-config-review \
+  --subject user@example.com \
+  --reference-service /path/to/reference/config.yaml \
+  --reference-mcp /path/to/reference/mcp.json
+```
+
+审核 `service.yaml`、`user.yaml`、`mcp.json` 的目标、模型和认证归属，不把内容粘贴进日志。按前述维护与一致备份流程停止旧进程后，安装已验证的新代码，将三个文件放入真实 state root，再执行下面的工作目录迁移，最后重启。文件缺失时数据库仍是配置来源；相应文件存在时页面只读，不能用 API 修改另一份投影。
+
+## 工单工作目录迁移
+
+将旧 `issues/<key>/work` 文件移动到现有 `workspaces/<key>` 平铺工作目录。此迁移不迁移数据库 schema，不移动开发 worktree，不重写历史会话。先按上文建立匹配的一致恢复点，再执行：
+
+```bash
+# 只读预检，不修改文件或数据库；输出工单号、文件名和计划数量。
+node --experimental-strip-types scripts/migrate-issue-work.ts
+# 停止入口、优雅停止 API，确认进程和子进程退出后应用。
+node --experimental-strip-types scripts/migrate-issue-work.ts --apply
+```
+
+应用阶段占有 API 使用的同一个项目 broker Socket，运行中或启动中的 API 会阻止迁移；已有异常 Socket 也保留，不自动删除。脚本只处理数据库已登记工单的已知旧 work 目录，检查所有目标是否重名，遇到链接、嵌套 Git 或特殊文件要求人工检查。文件移动失败或会话绑定更新失败时回移本次文件；回滚失败聚合报告并保留证据，不重复执行掩盖现场。成功后更新会话 cwd 绑定并写私有迁移记录；旧空 work 目录保留，重复调用无文件可移动。原附件、成果快照和 Pi JSONL 保持原位置。
+
+恢复服务后检查工作文件列表和下载、成果链接、会话回放以及仓库状态，核对迁移前后文件哈希、权限、Git refs/worktrees。脚本中的旧绝对路径或依赖相对链接需由工单所有者检查，不自动改写文件内容。
+
 ## 常见故障
 
 先判断应用能否响应，再检查身份、工作区和文件，最后排查模型/协议或 SSE/前端投影。`/health` 不验证每个工单和远程目标。创建或发消息响应不明时先查询确认，不盲目重复提交。
 
 | 症状或稳定错误 | 处理 |
 | --- | --- |
+| issue_work_directory_migration_required | 停止服务，备份并执行上文显式迁移；不自动忽略旧工作文件 |
 | unmanaged_issue_state | 保留未知目录、DB 和 Git，调查对应关系，不能自动收编 |
 | shared_checkout_changed | 保留 checkout/store，检查 HEAD、common dir 和改动 |
 | workspace_branch_does_not_match_issue_policy | 备份 refs、staged/untracked 和 DB，确认历史归属，不猜测修复 |
@@ -123,7 +153,7 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 | `sls_access_denied` / `sls_invalid_access_key` / `sls_signature_mismatch` | 核对实际 owner 的个人或部署凭证、RAM `log:GetLogStoreLogs` 权限及签名配置；失败不切换其他身份 |
 | `sls_request_time_expired` / `sls_project_not_found` / `sls_logstore_not_found` | 分别核对系统时间，或已配置的 region/project/logstore；不猜测或自动更换目标 |
 | `sls_rate_limited` / `sls_quota_exceeded` / `sls_http_429` | 查 SLS 服务端请求量、并发和额度；不自动重放查询 |
-| `capability_worker_initialization_failed` | 核对运行版本、Worker 模块和安装依赖；该错误不能用于判断查询语法或云端权限 |
+| sls_cli_not_available | 检查运行用户 PATH 和 aliyun CLI 安装；镜像应包含固定 CLI 版本，不换凭证重试 |
 | 查询不完整、超预算或异常大 | 检查来源、SQL 范围、LIMIT 和成果导出，不返回裁剪后的假完整结果 |
 
 DMS 核对部署或个人 URL/Authorization、同源消息通道及数据库映射；SLS 核对 region/project/logstore 和所选身份。失败不切换凭证重试。SSE 顺序为持久/当前回放 → snapshot_ready → live/heartbeat；检查代理缓冲、超时和 Web generation，重启不会恢复未持久事件。

@@ -18,8 +18,8 @@ const message = (error: unknown) => errors[errorMessage(error)] ?? errorMessage(
 const addressPrefix = (url: string) => url.slice(0, Math.max(url.lastIndexOf("/"), url.includes("://") ? -1 : url.indexOf(":")) + 1);
 
 export function RepositoryManagement() {
-  const { currentUser, refreshConfiguration, refreshCatalog } = useApplicationResources();
-  const canManage = () => currentUser()?.role === "developer";
+  const { currentUser, configuration, refreshConfiguration, refreshCatalog } = useApplicationResources();
+  const canManage = () => currentUser()?.role === "developer" && !configuration?.().fileManaged?.services;
   const [rows, setRows] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
   const sortedRows = createMemo(() => [...rows()].sort((left, right) => addressPrefix(left.url).localeCompare(addressPrefix(right.url)) || left.url.localeCompare(right.url)));
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
@@ -72,6 +72,7 @@ export function RepositoryManagement() {
     finally { if (current === generation) setSaving(false); }
   };
   return <section class="user-management-card repository-management" aria-label="仓库管理">
+    <Show when={configuration?.().fileManaged?.services}><div class="empty-band">仓库由 service.yaml 管理；修改后重启生效。</div></Show>
     <header class="user-management-header"><div><strong>仓库</strong><span>统一维护仓库地址，服务选择引用 · 共 {rows().length} 个</span></div><Button type="primary" icon={<Plus size={14} />} disabled={!canManage()} title={canManage() ? "添加仓库" : "仅开发角色可维护仓库"} onClick={() => edit()}>添加仓库</Button></header>
     <Show when={error() && !open() && !deleting()}><div class="user-management-error" role="alert">{error()}</div></Show>
     <Show when={!loading()} fallback={<div class="user-management-loading"><Skeleton active paragraph={{ rows: 6 }} /></div>}>

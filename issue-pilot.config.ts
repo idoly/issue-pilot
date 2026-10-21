@@ -46,14 +46,9 @@ export const issuePilotConfig = Object.freeze({
     environments: Object.freeze({ prod: "正式", test: "测试", dev: "开发" }),
     deployment: Object.freeze({ baseBranch: "main" }),
     dms: Object.freeze({ sseUrl: "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse" }),
-    nacos: Object.freeze({ group: "DEFAULT_GROUP" }),
-    redis: Object.freeze({ port: 6379, database: 0, scanResults: 50 }),
-    rabbitmq: Object.freeze({ managementPort: 15672, virtualHost: "/" }),
   }),
   runtime: Object.freeze({
-    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, resourceDirectory: ".pi" }),
-    redisWorker: Object.freeze({ oldGenerationMb: 96, youngGenerationMb: 16 }),
-    slsWorker: Object.freeze({ oldGenerationMb: 192, youngGenerationMb: 16 }),
+    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, maxConcurrentIssues: 3 }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
     projectTools: Object.freeze({
       node: Object.freeze({
@@ -97,17 +92,11 @@ export const issuePilotConfig = Object.freeze({
       diskUsageOutputBytes: 1024 * 1024,
     }),
     capability: Object.freeze({
-      workerConcurrency: 4,
       resultBytes: 1024 * 1024,
       timeoutMs: 15_000,
       connectionMs: 10_000,
-      database: Object.freeze({ queryChars: 20_000, databases: 20 }),
       mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
       dms: Object.freeze({ executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
-      elasticsearch: Object.freeze({ results: 200 }),
-      nacos: Object.freeze({ dataIds: 50, loginResponseBytes: 64 * 1024 }),
-      redis: Object.freeze({ keys: 100, results: 500, keyChars: 1024, cursorChars: 30 }),
-      rabbitmq: Object.freeze({ queueChars: 255 }),
       sls: Object.freeze({ pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),
     }),
   }),

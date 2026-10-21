@@ -14,7 +14,7 @@ import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKe
 import { listIssueOutputs, resolveIssueOutput } from "../outputs/store.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
-import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
+import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueWorkDirectory, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import { finalizeQuarantinedAttachments, type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removePendingAttachments, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
@@ -373,6 +373,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     return {
       ...summary, description: issue.description,
       repositories: repositoryRows.map((repository) => ({ name: repositoryNames.get(repository.url) ?? "", url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch })),
+      workingDirectory: issueWorkDirectory(stateRoot, issue.key),
       attachments: attachmentRows.map(serializeAttachment),
       collaboratingServices: await participatingServices(database.db, issue),
       outputs: outputRows,

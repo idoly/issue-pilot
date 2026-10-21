@@ -77,6 +77,10 @@ export class IssueOutputStore {
     return issueOutputRoot(this.stateRoot, this.issueKey);
   }
 
+  downloadPath(fileName: string): string {
+    return `/api/issues/${encodeURIComponent(this.issueKey.toUpperCase())}/outputs/${encodeURIComponent(outputFileName(fileName))}`;
+  }
+
   list(): Promise<IssueOutput[]> {
     return listIssueOutputs(this.stateRoot, this.issueKey);
   }

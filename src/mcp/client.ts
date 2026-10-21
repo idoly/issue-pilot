@@ -24,7 +24,7 @@ export function createMcpFetch(configuration: McpConfiguration, signal: AbortSig
   };
 }
 
-/** Connection tests and legacy SSE use the MCP SDK; Agent HTTP/stdio use Pi transports. */
+/** All external MCP transports use the protocol SDK; Pi consumes them through its public adapter. */
 export function createMcpTransport(configuration: McpConfiguration, signal: AbortSignal): Transport {
   if (configuration.transport === "stdio") {
     if (!configuration.stdio) throw new McpFailure("mcp_stdio_configuration_required");

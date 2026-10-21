@@ -1,79 +1,37 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-
 import { CAPABILITY_CREDENTIALS } from "../../src/configuration/contracts.ts";
-import { projectCapabilityConfiguration, resolveConfiguredCapabilitySections } from "../../src/configuration/credentials.ts";
-import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName } from "../../src/domain/contracts.ts";
-
+import { projectCapabilityConfiguration, resolveConfiguredCapabilitySections, resolveDeploymentConfiguration } from "../../src/configuration/credentials.ts";
+import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName, type StoredDeploymentConfig } from "../../src/domain/contracts.ts";
 const configuration: CapabilityConfiguration = {
-  nacos: { serverUrl: "https://nacos.example.test", namespace: "test", group: "DEFAULT_GROUP", dataIds: ["orders.yaml"], username: "operator", password: "nacos-secret" },
-  db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "db-secret" }] },
-  redis: { host: "redis.example.test", port: 6379, username: "reader", password: "redis-secret", database: 0 },
-  mq: { host: "mq.example.test", managementPort: 15672, username: "reader", password: "mq-secret", virtualHost: "/" },
-  es: { url: "https://es.example.test", username: "reader", password: "es-secret" },
   dms: { url: "https://dms.example.test/sse", authorization: "Bearer dms-token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
   sls: { accessKeyId: "sls-key", accessKeySecret: "sls-secret", region: "cn-test", project: "orders-test", logstores: ["application"] },
 };
-
-function publicInput(key: CapabilityName, credentialUpdate: Record<string, unknown>): Record<string, unknown> {
-  const projected = projectCapabilityConfiguration(configuration);
-  if (key === "db") return {
-    databases: projected.db!.databases.map(({ credentialConfigured: _configured, ...database }) => ({ ...database, credentialUpdate })),
-  };
-  const section = projected[key] as Record<string, unknown>;
-  const credentialFields = new Set<string>(CAPABILITY_CREDENTIALS[key].fields as readonly string[]);
-  const visible = Object.fromEntries(Object.entries(section).filter(([field]) => field !== "credentialConfigured" && !credentialFields.has(field)));
-  return { ...visible, credentialUpdate };
+function publicInput(key: CapabilityName, credentialUpdate: Record<string, unknown>) {
+  const section = projectCapabilityConfiguration(configuration)[key] as Record<string, unknown>;
+  return { ...Object.fromEntries(Object.entries(section).filter(([field]) => field !== "credentialConfigured")), credentialUpdate };
 }
-
-test("projects and preserves every capability credential through the shared contract", () => {
+test("projects and preserves active native credentials without exposing their values", () => {
   const projected = projectCapabilityConfiguration(configuration);
   for (const key of CAPABILITY_KEYS) {
-    if (key === "db") {
-      assert.equal(projected.db!.databases[0]!.credentialConfigured, true);
-      assert.equal("password" in projected.db!.databases[0]!, false);
-    } else {
-      const section = projected[key] as Record<string, unknown>;
-      assert.equal(section.credentialConfigured, true);
-      for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(field in section, false);
-    }
-    const resolved = resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], configuration);
-    assert.deepEqual(resolved[key], configuration[key]);
+    const section = projected[key] as Record<string, unknown>;
+    assert.equal(section.credentialConfigured, true);
+    for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(field in section, false);
+    assert.deepEqual(resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], configuration)[key], configuration[key]);
   }
-  assert.equal(JSON.stringify(projected).includes("secret"), false);
+  assert.doesNotMatch(JSON.stringify(projected), /sls-secret|dms-token|sls-key/);
 });
-
-test("ignores historical RabbitMQ AMQP ports when projecting and saving configuration", () => {
-  const historical = { ...configuration, mq: { ...configuration.mq!, port: 5672 } };
-  assert.equal("port" in projectCapabilityConfiguration(historical).mq!, false);
-  assert.deepEqual(resolveConfiguredCapabilitySections({ mq: { ...publicInput("mq", { mode: "preserve" }), port: "unused" } }, ["mq"], historical).mq, configuration.mq);
-});
-
-test("preserves significant password whitespace when replacing and resaving native credentials", () => {
-  const keys = ["nacos", "db", "redis", "mq", "es"] as const;
-  for (const key of keys) {
-    const password = "  fixture-private-password \t";
-    const input = publicInput(key, { mode: "replace", values: { password } });
-    const replaced = resolveConfiguredCapabilitySections({ [key]: input }, [key], configuration);
-    const storedPassword = key === "db" ? replaced.db!.databases[0]!.password : replaced[key]!.password;
-    assert.equal(storedPassword, password, `${key} replacement must preserve password bytes`);
-    const preserved = resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], replaced);
-    assert.deepEqual(preserved, replaced, `${key} preserve must not normalize saved passwords`);
-    assert.doesNotMatch(JSON.stringify(projectCapabilityConfiguration(replaced)), /fixture-private-password/);
-  }
-});
-
-test("clears only optional credentials and rejects preservation without stored values", () => {
+test("requires complete replacement credentials and never preserves credentials for a new DMS target", () => {
   for (const key of CAPABILITY_KEYS) {
-    const section = publicInput(key, { mode: "clear" });
-    if (key === "nacos" || key === "es") section.username = "";
-    if (CAPABILITY_CREDENTIALS[key].required) {
-      assert.throws(() => resolveConfiguredCapabilitySections({ [key]: section }, [key], configuration), /credential_required/);
-    } else {
-      const resolved = resolveConfiguredCapabilitySections({ [key]: section }, [key], configuration)[key] as Record<string, unknown>;
-      for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(field in resolved, false);
-    }
+    assert.throws(() => resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "clear" }) }, [key], configuration), /credential_required/);
+    assert.throws(() => resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key]), /credential_not_configured|dms_credentials_target_changed/);
   }
-  assert.throws(() => resolveConfiguredCapabilitySections({ db: publicInput("db", { mode: "preserve" }) }, ["db"]), /credential_not_configured/);
-  assert.throws(() => resolveConfiguredCapabilitySections({ dms: { url: "https://dms.example.test/sse", databases: configuration.dms!.databases, credentialUpdate: { mode: "replace", values: {} } } }, ["dms"]), /invalid_dms_authorization/);
+  assert.throws(() => resolveConfiguredCapabilitySections({ dms: { ...publicInput("dms", { mode: "preserve" }), url: "https://other.example.test/sse" } }, ["dms"], configuration), /dms_credentials_target_changed/);
+  assert.throws(() => resolveConfiguredCapabilitySections({ dms: publicInput("dms", { mode: "replace", values: {} }) }, ["dms"]), /invalid_dms_authorization/);
+  assert.throws(() => resolveConfiguredCapabilitySections({ sls: publicInput("sls", { mode: "replace", values: { accessKeyId: "key" } }) }, ["sls"]), /invalid_credential_replacement/);
+});
+test("retired private deployment configuration is not projected or executed", () => {
+  const stored: StoredDeploymentConfig = { ...configuration, db: { databases: [{ url: "mysql://legacy.example.test:3306/orders", username: "legacy", password: "retired-secret" }] }, redis: { host: "legacy", port: 6379, username: "", database: 0 } };
+  assert.deepEqual(resolveDeploymentConfiguration(stored), configuration);
+  assert.doesNotMatch(JSON.stringify(projectCapabilityConfiguration(stored)), /legacy|retired-secret/);
 });

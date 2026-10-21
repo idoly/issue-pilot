@@ -1,5 +1,7 @@
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, copyFile, lstat, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq, inArray, ne } from "drizzle-orm";
@@ -18,10 +20,12 @@ import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
-import { issueAttachmentRoot, issueSessionRoot, issueWorkDirectory, pathExists } from "../workspace/state.ts";
+import { prepareIssueWorkDirectory } from "../workspace/working-files.ts";
+import { issueAttachmentRoot, issueSessionRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import {
   agentSessions,
+  issueAttachments,
   mcpServices,
   environments,
   issueWorkspaces,
@@ -31,7 +35,6 @@ import {
 } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "./model-runtime.ts";
-import { agentResourceDirectory } from "../configuration/pi-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -69,6 +72,9 @@ export class AgentEngine implements AgentController {
   private readonly piRuntime: PiSessionRuntime;
   private closePromise: Promise<void> | undefined;
   private closing = false;
+  private activeSlots = 0;
+  private readonly slotWaiters: Array<() => void> = [];
+  private readonly maxConcurrentIssues: number;
 
   constructor(
     database: Database,
@@ -76,7 +82,10 @@ export class AgentEngine implements AgentController {
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
     modelRuntime?: PiModelRuntime,
+    maxConcurrentIssues: number = issuePilotConfig.runtime.agent.maxConcurrentIssues,
   ) {
+    if (!Number.isInteger(maxConcurrentIssues) || maxConcurrentIssues < 1) throw new Error("invalid_agent_concurrency");
+    this.maxConcurrentIssues = maxConcurrentIssues;
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
@@ -207,9 +216,19 @@ export class AgentEngine implements AgentController {
     this.idleWaiters.clear();
   }
 
+  private async acquireSlot(): Promise<() => void> {
+    if (this.activeSlots < this.maxConcurrentIssues) this.activeSlots++;
+    else await new Promise<void>(resolve => this.slotWaiters.push(resolve));
+    return () => {
+      const next = this.slotWaiters.shift();
+      if (next) next(); else this.activeSlots--;
+    };
+  }
+
   private schedule(issueId: string, operation: () => Promise<void>): void {
     this.beginActivity(issueId);
     void this.issueQueue.run(issueId, async () => {
+      const release = await this.acquireSlot();
       try { await operation(); }
       catch (error) {
         const cleanupFailures: unknown[] = [];
@@ -232,7 +251,7 @@ export class AgentEngine implements AgentController {
           cleanupFailures.push(reportingError);
         }
         if (cleanupFailures.length) this.reportError(new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed"));
-      }
+      } finally { release(); }
     }).finally(() => this.endActivity(issueId));
   }
 
@@ -274,10 +293,9 @@ export class AgentEngine implements AgentController {
       this.personalSessions.add(issue.id);
     }
 
+    const workDirectory = await prepareIssueWorkDirectory(this.stateRoot, issue.key);
     const project = await this.projectManager.prepare(issue, environmentKind, personalGit?.env);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
-    const workDirectory = issueWorkDirectory(this.stateRoot, issue.key);
-    await mkdir(workDirectory, { recursive: true, mode: 0o700 });
     await chmod(workDirectory, 0o700);
     const sessionDirectory = issueSessionRoot(this.stateRoot, issue.key);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
@@ -285,6 +303,15 @@ export class AgentEngine implements AgentController {
     const attachmentPath = issueAttachmentRoot(this.stateRoot, issue.key);
     await mkdir(attachmentPath, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(attachmentPath), 0o700), chmod(attachmentPath, 0o700)]);
+    const attachments = await this.database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
+    for (const attachment of attachments) {
+      if (path.dirname(attachment.objectKey) !== attachmentPath) throw new Error("insecure_issue_attachment_file");
+      const original = await lstat(attachment.objectKey);
+      if (!original.isFile() || (original.mode & 0o7777) !== 0o400 || original.size !== attachment.size) throw new Error("insecure_issue_attachment_file");
+      const copy = path.join(workDirectory, path.basename(attachment.objectKey));
+      try { await copyFile(attachment.objectKey, copy, constants.COPYFILE_EXCL); await chmod(copy, 0o600); }
+      catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error; }
+    }
     const environmentServices = await listEnvironmentServices(this.database, issue.environmentId, true);
     const queryServices = environmentServices.filter(row => row.environment.kind !== "dev");
     const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyProductionCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key, owner.credentials) }));
@@ -310,7 +337,6 @@ export class AgentEngine implements AgentController {
     const hadMessages = manager.buildSessionContext().messages.length > 0;
 
     const managed = await this.piRuntime.start({
-      resourceDirectory: agentResourceDirectory,
       runtime: agentConfiguration.runtime,
       workspaceRoot: workDirectory,
       context,

@@ -315,7 +315,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await mkdir(path.dirname(unknownMetadata), { recursive: true });
     await writeFile(unknownMetadata, "preserve\n", "utf8");
     const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
-    assert.deepEqual(blockedPreparation, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "workspace_has_untracked_files" }] });
+    assert.deepEqual(blockedPreparation, { prepared: [issue!.key], blocked: [] });
     assert.equal(await readFile(unknownMetadata, "utf8"), "preserve\n");
     await rm(path.dirname(unknownMetadata), { recursive: true });
     assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
@@ -340,10 +340,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const statsBeforeRelease = await lifecycle.stats();
     assert.equal(statsBeforeRelease.totalBytes > 0, true);
     assert.equal(statsBeforeRelease.workspaces[0]?.releasable, true);
+    const checkpoint = path.join(path.dirname(prepared[0]!.workspacePath), "checkpoint.json");
+    await writeFile(checkpoint, '{"remaining":10}\n');
     const released = await lifecycle.releaseIssue(issue!.id);
     assert.equal(released.alreadyReleased, false);
     assert.equal(released.releasedBytes > 0, true);
-    await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
+    assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
+    await Promise.all(prepared.map(worktree => assert.rejects(access(worktree.workspacePath))));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal(await readFile(sessionFile, "utf8"), "{}\n");
     assert.deepEqual(engine.closed, [issue!.id]);
@@ -372,7 +375,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     engine.closeError = new Error("stop_failed");
     await assert.rejects(lifecycle.reopenIssue(issue!.id), /stop_failed/);
     assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.status, "resolved");
-    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
     engine.closeError = undefined;
 
     const lifecycleDatabase = (lifecycle as unknown as { database: { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> } }).database;
@@ -387,7 +390,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     }) as typeof lifecycleDatabase.transaction;
     await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "simulated_restore_transaction_failure");
     lifecycleDatabase.transaction = runTransaction;
-    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
     assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null), true);
 
     const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
@@ -413,8 +416,10 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
     const unmanagedRootEntry = path.join(issueWorkspaceRoot(root, issue!.key), "unmanaged-root.sql");
     await writeFile(unmanagedRootEntry, "select 1;\n", "utf8");
-    await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_has_untracked_files");
+    await lifecycle.reopenIssue(issue!.id);
+    assert.equal(await readFile(unmanagedRootEntry, "utf8"), "select 1;\n");
     await unlink(unmanagedRootEntry);
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
 
     await database.db.update(issueRepositories).set({ workspaceName: "mismatched-name" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_path_does_not_match_repository");
@@ -448,9 +453,12 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       if (removalCount === restoredRows.length) await writeFile(concurrentRootEntry, "preserve root entry\n", "utf8");
       return commit;
     };
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_untracked_files");
+    await lifecycle.releaseIssue(issue!.id);
     lifecycleWorktrees.remove = removeWorktree;
     assert.equal(await readFile(concurrentRootEntry, "utf8"), "preserve root entry\n");
+    await Promise.all(restoredRows.map((repository) => assert.rejects(access(repository.localPath!))));
+    await lifecycle.reopenIssue(issue!.id);
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
     await unlink(concurrentRootEntry);
 
@@ -532,6 +540,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     };
 
     await reconstruct();
+    await writeFile(checkpoint, '{"remaining":10}\n');
     const retentionLifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
       retentionMs: 0,
       highWaterBytes: 0,
@@ -552,7 +561,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     }, prepareRuntime);
     const quota = await quotaLifecycle.maintain();
     assert.deepEqual(quota.released.map(({ issueKey }) => issueKey), [issue!.key]);
-    await assert.rejects(access(path.dirname(prepared[0]!.workspacePath)));
+    assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
+    await Promise.all(prepared.map(worktree => assert.rejects(access(worktree.workspacePath))));
 
     const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment!.id, config: {} });
@@ -687,7 +697,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal((await stat(path.join(runtimeRoot, "bin", "node-project"))).mode & 0o777, 0o700);
     const [session] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(session!.sessionFile, sessionFile);
-    assert.equal(session!.workspacePath, runtimeRoot);
+    assert.equal(session!.workspacePath, issueWorkspaceRoot(root, issue!.key));
     assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.equal((await stat(attachmentFile)).mode & 0o777, 0o400);

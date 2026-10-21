@@ -5,6 +5,7 @@ import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Send } from "../ui/icons";
 import { canUseIssueWorkMode, addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
+import { IssueFiles } from "./IssueFiles";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { OutputPreview } from "./OutputPreview";
@@ -356,6 +357,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         </section>
       </Show>
 
+      <Show when={props.issue.workingDirectory}><IssueFiles issue={props.issue} hidden={props.hidden} /></Show>
       <section class="attachment-band" aria-labelledby="attachments-title">
         <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
         <div class="issue-attachment-list">

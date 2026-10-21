@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { rmdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -289,7 +289,7 @@ export class WorkspaceLifecycleManager {
     ) throw new WorkspaceScopeMigrationRefusal("issue_not_migratable_between_development_scopes");
 
     await reservation.closeSession(issue.id);
-    const migrated = await this.projects.migrateDevelopmentScope(issue, target, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+    const migrated = await this.projects.migrateDevelopmentScope(issue, target, async ({ prepared, repositories, existingRepositories, names }) => {
       return this.database.transaction(async (transaction) => {
         const now = new Date();
         const existingByUrl = new Map(existingRepositories.map(repository => [repository.url, repository]));
@@ -304,7 +304,7 @@ export class WorkspaceLifecycleManager {
             commitBefore: existingByUrl.get(repository.url)?.commitBefore ?? worktree.baseCommit,
           };
         }), now);
-        await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
+        await transaction.update(agentSessions).set({ workspacePath: issueWorkspaceRoot(this.stateRoot, issue.key), updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
         await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
         const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
           .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
@@ -335,7 +335,7 @@ export class WorkspaceLifecycleManager {
     if (!developmentEnvironment) throw new WorkspaceConversionRefusal("development_environment_not_found");
     await reservation.closeSession(issue.id);
     try {
-      const converted = await this.projects.convertReadOnlyToDevelopment(issue, developmentEnvironment.id, async ({ prepared, repositories, existingRepositories, names, runtimeRoot }) => {
+      const converted = await this.projects.convertReadOnlyToDevelopment(issue, developmentEnvironment.id, async ({ prepared, repositories, existingRepositories, names }) => {
         return this.database.transaction(async (transaction) => {
           const now = new Date();
           await replaceIssueRepositoryRows(transaction, issue.id, existingRepositories, repositories.map(({ repository }, index) => {
@@ -349,7 +349,7 @@ export class WorkspaceLifecycleManager {
               commitBefore: worktree.baseCommit,
             };
           }), now);
-          await transaction.update(agentSessions).set({ workspacePath: runtimeRoot, updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
+          await transaction.update(agentSessions).set({ workspacePath: issueWorkspaceRoot(this.stateRoot, issue.key), updatedAt: now }).where(eq(agentSessions.issueId, issue.id));
           await transaction.delete(issueRelations).where(eq(issueRelations.issueId, issue.id));
           const [updatedWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, lastError: null, updatedAt: now })
             .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.status, "ready"))).returning({ issueId: issueWorkspaces.issueId });
@@ -393,7 +393,13 @@ export class WorkspaceLifecycleManager {
       return this.markReopened(issue);
     }
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
-    if (await pathExists(workspaceRoot)) throw new WorkspaceRestoreRefusal("workspace_path_already_exists");
+    if (await pathExists(workspaceRoot)) {
+      const names = issueRepositoryWorkspaceNames(repositories);
+      for (const name of names.values()) {
+        const metadata = await lstat(path.join(workspaceRoot, name)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
+        if (metadata) throw new WorkspaceRestoreRefusal("workspace_path_already_exists");
+      }
+    }
 
     try { developmentWorktreeMode(issue.type); issueRepositoryWorkspaceNames(repositories); }
     catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
@@ -467,7 +473,8 @@ export class WorkspaceLifecycleManager {
           workspacePath: repository.localPath!,
         })),
         finalize: async () => {
-          await rmdir(issueWorkspaceRoot(this.stateRoot, issue.key));
+          // The Issue working directory also owns durable scripts, attachments and checkpoints.
+          // Release only the registered worktrees; preserve the directory and other files.
           await this.markReleased(issue.id, repositories);
         },
       });
@@ -478,7 +485,8 @@ export class WorkspaceLifecycleManager {
       throw error;
     }
     await this.restoreDevelopmentRuntime(issue);
-    return { issueKey: issue.key, releasedBytes: inspection.bytes, alreadyReleased: false };
+    const remainingBytes = await directoryBytes(issueWorkspaceRoot(this.stateRoot, issue.key));
+    return { issueKey: issue.key, releasedBytes: Math.max(0, inspection.bytes - remainingBytes), alreadyReleased: false };
   }
 
   private async restoreDevelopmentRuntime(issue: Issue): Promise<void> {
@@ -511,7 +519,12 @@ export class WorkspaceLifecycleManager {
     else if (!await pathExists(workspaceRoot)) blockedReason = "workspace_missing";
     else {
       const repositories = knownRepositories ?? await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
-      if (classifyRepositoryState(repositories) !== "development_workspace") blockedReason = "development_repository_state_invalid";
+      const state = classifyRepositoryState(repositories);
+      if (state === "development_snapshot") {
+        const names = issueRepositoryWorkspaceNames(repositories);
+        const entries = await readdir(workspaceRoot);
+        blockedReason = entries.some((name) => [...names.values()].includes(name)) ? "development_repository_state_invalid" : "workspace_missing";
+      } else if (state !== "development_workspace") blockedReason = "development_repository_state_invalid";
       else try {
         issueRepositoryWorkspaceNames(repositories);
         await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));

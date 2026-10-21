@@ -1,0 +1,21 @@
+version: 1
+
+user:
+  subject: user@example.com
+
+apiKeys:
+  xhgj: "${MODEL_API_KEY}"
+
+ssh:
+  privateKey: "${GIT_SSH_PRIVATE_KEY}"
+
+sls:
+  accessKeyId: "${SLS_ACCESS_KEY_ID}"
+  accessKeySecret: "${SLS_ACCESS_KEY_SECRET}"
+
+dms:
+  url: https://dms.example.com/sse
+  authorization: "${DMS_AUTHORIZATION}"
+
+dingtalk:
+  apiKey: "${DINGTALK_MCP_KEY}"

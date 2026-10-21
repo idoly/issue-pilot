@@ -217,7 +217,9 @@ export class WorktreeManager {
       for (const worktree of input.worktrees) {
         const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
         const workspacePath = this.resolveIssueWorkspacePath(issueRoot, worktree.workspaceName, worktree.existingWorkspacePath);
-        if (!await pathExists(workspacePath)) created.push({ input: worktree, workspacePath });
+        const workspaceExists = await pathExists(workspacePath);
+        if (workspaceExists && !worktree.existingWorkspacePath) throw new Error("workspace_path_already_exists");
+        if (!workspaceExists) created.push({ input: worktree, workspacePath });
         prepared.push(await this.prepare(worktree));
       }
       return await input.finalize(prepared);

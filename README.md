@@ -10,7 +10,7 @@ Pi 提供模型会话、原生工具、Codemode 和 MCP 扩展；Issue Pilot 在
 - **代码开发**：为开发工单创建独立 Git worktree，在浏览器中编辑、查看差异和提交。
 - **数据处理**：通过 Node、Python/openpyxl 等普通脚本处理数据，生成并发布 `.xlsx` 等成果。
 - **持续协作**：实时查看 Agent 对话和工具执行，补充信息、关联工单、确认解决或继续处理。
-- **系统接入**：内建 MySQL、Redis、Nacos、RabbitMQ、Elasticsearch、DMS、SLS 查询，支持出站和入站 MCP。
+- **系统接入**：DMS 查询、aliyun SLS CLI，以及 MySQL 等外部 MCP；支持入站 MCP。
 
 ## 界面
 

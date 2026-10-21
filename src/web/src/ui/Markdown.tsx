@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { marked, Renderer } from "marked";
 import { createMemo } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
@@ -30,7 +30,19 @@ function renderMarkdown(source: string): string {
   return html;
 }
 
-export function Markdown(props: { source: string; cache?: boolean }) {
-  const html = createMemo(() => props.cache === false ? DOMPurify.sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source));
+export function Markdown(props: { source: string; cache?: boolean; resolveLink?: (href: string) => string | null | undefined }) {
+  const html = createMemo(() => {
+    if (!props.resolveLink) return props.cache === false ? DOMPurify.sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source);
+    const resolve = props.resolveLink;
+    const renderer = new Renderer();
+    const defaultLink = renderer.link;
+    renderer.link = function (token) {
+      const href = resolve(token.href);
+      if (href === null) return this.parser.parseInline(token.tokens);
+      const rendered = defaultLink.call(this, href === undefined ? token : { ...token, href });
+      return href === undefined ? rendered : rendered.replace("<a ", "<a download ");
+    };
+    return DOMPurify.sanitize(marked.parse(props.source, { async: false, renderer }) as string);
+  });
   return <div class="markdown markdown-body" innerHTML={html()} />;
 }

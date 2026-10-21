@@ -5,17 +5,12 @@ import { errorMessage, loadCapabilitySwitches, updateCapabilitySwitch, loadMcpSe
 import { CapabilityConfigurationDialog } from "./CapabilityConfigurationDialog";
 import { useApplicationResources } from "./ApplicationResources";
 
-const labels: Record<CapabilityName, string> = { nacos: "Nacos", db: "MySQL", redis: "Redis", mq: "RabbitMQ", es: "Elasticsearch", dms: "DMS", sls: "SLS" };
+const labels: Record<CapabilityName, string> = { dms: "DMS", sls: "SLS" };
 const descriptions: Record<CapabilityName, string> = {
-  nacos: "读取服务配置，核对环境参数与配置差异。",
-  db: "执行只读 SQL，查询业务数据并导出结果。",
-  redis: "查看缓存内容、键类型与过期时间。",
-  mq: "查看队列状态、积压与绑定关系，不消费消息。",
-  es: "检索索引数据，查看映射与统计结果。",
   dms: "通过 DMS 查询数据库，由服务端处理认证。",
   sls: "检索应用日志，按时间、条件或 Trace ID 排查问题。",
 };
-const typeNames = { http: "HTTP", mcp: "MCP", database: "数据库", redis: "Redis" };
+const typeNames = { mcp: "MCP", cli: "CLI" };
 const mcpTransports = { streamable_http: "Streamable HTTP", sse: "SSE", stdio: "stdio（本地进程）" };
 const parseJson = (value: string): McpServersInput => {
   let input: unknown;
@@ -27,7 +22,7 @@ const displayError = (cause: unknown) => ({ mcp_headers_not_supported: "HTTP 导
 
 export function CapabilityManagement() {
   const { currentUser, configuration, refreshConfiguration } = useApplicationResources();
-  const canConfigure = () => currentUser()?.role === "developer";
+  const canConfigure = () => currentUser()?.role === "developer" && !configuration().fileManaged?.services && !configuration().fileManaged?.mcp;
   const [configuring, setConfiguring] = createSignal<CapabilityName | null>(null, { ownedWrite: true });
   const [switches, setSwitches] = createSignal<CapabilitySwitchItem[]>([], { ownedWrite: true });
   const [mcp, setMcp] = createSignal<McpService[]>([], { ownedWrite: true });
@@ -76,7 +71,7 @@ export function CapabilityManagement() {
     if (row) await updateMcpService(row.id, input); else await importMcpServices(input);
     if (isCurrent()) closeEditor();
   });
-  return <main class="capability-configuration"><section class="user-management-card capability-management" aria-label="能力管理">
+  return <main class="capability-configuration"><Show when={configuration().fileManaged?.mcp}><div class="empty-band">MCP 由 mcp.json 管理，认证来自 user.yaml；修改后重启生效。</div></Show><section class="user-management-card capability-management" aria-label="能力管理">
     <header class="user-management-header"><div><strong>内建</strong><span>按服务和环境配置地址、目标与认证；这里统一管理开关。</span></div></header>
     <Show when={error() && !open()}><div role="alert" class="user-management-error">{error()}<Button size="small" onClick={() => { setError(""); void load(); }}>重试</Button></div></Show>
     <Show when={!loading() && switches().length === CAPABILITY_KEYS.length} fallback={<Show when={loading()}><div class="user-management-loading"><Skeleton active paragraph={{ rows: 7 }} /></div></Show>}>
@@ -87,14 +82,14 @@ export function CapabilityManagement() {
     </Show>
   </section>
   <section class="user-management-card capability-management" aria-label="外部能力管理">
-    <header class="user-management-header"><div><strong>外部</strong><span>通过 MCP 接入工具，启用后向所有工单提供全部工具，无需在服务或环境中选择。</span></div><Show when={currentUser()?.isAdmin}><Button type="primary" onClick={() => edit()}>添加</Button></Show></header>
+    <header class="user-management-header"><div><strong>外部</strong><span>通过 MCP 接入工具，启用后向所有工单提供全部工具，无需在服务或环境中选择。</span></div><Show when={currentUser()?.isAdmin && !configuration().fileManaged?.mcp}><Button type="primary" onClick={() => edit()}>添加</Button></Show></header>
     <Show when={!loading()} fallback={<Skeleton active paragraph={{ rows: 2 }} />}>
       <Show when={mcp().length} fallback={<p class="form-note">尚未添加外部能力，由管理角色通过 mcpServers JSON 添加。</p>}>
         <div class="capability-switch-list"><table class="capability-table" aria-label="MCP 工具列表"><thead><tr><th scope="col">名称</th><th scope="col">协议</th><th scope="col">适用范围</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><For each={mcp()}>{row => <tr class="capability-switch-row"><th scope="row">{row.name}</th><td><Tag>{mcpTransports[row.transport]}</Tag></td><td>所有工单</td><td><div class="capability-status"><Tag color={row.enabled ? "green" : "default"}>{row.enabled ? "开启" : "关闭"}</Tag><Show when={canConfigure()}><Toggle aria-label={`${row.name} MCP 开关`} checked={row.enabled} disabled={busy()} onChange={value => { void perform(() => updateMcpService(row.id, { name: row.name, url: row.url, transport: row.transport, enabled: value, credentialUpdate: { mode: "preserve" } })); }} /></Show></div></td><td><Show when={canConfigure()}><div class="capability-actions"><Button size="small" disabled={busy()} onClick={() => { void perform(async isCurrent => { const result = await testMcpService(row.id); if (isCurrent()) setTested(result.tools); }); }}>测试连接</Button><Button size="small" disabled={busy()} onClick={() => edit(row)}>配置</Button></div></Show></td></tr>}</For></tbody></table></div>
       </Show>
     </Show>
   </section>
-  <Modal open={open()} title={editing() ? "编辑 MCP" : "添加"} okText={editing() ? "保存" : "添加"} confirmLoading={busy()} okButtonProps={{ disabled: loadingEditor() || !jsonText().trim() }} footerExtra={<Show when={editing()}><Button danger disabled={busy() || loadingEditor()} onClick={() => setDeleting(true)}>删除</Button></Show>} onCancel={closeEditor} onOk={() => { void save(); }}><Show when={!loadingEditor()} fallback={<Skeleton active paragraph={{ rows: 6 }} />}><TextArea aria-label="mcpServers JSON" rows={12} autocomplete="off" spellcheck={false} value={jsonText()} placeholder={'{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@0.0.83","--headless","--isolated"]}}}'} onInput={event => setJsonText(event.currentTarget.value)} /></Show><Show when={error()}><div role="alert" class="form-error">{error()}</div></Show></Modal>
+  <Modal open={open()} title={editing() ? "编辑 MCP" : "添加"} okText={editing() ? "保存" : "添加"} confirmLoading={busy()} okButtonProps={{ disabled: loadingEditor() || !jsonText().trim() }} footerExtra={<Show when={editing()}><Button danger disabled={busy() || loadingEditor()} onClick={() => setDeleting(true)}>删除</Button></Show>} onCancel={closeEditor} onOk={() => { void save(); }}><Show when={!loadingEditor()} fallback={<Skeleton active paragraph={{ rows: 6 }} />}><TextArea aria-label="mcpServers JSON" rows={12} autocomplete="off" spellcheck={false} value={jsonText()} placeholder={'{"mcpServers":{"mysql":{"type":"stdio","command":"npx","args":["-y","@benborla29/mcp-server-mysql"]}}}'} onInput={event => setJsonText(event.currentTarget.value)} /></Show><Show when={error()}><div role="alert" class="form-error">{error()}</div></Show></Modal>
   <Modal open={deleting()} title="删除" okText="删除" confirmLoading={busy()} okButtonProps={{ danger: true }} onCancel={() => setDeleting(false)} onOk={() => { const row = editing(); if (row) void perform(async isCurrent => { await deleteMcpService(row.id); if (isCurrent()) { setDeleting(false); closeEditor(); } }); }}><p>删除 {editing()?.name}？</p><Show when={error()}><div role="alert">{error()}</div></Show></Modal>
   <Modal open={tested() !== null} title="连接测试" okText="关闭" onOk={() => setTested(null)} onCancel={() => setTested(null)}><For each={tested() ?? []} fallback={<p>未提供工具</p>}>{tool => <p><code>{tool.name}</code> · {tool.readOnly ? "只读" : "非只读"}</p>}</For></Modal>
   <Show when={configuring()}>{key => <CapabilityConfigurationDialog capability={key()} onClose={() => setConfiguring(null)} />}</Show>

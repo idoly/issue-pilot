@@ -10,9 +10,9 @@ function context(environmentKind: "dev" | "prod", repositoryAccess: Array<"read"
     issueKey: "ISSUE-20260804-001",
     issueType: issueType as "defect_fix" | "smart_analysis" | "data_processing",
     agentConfiguration: agent,
-    enabledCapabilities: ["redis"],
+    enabledCapabilities: ["sls"],
     deploymentConfig: {
-      redis: { host: "redis.example.test", port: 6379, username: "reader", password: "secret", database: 0 },
+      sls: { region: "cn-test", project: "orders-test", logstores: ["application"], accessKeyId: "reader", accessKeySecret: "secret" },
     },
     serviceKey: "orders",
     environmentKey: environmentKind,
@@ -23,8 +23,8 @@ function context(environmentKind: "dev" | "prod", repositoryAccess: Array<"read"
 
 test("keeps Agent session context small and credential-free", () => {
   const value = context("prod");
-  assert.deepEqual(value.capabilities, ["redis"]);
-  assert.doesNotMatch(JSON.stringify(value), /redis\.example\.test|reader|secret/);
+  assert.deepEqual(value.capabilities, ["sls"]);
+  assert.doesNotMatch(JSON.stringify(value), /orders-test|reader|secret/);
   assert.deepEqual(sessionToolAllowlist(value), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 

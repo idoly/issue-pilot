@@ -126,7 +126,7 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
     let sequence = 0;
     const publish = (event: RunEvent["event"], id = `live-${++sequence}`) => events.publish({ id, issueId, createdAt: new Date().toISOString(), event });
-    managed = await runtime.start({ manager, resourceDirectory: fixture.root, workspaceRoot: work, context: { issueKey: key, serviceKey: "snapshot-race", environmentKey: "test", model: { provider: "stream-fixture", modelId: "model", thinkingLevel: "off" }, codemode: "off", capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Use the native read tool.", onEvent: publish });
+    managed = await runtime.start({ manager, agentDirectory: fixture.root, workspaceRoot: work, context: { issueKey: key, serviceKey: "snapshot-race", environmentKey: "test", model: { provider: "stream-fixture", modelId: "model", thinkingLevel: "off" }, codemode: "off", capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Use the native read tool.", onEvent: publish });
     const session = managed;
     const repeated = fauxAssistantMessage("Same reply.", { timestamp: Date.now() });
     faux.setResponses([fauxAssistantMessage(fauxToolCall("read", { path: "evidence.txt" }, { id: "snapshot-read" }), { stopReason: "toolUse" }), repeated, repeated]);

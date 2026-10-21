@@ -51,7 +51,7 @@ async function waitForMcp(managed: Awaited<ReturnType<PiSessionRuntime["start"]>
   throw new Error("mcp_tools_not_ready");
 }
 
-function context(options: { writable: boolean; capability?: "db"; outputs?: boolean }): AgentSessionContext {
+function context(options: { writable: boolean; capability?: "dms"; outputs?: boolean }): AgentSessionContext {
   return {
     issueKey: "ISSUE-20260808-001",
     serviceKey: "orders",
@@ -118,7 +118,7 @@ test("maps the current user to Git author and committer environment", () => {
 });
 
 test("uses native coding tools independently of repository access policy", () => {
-  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "db" })), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "dms" })), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 
 test("keeps output publication limited to data-processing contexts", () => {

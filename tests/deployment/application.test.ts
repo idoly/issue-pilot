@@ -17,8 +17,8 @@ test("builds one application image with the required project tools", async () =>
   assert.match(containerfile, /ARG GIT_VERSION=2\.53\.0/);
   assert.match(containerfile, /git-\$\{GIT_VERSION\}\.tar\.xz/);
   assert.match(containerfile, /COPY --from=git \/opt\/git \/opt\/git/);
-  assert.doesNotMatch(containerfile, /ALIYUN_CLI_VERSION|aliyun-cli|\/usr\/local\/bin\/aliyun/);
-  assert.doesNotMatch(containerfile, /sha256sum|checksum/);
+  assert.match(containerfile, /ARG ALIYUN_CLI_VERSION=3\.4\.11/);
+  assert.match(containerfile, /\/usr\/local\/bin aliyun/);
   assert.match(containerfile, /COPY --from=maven \/opt\/java\/openjdk/);
   assert.match(containerfile, /COPY --from=maven \/usr\/share\/maven/);
   assert.match(containerfile, /node_modules\/\.bin\/pi/);

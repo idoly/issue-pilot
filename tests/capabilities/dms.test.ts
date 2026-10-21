@@ -466,6 +466,33 @@ test("distinguishes publication failure from SQL failure and preserves the previ
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("resolves an alias/schema file target before dispatching SQL and validates SQL before discovery", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const fixture = fixtureSession({
+    async listTools() { return [listInstancesTool, getDatabaseTool, executeScriptTool]; },
+    async callTool(name, args) {
+      calls.push({ name, args });
+      const result = name === "listInstances" ? { InstanceAlias: "ORDERS-PROD", InstanceId: "456", Host: "db.example.test", Port: 3306, InstanceType: "mysql", EnvType: "prod" }
+        : name === "getDatabase" ? { DatabaseId: "123", InstanceId: "456", SchemaName: "orders" } : undefined;
+      return { content: result ? [{ type: "text", text: JSON.stringify(result) }] : [] };
+    },
+  });
+  const unresolved = { ...configured, databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" }] };
+  await assert.rejects(queryDms({ schema: "orders", script: "DELETE FROM orders" }, unresolved, undefined, fixture.connect), /database_query_must_be_read_only/);
+  assert.equal(fixture.connections.length, 0);
+  await queryDms({ schema: "orders", script: "SELECT 1" }, unresolved, undefined, fixture.connect);
+  assert.deepEqual(calls.map(call => call.name), ["listInstances", "getDatabase", "executeScript"]);
+  assert.equal(calls[2]!.args.database_id, "123");
+  assert.equal(fixture.closes(), 2);
+  await queryDms({ schema: "orders", script: "SELECT 1" }, unresolved, undefined, fixture.connect);
+  assert.equal(calls.filter(call => call.name === "listInstances").length, 1);
+  assert.equal(fixture.closes(), 3);
+  unresolved.authorization = "Bearer changed-fixture-identity";
+  await queryDms({ schema: "orders", script: "SELECT 1" }, unresolved, undefined, fixture.connect);
+  assert.equal(calls.filter(call => call.name === "listInstances").length, 2);
+  assert.equal(fixture.closes(), 5);
+});
+
 test("calls only MCP executeScript and binds it to the configured deployment database", async () => {
   const fixture = fixtureSession({ async listTools() { return [readOnlyTool, executeScriptTool]; } });
   const result = await queryDms({ schema: "orders", script: "SELECT COUNT(*) FROM suppliers;", logic: false }, configured, undefined, fixture.connect);

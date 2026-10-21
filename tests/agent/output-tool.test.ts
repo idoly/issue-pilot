@@ -24,8 +24,10 @@ test("publishes any file bytes atomically without a format-specific operation", 
     assert.deepEqual(await store.read("delivered.custom"), bytes);
     assert.match(JSON.stringify(result.content), /delivered.custom/);
     assert.equal("content" in JSON.parse(text(result)).output, false);
+    assert.equal(JSON.parse(text(result)).output.downloadPath, "/api/issues/ISSUE-20261017-001/outputs/delivered.custom");
     const listed = await invoke(tool, { operation: "list" });
     assert.equal(JSON.parse(text(listed)).directory, store.directory);
+    assert.equal(JSON.parse(text(listed)).outputs[0].downloadPath, "/api/issues/ISSUE-20261017-001/outputs/delivered.custom");
     await assert.rejects(invoke(tool, { operation: "execute", fileName: "invalid" }), /invalid_output_input/);
     await assert.rejects(invoke(tool, { operation: "publish", sourcePath: "data.custom", fileName: "../escape" }), /invalid_output_file_name/);
     assert.deepEqual(await readFile(path.join(work, "data.custom")), bytes);

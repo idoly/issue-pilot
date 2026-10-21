@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext, type Tool } from "@earendil-works/pi-ai";
-import { ModelRuntime, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { defineTool, ModelRuntime, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentCodemodeMode } from "../../src/domain/contracts.ts";
 import { PiSessionRuntime, createPrivateSessionManager, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { IssueOutputStore } from "../../src/outputs/store.ts";
@@ -20,7 +21,7 @@ async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessio
   const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
   const events: JsonAgentSessionEvent[] = [];
   const manager = await createPrivateSessionManager(root, path.join(root, "sessions"));
-  const options: StartPiSessionOptions = { manager, workspaceRoot: root, context: { issueKey: "ISSUE-20261017-001", serviceKey: "entry", environmentKey: "prod", codemode: mode, model: { provider: "codemode-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Use configured tools to investigate the Issue.", onEvent: event => events.push(event), ...overrides };
+  const options: StartPiSessionOptions = { agentDirectory: root, manager, workspaceRoot: root, context: { issueKey: "ISSUE-20261017-001", serviceKey: "entry", environmentKey: "prod", codemode: mode, model: { provider: "codemode-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Use configured tools to investigate the Issue.", onEvent: event => events.push(event), ...overrides };
   return { root, models, runtime, options, faux, events, close: async () => { await runtime.close(); await rm(root, { recursive: true, force: true }); } };
 }
 function declaredTools(context: TranscriptContext) {
@@ -30,6 +31,9 @@ function declaredTools(context: TranscriptContext) {
     for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name);
   }
   return tools;
+}
+function evidenceTool(url: string) {
+  return defineTool({ name: "evidence_read", label: "Fixture evidence", description: "Read isolated fixture evidence.", parameters: Type.Object({}), execute: async (_id, _input, signal) => ({ content: [{ type: "text", text: await (await fetch(url, signal ? { signal } : {})).text() }], details: undefined }) });
 }
 const call = (code: string, id = "script") => fauxAssistantMessage(fauxToolCall("codemode", { code }, { id }), { stopReason: "toolUse" });
 
@@ -47,9 +51,8 @@ test("queues Codemode scripts across three sessions instead of exceeding SDK wor
   try {
     for (let index = 0; index < 3; index++) {
       const f = await fixture("on"); fixtures.push(f);
-      f.options.context.capabilities = ["nacos"];
-      f.options.deploymentConfig = { nacos: { serverUrl: `http://127.0.0.1:${address.port}`, namespace: "", group: "DEFAULT_GROUP", dataIds: ["app.yaml"], username: "" } };
-      f.faux.setResponses([call('return await tools.service_query({environment:"prod",service:"entry",capability:"nacos"});'), fauxAssistantMessage("Script finished.")]);
+      f.options.workspaceTool = evidenceTool(`http://127.0.0.1:${address.port}`);
+      f.faux.setResponses([call('return await tools.evidence_read({});'), fauxAssistantMessage("Script finished.")]);
       sessions.push(await f.runtime.start(f.options));
     }
     await Promise.all(sessions.map(managed => managed.prompt("Read the configured evidence.")));
@@ -87,7 +90,7 @@ for (const mode of ["off", "on", "only"] as const) test(`loads the explicit ${mo
 for (const nested of [false, true]) test(`${nested ? "codemode" : "direct"} calls reject invalid arguments introduced by an extension hook`, async () => {
   const f = await fixture("on"); let managed;
   const outputs = new IssueOutputStore(f.root, f.options.context.issueKey);
-  f.options.context.canWriteOutputs = true; f.options.outputStore = outputs; f.options.resourceDirectory = f.root;
+  f.options.context.canWriteOutputs = true; f.options.outputStore = outputs; f.options.agentDirectory = f.root;
   try {
     await mkdir(path.join(f.root, "extensions"));
     await writeFile(path.join(f.root, "extensions", "mutator.ts"), "export default pi => pi.on('tool_call', event => { if(event.toolName === 'output') event.input.operation = 'unsupported'; });\n");
@@ -151,7 +154,7 @@ for (const withTool of [false, true]) test(`keeps the model response timeout act
   } finally { clearTimeout(safety); release?.(); await managed?.stop(); await f.close(); }
 });
 
-test("batches structured service reads, validates each source and keeps intermediate results out of the transcript", { timeout: 15_000 }, async () => {
+test("batches evidence reads while enforcing native source and SQL boundaries", { timeout: 15_000 }, async () => {
   let active = 0, parallel = false, requests = 0;
   const waiting: Array<() => void> = [];
   const server = createServer((_request, response) => {
@@ -162,19 +165,20 @@ test("batches structured service reads, validates each source and keeps intermed
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const f = await fixture("on"); let managed;
-  const config = { nacos: { serverUrl: `http://127.0.0.1:${address.port}`, namespace: "", group: "DEFAULT_GROUP", dataIds: ["app.yaml"], username: "" }, db: { databases: [{ url: "mysql://db.example.test:3306/fixture", username: "reader", password: "private-config-token" }] } };
-  f.options.context.capabilities = ["nacos", "db"];
+  const config = { dms: { url: "https://dms.example.test/sse", authorization: "Bearer private-config-token", databases: [{ instanceAlias: "FIXTURE", schemaName: "fixture", instanceId: "1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "1" }] } };
+  f.options.context.capabilities = ["dms"];
+  f.options.workspaceTool = evidenceTool(`http://127.0.0.1:${address.port}`);
   f.options.serviceScopes = [
     { environmentKey: "prod", serviceKey: "first", serviceName: "First", config },
     { environmentKey: "prod", serviceKey: "second", serviceName: "Second", config },
   ];
   const code = `const results = await Promise.allSettled([
-    tools.service_query({environment:"prod",service:"first",capability:"nacos"}),
-    tools.service_query({environment:"prod",service:"second",capability:"nacos"}),
-    tools.service_query({environment:"test",service:"first",capability:"nacos"}),
-    tools.service_query({environment:"prod",service:"first",capability:"db",database:"fixture",statement:"DELETE FROM orders"})
+    tools.evidence_read({}),
+    tools.evidence_read({}),
+    tools.service_query({environment:"test",service:"first",capability:"dms",schema:"fixture",script:"SELECT 1"}),
+    tools.service_query({environment:"prod",service:"first",capability:"dms",schema:"fixture",script:"DELETE FROM orders"})
   ]);
-  return results.map(result => result.status === "fulfilled" ? {count:result.value.configurations.length} : {error:result.reason.message});`;
+  return results.map(result => result.status === "fulfilled" ? {count:JSON.stringify(result.value).length} : {error:result.reason.message});`;
   try {
     f.faux.setResponses([call(code), context => {
       const result = context.messages.find(message => message.role === "toolResult" && message.toolName === "codemode");
@@ -186,7 +190,7 @@ test("batches structured service reads, validates each source and keeps intermed
     managed = await f.runtime.start(f.options); await managed.prompt("Compare the configured evidence.");
     assert.equal(parallel, true); assert.equal(requests, 2);
     assert.equal(managed.session.getLastAssistantText(), "Two sources checked; unauthorized source rejected.");
-    assert.ok(f.events.some(event => event.type === "tool_execution_start" && event.parentToolCallId === "script" && event.toolName === "service_query"));
+    assert.ok(f.events.some(event => event.type === "tool_execution_start" && event.parentToolCallId === "script" && event.toolName === "evidence_read"));
     assert.doesNotMatch(await readFile(f.options.manager.getSessionFile()!, "utf8"), /intermediate-evidence-marker/);
   } finally { for (const finish of waiting.splice(0)) finish(); await managed?.stop(); await f.close(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
@@ -275,10 +279,9 @@ test("cancels nested evidence requests and permits another script after abort", 
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const f = await fixture("on"); let managed;
-  f.options.context.capabilities = ["nacos"];
-  f.options.deploymentConfig = { nacos: { serverUrl: `http://127.0.0.1:${address.port}`, namespace: "", group: "DEFAULT_GROUP", dataIds: ["app.yaml"], username: "" } };
+  f.options.workspaceTool = evidenceTool(`http://127.0.0.1:${address.port}`);
   try {
-    f.faux.setResponses([call('return await tools.service_query({environment:"prod",service:"entry",capability:"nacos"});'), call('return {resumed:true};', "after-abort"), fauxAssistantMessage("Resumed after cancellation.")]);
+    f.faux.setResponses([call('return await tools.evidence_read({});'), call('return {resumed:true};', "after-abort"), fauxAssistantMessage("Resumed after cancellation.")]);
     managed = await f.runtime.start(f.options);
     const pending = managed.prompt("Read the evidence.");
     await began; await managed.session.abort(); await pending; await closed;

@@ -1,10 +1,7 @@
 import { CAPABILITY_KEYS, type CapabilityName } from "../../../domain/contracts";
 import { CAPABILITY_CREDENTIALS, type CapabilityConfigurationInput, type CapabilityCredentialUpdate, type CapabilityCredentialValues, type ProjectedCapabilitySection } from "../../../configuration/contracts";
 
-type DbProjectedTarget = ProjectedCapabilitySection<"db">["databases"][number];
-type CapabilityCredentialDraft<Key extends CapabilityName> = Key extends "db"
-  ? { databases: Array<DbProjectedTarget & { password: string; credentialEnabled: boolean }> }
-  : ProjectedCapabilitySection<Key> & CapabilityCredentialValues<Key> & { credentialEnabled: boolean };
+type CapabilityCredentialDraft<Key extends CapabilityName> = ProjectedCapabilitySection<Key> & CapabilityCredentialValues<Key> & { credentialEnabled: boolean };
 type CapabilityDraftConfiguration = { [Key in CapabilityName]?: CapabilityCredentialDraft<Key> };
 
 export type DeploymentCapabilityDraft = CapabilityDraftConfiguration & {
@@ -22,11 +19,6 @@ function credentialUpdate<Key extends CapabilityName>(key: Key, draft: Record<st
 }
 
 const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
-  nacos: (draft) => ({ serverUrl: draft.serverUrl.trim(), namespace: draft.namespace.trim(), group: draft.group.trim(), dataIds: [...draft.dataIds], username: draft.credentialEnabled ? draft.username.trim() : "", credentialUpdate: credentialUpdate("nacos", draft) }),
-  db: (draft) => ({ databases: draft.databases.map((database) => ({ url: database.url.trim(), username: database.username.trim(), credentialUpdate: credentialUpdate("db", database) })) }),
-  redis: (draft) => ({ host: draft.host.trim(), port: draft.port, username: draft.username.trim(), database: draft.database, credentialUpdate: credentialUpdate("redis", draft) }),
-  mq: (draft) => ({ host: draft.host.trim(), managementPort: draft.managementPort, username: draft.username.trim(), virtualHost: draft.virtualHost.trim(), credentialUpdate: credentialUpdate("mq", draft) }),
-  es: (draft) => ({ url: draft.url.trim(), username: draft.credentialEnabled ? draft.username.trim() : "", credentialUpdate: credentialUpdate("es", draft) }),
   dms: (draft) => ({
     url: draft.url.trim(),
     databases: draft.databases.map((database) => ({

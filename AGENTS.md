@@ -36,7 +36,6 @@ Before an authorized operational change, follow the Runbook, including its bound
 | Shared data and Agent editing state | ApplicationResources.tsx, agent-configuration.ts |
 | SSE and conversation projection | agent-stream.ts, conversation.ts, AgentPanel.tsx |
 | Code browser | CodeBrowser.tsx, SourceText.tsx, SourceDiff.tsx, monaco.ts, src/workspace/source-browser.ts |
-| Browser verification | scripts/playwright.sh |
 
 Routes coordinate owners; they do not reimplement Git, protocols, attachment storage or command authorization. Prefer public Pi APIs and small local helpers over new generic layers.
 
@@ -70,9 +69,11 @@ For each confirmed finding, give location, evidence, effect, reasonable trigger,
 - Personal production DMS/SLS groups override independently and completely. Missing groups use deployment configuration; they do not create absent targets.
 - Ordinary configuration GET projects credentials out. Developer-only selected descriptions/MCP configuration may expose their documented values; native DMS Authorization and SLS keys remain hidden. Secrets never enter prompts, tool input, argv, diagnostics or ordinary logs.
 - Native evidence queries retain exact source/target and read-only checks. Development queries explicitly select prod/test; code include/remove stays in the Issue environment.
-- Enabled external MCP services are global and expose all configured tools to all Issues through Pi's MCP extension. Read-only hints are descriptive, not authorization. Keep DB ownership, literal private configuration, transport compatibility, cancellation and input/result budgets; let Pi own discovery, dynamic registration, connections and shutdown.
+- Resources use the running user's global Pi configuration; the application does not maintain a separate skills/extensions directory. Protect application tool names and keep global resource inspection free of extension execution.
+- Enabled external MCP services expose configured tools through Pi's public MCP integration. Read-only hints are descriptive, not authorization. Preserve authoritative file configuration (or DB configuration when files are absent), literal credentials, SDK transport compatibility, cancellation and input/result budgets; Pi owns discovery, registration, connections and shutdown.
+- Native capabilities are DMS and aliyun SLS CLI; MySQL uses configured external MCP. Retired adapter settings remain private historical state and must not execute or appear in public configuration.
 - Prod/test use read-only snapshots, active dev uses isolated worktrees, released dev restores from local working branches. Source API enforces repository policy; historical branch and workspace names remain history.
-- Agent native coding tools run as the trusted application user in persistent `issues/<key>/work`. Cwd organizes work and is not OS isolation; native code can bypass business file policies.
+- Agent native coding tools run as the trusted application user in persistent `workspaces/<key>` alongside Issue worktrees. Cwd organizes work and is not OS isolation; native code can bypass business file policies.
 - Use normal code and installed libraries for formats. Do not add format-specific executors, nested sandboxes or a selectable runtime framework without a concrete need.
 - Attachments have one durable 0400 regular file validated against DB size/hash. Writes belong to Issue transactions. Pasted Agent images belong to Pi messages, not attachment storage.
 - Outputs publish atomically from regular work files, preserving working sources and old deliveries on failure. Runtime/wrappers/checkouts are generated; abnormal or unknown state still requires owner inspection.
@@ -104,6 +105,6 @@ npm run build
 git diff --check
 ```
 
-On constrained machines use backend `--test-concurrency=2` and Vitest `--maxWorkers=1` as described in Development. Runtime, dependency, protocol security or container changes also require production dependency audit, browser harness status and available deployment health checks. Real-state operations require integrity/FK, file modes, Git refs/worktrees and unmanaged-directory checks from the Runbook.
+On constrained machines use backend `--test-concurrency=2` and Vitest `--maxWorkers=1` as described in Development. Runtime, dependency, protocol security or container changes also require production dependency audit and available deployment health checks. Real-state operations require integrity/FK, file modes, Git refs/worktrees and unmanaged-directory checks from the Runbook.
 
 Cover failure, retry, cancellation, repeated calls, rollback/finalize and shutdown where relevant. Keep HTTP and Web DTOs aligned and update the owning document. Inspect the final diff for unrelated work, state, generated artifacts and secrets. Report changes, checks and material gaps; do not claim tests prove all code safe or every unused path found.

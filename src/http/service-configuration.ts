@@ -76,7 +76,12 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
 }
 
 async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: string, environmentId: string, existing: typeof serviceDeployments.$inferSelect | undefined, input: ReturnType<typeof parseServiceDeployment>, repositories: Map<string, { id: string }>) {
-  const values = { config: input.config, updatedAt: new Date() };
+  const retired = Object.fromEntries(Object.entries(existing?.config ?? {}).filter(([key]) => !CAPABILITY_KEYS.includes(key as CapabilityName)));
+  const values = { config: { ...retired, ...input.config }, updatedAt: new Date() };
+  if (existing && JSON.stringify(existing.config) === JSON.stringify(values.config)) {
+    const branches = await executor.select().from(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, existing.id));
+    if (branches.length === input.repositoryBranches.length && input.repositoryBranches.every(branch => branches.some(current => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))) return existing;
+  }
   const [saved] = existing
     ? await executor.update(serviceDeployments).set(values).where(eq(serviceDeployments.id, existing.id)).returning()
     : await executor.insert(serviceDeployments).values({ serviceId, environmentId, ...values }).returning();

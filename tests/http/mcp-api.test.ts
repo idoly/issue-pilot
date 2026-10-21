@@ -66,10 +66,25 @@ test("MCP availability is global and historical deployment bindings do not block
   } finally { database.close(); await f.cleanup(); }
 });
 
+test("keeps query credentials private and preserves them when toggling a projected MCP URL", async () => {
+  const f = await createApiFixture();
+  try {
+    const added = await f.app.inject({ method: "POST", url: "/api/mcp-services", payload: { ...input, url: "https://mcp.example.test/mcp?key=private-query-key" } });
+    assert.equal(added.statusCode, 201, added.body);
+    const row = added.json();
+    assert.equal(row.url, "https://mcp.example.test/mcp");
+    assert.doesNotMatch(added.body, /private-query-key/);
+    const toggled = await f.app.inject({ method: "PATCH", url: `/api/mcp-services/${row.id}`, payload: { name: row.name, url: row.url, transport: row.transport, enabled: true, credentialUpdate: { mode: "preserve" } } });
+    assert.equal(toggled.statusCode, 200, toggled.body);
+    const selected = await f.app.inject({ method: "GET", url: `/api/mcp-services/${row.id}/configuration` });
+    assert.equal(selected.json().mcpServers.Docs.url, "https://mcp.example.test/mcp?key=private-query-key");
+  } finally { await f.cleanup(); }
+});
+
 test("rejects unsafe MCP URLs and unauthorized changes", async () => {
   const f = await createApiFixture();
   try {
-    for (const url of ["http://example.test/mcp", "https://token@example.test/mcp", "https://example.test/mcp?apiKey=secret", "file:///tmp/mcp"]) {
+    for (const url of ["http://example.test/mcp", "https://token@example.test/mcp", "file:///tmp/mcp"]) {
       const response = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: { ...input, url } });
       assert.equal(response.statusCode, 400, response.body);
     }

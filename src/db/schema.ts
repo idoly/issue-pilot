@@ -50,7 +50,7 @@ export const capabilitySwitches = sqliteTable("capability_switches", {
   key: text("key", { enum: CAPABILITY_KEYS }).primaryKey(),
   enabled: integer("enabled", { mode: "boolean" }).notNull(),
   updatedAt: date("updated_at").notNull().$defaultFn(() => new Date()),
-}, (table) => [check("capability_switch_key_valid", sql`${table.key} IN ('nacos','db','redis','mq','es','dms','sls')`)]);
+}, (table) => [check("capability_switch_key_valid", sql`${table.key} IN ('dms','sls')`)]);
 
 export const globalAgentConfiguration = sqliteTable("global_agent_configuration", {
   id: integer("id").primaryKey(),

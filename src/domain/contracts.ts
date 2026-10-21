@@ -28,9 +28,9 @@ export const MCP_TRANSPORTS = ["streamable_http", "sse", "stdio"] as const;
 export type McpTransport = typeof MCP_TRANSPORTS[number];
 export interface McpStdioConfiguration { command: string; args: string[]; env: Record<string, string>; cwd?: string }
 
-export const CAPABILITY_KEYS = ["nacos", "db", "redis", "mq", "es", "dms", "sls"] as const;
+export const CAPABILITY_KEYS = ["dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
-export const CAPABILITY_TYPES = { nacos: "http", db: "database", redis: "redis", mq: "http", es: "http", dms: "mcp", sls: "http" } as const;
+export const CAPABILITY_TYPES = { dms: "mcp", sls: "cli" } as const;
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];
@@ -73,17 +73,21 @@ export interface AgentFooterStats {
 }
 
 export interface CapabilityConfiguration {
+  dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
+  sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[]; targets?: Array<{ name: string; region: string; project: string; logstores: string[] }> };
+}
+
+/** Historical private deployment fields retained for migration/recovery; never executed or projected. */
+interface RetiredCapabilityConfiguration {
   nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string };
   db?: { databases: Array<{ url: string; username: string; password: string }> };
-  dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
-  sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[] };
   redis?: { host: string; port: number; username: string; password?: string; database: number };
   mq?: { host: string; managementPort: number; username: string; password: string; virtualHost: string };
   es?: { url: string; username: string; password?: string };
 }
 
 export type DeploymentConfig = CapabilityConfiguration;
-export type StoredDeploymentConfig = CapabilityConfiguration & {
+export type StoredDeploymentConfig = CapabilityConfiguration & RetiredCapabilityConfiguration & {
   /** Private pre-upgrade development settings; never projected or executed. */
   archivedDevelopment?: unknown;
   /** Historical deployment bindings; MCP availability is now global. */

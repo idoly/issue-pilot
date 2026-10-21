@@ -15,8 +15,8 @@ test("accepts only current date-sequence issue keys", () => {
 });
 
 test("keeps the Agent capability catalog in its shared display order", () => {
-  assert.deepEqual(CAPABILITY_KEYS, ["nacos", "db", "redis", "mq", "es", "dms", "sls"]);
-  assert.deepEqual(configuredCapabilities({ db: { databases: [{ url: "mysql://db.example.test:3306/app", username: "reader", password: "secret" }] } }), ["db"]);
+  assert.deepEqual(CAPABILITY_KEYS, ["dms", "sls"]);
+  assert.deepEqual(configuredCapabilities({ sls: {} }), ["sls"]);
 });
 
 test("maps each Issue work mode to one valid environment and type", () => {

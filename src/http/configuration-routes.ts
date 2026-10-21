@@ -67,7 +67,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     }
   });
   app.get("/api/catalog", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); return runScopeExclusive(() => loadConfigurationCatalog(database.db)); });
-  app.get("/api/config", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog)); });
+  app.get("/api/config", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(async () => ({ ...await loadConfiguration(database.db, modelCatalog), fileManaged: context.fileConfiguration ?? { services: false, mcp: false } })); });
   app.put("/api/config/agent", async (request) => runScopeExclusive(async () => {
     await requireDeveloper(database, request);
     const input = record(request.body);

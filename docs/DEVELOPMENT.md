@@ -38,7 +38,6 @@ npx vitest run --config src/web/vite.config.ts --environment jsdom --maxWorkers=
 ```bash
 npm audit --omit=dev --audit-level=high
 .venv/bin/python3 -m pip check
-scripts/playwright.sh status
 ```
 
 | 检查 | 主要验证 |
@@ -47,7 +46,6 @@ scripts/playwright.sh status
 | Node tests | 业务边界、队列、事务、Git、文件及协议夹具 |
 | Vitest/jsdom | 页面状态、交互、取消及公共适配 |
 | Vite build | 网页、Worker、字体和许可证资源 |
-| Playwright | 实际浏览器编辑、布局、字体和加载 |
 | 容器/部署验收 | 运行时、权限、挂载和恢复流程 |
 
 测试脚本将递归 glob 作为一个带引号的参数交给 Node 发现文件，覆盖 tests 根目录与多层子目录，不依赖 shell 的 globstar 设置。
@@ -91,10 +89,6 @@ Solid 2 使用 `createEffect(compute, callback)`，callback 只返回清理函�
 
 Monaco 使用公开 editor/model API，组件负责释放资源。修改时保留 SHA-256、CRLF、自动保存、撤销、只读与冲突语义。图标与字体配置由 `ui/icons.tsx`、`EditorIcons.tsx` 和 Vite 构建维护。
 
-```bash
-scripts/playwright.sh run <script> <existing-output-directory>
-```
-
-浏览器验证默认拦截 API mutation，使用演示数据；只在独立夹具中放行必要写入。README 截图使用当前前端和演示数据，不采集真实工单、凭证或私有配置。
+网页状态与交互由 Vitest/jsdom 验证，文件下载与服务协议由隔离 HTTP fixture 验证。项目不再维护 Playwright 工具链或浏览器 MCP 默认能力。README 截图使用演示数据，不采集真实工单、凭证或私有配置。
 
 交付时报告改动、验证与缺口；未授权不提交、推送、重启或修改线上状态。
