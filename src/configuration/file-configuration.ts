@@ -7,6 +7,7 @@ import type { Database } from "../db/client.ts";
 import { environments, globalAgentConfiguration, mcpServices, repositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../db/schema.ts";
 import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS, type CapabilityConfiguration } from "../domain/contracts.ts";
 import { parseCapabilityConfiguration, parseDmsConnectionConfiguration, parseSlsConnectionConfiguration } from "../capabilities/registry.ts";
+import { parseAgentRuntime } from "./pi-runtime.ts";
 import { parseMcpImport } from "./mcp.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "../http/service-configuration.ts";
 
@@ -108,8 +109,8 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
         const provider = text(agent.provider), model = text(agent.model), thinkingLevel = text(agent.thinkingLevel ?? "medium"), codemode = text(agent.codemode ?? "on");
         if (!AGENT_THINKING_LEVELS.includes(thinkingLevel as typeof AGENT_THINKING_LEVELS[number]) || !AGENT_CODEMODE_MODES.includes(codemode as typeof AGENT_CODEMODE_MODES[number])) return fail();
         const [existing] = await transaction.select().from(globalAgentConfiguration).limit(1);
-        const values = { provider, model, thinkingLevel, codemode: codemode as typeof AGENT_CODEMODE_MODES[number] };
-        if (!existing || !Object.entries(values).every(([key, value]) => existing[key as keyof typeof values] === value)) await transaction.insert(globalAgentConfiguration).values({ id: 1, ...values }).onConflictDoUpdate({ target: globalAgentConfiguration.id, set: { ...values, updatedAt: new Date() } });
+        const values = { provider, model, thinkingLevel, codemode: codemode as typeof AGENT_CODEMODE_MODES[number], runtime: parseAgentRuntime(agent.runtime ?? {}) };
+        if (!existing || !Object.entries(values).every(([key, value]) => same(existing[key as keyof typeof values], value))) await transaction.insert(globalAgentConfiguration).values({ id: 1, ...values }).onConflictDoUpdate({ target: globalAgentConfiguration.id, set: { ...values, updatedAt: new Date() } });
       }
       for (const [alias, raw] of Object.entries(repositoryDefinitions)) {
         const url = text(record(raw).url);

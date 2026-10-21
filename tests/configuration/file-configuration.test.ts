@@ -19,7 +19,7 @@ async function files(root: string, invalid = false) {
     dms: { url: "https://dms.example.test/sse", authorization: "Bearer private-dms-token" }, dingtalk: { apiKey: "private-dingtalk-key" },
   };
   const service = {
-    version: 1, issuesDirectory: "workspaces", agent: { provider: testAgent.provider, model: testAgent.model, thinkingLevel: "high" }, automation: { maxConcurrentIssues: 2 },
+    version: 1, issuesDirectory: "workspaces", agent: { provider: testAgent.provider, model: testAgent.model, thinkingLevel: "high", runtime: { settings: { retry: { enabled: false } } } }, automation: { maxConcurrentIssues: 2 },
     repositories: { app: { url: "git@example.test:app.git" } },
     services: { orders: { name: "Orders", environments: {
       dev: { repositories: { app: "develop" } },
@@ -43,6 +43,8 @@ test("files project services, named SLS targets, user credentials and exact MySQ
     assert.equal(owner!.productionSlsAccessKeySecret, "private-sls-secret");
     const [agent] = await database.db.select().from(globalAgentConfiguration);
     assert.equal(agent!.provider, testAgent.provider);
+    assert.deepEqual(agent!.runtime, { settings: { retry: { enabled: false } } });
+    const agentTimestamp = agent!.updatedAt.getTime();
     const deployments = await database.db.select().from(serviceDeployments);
     const production = deployments.find(row => row.config.dms)!;
     assert.equal(production.config.dms!.databases[0]!.schemaName, "orders");
@@ -61,6 +63,7 @@ test("files project services, named SLS targets, user credentials and exact MySQ
     await applyFileConfiguration(database.db, root);
     assert.deepEqual((await database.db.select().from(mcpServices)).map(row => ({ id: row.id, updatedAt: row.updatedAt.getTime() })), before);
     assert.equal((await database.db.select().from(userCredentials))[0]!.updatedAt.getTime(), credentialsTimestamp);
+    assert.equal((await database.db.select().from(globalAgentConfiguration))[0]!.updatedAt.getTime(), agentTimestamp);
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });
 

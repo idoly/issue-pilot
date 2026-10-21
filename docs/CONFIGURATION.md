@@ -126,7 +126,7 @@ SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 ali
 
 ## Agent 基座与资源
 
-Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，应用设置仅覆盖明确保存的运行参数。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
+Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，`service.yaml` 的 `agent.runtime.settings` 可显式覆盖运行参数；该项省略时清除旧数据库覆盖，采用全局 Pi 默认值，避免隐藏的旧配置继续生效。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
 
 资源检查 GET 仅发现扩展路径，不执行用户扩展。实际会话创建时加载资源，正常触发扩展启动和关闭。模型接口定义继续由全局 Pi `models.json` 管理。改变资源后重建会话或重启应用。
 

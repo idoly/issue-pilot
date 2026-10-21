@@ -63,7 +63,7 @@ try {
   if (sls) user.sls = sls;
   const dms = credentials?.production_dms_url && credentials.production_dms_authorization ? { url: credentials.production_dms_url, authorization: credentials.production_dms_authorization } : [...dmsConnections.values()][0];
   if (dms) user.dms = dms;
-  const service: Record<string, unknown> = { version: 1, issuesDirectory: "workspaces", agent: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinking_level, codemode: agent.codemode }, automation: { maxConcurrentIssues: 3 }, repositories: definitions, services: serviceDefinitions };
+  const service: Record<string, unknown> = { version: 1, issuesDirectory: "workspaces", agent: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinking_level, codemode: agent.codemode, runtime: JSON.parse(String(agent.runtime ?? "{}")) }, automation: { maxConcurrentIssues: 3 }, repositories: definitions, services: serviceDefinitions };
   if (values["reference-service"]) {
     const reference = parseDocument(await readFile(values["reference-service"], "utf8"));
     if (reference.errors.length) throw new Error("invalid_reference_configuration");
