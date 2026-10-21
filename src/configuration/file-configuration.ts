@@ -196,6 +196,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
       if (mcpFile) {
         const entries = { ...mcpEntries, ...generatedMysql };
         const inputs = Object.keys(entries).length ? parseMcpImport({ mcpServers: entries }) : [];
+        status.mcpServiceNames = inputs.map(input => input.name);
         const previous = await transaction.select().from(mcpServices);
         for (const input of inputs) {
           const old = previous.find(row => row.name === input.name);

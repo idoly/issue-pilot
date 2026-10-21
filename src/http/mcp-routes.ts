@@ -6,11 +6,12 @@ import { ApiError, record } from "./input.ts";
 import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({ id: row.id, name: row.name, url: publicMcpUrl(row.url), transport: row.transport, enabled: row.enabled, credentialConfigured: row.transport === "stdio" ? Boolean(row.stdio) : Boolean(row.authorization || new URL(row.url).search) });
-export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">) {
+export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive" | "fileConfiguration">) {
   const { app, database, engine, runScopeExclusive } = context;
+  const current = (row: McpRow) => !context.fileConfiguration?.mcp || context.fileConfiguration.mcpServiceNames?.includes(row.name) === true;
   const requireService = async (id: string) => {
     const [row] = await database.db.select().from(mcpServices).where(eq(mcpServices.id, id)).limit(1);
-    if (!row) throw new ApiError(404, "mcp_service_not_found");
+    if (!row || !current(row)) throw new ApiError(404, "mcp_service_not_found");
     return row;
   };
   const mutate = async <T>(operation: () => Promise<T>) => {
@@ -30,7 +31,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
   };
   app.get("/api/mcp-services", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
-    return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).map(project));
+    return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).filter(current).map(project));
   });
   app.get<{ Params: { id: string } }>("/api/mcp-services/:id/configuration", { logLevel: "silent" }, async (request, reply) => {
     reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");

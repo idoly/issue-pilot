@@ -37,7 +37,7 @@ test("files project services, named SLS targets, user credentials and exact MySQ
   try {
     await files(root);
     const status = await applyFileConfiguration(database.db, root);
-    assert.deepEqual(status, { services: true, mcp: true, maxConcurrentIssues: 2, userSubject: issuePilotConfig.bootstrapUser.subject });
+    assert.deepEqual(status, { services: true, mcp: true, maxConcurrentIssues: 2, userSubject: issuePilotConfig.bootstrapUser.subject, mcpServiceNames: ["dms", "dingtalk", "mysql-orders-test-orders"] });
     const [owner] = await database.db.select().from(userCredentials);
     assert.equal(owner!.modelApiKeys[testAgent.provider], "private-model-key");
     assert.equal(owner!.productionSlsAccessKeySecret, "private-sls-secret");
@@ -83,6 +83,9 @@ test("file configuration rolls back invalid imports and reports no private parse
 test("API exposes safe file ownership status and prevents editing a second configuration source", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-file-config-api-"));
   await mkdir(root, { recursive: true, mode: 0o700 }); await files(root);
+  const seed = await openApplicationDatabase(path.join(root, "issues.db"));
+  await seed.db.insert(mcpServices).values({ id: "retired", name: "Retired Browser", url: "", transport: "stdio", enabled: true, stdio: { command: process.execPath, args: ["-e", "process.exit(0)"], env: {} } });
+  seed.close();
   const app = await buildApi({ stateRoot: root, databaseFile: path.join(root, "issues.db"), engine: new TestAgentController(), modelCatalog, logger: false });
   try {
     const config = await app.inject({ method: "GET", url: "/api/config" });
@@ -90,7 +93,9 @@ test("API exposes safe file ownership status and prevents editing a second confi
     assert.equal(config.json().fileManaged.services, true);
     assert.doesNotMatch(config.body, /private-model-key|private-sls-secret|private-dms-token|private-dingtalk-key|private-mysql-password/);
     const mcp = await app.inject({ method: "GET", url: "/api/mcp-services" });
-    assert.doesNotMatch(mcp.body, /private-dingtalk-key|private-dms-token|private-mysql-password/);
+    assert.doesNotMatch(mcp.body, /private-dingtalk-key|private-dms-token|private-mysql-password|Retired Browser/);
+    assert.equal((await app.inject({ method: "POST", url: "/api/mcp-services/retired/test" })).statusCode, 404);
+    assert.equal((await app.inject({ method: "GET", url: "/api/mcp-services/retired/configuration" })).statusCode, 404);
     assert.equal((await app.inject({ method: "PATCH", url: "/api/services/orders", payload: {} })).json().error, "configuration_managed_by_files");
     assert.equal((await app.inject({ method: "PUT", url: "/api/me/credentials", payload: {} })).json().error, "credentials_managed_by_user_file");
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);

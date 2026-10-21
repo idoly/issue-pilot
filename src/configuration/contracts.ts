@@ -52,7 +52,7 @@ export interface ServiceConfiguration {
   repositories: Array<{ id: string; alias: string; url: string }>;
 }
 
-export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number }
+export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number; mcpServiceNames?: string[] }
 
 export interface Configuration extends ConfigurationCatalog {
   fileManaged?: FileConfigurationState;
