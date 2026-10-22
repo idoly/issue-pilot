@@ -2,11 +2,12 @@ import type { EnvironmentKind, IssuePriority, IssueWorkMode, UserRole } from "..
 
 export interface DingtalkTable { baseId: string; tableId: string; url: string }
 export interface DingtalkField { id: string; name: string; type: string }
-export const DINGTALK_COLUMNS = ["title", "description", "assignee", "status", "module", "number"] as const;
-export type DingtalkColumns = Record<typeof DINGTALK_COLUMNS[number], string>;
+export const DINGTALK_COLUMNS = ["title", "description", "assignee", "status", "module", "number", "attachments"] as const;
+export type DingtalkColumns = Record<Exclude<typeof DINGTALK_COLUMNS[number], "attachments">, string> & { attachments?: string };
 export interface DingtalkRecord { recordId: string; cells: Record<string, unknown> }
 export interface DingtalkPreviewRecord {
   recordId: string; title: string; description: string; assignee: string; status: string; module: string; number: string;
+  attachments?: Array<{ id: string; fileName: string; size: number }>;
   creatable: boolean; reason?: string; token: string; issueKey?: string;
 }
 interface DingtalkUser { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }

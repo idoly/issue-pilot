@@ -65,7 +65,7 @@ export const issuePilotConfig = Object.freeze({
   limits: Object.freeze({
     filesystemNameBytes: 255,
     codemode: Object.freeze({ queueWaitMs: 120_000, queueEntries: 32 }),
-    mcpServer: Object.freeze({ requestBytes: 1024 * 1024, responseBytes: 1024 * 1024, pageItems: 100, textLines: 1000 }),
+    mcpServer: Object.freeze({ requestBytes: Number.MAX_SAFE_INTEGER, responseBytes: 1024 * 1024, pageItems: 100, textLines: 1000 }),
     agentMessageChars: 50_000,
     relatedIssues: 20,
     agentImage: Object.freeze({
@@ -95,7 +95,7 @@ export const issuePilotConfig = Object.freeze({
       resultBytes: 1024 * 1024,
       timeoutMs: 15_000,
       connectionMs: 10_000,
-      dingtalk: Object.freeze({ previewRecords: 100, pendingStatus: "A待安排", importRecords: 100, tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512, cursorCharacters: 16384 }),
+      dingtalk: Object.freeze({ attachmentHosts: ["alidocs2.oss-cn-zhangjiakou.aliyuncs.com"] as readonly string[], previewRecords: 100, pendingStatus: "A待安排", importRecords: 100, tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512, cursorCharacters: 16384 }),
       mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
       dms: Object.freeze({ executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
       sls: Object.freeze({ pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),

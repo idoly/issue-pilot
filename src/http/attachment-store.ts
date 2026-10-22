@@ -20,8 +20,15 @@ export interface PendingAttachment {
 }
 
 export async function readMultipartAttachment(part: MultipartFile): Promise<PendingAttachment> {
-  const fileName = path.basename(part.filename);
-  if (!fileName) throw new ApiError(400, "invalid_attachment_name");
+  async function* chunks() {
+    yield* part.file;
+    if (part.file.truncated) throw new Error("attachment_stream_truncated");
+  }
+  return stageAttachment(path.basename(part.filename), part.mimetype, chunks());
+}
+
+export async function stageAttachment(fileName: string, mediaType: string, chunks: AsyncIterable<Uint8Array>): Promise<PendingAttachment> {
+  if (!fileName || /[/\\\u0000-\u001f\u007f]/.test(fileName) || [".", ".."].includes(fileName)) throw new ApiError(400, "invalid_attachment_name");
   const stagingRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-"));
   const temporaryPath = path.join(stagingRoot, randomUUID());
   const sha256 = createHash("sha256");
@@ -29,15 +36,14 @@ export async function readMultipartAttachment(part: MultipartFile): Promise<Pend
   let handle: FileHandle | undefined;
   try {
     handle = await open(temporaryPath, "wx", 0o600);
-    for await (const chunk of part.file) {
+    for await (const chunk of chunks) {
       const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       await handle.writeFile(content);
       sha256.update(content);
       size += content.length;
     }
-    if (part.file.truncated) throw new Error("attachment_stream_truncated");
     await handle.close();
-    return { fileName, mediaType: part.mimetype, temporaryPath, size, sha256: sha256.digest("hex") };
+    return { fileName, mediaType, temporaryPath, size, sha256: sha256.digest("hex") };
   } catch (error) {
     await handle?.close().catch(() => undefined);
     await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);

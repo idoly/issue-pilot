@@ -30,7 +30,7 @@ export function parseDingtalkTable(value: string): DingtalkTable {
     return { baseId, tableId, url: canonical.toString() };
   } catch { throw new DingtalkError("invalid_dingtalk_table_url", 400); }
 }
-async function read(session: McpSession, name: "get_tables" | "query_records", input: Record<string, unknown>) {
+async function read(session: McpSession, name: "get_tables" | "query_records" | "search_entities", input: Record<string, unknown>) {
   if (!session.call) throw new DingtalkError("dingtalk_read_not_supported");
   let result: Record<string, unknown>;
   try { result = object(await session.call(name, input)); }
@@ -64,8 +64,8 @@ export async function readDingtalkFields(session: McpSession, source: DingtalkTa
 }
 const suggested: Record<keyof DingtalkColumns, string[]> = {
   title: ["工单标题", "标题", "任务名称", "任务", "名称"], description: ["工单描述", "任务描述", "问题描述", "描述", "详情"],
-  assignee: ["处理人", "负责人", "参与人", "执行人", "当前处理人"], status: ["状态", "任务状态", "研发任务状态", "工单状态"],
-  module: ["对应模块", "模块", "项目"], number: ["序号", "工单编号", "编号"],
+  assignee: ["开发人员（归档字段）", "处理人", "负责人", "参与人", "执行人", "当前处理人"], status: ["状态（归档字段）", "状态", "任务状态", "研发任务状态", "工单状态"],
+  module: ["对应模块", "模块", "项目"], number: ["序号", "工单编号", "编号"], attachments: ["附件"],
 };
 export function resolveDingtalkColumns(fields: DingtalkField[], requested: Partial<DingtalkColumns>): DingtalkColumns {
   return Object.fromEntries(DINGTALK_COLUMNS.map(key => {
@@ -101,18 +101,55 @@ function cellTexts(value: unknown, depth = 0): string[] {
   }
   return [];
 }
-export function dingtalkCellTexts(record: DingtalkRecord, field: string): string[] { return field ? cellTexts(record.cells[field]).map(value => value.trim()).filter(Boolean) : []; }
+export function dingtalkCellTexts(record: DingtalkRecord, field: string | undefined): string[] { return field ? cellTexts(record.cells[field]).map(value => value.trim()).filter(Boolean) : []; }
 export function matchesDingtalkUser(record: DingtalkRecord, field: string, user: string): boolean {
   const escaped = user.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (!escaped) return false;
   const name = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "u");
   return dingtalkCellTexts(record, field).some(value => name.test(value));
 }
+export interface DingtalkPerson { userId: string; corpId: string }
+export async function resolveDingtalkPerson(session: McpSession, name: string): Promise<DingtalkPerson | undefined> {
+  const data = await read(session, "search_entities", { entityType: "PERSON", keyword: name, limit: 50 });
+  if (!Array.isArray(data.candidates)) throw new DingtalkError("invalid_dingtalk_response");
+  const matches = data.candidates.map(object).filter(candidate => typeof candidate.name === "string" && candidate.name.replace(/<\/?red>/g, "") === name);
+  if (matches.length > 1 || data.hasMore) throw new DingtalkError("dingtalk_person_ambiguous", 409);
+  if (!matches.length) return undefined;
+  const person = object(matches[0]!.person);
+  if (typeof person.userId !== "string" || typeof person.corpId !== "string") throw new DingtalkError("invalid_dingtalk_response");
+  return { userId: person.userId, corpId: person.corpId };
+}
+export function matchesDingtalkPerson(record: DingtalkRecord, field: string, name: string, person?: DingtalkPerson): boolean {
+  if (matchesDingtalkUser(record, field, name)) return true;
+  if (!person) return false;
+  const values = record.cells[field];
+  return (Array.isArray(values) ? values : [values]).some(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const entry = value as Record<string, unknown>;
+    return entry.userId === person.userId && entry.corpId === person.corpId;
+  });
+}
+export function pendingDingtalkStatus(fields: DingtalkField[], columns: DingtalkColumns): string {
+  return fields.find(field => field.id === columns.status)?.name === "状态（归档字段）" ? "待处理" : limits.pendingStatus;
+}
+export interface DingtalkAttachment { id: string; fileName: string; size: number; url: string }
+export function dingtalkAttachments(record: DingtalkRecord, field: string | undefined): DingtalkAttachment[] {
+  const value = field ? record.cells[field] : undefined;
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw new DingtalkError("invalid_dingtalk_attachments");
+  return value.map(value => {
+    const file = object(value);
+    if (typeof file.resourceId !== "string" || typeof file.filename !== "string" || !file.filename.trim() || /[/\\\u0000-\u001f\u007f]/.test(file.filename) || [".", ".."].includes(file.filename) || !Number.isSafeInteger(file.size) || Number(file.size) < 0 || typeof file.url !== "string") throw new DingtalkError("invalid_dingtalk_attachments");
+    return { id: file.resourceId, fileName: file.filename, size: Number(file.size), url: file.url };
+  });
+}
+
 export function dingtalkPreviewRecord(record: DingtalkRecord, columns: DingtalkColumns): Omit<DingtalkPreviewRecord, "token"> {
   const value = (key: keyof DingtalkColumns) => dingtalkCellTexts(record, columns[key]).join("\n");
   const number = value("number"), originalTitle = value("title"), description = value("description");
   const title = number && !originalTitle.includes(number) ? `${number} ${originalTitle}` : originalTitle;
   const reason = !originalTitle ? "记录标题为空" : title.length > 300 ? "标题超过 300 字符" : description.length > limits.descriptionCharacters ? "描述超过导入上限，请调整描述字段" : undefined;
   const label = (key: keyof DingtalkColumns) => value(key).slice(0, limits.labelCharacters);
-  return { recordId: record.recordId, title: title.slice(0, 300), description: description.slice(0, limits.descriptionCharacters), assignee: label("assignee"), status: label("status"), module: label("module"), number: number.slice(0, limits.labelCharacters), creatable: !reason, ...(reason ? { reason } : {}) };
+  const attachments = dingtalkAttachments(record, columns.attachments).map(({ id, fileName, size }) => ({ id, fileName, size }));
+  return { recordId: record.recordId, ...(attachments.length ? { attachments } : {}), title: title.slice(0, 300), description: description.slice(0, limits.descriptionCharacters), assignee: label("assignee"), status: label("status"), module: label("module"), number: number.slice(0, limits.labelCharacters), creatable: !reason, ...(reason ? { reason } : {}) };
 }

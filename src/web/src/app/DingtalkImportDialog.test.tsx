@@ -78,7 +78,7 @@ test("a successful batch stays open, removes imported rows and lets the next bat
 
 test("the import dialog explains current-user pending filtering and ignored views", async () => {
   await open();
-  expect(screen.getByText(/只显示当前用户且状态为“A待安排”的记录/)).toBeTruthy();
+  expect(screen.getByText(/只显示当前用户的待处理记录/)).toBeTruthy();
   expect(screen.getByText(/忽略链接中的视图筛选/)).toBeTruthy();
 });
 

@@ -11,9 +11,9 @@ import type { DingtalkPreviewResponse, DingtalkRecord } from "../../src/mcp/ding
 import { createApiFixture, createService } from "./fixture.ts";
 
 const url = "https://alidocs.dingtalk.com/i/nodes/base?entrance=data&sheetId=table&token=fixture-share-secret";
-const fields = [ ["title", "工单标题"], ["description", "工单描述"], ["assignee", "参与人"], ["status", "研发任务状态"], ["module", "对应模块"], ["number", "序号"] ].map(([fieldId, fieldName]) => ({ fieldId, fieldName, type: "text" }));
+const fields = [ ["title", "工单标题"], ["description", "工单描述"], ["assignee", "参与人"], ["status", "研发任务状态"], ["module", "对应模块"], ["number", "序号"], ["attachments", "附件"] ].map(([fieldId, fieldName]) => ({ fieldId, fieldName, type: "text" }));
 async function fixture() {
-  const state = { rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined };
+  const state = { fields, rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined };
   const connector: McpConnector = async (configuration, signal) => {
     state.configurations.push(configuration);
     if (state.failure) throw new Error("transport fixture-private-credential");
@@ -21,8 +21,9 @@ async function fixture() {
       list: async () => [], close: async () => { state.closed++; },
       async call(name, input) {
         state.calls.push({ name, input });
-        assert.ok(["get_tables", "query_records"].includes(name), "only known read operations may execute");
-        if (name === "get_tables") return { structuredContent: { status: "success", data: { tables: [{ tableId: "table", fields }] } } };
+        assert.ok(["get_tables", "query_records", "search_entities"].includes(name), "only known read operations may execute");
+        if (name === "get_tables") return { structuredContent: { status: "success", data: { tables: [{ tableId: "table", fields: state.fields }] } } };
+        if (name === "search_entities") return { structuredContent: { status: "success", data: { candidates: [{ name: "<red>" + actor.name + "</red>", person: { userId: "fixture-user-id", corpId: "fixture-corp" } }], hasMore: false } } };
         await state.beforeRecords?.(signal);
         const sourceRows = state.rows;
         const ids = input.recordIds as string[] | undefined, offset = input.cursor ? Number(String(input.cursor).replace("offset-", "")) || 0 : 0;
@@ -72,6 +73,63 @@ test("DingTalk preview uses computed display fields, selects the current person 
     assert.equal(remaining.records.length, 0);
     assert.equal(remaining.skippedImported, 2);
   } finally { await f.cleanup(); }
+});
+
+test("archived field defaults resolve person IDs and query archived pending status", async () => {
+  const f = await fixture();
+  try {
+    f.state.fields = [...fields, { fieldId: "archived-owner", fieldName: "开发人员（归档字段）", type: "user" }, { fieldId: "archived-status", fieldName: "状态（归档字段）", type: "singleSelect" }];
+    const template = f.state.rows[0]!;
+    template.cells["archived-owner"] = [{ userId: "fixture-user-id", corpId: "fixture-corp" }];
+    template.cells["archived-status"] = { name: "待处理", id: "pending-option" };
+    template.cells.assignee = null;
+    f.state.rows = [template];
+    const preview = await f.preview();
+    assert.equal(preview.columns.assignee, "archived-owner"); assert.equal(preview.columns.status, "archived-status"); assert.equal(preview.columns.attachments, "attachments");
+    assert.equal(preview.records.length, 1); assert.equal(preview.records[0]!.assignee, f.actor.name);
+    const query = f.state.calls.find(call => call.name === "query_records")!;
+    assert.deepEqual(query.input.filters, { operator: "and", operands: [{ operator: "eq", operands: ["archived-status", "待处理"] }] });
+    const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: f.payload(preview) });
+    assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().results[0].status, "created");
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk imports selected attachments in the Issue transaction without exposing signed URLs", async t => {
+  const f = await fixture();
+  const contents = Buffer.from("attachment evidence");
+  const downloader = t.mock.method(globalThis, "fetch", async (_url: unknown, options: RequestInit | undefined) => { assert.equal(options?.redirect, "error"); assert.equal(options?.headers, undefined); return new Response(contents, { headers: { "content-type": "text/plain" } }); });
+  try {
+    f.state.rows = [f.state.rows[0]!];
+    f.state.rows[0]!.cells.attachments = [{ resourceId: "resource", filename: "evidence.txt", size: contents.length, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/evidence?signature=private-download-signature" }];
+    const preview = await f.preview();
+    assert.deepEqual(preview.records[0]!.attachments, [{ id: "resource", fileName: "evidence.txt", size: contents.length }]);
+    assert.doesNotMatch(JSON.stringify(preview), /private-download-signature|aliyuncs/);
+    assert.equal(downloader.mock.callCount(), 0);
+    const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: f.payload(preview) });
+    assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().results[0].status, "created");
+    assert.equal(downloader.mock.callCount(), 1);
+    const key = response.json().results[0].issueKey, detail = (await f.app.inject({ method: "GET", url: `/api/issues/${key}` })).json();
+    assert.equal(detail.attachments.length, 1);
+    const file = await f.app.inject({ method: "GET", url: `/api/issues/${key}/attachments/${detail.attachments[0].id}` });
+    assert.deepEqual(file.rawPayload, contents);
+    assert.equal(f.engine.enqueued.length, 0);
+  } finally { downloader.mock.restore(); await f.cleanup(); }
+});
+
+test("DingTalk attachment failure creates no Issue and allows a later retry", async t => {
+  const f = await fixture();
+  const downloader = t.mock.method(globalThis, "fetch", async () => new Response("bad", { status: 403 }));
+  try {
+    f.state.rows = [f.state.rows[0]!];
+    f.state.rows[0]!.cells.attachments = [{ resourceId: "resource", filename: "evidence.txt", size: 4, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file" }];
+    const payload = f.payload(await f.preview());
+    const failed = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
+    assert.equal(failed.json().results[0].status, "failed"); assert.equal(failed.json().results[0].error, "dingtalk_attachment_download_failed");
+    assert.deepEqual(await f.database.db.select().from(issues), []);
+    downloader.mock.mockImplementation(async () => new Response("data"));
+    const retried = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
+    assert.equal(retried.json().results[0].status, "created");
+  } finally { downloader.mock.restore(); await f.cleanup(); }
 });
 
 test("DingTalk filters existing manual Issues by exact external number or full title", async () => {

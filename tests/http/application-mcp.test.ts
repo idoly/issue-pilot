@@ -5,7 +5,10 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { subjects } from "../../src/db/schema.ts";
+import { createHash } from "node:crypto";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
+import { subjects, issues, issueAttachments } from "../../src/db/schema.ts";
 import { eq } from "drizzle-orm";
 import { IssueOutputStore } from "../../src/outputs/store.ts";
 
@@ -84,6 +87,88 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.equal(f.engine.enqueued.length, before);
     assert.equal((await f.app.inject({ method: "GET", url: "/mcp" })).statusCode, 405);
   } finally { await client.close(); await f.cleanup(); }
+});
+
+test("MCP creates an Issue with text and binary attachments exceeding the former 1 MiB request limit", async () => {
+  const f = await createApiFixture(), client = new Client({ name: "attachment-fixture", version: "1" });
+  const database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "MCP Attachments", ["test"]);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`)) as Parameters<Client["connect"]>[0]);
+    const csv = Buffer.from("编号,结果\n00123,完成\n"), binary = Buffer.alloc(1100 * 1024, 0xa5);
+    const result = await client.callTool({ name: "issue_create", arguments: { title: "With attachments", serviceKey: "mcp-attachments", workMode: "test_analysis", attachments: [
+      { fileName: "结果.csv", mediaType: "text/csv", contentBase64: csv.toString("base64") },
+      { fileName: "evidence.xlsx", contentBase64: binary.toString("base64") },
+      { fileName: "empty.txt", contentBase64: "" },
+    ] } });
+    assert.equal(result.isError, undefined, text(result));
+    const summary = JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+    const detail = (await f.app.inject({ method: "GET", url: `/api/issues/${summary.id}` })).json();
+    assert.equal(detail.attachments.length, 3);
+    assert.equal(f.engine.enqueued.length, 1);
+    for (const [name, content] of [["结果.csv", csv], ["evidence.xlsx", binary], ["empty.txt", Buffer.alloc(0)]] as const) {
+      const file = detail.attachments.find((file: { fileName: string }) => file.fileName === name);
+      assert.ok(file, `missing attachment ${name}`);
+      assert.equal(file.size, content.length);
+      assert.equal(file.sha256, createHash("sha256").update(content).digest("hex"));
+      const downloaded = await f.app.inject({ method: "GET", url: `/api/issues/${summary.id}/attachments/${file.id}` });
+      assert.equal(downloaded.statusCode, 200); assert.deepEqual(downloaded.rawPayload, content);
+    }
+    for (const row of await database.db.select().from(issueAttachments)) {
+      assert.equal((await stat(row.objectKey)).mode & 0o777, 0o400);
+      assert.equal(row.uploadedBy, issuePilotConfig.bootstrapUser.subject);
+    }
+    const read = await client.callTool({ name: "attachment_read", arguments: { key: summary.id, attachmentId: detail.attachments[0].id } });
+    assert.equal(read.isError, undefined, text(read));
+    assert.doesNotMatch(text(result), /contentBase64|temporaryPath/);
+  } finally { await client.close(); database.close(); await f.cleanup(); }
+});
+
+test("MCP attachment validation rejects invalid input before creating an Issue", async () => {
+  const f = await createApiFixture(), client = new Client({ name: "invalid-attachment-fixture", version: "1" }), database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "MCP Invalid Attachments", ["test"]);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`)) as Parameters<Client["connect"]>[0]);
+    for (const attachment of [
+      { fileName: "../secret.txt", contentBase64: "YQ==" },
+      { fileName: "folder\\secret.txt", contentBase64: "YQ==" },
+      { fileName: "bad\r\nname", contentBase64: "YQ==" },
+      { fileName: "secret.txt", contentBase64: "YQ==private-invalid" },
+      { fileName: "secret.txt", contentBase64: "data:text/plain;base64,YQ==" },
+      { fileName: "secret.txt", mediaType: "text/plain\r\nprivate-header", contentBase64: "YQ==" },
+    ]) {
+      const result = await client.callTool({ name: "issue_create", arguments: { title: "Invalid", serviceKey: "mcp-invalid-attachments", workMode: "test_analysis", attachments: [attachment] } });
+      assert.equal(result.isError, true, text(result));
+      assert.doesNotMatch(text(result), /private-invalid|private-header/);
+    }
+    assert.deepEqual(await database.db.select().from(issues), []);
+    assert.deepEqual(await database.db.select().from(issueAttachments), []);
+    assert.equal(f.engine.enqueued.length, 0);
+  } finally { await client.close(); database.close(); await f.cleanup(); }
+});
+
+test("MCP attachment failure rolls back files and Issue and permits an explicit retry", async () => {
+  const f = await createApiFixture(), client = new Client({ name: "rollback-attachment-fixture", version: "1" }), database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "MCP Rollback", ["test"]);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`)) as Parameters<Client["connect"]>[0]);
+    await database.client.execute("CREATE TRIGGER reject_mcp_attachment BEFORE INSERT ON issue_attachments BEGIN SELECT RAISE(ABORT, 'private-attachment-failure'); END");
+    const args = { title: "Rollback", serviceKey: "mcp-rollback", workMode: "test_analysis", attachments: [{ fileName: "evidence.txt", contentBase64: "ZXZpZGVuY2U=" }] };
+    const failed = await client.callTool({ name: "issue_create", arguments: args });
+    assert.equal(failed.isError, true); assert.doesNotMatch(text(failed), /private-attachment-failure|ZXZpZGVuY2U=/);
+    assert.deepEqual(await database.db.select().from(issues), []);
+    assert.deepEqual(await database.db.select().from(issueAttachments), []);
+    assert.deepEqual(await readdir(path.join(f.root, "issues")), []);
+    assert.equal(f.engine.enqueued.length, 0);
+    await database.client.execute("DROP TRIGGER reject_mcp_attachment");
+    const retry = await client.callTool({ name: "issue_create", arguments: args });
+    assert.equal(retry.isError, undefined, text(retry));
+    assert.equal((await database.db.select().from(issueAttachments)).length, 1);
+    assert.equal(f.engine.enqueued.length, 1);
+  } finally { await client.close(); database.close(); await f.cleanup(); }
 });
 
 test("pins the default MCP identity for internal API dispatch without falling back after deactivation", async () => {
