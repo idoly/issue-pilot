@@ -28,6 +28,11 @@ export function resolveIssueFileLink(href: string, issue: Pick<IssueDetail, "id"
     else if (selected.startsWith("work/")) { kind = "work"; selected = selected.slice(5); }
   }
   if (!selected) return null;
+  if (kind === "work" || kind === "name") {
+    const original = issue.attachments.filter(file => file.storedFileName === selected || kind === "name" && file.fileName === selected && file.workingFileName !== selected);
+    if (original.length === 1) return attachmentUrl(issue.id, original[0]!.id);
+    return issueWorkFileUrl(issue.id, selected);
+  }
   if (kind !== "attachment") {
     const output = issue.outputs.find(file => file.fileName === selected);
     if (output) return outputUrl(issue.id, output.fileName);
@@ -36,7 +41,6 @@ export function resolveIssueFileLink(href: string, issue: Pick<IssueDetail, "id"
     const matches = issue.attachments.filter(file => file.fileName === selected || file.workingFileName === selected);
     if (matches.length === 1) return attachmentUrl(issue.id, matches[0]!.id);
   }
-  if (kind === "work" || kind === "name") return issueWorkFileUrl(issue.id, selected);
   return null;
 }
 

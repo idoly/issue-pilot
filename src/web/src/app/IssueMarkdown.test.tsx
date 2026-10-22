@@ -11,9 +11,12 @@ const issue = {
 } as IssueDetail;
 
 describe("Issue file links", () => {
-  it("turns published filesystem, relative and sandbox links into encoded download URLs", () => {
+  it("preserves explicit legacy output links and resolves current working files separately", () => {
     const expected = `/api/issues/${issue.id}/outputs/${encodeURIComponent("库存 #1.xlsx")}`;
-    for (const href of ["库存 #1.xlsx", "./outputs/库存 #1.xlsx", "sandbox:/mnt/data/库存%20%231.xlsx", "file:///state/issues/issue-20261021-001/outputs/库存%20%231.xlsx"]) expect(resolveIssueFileLink(href, issue)).toBe(expected);
+    for (const href of ["./outputs/库存 #1.xlsx", "sandbox:/mnt/data/库存%20%231.xlsx", "file:///state/issues/issue-20261021-001/outputs/库存%20%231.xlsx"]) expect(resolveIssueFileLink(href, issue)).toBe(expected);
+    for (const href of ["库存 #1.xlsx", "/state/workspaces/issue-20261021-001/库存 #1.xlsx"]) expect(resolveIssueFileLink(href, issue)).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent("库存 #1.xlsx")}`);
+    expect(resolveIssueFileLink("uuid-图片.png", issue)).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent("uuid-图片.png")}`);
+    expect(resolveIssueFileLink("图片.png", issue)).toBe(`/api/issues/${issue.id}/attachments/image-id`);
     expect(resolveIssueFileLink("attachments/uuid-图片.png", issue)).toBe(`/api/issues/${issue.id}/attachments/image-id`);
     expect(resolveIssueFileLink("/state/workspaces/issue-20261021-001/checkpoint.json", issue)).toBe(`/api/issues/${issue.id}/files/download?path=checkpoint.json`);
   });
