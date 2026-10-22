@@ -1,9 +1,8 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { Button } from "../ui";
-import { Download, File, RefreshCw } from "../ui/icons";
+import { ChevronRight, Download, File, Folder, GitBranch, RefreshCw } from "../ui/icons";
 import { errorMessage, issueWorkFileUrl, listIssueWorkFiles, type IssueDetail, type IssueWorkFile } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
-import { fileSize } from "./model";
 
 export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
   const { currentUser } = useApplicationResources();
@@ -28,27 +27,22 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
     }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; controller.abort(); };
   });
-  const category = (file: IssueWorkFile) => {
-    if (file.kind === "directory") return props.issue.repositories.some(repo => repo.name === file.path) ? "代码仓库" : "目录";
-    if (file.kind === "link") return "链接（不提供下载）";
-    if (file.kind === "special") return "特殊文件（不提供下载）";
-    if (props.issue.attachments.some(a => a.workingFileName === file.path)) return "附件工作副本";
-    return "工作文件";
-  };
+  const repositoryDirectory = (file: IssueWorkFile) => file.kind === "directory" && props.issue.repositories.some(repo => repo.name === file.path);
   const parent = () => directory().split("/").slice(0, -1).join("/");
   return <section class="attachment-band" aria-labelledby="working-files-title">
-    <div class="band-title"><File size={16} /><h2 id="working-files-title">工作文件</h2><span>{directory() || "工单根目录"}</span><Button size="small" aria-label="刷新工作文件" onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /></Button></div>
+    <div class="band-title"><File size={16} /><h2 id="working-files-title">工作目录</h2><Show when={directory()}><span title={directory()}>{directory()}</span></Show><Button size="small" aria-label="刷新工作目录" onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /></Button></div>
     <Show when={directory()}><Button size="small" onClick={() => setDirectory(parent())}>返回上级</Button></Show>
     <Show when={error()}><div role="alert">{error()}</div></Show>
     <Show when={loading()}><div class="empty-band">正在读取文件…</div></Show>
     <Show when={!loading() && !error()}>
-      <For each={files()} fallback={<div class="empty-band">暂无工作文件</div>}>{file => <div class="issue-attachment-row">
-        <File size={15} />
-        <Show when={file.kind === "directory"} fallback={<span class="attachment-file-info"><strong>{file.name}</strong><small>{category(file)} · {fileSize(file.size)}</small></span>}>
-          <button type="button" class="attachment-preview-trigger" onClick={() => setDirectory(file.path)}><span class="attachment-file-info"><strong>{file.name}</strong><small>{category(file)}</small></span></button>
+      <div class="issue-directory-list"><For each={files()} fallback={<div class="empty-band">目录为空</div>}>{file => <div class="issue-attachment-row" title={file.path}>
+        <Show when={file.kind === "directory"} fallback={<File size={15} />}><Show when={repositoryDirectory(file)} fallback={<Folder size={15} />}><GitBranch size={15} /></Show></Show>
+        <Show when={file.kind === "directory"} fallback={<span class="attachment-file-info"><strong>{file.name}</strong></span>}>
+          <button type="button" class="attachment-preview-trigger" aria-label={`打开目录 ${file.name}`} onClick={() => setDirectory(file.path)}><span class="attachment-file-info"><strong>{file.name}</strong></span></button>
         </Show>
+        <Show when={file.kind === "directory"}><ChevronRight class="directory-chevron" size={14} /></Show>
         <Show when={file.kind === "file"}><a class="attachment-download-link" href={issueWorkFileUrl(props.issue.id, file.path)} download={file.name} aria-label={`下载工作文件 ${file.name}`}><Download size={15} /></a></Show>
-      </div>}</For>
+      </div>}</For></div>
     </Show>
   </section>;
 }

@@ -219,6 +219,11 @@ button, input, textarea { font: inherit; }
 .band-title > .ui-icon { color: #60736a; }
 .band-title h2 { margin: 0; color: #303b36; font-size: 13px; letter-spacing: 0; }
 .band-title > span { min-width: 20px; margin-left: 1px; padding: 2px 6px; border-radius: 999px; background: #eef3f0; color: #738079; text-align: center; font-size: 10px; }
+.issue-directory-list { overflow: hidden; border: 1px solid #e1e5e3; border-radius: 7px; }
+.issue-directory-list .issue-attachment-row { min-height: 42px; gap: 8px; padding: 5px 8px 5px 12px; }
+.issue-directory-list .attachment-preview-trigger { min-height: 30px; padding: 3px 0; }
+.issue-directory-list .directory-chevron { color: #89958e; justify-self: center; }
+.source-detail-panel .issue-directory-list { border-color: #30363d; }
 .issue-branch-row { display: grid; min-width: 0; min-height: 44px; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 8px; padding: 5px 7px 5px 12px; border: 1px solid #dce4e0; border-radius: 7px; background: #f8faf9; }
 .issue-branch-row code { overflow: hidden; color: #35423c; font-family: var(--mono-font); font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .issue-branch-row:not(:has(.ui-button)) { grid-template-columns: minmax(0, 1fr); padding-right: 12px; }

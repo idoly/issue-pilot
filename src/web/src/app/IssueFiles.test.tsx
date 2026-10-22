@@ -10,14 +10,20 @@ const issue = { id: "ISSUE-20261021-001", updatedAt: "2026-10-21T00:00:00Z", rep
 const file = (name: string, kind: IssueWorkFile["kind"] = "file"): IssueWorkFile => ({ name, path: name, kind, size: 1, updatedAt: issue.updatedAt });
 afterEach(() => { cleanup(); vi.resetAllMocks(); state.user = () => ({ subject: "alice", role: "developer" }); });
 it("lists working files and repository folders and provides real downloads", async () => {
-  state.list.mockResolvedValueOnce([file("checkpoint.json"), file("uuid-image.png"), file("repository", "directory"), file("escape", "link")]);
+  state.list.mockResolvedValueOnce([file("checkpoint.json"), file("uuid-image.png"), file("folder", "directory"), file("repository", "directory"), file("escape", "link")]);
   state.list.mockResolvedValueOnce([{ ...file("source.java"), path: "repository/source.java" }]);
   render(() => <IssueFiles issue={issue} />);
   const link = await screen.findByRole("link", { name: "下载工作文件 checkpoint.json" });
   expect(link.getAttribute("href")).toBe(`/api/issues/${issue.id}/files/download?path=checkpoint.json`);
-  expect(screen.getByText("附件工作副本 · 1 B")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "工作目录" })).toBeTruthy();
+  expect(document.querySelector(".issue-directory-list small")).toBeNull();
+  const folder = screen.getByRole("button", { name: "打开目录 folder" }).closest(".issue-attachment-row")!;
+  const repository = screen.getByRole("button", { name: "打开目录 repository" }).closest(".issue-attachment-row")!;
+  const normal = link.closest(".issue-attachment-row")!;
+  expect(folder.querySelector(".ui-icon")?.getAttribute("data-icon")).not.toBe(normal.querySelector(".ui-icon")?.getAttribute("data-icon"));
+  expect(repository.querySelector(".ui-icon")?.getAttribute("data-icon")).not.toBe(folder.querySelector(".ui-icon")?.getAttribute("data-icon"));
   expect(screen.queryByRole("link", { name: "下载工作文件 escape" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /repository.*代码仓库/ }));
+  fireEvent.click(screen.getByRole("button", { name: "打开目录 repository" }));
   await screen.findByText("source.java");
   expect(state.list.mock.calls[1]?.slice(0, 2)).toEqual([issue.id, "repository"]);
 });
