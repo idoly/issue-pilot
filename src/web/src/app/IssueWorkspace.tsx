@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
+import { CheckCircle2, Code2, Download, Eye, File, GitBranch, History, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
 import { canUseIssueWorkMode, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { IssueFiles } from "./IssueFiles";
 import { Markdown } from "../ui/Markdown";
@@ -294,7 +294,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       </section>
       <Show when={(props.issue.scopeTransitions ?? []).length}>
         <section class="repository-band" aria-labelledby="scope-history-title">
-          <div class="band-title"><GitBranch size={16} /><h2 id="scope-history-title">处理范围历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
+          <div class="band-title"><History size={16} /><h2 id="scope-history-title">处理范围历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
           <div class="issue-attachment-list">
             <For each={props.issue.scopeTransitions ?? []}>{(transition) => (
               <div class="issue-attachment-row scope-history-row">
@@ -309,7 +309,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         </section>
       </Show>
       <Show when={props.issue.collaboratingServices?.length}>
-        <section class="repository-band" aria-label="协作服务"><div class="band-title"><GitBranch size={16} /><h2>协作服务</h2></div><div class="capability-labels"><For each={props.issue.collaboratingServices ?? []}>{(service) => <code>{service.name}</code>}</For></div></section>
+        <section class="repository-band" aria-label="协作服务"><div class="band-title"><Organization size={16} /><h2>协作服务</h2></div><div class="capability-labels"><For each={props.issue.collaboratingServices ?? []}>{(service) => <code>{service.name}</code>}</For></div></section>
       </Show>
       <Show when={canEditRelatedIssues() || (props.issue.relatedIssues ?? []).length}>
         <section class="repository-band" aria-labelledby="related-issues-title">
