@@ -20,7 +20,8 @@ export function parseDingtalkTable(value: string): DingtalkTable {
     const url = new URL(value);
     const match = /^\/i\/nodes\/([A-Za-z0-9_-]+)\/?$/.exec(url.pathname);
     if (url.protocol !== "https:" || !["alidocs.dingtalk.com", "docs.dingtalk.com"].includes(url.hostname) || url.username || url.password || url.port || !match) throw new Error();
-    const baseId = dingtalkId(match[1]), tableId = dingtalkId(url.searchParams.get("sheetId"));
+    const embedded = new URLSearchParams(url.searchParams.get("iframeQuery") ?? "");
+    const baseId = dingtalkId(match[1]), tableId = dingtalkId(url.searchParams.get("sheetId") ?? embedded.get("sheetId"));
     // Keep routing information only; share-link credentials never enter an Issue.
     const canonical = new URL(`https://alidocs.dingtalk.com/i/nodes/${baseId}`);
     canonical.searchParams.set("entrance", "data"); canonical.searchParams.set("sheetId", tableId);

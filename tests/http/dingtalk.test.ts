@@ -49,7 +49,7 @@ async function fixture() {
 test("DingTalk preview uses computed display fields, selects the current person and creates only on request", async () => {
   const f = await fixture();
   try {
-    const preview = await f.preview();
+    const preview = await f.preview({ url: "https://alidocs.dingtalk.com/i/nodes/base?iframeQuery=entrance%3Ddata%26sheetId%3Dtable%26viewId%3Dview" });
     assert.deepEqual(preview.records.map(row => row.recordId), ["one", "two"]);
     assert.deepEqual(preview.statusOptions, ["A待安排"]);
     assert.equal(preview.records[0]!.title, "EXT-one Order one");
