@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fillMissingUserCredentials, moveDingtalkSource, queryTargets, repositoryAddress, simpleServiceFile, userFileLayout } from "../../src/configuration/file-layout.ts";
+import { dingtalkFieldConfiguration, fillMissingUserCredentials, moveDingtalkSource, queryTargets, repositoryAddress, simpleServiceFile, userFileLayout } from "../../src/configuration/file-layout.ts";
+
+test("DingTalk field mappings accept only supported text mappings", () => {
+  assert.deepEqual(dingtalkFieldConfiguration({ title: " 序号 ", description: "工单描述", attachments: "附件" }), { title: "序号", description: "工单描述", attachments: "附件" });
+  assert.throws(() => dingtalkFieldConfiguration({ status: "状态" }), /invalid_file_configuration/);
+  assert.throws(() => dingtalkFieldConfiguration({ title: 123 }), /invalid_file_configuration/);
+});
 
 test("compact YAML preserves target identities and requires explicit names for several SLS targets", () => {
   assert.equal(repositoryAddress("git@example.test:app.git", 2), "git@example.test:app.git");

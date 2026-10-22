@@ -2,338 +2,183 @@ import assert from "node:assert/strict";
 import { readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { eq } from "drizzle-orm";
 import { stringify } from "yaml";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { dingtalkIssueImports, issues, mcpServices, subjects } from "../../src/db/schema.ts";
 import type { McpConfiguration, McpConnector } from "../../src/mcp/client.ts";
-import type { DingtalkPreviewResponse, DingtalkRecord } from "../../src/mcp/dingtalk-contracts.ts";
+import type { DingtalkRecord } from "../../src/mcp/dingtalk-contracts.ts";
 import { createApiFixture, createService } from "./fixture.ts";
 
-const url = "https://alidocs.dingtalk.com/i/nodes/base?entrance=data&sheetId=table&token=fixture-share-secret";
-const fields = [ ["title", "工单标题"], ["description", "工单描述"], ["assignee", "参与人"], ["status", "研发任务状态"], ["module", "对应模块"], ["number", "序号"], ["attachments", "附件"] ].map(([fieldId, fieldName]) => ({ fieldId, fieldName, type: "text" }));
+const recordUrl = "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=one&viewId=ignored&token=fixture-private";
+const fields = [["title", "工单标题"], ["description", "工单描述"], ["owner", "开发人员（归档字段）"], ["status", "状态（归档字段）"], ["module", "对应模块"], ["number", "序号"], ["attachments", "附件"]].map(([fieldId, fieldName]) => ({ fieldId, fieldName, type: "text" }));
 async function fixture() {
-  const state = { fields, rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined };
+  const state = { row: { recordId: "one", cells: { title: "Task", description: "Description", owner: "Other Person", status: { name: "待处理" }, module: "Orders", number: "EXT-one" } } as DingtalkRecord, fields, calls: [] as Array<{ name: string; input: Record<string, unknown> }>, configurations: [] as McpConfiguration[], closed: 0, failConnection: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined };
   const connector: McpConnector = async (configuration, signal) => {
     state.configurations.push(configuration);
-    if (state.failure) throw new Error("transport fixture-private-credential");
-    return {
-      list: async () => [], close: async () => { state.closed++; },
-      async call(name, input) {
-        state.calls.push({ name, input });
-        assert.ok(["get_tables", "query_records", "search_entities"].includes(name), "only known read operations may execute");
-        if (name === "get_tables") return { structuredContent: { status: "success", data: { tables: [{ tableId: "table", fields: state.fields }] } } };
-        if (name === "search_entities") return { structuredContent: { status: "success", data: { candidates: [{ name: "<red>" + actor.name + "</red>", person: { userId: "fixture-user-id", corpId: "fixture-corp" } }], hasMore: false } } };
-        await state.beforeRecords?.(signal);
-        const sourceRows = state.rows;
-        const ids = input.recordIds as string[] | undefined, offset = input.cursor ? Number(String(input.cursor).replace("offset-", "")) || 0 : 0;
-        const rows = ids ? sourceRows.filter(row => ids.includes(row.recordId)) : sourceRows.slice(offset, offset + Number(input.limit));
-        const next = state.badCursor ? "offset-0" : !ids && offset + rows.length < sourceRows.length ? `offset-${offset + rows.length}` : "";
-        return { structuredContent: { status: "success", data: { records: structuredClone(rows), nextCursor: next } } };
-      },
-    };
+    if (state.failConnection) throw new Error("fixture-private-connection");
+    return { list: async () => [], close: async () => { state.closed++; }, call: async (name, input) => {
+      state.calls.push({ name, input });
+      assert.ok(["get_tables", "query_records"].includes(name));
+      if (name === "get_tables") return { structuredContent: { status: "success", data: { tables: [{ tableId: "table", fields: state.fields }] } } };
+      await state.beforeRecords?.(signal);
+      return { structuredContent: { status: "success", data: { records: (input.recordIds as string[]).includes(state.row.recordId) ? [structuredClone(state.row)] : [], nextCursor: "" } } };
+    } };
   };
-  const value = await createApiFixture({ dingtalkConnector: connector }), database = await openApplicationDatabase(value.databaseFile);
-  const actor = (await value.app.inject({ method: "GET", url: "/api/me" })).json();
-  await database.db.insert(mcpServices).values({ name: "dingtalk", transport: "streamable_http", url: "https://gateway.example.test/mcp?key=fixture-shared-key", authorization: "fixture-shared-header", enabled: true });
-  const service = await createService(value.app, "Orders", ["prod", "dev"]);
-  const row = (id: string, assignee: string): DingtalkRecord => ({ recordId: id, cells: { title: `Order ${id}`, description: { text: `Description ${id}`, authorization: "fixture-never-project" }, assignee: { refFieldType: "text", value: [`负责人：${assignee}（研发）`] }, status: { value: ["A待安排"] }, module: "Orders", number: `EXT-${id}` } });
-  state.rows = [row("one", actor.name), row("other", "Other Person"), row("similar", actor.name + "Extra"), row("two", actor.name)];
-  const preview = async (input: Record<string, unknown> = {}) => {
-    const response = await value.app.inject({ method: "POST", url: "/api/dingtalk/preview", headers: { "x-issue-pilot-subject": actor.subject }, payload: { url, ...input } });
-    assert.equal(response.statusCode, 200, response.body);
-    return response.json<DingtalkPreviewResponse>();
-  };
-  const payload = (response: DingtalkPreviewResponse) => ({ url, columns: response.columns, records: response.records.map(row => ({ recordId: row.recordId, token: row.token })), serviceKey: service.key, workMode: "production_analysis", priority: "p2", startAgent: false });
-  return { ...value, state, database, actor, preview, payload, async cleanup() { database.close(); await value.cleanup(); } };
+  const f = await createApiFixture({ dingtalkConnector: connector }), database = await openApplicationDatabase(f.databaseFile);
+  const user = (await f.app.inject({ method: "GET", url: "/api/me" })).json();
+  await database.db.insert(mcpServices).values({ name: "dingtalk", transport: "streamable_http", url: "https://gateway.example.test/mcp?key=fixture-shared", authorization: "fixture-shared-header", enabled: true });
+  const service = await createService(f.app, "Orders", ["prod", "dev"]);
+  const payload = { url: recordUrl, serviceKey: service.key, workMode: "production_analysis", priority: "p2", startAgent: false };
+  const submit = (overrides = {}, headers = { "x-issue-pilot-subject": user.subject }) => f.app.inject({ method: "POST", url: "/api/dingtalk/import", headers, payload: { ...payload, ...overrides } });
+  return { ...f, state, database, user, payload, submit, async cleanup() { database.close(); await f.cleanup(); } };
 }
 
-test("DingTalk preview uses computed display fields, selects the current person and creates only on request", async () => {
+test("direct record import skips preview, ignores personnel and uses only the requested record", async () => {
   const f = await fixture();
   try {
-    const preview = await f.preview({ url: "https://alidocs.dingtalk.com/i/nodes/base?iframeQuery=entrance%3Ddata%26sheetId%3Dtable" });
-    assert.deepEqual(preview.records.map(row => row.recordId), ["one", "two"]);
-    assert.deepEqual(preview.statusOptions, ["A待安排"]);
-    assert.equal(preview.records[0]!.title, "EXT-one Order one");
-    assert.equal(preview.records[0]!.description, "Description one");
-    assert.doesNotMatch(JSON.stringify(preview), /fixture-shared-key|fixture-shared-header|fixture-never-project|fixture-share-secret/);
-    assert.deepEqual(await f.database.db.select().from(issues), []);
-    assert.equal(f.engine.enqueued.length, 0);
-    const payload = f.payload(preview);
-    const results = await Promise.all([f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload }), f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload })]);
-    for (const response of results) assert.equal(response.statusCode, 200, response.body);
-    assert.equal(results.flatMap(result => result.json().results).filter(result => result.status === "created").length, 2);
-    assert.equal((await f.database.db.select().from(issues)).length, 2);
-    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 2);
-    assert.equal(f.engine.enqueued.length, 0);
-    for (const issue of await f.database.db.select().from(issues)) { assert.equal(issue.assigneeSubject, f.actor.subject); assert.equal(issue.reporterSubject, f.actor.subject); assert.doesNotMatch(issue.description, /fixture-share-secret|viewId=/); }
-    assert.ok(f.state.calls.some(call => call.name === "query_records" && Array.isArray(call.input.recordIds)));
-    assert.equal(f.state.closed, f.state.configurations.length);
-    const remaining = await f.preview();
-    assert.equal(remaining.records.length, 0);
-    assert.equal(remaining.skippedImported, 2);
-  } finally { await f.cleanup(); }
-});
-
-test("single-record links query only the selected row and retain user and pending checks", async () => {
-  const f = await fixture();
-  try {
-    const url = "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=two&viewId=view";
-    const preview = await f.preview({ url });
-    assert.deepEqual(preview.records.map(row => row.recordId), ["two"]);
-    assert.equal(preview.cursor, "");
-    const query = f.state.calls.find(call => call.name === "query_records")!;
-    assert.deepEqual(query.input.recordIds, ["two"]); assert.equal(query.input.filters, undefined);
-    const created = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: { ...f.payload(preview), url } });
-    assert.equal(created.json().results[0].status, "created");
-    const other = await f.preview({ url: url.replace("rowId=two", "rowId=other") });
-    assert.deepEqual(other.records, []);
-  } finally { await f.cleanup(); }
-});
-
-test("archived field defaults resolve person IDs and query archived pending status", async () => {
-  const f = await fixture();
-  try {
-    f.state.fields = [...fields, { fieldId: "archived-owner", fieldName: "开发人员（归档字段）", type: "user" }, { fieldId: "archived-status", fieldName: "状态（归档字段）", type: "singleSelect" }];
-    const template = f.state.rows[0]!;
-    template.cells["archived-owner"] = [{ userId: "fixture-user-id", corpId: "fixture-corp" }];
-    template.cells["archived-status"] = { name: "待处理", id: "pending-option" };
-    template.cells.assignee = null;
-    f.state.rows = [template];
-    const preview = await f.preview();
-    assert.equal(preview.columns.assignee, "archived-owner"); assert.equal(preview.columns.status, "archived-status"); assert.equal(preview.columns.attachments, "attachments");
-    assert.equal(preview.records.length, 1); assert.equal(preview.records[0]!.assignee, f.actor.name);
-    const query = f.state.calls.find(call => call.name === "query_records")!;
-    assert.deepEqual(query.input.filters, { operator: "and", operands: [{ operator: "eq", operands: ["archived-status", "待处理"] }] });
-    const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: f.payload(preview) });
-    assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().results[0].status, "created");
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk imports selected attachments in the Issue transaction without exposing signed URLs", async t => {
-  const f = await fixture();
-  const contents = Buffer.from("attachment evidence");
-  const downloader = t.mock.method(globalThis, "fetch", async (_url: unknown, options: RequestInit | undefined) => { assert.equal(options?.redirect, "error"); assert.equal(options?.headers, undefined); return new Response(contents, { headers: { "content-type": "text/plain" } }); });
-  try {
-    f.state.rows = [f.state.rows[0]!];
-    f.state.rows[0]!.cells.attachments = [{ resourceId: "resource", filename: "evidence.txt", size: contents.length, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/evidence?signature=private-download-signature" }];
-    const preview = await f.preview();
-    assert.deepEqual(preview.records[0]!.attachments, [{ id: "resource", fileName: "evidence.txt", size: contents.length }]);
-    assert.doesNotMatch(JSON.stringify(preview), /private-download-signature|aliyuncs/);
-    assert.equal(downloader.mock.callCount(), 0);
-    const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: f.payload(preview) });
-    assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().results[0].status, "created");
-    assert.equal(downloader.mock.callCount(), 1);
-    const key = response.json().results[0].issueKey, detail = (await f.app.inject({ method: "GET", url: `/api/issues/${key}` })).json();
-    assert.equal(detail.attachments.length, 1);
-    const file = await f.app.inject({ method: "GET", url: `/api/issues/${key}/attachments/${detail.attachments[0].id}` });
-    assert.deepEqual(file.rawPayload, contents);
-    assert.equal(f.engine.enqueued.length, 0);
-  } finally { downloader.mock.restore(); await f.cleanup(); }
-});
-
-test("DingTalk attachment failure creates no Issue and allows a later retry", async t => {
-  const f = await fixture();
-  const downloader = t.mock.method(globalThis, "fetch", async () => new Response("bad", { status: 403 }));
-  try {
-    f.state.rows = [f.state.rows[0]!];
-    f.state.rows[0]!.cells.attachments = [{ resourceId: "resource", filename: "evidence.txt", size: 4, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file" }];
-    const payload = f.payload(await f.preview());
-    const failed = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(failed.json().results[0].status, "failed"); assert.equal(failed.json().results[0].error, "dingtalk_attachment_download_failed");
-    assert.deepEqual(await f.database.db.select().from(issues), []);
-    downloader.mock.mockImplementation(async () => new Response("data"));
-    const retried = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(retried.json().results[0].status, "created");
-  } finally { downloader.mock.restore(); await f.cleanup(); }
-});
-
-test("DingTalk filters existing manual Issues by exact external number or full title", async () => {
-  const f = await fixture();
-  try {
-    const payload = f.payload(await f.preview());
-    const existing = await f.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, title: "EXT-one", description: "Existing manual Issue", assigneeSubject: f.actor.subject, ccSubjects: [] } });
-    assert.equal(existing.statusCode, 201, existing.body);
-    const preview = await f.preview();
-    assert.equal(preview.skippedImported, 1);
-    assert.ok(preview.records.every(row => row.recordId !== "one"));
-    payload.records = payload.records.filter(row => row.recordId === "one");
-    const imported = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(imported.statusCode, 200, imported.body);
-    assert.equal(imported.json().results[0].status, "existing");
-    assert.equal(imported.json().results[0].issueKey, existing.json().id);
-    assert.equal((await f.database.db.select().from(issues)).length, 1);
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk ignores view IDs and displays only the current user's pending table records", async () => {
-  const f = await fixture();
-  try {
-    const viewUrl = url + "&iframeQuery=viewId%3Dview";
-    f.state.rows[3]!.cells.status = { value: ["D已完成"] };
-    const response = await f.preview({ url: viewUrl });
-    assert.deepEqual(response.records.map(row => row.recordId), ["one"]);
-    const calls = f.state.calls.filter(call => call.name === "query_records");
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0]!.input.filters, { operator: "and", operands: [{ operator: "eq", operands: ["status", "A待安排"] }] });
-    assert.equal(calls[0]!.input.sort, undefined);
-    const payload = { ...f.payload(response), url: viewUrl };
-    f.state.rows[0]!.cells.status = { value: ["D已完成"] };
-    const stale = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(stale.statusCode, 200, stale.body);
-    assert.equal(stale.json().results[0].status, "stale");
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
-    assert.ok(f.state.calls.every(call => call.name !== "get_views"));
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk filters only the exact A待安排 status", async () => {
-  const f = await fixture();
-  try {
-    const template = f.state.rows[0]!;
-    f.state.rows = ["待处理", "待安排", "A待安排", "D已完成", "X挂起", "Y无需处理"].map((status, index) => ({ recordId: `status-${index}`, cells: { ...structuredClone(template.cells), status: { value: [status] } } }));
-    const preview = await f.preview();
-    assert.deepEqual(preview.records.map(row => row.recordId), ["status-2"]);
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk preview batches dense matches without dropping records across continuation pages", async () => {
-  const f = await fixture();
-  try {
-    const template = f.state.rows[0]!;
-    f.state.rows = Array.from({ length: 240 }, (_, index) => ({ recordId: `record-${index}`, cells: structuredClone(template.cells) }));
-    const first = await f.preview();
-    assert.equal(first.records.length, 100);
+    assert.equal((await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: {} })).statusCode, 404);
+    const result = await f.submit(); assert.equal(result.statusCode, 200, result.body); assert.equal(result.json().status, "created");
     assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 1);
-    const second = await f.preview({ columns: first.columns, cursor: first.cursor });
-    const third = await f.preview({ columns: second.columns, cursor: second.cursor });
-    const ids = [...first.records, ...second.records, ...third.records].map(row => row.recordId);
-    assert.deepEqual(ids, f.state.rows.map(row => row.recordId));
-    assert.equal(new Set(ids).size, 240);
-    assert.equal(third.cursor, "");
-    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 3);
+    assert.deepEqual(f.state.calls.find(call => call.name === "query_records")!.input.recordIds, ["one"]);
+    const [issue] = await f.database.db.select().from(issues);
+    assert.equal(issue!.title, "EXT-one"); assert.equal(issue!.assigneeSubject, f.user.subject);
+    assert.doesNotMatch(issue!.description, /viewId|fixture-private/);
+    assert.equal(f.engine.enqueued.length, 0); assert.equal(f.state.closed, 1);
   } finally { await f.cleanup(); }
 });
 
-test("a page without matching users keeps its cursor and finds pending records on later pages", async () => {
-  const f = await fixture();
+test("MCP dingtalk_import dispatches the same single-record workflow and duplicate result", async () => {
+  const f = await fixture(), client = new Client({ name: "dingtalk-import-fixture", version: "1" });
   try {
-    const own = f.state.rows[0]!, other = f.state.rows[1]!;
-    f.state.rows = Array.from({ length: 101 }, (_, index) => ({ recordId: `row-${index}`, cells: structuredClone((index === 100 ? own : other).cells) }));
-    const first = await f.preview();
-    assert.deepEqual(first.records, []); assert.equal(first.scanned, 100); assert.ok(first.cursor);
-    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 1);
-    const second = await f.preview({ columns: first.columns, cursor: first.cursor });
-    assert.deepEqual(second.records.map(row => row.recordId), ["row-100"]);
-    assert.equal(second.cursor, "");
-    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 2);
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk requires person and status columns before reading records", async () => {
-  const f = await fixture();
-  try {
-    const preview = await f.preview({ columns: { assignee: "", status: "" }, statusFilter: "non-matching legacy input" });
-    assert.deepEqual(preview.records, []);
-    assert.equal(preview.needsMapping, true);
-    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 0);
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk verifies fresh records and actor-bound preview tokens, rejecting changed, forged and repeated-cursor results", async () => {
-  const f = await fixture();
-  try {
-    const preview = await f.preview(), payload = f.payload(preview);
-    f.state.rows[0]!.cells.title = "Changed after preview";
-    payload.records = payload.records.slice(0, 2);
-    payload.records[1]!.token = "0".repeat(64);
-    const stale = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(stale.statusCode, 200, stale.body);
-    assert.ok(stale.json().results.every((result: { status: string }) => result.status === "stale"));
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
-    await f.database.db.insert(subjects).values({ subject: "bob", displayName: "Bob", role: "developer" });
-    f.state.rows[0]!.cells.assignee = { value: [f.actor.name, "Bob"] };
-    const actorPreview = await f.preview();
-    const wrongActor = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", headers: { "x-issue-pilot-subject": "bob" }, payload: { ...f.payload(actorPreview), records: [{ recordId: "one", token: actorPreview.records[0]!.token }] } });
-    assert.equal(wrongActor.statusCode, 200, wrongActor.body);
-    assert.equal(wrongActor.json().results[0].status, "stale");
-    f.state.badCursor = true;
-    const firstPage = await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: { url } });
-    const invalid = await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: { url, cursor: firstPage.json().cursor } });
-    assert.equal(invalid.statusCode, 409, invalid.body);
-    assert.equal(invalid.json().error, "dingtalk_snapshot_changed");
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
-  } finally { await f.cleanup(); }
-});
-
-test("DingTalk source claims roll back with Issue/filesystem failures and an explicit retry enqueues only once", async () => {
-  const f = await fixture();
-  try {
-    const payload = f.payload(await f.preview()); payload.records = [payload.records[0]!]; payload.startAgent = true;
-    await f.database.client.execute("CREATE TRIGGER fail_dingtalk_import BEFORE INSERT ON dingtalk_issue_imports BEGIN SELECT RAISE(ABORT, 'fixture-import-failure'); END");
-    const failed = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(failed.statusCode, 200, failed.body); assert.equal(failed.json().results[0].status, "failed");
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
-    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 0);
-    assert.equal((await readdir(path.join(f.root, "issues"))).length, 0);
-    assert.equal(f.engine.enqueued.length, 0);
-    await f.database.client.execute("DROP TRIGGER fail_dingtalk_import");
-    for (let index = 0; index < 2; index++) {
-      const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-      assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().results[0].status, index ? "existing" : "created");
+    f.state.row.cells.status = { name: "开发中" }; f.state.row.cells.owner = "Other Person";
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`), { requestInit: { headers: { "X-Issue-Pilot-Subject": f.user.subject } } }) as Parameters<Client["connect"]>[0]);
+    const { startAgent: _start, priority: _priority, ...args } = f.payload;
+    for (const status of ["created", "existing"]) {
+      const response = await client.callTool({ name: "dingtalk_import", arguments: args });
+      assert.equal(response.isError, undefined, JSON.stringify(response));
+      const result = JSON.parse((response.content as Array<{ text: string }>)[0]!.text);
+      assert.equal(result.status, status); assert.equal(result.user.subject, f.user.subject);
     }
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
+    assert.equal(f.engine.enqueued.length, 0);
+    const invalid = await client.callTool({ name: "dingtalk_import", arguments: { ...args, url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table" } });
+    assert.equal(invalid.isError, true);
+    assert.match(JSON.stringify(invalid), /invalid_dingtalk_record_url/);
+  } finally { await client.close(); await f.cleanup(); }
+});
+
+test("concurrent and repeated record imports return the existing Issue without replaying Agent startup", async () => {
+  const f = await fixture();
+  try {
+    const results = await Promise.all([f.submit({ startAgent: true }), f.submit({ startAgent: true })]);
+    for (const result of results) assert.equal(result.statusCode, 200, result.body);
+    assert.deepEqual(results.map(result => result.json().status).sort(), ["created", "existing"]);
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
+    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 1);
+    const calls = f.state.calls.length;
+    const repeated = await f.submit(); assert.equal(repeated.json().status, "existing"); assert.equal(f.state.calls.length, calls);
     assert.equal(f.engine.enqueued.length, 1);
   } finally { await f.cleanup(); }
 });
 
-test("DingTalk personal connections are never replaced with another person's credentials or retried with shared credentials", async () => {
+test("table links and client field mappings are rejected; all personnel and statuses can import", async () => {
   const f = await fixture();
   try {
-    await f.database.db.insert(subjects).values({ subject: "bob", displayName: "Bob", role: "developer" });
-    await writeFile(path.join(f.root, "user.yaml"), stringify({ version: 2, shared: { dingtalk: { apiKey: "fixture-explicit-shared" } }, users: { [f.actor.subject]: { dingtalk: { apiKey: "fixture-personal", source: { mcp: "dingtalk", url, assignee: f.actor.name, intervalMinutes: 15 } } }, bob: {} } }), { mode: 0o600 });
-    const owner = await f.app.inject({ method: "GET", url: "/api/dingtalk/source", headers: { "x-issue-pilot-subject": f.actor.subject } }), bob = await f.app.inject({ method: "GET", url: "/api/dingtalk/source", headers: { "x-issue-pilot-subject": "bob" } });
-    assert.equal(owner.json().connection.kind, "personal"); assert.equal(bob.json().connection.kind, "shared"); assert.equal(bob.json().url, ""); assert.equal(bob.json().assignee, "Bob");
-    assert.doesNotMatch(owner.body + bob.body, /fixture-personal|fixture-explicit-shared|fixture-share-secret/);
-    await f.preview();
-    assert.equal(new URL(f.state.configurations.at(-1)!.url).searchParams.get("key"), "fixture-personal");
-    assert.equal(f.state.configurations.at(-1)!.authorization, "");
-    f.state.failure = true;
-    const count = f.state.configurations.length, failed = await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", headers: { "x-issue-pilot-subject": f.actor.subject }, payload: { url } });
-    assert.equal(failed.statusCode, 502, failed.body); assert.equal(f.state.configurations.length, count + 1);
-    assert.doesNotMatch(failed.body, /fixture-private-credential|fixture-personal|fixture-shared/);
+    assert.equal((await f.submit({ url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table" })).json().error, "invalid_dingtalk_record_url");
+    assert.equal((await f.submit({ columns: { title: "title" } })).json().error, "invalid_dingtalk_import");
+    f.state.row.cells.status = { name: "开发中" };
+    assert.equal((await f.submit()).json().status, "created");
+    assert.equal((await f.submit({ url: recordUrl.replace("rowId=one", "rowId=missing") })).json().error, "dingtalk_record_not_found");
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
   } finally { await f.cleanup(); }
 });
 
-test("DingTalk reauthorizes the selected work mode after a remote read", async () => {
+test("field mappings come from shared and personal user.yaml configuration and support exact names and IDs", async () => {
   const f = await fixture();
-  let release!: () => void, entered!: () => void;
   try {
-    const payload = { ...f.payload(await f.preview()), workMode: "production_data" };
+    f.state.fields = [...fields, { fieldId: "custom-title", fieldName: "自定义标题", type: "text" }, { fieldId: "runtime-status", fieldName: "研发任务状态", type: "text" }];
+    f.state.row.cells["custom-title"] = "Configured title"; f.state.row.cells["runtime-status"] = { value: ["A待安排"] };
+    await writeFile(path.join(f.root, "user.yaml"), stringify({ version: 2, shared: { dingtalk: { fields: { title: "自定义标题", attachments: "" } } }, users: { [f.user.subject]: { dingtalk: { fields: { number: "" } } } } }), { mode: 0o600 });
+    const response = await f.submit(); assert.equal(response.statusCode, 200, response.body);
+    assert.equal((await f.database.db.select().from(issues))[0]!.title, "Configured title");
+    const query = f.state.calls.find(call => call.name === "query_records")!;
+    assert.ok((query.input.fieldIds as string[]).includes("custom-title")); assert.ok(!(query.input.fieldIds as string[]).includes("runtime-status"));
+  } finally { await f.cleanup(); }
+});
+
+test("existing manual Issues are detected by exact title or external number", async () => {
+  const f = await fixture();
+  try {
+    const existing = await f.app.inject({ method: "POST", url: "/api/issues", payload: { title: "EXT-one", serviceKey: f.payload.serviceKey, workMode: "production_analysis", priority: "p2", description: "Manual", assigneeSubject: f.user.subject, ccSubjects: [] } });
+    assert.equal(existing.statusCode, 201, existing.body);
+    const response = await f.submit(); assert.equal(response.json().status, "existing"); assert.equal(response.json().issueKey, existing.json().id);
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
+  } finally { await f.cleanup(); }
+});
+
+test("record attachments are downloaded and saved atomically; failure leaves an explicit retry possible", async t => {
+  const f = await fixture();
+  const download = t.mock.method(globalThis, "fetch", async () => new Response("bad", { status: 403 }));
+  try {
+    f.state.row.cells.attachments = [{ resourceId: "resource", filename: "evidence.txt", size: 4, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file?signature=fixture-private" }];
+    const failed = await f.submit(); assert.equal(failed.statusCode, 502, failed.body); assert.equal(failed.json().error, "dingtalk_attachment_download_failed");
+    assert.deepEqual(await f.database.db.select().from(issues), []);
+    download.mock.mockImplementation(async () => new Response("data"));
+    const response = await f.submit(); assert.equal(response.statusCode, 200, response.body);
+    const key = response.json().issueKey, detail = (await f.app.inject({ method: "GET", url: `/api/issues/${key}` })).json();
+    assert.equal(detail.attachments.length, 1);
+    const file = await f.app.inject({ method: "GET", url: `/api/issues/${key}/attachments/${detail.attachments[0].id}` });
+    assert.equal(file.body, "data"); assert.doesNotMatch(response.body, /fixture-private|aliyuncs/);
+  } finally { download.mock.restore(); await f.cleanup(); }
+});
+
+test("source binding failure rolls back Issue and files and permits retry", async () => {
+  const f = await fixture();
+  try {
+    await f.database.client.execute("CREATE TRIGGER fail_dingtalk_import BEFORE INSERT ON dingtalk_issue_imports BEGIN SELECT RAISE(ABORT, 'fixture-private-failure'); END");
+    const failed = await f.submit(); assert.equal(failed.statusCode, 500); assert.doesNotMatch(failed.body, /fixture-private-failure/);
+    assert.deepEqual(await f.database.db.select().from(issues), []); assert.deepEqual(await readdir(path.join(f.root, "issues")), []);
+    await f.database.client.execute("DROP TRIGGER fail_dingtalk_import");
+    assert.equal((await f.submit()).json().status, "created");
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk reauthorizes work mode after the remote read", async () => {
+  const f = await fixture(); let entered!: () => void, release!: () => void;
+  try {
     const waiting = new Promise<void>(resolve => { entered = resolve; }), resume = new Promise<void>(resolve => { release = resolve; });
     f.state.beforeRecords = async () => { entered(); await resume; };
-    const response = f.app.inject({ method: "POST", url: "/api/dingtalk/import", headers: { "x-issue-pilot-subject": f.actor.subject }, payload });
-    await waiting;
-    await f.database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, f.actor.subject));
-    release();
-    const result = await response;
-    assert.equal(result.statusCode, 200, result.body);
-    assert.ok(result.json().results.every((row: { status: string; error: string }) => row.status === "failed" && row.error === "developer_role_required"));
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
+    const pending = f.submit({ workMode: "production_data" }).then(value => value);
+    await waiting; await f.database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, f.user.subject)); release();
+    const response = await pending; assert.equal(response.statusCode, 403, response.body); assert.equal(response.json().error, "developer_role_required");
+    assert.deepEqual(await f.database.db.select().from(issues), []);
   } finally { release?.(); await f.cleanup(); }
 });
 
-test("cancelling a DingTalk HTTP read closes its MCP session", { timeout: 10000 }, async () => {
+test("old table source defaults are omitted and personal connection failure never falls back", async () => {
   const f = await fixture();
   try {
-    let entered!: () => void;
-    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    await writeFile(path.join(f.root, "user.yaml"), stringify({ version: 2, shared: { dingtalk: { apiKey: "fixture-shared" } }, users: { [f.user.subject]: { dingtalk: { apiKey: "fixture-personal", source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table", assignee: "Ignored" } } } } }), { mode: 0o600 });
+    const source = await f.app.inject({ method: "GET", url: "/api/dingtalk/source" });
+    assert.equal(source.json().url, ""); assert.equal(source.json().connection.kind, "personal"); assert.doesNotMatch(source.body, /fixture-personal|fixture-shared/);
+    f.state.failConnection = true;
+    const response = await f.submit(); assert.equal(response.json().error, "dingtalk_connection_failed"); assert.equal(f.state.configurations.length, 1);
+    assert.equal(new URL(f.state.configurations[0]!.url).searchParams.get("key"), "fixture-personal");
+  } finally { await f.cleanup(); }
+});
+
+test("cancelling a record import closes the MCP session", { timeout: 10000 }, async () => {
+  const f = await fixture();
+  try {
+    let entered!: () => void; const waiting = new Promise<void>(resolve => { entered = resolve; });
     f.state.beforeRecords = signal => new Promise<void>((_resolve, reject) => { entered(); signal.addEventListener("abort", () => reject(signal.reason), { once: true }); });
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 }), controller = new AbortController();
-    const response = fetch(address + "/api/dingtalk/preview", { method: "POST", headers: { "Content-Type": "application/json", "X-Issue-Pilot-Subject": f.actor.subject }, body: JSON.stringify({ url }), signal: controller.signal });
-    await waiting; controller.abort();
-    await assert.rejects(response, error => error instanceof Error && error.name === "AbortError");
-    await f.stop();
-    assert.equal(f.state.closed, 1);
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
+    const response = fetch(address + "/api/dingtalk/import", { method: "POST", headers: { "content-type": "application/json", "x-issue-pilot-subject": f.user.subject }, body: JSON.stringify(f.payload), signal: controller.signal });
+    await waiting; controller.abort(); await assert.rejects(response, error => error instanceof Error && error.name === "AbortError");
+    await f.stop(); assert.equal(f.state.closed, 1); assert.deepEqual(await f.database.db.select().from(issues), []);
   } finally { await f.cleanup(); }
 });

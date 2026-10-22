@@ -13,7 +13,7 @@ import { applyServiceConfiguration, prepareServiceConfiguration } from "../http/
 
 import type { DingtalkConnectionSettings, DingtalkSourceSettings, DingtalkUserSettings, FileConfigurationState } from "./contracts.ts";
 export type { FileConfigurationState } from "./contracts.ts";
-import { FileConfigurationError, queryTargets, repositoryAddress, serviceVersion, userFileLayout, validateDingtalkSource } from "./file-layout.ts";
+import { FileConfigurationError, queryTargets, repositoryAddress, serviceVersion, userFileLayout, dingtalkFieldConfiguration, validateDingtalkSource } from "./file-layout.ts";
 export { FileConfigurationError } from "./file-layout.ts";
 const fail = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };
 function record(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) return fail(); return value as Record<string, unknown>; }
@@ -65,7 +65,8 @@ export async function loadDingtalkUserSettings(stateRoot: string, subject: strin
   const personal = connection(own), global = connection(shared);
   const source = own.source === undefined ? undefined : structuredClone(own.source) as DingtalkSourceSettings;
   if (source) { source.mcp = text(source.mcp); source.url = text(source.url); source.assignee = text(source.assignee); }
-  return { ...(source ? { source } : {}), ...(personal ? { personal } : {}), ...(global ? { shared: global } : {}) };
+  const fields = { ...dingtalkFieldConfiguration(shared.fields), ...dingtalkFieldConfiguration(own.fields) };
+  return { fields, ...(source ? { source } : {}), ...(personal ? { personal } : {}), ...(global ? { shared: global } : {}) };
 }
 
 /** Files are authoritative; SQLite retains the validated projection and historical identities. Runs before Agent startup. */
@@ -78,6 +79,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
   if (!serviceFile && !userFile && !mcpFile) return status;
   try {
     const dms = optionalRecord(userLayout.shared.dms), sls = optionalRecord(userLayout.shared.sls), dingtalk = optionalRecord(userLayout.shared.dingtalk);
+    dingtalkFieldConfiguration(dingtalk.fields);
     const mcpEntries = structuredClone(optionalRecord(mcpFile?.mcpServers));
     if (Object.keys(dms).length && mcpEntries.dms) {
       const entry = record(mcpEntries.dms);
@@ -114,6 +116,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
         managedUsers.push(userSubject);
         const apiKeys = Object.fromEntries(Object.entries(optionalRecord(personal.apiKeys)).map(([provider, value]) => [text(provider), secret(value)]));
         const ssh = optionalRecord(personal.ssh), personalDms = optionalRecord(personal.dms), personalSls = optionalRecord(personal.sls);
+        dingtalkFieldConfiguration(optionalRecord(personal.dingtalk).fields);
         validateDingtalkSource(optionalRecord(personal.dingtalk).source);
         const privateKey = ssh.privateKey === undefined ? "" : secret(ssh.privateKey);
         if (privateKey && !/^-----BEGIN (?:OPENSSH|RSA|EC|PRIVATE|ENCRYPTED)/.test(privateKey)) return fail();

@@ -1,3 +1,4 @@
+import { DINGTALK_COLUMNS, type DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
 import type { FileConfigurationState } from "./contracts.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -112,6 +113,15 @@ export function fillMissingUserCredentials(users: Record<string, Record<string, 
     }
   }
   return filled;
+}
+
+export function dingtalkFieldConfiguration(value: unknown): Partial<DingtalkColumns> {
+  const fields = fileRecord(value ?? {});
+  if (Object.keys(fields).some(key => !DINGTALK_COLUMNS.includes(key as keyof DingtalkColumns))) return invalid();
+  return Object.fromEntries(Object.entries(fields).map(([key, value]) => {
+    if (typeof value !== "string" || value.length > 255 || value.includes("\0")) return invalid();
+    return [key, value.trim()];
+  }));
 }
 
 export function validateDingtalkSource(value: unknown): void {

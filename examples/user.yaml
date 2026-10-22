@@ -10,6 +10,11 @@ shared:
     authorization: "${DMS_AUTHORIZATION}"
   dingtalk:
     apiKey: "${DINGTALK_MCP_KEY}"
+    fields:
+      title: 序号
+      description: 工单描述
+      number: 序号
+      attachments: 附件
 
 users:
   user@example.com:
@@ -27,7 +32,7 @@ users:
       apiKey: "${USER_DINGTALK_MCP_KEY}"
       source:
         mcp: dingtalk
-        url: https://alidocs.dingtalk.com/i/nodes/YOUR_BASE_ID?entrance=data&sheetId=YOUR_TABLE_ID
+        url: https://alidocs.dingtalk.com/notable/record?dentryUuid=YOUR_BASE_ID&sheetId=YOUR_TABLE_ID&rowId=YOUR_RECORD_ID
         assignee: 示例用户
         intervalMinutes: 15
   another@example.com:

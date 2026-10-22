@@ -1,3 +1,4 @@
+import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
 import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
 
 export const CAPABILITY_CREDENTIALS = {
@@ -54,7 +55,7 @@ export interface ServiceConfiguration {
 
 export interface DingtalkConnectionSettings { apiKey: string; url?: string }
 export interface DingtalkSourceSettings { mcp: string; url: string; assignee: string; intervalMinutes?: number; environment?: "dev" | "test" | "prod" }
-export interface DingtalkUserSettings { source?: DingtalkSourceSettings; personal?: DingtalkConnectionSettings; shared?: DingtalkConnectionSettings }
+export interface DingtalkUserSettings { fields?: Partial<DingtalkColumns>; source?: DingtalkSourceSettings; personal?: DingtalkConnectionSettings; shared?: DingtalkConnectionSettings }
 
 export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number; userSubjects?: string[]; mcpServiceNames?: string[] }
 

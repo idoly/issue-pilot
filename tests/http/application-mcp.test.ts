@@ -43,11 +43,13 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.equal(endpoint.readOnly, false);
     assert.deepEqual(endpoint.tools, listed.tools);
     assert.doesNotMatch(endpointResponse.body, /authorization|accessKeySecret|credentialUpdate/);
-    assert.equal(listed.tools.length, 9);
-    assert.ok(listed.tools.filter(tool => tool.name !== "issue_create" && tool.name !== "issue_message").every(tool => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint === false));
+    assert.equal(listed.tools.length, 10);
+    assert.ok(listed.tools.filter(tool => tool.name !== "issue_create" && tool.name !== "issue_message" && tool.name !== "dingtalk_import").every(tool => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint === false));
     const creation = listed.tools.find(tool => tool.name === "issue_create")!;
     assert.equal(creation.annotations?.readOnlyHint, false);
     assert.equal(creation.annotations?.idempotentHint, false);
+    const dingtalk = listed.tools.find(tool => tool.name === "dingtalk_import")!;
+    assert.equal(dingtalk.annotations?.readOnlyHint, false); assert.equal(dingtalk.annotations?.idempotentHint, false);
     const message = listed.tools.find(tool => tool.name === "issue_message")!;
     assert.equal(message.annotations?.readOnlyHint, false);
     assert.equal(message.annotations?.idempotentHint, false);
