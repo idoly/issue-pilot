@@ -48,6 +48,7 @@ async function read(session: McpSession, name: "get_tables" | "get_views" | "que
   if (result.isError || payload.status !== "success") {
     const error = payload.error && typeof payload.error === "object" ? object(payload.error) : {};
     if (["INVALID_CURSOR", "CURSOR_SNAPSHOT_CHANGED", "CURSOR_SNAPSHOT_UNAVAILABLE", "NON_RESUMABLE_ERROR_CURSOR", "CURSOR_OFFSET_LIMIT"].includes(String(error.code))) throw new DingtalkError("dingtalk_snapshot_changed", 409);
+    if (name === "query_records" && ["INVALID_FILTER_OPERANDS", "INVALID_FILTER_OPERATOR", "INVALID_FILTER_VALUE"].includes(String(error.code))) throw new DingtalkError("dingtalk_view_filter_not_supported", 422);
     throw new DingtalkError("dingtalk_read_failed");
   }
   return object(payload.data);
@@ -92,6 +93,11 @@ export async function readDingtalkView(session: McpSession, table: DingtalkTable
   if (typeof view.viewName !== "string" || view.viewName.length > limits.labelCharacters) throw new DingtalkError("invalid_dingtalk_response");
   const filter = view.filter === null || view.filter === undefined ? undefined : object(view.filter);
   if (filter && Object.keys(filter).length && (!Array.isArray(filter.operands) || !["and", "or"].includes(String(filter.operator).toLowerCase()))) throw new DingtalkError("dingtalk_view_filter_not_supported");
+  if (filter && Array.isArray(filter.operands) && filter.operands.some(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+    const condition = value as Record<string, unknown>;
+    return typeof condition.operator !== "string" || ["and", "or"].includes(condition.operator.toLowerCase()) || !Array.isArray(condition.operands);
+  })) throw new DingtalkError("dingtalk_view_filter_not_supported", 422);
   if (view.sort !== null && view.sort !== undefined && !Array.isArray(view.sort)) throw new DingtalkError("invalid_dingtalk_response");
   const sort = Array.isArray(view.sort) ? view.sort.map(object) : undefined;
   // Forward the view's own query, including $ME, to DingTalk without guessing a different user or filter.

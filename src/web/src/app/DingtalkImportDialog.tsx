@@ -7,7 +7,7 @@ import { priorityOptions, workModeOptions } from "./model";
 const labels: Record<keyof DingtalkColumns, string> = { title: "标题字段", description: "描述字段", assignee: "人员字段", status: "状态字段", module: "模块字段", number: "编号字段" };
 const errors: Record<string, string> = {
   invalid_dingtalk_table_url: "请输入包含 sheetId 的钉钉数据表链接。", dingtalk_mcp_not_configured: "尚未启用当前用户的钉钉 MCP 连接，请检查配置文件。",
-  dingtalk_view_not_found: "链接指定的视图不存在或不可访问。", dingtalk_view_filter_not_supported: "暂不支持该视图的筛选配置，请检查视图。", dingtalk_view_verification_limit: "视图范围较大，未能完整核对所选记录，请收窄视图后重新读取。",
+  dingtalk_view_not_found: "链接指定的视图不存在或不可访问。", dingtalk_view_filter_not_supported: "当前钉钉 MCP 不支持该视图的筛选条件。请使用简单筛选视图，或升级 MCP 的视图查询接口。", dingtalk_view_verification_limit: "视图范围较大，未能完整核对所选记录，请收窄视图后重新读取。",
   dingtalk_configuration_invalid: "个人钉钉配置无效，请检查 user.yaml。", dingtalk_connection_failed: "钉钉连接失败，请检查当前连接和凭证。",
   dingtalk_read_failed: "钉钉读取失败，请重试或检查表格访问权限。", dingtalk_fields_changed: "表格字段已变化，请重新打开弹窗读取。",
   dingtalk_snapshot_changed: "表格数据或查询条件已变化，请重新读取。", dingtalk_result_too_large: "返回数据过大，请调整读取字段。",
