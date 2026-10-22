@@ -19,15 +19,19 @@ export function parseDingtalkTable(value: string): DingtalkTable {
   try {
     const url = new URL(value);
     const match = /^\/i\/nodes\/([A-Za-z0-9_-]+)\/?$/.exec(url.pathname);
-    if (url.protocol !== "https:" || !["alidocs.dingtalk.com", "docs.dingtalk.com"].includes(url.hostname) || url.username || url.password || url.port || !match) throw new Error();
+    const recordLink = url.pathname === "/notable/record";
+    if (url.protocol !== "https:" || !["alidocs.dingtalk.com", "docs.dingtalk.com"].includes(url.hostname) || url.username || url.password || url.port || !match && !recordLink) throw new Error();
     const embedded = new URLSearchParams(url.searchParams.get("iframeQuery") ?? "");
     const entrance = url.searchParams.get("entrance") ?? embedded.get("entrance");
     if (entrance !== null && entrance !== "data") throw new Error();
-    const baseId = dingtalkId(match[1]), tableId = dingtalkId(url.searchParams.get("sheetId") ?? embedded.get("sheetId"));
+    const baseId = dingtalkId(recordLink ? url.searchParams.get("dentryUuid") : match![1]), tableId = dingtalkId(url.searchParams.get("sheetId") ?? embedded.get("sheetId"));
+    const recordId = recordLink ? dingtalkId(url.searchParams.get("rowId")) : undefined;
     // Keep routing information only; share-link credentials never enter an Issue.
-    const canonical = new URL(`https://alidocs.dingtalk.com/i/nodes/${baseId}`);
-    canonical.searchParams.set("entrance", "data"); canonical.searchParams.set("sheetId", tableId);
-    return { baseId, tableId, url: canonical.toString() };
+    const canonical = new URL(recordLink ? "https://alidocs.dingtalk.com/notable/record" : `https://alidocs.dingtalk.com/i/nodes/${baseId}`);
+    if (recordId) { canonical.searchParams.set("dentryUuid", baseId); canonical.searchParams.set("rowId", recordId); }
+    else canonical.searchParams.set("entrance", "data");
+    canonical.searchParams.set("sheetId", tableId);
+    return { baseId, tableId, ...(recordId ? { recordId } : {}), url: canonical.toString() };
   } catch { throw new DingtalkError("invalid_dingtalk_table_url", 400); }
 }
 async function read(session: McpSession, name: "get_tables" | "query_records" | "search_entities", input: Record<string, unknown>) {

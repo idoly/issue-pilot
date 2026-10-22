@@ -6,7 +6,7 @@ import { priorityOptions, workModeOptions } from "./model";
 
 const labels: Record<keyof DingtalkColumns, string> = { title: "标题字段", description: "描述字段", assignee: "人员字段", status: "状态字段", module: "模块字段", number: "编号字段", attachments: "附件字段" };
 const errors: Record<string, string> = {
-  invalid_dingtalk_table_url: "请输入包含 sheetId 的钉钉数据表链接。", dingtalk_mcp_not_configured: "尚未启用当前用户的钉钉 MCP 连接，请检查配置文件。",
+  invalid_dingtalk_table_url: "请输入包含 sheetId 的钉钉数据表链接，或包含 dentryUuid、sheetId 和 rowId 的单条记录链接。", dingtalk_mcp_not_configured: "尚未启用当前用户的钉钉 MCP 连接，请检查配置文件。",
   dingtalk_person_ambiguous: "钉钉存在同名人员，无法确定当前用户，请检查人员配置。",
   dingtalk_attachment_host_not_allowed: "附件下载地址尚未受信任，请检查钉钉附件存储配置。",
   dingtalk_attachment_download_failed: "附件下载失败，该条工单未创建，可重试。",
@@ -106,7 +106,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   return <Modal open title="导入" width={1100} onOk={() => { void create(); }} onCancel={props.onClose} footer={<div class="dingtalk-footer"><span>已选择 {selected().size} 条</span><Button onClick={props.onClose}>关闭</Button><Button type="primary" loading={busy() === "create"} disabled={Boolean(busy()) || !selected().size || selected().size > 100 || !service()} onClick={() => { void create(); }}>创建选中工单</Button></div>}>
     <div class="dingtalk-import user-form">
       <p class="dingtalk-identity">当前用户：{props.user.name} · {props.user.email}<Show when={source()}>　筛选人员：{source()!.assignee}　·　{source()!.connection.kind === "personal" ? "账号配置" : "共享连接"}</Show></p>
-      <label><span>数据表链接</span><Input aria-label="钉钉数据表链接" value={url()} disabled={Boolean(busy())} placeholder="https://alidocs.dingtalk.com/i/nodes/…?sheetId=…" onInput={event => { resetPreview(); setUrl(event.currentTarget.value); setFields([]); setColumns({}); }} /></label>
+      <label><span>数据表链接</span><Input aria-label="钉钉数据表链接" value={url()} disabled={Boolean(busy())} placeholder="钉钉数据表或单条记录链接" onInput={event => { resetPreview(); setUrl(event.currentTarget.value); setFields([]); setColumns({}); }} /></label>
       <Show when={fields().length}><div class="dingtalk-fields dingtalk-field-mapping"><For each={DINGTALK_COLUMNS}>{key => <label><span>{labels[key]}{["title", "assignee", "status"].includes(key) ? " *" : ""}</span><Select aria-label={`钉钉${labels[key]}`} value={columns()[key] ?? ""} disabled={Boolean(busy())} options={[{ value: "", label: "请选择" }, ...fields().map(field => ({ value: field.id, label: field.name }))]} onChange={value => { resetPreview(); setColumns(columns => ({ ...columns, [key]: value })); }} /></label>}</For></div></Show>
       <div class="dingtalk-read-actions"><Button loading={busy() === "read"} disabled={Boolean(busy()) || !url().trim() || !source()?.connection.available} onClick={() => { void read(); }}>读取表格</Button></div>
       <p class="dingtalk-note">分页读取整张数据表，只显示当前用户的待处理记录：研发任务状态为“A待安排”，归档状态为“待处理”，忽略链接中的视图筛选。读取仅用于预览，勾选并创建后才会生成工单。</p>

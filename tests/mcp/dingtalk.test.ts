@@ -14,6 +14,11 @@ test("DingTalk links use the table from direct or iframe parameters and ignore v
   assert.deepEqual(parseDingtalkTable("https://docs.dingtalk.com/i/nodes/base?iframeQuery=sheetId%3Dtable"), expected);
 });
 
+test("DingTalk record links retain exact row selection and omit view or share credentials", () => {
+  assert.deepEqual(parseDingtalkTable("https://alidocs.dingtalk.com/notable/record?dentryUuid=base&rowId=row&sheetId=table&viewId=view&token=fixture-private"), { baseId: "base", tableId: "table", recordId: "row", url: "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&rowId=row&sheetId=table" });
+  for (const query of ["dentryUuid=base&sheetId=table", "rowId=row&sheetId=table", "dentryUuid=base&sheetId=table&rowId=..%2Frow"]) assert.throws(() => parseDingtalkTable(`https://alidocs.dingtalk.com/notable/record?${query}`), /invalid_dingtalk_table_url/);
+});
+
 test("embedded query parameters cannot bypass table link validation", () => {
   for (const url of [
     "https://alidocs.dingtalk.com/i/nodes/base?iframeQuery=entrance%3Ddata%26viewId%3Dview",

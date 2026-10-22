@@ -1,6 +1,6 @@
 import type { EnvironmentKind, IssuePriority, IssueWorkMode, UserRole } from "../domain/contracts.ts";
 
-export interface DingtalkTable { baseId: string; tableId: string; url: string }
+export interface DingtalkTable { baseId: string; tableId: string; recordId?: string; url: string }
 export interface DingtalkField { id: string; name: string; type: string }
 export const DINGTALK_COLUMNS = ["title", "description", "assignee", "status", "module", "number", "attachments"] as const;
 export type DingtalkColumns = Record<Exclude<typeof DINGTALK_COLUMNS[number], "attachments">, string> & { attachments?: string };

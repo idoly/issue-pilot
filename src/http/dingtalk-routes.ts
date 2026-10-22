@@ -103,8 +103,10 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
           cursor = token.cursor;
         } catch { throw new DingtalkError("dingtalk_snapshot_changed", 409); }
       }
+      if (table.recordId && input.cursor) throw new ApiError(400, "invalid_dingtalk_cursor");
       signal.throwIfAborted();
-      const page = await readDingtalkRecords(session, table, columns, { ...(cursor ? { cursor } : {}), limit: limits.previewRecords, status: { fieldId: columns.status, value: pendingStatus } });
+      const page = await readDingtalkRecords(session, table, columns, table.recordId ? { recordIds: [table.recordId] } : { ...(cursor ? { cursor } : {}), limit: limits.previewRecords, status: { fieldId: columns.status, value: pendingStatus } });
+      if (table.recordId && (page.cursor || page.records.some(row => row.recordId !== table.recordId))) throw new DingtalkError("invalid_dingtalk_response");
       const statuses = new Set<string>();
       const records: DingtalkPreviewRecord[] = page.records.filter(row => matchesDingtalkPerson(row, columns.assignee, assignee, person) && dingtalkCellTexts(row, columns.status).includes(pendingStatus)).map(row => {
         for (const value of dingtalkCellTexts(row, columns.status)) if (value.length <= limits.labelCharacters && statuses.size < 100) statuses.add(value);
@@ -144,7 +146,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
         if (!row || !preview?.creatable || !matchesDingtalkPerson(row, columns.assignee, assignee, person) || !dingtalkCellTexts(row, columns.status).includes(pendingStatus) || !equal(selectedRow.token, sign("record", { signature, record: preview }))) { results.push({ recordId: selectedRow.recordId, status: "stale", error: "记录已变化，请重新读取后选择" }); continue; }
         try {
           const pending = await downloadDingtalkAttachments(dingtalkAttachments(row, columns.attachments), signal);
-          const result = await createIssue({ title: preview.title, description: `${preview.description}\n\n钉钉来源：${table.url}&recordId=${encodeURIComponent(row.recordId)}`, priority, workMode, serviceKey, assigneeSubject: state.user.subject, ccSubjects: [] }, request, pending, { dingtalk: { baseId: table.baseId, tableId: table.tableId, recordId: row.recordId, sourceUrl: table.url }, startAgent: input.startAgent === true, signal });
+          const result = await createIssue({ title: preview.title, description: `${preview.description}\n\n钉钉来源：${table.recordId ? table.url : `${table.url}&recordId=${encodeURIComponent(row.recordId)}`}`, priority, workMode, serviceKey, assigneeSubject: state.user.subject, ccSubjects: [] }, request, pending, { dingtalk: { baseId: table.baseId, tableId: table.tableId, recordId: row.recordId, sourceUrl: table.url }, startAgent: input.startAgent === true, signal });
           results.push({ recordId: row.recordId, status: result.created ? "created" : "existing", issueKey: result.issue.id });
         } catch (error) {
           if (signal.aborted) throw error;

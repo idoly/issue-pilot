@@ -75,6 +75,22 @@ test("DingTalk preview uses computed display fields, selects the current person 
   } finally { await f.cleanup(); }
 });
 
+test("single-record links query only the selected row and retain user and pending checks", async () => {
+  const f = await fixture();
+  try {
+    const url = "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=two&viewId=view";
+    const preview = await f.preview({ url });
+    assert.deepEqual(preview.records.map(row => row.recordId), ["two"]);
+    assert.equal(preview.cursor, "");
+    const query = f.state.calls.find(call => call.name === "query_records")!;
+    assert.deepEqual(query.input.recordIds, ["two"]); assert.equal(query.input.filters, undefined);
+    const created = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: { ...f.payload(preview), url } });
+    assert.equal(created.json().results[0].status, "created");
+    const other = await f.preview({ url: url.replace("rowId=two", "rowId=other") });
+    assert.deepEqual(other.records, []);
+  } finally { await f.cleanup(); }
+});
+
 test("archived field defaults resolve person IDs and query archived pending status", async () => {
   const f = await fixture();
   try {
