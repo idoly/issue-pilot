@@ -28,7 +28,7 @@ beforeEach(() => { vi.clearAllMocks(); setCurrentUserSubject(null); vi.mocked(pr
 afterEach(() => { cleanup(); setCurrentUserSubject(null); });
 async function open(created = vi.fn()) {
   render(() => <ApplicationResourcesProvider><Harness created={created} /></ApplicationResourcesProvider>);
-  const button = screen.getByRole("button", { name: "钉钉导入" });
+  const button = screen.getByRole("button", { name: "钉钉" });
   await waitFor(() => expect(button).toHaveProperty("disabled", false)); fireEvent.click(button);
   await waitFor(() => expect(screen.getByRole("button", { name: "读取表格" })).toHaveProperty("disabled", false));
   return created;
@@ -63,7 +63,7 @@ test("changing identity aborts an outstanding read and ignores its late result",
   fireEvent.click(screen.getByRole("button", { name: "切换为 Bob" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(signal.aborted).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "钉钉导入" }));
+  fireEvent.click(screen.getByRole("button", { name: "钉钉" }));
   await screen.findByText(/当前用户：Bob/);
   resolve(preview());
   await waitFor(() => expect(screen.queryByText("Task a")).toBeNull());

@@ -10,10 +10,10 @@ import type { McpConfiguration, McpConnector } from "../../src/mcp/client.ts";
 import type { DingtalkPreviewResponse, DingtalkRecord } from "../../src/mcp/dingtalk-contracts.ts";
 import { createApiFixture, createService } from "./fixture.ts";
 
-const url = "https://alidocs.dingtalk.com/i/nodes/base?entrance=data&sheetId=table&viewId=view&token=fixture-share-secret";
+const url = "https://alidocs.dingtalk.com/i/nodes/base?entrance=data&sheetId=table&token=fixture-share-secret";
 const fields = [ ["title", "工单标题"], ["description", "工单描述"], ["assignee", "参与人"], ["status", "研发任务状态"], ["module", "对应模块"], ["number", "序号"] ].map(([fieldId, fieldName]) => ({ fieldId, fieldName, type: "text" }));
 async function fixture() {
-  const state = { rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined };
+  const state = { rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined, viewFilter: { operator: "and", operands: [{ operator: "any_of", operands: ["assignee", ["$ME"]] }] }, viewSort: [{ fieldId: "number", direction: "DESC" }], viewIds: undefined as Set<string> | undefined };
   const connector: McpConnector = async (configuration, signal) => {
     state.configurations.push(configuration);
     if (state.failure) throw new Error("transport fixture-private-credential");
@@ -21,12 +21,14 @@ async function fixture() {
       list: async () => [], close: async () => { state.closed++; },
       async call(name, input) {
         state.calls.push({ name, input });
-        assert.ok(["get_tables", "query_records"].includes(name), "only known read operations may execute");
+        assert.ok(["get_tables", "get_views", "query_records"].includes(name), "only known read operations may execute");
         if (name === "get_tables") return { structuredContent: { status: "success", data: { tables: [{ tableId: "table", fields }] } } };
+        if (name === "get_views") return { structuredContent: { status: "success", data: { views: [{ viewId: "view", viewName: "My tasks", tableId: "table", baseId: "base", filter: state.viewFilter, sort: state.viewSort }] } } };
         await state.beforeRecords?.(signal);
+        const sourceRows = input.filters && state.viewIds ? state.rows.filter(row => state.viewIds!.has(row.recordId)) : state.rows;
         const ids = input.recordIds as string[] | undefined, offset = input.cursor ? Number(String(input.cursor).replace("offset-", "")) || 0 : 0;
-        const rows = ids ? state.rows.filter(row => ids.includes(row.recordId)) : state.rows.slice(offset, offset + Number(input.limit));
-        const next = state.badCursor ? "offset-0" : !ids && offset + rows.length < state.rows.length ? `offset-${offset + rows.length}` : "";
+        const rows = ids ? sourceRows.filter(row => ids.includes(row.recordId)) : sourceRows.slice(offset, offset + Number(input.limit));
+        const next = state.badCursor ? "offset-0" : !ids && offset + rows.length < sourceRows.length ? `offset-${offset + rows.length}` : "";
         return { structuredContent: { status: "success", data: { records: structuredClone(rows), nextCursor: next } } };
       },
     };
@@ -49,8 +51,8 @@ async function fixture() {
 test("DingTalk preview uses computed display fields, selects the current person and creates only on request", async () => {
   const f = await fixture();
   try {
-    const preview = await f.preview({ url: "https://alidocs.dingtalk.com/i/nodes/base?iframeQuery=entrance%3Ddata%26sheetId%3Dtable%26viewId%3Dview" });
-    assert.deepEqual(preview.records.map(row => row.recordId), ["one", "two"]);
+    const preview = await f.preview({ url: "https://alidocs.dingtalk.com/i/nodes/base?iframeQuery=entrance%3Ddata%26sheetId%3Dtable" });
+    assert.deepEqual(preview.records.map(row => row.recordId), ["one", "other", "similar", "two"]);
     assert.deepEqual(preview.statusOptions, ["A待安排"]);
     assert.equal(preview.records[0]!.title, "EXT-one Order one");
     assert.equal(preview.records[0]!.description, "Description one");
@@ -60,13 +62,79 @@ test("DingTalk preview uses computed display fields, selects the current person 
     const payload = f.payload(preview);
     const results = await Promise.all([f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload }), f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload })]);
     for (const response of results) assert.equal(response.statusCode, 200, response.body);
-    assert.equal(results.flatMap(result => result.json().results).filter(result => result.status === "created").length, 2);
-    assert.equal((await f.database.db.select().from(issues)).length, 2);
-    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 2);
+    assert.equal(results.flatMap(result => result.json().results).filter(result => result.status === "created").length, 4);
+    assert.equal((await f.database.db.select().from(issues)).length, 4);
+    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 4);
     assert.equal(f.engine.enqueued.length, 0);
     for (const issue of await f.database.db.select().from(issues)) { assert.equal(issue.assigneeSubject, f.actor.subject); assert.equal(issue.reporterSubject, f.actor.subject); assert.doesNotMatch(issue.description, /fixture-share-secret|viewId=/); }
     assert.ok(f.state.calls.some(call => call.name === "query_records" && Array.isArray(call.input.recordIds)));
     assert.equal(f.state.closed, f.state.configurations.length);
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk view queries preserve server filters, sorting and $ME without applying a second local person filter", async () => {
+  const f = await fixture();
+  try {
+    const viewUrl = url + "&iframeQuery=viewId%3Dview";
+    f.state.viewIds = new Set(["other"]);
+    const response = await f.preview({ url: viewUrl, columns: { assignee: "" } });
+    assert.deepEqual(response.records.map(row => row.recordId), ["other"]);
+    assert.deepEqual(response.view, { id: "view", name: "My tasks" });
+    const calls = f.state.calls.filter(call => call.name === "query_records");
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]!.input.filters, f.state.viewFilter);
+    assert.deepEqual(calls[0]!.input.sort, f.state.viewSort);
+    const payload = { ...f.payload(response), url: viewUrl };
+    f.state.viewIds = new Set();
+    const stale = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
+    assert.equal(stale.statusCode, 200, stale.body);
+    assert.equal(stale.json().results[0].status, "stale");
+    assert.equal((await f.database.db.select().from(issues)).length, 0);
+    f.state.viewIds = new Set(["other"]);
+    const imported = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
+    assert.equal(imported.statusCode, 200, imported.body);
+    assert.equal(imported.json().results[0].status, "created");
+    assert.ok(f.state.calls.filter(call => call.name === "query_records").every(call => call.input.recordIds === undefined));
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk rejects an old view preview when its filter changes", async () => {
+  const f = await fixture();
+  try {
+    const viewUrl = url + "&viewId=view", preview = await f.preview({ url: viewUrl });
+    f.state.viewFilter = { operator: "or", operands: [] };
+    const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: { ...f.payload(preview), url: viewUrl } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.ok(response.json().results.every((row: { status: string }) => row.status === "stale"));
+    assert.equal((await f.database.db.select().from(issues)).length, 0);
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk preview batches dense matches without dropping records across continuation pages", async () => {
+  const f = await fixture();
+  try {
+    const template = f.state.rows[0]!;
+    f.state.rows = Array.from({ length: 240 }, (_, index) => ({ recordId: `record-${index}`, cells: structuredClone(template.cells) }));
+    const first = await f.preview();
+    assert.equal(first.records.length, 100);
+    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 1);
+    const second = await f.preview({ columns: first.columns, cursor: first.cursor });
+    const third = await f.preview({ columns: second.columns, cursor: second.cursor });
+    const ids = [...first.records, ...second.records, ...third.records].map(row => row.recordId);
+    assert.deepEqual(ids, f.state.rows.map(row => row.recordId));
+    assert.equal(new Set(ids).size, 240);
+    assert.equal(third.cursor, "");
+    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 3);
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk returns the link's records without adding local person or status filters", async () => {
+  const f = await fixture();
+  try {
+    const preview = await f.preview({ columns: { assignee: "", status: "" }, statusFilter: "non-matching legacy input" });
+    assert.deepEqual(preview.records.map(row => row.recordId), f.state.rows.map(row => row.recordId));
+    assert.equal(preview.needsMapping, false);
+    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 1);
   } finally { await f.cleanup(); }
 });
 
@@ -75,6 +143,7 @@ test("DingTalk verifies fresh records and actor-bound preview tokens, rejecting 
   try {
     const preview = await f.preview(), payload = f.payload(preview);
     f.state.rows[0]!.cells.title = "Changed after preview";
+    payload.records = payload.records.slice(0, 2);
     payload.records[1]!.token = "0".repeat(64);
     const stale = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
     assert.equal(stale.statusCode, 200, stale.body);
@@ -87,7 +156,8 @@ test("DingTalk verifies fresh records and actor-bound preview tokens, rejecting 
     assert.equal(wrongActor.statusCode, 200, wrongActor.body);
     assert.equal(wrongActor.json().results[0].status, "stale");
     f.state.badCursor = true;
-    const invalid = await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: { url } });
+    const firstPage = await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: { url } });
+    const invalid = await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: { url, cursor: firstPage.json().cursor } });
     assert.equal(invalid.statusCode, 409, invalid.body);
     assert.equal(invalid.json().error, "dingtalk_snapshot_changed");
     assert.equal((await f.database.db.select().from(issues)).length, 0);

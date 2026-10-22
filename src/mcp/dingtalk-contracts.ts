@@ -1,6 +1,7 @@
 import type { EnvironmentKind, IssuePriority, IssueWorkMode, UserRole } from "../domain/contracts.ts";
 
-export interface DingtalkTable { baseId: string; tableId: string; url: string }
+export interface DingtalkTable { baseId: string; tableId: string; viewId?: string; url: string }
+export interface DingtalkView { id: string; name: string; filters?: Record<string, unknown>; sort?: Array<Record<string, unknown>> }
 export interface DingtalkField { id: string; name: string; type: string }
 export const DINGTALK_COLUMNS = ["title", "description", "assignee", "status", "module", "number"] as const;
 export type DingtalkColumns = Record<typeof DINGTALK_COLUMNS[number], string>;
@@ -14,10 +15,10 @@ export interface DingtalkSourceResponse {
   user: DingtalkUser; url: string; assignee: string; environment?: EnvironmentKind;
   connection: { available: boolean; kind: "personal" | "shared"; name: string };
 }
-export interface DingtalkPreviewInput { url: string; columns?: Partial<DingtalkColumns>; statusFilter?: string; cursor?: string }
+export interface DingtalkPreviewInput { url: string; columns?: Partial<DingtalkColumns>; cursor?: string }
 export interface DingtalkPreviewResponse {
   user: DingtalkUser; fields: DingtalkField[]; columns: DingtalkColumns; records: DingtalkPreviewRecord[];
-  cursor: string; scanned: number; statusOptions: string[]; needsMapping: boolean;
+  cursor: string; scanned: number; statusOptions: string[]; needsMapping: boolean; view?: { id: string; name: string };
 }
 export interface DingtalkImportInput extends Omit<DingtalkPreviewInput, "cursor"> {
   records: Array<{ recordId: string; token: string }>; workMode: IssueWorkMode; serviceKey: string; priority: IssuePriority; startAgent: boolean;
