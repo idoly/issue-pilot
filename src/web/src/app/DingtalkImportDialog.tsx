@@ -35,6 +35,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   const [rows, setRows] = createSignal<DingtalkPreviewRecord[]>([], { ownedWrite: true }), [selected, setSelected] = createSignal<Set<string>>(new Set(), { ownedWrite: true });
   const [cursor, setCursor] = createSignal("", { ownedWrite: true }), [scanned, setScanned] = createSignal(0, { ownedWrite: true });
   const [busy, setBusy] = createSignal<"defaults" | "read" | "create" | "">("defaults", { ownedWrite: true }), [error, setError] = createSignal("", { ownedWrite: true });
+  const [skippedImported, setSkippedImported] = createSignal(0, { ownedWrite: true });
   const [viewName, setViewName] = createSignal("", { ownedWrite: true });
   const [needsMapping, setNeedsMapping] = createSignal(false, { ownedWrite: true });
   const [results, setResults] = createSignal<DingtalkImportResponse["results"]>([], { ownedWrite: true });
@@ -52,7 +53,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
     if (!value.services.some(service => service.key === value.selected)) setService(value.services[0]?.key ?? "");
   });
   const eligible = () => rows().filter(row => row.creatable && !row.issueKey);
-  const resetPreview = () => { generation++; controller?.abort(); setBusy(""); setRows([]); setSelected(new Set<string>()); setCursor(""); setScanned(0); setResults([]); setViewName(""); setNeedsMapping(false); setError(""); cursors.clear(); };
+  const resetPreview = () => { generation++; controller?.abort(); setBusy(""); setRows([]); setSelected(new Set<string>()); setCursor(""); setScanned(0); setSkippedImported(0); setResults([]); setViewName(""); setNeedsMapping(false); setError(""); cursors.clear(); };
   const defaults = async () => {
     const task = begin();
     try {
@@ -77,7 +78,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       if (response.cursor && cursors.has(response.cursor) || response.records.some(row => previous.some(old => old.recordId === row.recordId))) throw new Error("dingtalk_snapshot_changed");
       if (response.cursor) cursors.add(response.cursor);
       setFields(response.fields); setColumns(response.columns); setViewName(response.view?.name ?? ""); setNeedsMapping(response.needsMapping);
-      setRows([...previous, ...response.records]); setCursor(response.cursor); setScanned(previousScanned + response.scanned);
+      setRows([...previous, ...response.records.filter(row => !row.issueKey)]); setCursor(response.cursor); setScanned(previousScanned + response.scanned); setSkippedImported(value => (more ? value : 0) + (response.skippedImported ?? 0));
     } catch (error) { if (current(task.owner)) { setRows([]); setSelected(new Set<string>()); setCursor(""); setScanned(0); cursors.clear(); setError(message(error)); } }
     finally { if (current(task.owner)) setBusy(""); }
   };
@@ -90,9 +91,10 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       const response = await importDingtalkRecords({ url: url(), columns: columns(), records, serviceKey: service(), workMode: workMode(), priority: priority(), startAgent: startAgent() }, task.signal);
       if (!current(task.owner)) return;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
-      setResults(response.results);
+      setResults(values => [...values.filter(old => !response.results.some(row => row.recordId === old.recordId)), ...response.results]);
       const byId = new Map(response.results.map(row => [row.recordId, row]));
-      setRows(values => values.map(row => { const result = byId.get(row.recordId); return result?.issueKey ? { ...row, issueKey: result.issueKey } : result?.status === "stale" ? { ...row, creatable: false, reason: result.error ?? "记录已变化，请重新读取" } : row; }));
+      setRows(values => values.filter(row => !byId.get(row.recordId)?.issueKey).map(row => { const result = byId.get(row.recordId); return result?.status === "stale" ? { ...row, creatable: false, reason: result.error ?? "记录已变化，请重新读取" } : row; }));
+      setSkippedImported(value => value + response.results.filter(row => row.issueKey).length);
       setSelected(new Set(response.results.filter(row => row.status === "failed").map(row => row.recordId)));
       if (response.results.some(row => row.issueKey)) props.onCreated();
     } catch (error) { if (current(task.owner)) setError(message(error)); }
@@ -107,12 +109,13 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       <p class="dingtalk-note">{viewName() ? `当前视图：${viewName()}。使用该视图的筛选与排序，$ME 由钉钉连接账号解释。` : "按链接指定的数据表读取。"}读取仅用于预览，勾选并创建后才会生成工单。</p>
       <Show when={needsMapping()}><p role="status">请选择标题字段，然后重新读取。</p></Show>
       <Show when={source() && !source()!.connection.available}><p role="alert" class="form-error">尚未启用钉钉 MCP 连接，请检查配置文件。</p></Show>
-      <Show when={scanned() || rows().length}><p role="status">已检查 {scanned()} 行，匹配 {rows().length} 条{cursor() ? "，还有后续记录" : ""}。</p></Show>
+      <Show when={scanned() || rows().length}><p role="status">已检查 {scanned()} 行，匹配 {rows().length} 条，已过滤 {skippedImported()} 条已有工单{cursor() ? "，还有后续记录" : ""}。</p></Show>
       <Show when={rows().length}><div class="dingtalk-table-scroll"><table class="dingtalk-preview"><thead><tr><th><input type="checkbox" aria-label="选择全部可导入记录" disabled={Boolean(busy()) || !eligible().length} checked={eligible().length > 0 && eligible().every(row => selected().has(row.recordId))} onChange={event => setSelected(event.currentTarget.checked ? new Set(eligible().slice(0, 100).map(row => row.recordId)) : new Set())} /></th><th>标题与描述</th><th>模块</th><th>人员</th><th>状态</th><th>导入结果</th></tr></thead><tbody><For each={rows()}>{row => <tr><td><input type="checkbox" aria-label={`选择 ${row.title}`} checked={selected().has(row.recordId)} disabled={Boolean(busy()) || !row.creatable || Boolean(row.issueKey) || selected().size >= 100 && !selected().has(row.recordId)} onChange={event => setSelected(values => { const next = new Set(values); if (event.currentTarget.checked) next.add(row.recordId); else next.delete(row.recordId); return next; })} /></td><td><strong>{row.title || "无标题"}</strong><Show when={row.description}><details><summary>查看描述</summary><pre>{row.description}</pre></details></Show><Show when={row.reason}><small>{row.reason}</small></Show></td><td>{row.module || "—"}</td><td>{row.assignee || "—"}</td><td>{row.status || "—"}</td><td><Show when={row.issueKey} fallback={results().find(result => result.recordId === row.recordId)?.status === "failed" ? message(new Error(results().find(result => result.recordId === row.recordId)?.error)) : "未导入"}><Button type="text" onClick={() => { if (props.onOpenIssue(row.issueKey!)) props.onClose(); }}>{row.issueKey}</Button></Show></td></tr>}</For></tbody></table></div></Show>
       <Show when={cursor()}><Button disabled={Boolean(busy()) || rows().length >= 1000} onClick={() => { void read(true); }}>继续读取</Button></Show>
       <div class="dingtalk-fields"><label><span>入口服务</span><Select aria-label="导入工单服务" value={service()} disabled={Boolean(busy())} options={services().map(service => ({ value: service.key, label: service.name }))} onChange={setService} /></label><label><span>处理方式</span><Select aria-label="导入工单处理方式" value={workMode()} disabled={Boolean(busy())} options={modes()} onChange={setWorkMode} /></label><label><span>优先级</span><Select aria-label="导入工单优先级" value={priority()} disabled={Boolean(busy())} options={priorityOptions} onChange={setPriority} /></label></div>
       <label class="dingtalk-start-agent"><input type="checkbox" checked={startAgent()} disabled={Boolean(busy())} onChange={event => setStartAgent(event.currentTarget.checked)} />创建后立即启动 Agent</label>
       <Show when={results().length}><p role="status">创建 {results().filter(row => row.status === "created").length} 条，已存在 {results().filter(row => row.status === "existing").length} 条，需重新读取 {results().filter(row => row.status === "stale").length} 条，失败 {results().filter(row => row.status === "failed").length} 条。</p></Show>
+      <Show when={results().some(row => row.issueKey)}><div class="dingtalk-results"><span>已创建或已存在：</span><For each={results().filter(row => row.issueKey)}>{row => <Button type="text" onClick={() => { if (props.onOpenIssue(row.issueKey!)) props.onClose(); }}>{row.issueKey}</Button>}</For></div></Show>
       <Show when={error()}><p role="alert" class="form-error">{error()}</p></Show>
     </div>
   </Modal>;

@@ -67,10 +67,20 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       if (session) try { await session.close(); } catch { app.log.warn("dingtalk_connection_close_failed"); }
     }
   };
-  const mappings = async (table: ReturnType<typeof parseDingtalkTable>, ids: string[]) => {
+  const mappings = async (table: ReturnType<typeof parseDingtalkTable>, ids: string[], previews: Array<Pick<DingtalkPreviewRecord, "recordId" | "title" | "number">> = []) => {
     if (!ids.length) return new Map<string, string>();
     const rows = await database.db.select({ recordId: dingtalkIssueImports.recordId, key: issues.key }).from(dingtalkIssueImports).innerJoin(issues, eq(issues.id, dingtalkIssueImports.issueId)).where(and(eq(dingtalkIssueImports.baseId, table.baseId), eq(dingtalkIssueImports.tableId, table.tableId), inArray(dingtalkIssueImports.recordId, ids)));
-    return new Map(rows.map(row => [row.recordId, row.key]));
+    const existing = new Map(rows.map(row => [row.recordId, row.key]));
+    const titles = [...new Set(previews.flatMap(row => [row.title, row.number].filter(Boolean)))];
+    if (titles.length) {
+      const matches = await database.db.select({ key: issues.key, title: issues.title }).from(issues).where(inArray(issues.title, titles));
+      const byTitle = new Map(matches.map(row => [row.title, row.key]));
+      for (const row of previews) {
+        const key = byTitle.get(row.title) ?? (row.number ? byTitle.get(row.number) : undefined);
+        if (key && !existing.has(row.recordId)) existing.set(row.recordId, key);
+      }
+    }
+    return existing;
   };
   app.get("/api/dingtalk/source", handle(async (request): Promise<DingtalkSourceResponse> => {
     const state = await settings(request);
@@ -100,9 +110,9 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       });
       cursor = page.cursor;
       const scanned = page.records.length;
-      const imported = await mappings(table, records.map(row => row.recordId));
-      for (const row of records) if (imported.has(row.recordId)) row.issueKey = imported.get(row.recordId)!;
-      return { user: serializePerson(state.user), fields, columns, records, cursor: cursor ? Buffer.from(JSON.stringify({ cursor, signature: sign("cursor", { signature, cursor }) })).toString("base64url") : "", scanned, statusOptions: [...statuses], needsMapping: false, ...viewSummary };
+      const imported = await mappings(table, records.map(row => row.recordId), records);
+      const remaining = records.filter(row => !imported.has(row.recordId));
+      return { user: serializePerson(state.user), fields, columns, records: remaining, skippedImported: records.length - remaining.length, cursor: cursor ? Buffer.from(JSON.stringify({ cursor, signature: sign("cursor", { signature, cursor }) })).toString("base64url") : "", scanned, statusOptions: [...statuses], needsMapping: false, ...viewSummary };
     });
   }));
   app.post("/api/dingtalk/import", handle(async (request, signal) => {
@@ -132,6 +142,8 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
         if (cursor && needed.size) throw new ApiError(409, "dingtalk_view_verification_limit");
       } else if (missing.length) fresh.push(...(await readDingtalkRecords(session, table, columns, { recordIds: missing.map(row => row.recordId) })).records);
       if (fresh.some(row => !missing.some(selected => selected.recordId === row.recordId))) throw new DingtalkError("invalid_dingtalk_response");
+      const freshPreviews = fresh.map(row => dingtalkPreviewRecord(row, columns));
+      for (const [id, key] of await mappings(table, fresh.map(row => row.recordId), freshPreviews)) imported.set(id, key);
       const byId = new Map<string, DingtalkRecord>(fresh.map(row => [row.recordId, row]));
       const results: Array<{ recordId: string; status: "created" | "existing" | "stale" | "failed"; issueKey?: string; error?: string }> = [];
       for (const selectedRow of selected) {

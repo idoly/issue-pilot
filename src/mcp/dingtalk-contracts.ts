@@ -18,7 +18,7 @@ export interface DingtalkSourceResponse {
 export interface DingtalkPreviewInput { url: string; columns?: Partial<DingtalkColumns>; cursor?: string }
 export interface DingtalkPreviewResponse {
   user: DingtalkUser; fields: DingtalkField[]; columns: DingtalkColumns; records: DingtalkPreviewRecord[];
-  cursor: string; scanned: number; statusOptions: string[]; needsMapping: boolean; view?: { id: string; name: string };
+  cursor: string; scanned: number; statusOptions: string[]; needsMapping: boolean; skippedImported?: number; view?: { id: string; name: string };
 }
 export interface DingtalkImportInput extends Omit<DingtalkPreviewInput, "cursor"> {
   records: Array<{ recordId: string; token: string }>; workMode: IssueWorkMode; serviceKey: string; priority: IssuePriority; startAgent: boolean;

@@ -6,7 +6,7 @@ vi.mock("../data/client", async importOriginal => {
   const users = [ { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" as const }, { subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" as const } ];
   return { ...actual,
     loadUsers: vi.fn(async () => users), loadCurrentUser: vi.fn(async () => users.find(user => user.subject === actual.currentUserSubject()) ?? users[0]!),
-    loadCatalog: vi.fn(async () => ({ environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }] })),
+    loadCatalog: vi.fn(async () => ({ environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }, { key: "inventory", name: "Inventory", deployments: [{ environmentKey: "prod" }] }] })),
     loadDingtalkSource: vi.fn(async () => { const user = users.find(user => user.subject === actual.currentUserSubject()) ?? users[0]!; return { user, url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table", assignee: user.name, connection: { available: true, kind: "shared" as const, name: "dingtalk" } }; }),
     previewDingtalkRecords: vi.fn(), importDingtalkRecords: vi.fn(),
   };
@@ -48,9 +48,32 @@ test("navigation opens a read-only preview; only selected records are created an
   await waitFor(() => expect(importDingtalkRecords).toHaveBeenCalledOnce());
   await screen.findByRole("button", { name: "ISSUE-20261021-001" });
   expect(importDingtalkRecords).toHaveBeenCalledWith(expect.objectContaining({ serviceKey: "orders", workMode: "production_analysis", startAgent: false, records: [{ recordId: "a", token: "a".repeat(64) }, { recordId: "b", token: "b".repeat(64) }] }), expect.any(AbortSignal));
-  expect(screen.getByRole("checkbox", { name: "选择 Task a" })).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("checkbox", { name: "选择 Task a" })).toBeNull();
   expect(screen.getByRole("checkbox", { name: "选择 Task b" })).toHaveProperty("checked", true);
   expect(created).toHaveBeenCalledOnce();
+});
+
+test("a successful batch stays open, removes imported rows and lets the next batch choose another system", async () => {
+  const created = await open();
+  fireEvent.click(screen.getByRole("button", { name: "读取表格" })); await screen.findByText("Task a");
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择 Task a" }));
+  vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, results: [{ recordId: "a", status: "created", issueKey: "ISSUE-20261022-001" }] });
+  await waitFor(() => expect(screen.getByRole("button", { name: "创建选中工单" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "创建选中工单" }));
+  await screen.findByRole("button", { name: "ISSUE-20261022-001" });
+  expect(screen.getByRole("dialog", { name: "导入" })).toBeTruthy();
+  expect(screen.queryByRole("checkbox", { name: "选择 Task a" })).toBeNull();
+  fireEvent.click(screen.getByRole("combobox", { name: "导入工单服务" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Inventory" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择 Task b" }));
+  vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, results: [{ recordId: "b", status: "created", issueKey: "ISSUE-20261022-002" }] });
+  await waitFor(() => expect(screen.getByRole("button", { name: "创建选中工单" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "创建选中工单" }));
+  await screen.findByRole("button", { name: "ISSUE-20261022-002" });
+  expect(vi.mocked(importDingtalkRecords).mock.calls[1]![0]).toMatchObject({ serviceKey: "inventory", records: [{ recordId: "b", token: "b".repeat(64) }] });
+  expect(screen.getByRole("button", { name: "ISSUE-20261022-001" })).toBeTruthy();
+  expect(screen.queryByRole("checkbox", { name: "选择 Task b" })).toBeNull();
+  expect(created).toHaveBeenCalledTimes(2);
 });
 
 test("changing identity aborts an outstanding read and ignores its late result", async () => {

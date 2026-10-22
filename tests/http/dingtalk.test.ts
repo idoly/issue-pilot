@@ -69,6 +69,27 @@ test("DingTalk preview uses computed display fields, selects the current person 
     for (const issue of await f.database.db.select().from(issues)) { assert.equal(issue.assigneeSubject, f.actor.subject); assert.equal(issue.reporterSubject, f.actor.subject); assert.doesNotMatch(issue.description, /fixture-share-secret|viewId=/); }
     assert.ok(f.state.calls.some(call => call.name === "query_records" && Array.isArray(call.input.recordIds)));
     assert.equal(f.state.closed, f.state.configurations.length);
+    const remaining = await f.preview();
+    assert.equal(remaining.records.length, 0);
+    assert.equal(remaining.skippedImported, 4);
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk filters existing manual Issues by exact external number or full title", async () => {
+  const f = await fixture();
+  try {
+    const payload = f.payload(await f.preview());
+    const existing = await f.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, title: "EXT-one", description: "Existing manual Issue", assigneeSubject: f.actor.subject, ccSubjects: [] } });
+    assert.equal(existing.statusCode, 201, existing.body);
+    const preview = await f.preview();
+    assert.equal(preview.skippedImported, 1);
+    assert.ok(preview.records.every(row => row.recordId !== "one"));
+    payload.records = payload.records.filter(row => row.recordId === "one");
+    const imported = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
+    assert.equal(imported.statusCode, 200, imported.body);
+    assert.equal(imported.json().results[0].status, "existing");
+    assert.equal(imported.json().results[0].issueKey, existing.json().id);
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
   } finally { await f.cleanup(); }
 });
 
