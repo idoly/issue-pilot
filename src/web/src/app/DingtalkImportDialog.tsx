@@ -7,7 +7,6 @@ import { priorityOptions, workModeOptions } from "./model";
 const labels: Record<keyof DingtalkColumns, string> = { title: "标题字段", description: "描述字段", assignee: "人员字段", status: "状态字段", module: "模块字段", number: "编号字段" };
 const errors: Record<string, string> = {
   invalid_dingtalk_table_url: "请输入包含 sheetId 的钉钉数据表链接。", dingtalk_mcp_not_configured: "尚未启用当前用户的钉钉 MCP 连接，请检查配置文件。",
-  dingtalk_view_not_found: "链接指定的视图不存在或不可访问。", dingtalk_view_filter_not_supported: "当前钉钉 MCP 不支持该视图的筛选条件。请使用简单筛选视图，或升级 MCP 的视图查询接口。", dingtalk_view_verification_limit: "视图范围较大，未能完整核对所选记录，请收窄视图后重新读取。",
   dingtalk_configuration_invalid: "个人钉钉配置无效，请检查 user.yaml。", dingtalk_connection_failed: "钉钉连接失败，请检查当前连接和凭证。",
   dingtalk_read_failed: "钉钉读取失败，请重试或检查表格访问权限。", dingtalk_fields_changed: "表格字段已变化，请重新打开弹窗读取。",
   dingtalk_snapshot_changed: "表格数据或查询条件已变化，请重新读取。", dingtalk_result_too_large: "返回数据过大，请调整读取字段。",
@@ -36,7 +35,6 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   const [cursor, setCursor] = createSignal("", { ownedWrite: true }), [scanned, setScanned] = createSignal(0, { ownedWrite: true });
   const [busy, setBusy] = createSignal<"defaults" | "read" | "create" | "">("defaults", { ownedWrite: true }), [error, setError] = createSignal("", { ownedWrite: true });
   const [skippedImported, setSkippedImported] = createSignal(0, { ownedWrite: true });
-  const [viewName, setViewName] = createSignal("", { ownedWrite: true });
   const [needsMapping, setNeedsMapping] = createSignal(false, { ownedWrite: true });
   const [results, setResults] = createSignal<DingtalkImportResponse["results"]>([], { ownedWrite: true });
   const [workMode, setWorkMode] = createSignal<IssueWorkMode>("production_analysis", { ownedWrite: true }), [service, setService] = createSignal("", { ownedWrite: true });
@@ -53,7 +51,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
     if (!value.services.some(service => service.key === value.selected)) setService(value.services[0]?.key ?? "");
   });
   const eligible = () => rows().filter(row => row.creatable && !row.issueKey);
-  const resetPreview = () => { generation++; controller?.abort(); setBusy(""); setRows([]); setSelected(new Set<string>()); setCursor(""); setScanned(0); setSkippedImported(0); setResults([]); setViewName(""); setNeedsMapping(false); setError(""); cursors.clear(); };
+  const resetPreview = () => { generation++; controller?.abort(); setBusy(""); setRows([]); setSelected(new Set<string>()); setCursor(""); setScanned(0); setSkippedImported(0); setResults([]); setNeedsMapping(false); setError(""); cursors.clear(); };
   const defaults = async () => {
     const task = begin();
     try {
@@ -77,7 +75,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
       if (response.cursor && cursors.has(response.cursor) || response.records.some(row => previous.some(old => old.recordId === row.recordId))) throw new Error("dingtalk_snapshot_changed");
       if (response.cursor) cursors.add(response.cursor);
-      setFields(response.fields); setColumns(response.columns); setViewName(response.view?.name ?? ""); setNeedsMapping(response.needsMapping);
+      setFields(response.fields); setColumns(response.columns); setNeedsMapping(response.needsMapping);
       setRows([...previous, ...response.records.filter(row => !row.issueKey)]); setCursor(response.cursor); setScanned(previousScanned + response.scanned); setSkippedImported(value => (more ? value : 0) + (response.skippedImported ?? 0));
     } catch (error) { if (current(task.owner)) { setRows([]); setSelected(new Set<string>()); setCursor(""); setScanned(0); cursors.clear(); setError(message(error)); } }
     finally { if (current(task.owner)) setBusy(""); }
@@ -102,12 +100,12 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   };
   return <Modal open title="导入" width={1100} onOk={() => { void create(); }} onCancel={props.onClose} footer={<div class="dingtalk-footer"><span>已选择 {selected().size} 条</span><Button onClick={props.onClose}>关闭</Button><Button type="primary" loading={busy() === "create"} disabled={Boolean(busy()) || !selected().size || selected().size > 100 || !service()} onClick={() => { void create(); }}>创建选中工单</Button></div>}>
     <div class="dingtalk-import user-form">
-      <p class="dingtalk-identity">当前用户：{props.user.name} · {props.user.email}<Show when={source()}>　·　{source()!.connection.kind === "personal" ? "账号配置" : "共享连接"}</Show></p>
+      <p class="dingtalk-identity">当前用户：{props.user.name} · {props.user.email}<Show when={source()}>　筛选人员：{source()!.assignee}　·　{source()!.connection.kind === "personal" ? "账号配置" : "共享连接"}</Show></p>
       <label><span>数据表链接</span><Input aria-label="钉钉数据表链接" value={url()} disabled={Boolean(busy())} placeholder="https://alidocs.dingtalk.com/i/nodes/…?sheetId=…" onInput={event => { resetPreview(); setUrl(event.currentTarget.value); setFields([]); setColumns({}); }} /></label>
-      <Show when={fields().length}><div class="dingtalk-fields"><For each={DINGTALK_COLUMNS}>{key => <label><span>{labels[key]}{key === "title" ? " *" : ""}</span><Select aria-label={`钉钉${labels[key]}`} value={columns()[key] ?? ""} disabled={Boolean(busy())} options={[{ value: "", label: "请选择" }, ...fields().map(field => ({ value: field.id, label: field.name }))]} onChange={value => { resetPreview(); setColumns(columns => ({ ...columns, [key]: value })); }} /></label>}</For></div></Show>
+      <Show when={fields().length}><div class="dingtalk-fields"><For each={DINGTALK_COLUMNS}>{key => <label><span>{labels[key]}{["title", "assignee", "status"].includes(key) ? " *" : ""}</span><Select aria-label={`钉钉${labels[key]}`} value={columns()[key] ?? ""} disabled={Boolean(busy())} options={[{ value: "", label: "请选择" }, ...fields().map(field => ({ value: field.id, label: field.name }))]} onChange={value => { resetPreview(); setColumns(columns => ({ ...columns, [key]: value })); }} /></label>}</For></div></Show>
       <div class="dingtalk-read-actions"><Button loading={busy() === "read"} disabled={Boolean(busy()) || !url().trim() || !source()?.connection.available} onClick={() => { void read(); }}>读取表格</Button></div>
-      <p class="dingtalk-note">{viewName() ? `当前视图：${viewName()}。使用该视图的筛选与排序，$ME 由钉钉连接账号解释。` : "按链接指定的数据表读取。"}读取仅用于预览，勾选并创建后才会生成工单。</p>
-      <Show when={needsMapping()}><p role="status">请选择标题字段，然后重新读取。</p></Show>
+      <p class="dingtalk-note">分页读取整张数据表，只显示当前用户且状态为“A待安排”的记录，忽略链接中的视图筛选。读取仅用于预览，勾选并创建后才会生成工单。</p>
+      <Show when={needsMapping()}><p role="status">请选择标题、人员和状态字段，然后重新读取。</p></Show>
       <Show when={source() && !source()!.connection.available}><p role="alert" class="form-error">尚未启用钉钉 MCP 连接，请检查配置文件。</p></Show>
       <Show when={fields().length && !needsMapping() && busy() !== "read" && !error()}><p role="status">已检查 {scanned()} 行，匹配 {rows().length} 条，已过滤 {skippedImported()} 条已有工单{cursor() ? "，还有后续记录" : ""}。</p></Show>
       <Show when={rows().length}><div class="dingtalk-table-scroll"><table class="dingtalk-preview"><thead><tr><th><input type="checkbox" aria-label="选择全部可导入记录" disabled={Boolean(busy()) || !eligible().length} checked={eligible().length > 0 && eligible().every(row => selected().has(row.recordId))} onChange={event => setSelected(event.currentTarget.checked ? new Set(eligible().slice(0, 100).map(row => row.recordId)) : new Set())} /></th><th>标题与描述</th><th>模块</th><th>人员</th><th>状态</th><th>导入结果</th></tr></thead><tbody><For each={rows()}>{row => <tr><td><input type="checkbox" aria-label={`选择 ${row.title}`} checked={selected().has(row.recordId)} disabled={Boolean(busy()) || !row.creatable || Boolean(row.issueKey) || selected().size >= 100 && !selected().has(row.recordId)} onChange={event => setSelected(values => { const next = new Set(values); if (event.currentTarget.checked) next.add(row.recordId); else next.delete(row.recordId); return next; })} /></td><td><strong>{row.title || "无标题"}</strong><Show when={row.description}><details><summary>查看描述</summary><pre>{row.description}</pre></details></Show><Show when={row.reason}><small>{row.reason}</small></Show></td><td>{row.module || "—"}</td><td>{row.assignee || "—"}</td><td>{row.status || "—"}</td><td><Show when={row.issueKey} fallback={results().find(result => result.recordId === row.recordId)?.status === "failed" ? message(new Error(results().find(result => result.recordId === row.recordId)?.error)) : "未导入"}><Button type="text" onClick={() => { if (props.onOpenIssue(row.issueKey!)) props.onClose(); }}>{row.issueKey}</Button></Show></td></tr>}</For></tbody></table></div></Show>

@@ -95,6 +95,10 @@ test("API exposes safe file ownership status and prevents editing a second confi
     assert.equal(config.statusCode, 200, config.body);
     assert.equal(config.json().fileManaged.services, true);
     assert.doesNotMatch(config.body, /private-model-key|private-sls-secret|private-dms-token|private-dingtalk-key|private-mysql-password/);
+    const credentialStatus = await app.inject({ method: "GET", url: "/api/me/credentials" });
+    assert.equal(credentialStatus.statusCode, 200, credentialStatus.body);
+    assert.equal(credentialStatus.json().dingtalkConfigured, true);
+    assert.doesNotMatch(credentialStatus.body, /private-model-key|private-sls-secret|private-dms-token|private-dingtalk-key|private-mysql-password/);
     const mcp = await app.inject({ method: "GET", url: "/api/mcp-services" });
     assert.doesNotMatch(mcp.body, /private-dingtalk-key|private-dms-token|private-mysql-password|Retired Browser/);
     assert.equal((await app.inject({ method: "POST", url: "/api/mcp-services/retired/test" })).statusCode, 404);

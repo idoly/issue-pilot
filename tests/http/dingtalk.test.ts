@@ -13,7 +13,7 @@ import { createApiFixture, createService } from "./fixture.ts";
 const url = "https://alidocs.dingtalk.com/i/nodes/base?entrance=data&sheetId=table&token=fixture-share-secret";
 const fields = [ ["title", "工单标题"], ["description", "工单描述"], ["assignee", "参与人"], ["status", "研发任务状态"], ["module", "对应模块"], ["number", "序号"] ].map(([fieldId, fieldName]) => ({ fieldId, fieldName, type: "text" }));
 async function fixture() {
-  const state = { rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined, viewFilter: { operator: "and", operands: [{ operator: "any_of", operands: ["assignee", ["$ME"]] }] }, viewSort: [{ fieldId: "number", direction: "DESC" }], viewIds: undefined as Set<string> | undefined };
+  const state = { rows: [] as DingtalkRecord[], configurations: [] as McpConfiguration[], calls: [] as Array<{ name: string; input: Record<string, unknown> }>, closed: 0, failure: false, badCursor: false, beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined };
   const connector: McpConnector = async (configuration, signal) => {
     state.configurations.push(configuration);
     if (state.failure) throw new Error("transport fixture-private-credential");
@@ -21,11 +21,10 @@ async function fixture() {
       list: async () => [], close: async () => { state.closed++; },
       async call(name, input) {
         state.calls.push({ name, input });
-        assert.ok(["get_tables", "get_views", "query_records"].includes(name), "only known read operations may execute");
+        assert.ok(["get_tables", "query_records"].includes(name), "only known read operations may execute");
         if (name === "get_tables") return { structuredContent: { status: "success", data: { tables: [{ tableId: "table", fields }] } } };
-        if (name === "get_views") return { structuredContent: { status: "success", data: { views: [{ viewId: "view", viewName: "My tasks", tableId: "table", baseId: "base", filter: state.viewFilter, sort: state.viewSort }] } } };
         await state.beforeRecords?.(signal);
-        const sourceRows = input.filters && state.viewIds ? state.rows.filter(row => state.viewIds!.has(row.recordId)) : state.rows;
+        const sourceRows = state.rows;
         const ids = input.recordIds as string[] | undefined, offset = input.cursor ? Number(String(input.cursor).replace("offset-", "")) || 0 : 0;
         const rows = ids ? sourceRows.filter(row => ids.includes(row.recordId)) : sourceRows.slice(offset, offset + Number(input.limit));
         const next = state.badCursor ? "offset-0" : !ids && offset + rows.length < sourceRows.length ? `offset-${offset + rows.length}` : "";
@@ -52,7 +51,7 @@ test("DingTalk preview uses computed display fields, selects the current person 
   const f = await fixture();
   try {
     const preview = await f.preview({ url: "https://alidocs.dingtalk.com/i/nodes/base?iframeQuery=entrance%3Ddata%26sheetId%3Dtable" });
-    assert.deepEqual(preview.records.map(row => row.recordId), ["one", "other", "similar", "two"]);
+    assert.deepEqual(preview.records.map(row => row.recordId), ["one", "two"]);
     assert.deepEqual(preview.statusOptions, ["A待安排"]);
     assert.equal(preview.records[0]!.title, "EXT-one Order one");
     assert.equal(preview.records[0]!.description, "Description one");
@@ -62,16 +61,16 @@ test("DingTalk preview uses computed display fields, selects the current person 
     const payload = f.payload(preview);
     const results = await Promise.all([f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload }), f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload })]);
     for (const response of results) assert.equal(response.statusCode, 200, response.body);
-    assert.equal(results.flatMap(result => result.json().results).filter(result => result.status === "created").length, 4);
-    assert.equal((await f.database.db.select().from(issues)).length, 4);
-    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 4);
+    assert.equal(results.flatMap(result => result.json().results).filter(result => result.status === "created").length, 2);
+    assert.equal((await f.database.db.select().from(issues)).length, 2);
+    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 2);
     assert.equal(f.engine.enqueued.length, 0);
     for (const issue of await f.database.db.select().from(issues)) { assert.equal(issue.assigneeSubject, f.actor.subject); assert.equal(issue.reporterSubject, f.actor.subject); assert.doesNotMatch(issue.description, /fixture-share-secret|viewId=/); }
     assert.ok(f.state.calls.some(call => call.name === "query_records" && Array.isArray(call.input.recordIds)));
     assert.equal(f.state.closed, f.state.configurations.length);
     const remaining = await f.preview();
     assert.equal(remaining.records.length, 0);
-    assert.equal(remaining.skippedImported, 4);
+    assert.equal(remaining.skippedImported, 2);
   } finally { await f.cleanup(); }
 });
 
@@ -93,41 +92,34 @@ test("DingTalk filters existing manual Issues by exact external number or full t
   } finally { await f.cleanup(); }
 });
 
-test("DingTalk view queries preserve server filters, sorting and $ME without applying a second local person filter", async () => {
+test("DingTalk ignores view IDs and displays only the current user's pending table records", async () => {
   const f = await fixture();
   try {
     const viewUrl = url + "&iframeQuery=viewId%3Dview";
-    f.state.viewIds = new Set(["other"]);
-    const response = await f.preview({ url: viewUrl, columns: { assignee: "" } });
-    assert.deepEqual(response.records.map(row => row.recordId), ["other"]);
-    assert.deepEqual(response.view, { id: "view", name: "My tasks" });
+    f.state.rows[3]!.cells.status = { value: ["D已完成"] };
+    const response = await f.preview({ url: viewUrl });
+    assert.deepEqual(response.records.map(row => row.recordId), ["one"]);
     const calls = f.state.calls.filter(call => call.name === "query_records");
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0]!.input.filters, f.state.viewFilter);
-    assert.deepEqual(calls[0]!.input.sort, f.state.viewSort);
+    assert.deepEqual(calls[0]!.input.filters, { operator: "and", operands: [{ operator: "eq", operands: ["status", "A待安排"] }] });
+    assert.equal(calls[0]!.input.sort, undefined);
     const payload = { ...f.payload(response), url: viewUrl };
-    f.state.viewIds = new Set();
+    f.state.rows[0]!.cells.status = { value: ["D已完成"] };
     const stale = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
     assert.equal(stale.statusCode, 200, stale.body);
     assert.equal(stale.json().results[0].status, "stale");
     assert.equal((await f.database.db.select().from(issues)).length, 0);
-    f.state.viewIds = new Set(["other"]);
-    const imported = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload });
-    assert.equal(imported.statusCode, 200, imported.body);
-    assert.equal(imported.json().results[0].status, "created");
-    assert.ok(f.state.calls.filter(call => call.name === "query_records").every(call => call.input.recordIds === undefined));
+    assert.ok(f.state.calls.every(call => call.name !== "get_views"));
   } finally { await f.cleanup(); }
 });
 
-test("DingTalk rejects an old view preview when its filter changes", async () => {
+test("DingTalk filters only the exact A待安排 status", async () => {
   const f = await fixture();
   try {
-    const viewUrl = url + "&viewId=view", preview = await f.preview({ url: viewUrl });
-    f.state.viewFilter = { operator: "or", operands: [] };
-    const response = await f.app.inject({ method: "POST", url: "/api/dingtalk/import", payload: { ...f.payload(preview), url: viewUrl } });
-    assert.equal(response.statusCode, 200, response.body);
-    assert.ok(response.json().results.every((row: { status: string }) => row.status === "stale"));
-    assert.equal((await f.database.db.select().from(issues)).length, 0);
+    const template = f.state.rows[0]!;
+    f.state.rows = ["待处理", "待安排", "A待安排", "D已完成", "X挂起", "Y无需处理"].map((status, index) => ({ recordId: `status-${index}`, cells: { ...structuredClone(template.cells), status: { value: [status] } } }));
+    const preview = await f.preview();
+    assert.deepEqual(preview.records.map(row => row.recordId), ["status-2"]);
   } finally { await f.cleanup(); }
 });
 
@@ -149,13 +141,28 @@ test("DingTalk preview batches dense matches without dropping records across con
   } finally { await f.cleanup(); }
 });
 
-test("DingTalk returns the link's records without adding local person or status filters", async () => {
+test("a page without matching users keeps its cursor and finds pending records on later pages", async () => {
+  const f = await fixture();
+  try {
+    const own = f.state.rows[0]!, other = f.state.rows[1]!;
+    f.state.rows = Array.from({ length: 101 }, (_, index) => ({ recordId: `row-${index}`, cells: structuredClone((index === 100 ? own : other).cells) }));
+    const first = await f.preview();
+    assert.deepEqual(first.records, []); assert.equal(first.scanned, 100); assert.ok(first.cursor);
+    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 1);
+    const second = await f.preview({ columns: first.columns, cursor: first.cursor });
+    assert.deepEqual(second.records.map(row => row.recordId), ["row-100"]);
+    assert.equal(second.cursor, "");
+    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 2);
+  } finally { await f.cleanup(); }
+});
+
+test("DingTalk requires person and status columns before reading records", async () => {
   const f = await fixture();
   try {
     const preview = await f.preview({ columns: { assignee: "", status: "" }, statusFilter: "non-matching legacy input" });
-    assert.deepEqual(preview.records.map(row => row.recordId), f.state.rows.map(row => row.recordId));
-    assert.equal(preview.needsMapping, false);
-    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 1);
+    assert.deepEqual(preview.records, []);
+    assert.equal(preview.needsMapping, true);
+    assert.equal(f.state.calls.filter(call => call.name === "query_records").length, 0);
   } finally { await f.cleanup(); }
 });
 

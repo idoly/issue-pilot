@@ -2,6 +2,7 @@ import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration, Capab
 import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { subjects, issues, userCredentials } from "../db/schema.ts";
+import { loadDingtalkUserSettings } from "../configuration/file-configuration.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
 import { USER_ROLES } from "../domain/contracts.ts";
@@ -43,7 +44,7 @@ function serializeManagedUser(user: typeof subjects.$inferSelect) {
   };
 }
 
-export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">): void {
+export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive" | "stateRoot">): void {
   const { app, database, engine, runScopeExclusive } = context;
 
   const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) => runScopeExclusive(async () => {
@@ -59,7 +60,10 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     reply.header("Cache-Control", "private, no-store");
     const [credentials] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, user.subject)).limit(1);
     const status = credentialStatus(credentials);
-    return user.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
+    const dingtalk = await loadDingtalkUserSettings(context.stateRoot, user.subject);
+    const dingtalkConfigured = Boolean(dingtalk.personal?.apiKey ?? dingtalk.shared?.apiKey);
+    const publicStatus = { ...status, ...(dingtalkConfigured ? { dingtalkConfigured: true } : {}) };
+    return user.role === "developer" ? { ...publicStatus, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...publicStatus, modelProviders: [], gitSshConfigured: false };
   });
 
   app.put("/api/me/credentials", { logLevel: "silent" }, async (request, reply) => {

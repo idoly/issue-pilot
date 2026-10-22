@@ -1,6 +1,6 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { McpSession } from "./client.ts";
-import { DINGTALK_COLUMNS, type DingtalkTable, type DingtalkView, type DingtalkField, type DingtalkColumns, type DingtalkRecord, type DingtalkPreviewRecord } from "./dingtalk-contracts.ts";
+import { DINGTALK_COLUMNS, type DingtalkTable, type DingtalkField, type DingtalkColumns, type DingtalkRecord, type DingtalkPreviewRecord } from "./dingtalk-contracts.ts";
 
 const limits = issuePilotConfig.limits.capability.dingtalk;
 export class DingtalkError extends Error {
@@ -24,16 +24,13 @@ export function parseDingtalkTable(value: string): DingtalkTable {
     const entrance = url.searchParams.get("entrance") ?? embedded.get("entrance");
     if (entrance !== null && entrance !== "data") throw new Error();
     const baseId = dingtalkId(match[1]), tableId = dingtalkId(url.searchParams.get("sheetId") ?? embedded.get("sheetId"));
-    const rawViewId = url.searchParams.get("viewId") ?? embedded.get("viewId");
-    const viewId = rawViewId === null ? undefined : dingtalkId(rawViewId);
     // Keep routing information only; share-link credentials never enter an Issue.
     const canonical = new URL(`https://alidocs.dingtalk.com/i/nodes/${baseId}`);
     canonical.searchParams.set("entrance", "data"); canonical.searchParams.set("sheetId", tableId);
-    if (viewId) canonical.searchParams.set("viewId", viewId);
-    return { baseId, tableId, ...(viewId ? { viewId } : {}), url: canonical.toString() };
+    return { baseId, tableId, url: canonical.toString() };
   } catch { throw new DingtalkError("invalid_dingtalk_table_url", 400); }
 }
-async function read(session: McpSession, name: "get_tables" | "get_views" | "query_records", input: Record<string, unknown>) {
+async function read(session: McpSession, name: "get_tables" | "query_records", input: Record<string, unknown>) {
   if (!session.call) throw new DingtalkError("dingtalk_read_not_supported");
   let result: Record<string, unknown>;
   try { result = object(await session.call(name, input)); }
@@ -48,7 +45,6 @@ async function read(session: McpSession, name: "get_tables" | "get_views" | "que
   if (result.isError || payload.status !== "success") {
     const error = payload.error && typeof payload.error === "object" ? object(payload.error) : {};
     if (["INVALID_CURSOR", "CURSOR_SNAPSHOT_CHANGED", "CURSOR_SNAPSHOT_UNAVAILABLE", "NON_RESUMABLE_ERROR_CURSOR", "CURSOR_OFFSET_LIMIT"].includes(String(error.code))) throw new DingtalkError("dingtalk_snapshot_changed", 409);
-    if (name === "query_records" && ["INVALID_FILTER_OPERANDS", "INVALID_FILTER_OPERATOR", "INVALID_FILTER_VALUE"].includes(String(error.code))) throw new DingtalkError("dingtalk_view_filter_not_supported", 422);
     throw new DingtalkError("dingtalk_read_failed");
   }
   return object(payload.data);
@@ -84,27 +80,9 @@ export function resolveDingtalkColumns(fields: DingtalkField[], requested: Parti
     return [key, id ?? ""];
   })) as DingtalkColumns;
 }
-export async function readDingtalkView(session: McpSession, table: DingtalkTable): Promise<DingtalkView | undefined> {
-  if (!table.viewId) return undefined;
-  const data = await read(session, "get_views", { baseId: table.baseId, tableId: table.tableId, viewIds: [table.viewId] });
-  if (!Array.isArray(data.views)) throw new DingtalkError("invalid_dingtalk_response");
-  const view = data.views.map(object).find(view => view.viewId === table.viewId);
-  if (!view || view.tableId !== undefined && view.tableId !== table.tableId || view.baseId !== undefined && view.baseId !== table.baseId) throw new DingtalkError("dingtalk_view_not_found", 404);
-  if (typeof view.viewName !== "string" || view.viewName.length > limits.labelCharacters) throw new DingtalkError("invalid_dingtalk_response");
-  const filter = view.filter === null || view.filter === undefined ? undefined : object(view.filter);
-  if (filter && Object.keys(filter).length && (!Array.isArray(filter.operands) || !["and", "or"].includes(String(filter.operator).toLowerCase()))) throw new DingtalkError("dingtalk_view_filter_not_supported");
-  if (filter && Array.isArray(filter.operands) && filter.operands.some(value => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
-    const condition = value as Record<string, unknown>;
-    return typeof condition.operator !== "string" || ["and", "or"].includes(condition.operator.toLowerCase()) || !Array.isArray(condition.operands);
-  })) throw new DingtalkError("dingtalk_view_filter_not_supported", 422);
-  if (view.sort !== null && view.sort !== undefined && !Array.isArray(view.sort)) throw new DingtalkError("invalid_dingtalk_response");
-  const sort = Array.isArray(view.sort) ? view.sort.map(object) : undefined;
-  // Forward the view's own query, including $ME, to DingTalk without guessing a different user or filter.
-  return { id: table.viewId, name: view.viewName, ...(filter && Array.isArray(filter.operands) && filter.operands.length ? { filters: filter } : {}), ...(sort?.length ? { sort } : {}) };
-}
-export async function readDingtalkRecords(session: McpSession, table: DingtalkTable, columns: DingtalkColumns, options: { cursor?: string; limit?: number; recordIds?: string[]; filters?: Record<string, unknown>; sort?: Array<Record<string, unknown>> }) {
-  const data = await read(session, "query_records", { baseId: table.baseId, tableId: table.tableId, fieldIds: [...new Set(Object.values(columns).filter(Boolean))], ...options });
+export async function readDingtalkRecords(session: McpSession, table: DingtalkTable, columns: DingtalkColumns, options: { cursor?: string; limit?: number; recordIds?: string[]; status?: { fieldId: string; value: string } }) {
+  const { status, ...query } = options;
+  const data = await read(session, "query_records", { baseId: table.baseId, tableId: table.tableId, fieldIds: [...new Set(Object.values(columns).filter(Boolean))], ...query, ...(status ? { filters: { operator: "and", operands: [{ operator: "eq", operands: [status.fieldId, status.value] }] } } : {}) });
   if (!Array.isArray(data.records) || data.records.length > 100) throw new DingtalkError("invalid_dingtalk_response");
   const records: DingtalkRecord[] = data.records.map(value => { const row = object(value); return { recordId: dingtalkId(row.recordId), cells: object(row.cells) }; });
   if (new Set(records.map(row => row.recordId)).size !== records.length) throw new DingtalkError("invalid_dingtalk_response");
@@ -124,6 +102,12 @@ function cellTexts(value: unknown, depth = 0): string[] {
   return [];
 }
 export function dingtalkCellTexts(record: DingtalkRecord, field: string): string[] { return field ? cellTexts(record.cells[field]).map(value => value.trim()).filter(Boolean) : []; }
+export function matchesDingtalkUser(record: DingtalkRecord, field: string, user: string): boolean {
+  const escaped = user.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!escaped) return false;
+  const name = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "u");
+  return dingtalkCellTexts(record, field).some(value => name.test(value));
+}
 export function dingtalkPreviewRecord(record: DingtalkRecord, columns: DingtalkColumns): Omit<DingtalkPreviewRecord, "token"> {
   const value = (key: keyof DingtalkColumns) => dingtalkCellTexts(record, columns[key]).join("\n");
   const number = value("number"), originalTitle = value("title"), description = value("description");

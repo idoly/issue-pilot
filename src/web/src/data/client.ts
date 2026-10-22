@@ -6,7 +6,7 @@ import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../
 import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
@@ -26,7 +26,7 @@ export interface DmsScopeResolution { instanceId: string; instanceHost: string; 
 export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
 export interface ManagedUserInput { subject: string; name: string; email: string; role?: UserRole; isAdmin?: boolean }
 export interface ManagedUserUpdate { name?: string; email?: string; active?: boolean; role?: UserRole; isAdmin?: boolean }
-export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
+export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean; dingtalkConfigured?: boolean }
 export interface PersonalCredentialUpdate {
   production?: {
     dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" };
@@ -195,7 +195,6 @@ export const listIssueWorkFiles = async (key: string, path = "", signal?: AbortS
 export const issueWorkFileUrl = (key: string, path: string) => issuePath(key, `/files/download?path=${encodeURIComponent(path)}`);
 
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
-export const updateGlobalAgent = (input: AgentConfiguration) => request<{ ok: true }>("/api/config/agent", { method: "PUT", body: JSON.stringify(input) });
 
 type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite" | "Offset";
 
@@ -292,16 +291,6 @@ function appendFiles(form: FormData, files: File[]): void {
 
 export const resolveDmsScope = (input: { url: string; authorization?: string; serviceKey?: string; environmentKey: string; instanceAlias: string; schemaName: string }) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input);
 
-import type { McpStdioConfiguration, McpTransport } from "../../../domain/contracts";
-export interface McpService { id: string; name: string; url: string; transport: McpTransport; enabled: boolean; credentialConfigured: boolean }
-export interface McpServiceInput { name: string; url: string; transport: McpService["transport"]; enabled: boolean; credentialUpdate: { mode: "preserve" | "clear" } | { mode: "replace"; values: { authorization: string } | { stdio: McpStdioConfiguration } } }
-export const importMcpServices = (input: unknown) => jsonRequest<McpService[]>("/api/mcp-services/import", "POST", input);
-export const loadMcpServiceConfiguration = (id: string, signal?: AbortSignal) => request<McpServersInput>(`/api/mcp-services/${encodeURIComponent(id)}/configuration`, signal ? { signal } : undefined);
-export const loadMcpServices = () => request<McpService[]>("/api/mcp-services");
-export interface McpServersInput { mcpServers: Record<string, unknown> }
-export const updateMcpService = (id: string, input: McpServiceInput | McpServersInput) => jsonRequest<McpService>(`/api/mcp-services/${encodeURIComponent(id)}`, "PATCH", input);
-export const deleteMcpService = (id: string) => request<void>(`/api/mcp-services/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const testMcpService = (id: string) => jsonRequest<{ tools: Array<{ name: string; readOnly: boolean }> }>(`/api/mcp-services/${encodeURIComponent(id)}/test`, "POST", {});
 
 export interface ApplicationEndpoint {
   name: string; path: string; transport: string; readOnly: boolean;
@@ -309,15 +298,9 @@ export interface ApplicationEndpoint {
 }
 export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endpoints: ApplicationEndpoint[] }>("/api/endpoints", signal ? { signal } : undefined);
 
-export interface CapabilitySwitchItem { key: import("../../../domain/contracts").CapabilityName; enabled: boolean }
-export const loadCapabilitySwitches = () => request<CapabilitySwitchItem[]>("/api/capabilities");
-export const updateCapabilitySwitch = (key: CapabilitySwitchItem["key"], enabled: boolean) => jsonRequest<CapabilitySwitchItem>(`/api/capabilities/${encodeURIComponent(key)}`, "PATCH", { enabled });
 
 export interface ManagedRepository { id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
 export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");
-export const createRepository = (input: { name: string; url: string }) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
-export const updateRepository = (id: string, input: { name: string; url: string }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
-export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
 
 export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
 export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(userPath(subject), "PATCH", input);

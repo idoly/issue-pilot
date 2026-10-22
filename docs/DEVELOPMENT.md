@@ -68,7 +68,7 @@ npm audit --omit=dev --audit-level=high
 | Git、代码集合、生命周期 | src/workspace |
 | 成果与发布 | outputs/store.ts、agent/output-tool.ts |
 | Web DTO、请求、SSE | web/src/data/client.ts、app/agent-stream.ts |
-| 共享草稿、配置编辑 | ApplicationResources.tsx、agent-configuration.ts |
+| 共享配置、当前身份 | ApplicationResources.tsx |
 | 代码浏览 | CodeBrowser.tsx、SourceText.tsx、SourceDiff.tsx、monaco.ts、workspace/source-browser.ts；共用 DTO/枚举：workspace/source-contracts.ts |
 
 ## 隔离与变更边界
@@ -85,7 +85,7 @@ unknown 在请求或协议边界解析；路由协调 owner，不复制存储、
 
 ## Web 与浏览器
 
-Solid 2 使用 `createEffect(compute, callback)`，callback 只返回清理函数或 undefined；组件构造时有意读取初始 reactive value 使用 untrack。基座草稿由应用资源持有，旧身份未提交修改和旧请求不得覆盖新状态。
+Solid 2 使用 `createEffect(compute, callback)`，callback 只返回清理函数或 undefined；组件构造时有意读取初始 reactive value 使用 untrack。配置页保留用户凭证状态、仓库、服务和端点，不提供基座和能力管理入口；切换身份时旧请求不得覆盖新身份状态。
 
 Monaco 使用公开 editor/model API，组件负责释放资源。修改时保留 SHA-256、CRLF、自动保存、撤销、只读与冲突语义。图标与字体配置由 `ui/icons.tsx`、`EditorIcons.tsx` 和 Vite 构建维护。
 

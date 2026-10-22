@@ -33,7 +33,7 @@ Before an authorized operational change, follow the Runbook, including its bound
 | Outputs and publication | src/outputs/store.ts, src/agent/output-tool.ts |
 | Git, projects, runtime and lifecycle | src/workspace |
 | Web requests and DTOs | src/web/src/data/client.ts |
-| Shared data and Agent editing state | ApplicationResources.tsx, agent-configuration.ts |
+| Shared configuration and identity | ApplicationResources.tsx |
 | SSE and conversation projection | agent-stream.ts, conversation.ts, AgentPanel.tsx |
 | Code browser | CodeBrowser.tsx, SourceText.tsx, SourceDiff.tsx, monaco.ts, src/workspace/source-browser.ts |
 

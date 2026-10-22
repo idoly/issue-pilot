@@ -187,7 +187,7 @@ test("does not save another user's credentials when the default identity changes
   const f = await createApiFixture(), database = openDatabase(f.databaseFile), app = Fastify();
   let release!: () => void, entered!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }), waiting = new Promise<void>(resolve => { entered = resolve; });
-  registerUserRoutes({ app, database, engine: f.engine, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
+  registerUserRoutes({ app, database, stateRoot: f.root, engine: f.engine, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
   app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     const created = await f.app.inject({ method: "POST", url: "/api/users", headers: { "x-issue-pilot-subject": owner }, payload: { subject: "zz-next-developer", name: "Next", email: "next@example.test", role: "developer", isAdmin: true } });

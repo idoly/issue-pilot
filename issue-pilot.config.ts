@@ -95,7 +95,7 @@ export const issuePilotConfig = Object.freeze({
       resultBytes: 1024 * 1024,
       timeoutMs: 15_000,
       connectionMs: 10_000,
-      dingtalk: Object.freeze({ previewRecords: 100, importScanRecords: 1000, importRecords: 100, tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512, cursorCharacters: 16384 }),
+      dingtalk: Object.freeze({ previewRecords: 100, pendingStatus: "A待安排", importRecords: 100, tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512, cursorCharacters: 16384 }),
       mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
       dms: Object.freeze({ executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
       sls: Object.freeze({ pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),

@@ -44,7 +44,6 @@ vi.mock("../data/client", async (importOriginal) => {
       repositories: [{ id: "orders-repository", alias: "orders", url: "git@example.com:team/orders.git" }],
     }],
   };
-  const capabilitySwitches = ["dms", "sls"].map(key => ({ key, enabled: true }));
   return {
     ...actual,
     loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
@@ -67,24 +66,12 @@ vi.mock("../data/client", async (importOriginal) => {
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
     })),
     loadApplicationEndpoints: vi.fn(async () => ({ endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: true, tools: [{ name: "issue_get", description: "Read Issue details", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { key: { type: "string", description: "Issue key" } }, required: ["key"] } }] }] })),
-    importMcpServices: vi.fn(async () => []),
-    loadMcpServices: vi.fn(async () => []),
-    loadMcpServiceConfiguration: vi.fn(async (id: string) => id === "local" ? { mcpServers: { Local: { command: "npx", args: ["@playwright/mcp@0.0.83"], env: { TOKEN: "private-token" } } } } : { mcpServers: { Docs: { url: "https://mcp.example.test/mcp", headers: { Authorization: "Bearer stored-token" } } } }),
-    updateMcpService: vi.fn(async () => ({ id: "mcp-1", name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialConfigured: false })),
-    deleteMcpService: vi.fn(async () => undefined),
-    testMcpService: vi.fn(async () => ({ tools: [{ name: "search", readOnly: true }] })),
-    loadCapabilitySwitches: vi.fn(async () => structuredClone(capabilitySwitches)),
-    updateCapabilitySwitch: vi.fn(async (key, enabled) => { const row = capabilitySwitches.find(row => row.key === key)!; row.enabled = enabled; return structuredClone(row); }),
     loadRepositories: vi.fn(async () => [
       ...configuration.services.flatMap((service) => service.repositories.map((repository) => ({ id: repository.id, name: repository.alias, url: repository.url, createdAt: now, updatedAt: now, services: [{ key: service.key, name: service.name }] }))),
       { id: "updated-repository", name: "Updated repository", url: "git@example.test:team/updated.git", createdAt: now, updatedAt: now, services: [] },
     ]),
-    createRepository: vi.fn(async () => ({ id: "new-repository" })),
-    updateRepository: vi.fn(async () => ({ ok: true })),
-    deleteRepository: vi.fn(async () => undefined),
     loadServiceConfigurationDescription: vi.fn(async (key: string) => ({ context: configuration.services.find(service => service.key === key)?.context ?? configuration.services.find(service => service.key === key)?.description ?? "" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
-    updateGlobalAgent: vi.fn(async (agent) => { configuration.agent = { ...agent }; return { ok: true as const }; }),
     listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
     createIssue: vi.fn(async (input: { title: string; description: string; priority: string; workMode: string; serviceKey: string; assigneeSubject: string | null; ccSubjects: string[]; relatedIssueKeys?: string[] }) => {
       const created = issue("ISSUE-20260810-043", input.title, "open");
@@ -732,33 +719,6 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   });
 
-  test("keeps a service draft when the current user's details refresh without a permission change", async () => {
-    const client = await import("../data/client");
-    render(() => <App initialView="configuration" />);
-    await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test"));
-    let finish!: (user: Awaited<ReturnType<typeof client.loadCurrentUser>>) => void;
-    vi.mocked(client.loadCurrentUser).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const refreshed = { subject: "fixture-user", name: "Updated User", email: "owner@example.test", role: "developer" as const };
-    try {
-      fireEvent.click(screen.getByRole("tab", { name: "用户" }));
-      const users = await screen.findByRole("region", { name: "用户列表" });
-      const row = within(users).getByText("fixture-user").closest(".user-table-row") as HTMLElement;
-      fireEvent.click(within(row).getByRole("button", { name: "编辑" }));
-      const userDialog = await screen.findByRole("dialog", { name: "编辑用户" });
-      fireEvent.click(within(userDialog).getByRole("button", { name: "保存" }));
-      await waitFor(() => expect(finish).toBeTypeOf("function"));
-      fireEvent.click(screen.getByRole("tab", { name: "服务" }));
-      const panel = document.querySelector(".service-panel") as HTMLElement;
-      fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
-      const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
-      fireEvent.input(within(dialog).getByLabelText("服务名称"), { target: { value: "preserved service draft" } });
-      finish(refreshed);
-      await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.getAttribute("title")).toContain("Updated User"));
-      expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(dialog);
-      expect(within(dialog).getByLabelText("服务名称")).toHaveProperty("value", "preserved service draft");
-    } finally { finish?.(refreshed); }
-  });
-
   test("clears service credential drafts when the selected identity changes", async () => {
     render(() => <App initialView="configuration" />);
     fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
@@ -940,162 +900,11 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
   });
 
-  test("opens an unconfigured native capability directly as an unsaved form", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.updateService).mockClear();
+  test("omits the removed capability page from settings", async () => {
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const panel = await screen.findByRole("region", { name: "能力管理" });
-    const row = (await within(panel).findAllByText("DMS"))[0]!.closest(".capability-switch-row") as HTMLElement;
-    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
-    const dialog = await screen.findByRole("dialog", { name: "DMS 配置" });
-    fireEvent.click(within(dialog).getByLabelText("能力配置环境"));
-    fireEvent.click(await screen.findByRole("option", { name: "测试" }));
-    expect(await within(dialog).findByLabelText("dms instance 1-1")).toHaveProperty("value", "");
-    expect(within(dialog).queryByRole("button", { name: "dms" })).toBeNull();
-    expect(client.updateService).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
-  });
-
-  test("opens native capability configuration in place without navigating to services", async () => {
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const panel = await screen.findByRole("region", { name: "能力管理" });
-    const row = (await within(panel).findByText("SLS")).closest(".capability-switch-row") as HTMLElement;
-    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
-    const dialog = await screen.findByRole("dialog", { name: "SLS 配置" });
-    expect(screen.getByRole("tab", { name: "能力" }).getAttribute("aria-selected")).toBe("true");
-    expect(within(dialog).getByLabelText("能力配置服务")).toBeTruthy();
-    fireEvent.click(within(dialog).getByLabelText("能力配置环境"));
-    fireEvent.click(await screen.findByRole("option", { name: "测试" }));
-    expect(await within(dialog).findByLabelText("sls project 1")).toHaveProperty("value", "srm-test");
-    expect(within(dialog).queryByLabelText("db url 1-1")).toBeNull();
-    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
-  });
-
-  test("edits an external MCP service using its saved JSON configuration", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.updateMcpService).mockClear();
-    vi.spyOn(client, "loadMcpServices").mockResolvedValue([{ id: "docs", name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: true, credentialConfigured: true }]);
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const builtIn = await screen.findByRole("region", { name: "能力管理" });
-    const external = screen.getByRole("region", { name: "外部能力管理" });
-    expect(within(builtIn).getByText("内建")).toBeTruthy();
-    expect(within(external).getByText("外部", { exact: true })).toBeTruthy();
-    expect(within(builtIn).queryByRole("button", { name: /^添加$/ })).toBeNull();
-    expect(within(external).getByText(/启用后向所有工单提供全部工具/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /添加 MCP|添加能力/ })).toBeNull();
-    const row = (await within(external).findByText("Docs")).closest("tr")!;
-    expect(within(row).getByText("所有工单")).toBeTruthy();
-    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
-    const dialog = await screen.findByRole("dialog", { name: "编辑 MCP" });
-    const field = await within(dialog).findByLabelText("mcpServers JSON");
-    const initial = JSON.parse((field as HTMLTextAreaElement).value);
-    expect(initial).toEqual({ mcpServers: { Docs: { url: "https://mcp.example.test/mcp", headers: { Authorization: "Bearer stored-token" } } } });
-    expect(within(dialog).queryByLabelText("能力 Authorization")).toBeNull();
-    const input = { mcpServers: { Docs: { ...initial.mcpServers.Docs, headers: { Authorization: "Bearer secret-token" } } } };
-    await fireEvent.input(field, { target: { value: JSON.stringify(input) } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(client.updateMcpService).toHaveBeenCalledWith("docs", input));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  test("edits a stdio MCP process with private launch configuration", async () => {
-    const client = await import("../data/client"); vi.mocked(client.updateMcpService).mockClear();
-    vi.spyOn(client, "loadMcpServices").mockResolvedValue([{ id: "local", name: "Local", url: "", transport: "stdio", enabled: true, credentialConfigured: true }]);
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const external = await screen.findByRole("region", { name: "外部能力管理" });
-    const row = (await within(external).findByText("Local")).closest("tr")!;
-    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
-    const dialog = await screen.findByRole("dialog", { name: "编辑 MCP" });
-    const config = { command: "npx", args: ["@playwright/mcp@0.0.83"], env: { TOKEN: "private-token" } };
-    const field = await within(dialog).findByLabelText("mcpServers JSON");
-    expect(JSON.parse((field as HTMLTextAreaElement).value)).toEqual({ mcpServers: { Local: config } });
-    const footer = dialog.querySelector(".ui-modal-footer") as HTMLElement;
-    expect(within(footer).getAllByRole("button").map(button => button.textContent)).toEqual(["取消", "保存", "删除"]);
-    expect(dialog.querySelector(".ui-modal-body")?.textContent).not.toContain("删除");
-    fireEvent.click(within(footer).getByRole("button", { name: /^删除$/ }));
-    const confirmation = await screen.findByRole("dialog", { name: /^删除$/ });
-    fireEvent.click(within(confirmation).getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^删除$/ })).toBeNull());
-    const input = { mcpServers: { Local: { ...config, enabled: true } } };
-    await fireEvent.input(field, { target: { value: JSON.stringify(input) } });
-    expect(within(dialog).queryByLabelText("能力地址")).toBeNull();
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(client.updateMcpService).toHaveBeenCalledWith("local", input));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  test("discards a pending private configuration load when the editor is closed", async () => {
-    const client = await import("../data/client");
-    vi.spyOn(client, "loadCurrentUser").mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer", isAdmin: true });
-    vi.spyOn(client, "loadMcpServices").mockResolvedValue([{ id: "local", name: "Local", url: "", transport: "stdio", enabled: true, credentialConfigured: true }]);
-    let resolve!: (input: { mcpServers: Record<string, unknown> }) => void;
-    let signal: AbortSignal | undefined;
-    vi.spyOn(client, "loadMcpServiceConfiguration").mockImplementationOnce((_id, requestSignal) => { signal = requestSignal; return new Promise(done => { resolve = done; }); });
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const external = await screen.findByRole("region", { name: "外部能力管理" });
-    const row = (await within(external).findByText("Local")).closest("tr")!;
-    fireEvent.click(within(row).getByRole("button", { name: "配置" }));
-    const editor = await screen.findByRole("dialog", { name: "编辑 MCP" });
-    expect(within(editor).getByRole("button", { name: "保存" })).toHaveProperty("disabled", true);
-    fireEvent.click(within(editor).getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(signal?.aborted).toBe(true));
-    fireEvent.click(within(external).getByRole("button", { name: /^添加$/ }));
-    const adding = await screen.findByRole("dialog", { name: /^添加$/ });
-    resolve({ mcpServers: { Local: { command: "private-command" } } });
-    await waitFor(() => expect(within(adding).getByLabelText("mcpServers JSON")).toHaveProperty("value", ""));
-  });
-
-  test("imports mcpServers JSON and reports malformed input without echoing secrets", async () => {
-    const client = await import("../data/client"); vi.mocked(client.importMcpServices).mockClear();
-    vi.spyOn(client, "loadCurrentUser").mockResolvedValue({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer", isAdmin: true });
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    fireEvent.click(await screen.findByRole("button", { name: /^添加$/ }));
-    const dialog = await screen.findByRole("dialog", { name: /^添加$/ });
-    expect(within(dialog).queryByLabelText("能力名称")).toBeNull();
-    const field = within(dialog).getByLabelText("mcpServers JSON");
-    await fireEvent.input(field, { target: { value: '{"TOKEN":"private-import-token"' } });
-    fireEvent.click(within(dialog).getByRole("button", { name: /^添加$/ }));
-    expect((await within(dialog).findByRole("alert")).textContent).toBe("请输入有效的 JSON");
-    expect(client.importMcpServices).not.toHaveBeenCalled();
-    const value = { mcpServers: { playwright: { command: "npx", args: ["@playwright/mcp@latest"] } } };
-    await fireEvent.input(field, { target: { value: JSON.stringify(value) } });
-    await waitFor(() => expect(within(dialog).getByRole("button", { name: /^添加$/ })).toHaveProperty("disabled", false));
-    fireEvent.click(within(dialog).getByRole("button", { name: /^添加$/ }));
-    await waitFor(() => expect(client.importMcpServices).toHaveBeenCalledWith(value));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  for (const actor of ["product", "test", "developer", "manager"] as const) test(`only management sees the external add button: ${actor}`, async () => {
-    const client = await import("../data/client");
-    const isAdmin = actor === "manager", role = isAdmin ? "developer" : actor;
-    vi.spyOn(client, "loadCurrentUser").mockResolvedValue({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role, isAdmin });
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const external = await screen.findByRole("region", { name: "外部能力管理" });
-    await within(external).findByText(/尚未添加外部能力/);
-    expect(Boolean(within(external).queryByRole("button", { name: /^添加$/ }))).toBe(isAdmin);
-  });
-
-  test("manages global capability switches in their own settings tab", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.updateCapabilitySwitch).mockClear();
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "能力" }));
-    const panel = await screen.findByRole("region", { name: "能力管理" });
-    const toggle = await within(panel).findByRole("switch", { name: "DMS 全局开关" });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(toggle);
-    await waitFor(() => expect(client.updateCapabilitySwitch).toHaveBeenCalledWith("dms", false));
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
-    await waitFor(() => expect(toggle).toHaveProperty("disabled", false));
-    fireEvent.click(toggle);
-    await waitFor(() => expect(client.updateCapabilitySwitch).toHaveBeenLastCalledWith("dms", true));
+    await screen.findByRole("tab", { name: "用户" });
+    expect(screen.queryByRole("tab", { name: "能力" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "能力管理" })).toBeNull();
   });
 
   test("sorts repositories by their address directories without rendering group headings", async () => {
@@ -1114,203 +923,29 @@ describe("issue pilot workspace", () => {
     } finally { loadRepositories.mockImplementation(original); }
   });
 
-  test("manages repositories from their own settings tab and selects registered URLs in services", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.createRepository).mockClear();
-    render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
-    const panel = await screen.findByRole("region", { name: "仓库管理" });
-    await waitFor(() => expect(within(panel).getByText("git@example.com:team/srm.git")).toBeTruthy());
-    fireEvent.click(within(panel).getByRole("button", { name: "添加仓库" }));
-    const dialog = await screen.findByRole("dialog", { name: "添加仓库" });
-    fireEvent.input(within(dialog).getByLabelText("统一仓库名称"), { target: { value: "Shared API" } });
-    fireEvent.input(within(dialog).getByLabelText("统一仓库地址"), { target: { value: "git@example.test:team/shared-api.git" } });
-    await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(client.createRepository).toHaveBeenCalledWith({ name: "Shared API", url: "git@example.test:team/shared-api.git" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  test("shows repository actions disabled when the selected user cannot maintain repositories", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "test" });
+  test("shows repository names and addresses without maintenance controls", async () => {
     render(() => <App initialView="configuration" />);
     fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
     const panel = await screen.findByRole("region", { name: "仓库管理" });
     await within(panel).findByText("git@example.com:team/srm.git");
-    expect(within(panel).getByRole("button", { name: "添加仓库" })).toHaveProperty("disabled", true);
-    for (const button of within(panel).getAllByRole("button", { name: "编辑" })) expect(button).toHaveProperty("disabled", true);
-    for (const button of within(panel).getAllByRole("button", { name: "删除" })) expect(button).toHaveProperty("disabled", true);
-    expect(within(panel).queryByText("仅开发可维护")).toBeNull();
+    expect(within(panel).queryByRole("button")).toBeNull();
+    expect(within(panel).queryByText("引用服务")).toBeNull();
+    expect(within(panel).queryByText("操作")).toBeNull();
+    expect(within(panel).queryByText(/修改后重启生效/)).toBeNull();
   });
 
-  test("adds, edits, and disables users from the user management view", async () => {
-    const client = await import("../data/client");
-    vi.mocked(client.createUser).mockClear();
-    vi.mocked(client.updateUser).mockClear();
-    render(() => <App initialView="issues" />);
-    await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
-
-    fireEvent.click(screen.getByRole("radio", { name: "配置" }));
-    fireEvent.click(await waitFor(() => screen.getByRole("tab", { name: "用户" })));
-    await waitFor(() => expect(screen.getByRole("button", { name: "添加用户" })).toBeTruthy());
-    expect(screen.getByRole("tab", { name: "基座" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "服务" })).toBeTruthy();
-    const userList = await screen.findByRole("region", { name: "用户列表" });
-    await waitFor(() => expect(within(userList).getByText("fixture-user")).toBeTruthy());
-    expect(within(userList).getByText("second-user")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "添加用户" }));
-    const dialog = await waitFor(() => screen.getByRole("dialog", { name: "添加用户" }));
-    fireEvent.input(within(dialog).getByLabelText("用户标识"), { target: { value: "new-user@example.test" } });
-    fireEvent.input(within(dialog).getByLabelText("用户姓名"), { target: { value: "新用户" } });
-    fireEvent.input(within(dialog).getByLabelText("用户邮箱"), { target: { value: "new.user@example.test" } });
-    const saveUser = within(dialog).getByRole("button", { name: "保存" }) as HTMLButtonElement;
-    expect(saveUser.disabled).toBe(false);
-    fireEvent.click(saveUser);
-    await waitFor(() => {
-      const alert = within(dialog).queryByRole("alert");
-      if (alert) throw new Error(alert.textContent ?? "user save failed");
-      expect(client.createUser).toHaveBeenCalledWith({ subject: "new-user@example.test", name: "新用户", email: "new.user@example.test", role: "product" });
-    });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加用户" })).toBeNull());
-    const newUserRow = await waitFor(() => screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement);
-    expect(newUserRow).toBeTruthy();
-    fireEvent.click(within(newUserRow).getByRole("button", { name: "停用" }));
-    await waitFor(() => expect(client.updateUser).toHaveBeenCalledWith("new-user@example.test", { active: false }));
-    await waitFor(() => expect(within(screen.getByText("new-user@example.test").closest(".user-table-row") as HTMLElement).getByText("停用")).toBeTruthy());
-  });
-
-  test("automatically saves the global model only after a setting changes", async () => {
-    const client = await import("../data/client");
-    const initial = await client.loadConfig(); vi.mocked(client.updateGlobalAgent).mockClear();
-    const view = render(() => <App initialView="configuration" />);
-    await screen.findByLabelText("全局模型 provider");
-    expect(screen.queryByRole("button", { name: "保存 Agent 配置" })).toBeNull();
-    await new Promise(resolve => setTimeout(resolve, 550));
-    expect(client.updateGlobalAgent).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("全局模型 provider"));
-    fireEvent.click(await screen.findByRole("option", { name: /^enterprise-ai$/ }));
-    await new Promise(resolve => setTimeout(resolve, 550));
-    expect(client.updateGlobalAgent).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("全局模型 thinking level"));
-    fireEvent.click(await screen.findByRole("option", { name: /^high$/ }));
-    await waitFor(() => expect(client.updateGlobalAgent).toHaveBeenCalledWith({ ...initial.agent, thinkingLevel: "high" }));
-    await waitFor(() => expect(screen.queryByText("保存中…")).toBeNull());
-    view.unmount(); await client.updateGlobalAgent(initial.agent);
-  });
-
-  test("puts the Agent base first and saves codemode independently of the selected model", async () => {
-    const client = await import("../data/client"); vi.mocked(client.updateGlobalAgent).mockClear();
+  test("shows only personal credential groups on the users tab", async () => {
     render(() => <App initialView="configuration" />);
     const tabs = await screen.findByRole("tablist", { name: "配置分类" });
-    expect(within(tabs).getAllByRole("tab")[0]?.textContent).toBe("基座");
-    expect(within(tabs).getByRole("tab", { name: "基座" }).getAttribute("aria-selected")).toBe("true");
-    const select = await screen.findByLabelText("全局 Agent Codemode");
-    expect(select.closest(".ui-select")?.textContent).toContain("开启");
-    fireEvent.click(select);
-    fireEvent.click(await screen.findByRole("option", { name: "仅 Codemode" }));
-    await waitFor(() => expect(select.closest(".ui-select")?.textContent).toContain("仅 Codemode"));
-    await waitFor(() => expect(client.updateGlobalAgent).toHaveBeenCalledWith({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "only", runtime: {} }));
-    await waitFor(() => expect(screen.queryByText("保存中…")).toBeNull());
-  });
-
-  test("simplifies the Agent base while retaining existing runtime settings on save", async () => {
-    const client = await import("../data/client"); vi.mocked(client.updateGlobalAgent).mockClear();
-    const initial = structuredClone(await client.loadConfig()); initial.agent.codemode = "on";
-    initial.agent.runtime = { settings: { retry: { maxRetries: 2, baseDelayMs: 1234 }, cacheWarming: "off", transport: "sse", compaction: { keepRecentTokens: 12000 } } };
-    vi.mocked(client.loadConfig).mockResolvedValueOnce(initial);
-    render(() => <App initialView="configuration" />);
-    await screen.findByLabelText("最大重试次数");
-    expect(screen.getByLabelText("最大重试次数")).toHaveProperty("value", "2");
-    expect(document.querySelector(".global-model-summary")).toBeNull();
-    expect(screen.queryByLabelText("其他 Pi 参数")).toBeNull();
-    expect(screen.queryByText("Skills、Prompts 与扩展")).toBeNull();
-    await fireEvent.click(screen.getByRole("switch", { name: "自动压缩上下文" }));
-    const runtime = { settings: { ...initial.agent.runtime.settings, compaction: { keepRecentTokens: 12000, enabled: false } } };
-    await waitFor(() => expect(client.updateGlobalAgent).toHaveBeenCalledWith({ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime }));
-    await waitFor(() => expect(screen.queryByText("保存中…")).toBeNull());
-  });
-
-  test("coalesces Agent edits while a save is pending without replacing newer input", async () => {
-    const client = await import("../data/client"), initial = await client.loadConfig();
-    const update = vi.mocked(client.updateGlobalAgent), persist = update.getMockImplementation()!;
-    let release!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    update.mockClear(); update.mockImplementationOnce(async input => { await gate; return persist(input); });
-    const view = render(() => <App initialView="configuration" />);
-    try {
-      const input = await screen.findByLabelText("最大重试次数");
-      fireEvent.input(input, { target: { value: "4" } });
-      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-      fireEvent.input(input, { target: { value: "5" } }); fireEvent.input(input, { target: { value: "6" } });
-      await new Promise(resolve => setTimeout(resolve, 550));
-      expect(update).toHaveBeenCalledTimes(1);
-      release();
-      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
-      await waitFor(() => expect(screen.queryByText("保存中…")).toBeNull());
-      expect(update.mock.calls.map(([value]) => value.runtime.settings?.retry?.maxRetries)).toEqual([4, 6]);
-      expect(input).toHaveProperty("value", "6");
-    } finally { release(); view.unmount(); await client.updateGlobalAgent(initial.agent); }
-  });
-
-  test("keeps an unsuccessful Agent edit until an explicit retry", async () => {
-    const client = await import("../data/client"), initial = await client.loadConfig();
-    const update = vi.mocked(client.updateGlobalAgent); update.mockClear();
-    update.mockRejectedValueOnce(new Error("global_configuration_has_running_issues"));
-    const view = render(() => <App initialView="configuration" />);
-    const toggle = await screen.findByRole("switch", { name: "失败自动重试" });
-    fireEvent.click(toggle);
-    const alert = await screen.findByRole("alert"); expect(alert.textContent).toContain("有正在执行的工单");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    await new Promise(resolve => setTimeout(resolve, 550)); expect(update).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
-    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByText("保存中…")).toBeNull());
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    view.unmount(); await client.updateGlobalAgent(initial.agent);
-  });
-
-  test("retains a rejected Agent autosave across navigation", async () => {
-    const client = await import("../data/client"), initial = await client.loadConfig();
-    const update = vi.mocked(client.updateGlobalAgent); update.mockClear();
-    update.mockRejectedValueOnce(new Error("global_configuration_has_running_issues"));
-    const view = render(() => <App initialView="configuration" />);
-    try {
-      fireEvent.input(await screen.findByLabelText("最大重试次数"), { target: { value: "9" } });
-      fireEvent.click(screen.getByRole("radio", { name: "工单" }));
-      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-      await new Promise<void>(resolve => setTimeout(resolve, 0));
-      fireEvent.click(screen.getByRole("radio", { name: "配置" }));
-      const input = await screen.findByLabelText("最大重试次数");
-      expect(input).toHaveProperty("value", "9");
-      const alert = await screen.findByRole("alert"); expect(alert.textContent).toContain("有正在执行的工单");
-      fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
-      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
-      await waitFor(() => expect(screen.queryByText("保存中…")).toBeNull());
-      expect(input).toHaveProperty("value", "9");
-    } finally { view.unmount(); await client.updateGlobalAgent(initial.agent); }
-  });
-
-  test("does not submit a queued Agent edit under a different selected identity", async () => {
-    const client = await import("../data/client"); vi.mocked(client.updateGlobalAgent).mockClear();
-    const view = render(() => <App initialView="configuration" />);
-    fireEvent.input(await screen.findByLabelText("最大重试次数"), { target: { value: "7" } });
-    client.setCurrentUserSubject("second-user");
-    await new Promise(resolve => setTimeout(resolve, 550));
-    expect(client.updateGlobalAgent).not.toHaveBeenCalled();
-    view.unmount();
-  });
-
-  test("flushes a pending Agent edit when leaving the settings page", async () => {
-    const client = await import("../data/client"), initial = await client.loadConfig();
-    vi.mocked(client.updateGlobalAgent).mockClear();
-    const view = render(() => <App initialView="configuration" />);
-    fireEvent.input(await screen.findByLabelText("最大重试次数"), { target: { value: "8" } });
-    view.unmount();
-    await waitFor(() => expect(client.updateGlobalAgent).toHaveBeenCalledWith({ ...initial.agent, runtime: { ...initial.agent.runtime, settings: { ...initial.agent.runtime.settings, retry: { ...initial.agent.runtime.settings?.retry, maxRetries: 8 } } } }));
-    await client.updateGlobalAgent(initial.agent);
+    expect(within(tabs).getAllByRole("tab").map(tab => tab.textContent)).toEqual(["用户", "仓库", "服务", "端点"]);
+    const credentials = await screen.findByRole("region", { name: "我的凭证" });
+    await within(credentials).findByText("API Key");
+    expect(within(credentials).getByText("SSH Key")).toBeTruthy();
+    expect(within(credentials).getByText("SLS")).toBeTruthy();
+    expect(within(credentials).getByText("DMS")).toBeTruthy();
+    expect(within(credentials).getByText("钉钉")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "用户列表" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "添加用户" })).toBeNull();
   });
 
   test("retries the initial configuration request in place", async () => {

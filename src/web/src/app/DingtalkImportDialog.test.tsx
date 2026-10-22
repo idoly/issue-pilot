@@ -76,12 +76,10 @@ test("a successful batch stays open, removes imported rows and lets the next bat
   expect(created).toHaveBeenCalledTimes(2);
 });
 
-test("unsupported view filters display the MCP limitation instead of a permissions suggestion", async () => {
-  vi.mocked(previewDingtalkRecords).mockRejectedValueOnce(new Error("dingtalk_view_filter_not_supported"));
+test("the import dialog explains current-user pending filtering and ignored views", async () => {
   await open();
-  fireEvent.click(screen.getByRole("button", { name: "读取表格" }));
-  await screen.findByText("当前钉钉 MCP 不支持该视图的筛选条件。请使用简单筛选视图，或升级 MCP 的视图查询接口。");
-  expect(importDingtalkRecords).not.toHaveBeenCalled();
+  expect(screen.getByText(/只显示当前用户且状态为“A待安排”的记录/)).toBeTruthy();
+  expect(screen.getByText(/忽略链接中的视图筛选/)).toBeTruthy();
 });
 
 test("changing identity aborts an outstanding read and ignores its late result", async () => {
