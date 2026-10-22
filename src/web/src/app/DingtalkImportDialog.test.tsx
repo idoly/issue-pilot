@@ -22,6 +22,8 @@ async function open(created = vi.fn()) {
 }
 test("imports a record directly without preview or mappings and keeps the dialog open for another system", async () => {
   const created = await open();
+  expect(screen.queryByText(/当前用户：/)).toBeNull();
+  expect(screen.queryByRole("checkbox", { name: "创建后立即启动 Agent" })).toBeNull();
   expect(screen.queryByRole("button", { name: "读取表格" })).toBeNull();
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByLabelText("钉钉标题字段")).toBeNull();
@@ -30,7 +32,7 @@ test("imports a record directly without preview or mappings and keeps the dialog
   await waitFor(() => expect(screen.getByRole("button", { name: "导入工单" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "导入工单" }));
   await screen.findByRole("button", { name: "ISSUE-20261022-001" });
-  expect(importDingtalkRecords).toHaveBeenCalledWith({ url, serviceKey: "orders", workMode: "production_analysis", priority: "p2", startAgent: false }, expect.any(AbortSignal));
+  expect(importDingtalkRecords).toHaveBeenCalledWith({ url, serviceKey: "orders", workMode: "production_analysis", priority: "p2", startAgent: true }, expect.any(AbortSignal));
   expect(screen.getByRole("dialog", { name: "导入" })).toBeTruthy(); expect(created).toHaveBeenCalledOnce();
   expect(screen.getByRole("textbox", { name: "钉钉记录链接" })).toHaveProperty("value", "");
   fireEvent.click(screen.getByRole("combobox", { name: "导入工单服务" })); fireEvent.click(await screen.findByRole("option", { name: "Inventory" }));

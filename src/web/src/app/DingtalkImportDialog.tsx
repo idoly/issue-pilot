@@ -42,7 +42,6 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   const [workMode, setWorkMode] = createSignal<IssueWorkMode>("production_analysis", { ownedWrite: true });
   const [service, setService] = createSignal("", { ownedWrite: true });
   const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
-  const [startAgent, setStartAgent] = createSignal(false, { ownedWrite: true });
   let generation = 0, disposed = false, controller: AbortController | undefined;
   const begin = () => { controller?.abort(); controller = new AbortController(); return { owner: ++generation, signal: controller.signal }; };
   const current = (owner: number) => !disposed && owner === generation;
@@ -69,7 +68,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
     if (busy() || !url().trim() || !service() || !source()?.connection.available) return;
     const task = begin(); setBusy("import"); setError("");
     try {
-      const response = await importDingtalkRecords({ url: url().trim(), serviceKey: service(), workMode: workMode(), priority: priority(), startAgent: startAgent() }, task.signal);
+      const response = await importDingtalkRecords({ url: url().trim(), serviceKey: service(), workMode: workMode(), priority: priority(), startAgent: true }, task.signal);
       if (!current(task.owner)) return;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
       setResults(values => [...values.filter(row => row.issueKey !== response.issueKey), response]);
@@ -80,10 +79,8 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   };
   return <Modal open title="导入" width={800} onOk={() => { void submit(); }} onCancel={props.onClose} footer={<div class="dingtalk-footer"><Button onClick={props.onClose}>关闭</Button><Button type="primary" loading={busy() === "import"} disabled={Boolean(busy()) || !url().trim() || !service() || !source()?.connection.available} onClick={() => { void submit(); }}>导入工单</Button></div>}>
     <div class="dingtalk-import user-form">
-      <p class="dingtalk-identity">当前用户：{props.user.name} · {props.user.email}</p>
       <label><span>钉钉记录链接</span><Input aria-label="钉钉记录链接" value={url()} disabled={Boolean(busy())} placeholder="https://alidocs.dingtalk.com/notable/record?dentryUuid=…&rowId=…&sheetId=…" onInput={event => { setUrl(event.currentTarget.value); setError(""); }} /></label>
       <div class="dingtalk-fields"><label><span>入口服务</span><Select aria-label="导入工单服务" value={service()} disabled={Boolean(busy())} options={services().map(service => ({ value: service.key, label: service.name }))} onChange={setService} /></label><label><span>处理方式</span><Select aria-label="导入工单处理方式" value={workMode()} disabled={Boolean(busy())} options={modes()} onChange={setWorkMode} /></label><label><span>优先级</span><Select aria-label="导入工单优先级" value={priority()} disabled={Boolean(busy())} options={priorityOptions} onChange={setPriority} /></label></div>
-      <label class="dingtalk-start-agent"><input type="checkbox" checked={startAgent()} disabled={Boolean(busy())} onChange={event => setStartAgent(event.currentTarget.checked)} />创建后立即启动 Agent</label>
       <p class="dingtalk-note">直接导入这一条记录及其附件，不按人员或状态过滤，已有工单不会重复创建。</p>
       <For each={results()}>{row => <p role="status">{row.status === "created" ? "已创建" : "工单已存在"}：<Button type="text" onClick={() => { if (props.onOpenIssue(row.issueKey)) props.onClose(); }}>{row.issueKey}</Button></p>}</For>
       <Show when={error()}><p role="alert" class="form-error">{error()}</p></Show>

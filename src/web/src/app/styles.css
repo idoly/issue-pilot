@@ -785,9 +785,8 @@ button, input, textarea { font: inherit; }
 .deployment-summary .capability-labels button:hover { border-color: #86aa9d; color: #176b5b; }
 .app-header .dingtalk-nav-button { flex: 0 0 auto; color: #edf5f2; border-color: #52605b; background: transparent; }
 .dingtalk-import { gap: 12px; }
-.dingtalk-identity, .dingtalk-note { margin: 0; color: #62716a; font-size: 12px; }
+.dingtalk-note { margin: 0; color: #62716a; font-size: 12px; }
 .dingtalk-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-.dingtalk-import .dingtalk-start-agent { display: flex; align-items: center; gap: 8px; }
 .dingtalk-footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 
 .service-form-empty { padding: 16px; border: 1px dashed #d8dfdb; border-radius: 5px; color: #7d8883; text-align: center; font-size: 12px; }
