@@ -311,7 +311,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
               <div class="issue-attachment-row scope-history-row">
                 <span>
                   <strong>{transition.from.service.name} · {workModeLabel[transition.from.workMode]} → {transition.to.service.name} · {workModeLabel[transition.to.workMode]}</strong>
-                  <small>{transition.actor.name} · {localDateTime(transition.createdAt)} · 保留 {transition.repositories.retained.length} / 新增 {transition.repositories.added.length} / 移除 {transition.repositories.removed.length}</small>
+                  <small class="scope-history-meta"><span>{transition.actor.name}</span><time datetime={transition.createdAt}>{localDateTime(transition.createdAt)}</time><span>保留 {transition.repositories.retained.length} / 新增 {transition.repositories.added.length} / 移除 {transition.repositories.removed.length}</span></small>
                 </span>
               </div>
             )}</For>
