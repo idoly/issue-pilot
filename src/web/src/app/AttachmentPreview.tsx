@@ -9,7 +9,7 @@ import { attachmentPreviewKind } from "./file-preview";
 
 type IssueAttachment = IssueDetail["attachments"][number];
 
-export function AttachmentPreview(props: { issueKey: string; attachment: IssueAttachment | null; onClose: () => void }) {
+export function AttachmentPreview(props: { issueKey: string; attachment: IssueAttachment | null; loadFile?: (signal: AbortSignal) => Promise<Blob>; onClose: () => void }) {
   const [attempt, setAttempt] = createSignal(0, { ownedWrite: true });
   const [loading, setLoading] = createSignal(false, { ownedWrite: true });
   const [text, setText] = createSignal("", { ownedWrite: true });
@@ -46,7 +46,8 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
       const sequence = ++requestSequence;
       controller = new AbortController();
       setLoading(true);
-      void fetchAttachment(issueKey, attachment.id, controller.signal).then(async (blob) => {
+      const file = props.loadFile ? props.loadFile(controller.signal) : fetchAttachment(issueKey, attachment.id, controller.signal);
+      void file.then(async (blob) => {
         if (sequence !== requestSequence) return;
         if (attachmentPreviewKind(attachment) === "text") {
           const content = await blob.text();

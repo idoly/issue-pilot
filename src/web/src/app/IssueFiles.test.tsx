@@ -2,8 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueWorkFile } from "../data/client";
-const state = vi.hoisted(() => ({ list: vi.fn(), user: () => ({ subject: "alice", role: "developer" }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), listIssueWorkFiles: state.list }));
+const state = vi.hoisted(() => ({ list: vi.fn(), user: () => ({ subject: "alice", role: "developer" }), read: vi.fn() }));
+vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), listIssueWorkFiles: state.list, fetchIssueWorkFile: state.read }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueFiles } from "./IssueFiles";
 const issue = { id: "ISSUE-20261021-001", updatedAt: "2026-10-21T00:00:00Z", repositories: [{ name: "repository" }], attachments: [{ workingFileName: "uuid-image.png" }], outputs: [] } as unknown as IssueDetail;
@@ -14,6 +14,7 @@ it("lists working files and repository folders and provides real downloads", asy
   state.list.mockResolvedValueOnce([{ ...file("source.java"), path: "repository/source.java" }]);
   render(() => <IssueFiles issue={issue} />);
   const link = await screen.findByRole("link", { name: "下载工作文件 checkpoint.json" });
+  expect(state.read).not.toHaveBeenCalled();
   expect(link.getAttribute("href")).toBe(`/api/issues/${issue.id}/files/download?path=checkpoint.json`);
   expect(screen.getByRole("heading", { name: "工作目录" })).toBeTruthy();
   expect(document.querySelector(".issue-directory-list small")).toBeNull();
@@ -27,6 +28,22 @@ it("lists working files and repository folders and provides real downloads", asy
   await screen.findByText("source.java");
   expect(state.list.mock.calls[1]?.slice(0, 2)).toEqual([issue.id, "repository"]);
 });
+it("previews supported working files only after a click and keeps binary files download-only", async () => {
+  state.list.mockResolvedValue([file("note.txt"), file("report.xlsx")]);
+  state.read.mockImplementation(async () => new Response("working preview").blob());
+  render(() => <IssueFiles issue={issue} />);
+  const preview = await screen.findByRole("button", { name: "预览工作文件 note.txt" });
+  expect(state.read).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "预览工作文件 report.xlsx" })).toBeNull();
+  fireEvent.click(preview);
+  await screen.findByText("working preview");
+  expect(state.read).toHaveBeenCalledWith(issue.id, "note.txt", expect.any(AbortSignal));
+  expect(screen.getByRole("dialog", { name: "note.txt" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "下载文件" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
 it("cancels old identity reads and ignores their late results", async () => {
   let finishOld!: (rows: IssueWorkFile[]) => void;
   const [user, setUser] = createSignal({ subject: "alice", role: "developer" }, { ownedWrite: true }); state.user = user;
