@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { CheckCircle2, Code2, Download, Eye, File, GitBranch, History, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
+import { CheckCircle2, Code2, Download, Eye, File, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
 import { canUseIssueWorkMode, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { IssueFiles } from "./IssueFiles";
 import { Markdown } from "../ui/Markdown";
@@ -305,11 +305,10 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       </Show>
       <Show when={(props.issue.scopeTransitions ?? []).length}>
         <section class="repository-band" aria-labelledby="scope-history-title">
-          <div class="band-title"><History size={16} /><h2 id="scope-history-title">处理历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
+          <div class="band-title"><h2 id="scope-history-title">处理历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
           <div class="issue-attachment-list">
             <For each={props.issue.scopeTransitions ?? []}>{(transition) => (
               <div class="issue-attachment-row scope-history-row">
-                <GitBranch size={15} />
                 <span>
                   <strong>{transition.from.service.name} · {workModeLabel[transition.from.workMode]} → {transition.to.service.name} · {workModeLabel[transition.to.workMode]}</strong>
                   <small>{transition.actor.name} · {localDateTime(transition.createdAt)} · 保留 {transition.repositories.retained.length} / 新增 {transition.repositories.added.length} / 移除 {transition.repositories.removed.length}</small>
