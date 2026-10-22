@@ -542,7 +542,7 @@ describe("issue pilot workspace", () => {
     expect((within(followUpDialog).getByLabelText("正式跟进标题") as HTMLInputElement).value).toBe("【正式跟进】客户导出的 CSV 缺少时区信息");
     expect(within(followUpDialog).getByText(/附件不会复制/)).toBeTruthy();
     fireEvent.click(within(followUpDialog).getByRole("button", { name: "取消" }));
-    const scopeHistory = screen.getByRole("heading", { name: "处理范围历史" }).closest("section")!;
+    const scopeHistory = screen.getByRole("heading", { name: "处理历史" }).closest("section")!;
     expect(scopeHistory.textContent).toContain("Orders · 正式问题调查 → Orders · 开发缺陷修复");
     expect(scopeHistory.textContent).toContain("严欣");
     expect(screen.queryByRole("button", { name: "释放工作区" })).toBeNull();
