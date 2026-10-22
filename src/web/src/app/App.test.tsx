@@ -124,12 +124,6 @@ vi.mock("../data/client", async (importOriginal) => {
       before: { path: "README.md", version: "index" as const, content: "# Indexed SRM source\n" },
       after: { path: "README.md", version: "working-tree" as const, content: "# SRM source\n" },
     })),
-    addIssueComment: async (id: string, body: string) => {
-      const selected = issues.find((item) => item.id === id)!;
-      const comment = { id: `comment-${selected.comments.length + 1}`, author: "fixture-user", body, createdAt: now };
-      selected.comments.push(comment);
-      return structuredClone(comment);
-    },
     retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
     updateIssueStatus: vi.fn(async (id: string, status: "open" | "resolved") => {
       const selected = issues.find((item) => item.id === id)!;
@@ -434,8 +428,6 @@ describe("issue pilot workspace", () => {
     const { fetchAttachment, sendAgentMessage } = await import("../data/client");
     await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", pastedMessage));
     fireEvent.input(agentInput, { target: { value: "还原后保留的 Agent 草稿" } });
-    const commentInput = screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement;
-    fireEvent.input(commentInput, { target: { value: "还原后保留的评论草稿" } });
     const issueQueue = screen.getByLabelText("工单队列") as HTMLElement;
     const issueWorkspace = document.querySelector(".issue-workspace") as HTMLElement;
     fireEvent.click(screen.getByRole("button", { name: "浏览工单代码" }));
@@ -482,7 +474,6 @@ describe("issue pilot workspace", () => {
     expect(issueWorkspace.classList.contains("source-detail-panel")).toBe(false);
     expect(screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" })).toBe(agentRegion);
     expect(agentInput.value).toBe("还原后保留的 Agent 草稿");
-    expect(commentInput.value).toBe("还原后保留的评论草稿");
     expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "预览 existing.csv" }));
     const previewDialog = await waitFor(() => screen.getByRole("dialog", { name: "existing.csv" }));
@@ -491,13 +482,6 @@ describe("issue pilot workspace", () => {
     expect(within(previewDialog).getByRole("button", { name: "复制文字" })).toBeTruthy();
     fireEvent.click(within(previewDialog).getByRole("button", { name: "关闭" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "existing.csv" })).toBeNull());
-    fireEvent.input(commentInput, { target: { value: "**供其他用户查看的备注**" } });
-    fireEvent.click(within(screen.getByRole("radiogroup", { name: "评论编辑模式" })).getByRole("radio", { name: "预览" }));
-    await waitFor(() => expect(screen.getByText("供其他用户查看的备注").tagName).toBe("STRONG"));
-    const publishComment = screen.getByRole("button", { name: "发布评论" }) as HTMLButtonElement;
-    await waitFor(() => expect(publishComment.disabled).toBe(false));
-    fireEvent.click(publishComment);
-    await waitFor(() => expect(screen.getByText("供其他用户查看的备注")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const issueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
@@ -531,7 +515,6 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByRole("dialog", { name: "切换调查范围" })).toBeNull();
     fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
-    fireEvent.input(commentInput, { target: { value: "另一个工单不应继承的草稿" } });
     fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
     await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     const issueActions = document.querySelector(".issue-actions");
@@ -580,7 +563,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
     await waitFor(() => expect(currentUserSelect.closest(".ui-select")?.textContent).toContain("lyz@example.test"));
     await waitFor(() => expect(screen.getByText("ISSUE-20260810-038")).toBeTruthy());
-    await waitFor(() => expect((screen.getByLabelText("添加评论或备注") as HTMLTextAreaElement).value).toBe(""));
+    expect(screen.queryByLabelText("添加评论或备注")).toBeNull();
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
     fireEvent.click(retryButton);
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试处理" })).toBeNull());
@@ -1029,6 +1012,23 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "客户导出的 CSV 缺少时区信息" })).toBeTruthy());
     expect(source.closed).toBe(true);
     expect(screen.getByLabelText("工单队列").querySelector(".queue-item.selected")?.textContent).toContain("ISSUE-20260810-041");
+  });
+
+  test("shows relative queue update time with a creation-time tooltip and omits detail facts", async () => {
+    const client = await import("../data/client");
+    const rows = await client.listIssues();
+    rows[0]!.createdAt = "2026-10-01T01:02:00.000Z";
+    rows[0]!.updatedAt = "2026-10-22T08:00:00.000Z";
+    vi.mocked(client.listIssues).mockResolvedValueOnce(rows);
+    render(() => <App initialView="issues" />);
+    await screen.findByRole("heading", { name: "结算页提交后订单状态未刷新" });
+    const row = screen.getAllByRole("listitem").find(row => row.textContent?.includes(rows[0]!.id))!;
+    const time = row.querySelector(".queue-time")!;
+    expect(time.textContent).not.toBe("2026/10/01");
+    expect(time.getAttribute("title")).toBe("2026/10/01 09:02");
+    expect(time.getAttribute("title")).not.toContain("创建时间");
+    expect(document.querySelector(".issue-facts")).toBeNull();
+    expect(screen.getByRole("button", { name: "编辑工单" })).toBeTruthy();
   });
 
   test("combines environment and service Issue queue filters", async () => {

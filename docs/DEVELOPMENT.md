@@ -85,7 +85,7 @@ unknown 在请求或协议边界解析；路由协调 owner，不复制存储、
 
 ## Web 与浏览器
 
-Solid 2 使用 `createEffect(compute, callback)`，callback 只返回清理函数或 undefined；组件构造时有意读取初始 reactive value 使用 untrack。配置页保留用户凭证状态、仓库、服务和端点，不提供基座和能力管理入口；切换身份时旧请求不得覆盖新身份状态。
+Solid 2 使用 `createEffect(compute, callback)`，callback 只返回清理函数或 undefined；组件构造时有意读取初始 reactive value 使用 untrack。配置页保留用户凭证状态、仓库、服务和端点，不提供基座和能力管理入口；切换身份时旧请求不得覆盖新身份状态。工单详情不展示元信息格和评论编辑区；附件紧接详情头部，其余区块保持原顺序。队列仍展示相对更新时间，悬停显示不带前缀的创建时间。
 
 Monaco 使用公开 editor/model API，组件负责释放资源。修改时保留 SHA-256、CRLF、自动保存、撤销、只读与冲突语义。图标与字体配置由 `ui/icons.tsx`、`EditorIcons.tsx` 和 Vite 构建维护。
 

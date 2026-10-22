@@ -1,11 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { createSignal } from "solid-js";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
-const state = vi.hoisted(() => ({ plan: vi.fn(), comment: vi.fn(), create: vi.fn(), list: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), planIssueScopeTransition: state.plan, addIssueComment: state.comment, createIssue: state.create, listIssues: state.list }));
+const state = vi.hoisted(() => ({ plan: vi.fn(), create: vi.fn(), list: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
+vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), planIssueScopeTransition: state.plan, createIssue: state.create, listIssues: state.list }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({
   currentUser: () => state.user(), people: () => [], peopleError: () => "",
   catalog: () => ({ environments: [{ key: "prod", name: "正式" }, { key: "test", name: "测试" }], services: [
@@ -48,50 +47,12 @@ for (const outcome of ["success", "failure"] as const) for (const currentPending
   } finally { finishOld?.(); finishCurrent?.(); }
 });
 
-it("preserves a newer comment draft while an earlier comment is being published", async () => {
-  let finish!: () => void;
-  state.comment.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+it("omits comments and places attachments immediately after the Issue header", () => {
   render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
-  const input = screen.getByLabelText("添加评论或备注");
-  fireEvent.input(input, { target: { value: "first comment" } });
-  await waitFor(() => expect(screen.getByRole("button", { name: "发布评论" })).toHaveProperty("disabled", false));
-  fireEvent.click(screen.getByRole("button", { name: "发布评论" }));
-  await waitFor(() => expect(state.comment).toHaveBeenCalledWith(issue.id, "first comment"));
-  fireEvent.input(input, { target: { value: "next unsaved comment" } });
-  finish();
-  await waitFor(() => expect(screen.getByRole("button", { name: "发布评论" })).toHaveProperty("disabled", false));
-  expect(input).toHaveProperty("value", "next unsaved comment");
-});
-
-for (const outcome of ["success", "failure"] as const) it(`isolates the previous identity's comment ${outcome}`, async () => {
-  const [user, setUser] = createSignal({ subject: "alice", role: "developer" }, { ownedWrite: true }); state.user = user;
-  let finish!: () => void;
-  state.comment.mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = outcome === "success" ? resolve : () => reject(new Error("old_comment_failed")); }));
-  const updated = vi.fn(async () => {});
-  render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
-  fireEvent.input(screen.getByLabelText("添加评论或备注"), { target: { value: "alice comment" } });
-  await waitFor(() => expect(screen.getByRole("button", { name: "发布评论" })).toHaveProperty("disabled", false));
-  fireEvent.click(screen.getByRole("button", { name: "发布评论" }));
-  await waitFor(() => expect(state.comment).toHaveBeenCalledOnce());
-  setUser({ subject: "bob", role: "developer" });
-  await waitFor(() => expect(screen.getByLabelText("添加评论或备注")).toHaveProperty("value", ""));
-  fireEvent.input(screen.getByLabelText("添加评论或备注"), { target: { value: "bob draft" } });
-  finish();
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(screen.getByLabelText("添加评论或备注")).toHaveProperty("value", "bob draft");
-  expect(screen.queryByText("old_comment_failed")).toBeNull();
-  expect(updated).not.toHaveBeenCalled();
-});
-
-it("keeps the comment draft when the same identity's profile refreshes", async () => {
-  const initial = { subject: "alice", role: "developer", name: "Alice" };
-  const [user, setUser] = createSignal(initial, { ownedWrite: true }); state.user = user;
-  render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
-  const input = screen.getByLabelText("添加评论或备注");
-  fireEvent.input(input, { target: { value: "unsaved comment" } });
-  setUser({ ...initial, name: "Updated Alice" });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(input).toHaveProperty("value", "unsaved comment");
+  expect(screen.queryByRole("heading", { name: "评论与备注" })).toBeNull();
+  expect(screen.queryByLabelText("添加评论或备注")).toBeNull();
+  const header = document.querySelector(".issue-header")!;
+  expect(header.nextElementSibling?.getAttribute("aria-labelledby")).toBe("attachments-title");
 });
 
 it("does not navigate to a follow-up created after the workspace unmounts", async () => {

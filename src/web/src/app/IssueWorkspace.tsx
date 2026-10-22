@@ -1,10 +1,10 @@
-import { Badge, Button, Input, Modal, Segmented, Select, Tag, TextArea } from "../ui";
+import { Badge, Button, Input, Modal, Select, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Send } from "../ui/icons";
-import { canUseIssueWorkMode, addIssueComment, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
+import { CheckCircle2, Code2, Download, Eye, File, GitBranch, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
+import { canUseIssueWorkMode, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { IssueFiles } from "./IssueFiles";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
@@ -16,11 +16,12 @@ import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typ
 
 type IssueAttachment = IssueDetail["attachments"][number];
 
-function IssueFileRow(props: { fileName: string; detail: string; href: string; icon: JSX.Element; onPreview: (() => void) | undefined }) {
-  return <div class="issue-attachment-row" title={props.fileName}>
-    {props.icon}
-    <Show when={props.onPreview} fallback={<span class="attachment-file-info"><strong>{props.fileName}</strong><small>{props.detail} · 仅下载</small></span>}>
-      <button type="button" class="attachment-preview-trigger" aria-label={`预览 ${props.fileName}`} onClick={props.onPreview}><span class="attachment-file-info"><strong>{props.fileName}</strong><small>{props.detail}</small></span><Eye size={15} /></button>
+function IssueFileRow(props: { fileName: string; label?: string; thumbnail?: string | undefined; detail: string; href: string; icon: JSX.Element; onPreview: (() => void) | undefined }) {
+  const [thumbnailFailed, setThumbnailFailed] = createSignal(false, { ownedWrite: true });
+  return <div class={`issue-attachment-row${props.thumbnail ? " has-thumbnail" : ""}`} title={props.fileName}>
+    <Show when={props.thumbnail && !thumbnailFailed()} fallback={props.icon}><button type="button" class="attachment-thumbnail" aria-label={`预览缩略图 ${props.fileName}`} onClick={props.onPreview}><img src={props.thumbnail} alt="" loading="lazy" decoding="async" onError={() => setThumbnailFailed(true)} /></button></Show>
+    <Show when={props.onPreview} fallback={<span class="attachment-file-info"><strong>{props.label ?? props.fileName}</strong><small>{props.detail} · 仅下载</small></span>}>
+      <button type="button" class="attachment-preview-trigger" aria-label={`预览 ${props.fileName}`} onClick={props.onPreview}><span class="attachment-file-info"><strong>{props.label ?? props.fileName}</strong><small>{props.detail}</small></span><Eye size={15} /></button>
     </Show>
     <a class="attachment-download-link" href={props.href} download={props.fileName} title={`下载 ${props.fileName}`} aria-label={`下载 ${props.fileName}`}><Download size={15} /></a>
   </div>;
@@ -34,10 +35,10 @@ const dateTimeOptions = {
   minute: "2-digit",
 } as const;
 const issueDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, { ...dateTimeOptions, year: "numeric" });
-const commentDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, dateTimeOptions);
+const shortDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, dateTimeOptions);
 
 function localDateTime(value: string, includeYear = true): string {
-  return (includeYear ? issueDateTimeFormat : commentDateTimeFormat).format(new Date(value));
+  return (includeYear ? issueDateTimeFormat : shortDateTimeFormat).format(new Date(value));
 }
 
 export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (element: HTMLElement) => void; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void>; onCreatedFollowUp: (issueKey: string) => void }) {
@@ -75,10 +76,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const [relatedLoading, setRelatedLoading] = createSignal(false, { ownedWrite: true });
   const [relatedSaving, setRelatedSaving] = createSignal(false, { ownedWrite: true });
   const [relatedError, setRelatedError] = createSignal("", { ownedWrite: true });
-  const [commentBody, setCommentBody] = createSignal("", { ownedWrite: true });
-  const [commentSaving, setCommentSaving] = createSignal(false, { ownedWrite: true });
-  const [commentMode, setCommentMode] = createSignal<"edit" | "preview">("edit", { ownedWrite: true });
-  const [commentError, setCommentError] = createSignal("", { ownedWrite: true });
   const [previewOutput, setPreviewOutput] = createSignal<IssueDetail["outputs"][number] | null>(null, { ownedWrite: true });
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
@@ -92,7 +89,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setScopeOpen(false); setScopePlan(null); setScopePlanning(false); setScopeApplying(false); setScopeError("");
     setFollowUpOpen(false); setFollowUpSaving(false); setFollowUpError("");
     setRelatedOpen(false); setRelatedKeys([]); setRelatedCandidates([]); setRelatedLoading(false); setRelatedSaving(false); setRelatedError("");
-    setCommentBody(""); setCommentSaving(false); setCommentMode("edit"); setCommentError(""); setPreviewAttachment(null); setPreviewOutput(null); setDescriptionExpanded(false);
+    setPreviewAttachment(null); setPreviewOutput(null); setDescriptionExpanded(false);
   });
   const openEditor = () => {
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority);
@@ -119,22 +116,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       if (issueGeneration === generation) setEditError(errorMessage(error));
     } finally { if (issueGeneration === generation) setEditSaving(false); }
   };
-  const submitComment = async () => {
-    const body = commentBody().trim();
-    if (commentSaving() || !body) return;
-    const issueId = props.issue.id;
-    const generation = issueGeneration;
-    setCommentSaving(true); setCommentError("");
-    try {
-      await addIssueComment(issueId, body);
-      if (issueGeneration !== generation) return;
-      if (commentBody().trim() === body) { setCommentBody(""); setCommentMode("edit"); }
-      await props.onUpdated();
-    } catch (error) {
-      if (issueGeneration === generation) setCommentError(errorMessage(error));
-    } finally { if (issueGeneration === generation) setCommentSaving(false); }
-  };
-
   const retry = async () => {
     const issueId = props.issue.id;
     const generation = issueGeneration;
@@ -262,7 +243,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   };
   const canChangeScope = () => ["open", "pending"].includes(props.issue.status) && props.issue.workspace.status === "ready" && !isWorkspaceBusy(props.issue.workspace.status);
   const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
-  const environmentName = () => catalog().environments.find((environment) => environment.key === props.issue.environmentKey)?.name ?? props.issue.environmentKey;
   return (
     <section ref={props.elementRef} class={`issue-workspace ip-scrollbar${props.sourcePanel ? ` ip-scrollbar-dark source-detail-panel${props.sourcePanelOpen ? " details-open" : ""}` : ""}`} hidden={props.hidden}>
       <header class="issue-header">
@@ -298,17 +278,20 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         </div>
       </header>
 
-      <div class="issue-facts">
-        <div><span>处理人</span><strong>{props.issue.assignee ?? "未分配"}</strong></div>
-        <div><span>创建人</span><strong>{props.issue.reporter?.name ?? "-"}</strong></div>
-        <div><span>入口服务</span><strong>{props.issue.service.name}</strong></div>
-        <div><span>环境</span><strong>{environmentName()}</strong></div>
-        <div><span>创建时间</span><strong>{localDateTime(props.issue.createdAt ?? props.issue.updatedAt)}</strong></div>
-        <div><span>抄送人</span><strong>{props.issue.ccRecipients?.map((person) => person.name).join("、") || "无"}</strong></div>
-      </div>
       <Show when={retryError()}><div class="workspace-error" role="alert">{retryError()}</div></Show>
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
       <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{props.issue.workspace.lastError}</div></Show>
+      <section class="attachment-band issue-attachments" aria-labelledby="attachments-title">
+        <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
+        <div class="issue-attachment-list">
+          <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
+            {(attachment, index) => {
+              const kind = attachmentPreviewKind(attachment);
+              return <IssueFileRow fileName={attachment.fileName} label={kind === "image" && /^[a-f0-9]{24,}\.[a-z0-9]+$/i.test(attachment.fileName) ? `图片附件 ${index() + 1}` : attachment.fileName} thumbnail={kind === "image" ? attachmentUrl(props.issue.id, attachment.id) : undefined} detail={`${kind === "image" ? attachment.mediaType.slice(6).toUpperCase() : attachment.mediaType} · ${fileSize(attachment.size)}`} href={attachmentUrl(props.issue.id, attachment.id)} icon={<Paperclip size={15} />} onPreview={kind === "unsupported" ? undefined : () => setPreviewAttachment(attachment)} />;
+            }}
+          </For>
+        </div>
+      </section>
       <Show when={(props.issue.scopeTransitions ?? []).length}>
         <section class="repository-band" aria-labelledby="scope-history-title">
           <div class="band-title"><GitBranch size={16} /><h2 id="scope-history-title">处理范围历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
@@ -358,30 +341,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       </Show>
 
       <Show when={props.issue.workingDirectory}><IssueFiles issue={props.issue} hidden={props.hidden} /></Show>
-      <section class="attachment-band" aria-labelledby="attachments-title">
-        <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
-        <div class="issue-attachment-list">
-          <For each={props.issue.attachments} fallback={<div class="empty-band">暂无附件</div>}>
-            {(attachment) => <IssueFileRow fileName={attachment.fileName} detail={`${attachment.mediaType} · ${fileSize(attachment.size)}`} href={attachmentUrl(props.issue.id, attachment.id)} icon={<Paperclip size={15} />} onPreview={attachmentPreviewKind(attachment) === "unsupported" ? undefined : () => setPreviewAttachment(attachment)} />}
-          </For>
-        </div>
-      </section>
-
-      <section class="comments-band" aria-labelledby="comments-title">
-        <div class="band-title"><MessageSquare size={16} /><h2 id="comments-title">评论与备注</h2><span>{props.issue.comments.length}</span></div>
-        <div class="comment-list">
-          <For each={props.issue.comments} fallback={<div class="empty-band">暂无评论</div>}>
-            {(comment) => <article class="comment-row"><header><strong>{comment.author}</strong><time>{localDateTime(comment.createdAt, false)}</time></header><Markdown source={comment.body} /></article>}
-          </For>
-        </div>
-        <div class="comment-editor">
-          <div class="markdown-editor-toolbar"><Segmented aria-label="评论编辑模式" value={commentMode()} options={[{ value: "edit", label: "编辑" }, { value: "preview", label: "预览" }]} onChange={(value) => setCommentMode(value as "edit" | "preview")} /></div>
-          <Show when={commentMode() === "edit"} fallback={<div class="comment-markdown-preview"><Show when={commentBody().trim()} fallback={<span class="muted">暂无内容</span>}><Markdown source={commentBody()} /></Show></div>}>
-            <TextArea aria-label="添加评论或备注" placeholder="添加评论或备注" autoSize={{ minRows: 3, maxRows: 8 }} value={commentBody()} onInput={(event) => setCommentBody(event.currentTarget.value)} />
-          </Show>
-          <div class="comment-actions"><Show when={commentError()}><span class="comment-error" role="alert">{commentError()}</span></Show><Button type="primary" icon={<Send size={14} />} loading={commentSaving()} disabled={!commentBody().trim()} onClick={() => { void submitComment(); }}>发布评论</Button></div>
-        </div>
-      </section>
       <OutputPreview issueKey={props.issue.id} output={previewOutput()} onClose={() => setPreviewOutput(null)} />
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
       <Modal open={relatedOpen()} title="编辑关联工单" okText="保存关联" cancelText="取消" confirmLoading={relatedSaving()} cancelButtonProps={{ disabled: relatedSaving() }} okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }} onOk={() => { void saveRelatedIssues(); }} onCancel={() => { if (!relatedSaving()) closeRelatedEditor(); }}>

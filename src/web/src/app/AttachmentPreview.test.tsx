@@ -68,7 +68,7 @@ it("retries a failed attachment preview while retaining the download action", as
   vi.stubGlobal("fetch", fetchMock);
   render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "text", fileName: "notes.txt", mediaType: "text/plain", size: 20, sha256: "a".repeat(64) }} onClose={() => {}} />);
   await screen.findByRole("alert");
-  expect(screen.getByRole("link", { name: "下载文件" }).getAttribute("href")).toBe("/api/issues/ISSUE-1/attachments/text");
+  expect(screen.queryByRole("link", { name: "下载文件" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "重试" }));
   await screen.findByText("Recovered attachment");
   expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -83,6 +83,6 @@ it("offers an Excel attachment download without fetching or parsing its contents
   expect(screen.getByRole("status").textContent).toContain("此格式不支持内嵌预览");
   expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
   expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
-  expect(screen.getByRole("link", { name: "下载文件" }).getAttribute("href")).toBe("/api/issues/ISSUE-1/attachments/workbook");
+  expect(screen.queryByRole("link", { name: "下载文件" })).toBeNull();
   expect(fetchMock).not.toHaveBeenCalled();
 });

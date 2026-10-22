@@ -41,6 +41,16 @@ const dateFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, {
   day: "2-digit",
 });
 
+const creationTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, {
+  timeZone: issuePilotConfig.regional.timeZone,
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+});
+export function issueCreationDate(value: string | undefined, full = false): string {
+  if (!value) return "未记录";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? (full ? creationTimeFormat : dateFormat).format(date) : "未记录";
+}
+
 export function relativeTime(value: string): string {
   const elapsed = Date.now() - new Date(value).getTime();
   if (!Number.isFinite(elapsed)) return value;

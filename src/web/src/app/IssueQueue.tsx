@@ -5,7 +5,7 @@ import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
 import { canUseIssueWorkMode, createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
-import { priorityColor, priorityOptions, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
+import { priorityColor, priorityOptions, issueCreationDate, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
 
 type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
 
@@ -241,7 +241,7 @@ export function IssueQueue(props: {
                   <span class="queue-item-topline">
                     <span class="issue-key">{issue.id}</span>
                     <Tag color={priorityColor[issue.priority]}>{issue.priority.toUpperCase()}</Tag>
-                    <span class="queue-time">{relativeTime(issue.updatedAt)}</span>
+                    <span class="queue-time" title={issueCreationDate(issue.createdAt, true)}>{relativeTime(issue.updatedAt)}</span>
                   </span>
                   <span class="queue-title" title={issue.title}>{issue.title}</span>
                   <span class="queue-item-meta">
