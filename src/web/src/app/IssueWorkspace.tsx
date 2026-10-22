@@ -292,9 +292,20 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           </For>
         </div>
       </section>
+      <Show when={props.issue.collaboratingServices?.length}>
+        <section class="repository-band" aria-label="协作服务"><div class="band-title"><Organization size={16} /><h2>协作服务</h2></div><div class="capability-labels"><For each={props.issue.collaboratingServices ?? []}>{(service) => <code>{service.name}</code>}</For></div></section>
+      </Show>
+      <Show when={canEditRelatedIssues() || (props.issue.relatedIssues ?? []).length}>
+        <section class="repository-band" aria-labelledby="related-issues-title">
+          <div class="band-title"><MessageSquare size={16} /><h2 id="related-issues-title">关联工单</h2><span>{props.issue.relatedIssues?.length ?? 0}</span><Show when={canEditRelatedIssues()}><Button type="text" icon={<Pencil size={14} />} disabled={Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status)} onClick={() => { void openRelatedEditor(); }}>编辑关联</Button></Show></div>
+          <div class="issue-attachment-list">
+            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>{(relatedIssue) => <div class="issue-attachment-row"><GitBranch size={15} /><span><strong>{relatedIssue.id}</strong><small>{relatedIssue.title} · {relatedIssue.service.name} / {relatedIssue.environmentKey}</small></span></div>}</For>
+          </div>
+        </section>
+      </Show>
       <Show when={(props.issue.scopeTransitions ?? []).length}>
         <section class="repository-band" aria-labelledby="scope-history-title">
-          <div class="band-title"><History size={16} /><h2 id="scope-history-title">处理范围历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
+          <div class="band-title"><History size={16} /><h2 id="scope-history-title">处理历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
           <div class="issue-attachment-list">
             <For each={props.issue.scopeTransitions ?? []}>{(transition) => (
               <div class="issue-attachment-row scope-history-row">
@@ -305,17 +316,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
                 </span>
               </div>
             )}</For>
-          </div>
-        </section>
-      </Show>
-      <Show when={props.issue.collaboratingServices?.length}>
-        <section class="repository-band" aria-label="协作服务"><div class="band-title"><Organization size={16} /><h2>协作服务</h2></div><div class="capability-labels"><For each={props.issue.collaboratingServices ?? []}>{(service) => <code>{service.name}</code>}</For></div></section>
-      </Show>
-      <Show when={canEditRelatedIssues() || (props.issue.relatedIssues ?? []).length}>
-        <section class="repository-band" aria-labelledby="related-issues-title">
-          <div class="band-title"><MessageSquare size={16} /><h2 id="related-issues-title">关联工单</h2><span>{props.issue.relatedIssues?.length ?? 0}</span><Show when={canEditRelatedIssues()}><Button type="text" icon={<Pencil size={14} />} disabled={Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status)} onClick={() => { void openRelatedEditor(); }}>编辑关联</Button></Show></div>
-          <div class="issue-attachment-list">
-            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>{(relatedIssue) => <div class="issue-attachment-row"><GitBranch size={15} /><span><strong>{relatedIssue.id}</strong><small>{relatedIssue.title} · {relatedIssue.service.name} / {relatedIssue.environmentKey}</small></span></div>}</For>
           </div>
         </section>
       </Show>
