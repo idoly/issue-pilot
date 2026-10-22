@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -10,7 +10,6 @@ import { Type } from "typebox";
 import { defineTool, ModelRuntime, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentCodemodeMode } from "../../src/domain/contracts.ts";
 import { PiSessionRuntime, createPrivateSessionManager, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
-import { IssueOutputStore } from "../../src/outputs/store.ts";
 
 async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessionOptions> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-codemode-"));
@@ -21,7 +20,7 @@ async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessio
   const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
   const events: JsonAgentSessionEvent[] = [];
   const manager = await createPrivateSessionManager(root, path.join(root, "sessions"));
-  const options: StartPiSessionOptions = { agentDirectory: root, manager, workspaceRoot: root, context: { issueKey: "ISSUE-20261017-001", serviceKey: "entry", environmentKey: "prod", codemode: mode, model: { provider: "codemode-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: false }, deploymentConfig: {}, systemPrompt: "Use configured tools to investigate the Issue.", onEvent: event => events.push(event), ...overrides };
+  const options: StartPiSessionOptions = { agentDirectory: root, manager, workspaceRoot: root, context: { issueKey: "ISSUE-20261017-001", serviceKey: "entry", environmentKey: "prod", codemode: mode, model: { provider: "codemode-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false }, deploymentConfig: {}, systemPrompt: "Use configured tools to investigate the Issue.", onEvent: event => events.push(event), ...overrides };
   return { root, models, runtime, options, faux, events, close: async () => { await runtime.close(); await rm(root, { recursive: true, force: true }); } };
 }
 function declaredTools(context: TranscriptContext) {
@@ -87,27 +86,25 @@ for (const mode of ["off", "on", "only"] as const) test(`loads the explicit ${mo
   } finally { await managed?.stop(); await f.close(); }
 });
 
-for (const nested of [false, true]) test(`${nested ? "codemode" : "direct"} calls reject invalid arguments introduced by an extension hook`, async () => {
+for (const nested of [false, true]) test(`${nested ? "codemode" : "direct"} writes validate arguments again after a mutable extension hook`, async () => {
   const f = await fixture("on"); let managed;
-  const outputs = new IssueOutputStore(f.root, f.options.context.issueKey);
-  f.options.context.canWriteOutputs = true; f.options.outputStore = outputs; f.options.agentDirectory = f.root;
+  f.options.agentDirectory = f.root;
   try {
     await mkdir(path.join(f.root, "extensions"));
-    await writeFile(path.join(f.root, "extensions", "mutator.ts"), "export default pi => pi.on('tool_call', event => { if(event.toolName === 'output') event.input.operation = 'unsupported'; });\n");
-    await writeFile(path.join(f.root, "evidence.bin"), Buffer.from([0, 255, 1, 2]));
-    const input = { operation: "publish", sourcePath: "evidence.bin", fileName: "delivery.bin" };
+    await writeFile(path.join(f.root, "extensions", "mutator.ts"), "export default pi => pi.on('tool_call', event => { if(event.toolName==='write') event.input.content=9; });\n");
+    const input = { path: "must-not-exist.txt", content: "before mutation" };
     f.faux.setResponses([
-      nested ? call(`return await tools.output(${JSON.stringify(input)});`, "mutated") : fauxAssistantMessage(fauxToolCall("output", input, { id: "mutated" }), { stopReason: "toolUse" }),
+      nested ? call(`await tools.write(${JSON.stringify(input)});`, "mutated") : fauxAssistantMessage(fauxToolCall("write", input, { id: "mutated" }), { stopReason: "toolUse" }),
       context => {
         const result = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "mutated");
         assert.ok(result && result.role === "toolResult"); assert.equal(result.isError, true);
-        assert.match(JSON.stringify(result.content), /invalid_output_input/);
-        return fauxAssistantMessage("Invalid operation rejected.");
+        assert.match(JSON.stringify(result.content), /invalid_issue_write_input/);
+        return fauxAssistantMessage("Invalid write rejected.");
       },
     ]);
-    managed = await f.runtime.start(f.options); await managed.prompt("Publish the synthetic evidence.");
-    assert.deepEqual(await outputs.list(), []);
-    assert.equal(managed.session.getLastAssistantText(), "Invalid operation rejected.");
+    managed = await f.runtime.start(f.options); await managed.prompt("Write a synthetic file.");
+    await assert.rejects(readFile(path.join(f.root, "must-not-exist.txt")), { code: "ENOENT" });
+    assert.equal(managed.session.getLastAssistantText(), "Invalid write rejected.");
   } finally { await managed?.stop(); await f.close(); }
 });
 
@@ -216,19 +213,17 @@ test("calls native MCP tools from codemode and reuses the SDK stdio connection",
   } finally { await managed?.stop(); await f.close(); }
 });
 
-test("uses structured output metadata and persists codemode store values across session reopen", async () => {
+test("persists ordinary working filenames in the codemode store across session reopen", async () => {
   const f = await fixture("only"); let managed;
-  f.options.context.canWriteOutputs = true;
-  const outputs = new IssueOutputStore(f.root, f.options.context.issueKey); f.options.outputStore = outputs;
   try {
     f.faux.setResponses([
-      call('await tools.write({path:"result.txt",content:"saved by native tool"}); const published = await tools.output({operation:"publish",sourcePath:"result.txt",fileName:"result.txt"}); store("published",published.output.fileName); return {file:published.output.fileName};', "publish"),
-      fauxAssistantMessage("Published."),
-      call('const existing = await tools.output({operation:"list"}); return {stored:load("published"),count:existing.outputs.length};', "resume"),
+      call('await tools.write({path:"result.txt",content:"saved by native tool"}); store("file","result.txt"); return {file:"result.txt"};', "write"),
+      fauxAssistantMessage("Saved."),
+      call('const existing = await tools.read({path:load("file")}); return {stored:load("file"),file:existing};', "resume"),
       context => { assert.match(JSON.stringify(context), /stored/); return fauxAssistantMessage("Reopened with stored filename."); },
     ]);
-    managed = await f.runtime.start(f.options); await managed.prompt("Publish the result.");
-    assert.equal((await outputs.read("result.txt")).toString(), "saved by native tool");
+    managed = await f.runtime.start(f.options); await managed.prompt("Save the result.");
+    assert.equal(await readFile(path.join(f.root, "result.txt"), "utf8"), "saved by native tool");
     await managed.stop();
     const manager = SessionManager.open(f.options.manager.getSessionFile()!);
     managed = await f.runtime.start({ ...f.options, manager }); await managed.prompt("Check the published result.");
@@ -267,6 +262,25 @@ test("keeps partial output but does not commit store writes when a script fails"
     managed = await f.runtime.start(f.options); await managed.prompt("Run a script and recover from its failure.");
     assert.equal(managed.session.getLastAssistantText(), "Failed writes were discarded.");
     assert.equal(f.options.manager.getBranch().some(entry => entry.type === "custom" && entry.customType === "codemode-store"), false);
+  } finally { await managed?.stop(); await f.close(); }
+});
+
+test("Codemode images and truncated output are archived in the Issue root before the result is persisted", async () => {
+  const f = await fixture("on"); let managed;
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=";
+  try {
+    f.faux.setResponses([call(`image({type:'image',data:${JSON.stringify(png)},mimeType:'image/png'});console.log('x'.repeat(50000));`), context => {
+      const result = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "script");
+      assert.ok(result && result.role === "toolResult"); assert.equal(result.isError, false);
+      assert.match(JSON.stringify(result.content), /codemode-[0-9a-f-]+\.png/);
+      assert.doesNotMatch(JSON.stringify(result.content), /pi-codemode-[0-9a-f]{16}/);
+      return fauxAssistantMessage("Files archived.");
+    }]);
+    managed = await f.runtime.start(f.options); await managed.prompt("Generate an image and a large text result.");
+    const files = (await readdir(f.root)).filter(name => name.startsWith("codemode-"));
+    assert.equal(files.filter(name => name.endsWith(".png")).length, 1, JSON.stringify(f.events.filter(event => event.type === "tool_execution_end")).slice(0, 1800)); assert.equal(files.filter(name => name.endsWith(".txt")).length, 1);
+    assert.deepEqual(await readFile(path.join(f.root, files.find(name => name.endsWith(".png"))!)), Buffer.from(png, "base64"));
+    assert.match(await readFile(path.join(f.root, files.find(name => name.endsWith(".txt"))!), "utf8"), /x{50000}/);
   } finally { await managed?.stop(); await f.close(); }
 });
 

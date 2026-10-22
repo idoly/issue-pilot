@@ -28,7 +28,7 @@ async function createRemote(root: string): Promise<string> {
   return remote;
 }
 
-test("adds available metadata, conversations, and development snapshots to a production analysis runtime", async () => {
+test("related Issues expose their complete current working directory and conversation without copying code", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-related-runtime-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
@@ -51,6 +51,7 @@ test("adds available metadata, conversations, and development snapshots to a pro
     ]).returning();
     await database.db.insert(issueWorkspaces).values([{ issueId: development!.id }, { issueId: relatedProduction!.id }, { issueId: production!.id }]);
 
+    await mkdir(issueSessionRoot(root, relatedProduction!.key), { recursive: true });
     const projects = new IssueProjectManager(database.db, root);
     const preparedDevelopment = await projects.prepare(development!, "dev");
     const developmentRepository = preparedDevelopment.repositories[0]!.workspacePath;
@@ -60,7 +61,7 @@ test("adds available metadata, conversations, and development snapshots to a pro
     await writeFile(path.join(developmentRepository, "README.md"), "uncommitted local experiment\n", "utf8");
 
     const sessionRoot = issueSessionRoot(root, development!.key);
-    const sessionFile = path.join(sessionRoot, "session.jsonl");
+    const sessionFile = path.join(sessionRoot, ".session-related.jsonl");
     await mkdir(sessionRoot, { recursive: true });
     await writeFile(sessionFile, "{\"type\":\"custom\",\"customType\":\"issue-pilot-user\",\"data\":{\"message\":\"check the contract\"}}\n", { mode: 0o600 });
     await database.db.insert(agentSessions).values({ issueId: development!.id, sessionFile, workspacePath: preparedDevelopment.workspaceRoot });
@@ -72,31 +73,30 @@ test("adds available metadata, conversations, and development snapshots to a pro
 
     const preparedProduction = await projects.prepare(production!, "prod");
     assert.deepEqual(preparedProduction.relatedIssueKeys.sort(), [development!.key, relatedProduction!.key].sort());
-    const relatedRoot = path.join(issueRuntimeRoot(root, production!.key), "related-issues", development!.key.toLowerCase());
-    assert.equal(await readFile(path.join(relatedRoot, "repositories", "remote", "README.md"), "utf8"), "committed development fix\n");
-    assert.match(await readFile(path.join(relatedRoot, "conversation.jsonl"), "utf8"), /check the contract/);
-    const metadata = JSON.parse(await readFile(path.join(relatedRoot, "issue.json"), "utf8")) as { key: string; repositories: Array<{ workingBranch: string; commit: string }> };
+    const relatedRoot = path.join(issueRuntimeRoot(root, production!.key), `.related-${development!.key.toLowerCase()}`);
+    assert.equal(await readFile(path.join(relatedRoot, "remote", "README.md"), "utf8"), "uncommitted local experiment\n");
+    assert.match(await readFile(relatedRoot + ".jsonl", "utf8"), /check the contract/);
+    const metadata = JSON.parse(await readFile(relatedRoot + ".json", "utf8")) as { key: string; repositories: Array<{ workingBranch: string; commit: string }> };
     assert.equal(metadata.key, development!.key);
     assert.match(metadata.repositories[0]!.workingBranch, /^hotfix-issue-20260918-101$/);
     assert.match(metadata.repositories[0]!.commit, /^[0-9a-f]{40}$/);
-    const metadataOnlyRoot = path.join(issueRuntimeRoot(root, production!.key), "related-issues", relatedProduction!.key.toLowerCase());
-    const metadataOnly = JSON.parse(await readFile(path.join(metadataOnlyRoot, "issue.json"), "utf8")) as { key: string; repositories: unknown[]; conversationFile?: string; note: string };
+    const metadataOnlyRoot = path.join(issueRuntimeRoot(root, production!.key), `.related-${relatedProduction!.key.toLowerCase()}`);
+    const metadataOnly = JSON.parse(await readFile(metadataOnlyRoot + ".json", "utf8")) as { key: string; repositories: unknown[]; conversationFile?: string; note: string };
     assert.equal(metadataOnly.key, relatedProduction!.key);
     assert.deepEqual(metadataOnly.repositories, []);
     assert.equal(metadataOnly.conversationFile, undefined);
-    assert.match(metadataOnly.note, /No local development branch snapshot/);
-    assert.deepEqual(await readdir(path.join(metadataOnlyRoot, "repositories")), []);
-    await assert.rejects(readFile(path.join(metadataOnlyRoot, "conversation.jsonl"), "utf8"), (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT");
+    assert.match(metadataOnly.note, /read-only reference/);
+    assert.deepEqual(await readdir(metadataOnlyRoot), []);
+    await assert.rejects(readFile(metadataOnlyRoot + ".jsonl", "utf8"), (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT");
     assert.equal(await readFile(path.join(preparedProduction.runtimeRoot, "remote", "README.md"), "utf8"), "production baseline\n");
 
-    // Development rounds and cold-start hydration expose the same read-only evidence
-    // in runtime without adding unmanaged entries to the writable workspace root.
+    // Development and startup hydration retain the same directory references.
     await database.db.insert(issueRelations).values({ issueId: development!.id, relatedIssueId: relatedProduction!.id });
     const developmentWithRelations = await projects.prepare(development!, "dev");
     assert.deepEqual(developmentWithRelations.relatedIssueKeys, [relatedProduction!.key]);
-    const devEvidence = path.join(developmentWithRelations.runtimeRoot, "related-issues", relatedProduction!.key.toLowerCase(), "issue.json");
+    const devEvidence = path.join(developmentWithRelations.runtimeRoot, `.related-${relatedProduction!.key.toLowerCase()}.json`);
     assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
-    assert.deepEqual(await readdir(developmentWithRelations.workspaceRoot), ["remote"]);
+    assert.equal((await readdir(developmentWithRelations.workspaceRoot)).includes("remote"), true);
     await projects.hydrateDevelopmentRuntime(development!);
     assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
   } finally {

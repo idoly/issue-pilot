@@ -428,6 +428,20 @@
       "when": 1792627200000,
       "tag": "0060_dingtalk_issue_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1792656000000,
+      "tag": "0061_flat_issue_attachment_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1792656000001,
+      "tag": "0062_retire_production_data",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { buildApi } from "../../src/http/api.ts";
 
-const projectTools = { async start() {}, async close() {} };
+const stateLease = { async start() {}, async close() {} };
 
 test("serves the production Web and keeps unlisted files private", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-web-"));
@@ -20,7 +20,7 @@ test("serves the production Web and keeps unlisted files private", async () => {
       writeFile(path.join(webRoot, "assets", "app-123.js"), "globalThis.issuePilot = true;"),
       writeFile(path.join(webRoot, "private.txt"), "not public"),
     ]);
-    const app = await buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, projectTools, webRoot });
+    const app = await buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, stateLease, webRoot });
     try {
       const index = await app.inject({ method: "GET", url: "/" });
       assert.equal(index.statusCode, 200);
@@ -61,7 +61,7 @@ test("fails startup when the configured Web build is incomplete", async () => {
   try {
     await Promise.all([mkdir(webRoot), mkdir(stateRoot)]);
     await writeFile(path.join(webRoot, "assets-only.js"), "void 0;");
-    await assert.rejects(buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, projectTools, webRoot }), /web_build_file_missing:index\.html/);
+    await assert.rejects(buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, stateLease, webRoot }), /web_build_file_missing:index\.html/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

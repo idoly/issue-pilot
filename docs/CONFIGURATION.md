@@ -146,7 +146,7 @@ MCP 端点提供 `dingtalk_import`，与页面复用同一接口和配置。参�
 
 ## 凭证与 owner
 
-工单 owner 为 assignee，未分配时为 reporter，必须活跃。开发和正式数据处理要求 owner 为 developer。developer owner 使用个人模型和 Git 身份，缺失或失败不回退到其他身份。个人正式 DMS/SLS 配置各自完整覆盖部署组，没有该组则使用部署配置，不能创建不存在的目标。普通配置 GET 隐藏凭证；选定 MCP 编辑配置的开发者接口可以展示其文档约定的私有值。用户文件不会注入 Agent 提示词或工具输入；当前原生工具仍以应用用户执行，文件位置和权限不构成 OS 隔离。
+工单 owner 为 assignee，未分配时为 reporter，必须活跃。开发要求 owner 为 developer。developer owner 使用个人模型和 Git 身份，缺失或失败不回退到其他身份。个人正式 DMS/SLS 配置各自完整覆盖部署组，没有该组则使用部署配置，不能创建不存在的目标。普通配置 GET 隐藏凭证；选定 MCP 编辑配置的开发者接口可以展示其文档约定的私有值。用户文件不会注入 Agent 提示词或工具输入；本地工具经 SRT 限制持久文件写入范围，执行与远程服务的信任边界见 [Agent](AGENT.md#执行边界)。
 
 ## 内建能力与工具
 
@@ -182,7 +182,7 @@ SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 ali
 
 ## Agent 基座与资源
 
-Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，`service.yaml` 的 `agent.runtime.settings` 可显式覆盖运行参数；该项省略时清除旧数据库覆盖，采用全局 Pi 默认值，避免隐藏的旧配置继续生效。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
+Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，`service.yaml` 的 `agent.runtime.settings` 可显式覆盖运行参数；`agent.runtime.networkAllowedDomains` 为本地工具和 stdio MCP 追加按域名或 `host:port` 限定的出口，使用 SRT 的域名规则校验，不能覆盖宿主控制地址与端口的拒绝规则。该项省略时清除旧数据库覆盖，采用全局 Pi 默认值，避免隐藏的旧配置继续生效。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
 
 资源检查 GET 仅发现扩展路径，不执行用户扩展。实际会话创建时加载资源，正常触发扩展启动和关闭。模型接口定义继续由全局 Pi `models.json` 管理。改变资源后重建会话或重启应用。
 
@@ -192,9 +192,10 @@ Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi �
 | --- | --- | --- | --- |
 | production_analysis | prod | smart_analysis | 只读快照 |
 | test_analysis | test | smart_analysis | 只读快照 |
-| production_data | prod | data_processing | 只读快照与成果发布 |
 | development_fix | dev | defect_fix | 独立 worktree |
 | development_feature | dev | feature_development | 独立 worktree |
+
+旧 `production_data` / `data_processing` 由迁移 0062 统一改为 `production_analysis` / `smart_analysis`，同时转换处理历史的前后模式。新请求及数据库写入拒绝旧类型。全部处理方式均可创建普通工作文件；DMS 导出取决于配置与凭证。
 
 ## 身份与权限
 
@@ -215,4 +216,4 @@ Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi �
 }
 ```
 
-二进制成果返回已验证的下载路径，不把文件内容塞进 MCP 文本。原生发布与 DMS 导出返回 `downloadPath`，对话应使用该路径提供下载。
+二进制工作文件返回已验证的下载路径，不把文件内容塞进 MCP 文本。DMS 导出返回 `downloadPath`，对话应使用该路径提供下载。`work_files` 列出当前工作文件，`output_read` 保留旧成果及根目录普通文件的读取兼容。

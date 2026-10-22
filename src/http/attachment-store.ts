@@ -63,11 +63,16 @@ export async function resolveSecureAttachmentFile(attachmentRoot: string, object
   return attachmentPath;
 }
 
+export function attachmentWorkingFileName(objectKey: string): string {
+  return path.basename(objectKey).replace(/^\.attachment-/, "");
+}
+
 export function serializeAttachment(attachment: typeof issueAttachments.$inferSelect) {
   return {
     id: attachment.id,
     fileName: attachment.fileName,
-    workingFileName: path.basename(attachment.objectKey),
+    storedFileName: path.basename(attachment.objectKey),
+    workingFileName: attachment.workingFileName ?? attachmentWorkingFileName(attachment.objectKey),
     mediaType: attachment.mediaType,
     size: attachment.size,
     sha256: attachment.sha256,
@@ -112,7 +117,7 @@ export async function finalizeQuarantinedAttachments(
 }
 
 function attachmentObjectName(fileName: string): string {
-  const prefix = `${randomUUID()}-`;
+  const prefix = `.attachment-${randomUUID()}-`;
   const budget = issuePilotConfig.limits.filesystemNameBytes - Buffer.byteLength(prefix);
   const suffix = path.extname(fileName);
   const extension = Buffer.byteLength(suffix) <= budget ? suffix : "";
@@ -141,7 +146,7 @@ export async function writePendingAttachments(
     writtenObjectKeys.push(objectKey);
     await copyFile(pendingAttachment.temporaryPath, objectKey, constants.COPYFILE_EXCL);
     await chmod(objectKey, 0o400);
-    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
+    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, workingFileName: attachmentWorkingFileName(objectKey), mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
     createdAttachments.push(serializeAttachment(attachment!));
   }
   return createdAttachments;

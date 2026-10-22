@@ -8,6 +8,8 @@ import { inspectAgentResources, parseAgentRuntime } from "../../src/configuratio
 test("validates supported Pi fields against the installed SDK schema and rejects conflicting owners", () => {
   const runtime = { settings: { compaction: { enabled: false, keepRecentTokens: 8000 }, retry: { enabled: true, maxRetries: 2 }, shellPath: "/bin/bash", images: { autoResize: true }, cacheWarming: "off", codemode: { inlineBudget: 600 } } };
   assert.deepEqual(parseAgentRuntime(runtime), runtime);
+  assert.deepEqual(parseAgentRuntime({ networkAllowedDomains: ["db.example.test:3306", "repo.example.test:443"] }), { networkAllowedDomains: ["db.example.test:3306", "repo.example.test:443"] });
+  for (const networkAllowedDomains of [["*"], ["http://example.test"], ["example.test:0"], [9]]) assert.throws(() => parseAgentRuntime({ networkAllowedDomains }), /invalid_agent_runtime_configuration/);
   for (const settings of [{ defaultModel: "other" }, { defaultTools: ["bash"] }, { sessionDir: "/other" }, { extensions: ["/other"] }, { codemode: { mode: "only" } }, { retry: { maxRetries: -1 } }, { retry: { enabled: "yes" } }, { retry: { unsupported: true } }, { unknown: true }, { retry: { maxDelayMs: 1000 } }]) {
     assert.throws(() => parseAgentRuntime({ settings }), /invalid_agent_runtime_configuration/);
   }

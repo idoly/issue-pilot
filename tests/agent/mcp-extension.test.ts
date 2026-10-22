@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { setTimeout as pause } from "node:timers/promises";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { hostMcpPid } from "../helpers/mcp-process.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 
 async function fixture(env: Record<string, string> = {}) {
@@ -18,7 +19,7 @@ async function fixture(env: Record<string, string> = {}) {
   const options: StartPiSessionOptions = {
     agentDirectory: root,
     manager: await createPrivateSessionManager(root, root), workspaceRoot: root,
-    context: { issueKey: "ISSUE-20261018-998", serviceKey: "entry", environmentKey: "prod", codemode: "off", model: { provider: "mcp-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: false },
+    context: { issueKey: "ISSUE-20261018-998", serviceKey: "entry", environmentKey: "prod", codemode: "off", model: { provider: "mcp-fixture", modelId: "fixture", thinkingLevel: "off" }, capabilities: [], canModifyCode: false },
     deploymentConfig: {}, systemPrompt: "Use configured MCP tools.", onEvent() {},
     mcpConfigurations: [{ id: "local", name: "Local", url: "", transport: "stdio", authorization: "", enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_PID_FILE: path.join(root, "pid"), MCP_FIXTURE_SLOW_FILE: path.join(root, "slow"), MCP_FIXTURE_SECRET: "native-mcp-private-key", ...env } } }],
   };
@@ -133,14 +134,17 @@ test("SDK tools reuse a private stdio process, retain literal configuration and 
     managed = await f.runtime.start(f.options); await ready(managed); await managed.prompt("Inspect the connected MCP tools.");
     const context = managed.session.extensionRunner.createToolContext("integration", undefined);
     const first = data(await context.executeTool("mcp__local__counter", {}));
+    const firstHostPid = await hostMcpPid(path.join(f.root, "pid"));
     const second = data(await context.executeTool("mcp__local__write", {}));
     assert.equal(first.pid, second.pid); assert.equal(second.count, first.count + 1); assert.equal(first.cwd, f.root); assert.equal(first.inherited, false);
     await assert.rejects(readFile(path.join(f.root, "must-not-run")), { code: "ENOENT" });
     assert.doesNotMatch(JSON.stringify(managed.session.getAllTools()), /native-mcp-private-key|must-not-run/);
     await context.executeTool("mcp__local__die", {});
     const restarted = data(await context.executeTool("mcp__local__counter", {}));
-    assert.notEqual(first.pid, restarted.pid); stopped(first.pid);
-    await Promise.all([managed.stop(), managed.stop()]); stopped(restarted.pid);
+    assert.equal(restarted.count, 1);
+    const restartedHostPid = await hostMcpPid(path.join(f.root, "pid"));
+    assert.notEqual(firstHostPid, restartedHostPid); stopped(firstHostPid);
+    await Promise.all([managed.stop(), managed.stop()]); stopped(restartedHostPid);
   } finally {
     await managed?.stop(); await f.close();
     if (previous === undefined) delete process.env.MCP_PARENT_SECRET; else process.env.MCP_PARENT_SECRET = previous;
@@ -164,7 +168,8 @@ test("SDK call cancellation leaves the shared connection usable and errors omit 
     await file(f.root, "slow"); controller.abort(); await pending;
     const result = data(await context.executeTool("mcp__local__counter", {}));
     assert.equal(result.pid, Number(await file(f.root, "pid")));
-    await managed.stop(); stopped(result.pid);
+    const resultHostPid = await hostMcpPid(path.join(f.root, "pid"));
+    await managed.stop(); stopped(resultHostPid);
   } finally { await managed?.stop(); await f.close(); }
 });
 
@@ -172,7 +177,8 @@ test("SDK shutdown closes a stdio server whose initialization is pending", async
   const f = await fixture({ MCP_FIXTURE_HANG: "1" }); let managed: ManagedPiSession | undefined;
   try {
     managed = await f.runtime.start(f.options);
-    const child = Number(await file(f.root, "pid"));
+    await file(f.root, "pid");
+    const child = await hostMcpPid(path.join(f.root, "pid"));
     await managed.stop(); stopped(child);
   } finally { await managed?.stop(); await f.close(); }
 });
@@ -228,7 +234,21 @@ test("SDK exposes MCP resources through the native resource tools", async () => 
     assert.deepEqual(templates.result.structuredContent, { resourceTemplates: [] });
     const read = await context.executeTool("read_mcp_resource", { server: "local", uri: "fixture://evidence" });
     assert.equal(read.isError, false); assert.match(JSON.stringify(read.result), /resource evidence/);
+    const binary = await context.executeTool("read_mcp_resource", { server: "local", uri: "fixture://binary.bin" });
+    assert.equal(binary.isError, false); assert.doesNotMatch(JSON.stringify(binary.result.content), /pi-mcp-[0-9a-f]{16}/);
+    const files = (await readdir(f.root)).filter(name => name.startsWith("mcp-") && name.endsWith(".bin"));
+    assert.equal(files.length, 1);
+    assert.deepEqual(await readFile(path.join(f.root, files[0]!)), Buffer.from([0, 255, 1, 2]));
+    assert.equal((await stat(path.join(f.root, files[0]!))).mode & 0o777, 0o600);
   } finally { await managed?.stop(); await f.close(); }
+});
+
+test("rejects loader environment overrides before starting a stdio sandbox", async () => {
+  const f = await fixture({ LD_PRELOAD: "./untrusted-loader.so" });
+  try {
+    await assert.rejects(f.runtime.start(f.options), /unsafe_issue_launcher_environment/);
+    await assert.rejects(readFile(path.join(f.root, "pid")), { code: "ENOENT" });
+  } finally { await f.close(); }
 });
 
 test("rejects oversized MCP results before formatting or returning their contents", async () => {

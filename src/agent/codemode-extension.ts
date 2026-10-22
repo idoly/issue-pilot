@@ -1,5 +1,6 @@
 import { addAbortListener } from "node:events";
 import { createCodemodeExtension, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { generatedWorkFileSaver } from "../workspace/work-file-store.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const limits = issuePilotConfig.limits.codemode;
@@ -55,8 +56,8 @@ export class CodemodeQueue {
 
 const scripts = new CodemodeQueue();
 
-export function createIssueCodemodeExtension(): ExtensionFactory {
-  const extension = createCodemodeExtension({ models: false });
+export function createIssueCodemodeExtension(root: string): ExtensionFactory {
+  const extension = createCodemodeExtension({ models: false, saveOutput: generatedWorkFileSaver(root, "codemode") });
   return pi => extension({
     ...pi,
     registerTool(tool) {

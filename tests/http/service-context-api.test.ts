@@ -53,7 +53,7 @@ test("service configuration and generated descriptions share one source without 
     assert.ok(!JSON.stringify(notes).includes("fixture-private-token"));
     await assert.rejects(workspace.execute("include", { operation: "include", service: "other" }, undefined, undefined, {} as never));
     const scopes = services.filter(row => row.environment.kind !== "dev").map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: resolveDeploymentConfiguration(row.deployment.config) }));
-    const tools = createCapabilityTools({ serviceKey: "entry", environmentKey: "dev", capabilities: ["dms"], canWriteOutputs: false }, {}, { serviceScopes: scopes });
+    const tools = createCapabilityTools({ serviceKey: "entry", environmentKey: "dev", capabilities: ["dms"] }, {}, { serviceScopes: scopes });
     assert.deepEqual(tools.map(tool => tool.name), ["service_query"]);
     assert.ok(!JSON.stringify(tools[0]!.parameters).includes("fixture-private-token"));
     assert.match(JSON.stringify(tools[0]!.parameters), /orders_test/);

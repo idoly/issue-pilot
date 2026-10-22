@@ -8,7 +8,7 @@ const agent = { provider: "test-provider", model: "test-model", thinkingLevel: "
 function context(environmentKind: "dev" | "prod", repositoryAccess: Array<"read" | "write"> = ["write"], issueType = environmentKind === "dev" ? "defect_fix" : "smart_analysis") {
   return createAgentSessionContext({
     issueKey: "ISSUE-20260804-001",
-    issueType: issueType as "defect_fix" | "smart_analysis" | "data_processing",
+    issueType: issueType as "defect_fix" | "smart_analysis",
     agentConfiguration: agent,
     enabledCapabilities: ["sls"],
     deploymentConfig: {
@@ -36,10 +36,11 @@ test("keeps repository policy independent from the native coding tool set", () =
   assert.deepEqual(sessionToolAllowlist(context("dev", [])), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 
-test("grants only the durable output tool to production data-processing Issues", () => {
-  const data = context("prod", ["read"], "data_processing");
-  assert.equal(data.canModifyCode, false);
-  assert.equal(data.canWriteOutputs, true);
-  assert.deepEqual(sessionToolAllowlist(data), ["read", "bash", "edit", "write", "grep", "find", "ls", "output", "service_query"]);
-  assert.equal(context("prod", ["read"], "smart_analysis").canWriteOutputs, false);
+test("all Issue types use ordinary working files without a publication permission", () => {
+  for (const environment of ["dev", "prod"] as const) {
+    const value = context(environment);
+    assert.equal("canWriteOutputs" in value, false);
+    assert.equal(sessionToolAllowlist(value).includes("output"), false);
+    assert.ok(sessionToolAllowlist(value).includes("write"));
+  }
 });

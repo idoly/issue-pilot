@@ -8,7 +8,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
-import { issueRepositoryWorkspaceNames } from "./git.ts";
+import { issueRepositoryWorkspaceNames, repositoryStorePath } from "./git.ts";
 import { classifyRepositoryState, issueRuntimeRoot, sharedCheckoutsRoot } from "./state.ts";
 
 import type { SourceBlame, SourceChanges, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "./source-contracts.ts";
@@ -74,6 +74,15 @@ export class SourceBrowser {
       branch: repository.workingBranch ?? repository.baseBranch,
       access: state === "development_workspace" ? "write" : "read",
     }));
+  }
+
+  async readRoots(issue: IssueReference): Promise<Record<string, string>> {
+    let rows: RepositoryRow[];
+    try { rows = await this.repositoryRows(issue); }
+    catch (error) { if (error instanceof Error && ["source_browser_unavailable", "source_repository_state_invalid"].includes(error.message)) return {}; throw error; }
+    const names = issueRepositoryWorkspaceNames(rows), roots: Record<string, string> = {};
+    for (const repository of rows) { const name = names.get(repository.url)!; roots[name] = (await this.context(issue, name, rows)).root; }
+    return roots;
   }
 
   async tree(issue: IssueReference, repositoryName: string, relativePath = ""): Promise<SourceTree> {
@@ -523,6 +532,12 @@ export class SourceBrowser {
   private async writableContext(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
     const context = await this.context(issue, repositoryName);
     if (context.source.access !== "write") throw new Error("source_read_only");
+    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"], this.mutationOptions());
+    const [gitDirectory, commonDirectory, workingDirectory, branch] = result.stdout.trim().split("\n");
+    const expectedStore = repositoryStorePath(this.stateRoot, context.repository.url);
+    if (result.code !== 0 || commonDirectory !== expectedStore || workingDirectory !== context.root || branch !== context.repository.workingBranch || !gitDirectory || path.dirname(gitDirectory) !== path.join(expectedStore, "worktrees")) throw new Error("source_git_binding_invalid");
+    const pointer = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
+    if (path.resolve(gitDirectory, pointer) !== path.join(context.root, ".git")) throw new Error("source_git_binding_invalid");
     return context;
   }
 
@@ -572,9 +587,9 @@ export class SourceBrowser {
     if (result.code !== 0) throw new Error(failure);
   }
 
-  private async context(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
+  private async context(issue: IssueReference, repositoryName: string, knownRows?: RepositoryRow[]): Promise<SourceContext> {
     if (!repositoryNamePattern.test(repositoryName)) throw new Error("source_repository_not_found");
-    const rows = await this.repositoryRows(issue);
+    const rows = knownRows ?? await this.repositoryRows(issue);
     const state = classifyRepositoryState(rows);
     const names = issueRepositoryWorkspaceNames(rows);
     const repository = rows.find((candidate) => names.get(candidate.url) === repositoryName);
@@ -582,16 +597,27 @@ export class SourceBrowser {
     const runtimeRepository = path.join(issueRuntimeRoot(this.stateRoot, issue.key), repositoryName);
     let metadata;
     try { metadata = await lstat(runtimeRepository); } catch (error) { missingPathError(error); }
-    if (!metadata!.isSymbolicLink()) throw new Error("source_runtime_invalid");
+    if (state === "development_workspace" ? !metadata!.isDirectory() : !metadata!.isSymbolicLink()) throw new Error("source_runtime_invalid");
     let root: string;
     try { root = await realpath(runtimeRepository); } catch (error) { missingPathError(error); }
     if (state === "development_workspace") {
       if (!repository.localPath || path.resolve(repository.localPath) !== root) throw new Error("source_runtime_invalid");
+      const store = repositoryStorePath(this.stateRoot, repository.url);
+      try {
+        const pointerFile = path.join(root, ".git");
+        if (!(await lstat(pointerFile)).isFile()) throw new Error("source_git_binding_invalid");
+        const pointer = (await readFile(pointerFile, "utf8")).trim();
+        if (!pointer.startsWith("gitdir: ")) throw new Error("source_git_binding_invalid");
+        const directory = path.resolve(root, pointer.slice("gitdir: ".length));
+        if (path.dirname(directory) !== path.join(store, "worktrees") || await realpath(directory) !== directory) throw new Error("source_git_binding_invalid");
+        const [common, backPointer, head] = await Promise.all(["commondir", "gitdir", "HEAD"].map(name => readFile(path.join(directory, name), "utf8")));
+        if (path.resolve(directory, common!.trim()) !== store || path.resolve(directory, backPointer!.trim()) !== pointerFile || head!.trim() !== `ref: refs/heads/${repository.workingBranch}`) throw new Error("source_git_binding_invalid");
+      } catch (error) { if (error instanceof Error && error.message === "source_git_binding_invalid") throw error; throw new Error("source_git_binding_invalid", { cause: error }); }
     } else {
       const checkoutRoot = sharedCheckoutsRoot(this.stateRoot);
       const relative = path.relative(checkoutRoot, root);
       const segments = relative.split(path.sep);
-      if (relative.startsWith("..") || path.isAbsolute(relative) || segments.length !== 2 || !/^[a-f0-9]{40}$/.test(segments[1]!)) throw new Error("source_runtime_invalid");
+      if (relative.startsWith("..") || path.isAbsolute(relative) || segments.length !== 2 || segments[0] !== path.basename(repositoryStorePath(this.stateRoot, repository.url)) || !/^[a-f0-9]{40}$/.test(segments[1]!)) throw new Error("source_runtime_invalid");
     }
     return {
       repository,

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { rename } from "node:fs/promises";
 import path from "node:path";
 
@@ -11,7 +10,7 @@ import { readInBatches } from "../db/client.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { agentSessions, dingtalkIssueImports, environments, issueAttachments, issueCcRecipients, issueComments, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
-import { listIssueOutputs, resolveIssueOutput } from "../outputs/store.ts";
+import { listIssueOutputs, openLegacyIssueOutput } from "../outputs/store.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueWorkDirectory, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
@@ -192,7 +191,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         if (existing) { created = false; return existing.issue; }
       }
       const issueValues = await parseCreateIssueInput(input);
-      if (issueValues.environment.kind === "dev" || issueValues.type === "data_processing") {
+      if (issueValues.environment.kind === "dev") {
         const [owner] = await database.db.select().from(subjects).where(eq(subjects.subject, issueValues.assigneeSubject ?? reporterSubject)).limit(1);
         if (owner?.role !== "developer") throw new ApiError(400, "issue_developer_owner_required");
       }
@@ -258,7 +257,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       const removedAttachmentIdSet = new Set(removedAttachmentIds);
       const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
       if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
-      if (issueEnvironment?.kind === "dev" || currentIssue.type === "data_processing") {
+      if (issueEnvironment?.kind === "dev") {
         const [owner] = await database.db.select().from(subjects).where(eq(subjects.subject, issueValues.assigneeSubject ?? currentIssue.reporterSubject)).limit(1);
         if (owner?.role !== "developer") throw new ApiError(400, "issue_developer_owner_required");
       }
@@ -273,7 +272,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       let attachmentDtos: Array<ReturnType<typeof serializeAttachment>> = [];
       try {
         for (const { attachment, sourcePath } of removableFiles) {
-          const temporaryPath = path.join(attachmentRoot, `.${attachment.id}-${randomUUID()}.deleting`);
+          const temporaryPath = path.join(attachmentRoot, `.attachment-${attachment.id}-${randomUUID()}.deleting`);
           await rename(sourcePath, temporaryPath);
           quarantined.push({ sourcePath, temporaryPath });
         }
@@ -412,18 +411,18 @@ export function registerIssueRoutes(context: ApiRouteContext) {
 
   app.get<{ Params: { key: string; fileName: string } }>("/api/issues/:key/outputs/:fileName", { logLevel: "silent" }, async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    let outputPath: string;
-    try { outputPath = await resolveIssueOutput(stateRoot, issue.key, request.params.fileName); }
+    let output: Awaited<ReturnType<typeof openLegacyIssueOutput>>;
+    try { output = await openLegacyIssueOutput(stateRoot, issue.key, request.params.fileName); }
     catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new ApiError(404, "issue_output_not_found");
-      if (error instanceof Error && error.message === "invalid_output_file_name") throw new ApiError(400, error.message);
+      if (error instanceof Error && error.message === "invalid_work_file_name") throw new ApiError(400, error.message);
       throw error;
     }
     const extension = path.extname(request.params.fileName).toLowerCase();
     const mediaType = new Map([[".csv", "text/csv; charset=utf-8"], [".json", "application/json; charset=utf-8"], [".jsonl", "application/x-ndjson; charset=utf-8"], [".sql", "text/plain; charset=utf-8"], [".txt", "text/plain; charset=utf-8"], [".md", "text/markdown; charset=utf-8"]]).get(extension) ?? "application/octet-stream";
     reply.header("Cache-Control", "private, no-store");
     reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(request.params.fileName)}`);
-    return reply.type(mediaType).send(createReadStream(outputPath));
+    return reply.type(mediaType).header("Content-Length", output.size).send(output.handle.createReadStream({ autoClose: true }));
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/comments", async (request, reply) => {

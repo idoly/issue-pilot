@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -14,6 +13,7 @@ import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus }
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows } from "./project.ts";
+import { assertReleasedIssueRuntime } from "./runtime.ts";
 import { assertManagedIssueWorkspaceLayout, assertManagedIssueWorkspacePaths, classifyRepositoryState, issueWorkspaceRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -393,13 +393,10 @@ export class WorkspaceLifecycleManager {
       return this.markReopened(issue);
     }
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
-    if (await pathExists(workspaceRoot)) {
+    try {
       const names = issueRepositoryWorkspaceNames(repositories);
-      for (const name of names.values()) {
-        const metadata = await lstat(path.join(workspaceRoot, name)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
-        if (metadata) throw new WorkspaceRestoreRefusal("workspace_path_already_exists");
-      }
-    }
+      await assertReleasedIssueRuntime(this.stateRoot, issue.key, repositories.map(repository => ({ name: names.get(repository.url)!, url: repository.url })));
+    } catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
 
     try { developmentWorktreeMode(issue.type); issueRepositoryWorkspaceNames(repositories); }
     catch (error) { throw new WorkspaceRestoreRefusal(errorMessage(error)); }
@@ -521,9 +518,11 @@ export class WorkspaceLifecycleManager {
       const repositories = knownRepositories ?? await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
       const state = classifyRepositoryState(repositories);
       if (state === "development_snapshot") {
-        const names = issueRepositoryWorkspaceNames(repositories);
-        const entries = await readdir(workspaceRoot);
-        blockedReason = entries.some((name) => [...names.values()].includes(name)) ? "development_repository_state_invalid" : "workspace_missing";
+        try {
+          const names = issueRepositoryWorkspaceNames(repositories);
+          await assertReleasedIssueRuntime(this.stateRoot, issue.key, repositories.map(repository => ({ name: names.get(repository.url)!, url: repository.url })));
+          blockedReason = "workspace_missing";
+        } catch { blockedReason = "development_repository_state_invalid"; }
       } else if (state !== "development_workspace") blockedReason = "development_repository_state_invalid";
       else try {
         issueRepositoryWorkspaceNames(repositories);

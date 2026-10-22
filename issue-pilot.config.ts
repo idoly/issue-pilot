@@ -48,19 +48,12 @@ export const issuePilotConfig = Object.freeze({
     dms: Object.freeze({ sseUrl: "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse" }),
   }),
   runtime: Object.freeze({
-    agent: Object.freeze({ modelResponseIdleMs: 5 * 60 * 1000, maxConcurrentIssues: 3 }),
-    sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
-    projectTools: Object.freeze({
-      node: Object.freeze({
-        npmConfig: ".npmrc",
-        npmCache: ".npm/issue-pilot",
-      }),
-      maven: Object.freeze({
-        settings: ".m2/settings.xml",
-        repository: ".m2/repository/issue-pilot",
-      }),
-      executionMs: 30 * 60 * 1000,
+    agent: Object.freeze({
+      modelResponseIdleMs: 5 * 60 * 1000, maxConcurrentIssues: 3,
+      networkAllowedDomains: Object.freeze(["registry.npmjs.org", "registry.npmmirror.com", "repo.maven.apache.org", "repo1.maven.org", "github.com", "*.githubusercontent.com"]),
     }),
+    sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
+
   }),
   limits: Object.freeze({
     filesystemNameBytes: 255,

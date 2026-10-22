@@ -3,15 +3,14 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import type { JSX } from "@solidjs/web";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { CheckCircle2, Code2, Download, Eye, File, GitBranch, History, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
-import { canUseIssueWorkMode, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, outputUrl, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
+import { CheckCircle2, Code2, Download, Eye, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
+import { canUseIssueWorkMode, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { IssueFiles } from "./IssueFiles";
 import { Markdown } from "../ui/Markdown";
 import { useApplicationResources } from "./ApplicationResources";
-import { OutputPreview } from "./OutputPreview";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
-import { attachmentPreviewKind, outputPreviewUnavailable } from "./file-preview";
+import { attachmentPreviewKind } from "./file-preview";
 import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workModeLabel, workModeOptions } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
@@ -35,10 +34,8 @@ const dateTimeOptions = {
   minute: "2-digit",
 } as const;
 const issueDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, { ...dateTimeOptions, year: "numeric" });
-const shortDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, dateTimeOptions);
-
-function localDateTime(value: string, includeYear = true): string {
-  return (includeYear ? issueDateTimeFormat : shortDateTimeFormat).format(new Date(value));
+function localDateTime(value: string): string {
+  return issueDateTimeFormat.format(new Date(value));
 }
 
 export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (element: HTMLElement) => void; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void>; onCreatedFollowUp: (issueKey: string) => void }) {
@@ -76,7 +73,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
   const [relatedLoading, setRelatedLoading] = createSignal(false, { ownedWrite: true });
   const [relatedSaving, setRelatedSaving] = createSignal(false, { ownedWrite: true });
   const [relatedError, setRelatedError] = createSignal("", { ownedWrite: true });
-  const [previewOutput, setPreviewOutput] = createSignal<IssueDetail["outputs"][number] | null>(null, { ownedWrite: true });
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
@@ -89,7 +85,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     setRetrying(false); setRetryError(""); setStatusSaving(false); setStatusError(""); setScopeOpen(false); setScopePlan(null); setScopePlanning(false); setScopeApplying(false); setScopeError("");
     setFollowUpOpen(false); setFollowUpSaving(false); setFollowUpError("");
     setRelatedOpen(false); setRelatedKeys([]); setRelatedCandidates([]); setRelatedLoading(false); setRelatedSaving(false); setRelatedError("");
-    setPreviewAttachment(null); setPreviewOutput(null); setDescriptionExpanded(false);
+    setPreviewAttachment(null); setDescriptionExpanded(false);
   });
   const openEditor = () => {
     setEditTitle(props.issue.title); setEditDescription(props.issue.description); setEditPriority(props.issue.priority);
@@ -136,7 +132,6 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
     finally { if (issueGeneration === generation) setStatusSaving(false); }
   };
   const currentWorkMode = () => issueWorkMode(props.issue.environmentKey as "prod" | "test" | "dev", props.issue.type);
-  const outputs = () => props.issue.outputs ?? [];
   const availableScopeModes = createMemo(() => workModeOptions.filter(({ value }) => {
     if (!canUseIssueWorkMode(currentUser()?.role ?? "product", value)) return false;
     if (props.issue.environmentKey === "dev" && value !== currentWorkMode()) return false;
@@ -305,14 +300,13 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       </Show>
       <Show when={(props.issue.scopeTransitions ?? []).length}>
         <section class="repository-band" aria-labelledby="scope-history-title">
-          <div class="band-title"><History size={16} /><h2 id="scope-history-title">处理历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
+          <div class="band-title"><h2 id="scope-history-title">处理历史</h2><span>{props.issue.scopeTransitions?.length ?? 0}</span></div>
           <div class="issue-attachment-list">
             <For each={props.issue.scopeTransitions ?? []}>{(transition) => (
               <div class="issue-attachment-row scope-history-row">
-                <GitBranch size={15} />
                 <span>
                   <strong>{transition.from.service.name} · {workModeLabel[transition.from.workMode]} → {transition.to.service.name} · {workModeLabel[transition.to.workMode]}</strong>
-                  <small>{transition.actor.name} · {localDateTime(transition.createdAt)} · 保留 {transition.repositories.retained.length} / 新增 {transition.repositories.added.length} / 移除 {transition.repositories.removed.length}</small>
+                  <small class="scope-history-meta"><span>{transition.actor.name}</span><time datetime={transition.createdAt}>{localDateTime(transition.createdAt)}</time><span>保留 {transition.repositories.retained.length} / 新增 {transition.repositories.added.length} / 移除 {transition.repositories.removed.length}</span></small>
                 </span>
               </div>
             )}</For>
@@ -329,19 +323,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
         </div>
       </section>
 
-      <Show when={currentWorkMode() === "production_data" || outputs().length}>
-        <section class="attachment-band" aria-labelledby="outputs-title">
-          <div class="band-title"><File size={16} /><h2 id="outputs-title">成果文件</h2><span>{outputs().length}</span></div>
-          <div class="issue-attachment-list">
-            <For each={outputs()} fallback={<div class="empty-band">Agent 尚未生成成果文件</div>}>
-              {(output) => <IssueFileRow fileName={output.fileName} detail={`${fileSize(output.size)} · ${localDateTime(output.updatedAt, false)}`} href={outputUrl(props.issue.id, output.fileName)} icon={<File size={15} />} onPreview={outputPreviewUnavailable(output) ? undefined : () => setPreviewOutput(output)} />}
-            </For>
-          </div>
-        </section>
-      </Show>
-
       <Show when={props.issue.workingDirectory}><IssueFiles issue={props.issue} hidden={props.hidden} /></Show>
-      <OutputPreview issueKey={props.issue.id} output={previewOutput()} onClose={() => setPreviewOutput(null)} />
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
       <Modal open={relatedOpen()} title="编辑关联工单" okText="保存关联" cancelText="取消" confirmLoading={relatedSaving()} cancelButtonProps={{ disabled: relatedSaving() }} okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }} onOk={() => { void saveRelatedIssues(); }} onCancel={() => { if (!relatedSaving()) closeRelatedEditor(); }}>
         <div class="create-issue-form related-issue-form">

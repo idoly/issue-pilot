@@ -47,7 +47,7 @@ test("personal model requests omit provider and model Operator headers", async (
     };
     managed = await runtime.start({ manager: await createPrivateSessionManager(work, sessions), workspaceRoot: work,
       context: { issueKey: "ISSUE-20261020-991", serviceKey: "test", environmentKey: "prod", codemode: "off",
-        model: { provider: "test-provider", modelId: "model", thinkingLevel: "off" }, capabilities: [], canModifyCode: false, canWriteOutputs: false },
+        model: { provider: "test-provider", modelId: "model", thinkingLevel: "off" }, capabilities: [], canModifyCode: false },
       deploymentConfig: {}, systemPrompt: "Fixture", runtime: { settings: { retry: { enabled: false }, compaction: { enabled: false }, cacheWarming: "off" } },
       modelResponseIdleMs: 2000, onEvent() {},
     });

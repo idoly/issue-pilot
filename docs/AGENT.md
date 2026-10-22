@@ -11,7 +11,7 @@ flowchart TB
   Model --> Call[工具名与参数]
   Call --> Pipeline[Pi 工具管线]
   Pipeline --> Native[原生文件与 Bash 工具]
-  Pipeline --> Business[workspace / service_query / output]
+  Pipeline --> Business[workspace / service_query]
   Pipeline --> MCP[全局外部 MCP]
   Native --> Runtime[Node / Python / Git]
   Business --> Owners[业务校验与资源 owner]
@@ -29,7 +29,6 @@ flowchart TB
 | read/bash/edit/write/grep/find/ls | 普通文件操作、脚本与命令执行 | 全部工单，cwd 为持久工单工作目录 `workspaces/<key>` |
 | workspace | list/describe/include/remove，服务说明与代码集合 | 全部工单 |
 | service_query | 已配置的原生只读证据查询 | 当前上下文有可用原生能力时 |
-| output | list/publish，受管成果交付 | 正式数据处理工单 |
 | `mcp__<id>__<tool>` 与 resources | 已启用外部服务的工具与资源 | 全局向所有工单开放 |
 
 入口：[context.ts](../src/agent/context.ts)、[engine.ts](../src/agent/engine.ts)、[pi-session.ts](../src/agent/pi-session.ts)、[prompts.ts](../src/agent/prompts.ts)。
@@ -71,11 +70,11 @@ Codemode 让模型用脚本编排现有工具，仍走同一工具管线：
 | on | 原生、应用直接工具，以及 Codemode | searchTools/describeTool 按需发现 |
 | only | SDK 隐藏其他模型工具声明，主要通过 Codemode | 同样按需发现和调用 |
 
-on/only 不预先把全部 MCP schema 放入上下文。Codemode 脚本使用进程级、可取消的 FIFO 执行资源队列，一次执行一个脚本，为 SDK 的第二个 Worker 槽位保留退出缓冲；默认最多等待 120 秒、排队 32 个，预算归根配置 `limits.codemode`。等待超时或取消的脚本不执行，不自动重放；脚本内部独立工具调用仍可并行。`service_query`、`workspace`、`output` 返回结构化结果；独立的非 DMS 读取可并行，DMS 批次串行并保留间隔。依赖结果或发布同一文件时顺序执行，只返回模型需要的字段。原生发布与 DMS 导出返回 `downloadPath`，最终回复应使用它生成文件下载链接，不把服务器路径、`file://` 或 `sandbox:` 地址作为下载入口。
+on/only 不预先把全部 MCP schema 放入上下文。Codemode 脚本使用进程级、可取消的 FIFO 执行资源队列，一次执行一个脚本，为 SDK 的第二个 Worker 槽位保留退出缓冲；默认最多等待 120 秒、排队 32 个，预算归根配置 `limits.codemode`。等待超时或取消的脚本不执行，不自动重放；脚本内部独立工具调用仍可并行。`service_query`、`workspace` 返回结构化结果；独立的非 DMS 读取可并行，DMS 批次串行并保留间隔。依赖结果或发布同一文件时顺序执行，只返回模型需要的字段。查询导出返回 `downloadPath`，最终回复应使用它生成文件下载链接，不把服务器路径、`file://` 或 `sandbox:` 地址作为下载入口。
 
 ## 文件处理与会话
 
-模型通过普通脚本处理文件，应用不提供格式专用执行器。Bash PATH 包含应用 `.venv` 和项目 wrapper，Node 可使用应用已安装的包；当前 Git 身份随调用环境注入。
+模型通过普通脚本处理文件，应用不提供格式专用执行器。Bash PATH 包含应用 `.venv`，直接使用系统 npm/mvn，Node 可使用应用已安装的包；当前 Git 身份随调用环境注入。项目命令包装器和命令 broker 已移除。
 
 Python/openpyxl 用于读取、创建和修改 `.xlsx`，支持写入及保留公式，不计算公式结果。旧 `.xls` 不在支持范围内，网页不解析或预览 Excel，文件列表仅提供下载；超出预览大小限制的成果同样不显示预览入口。附件和成果弹窗统一使用下载与关闭操作，只有加载失败时提供重试。发布和文件事务见[数据存储设计](STORAGE.md#文件写入与发布)。
 
@@ -85,6 +84,14 @@ Pi 标准 ResourceLoader 从用户全局目录加载 Skills、Prompts、受信�
 
 ## 执行边界
 
-原生代码以应用用户权限执行，可访问该用户能读写的文件。工单 cwd 用于组织工作，Source API 的只读策略、Codemode 和容器资源限制都不构成工单间 OS 隔离。
+应用保持单进程管理业务和 Pi 会话，不启动每工单常驻 Worker 或容器。模型控制的本地 read/write/edit/Bash/grep/find/ls 经统一 SRT 入口执行，复用 SDK 原生工具；工具调用使用短期受限进程。本地 stdio MCP 在相同边界内运行，连接和重连仍由 Pi 管理。
 
-因此这套系统用于可信执行环境。内建证据查询仍检查业务目标，项目命令 broker 也保留自己的命令授权；外部 MCP 的工具行为由配置者确认。
+SRT 使用 Linux user/PID/mount/network namespace 和 seccomp。宿主文件系统只读，当前工单根目录可持久写入；关联工单只读，应用数据库与私有配置区域隐藏，既有管理文件及 Git 指针另设只读。虚拟 `/tmp`、`/dev` 和代理引导资源属于隔离设施；实际工具的 TMPDIR、Node/Maven 缓存和 Java 临时路径落在工单根目录。启动检查跨目录硬链接；写入再次检查路径、链接和管理文件。
+
+执行默认关闭 Unix socket 与嵌套 namespace，经 HTTP 代理转发网络；proxychains 为不读取代理变量的 TCP 客户端提供同一出口。域名基础列表位于根配置 `runtime.agent.networkAllowedDomains`，私有目标通过 `service.yaml` 的全局 `agent.runtime.networkAllowedDomains` 追加；部署需显式加入实际包源、Git 与 stdio MCP 所需的业务目标。宿主地址、应用 API 与开发 Web 端口拒绝访问。危险 loader 环境覆盖拒绝执行，沙箱依赖使用应用解析出的绝对路径；依赖缺失或隔离能力不满足时失败，不降级裸执行或弱隔离。
+
+本地工具按工单串行，包含等待、取消和进程退出；不同工单不共享执行队列。SRT 只在初始化及关闭共享代理时使用资源生命周期队列，不替代配置、Agent、Git 或工单预约。项目命令不经 socket RPC，应用独占 state 的控制 socket 仅用于实例与离线迁移互斥，沿用旧路径以阻止旧版本并发启动。
+
+Pi SDK 与 Operator 安装的扩展属于可信应用代码；工单目录中的扩展不加载。Codemode 只编排工具，没有直接文件或网络能力。SDK 的图片、长输出和 MCP 二进制资源通过保存回调直接进入工单根目录；回调来自版本固定的 SDK 补丁，安装时校验应用，不修改全局 TMPDIR。补丁说明见 [patches/README.md](../patches/README.md)。
+
+远程 MCP 服务具有自己的执行权限，SRT 不替远程服务实施数据库只读或业务授权。内建证据查询、Source API 和应用存储 owner 继续承担各自的目标、身份、Git 绑定与事务检查。

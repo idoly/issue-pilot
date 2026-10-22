@@ -13,7 +13,7 @@ import { requireCurrentUser, requireDeveloper } from "../../src/http/route-conte
 
 const owner = issuePilotConfig.bootstrapUser.subject;
 
-test("only developers can create development or production-data Issues and plan conversions", async () => {
+test("only developers can create development Issues and plan development conversions", async () => {
   const f = await createApiFixture();
   const inject = (input: InjectOptions) => f.app.inject({ ...input, headers: { "x-issue-pilot-subject": owner, ...input.headers } });
   try {
@@ -22,16 +22,16 @@ test("only developers can create development or production-data Issues and plan 
       const subject = `${role}@example.test`;
       assert.equal((await inject({ method: "POST", url: "/api/users", payload: { subject, name: role, email: subject, role } })).statusCode, 201);
       const headers = { "x-issue-pilot-subject": subject };
-      for (const workMode of ["development_fix", "development_feature", "production_data", "test_analysis"]) {
+      for (const workMode of ["development_fix", "development_feature", "production_analysis", "test_analysis"]) {
         const response = await inject({ method: "POST", url: "/api/issues", headers, payload: { ...issuePayload("roles"), workMode } });
-        assert.equal(response.statusCode, role !== "developer" && (workMode.startsWith("development") || workMode === "production_data") ? 403 : 201, response.body);
+        assert.equal(response.statusCode, role !== "developer" && workMode.startsWith("development") ? 403 : 201, response.body);
       }
       const created = await inject({ method: "POST", url: "/api/issues", headers, payload: { ...issuePayload("roles"), workMode: "production_analysis" } });
       const key = JSON.parse(created.body).id;
       const plan = await inject({ method: "POST", url: `/api/issues/${key}/scope-transition/plan`, headers, payload: { serviceKey: "roles", workMode: "development_fix" } });
       if (role !== "developer") assert.equal(plan.statusCode, 403, plan.body);
       const dataPlan = await inject({ method: "POST", url: `/api/issues/${key}/scope-transition/plan`, headers, payload: { serviceKey: "roles", workMode: "production_data" } });
-      if (role !== "developer") assert.equal(dataPlan.statusCode, 403, dataPlan.body);
+      assert.equal(dataPlan.statusCode, 400, dataPlan.body);
       f.engine.running.clear();
       const promoteSelf = await inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(subject)}`, headers, payload: { name: role, email: subject, active: true, role: "developer" } });
       assert.equal(promoteSelf.statusCode, role === "developer" ? 200 : 403, promoteSelf.body);
@@ -75,27 +75,13 @@ test("personal credentials are private, independently updated and never returned
   } finally { await f.cleanup(); }
 });
 
-test("product and test users cannot execute production-data Issues or become their credential owner", async () => {
+test("retired production-data work mode cannot create Issues for any role", async () => {
   const f = await createApiFixture();
-  const inject = (input: InjectOptions) => f.app.inject({ ...input, headers: { "x-issue-pilot-subject": owner, ...input.headers } });
   try {
-    await createService(f.app, "Data permissions", ["prod"]);
-    const created = await inject({ method: "POST", url: "/api/issues", payload: { ...issuePayload("data-permissions"), workMode: "production_data" } });
-    assert.equal(created.statusCode, 201, created.body);
-    const key = JSON.parse(created.body).id;
-    f.engine.running.clear();
-    for (const role of ["product", "test"]) {
-      const subject = `${role}-data@example.test`;
-      await inject({ method: "POST", url: "/api/users", payload: { subject, name: role, email: subject, role } });
-      const headers = { "x-issue-pilot-subject": subject };
-      for (const suffix of ["retry", "agent-messages"]) {
-        const response = await inject({ method: "POST", url: `/api/issues/${key}/${suffix}`, headers, payload: { message: "run" } });
-        assert.equal(response.statusCode, 403, response.body);
-      }
-      const assignment = await inject({ method: "POST", url: "/api/issues", payload: { ...issuePayload("data-permissions"), workMode: "production_data", assigneeSubject: subject } });
-      assert.equal(assignment.statusCode, 400, assignment.body);
-      assert.equal(JSON.parse(assignment.body).error, "issue_developer_owner_required");
-    }
+    await createService(f.app, "Retired mode", ["prod"]);
+    const response = await f.app.inject({ method: "POST", url: "/api/issues", payload: { ...issuePayload("retired-mode"), workMode: "production_data" } });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.equal(response.json().error, "invalid_work_mode");
   } finally { await f.cleanup(); }
 });
 

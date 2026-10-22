@@ -8,16 +8,18 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentCodemodeMode } from "../domain/contracts.ts";
+import { generatedWorkFileSaver } from "../workspace/work-file-store.ts";
 import { createMcpTransport, type McpConfiguration, type McpTool } from "./client.ts";
 
 const limits = issuePilotConfig.limits.capability;
 type Validators = Map<string, ReturnType<typeof Compile>>;
 
 /** Pi owns discovery and lifecycle; the application's validated configuration projection is authoritative. */
-export function createIssueMcpExtension(configurations: McpConfiguration[], codemode: AgentCodemodeMode): ExtensionFactory {
+export function createIssueMcpExtension(configurations: McpConfiguration[], codemode: AgentCodemodeMode, root: string): ExtensionFactory {
   const configured = structuredClone(configurations.filter(configuration => configuration.enabled));
   const exposure = codemode === "off" ? "direct" : "codemode";
   const extension = createMcpExtension({
+    saveOutput: generatedWorkFileSaver(root, "mcp"),
     loadConfig: () => ({
       errors: [], autoEnableCodemode: false,
       servers: configured.map(configuration => ({

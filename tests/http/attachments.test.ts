@@ -42,7 +42,7 @@ test("rolls back only empty state claimed for a failed Issue creation", async ()
   try {
     await claimIssueRoot(root, issueKey);
     const attachmentRoot = issueAttachmentRoot(root, issueKey);
-    await mkdir(attachmentRoot, { mode: 0o700 });
+    assert.equal(attachmentRoot, issueRoot(root, issueKey));
     const objectKey = path.join(attachmentRoot, "new.txt");
     await writeFile(objectKey, "new", { mode: 0o400 });
     await removeWrittenAttachments([objectKey]);
@@ -50,7 +50,6 @@ test("rolls back only empty state claimed for a failed Issue creation", async ()
     await assert.rejects(access(issueRoot(root, issueKey)));
 
     await claimIssueRoot(root, issueKey);
-    await mkdir(attachmentRoot, { mode: 0o700 });
     const evidence = path.join(attachmentRoot, "unexpected.txt");
     await writeFile(evidence, "preserve", { mode: 0o400 });
     await assert.rejects(removeEmptyIssueRoot(root, issueKey), /issue_state_rollback_failed/);

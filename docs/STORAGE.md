@@ -8,9 +8,9 @@
 | --- | --- | --- |
 | SQLite | 用户、配置、工单、范围、附件元数据、工作区和会话绑定 | [schema.ts](../src/db/schema.ts) |
 | Pi JSONL | Agent 消息、工具结果、会话分支 | [pi-session.ts](../src/agent/pi-session.ts) |
-| attachments | 原始附件，一份文件对应一条元数据 | [attachment-store.ts](../src/http/attachment-store.ts) |
-| 工单工作目录 | 脚本、中间结果、检查点与开发仓库，跨轮次保留 | Agent 普通文件操作 |
-| outputs | 显式发布的交付成果，从目录生成列表 | [store.ts](../src/outputs/store.ts) |
+| 附件原件 | 工单根目录中的 `.attachment-*`，一份文件对应一条元数据 | [attachment-store.ts](../src/http/attachment-store.ts) |
+| 工单根目录 | 代码、脚本、中间结果、会话、运行文件及交付文件，跨轮次保留 | [state.ts](../src/workspace/state.ts)、各资源 owner |
+| 工作文件 | 普通工作文件；查询导出原子写入同一目录 | [work-file-store.ts](../src/workspace/work-file-store.ts) |
 | Git store/worktree | objects、refs、提交与未提交代码 | [git.ts](../src/workspace/git.ts) |
 
 对话没有另建 SQL 消息表，成果也没有单独的数据库表。人工工单评论存放在 `issue_comments`，与 Agent 对话分开。
@@ -45,7 +45,7 @@ erDiagram
 | issue_workspaces | 准备/运行状态、runtime_ready、last_error |
 | issue_pilot_sessions | Pi JSONL 路径与 work 路径 |
 | issue_repositories | URL、base/working branch、local_path、workspace_name、commit_before |
-| issue_attachments | objectKey、原始文件名、mediaType、size、SHA-256、上传者 |
+| issue_attachments | objectKey、原始文件名、working_file_name、mediaType、size、SHA-256、上传者 |
 | issue_service_scopes | 显式加入服务的意图，用于准备代码集合 |
 | issue_scope_transitions | 范围变更前后值、操作者、plan hash、仓库增减快照 |
 | issue_comments / issue_cc_recipients | 人工评论与抄送人 |
@@ -68,27 +68,30 @@ erDiagram
     ├── user.yaml                       # 可选：指定用户的私有凭证，0600
     ├── mcp.json                        # 可选：MCP 连接与 MySQL 启动模板
     ├── issues.db                       # SQLite，可能有 -wal、-shm
-    ├── issues/<issue-key>/             # 应用持有的工单存储，位于 Agent cwd 之外
-    │   ├── agent/                      # Pi JSONL
-    │   ├── attachments/                # objectKey 命名的原始文件
-    │   ├── outputs/                    # 已发布成果快照
-    │   └── runtime/                    # 生成的仓库与关联证据链接
-    ├── git/repositories/<url-hash>/     # bare store
+    ├── git/repositories/<url-hash>/     # 全局 bare store，由应用维护
     ├── git/checkouts/<url-hash>/<commit>/
-    ├── workspaces/<issue-key>/          # Agent cwd，工单平铺工作目录
-    │   ├── <repo>/                     # 活动开发 worktree
-    │   ├── <attachment-object-name>     # 可编辑的附件工作副本，按需复制且不覆盖
-    │   ├── query.py                    # 脚本（名称仅为示例）
-    │   ├── checkpoint.json             # 查询检查点
-    │   └── report.xlsx                 # 工作成果源文件
-    └── control/                        # 项目 broker socket 等生成资源
+    ├── workspaces/<issue-key>/          # 唯一工单根目录及 Agent cwd
+    │   ├── <repo>/                     # 开发 worktree；其他状态为只读快照链接
+    │   ├── .session-<name>.jsonl        # Pi 对话，0600
+    │   ├── .attachment-<id>.<ext>       # 原始附件，0400
+    │   ├── <attachment-object-name>     # 可编辑工作副本，按需复制且不覆盖
+    │   ├── .issue-runtime.json         # 应用生成资源的归属清单
+    │   ├── .related-<key>              # 关联工单完整目录的只读引用
+    │   ├── .related-<key>.json          # 关联说明
+    │   ├── .related-<key>.jsonl         # 关联会话引用（存在时）
+    │   ├── .legacy-output-links.json   # 旧下载名到工作文件的映射（有历史成果时）
+    │   ├── .runtime-legacy-*           # 迁移保留的历史运行文件（存在时）
+    │   ├── .runtime-proxy-*.conf        # 临时执行网络配置，随执行/连接关闭清理
+    │   ├── query.py / checkpoint.json
+    │   └── report.xlsx                # 普通工作及交付文件
+    └── control/                        # 应用实例租约、离线迁移记录
 ```
 
-工单工作目录不要求固定子目录，Agent 可自行组织普通文件。前端“附件”读取受管原件，“成果文件”读取已发布快照，“工作文件”按目录浏览当前 cwd；登记过的附件副本和仓库提供用途标记，普通工作文件不会自动算作交付成果。工作文件下载只读取本工单内的 regular file，拒绝路径越界、指向外部的链接、Git 控制文件、目录和特殊文件。目录超过预算时明确报错，不静默截断。
+代码、原件、工作副本、JSONL 和运行元数据直接属于该工单根目录，不再另设 `agent/attachments/outputs/runtime/work` 包装目录。前端“附件”通过附件 API 读取原件，“工作目录”浏览当前文件，支持按需预览及下载；应用管理文件只列名称，不提供原始内容下载。仓库和关联工单目录按受控只读根解析，拒绝 Git 控制文件、越界链接和特殊文件；目录超过预算时明确报错。
 
-旧 `issues/<key>/work` 中的非空文件必须通过显式离线迁移搬到工单 cwd；Agent 遇到尚未迁移的文件会报 `issue_work_directory_migration_required`，不创建空会话继续处理。迁移保留现有开发 worktree 路径，遇到重名、符号链接、嵌套 Git 仓库或异常文件停止供检查；不自动收编未知目录。步骤见[运维手册](RUNBOOK.md#工单工作目录迁移)。
+旧 `issues/<key>` 内容必须显式离线迁移；启动遇到未迁移内容报 `issue_layout_migration_required`。迁移保留开发 worktree 原路径，更新附件和会话绑定，保存历史成果映射。遇到未知目录、冲突或校验失败先保留现场；已识别的历史运行文件也保留到根目录，不因重新生成运行资源而丢失内容。步骤见[运维手册](RUNBOOK.md#工单工作目录迁移)。
 
-`runtime` 是资源视图，不是另一份代码事实。关联工单可以提供元数据、持久会话链接和本地开发分支快照，不暴露其他工单未提交的 worktree 作为快照。
+关联目录指向关联工单的实际文件，包括未提交代码、附件、对话和工作文件。模型本地操作在 SRT 中执行，关联工单只读；完整信任边界见[执行边界](AGENT.md#执行边界)。
 
 Skills、Prompts、Extensions、模型定义与全局指令统一从 Operator HOME 的全局 Pi 配置读取；应用不再另外设置资源目录。`service.yaml`、`user.yaml` 和 `mcp.json` 在启动时校验并投影到数据库，历史身份、工作区路径与不可见的退役配置仍保留；普通 API 不输出凭证。配置的单一来源和启用方式见[配置与协议](CONFIGURATION.md)。
 
@@ -98,23 +101,23 @@ Skills、Prompts、Extensions、模型定义与全局指令统一从 Operator HO
 
 粘贴到 Agent 的图片属于 Pi 消息，不进入附件表。
 
-成果从工单工作目录中的普通文件显式发布；工具返回 `downloadPath`，Agent 应用它构造 Markdown 下载链接。DMS 查询导出也返回同样的下载路径。前端只把当前工单已发布的 sandbox/outputs 链接映射到成果下载，把工作目录中的路径映射到工作文件下载；无法确认的服务器路径不作为可点击链接。服务器路径本身不是浏览器下载地址。
+成果直接使用普通工作文件，不再执行独立发布或复制快照。DMS 导出写入工单根目录，返回 `downloadPath`；所有工单类型均可使用已配置且有凭证的 DMS 导出，不再由 `canWriteOutputs` 决定。前端将工作路径映射为文件下载；历史 outputs 下载名经 `.legacy-output-links.json` 解析。同名且内容不同的旧交付另存带摘要后缀的文件，保留当前工作源文件。映射目标后续修改时旧链接读取目标的当前内容。
 
 ```mermaid
 sequenceDiagram
-  participant Work as work 源文件
-  participant Store as output owner
-  participant Temp as 临时文件
-  participant Output as outputs 目标
-  Store->>Work: 校验受管路径与 regular file
-  Store->>Temp: 复制、完成写入并校验元数据与权限
-  Store->>Temp: 关闭临时文件
+  participant Query as 查询生产者
+  participant Store as 工作文件 owner
+  participant Temp as 根目录临时文件
+  participant File as 普通工作文件
+  Query->>Store: 指定文件名与取消信号
+  Store->>Temp: 独占创建并完成写入
+  Store->>Temp: 取得元数据并关闭
   Store->>Store: 检查取消
-  Store->>Output: 原子 rename 替换
-  Note over Work,Output: 源文件保留；替换前失败保留旧交付
+  Store->>File: 原子 rename 替换
+  Note over Temp,File: 替换前失败保留旧文件；清理失败保留原错误
 ```
 
-成果文件名限制在本工单 outputs 内，按根配置 `limits.filesystemNameBytes` 校验 UTF-8 字节数（默认 255），超限在生产者执行前拒绝。原生 DMS 导出复用成果存储，但先完成协议收尾再发布。存储 owner 从临时文件句柄取得并验证返回元数据，在关闭临时文件后、原子替换前检查取消，替换后直接返回已取得的元数据。原生发布和 DMS 导出传递调用方取消信号；排队任务在执行前检查取消，不启动已取消的生产者。已经提交的 rename 不自动回滚，活动生产者仍须响应取消并完成清理。SQLite 事务不会撤销文件移动或 Git 操作，因此各 owner 分别承担 prepare、rollback 和 finalize。
+查询导出文件名按 `limits.filesystemNameBytes` 限制 UTF-8 字节数，并拒绝管理文件、路径和非普通目标；生产者运行前完成校验。同名任务串行，排队期间取消不启动生产者。DMS 协议收尾成功后才替换文件，已经提交的 rename 不自动回滚。SQLite 事务不会撤销文件和 Git 操作，各 owner 分别负责 prepare、rollback 和 finalize。
 
 ## Git 与工作区
 
@@ -150,9 +153,9 @@ SQLite 使用本地 libSQL 客户端，启动启用 WAL 和外键，数据库文
 
 | 分类 | 内容 | 处理 |
 | --- | --- | --- |
-| 持久 | DB/WAL/SHM、JSONL、附件、work、outputs、本地 Git refs/objects | 使用匹配的完整恢复点 |
+| 持久 | DB/WAL/SHM、JSONL、原始附件、工作文件、旧下载映射、本地 Git refs/objects | 使用匹配的完整恢复点 |
 | 有条件持久 | 活动开发 worktree | 满足释放条件前保留未提交、staged 和 untracked 内容 |
-| 生成 | runtime、wrapper、socket、受管 checkout | 确认归属和状态正常后由 owner 处理 |
+| 生成 | runtime 元数据、网络临时配置、实例控制 socket、受管 checkout、工单内包缓存 | 确认归属和状态正常后由 owner 处理 |
 | 配置 | 根配置、私有 YAML/MCP 文件、全局 Pi 配置与 Operator 工具配置 | 与目标版本一起部署和备份 |
 | 安装产物 | node_modules、`.venv`、编译后网页 | 根据匹配版本重新生成 |
 

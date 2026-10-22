@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { DefaultPackageManager, DefaultResourceLoader, getAgentDir, getPackageDir, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { NetworkConfigSchema } from "@anthropic-ai/sandbox-runtime";
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { AGENT_PI_SETTING_KEYS, type AgentRuntimeConfiguration } from "../domain/contracts.ts";
@@ -21,11 +22,13 @@ function exactSchema(schema: SettingsSchema): TSchema {
 const settingProperties = Object.fromEntries(AGENT_PI_SETTING_KEYS.map(key => [key, Type.Optional(exactSchema(nativeSchema.properties[key]!))]));
 settingProperties.codemode = Type.Optional(Type.Object({ inlineBudget: Type.Optional(Type.Number({ minimum: 0 })) }, { additionalProperties: false }));
 export const agentPiSettingsSchema = Type.Object(settingProperties, { additionalProperties: false });
-const runtimeSchema = Type.Object({ settings: Type.Optional(agentPiSettingsSchema) }, { additionalProperties: false });
+const runtimeSchema = Type.Object({ settings: Type.Optional(agentPiSettingsSchema), networkAllowedDomains: Type.Optional(Type.Array(Type.String())) }, { additionalProperties: false });
 export class AgentRuntimeConfigurationError extends Error {}
 export function parseAgentRuntime(value: unknown): AgentRuntimeConfiguration {
   if (!Value.Check(runtimeSchema, value)) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
-  return structuredClone(value) as AgentRuntimeConfiguration;
+  const runtime = structuredClone(value) as AgentRuntimeConfiguration;
+  if (runtime.networkAllowedDomains && !NetworkConfigSchema.safeParse({ allowedDomains: runtime.networkAllowedDomains, deniedDomains: [] }).success) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
+  return runtime;
 }
 export async function inspectAgentResources(directory = getAgentDir()) {
   const settingsManager = SettingsManager.create(directory, directory, { projectTrusted: false });

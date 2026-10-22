@@ -249,6 +249,11 @@ button, input, textarea { font: inherit; }
 .issue-attachments .attachment-preview-trigger { gap: 8px; padding: 4px 0; min-height: 40px; }
 .issue-attachments .attachment-preview-trigger > .ui-icon { width: 16px; height: 16px; }
 .issue-attachments .attachment-file-info small { font-size: 11px; }
+.scope-history-row { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+.scope-history-row > span { display: grid; min-width: 0; gap: 7px; }
+.scope-history-row strong { white-space: normal; overflow-wrap: anywhere; line-height: 1.65; }
+.scope-history-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; line-height: 1.6; }
+.scope-history-meta > * { white-space: nowrap; }
 .scope-transition-preview { min-width: 0; grid-column: 1 / -1; margin-bottom: 0; }
 .scope-transition-repositories { overflow: hidden; border: 1px solid #e1e5e3; border-radius: 7px; background: #fff; }
 .scope-transition-repository { display: grid; min-width: 0; min-height: 44px; grid-template-columns: minmax(0, 1fr) minmax(120px, auto); align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #e7eae8; }

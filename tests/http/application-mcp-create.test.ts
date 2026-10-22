@@ -59,7 +59,7 @@ test("MCP creation preserves role restrictions on development and production-dat
     const user = await f.app.inject({ method: "POST", url: "/api/users", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });assert.equal(user.statusCode, 201);
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
     await client.connect(new StreamableHTTPClientTransport(new URL(address + "/mcp"), { requestInit: { headers: { "x-issue-pilot-subject": "product" } } }) as Parameters<Client["connect"]>[0]);
-    for (const mode of ["development_fix", "development_feature", "production_data"]) {
+    for (const mode of ["development_fix", "development_feature"]) {
       const result = await client.callTool({ name: "issue_create", arguments: payload("Forbidden", mode) });
       assert.equal(result.isError, true);assert.equal(f.engine.enqueued.length, 0);
     }

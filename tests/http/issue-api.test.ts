@@ -52,7 +52,6 @@ test("creates each Issue work mode and rejects ambiguous scope input", async () 
   try {
     await createService(fixture.app, "Alpha", ["prod", "test", "dev"]);
     for (const [workMode, environmentKey, type] of [
-      ["production_data", "prod", "data_processing"],
       ["production_analysis", "prod", "smart_analysis"],
       ["test_analysis", "test", "smart_analysis"],
       ["development_fix", "dev", "defect_fix"],
@@ -89,7 +88,7 @@ test("creates production smart-analysis Issues with related context", async () =
     const developmentId = fixture.engine.enqueued.at(-1)!;
     fixture.engine.running.clear();
     const workspacePath = path.join(fixture.root, "workspaces", String(development.id).toLowerCase(), "orders");
-    const sessionRoot = path.join(fixture.root, "issues", String(development.id).toLowerCase(), "agent");
+    const sessionRoot = path.join(fixture.root, "workspaces", String(development.id).toLowerCase());
     const sessionFile = path.join(sessionRoot, "session.jsonl");
     await mkdir(sessionRoot, { recursive: true });
     await writeFile(sessionFile, "{\"type\":\"session\"}\n", { mode: 0o600 });
@@ -112,7 +111,7 @@ test("creates production smart-analysis Issues with related context", async () =
     assert.deepEqual((await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId), [developmentId]);
 
     fixture.engine.running.clear();
-    const missingRelated = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, workMode: "production_data", relatedIssueKeys: ["ISSUE-20260101-999"] } });
+    const missingRelated = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, workMode: "production_analysis", relatedIssueKeys: ["ISSUE-20260101-999"] } });
     assert.equal(missingRelated.statusCode, 400);
     assert.equal((await json(missingRelated)).error, "invalid_related_issues");
     fixture.engine.running.clear();
@@ -356,7 +355,7 @@ test("generates concurrent Issue keys and refuses unmanaged state", async () => 
     const first = await createIssue(fixture.app, "alpha", "test", "First");
     fixture.engine.running.clear();
     const unmanagedKey = String(first.id).replace(/001$/, "002");
-    const unmanagedRoot = path.join(fixture.root, "issues", unmanagedKey.toLowerCase());
+    const unmanagedRoot = path.join(fixture.root, "workspaces", unmanagedKey.toLowerCase());
     await mkdir(unmanagedRoot, { recursive: true });
     const evidence = path.join(unmanagedRoot, "evidence.txt");
     await writeFile(evidence, "preserve", "utf8");

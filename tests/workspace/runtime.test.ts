@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -83,30 +83,30 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     assert.equal(path.isAbsolute(readOnlyLink), false);
     assert.equal(path.resolve(readOnlyRuntime, readOnlyLink), checkout);
     assert.equal(await readFile(path.join(readOnlyRuntime, "orders", "README.md"), "utf8"), "shared checkout\n");
-    await assert.rejects(access(issueWorkspaceRoot(root, readOnlyIssue)));
+    assert.equal((await lstat(issueWorkspaceRoot(root, readOnlyIssue))).isDirectory(), true);
 
     const worktree = path.join(issueWorkspaceRoot(root, writableIssue), "orders");
     await mkdir(worktree, { recursive: true });
     await writeFile(path.join(worktree, "README.md"), "writable worktree\n", "utf8");
     const writableRuntime = await prepareIssueRuntime(root, writableIssue, [{ name: "orders", repositoryPath: worktree }], "write");
-    const writableLink = await readlink(path.join(writableRuntime, "orders"));
-    assert.equal(path.isAbsolute(writableLink), false);
-    assert.equal(path.resolve(writableRuntime, writableLink), worktree);
+    assert.equal(writableRuntime, issueWorkspaceRoot(root, writableIssue));
+    assert.equal((await lstat(path.join(writableRuntime, "orders"))).isDirectory(), true);
     await writeFile(path.join(writableRuntime, "orders", "created-through-runtime.txt"), "writable\n", "utf8");
     assert.equal(await readFile(path.join(worktree, "created-through-runtime.txt"), "utf8"), "writable\n");
 
-    const conversation = path.join(root, "related-session.jsonl");
+    const relatedDirectory = issueWorkspaceRoot(root, "ISSUE-20260809-099");
+    await mkdir(relatedDirectory, { recursive: true });
+    const conversation = path.join(relatedDirectory, ".session-related.jsonl");
     await writeFile(conversation, "{\"type\":\"session\"}\n", "utf8");
     const relatedRuntime = await prepareIssueRuntime(root, readOnlyIssue, [{ name: "orders", repositoryPath: checkout }], "read", [{
       key: "ISSUE-20260809-099",
       metadata: { key: "ISSUE-20260809-099", title: "Earlier development" },
       conversationPath: conversation,
-      repositories: [{ name: "orders", repositoryPath: checkout }],
+      workDirectory: relatedDirectory,
     }]);
-    const relatedRoot = path.join(relatedRuntime, "related-issues", "issue-20260809-099");
-    assert.deepEqual(JSON.parse(await readFile(path.join(relatedRoot, "issue.json"), "utf8")), { key: "ISSUE-20260809-099", title: "Earlier development" });
-    assert.equal(await readFile(path.join(relatedRoot, "conversation.jsonl"), "utf8"), "{\"type\":\"session\"}\n");
-    assert.equal((await lstat(path.join(relatedRoot, "repositories", "orders"))).isSymbolicLink(), true);
+    assert.deepEqual(JSON.parse(await readFile(path.join(relatedRuntime, ".related-issue-20260809-099.json"), "utf8")), { key: "ISSUE-20260809-099", title: "Earlier development" });
+    assert.equal(await readFile(path.join(relatedRuntime, ".related-issue-20260809-099.jsonl"), "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal(await readlink(path.join(relatedRuntime, ".related-issue-20260809-099")), path.relative(relatedRuntime, relatedDirectory));
 
     await assert.rejects(
       prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"),

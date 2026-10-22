@@ -5,7 +5,7 @@ import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
-import { issueRoot, issueWorkDirectory } from "../../src/workspace/state.ts";
+import { legacyIssueRoot, issueWorkDirectory } from "../../src/workspace/state.ts";
 
 test("offline migration refuses a live API, preserves a plan-only run and supports repeated application", async () => {
   const fixture = await createApiFixture();
@@ -14,7 +14,7 @@ test("offline migration refuses a live API, preserves a plan-only run and suppor
     await createService(fixture.app, "Migration", ["test"]);
     const issue = await createIssue(fixture.app, "migration", "test", "Legacy work");
     fixture.engine.running.clear();
-    const key = String(issue.id), oldRoot = path.join(issueRoot(fixture.root, key), "work");
+    const key = String(issue.id), oldRoot = path.join(legacyIssueRoot(fixture.root, key), "work");
     await mkdir(oldRoot, { recursive: true });
     await writeFile(path.join(oldRoot, "checkpoint.json"), "{}");
     const args = ["--experimental-strip-types", "scripts/migrate-issue-work.ts", "--state-root", fixture.root];

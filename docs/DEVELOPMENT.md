@@ -40,6 +40,8 @@ npm audit --omit=dev --audit-level=high
 .venv/bin/python3 -m pip check
 ```
 
+当前 SRT 0.0.81 引入的 node-forge 1.4.0 存在 RSA 验签公告 [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)，生产审计会报告该依赖及 SRT 的影响链。应用未配置 SRT TLS 终止或凭证重写，正常 CONNECT 转发不调用该验签路径；这不是零漏洞结论。升级修复需重新跑隔离与协议回归，不通过退回缺少当前隔离修复的旧 SRT 清除告警。
+
 | 检查 | 主要验证 |
 | --- | --- |
 | typecheck | 前后端类型、DTO 使用和未使用局部符号 |
@@ -66,7 +68,9 @@ npm audit --omit=dev --audit-level=high
 | Agent 排队、会话、模型、资源 | src/agent、configuration/pi-runtime.ts |
 | 工具输入与外部协议 | capabilities/registry.ts、src/capabilities、src/mcp |
 | Git、代码集合、生命周期 | src/workspace |
-| 成果与发布 | outputs/store.ts、agent/output-tool.ts |
+| 工作文件与旧下载兼容 | workspace/work-file-store.ts、outputs/store.ts |
+| 本地工具执行与隔离 | agent/native-tools.ts、issue-sandbox.ts、native-tool-executor.ts |
+| 单实例保护 | workspace/state-lease.ts |
 | Web DTO、请求、SSE | web/src/data/client.ts、app/agent-stream.ts |
 | 共享配置、当前身份 | ApplicationResources.tsx |
 | 代码浏览 | CodeBrowser.tsx、SourceText.tsx、SourceDiff.tsx、monaco.ts、workspace/source-browser.ts；共用 DTO/枚举：workspace/source-contracts.ts |

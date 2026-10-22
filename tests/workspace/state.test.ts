@@ -77,16 +77,13 @@ test("preserves unmanaged issue state before pruning generated resources", async
     await Promise.all([
       mkdir(path.join(root, "workspaces", activeKey, "repository"), { recursive: true }),
       mkdir(path.dirname(unmanagedWorkspaceFile), { recursive: true }),
-      mkdir(path.join(root, "issues", activeKey, "runtime"), { recursive: true }),
-      mkdir(path.join(root, "issues", activeKey, ".runtime-12345678-1234-4234-9234-123456789abc"), { recursive: true }),
-      mkdir(path.join(root, "issues", activeKey, ".runtime-previous-12345678-1234-4234-9234-123456789abc"), { recursive: true }),
-      mkdir(path.join(root, "issues", activeKey, ".runtime-operator-evidence"), { recursive: true }),
-      mkdir(path.join(root, "issues", activeKey, "agent"), { recursive: true }),
-      mkdir(path.join(root, "issues", activeKey, "attachments"), { recursive: true }),
+      mkdir(path.join(root, "workspaces", activeKey, "operator-evidence"), { recursive: true }),
       mkdir(path.dirname(unmanagedAttachment), { recursive: true }),
       mkdir(repositoriesRoot(root), { recursive: true }),
     ]);
     await Promise.all([
+      writeFile(path.join(root, "workspaces", activeKey, ".session-test.jsonl"), "session evidence\n"),
+      writeFile(path.join(root, "workspaces", activeKey, ".attachment-test.txt"), "attachment evidence\n", { mode: 0o400 }),
       writeFile(unmanagedWorkspaceFile, "preserve workspace\n", "utf8"),
       writeFile(unmanagedAttachment, "preserve attachment\n", "utf8"),
       exec("git", ["init", "--bare", path.join(repositoriesRoot(root), "repository")]),
@@ -98,7 +95,7 @@ test("preserves unmanaged issue state before pruning generated resources", async
     await assert.rejects(pruneState(root, ["ISSUE-20260807-001"]), /unmanaged_issue_state:issues\/issue-20260807-002,workspaces\/issue-20260807-002/);
     assert.equal(await readFile(unmanagedWorkspaceFile, "utf8"), "preserve workspace\n");
     assert.equal(await readFile(unmanagedAttachment, "utf8"), "preserve attachment\n");
-    assert.equal((await stat(path.join(root, "issues", activeKey, "runtime"))).isDirectory(), true);
+    assert.equal((await stat(path.join(root, "workspaces", activeKey, "operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).isDirectory(), true);
 
     await Promise.all([
@@ -107,14 +104,9 @@ test("preserves unmanaged issue state before pruning generated resources", async
     ]);
     await pruneState(root, ["ISSUE-20260807-001"]);
     assert.equal((await stat(path.join(root, "workspaces", activeKey, "repository"))).isDirectory(), true);
-    assert.equal((await stat(path.join(root, "issues", activeKey, "agent"))).isDirectory(), true);
-    assert.equal((await stat(path.join(root, "issues", activeKey, "attachments"))).isDirectory(), true);
-    await Promise.all([
-      assert.rejects(stat(path.join(root, "issues", activeKey, "runtime"))),
-      assert.rejects(stat(path.join(root, "issues", activeKey, ".runtime-12345678-1234-4234-9234-123456789abc"))),
-      assert.rejects(stat(path.join(root, "issues", activeKey, ".runtime-previous-12345678-1234-4234-9234-123456789abc"))),
-    ]);
-    assert.equal((await stat(path.join(root, "issues", activeKey, ".runtime-operator-evidence"))).isDirectory(), true);
+    assert.equal(await readFile(path.join(root, "workspaces", activeKey, ".session-test.jsonl"), "utf8"), "session evidence\n");
+    assert.equal(await readFile(path.join(root, "workspaces", activeKey, ".attachment-test.txt"), "utf8"), "attachment evidence\n");
+    assert.equal((await stat(path.join(root, "workspaces", activeKey, "operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).ino, checkoutRootInode);
     assert.equal((await stat(checkout)).ino, checkoutInode);
     assert.equal(await readFile(path.join(checkout, "README.md"), "utf8"), "shared checkout\n");
@@ -126,7 +118,7 @@ test("preserves unmanaged issue state before pruning generated resources", async
 
 test("preserves unowned repositories disguised as shared checkouts", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-unowned-checkout-state-"));
-  const issueRuntime = path.join(root, "issues", "issue-20260807-001", "runtime");
+  const issueRuntime = path.join(root, "workspaces", "issue-20260807-001");
   try {
     await Promise.all([mkdir(issueRuntime, { recursive: true }), mkdir(path.join(root, "workspaces"), { recursive: true })]);
     const managedCheckout = await createSharedCheckout(root);
@@ -148,7 +140,7 @@ test("preserves unowned repositories disguised as shared checkouts", async () =>
 
 test("preserves changed shared checkouts and generated runtimes as evidence", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-shared-checkout-state-"));
-  const issueRuntime = path.join(root, "issues", "issue-20260807-001", "runtime");
+  const issueRuntime = path.join(root, "workspaces", "issue-20260807-001");
   try {
     await Promise.all([
       mkdir(issueRuntime, { recursive: true }),

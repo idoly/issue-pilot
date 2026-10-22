@@ -70,7 +70,7 @@ it("does not navigate to a follow-up created after the workspace unmounts", asyn
   expect(created).not.toHaveBeenCalled();
 });
 
-it("offers previews only for supported outputs and attachments", async () => {
+it("offers previews for supported attachments without a separate outputs section", async () => {
   const fetchMock = vi.fn().mockResolvedValue(new Response('{"result":"previewed-json"}'));
   vi.stubGlobal("fetch", fetchMock);
   const detailed: IssueDetail = { ...issue, outputs: [
@@ -78,12 +78,14 @@ it("offers previews only for supported outputs and attachments", async () => {
     { fileName: "results.json", size: 30, updatedAt: issue.updatedAt },
     { fileName: "large.txt", size: issuePilotConfig.web.outputPreviewBytes + 1, updatedAt: issue.updatedAt },
   ], attachments: [
+    { id: "text", fileName: "results.json", mediaType: "application/json", size: 30, sha256: "a".repeat(64) },
     { id: "workbook", fileName: "input.xlsx", mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 512, sha256: "a".repeat(64) },
     { id: "image", fileName: "image.png", mediaType: "image/png", size: 512, sha256: "a".repeat(64) },
     { id: "archive", fileName: "archive.zip", mediaType: "application/zip", size: 512, sha256: "a".repeat(64) },
   ] };
   render(() => <IssueWorkspace issue={detailed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
-  for (const fileName of ["delivery.xlsx", "large.txt", "input.xlsx", "archive.zip"]) {
+  expect(screen.queryByRole("link", { name: "下载 delivery.xlsx" })).toBeNull();
+  for (const fileName of ["input.xlsx", "archive.zip"]) {
     expect(screen.queryByRole("button", { name: `预览 ${fileName}` })).toBeNull();
     expect(screen.getByRole("link", { name: `下载 ${fileName}` })).toBeTruthy();
   }

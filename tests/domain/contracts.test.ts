@@ -20,7 +20,7 @@ test("keeps the Agent capability catalog in its shared display order", () => {
 });
 
 test("maps each Issue work mode to one valid environment and type", () => {
-  assert.deepEqual(ISSUE_WORK_MODES, ["production_data", "production_analysis", "test_analysis", "development_fix", "development_feature"]);
+  assert.deepEqual(ISSUE_WORK_MODES, ["production_analysis", "test_analysis", "development_fix", "development_feature"]);
   assert.deepEqual(issueScopeForWorkMode("production_analysis"), { environmentKind: "prod", issueType: "smart_analysis", repositoryAccess: "read" });
   assert.deepEqual(issueScopeForWorkMode("development_feature"), { environmentKind: "dev", issueType: "feature_development", repositoryAccess: "write" });
   for (const workMode of ISSUE_WORK_MODES) {

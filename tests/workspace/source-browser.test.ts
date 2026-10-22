@@ -12,6 +12,7 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
+import { repositoryStorePath } from "../../src/workspace/git.ts";
 import { issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 test("browses only registered Issue repository content", async () => {
@@ -28,7 +29,6 @@ test("browses only registered Issue repository content", async () => {
     }).returning();
     const repository = path.join(issueWorkspaceRoot(root, issue!.key), "application");
     await mkdir(path.join(repository, "src"), { recursive: true, mode: 0o700 });
-    await mkdir(path.join(repository, ".git"), { mode: 0o700 });
     await writeFile(path.join(repository, "README.md"), "# Application\n", "utf8");
     await writeFile(path.join(repository, "src", "index.ts"), "export const ready = true;\n", "utf8");
     await database.db.insert(issueRepositories).values({
@@ -37,6 +37,12 @@ test("browses only registered Issue repository content", async () => {
     });
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
+    const store = repositoryStorePath(root, "https://git.example.test/application.git"), gitDirectory = path.join(store, "worktrees", "application");
+    await mkdir(gitDirectory, { recursive: true });
+    await writeFile(path.join(repository, ".git"), `gitdir: ${gitDirectory}\n`);
+    await writeFile(path.join(gitDirectory, "gitdir"), path.join(repository, ".git"));
+    await writeFile(path.join(gitDirectory, "commondir"), "../..\n");
+    await writeFile(path.join(gitDirectory, "HEAD"), "ref: refs/heads/hotfix-issue-20260815-002\n");
 
     const commands: Array<{ command: string; args: string[]; cwd?: string; maxOutputBytes?: number | null }> = [];
     const executor: CommandExecutor = {
@@ -46,6 +52,7 @@ test("browses only registered Issue repository content", async () => {
           code: 0, stderr: "", killed: false,
           stdout: `${JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "export const ready = true;\n" }, line_number: 1, submatches: [{ start: 13 }] } })}\n`,
         };
+        if (args.includes("--git-common-dir")) return { code: 0, stderr: "", killed: false, stdout: `${gitDirectory}\n${store}\n${repository}\nhotfix-issue-20260815-002\n` };
         if (args.includes("rev-parse")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\n` };
         if (args.includes("log")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\x1f${"a".repeat(40)}\x1fTest User\x1f2026-08-15T08:00:00+08:00\x1fFix source browser\x1e\n` };
         if (args.includes("blame")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} 1 1 1\nauthor Test User\nauthor-mail <test@example.test>\nauthor-time 1786752000\nauthor-tz +0800\nsummary Fix source browser\nfilename src/index.ts\n\texport const ready = true;\n` };
@@ -187,7 +194,7 @@ test("browses only registered Issue repository content", async () => {
 
     await assert.rejects(browser.file(issue!, "application", "../outside.txt"), /invalid_source_path/);
     await assert.rejects(browser.createFile(issue!, "application", ".git/alternate-control", "must not write Git metadata\n"), /invalid_source_path/);
-    await assert.rejects(readFile(path.join(repository, ".git", "alternate-control")), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(repository, ".git"), "utf8"), `gitdir: ${gitDirectory}\n`);
     const outside = path.join(root, "outside.txt");
     await writeFile(outside, "secret\n", "utf8");
     await symlink(outside, path.join(repository, "outside-link"));
@@ -198,7 +205,7 @@ test("browses only registered Issue repository content", async () => {
     const [readOnlyIssue] = await database.db.insert(issues).values({
       key: "ISSUE-20260815-003", title: "Read source", type: "defect_fix", serviceId: service!.id, environmentId: environment.id, reporterSubject: "source-tester",
     }).returning();
-    const readOnlyRepository = path.join(sharedCheckoutsRoot(root), "b".repeat(20), "c".repeat(40));
+    const readOnlyRepository = path.join(sharedCheckoutsRoot(root), path.basename(store), "c".repeat(40));
     await mkdir(path.join(readOnlyRepository, ".git"), { recursive: true, mode: 0o700 });
     await writeFile(path.join(readOnlyRepository, "README.md"), "# Snapshot\n", "utf8");
     await database.db.insert(issueRepositories).values({

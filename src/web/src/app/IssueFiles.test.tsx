@@ -2,8 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueWorkFile } from "../data/client";
-const state = vi.hoisted(() => ({ list: vi.fn(), user: () => ({ subject: "alice", role: "developer" }), read: vi.fn() }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), listIssueWorkFiles: state.list, fetchIssueWorkFile: state.read }));
+const state = vi.hoisted(() => ({ list: vi.fn(), user: () => ({ subject: "alice", role: "developer" }), read: vi.fn(), original: vi.fn() }));
+vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), listIssueWorkFiles: state.list, fetchIssueWorkFile: state.read, fetchAttachment: state.original }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueFiles } from "./IssueFiles";
 const issue = { id: "ISSUE-20261021-001", updatedAt: "2026-10-21T00:00:00Z", repositories: [{ name: "repository" }], attachments: [{ workingFileName: "uuid-image.png" }], outputs: [] } as unknown as IssueDetail;
@@ -42,6 +42,21 @@ it("previews supported working files only after a click and keeps binary files d
   expect(screen.queryByRole("link", { name: "下载文件" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+it("keeps managed metadata private and previews original attachments through the attachment endpoint", async () => {
+  const stored = ".attachment-original.txt", detailed = { ...issue, attachments: [{ id: "original", fileName: "input.txt", storedFileName: stored, mediaType: "text/plain", size: 8, sha256: "" }] } as IssueDetail;
+  state.list.mockResolvedValue([{ ...file(stored), managed: true }, { ...file(".session-private.jsonl"), managed: true }]);
+  state.original.mockResolvedValue(new Response("original preview").blob());
+  render(() => <IssueFiles issue={detailed} />);
+  const preview = await screen.findByRole("button", { name: "预览工作文件 input.txt" });
+  expect(state.original).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "预览工作文件 .session-private.jsonl" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "下载工作文件 .session-private.jsonl" })).toBeNull();
+  expect(screen.getByRole("link", { name: "下载工作文件 input.txt" }).getAttribute("href")).toBe(`/api/issues/${issue.id}/attachments/original`);
+  fireEvent.click(preview); await screen.findByText("original preview");
+  expect(state.original).toHaveBeenCalledWith(issue.id, "original", expect.any(AbortSignal));
+  expect(state.read).not.toHaveBeenCalled();
 });
 
 it("cancels old identity reads and ignores their late results", async () => {

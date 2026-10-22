@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { claimIssueRoot, issueRoot, issueWorkDirectory } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, legacyIssueRoot, issueWorkDirectory } from "../../src/workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile, prepareIssueWorkDirectory } from "../../src/workspace/working-files.ts";
 import { applyIssueWorkMigration, planIssueWorkMigration } from "../../src/workspace/work-directory-migration.ts";
 
@@ -27,6 +27,12 @@ test("lists and downloads working files without following paths outside the Issu
     assert.equal(work, issueWorkDirectory(root, key));
     await mkdir(path.join(work, "nested"));
     await writeFile(path.join(work, "nested", "库存 #1.xlsx"), "workbook");
+    await writeFile(path.join(work, "nested", ".session-business.txt"), "ordinary nested content");
+    await writeFile(path.join(work, ".session-private.jsonl"), "private session");
+    await symlink(path.join(work, ".session-private.jsonl"), path.join(work, "session-alias"));
+    const nested = await openIssueWorkFile(root, key, "nested/.session-business.txt");
+    try { assert.equal((await nested.handle.readFile()).toString(), "ordinary nested content"); } finally { await nested.handle.close(); }
+    for (const selected of [".session-private.jsonl", "session-alias"]) await assert.rejects(openIssueWorkFile(root, key, selected), /managed_issue_file_private/);
     await mkdir(path.join(work, ".git"));
     await writeFile(path.join(work, ".git", "config"), "private git data");
     await writeFile(path.join(root, "secret"), "private");
@@ -48,13 +54,13 @@ test("lists and downloads working files without following paths outside the Issu
 test("explicitly migrates legacy working files, rolls back a failed commit, then retries without changing repositories", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-migration-"));
   try {
-    const legacy = path.join(issueRoot(root, key), "work");
+    const legacy = path.join(legacyIssueRoot(root, key), "work");
     const target = issueWorkDirectory(root, key);
     await mkdir(legacy, { recursive: true });
     await mkdir(path.join(target, "repository"), { recursive: true });
     await writeFile(path.join(target, "repository", "dirty.txt"), "uncommitted code");
     await writeFile(path.join(legacy, "checkpoint.json"), '{"remaining":10}');
-    await assert.rejects(prepareIssueWorkDirectory(root, key), /issue_work_directory_migration_required/);
+    await assert.rejects(prepareIssueWorkDirectory(root, key), /issue_layout_migration_required/);
     const plan = await planIssueWorkMigration(root, [key]);
     assert.equal(plan.length, 1);
     await assert.rejects(applyIssueWorkMigration(plan, async () => { throw new Error("db_commit_failed"); }), /db_commit_failed/);
@@ -65,6 +71,7 @@ test("explicitly migrates legacy working files, rolls back a failed commit, then
     assert.equal(await readFile(path.join(target, "checkpoint.json"), "utf8"), '{"remaining":10}');
     assert.equal(await readFile(path.join(target, "repository", "dirty.txt"), "utf8"), "uncommitted code");
     assert.deepEqual(await planIssueWorkMigration(root, [key]), []);
+    await rm(legacy, { recursive: true });
     assert.equal(await prepareIssueWorkDirectory(root, key), target);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -72,7 +79,7 @@ test("explicitly migrates legacy working files, rolls back a failed commit, then
 test("refuses migration collisions and symlinks while preserving all evidence", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-collision-"));
   try {
-    const legacy = path.join(issueRoot(root, key), "work");
+    const legacy = path.join(legacyIssueRoot(root, key), "work");
     const target = issueWorkDirectory(root, key);
     await mkdir(legacy, { recursive: true }); await mkdir(target, { recursive: true });
     await writeFile(path.join(legacy, "result.txt"), "old");

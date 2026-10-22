@@ -18,14 +18,12 @@ export const statusBadge: Record<IssueStatus, "default" | "processing" | "warnin
 };
 
 export const typeLabel: Record<IssueType, string> = {
-  data_processing: "数据处理",
   smart_analysis: "智能分析",
   defect_fix: "缺陷修复",
   feature_development: "功能开发",
 };
 
 export const workModeLabel: Record<IssueWorkMode, string> = {
-  production_data: "正式数据处理",
   production_analysis: "正式问题调查",
   test_analysis: "测试问题调查",
   development_fix: "开发缺陷修复",

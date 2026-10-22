@@ -10,6 +10,7 @@ import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
 import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
+import { hostMcpPid } from "../helpers/mcp-process.ts";
 import { IssueOutputStore } from "../../src/outputs/store.ts";
 import type { PiModelRuntime } from "../../src/agent/model-runtime.ts";
 
@@ -51,7 +52,7 @@ async function waitForMcp(managed: Awaited<ReturnType<PiSessionRuntime["start"]>
   throw new Error("mcp_tools_not_ready");
 }
 
-function context(options: { writable: boolean; capability?: "dms"; outputs?: boolean }): AgentSessionContext {
+function context(options: { writable: boolean; capability?: "dms" }): AgentSessionContext {
   return {
     issueKey: "ISSUE-20260808-001",
     serviceKey: "orders",
@@ -60,7 +61,6 @@ function context(options: { writable: boolean; capability?: "dms"; outputs?: boo
     capabilities: options.capability ? [options.capability] : [],
     codemode: "off",
     canModifyCode: options.writable,
-    canWriteOutputs: options.outputs ?? false,
   };
 }
 
@@ -121,11 +121,9 @@ test("uses native coding tools independently of repository access policy", () =>
   assert.deepEqual(sessionToolAllowlist(context({ writable: false, capability: "dms" })), ["read", "bash", "edit", "write", "grep", "find", "ls", "service_query"]);
 });
 
-test("keeps output publication limited to data-processing contexts", () => {
-  assert.deepEqual(sessionToolAllowlist(context({ writable: true })), [
-    "read", "bash", "edit", "write", "grep", "find", "ls",
-  ]);
-  assert.deepEqual(sessionToolAllowlist(context({ writable: false, outputs: true })), ["read", "bash", "edit", "write", "grep", "find", "ls", "output"]);
+test("does not expose a publication tool in any Issue context", () => {
+  assert.deepEqual(sessionToolAllowlist(context({ writable: true })), ["read", "bash", "edit", "write", "grep", "find", "ls"]);
+  assert.deepEqual(sessionToolAllowlist(context({ writable: false })), ["read", "bash", "edit", "write", "grep", "find", "ls"]);
 });
 
 test("starts an SDK session with only context-selected tools and explicit resources", async () => {
@@ -156,7 +154,7 @@ test("starts an SDK session with only context-selected tools and explicit resour
   }
 });
 
-test("registers the durable output tool only with an explicit Issue output store", async () => {
+test("an export writer does not register a separate publication tool", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-output-"));
   const sessionDirectory = join(root, "sessions");
   await mkdir(sessionDirectory);
@@ -165,14 +163,14 @@ test("registers the durable output tool only with an explicit Issue output store
   try {
     const managed = await runtime.start({
       manager,
-      context: context({ writable: false, outputs: true }),
+      context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot: root,
       outputStore: new IssueOutputStore(root, "ISSUE-20260929-001"),
       systemPrompt: "",
       onEvent: () => undefined,
     });
-    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "output", "read", "write"]);
+    assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     await managed.stop();
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -192,7 +190,8 @@ test("disposes an SDK session and stdio process even when abort fails during sto
     onEvent: () => undefined,
   });
   await waitForMcp(managed);
-  const child = Number(await readFile(join(root, "pid"), "utf8"));
+  await readFile(join(root, "pid"), "utf8");
+  const child = await hostMcpPid(join(root, "pid"));
   let disposed = false;
   const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
   const dispose = session.dispose.bind(session);

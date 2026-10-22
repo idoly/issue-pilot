@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, readdir, rm, rmdir } from "node:fs/promises";
+import { access, mkdir, readdir, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -49,8 +49,12 @@ function issuesRoot(stateRoot: string): string {
   return path.resolve(stateRoot, "issues");
 }
 
-export function issueRoot(stateRoot: string, issueKey: string): string {
+export function legacyIssueRoot(stateRoot: string, issueKey: string): string {
   return path.join(issuesRoot(stateRoot), issueSegment(issueKey));
+}
+
+export function issueRoot(stateRoot: string, issueKey: string): string {
+  return issueWorkspaceRoot(stateRoot, issueKey);
 }
 
 export function issueWorkDirectory(stateRoot: string, issueKey: string): string {
@@ -58,19 +62,19 @@ export function issueWorkDirectory(stateRoot: string, issueKey: string): string 
 }
 
 export function issueSessionRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "agent");
+  return issueRoot(stateRoot, issueKey);
 }
 
 export function issueRuntimeRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "runtime");
+  return issueRoot(stateRoot, issueKey);
 }
 
 export function issueAttachmentRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "attachments");
+  return issueRoot(stateRoot, issueKey);
 }
 
 export function issueOutputRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issueRoot(stateRoot, issueKey), "outputs");
+  return path.join(legacyIssueRoot(stateRoot, issueKey), "outputs");
 }
 
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
@@ -78,15 +82,6 @@ export async function claimIssueRoot(stateRoot: string, issueKey: string): Promi
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
   try { await mkdir(root, { mode: 0o700 }); }
   catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:issues/${path.basename(root)}`);
-    throw error;
-  }
-  try {
-    await mkdir(workspacesRoot(stateRoot), { recursive: true, mode: 0o700 });
-    await mkdir(issueWorkDirectory(stateRoot, issueKey), { mode: 0o700 });
-  } catch (error) {
-    try { await rmdir(root); }
-    catch (cleanupError) { throw new AggregateError([error, cleanupError], "issue_state_rollback_failed"); }
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:workspaces/${path.basename(root)}`);
     throw error;
   }
@@ -94,7 +89,7 @@ export async function claimIssueRoot(stateRoot: string, issueKey: string): Promi
 
 export async function removeEmptyIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
   const failures: unknown[] = [];
-  for (const directory of [issueAttachmentRoot(stateRoot, issueKey), issueRoot(stateRoot, issueKey), issueWorkDirectory(stateRoot, issueKey)]) {
+  for (const directory of [issueRoot(stateRoot, issueKey)]) {
     try { await rmdir(directory); }
     catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) failures.push(error);
@@ -192,7 +187,6 @@ export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, l
 
 export async function pruneState(stateRoot: string, issueKeys: string[]): Promise<void> {
   const active = new Set(issueKeys.map((key) => normalizeIssueKey(key).toLowerCase()));
-  const managedIssuesRoot = issuesRoot(stateRoot);
   const unmanaged: string[] = [];
   for (const category of ["workspaces", "issues"]) {
     for (const entry of await directoryNames(path.resolve(stateRoot, category))) {
@@ -200,14 +194,12 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
     }
   }
   if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
+  for (const key of issueKeys) {
+    const legacy = legacyIssueRoot(stateRoot, key);
+    const content = await readdir(legacy).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+    if (content.length) throw new Error("issue_layout_migration_required");
+  }
   await validateSharedCheckouts(stateRoot);
-  await pMap(await directoryNames(managedIssuesRoot), async (entry) => {
-    if (!active.has(entry.toLowerCase())) return;
-    const managedIssueRoot = path.join(managedIssuesRoot, entry);
-    const generatedRuntime = /^\.runtime-(?:previous-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-    const generated = (await readdir(managedIssueRoot)).filter((name) => name === "runtime" || generatedRuntime.test(name));
-    await Promise.all(generated.map((name) => rm(path.join(managedIssueRoot, name), { recursive: true, force: true })));
-  }, stateTaskOptions);
   const repositoriesDirectory = repositoriesRoot(stateRoot);
   await pMap(
     await directoryNames(repositoriesDirectory),

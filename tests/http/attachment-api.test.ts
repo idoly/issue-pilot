@@ -49,14 +49,14 @@ test("creates initial attachments atomically and rolls back the claimed Issue ro
     const boundary = "create-attachment";
     const payload = issuePayload("alpha", "test", "Issue with evidence");
     const body = issueMultipart(boundary, payload, "initial.txt", "initial evidence");
-    const beforeDirectories = await readdir(path.join(fixture.root, "issues")).catch(() => []);
+    const beforeDirectories = await readdir(path.join(fixture.root, "workspaces")).catch(() => []);
     const database = openDatabase(fixture.databaseFile);
     await database.client.execute("CREATE TRIGGER fail_initial_attachment_insert BEFORE INSERT ON issue_attachments BEGIN SELECT RAISE(ABORT, 'simulated_initial_attachment_failure'); END");
     const failed = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: body });
     assert.equal(failed.statusCode, 500);
     await database.client.execute("DROP TRIGGER fail_initial_attachment_insert");
     await database.close();
-    assert.deepEqual((await readdir(path.join(fixture.root, "issues"))).sort(), beforeDirectories.sort());
+    assert.deepEqual((await readdir(path.join(fixture.root, "workspaces"))).sort(), beforeDirectories.sort());
     assert.equal(fixture.engine.enqueued.length, 0);
 
     const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: body });

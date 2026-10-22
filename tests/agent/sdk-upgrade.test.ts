@@ -13,7 +13,7 @@ const context: AgentSessionContext = {
   issueKey: "ISSUE-20261016-004", serviceKey: "fixture", environmentKey: "prod",
   model: { provider: "sdk-fixture", modelId: "sdk-model", thinkingLevel: "medium" },
   codemode: "off",
-  capabilities: [], canModifyCode: false, canWriteOutputs: false,
+  capabilities: [], canModifyCode: false,
 };
 
 test("SDK 1.3 replays persistent sessions with current tools and canonical prompts without restoring obsolete tools", async () => {

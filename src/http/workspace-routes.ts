@@ -1,3 +1,6 @@
+import { eq } from "drizzle-orm";
+import { issueRelations, issues } from "../db/schema.ts";
+import { issueWorkspaceRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/working-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
@@ -20,6 +23,16 @@ function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["wor
 export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   const { app, database, workspaces, scopeTransitions, runScopeExclusive } = context;
 
+  const fileAccess = (issue: { id: string; key: string }) => runScopeExclusive(async () => {
+    const readRoots = await context.sourceBrowser.readRoots(issue);
+    const related = await database.db.select({ id: issues.id, key: issues.key }).from(issueRelations).innerJoin(issues, eq(issues.id, issueRelations.relatedIssueId)).where(eq(issueRelations.issueId, issue.id));
+    for (const row of related) {
+      const prefix = `.related-${row.key.toLowerCase()}`;
+      readRoots[prefix] = issueWorkspaceRoot(context.stateRoot, row.key);
+      for (const [name, root] of Object.entries(await context.sourceBrowser.readRoots(row))) readRoots[`${prefix}/${name}`] = root;
+    }
+    return { readRoots };
+  });
   const relativeWorkPath = (value: unknown, optional = false): string => {
     if (value === undefined && optional) return "";
     if (typeof value !== "string" || value.length > 4096 || (!optional && !value.length)) throw new ApiError(400, "invalid_issue_file_path");
@@ -27,7 +40,8 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   };
   const workFileError = (error: unknown): never => {
     const code = error instanceof Error ? error.message : "";
-    if (["invalid_issue_file_path", "invalid_issue_work_directory", "issue_file_not_directory", "issue_file_not_regular"].includes(code)) throw new ApiError(400, code);
+    if (["invalid_issue_file_path", "invalid_issue_work_directory", "issue_file_not_directory", "issue_file_not_regular", "managed_issue_file_private"].includes(code)) throw new ApiError(400, code);
+    if (code === "source_git_binding_invalid") throw new ApiError(409, code);
     if (code === "issue_file_directory_too_large") throw new ApiError(413, code);
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new ApiError(404, "issue_file_not_found");
     throw error;
@@ -36,7 +50,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path, true);
     reply.header("Cache-Control", "private, no-store");
-    try { return await listIssueWorkFiles(context.stateRoot, issue.key, relative); }
+    try { return await listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue)); }
     catch (error) {
       if (!relative && error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
       return workFileError(error);
@@ -46,7 +60,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path);
     try {
-      const file = await openIssueWorkFile(context.stateRoot, issue.key, relative);
+      const file = await openIssueWorkFile(context.stateRoot, issue.key, relative, await fileAccess(issue));
       reply.header("Cache-Control", "private, no-store");
       reply.header("Content-Type", "application/octet-stream");
       reply.header("X-Content-Type-Options", "nosniff");

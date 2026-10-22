@@ -4,7 +4,6 @@ import { writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
-  createBashToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
   SessionManager,
@@ -20,11 +19,12 @@ import type { AgentRuntimeConfiguration, DeploymentConfig } from "../domain/cont
 import type { McpConfiguration } from "../mcp/client.ts";
 import { createIssueCodemodeExtension } from "./codemode-extension.ts";
 import { createIssueMcpExtension } from "../mcp/pi-extension.ts";
+import { assertIssueLaunchEnvironment, prepareIssueCommand, type PreparedIssueCommand } from "./issue-sandbox.ts";
+import { assertIssueHardlinks, issueNativeTools } from "./native-tools.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "./model-runtime.ts";
 import { createCapabilityTools, type ServiceToolScope } from "./service-query-tool.ts";
 import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
-import { createOutputTool } from "./output-tool.ts";
 
 export interface GitCommitIdentity {
   name: string;
@@ -38,7 +38,7 @@ export interface StartPiSessionOptions {
   runtime?: AgentRuntimeConfiguration;
   deploymentConfig: DeploymentConfig;
   workspaceRoot: string;
-  executableRoot?: string;
+  readRoots?: string[];
   modelApiKey?: string;
   gitEnvironment?: Record<string, string>;
   gitIdentity?: GitCommitIdentity;
@@ -61,7 +61,8 @@ export interface ManagedPiSession {
 
 export async function createPrivateSessionManager(cwd: string, sessionDirectory: string): Promise<SessionManager> {
   const manager = SessionManager.create(cwd, sessionDirectory);
-  const sessionFile = manager.getSessionFile();
+  const generatedFile = manager.getSessionFile();
+  const sessionFile = generatedFile ? path.join(sessionDirectory, `.session-${path.basename(generatedFile)}`) : undefined;
   const header = manager.getHeader();
   if (!sessionFile || !header) throw new Error("failed_to_initialize_agent_session");
 
@@ -151,29 +152,18 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
   };
 }
 
-function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, settings: SettingsManager): ToolDefinition<any, any, any>[] {
-  const { context, deploymentConfig, workspaceRoot, outputStore, executableRoot, gitEnvironment, serviceScopes } = options;
+function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, settings: SettingsManager, model: AgentSession["model"]): ToolDefinition<any, any, any>[] {
+  const { context, deploymentConfig, workspaceRoot, outputStore, gitEnvironment, serviceScopes } = options;
   const tools = createCapabilityTools(context, deploymentConfig, { outputStore, serviceScopes });
-  if (context.canWriteOutputs) {
-    if (!outputStore) throw new Error("issue_output_store_required");
-    tools.unshift(createOutputTool(outputStore, workspaceRoot));
-  }
-  tools.unshift(createBashToolDefinition(workspaceRoot, {
-    ...(settings.getShellPath() ? { shellPath: settings.getShellPath()! } : {}),
-    ...(settings.getShellCommandPrefix() ? { commandPrefix: settings.getShellCommandPrefix()! } : {}),
-    spawnHook: (context) => ({
-      ...context,
-      env: {
-        ...context.env,
-        AI_AGENT: "pi",
-        PI_CODING_AGENT: "true",
-        NODE_PATH: [path.resolve(import.meta.dirname, "../../node_modules"), context.env.NODE_PATH].filter(Boolean).join(path.delimiter),
-        PATH: [executableRoot, path.resolve(import.meta.dirname, "../../.venv/bin"), context.env.PATH].filter(Boolean).join(path.delimiter),
-        ...gitEnvironment,
-        ...identityEnvironment(),
-      },
-    }),
-  }));
+  tools.unshift(...issueNativeTools({ writeRoot: workspaceRoot, readRoots: [...(options.readRoots ?? []), options.agentDirectory ?? getAgentDir()], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, () => ({
+    AI_AGENT: "pi", PI_CODING_AGENT: "true", GIT_OPTIONAL_LOCKS: "0",
+    PI_MODEL_INPUT: JSON.stringify(model?.input ?? ["text", "image"]),
+    PI_SESSION_ID: options.manager.getSessionId(), PI_SESSION_FILE: options.manager.getSessionFile() ?? "", PI_PROVIDER: context.model.provider, PI_MODEL: context.model.modelId, PI_REASONING_LEVEL: context.model.thinkingLevel,
+    PATH: [path.resolve(import.meta.dirname, "../../.venv/bin"), process.env.PATH].filter(Boolean).join(path.delimiter),
+    ...(settings.getShellPath() ? { ISSUE_PILOT_SHELL_PATH: settings.getShellPath()! } : {}),
+    ...(settings.getShellCommandPrefix() ? { ISSUE_PILOT_SHELL_PREFIX: settings.getShellCommandPrefix()! } : {}),
+    ...gitEnvironment, ...identityEnvironment(),
+  })));
   return tools;
 }
 
@@ -210,16 +200,32 @@ export class PiSessionRuntime {
   }
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
-    if (!options.modelApiKey) return this.startWithRuntime(options, this.#modelRuntime);
-    const personal = createPiModelRuntime(getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey });
+    const commands: PreparedIssueCommand[] = [];
+    const personal = options.modelApiKey ? createPiModelRuntime(getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey }) : undefined;
+    const cleanup = async () => {
+      const failures: unknown[] = [];
+      for (const command of commands) try { await command.cleanup(); } catch (error) { failures.push(error); }
+      try { await personal?.close(); } catch (error) { failures.push(error); }
+      if (failures.length) throw new AggregateError(failures, "pi_runtime_cleanup_failed");
+    };
     try {
-      const managed = await this.startWithRuntime(options, personal);
-      return { ...managed, get streaming() { return managed.streaming; }, stop: async () => { try { await managed.stop(); } finally { await personal.close(); } } };
-    } catch (error) { await personal.close(); throw error; }
+      const managed = await this.startWithRuntime(options, personal ?? this.#modelRuntime, commands);
+      let stopping: Promise<void> | undefined, stopped = false;
+      return { ...managed, get streaming() { return managed.streaming; }, stop: () => stopped ? Promise.resolve() : stopping ??= (async () => {
+        const failures: unknown[] = [];
+        try {
+          try { await managed.stop(); } catch (error) { failures.push(error); }
+          try { await cleanup(); } catch (error) { failures.push(error); }
+          if (failures.length === 1) throw failures[0];
+          if (failures.length) throw new AggregateError(failures, "pi_runtime_stop_failed");
+        } finally { stopped = true; }
+      })() };
+    } catch (error) { try { await cleanup(); } catch (failure) { throw new AggregateError([error, failure], "pi_runtime_start_cleanup_failed"); } throw error; }
   }
 
-  private async startWithRuntime(options: StartPiSessionOptions, runtime: PiModelRuntime): Promise<ManagedPiSession> {
+  private async startWithRuntime(options: StartPiSessionOptions, runtime: PiModelRuntime, commands: PreparedIssueCommand[]): Promise<ManagedPiSession> {
     const { context, workspaceRoot, runtime: configuration = {} } = options;
+    await assertIssueHardlinks(workspaceRoot);
     const modelRuntime = await runtime.load();
     await modelRuntime.refresh({ providers: [context.model.provider], allowNetwork: false });
     const model = modelRuntime.getModel(context.model.provider, context.model.modelId);
@@ -235,13 +241,22 @@ export class PiSessionRuntime {
       ...configuration.settings,
       codemode: { ...globalSettings.codemode, ...configuration.settings?.codemode, mode: context.codemode === "only" ? "only" : "on" },
     }, { projectTrusted: false });
+    const mcpConfigurations: McpConfiguration[] = [];
+    for (const configuration of options.mcpConfigurations ?? []) {
+      if (!configuration.enabled || configuration.transport !== "stdio" || !configuration.stdio) { mcpConfigurations.push(configuration); continue; }
+      assertIssueLaunchEnvironment(configuration.stdio.env ?? {});
+      const cwd = path.resolve(workspaceRoot, configuration.stdio.cwd ?? ".");
+      const prepared = await prepareIssueCommand({ writeRoot: workspaceRoot, readRoots: options.readRoots ?? [], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, [configuration.stdio.command, ...configuration.stdio.args], cwd);
+      commands.push(prepared);
+      mcpConfigurations.push({ ...configuration, stdio: { ...configuration.stdio, command: prepared.argv[0]!, args: prepared.argv.slice(1), cwd, env: { ...configuration.stdio.env, NPM_CONFIG_CACHE: path.join(workspaceRoot, ".npm-cache"), TMPDIR: workspaceRoot } } });
+    }
     const resourceLoader = new DefaultResourceLoader({
       cwd: agentDirectory,
       agentDir: agentDirectory,
       settingsManager,
       extensionFactories: [
-        ...(context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createIssueCodemodeExtension() }]),
-        { name: "issue-pilot-mcp", factory: createIssueMcpExtension(options.mcpConfigurations ?? [], context.codemode) },
+        ...(context.codemode === "off" ? [] : [{ name: "issue-pilot-codemode", factory: createIssueCodemodeExtension(workspaceRoot) }]),
+        { name: "issue-pilot-mcp", factory: createIssueMcpExtension(mcpConfigurations, context.codemode, workspaceRoot) },
       ],
       noThemes: true,
       appendSystemPromptOverride: base => [...base, options.systemPrompt],
@@ -271,7 +286,7 @@ export class PiSessionRuntime {
         model,
         thinkingLevel: context.model.thinkingLevel,
         tools: allowedTools,
-        customTools: [...sessionTools(options, () => identityEnvironment, settingsManager), ...(options.workspaceTool ? [options.workspaceTool] : [])],
+        customTools: [...sessionTools(options, () => identityEnvironment, settingsManager, model), ...(options.workspaceTool ? [options.workspaceTool] : [])],
         sessionManager: options.manager,
         settingsManager,
         resourceLoader,

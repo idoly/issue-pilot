@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
-const context: AgentSessionContext = { issueKey: "ISSUE-20260808-001", serviceKey: "orders", environmentKey: "prod", model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" }, codemode: "off", capabilities: ["dms", "sls"], canModifyCode: false, canWriteOutputs: false };
+const context: AgentSessionContext = { issueKey: "ISSUE-20260808-001", serviceKey: "orders", environmentKey: "prod", model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" }, codemode: "off", capabilities: ["dms", "sls"], canModifyCode: false };
 const config: DeploymentConfig = {
   dms: { url: "https://dms.example.test/sse", authorization: "Bearer private-token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
   sls: { accessKeyId: "private-key", accessKeySecret: "private-secret", region: "cn-test", project: "orders", logstores: ["application", "gateway"] },
@@ -28,8 +28,8 @@ test("rejects retired adapters and undeclared targets before invoking external s
     { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", databaseId: "different" },
     ...["nacos", "db", "redis", "mq", "es", "mcp"].map(capability => ({ service: "orders", capability })),
   ]) await assert.rejects(call(tool!, input), /invalid_service_query_input/);
-  const [exports] = createCapabilityTools({ ...context, canWriteOutputs: true }, config);
-  await assert.rejects(call(exports!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", output: { fileName: "batch.json" } }), /issue_output_not_available/);
+  const [exports] = createCapabilityTools({ ...context }, config);
+  await assert.rejects(call(exports!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", output: { fileName: "batch.json" } }), /invalid_service_query_input/);
   assert.deepEqual(createCapabilityTools({ ...context, capabilities: [] }, {}), []);
 });
 test("returns safe DMS diagnostics to the agent without SDK details or credentials", async () => {

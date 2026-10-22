@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import { environments, issueRepositories, issues, issueWorkspaces, serviceDeploy
 import { executeLocalCommand, type CommandExecutor } from "../../src/process.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
+import { repositoryStorePath } from "../../src/workspace/git.ts";
 import { issueWorkspaceRoot } from "../../src/workspace/state.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import { TestAgentController } from "../http/fixture.ts";
@@ -30,11 +31,30 @@ async function fixture() {
     assert.equal(result.code, 0, result.stderr); return result.stdout.trim();
   };
   await git(["init", "--initial-branch=hotfix-issue-20261017-991"]);
+  await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture baseline"]);
+  const seed = path.join(root, "seed"), store = repositoryStorePath(root, "https://example.test/source-pages.git");
+  await rename(repository, seed); await mkdir(path.dirname(store), { recursive: true });
+  const cloned = await executeLocalCommand("git", ["clone", "--mirror", seed, store]); assert.equal(cloned.code, 0, cloned.stderr);
+  const linked = await executeLocalCommand("git", ["--git-dir", store, "worktree", "add", repository, "hotfix-issue-20261017-991"]); assert.equal(linked.code, 0, linked.stderr);
   await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: "https://example.test/source-pages.git", baseBranch: "main", workingBranch: "hotfix-issue-20261017-991", localPath: repository, workspaceName: "application", commitBefore: "a".repeat(40) });
   await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
   await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
   return { root, database, issue: issue!, repository, git, browser: new SourceBrowser(database.db, root), close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
+
+test("source mutations reject a Git pointer redirected to another Issue's worktree", async () => {
+  const f = await fixture();
+  try {
+    const store = repositoryStorePath(f.root, "https://example.test/source-pages.git"), foreign = path.join(f.root, "other-issue");
+    const added = await executeLocalCommand("git", ["--git-dir", store, "worktree", "add", "--force", foreign, "hotfix-issue-20261017-991"]); assert.equal(added.code, 0, added.stderr);
+    const pointer = await readFile(path.join(foreign, ".git"), "utf8"), directory = pointer.trim().slice("gitdir: ".length), index = path.join(directory, "index");
+    const before = await readFile(index);
+    await writeFile(path.join(f.repository, "evidence.txt"), "own change");
+    await writeFile(path.join(f.repository, ".git"), pointer);
+    await assert.rejects(f.browser.stage(f.issue, "application", ["evidence.txt"]), /source_git_binding_invalid/);
+    assert.deepEqual(await readFile(index), before);
+  } finally { await f.close(); }
+});
 
 test("saves long ASCII and Unicode file names using bounded temporary names", async () => {
   const f = await fixture();
@@ -126,12 +146,12 @@ test("rejects source reads through aliases to Git control paths", async () => {
   const f = await fixture();
   try {
     await symlink(".git", path.join(f.repository, "control-alias"));
-    await symlink(".git/config", path.join(f.repository, "config-alias"));
+    await symlink(path.join(repositoryStorePath(f.root, "https://example.test/source-pages.git"), "config"), path.join(f.repository, "config-alias"));
     await assert.rejects(f.browser.tree(f.issue, "application", "control-alias"), /invalid_source_path/);
-    await assert.rejects(f.browser.file(f.issue, "application", "config-alias"), /invalid_source_path/);
+    await assert.rejects(f.browser.file(f.issue, "application", "config-alias"), /source_path_outside_repository/);
     await assert.rejects(f.browser.createFile(f.issue, "application", "control-alias/new.txt", "forbidden"), /invalid_source_path|source_path_outside_repository/);
     await f.browser.deletePath(f.issue, "application", "control-alias", false);
-    assert.ok((await lstat(path.join(f.repository, ".git"))).isDirectory());
+    assert.ok((await lstat(path.join(f.repository, ".git"))).isFile());
   } finally { await f.close(); }
 });
 
@@ -246,7 +266,7 @@ test("paginates a pinned history without losing or repeating commits when HEAD a
   const f = await fixture();
   try {
     const count = issuePilotConfig.limits.sourceBrowser.historyCommits + 25;
-    for (let index = 0; index < count; index++) await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", `Commit ${index}`]);
+    for (let index = 1; index < count; index++) await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", `Commit ${index}`]);
     const first = await f.browser.history(f.issue, "application");
     assert.equal(first.commits.length, issuePilotConfig.limits.sourceBrowser.historyCommits); assert.ok(first.nextCursor);
     await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Arrived during pagination"]);
@@ -255,7 +275,7 @@ test("paginates a pinned history without losing or repeating commits when HEAD a
     const combined = [...first.commits, ...second.commits];
     assert.equal(new Set(combined.map(commit => commit.hash)).size, count);
     assert.equal(combined.some(commit => commit.subject === "Arrived during pagination"), false);
-    assert.equal(second.commits.at(-1)?.subject, "Commit 0");
+    assert.equal(second.commits.at(-1)?.subject, "Fixture baseline");
     await assert.rejects(f.browser.history(f.issue, "application", "", { revision: "invalid", offset: 1 }), /invalid_source_history_cursor/);
     await assert.rejects(f.browser.history(f.issue, "application", "", { revision: first.nextCursor.revision, offset: -1 }), /invalid_source_history_cursor/);
   } finally { await f.close(); }

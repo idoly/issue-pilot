@@ -7,20 +7,19 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { applicationConfig } from "../config.ts";
 import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
-import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { managesFileUser } from "../configuration/file-layout.ts";
 import { requireCurrentUser } from "./route-context.ts";
 import { applyFileConfiguration } from "../configuration/file-configuration.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
-import type { Database, DatabaseConnection } from "../db/client.ts";
+import type { DatabaseConnection } from "../db/client.ts";
 import { issues } from "../db/schema.ts";
 import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../agent/model-runtime.ts";
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { prepareDevelopmentIssueRuntimes, prepareReadOnlyIssueRuntimes } from "../workspace/project.ts";
 import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
-import { ProjectToolBroker } from "../workspace/project-tools.ts";
+import { ApplicationStateLease } from "../workspace/state-lease.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
 import { pruneState } from "../workspace/state.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
@@ -47,12 +46,11 @@ export interface ApiOptions {
   stateRoot?: string;
   engine?: AgentController;
   events?: AgentEventBus;
-  toolRuntime?: ToolRuntime;
   logger?: boolean;
   listenHost?: string;
   modelCatalog?: AgentModelCatalog;
   workspacePolicy?: WorkspaceLifecyclePolicy;
-  projectTools?: Pick<ProjectToolBroker, "start" | "close">;
+  stateLease?: Pick<ApplicationStateLease, "start" | "close">;
   webRoot?: string;
 }
 
@@ -85,19 +83,15 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const databaseFile = options.databaseFile ?? applicationConfig.databaseFile;
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: true });
   let connection: DatabaseConnection | undefined;
-  let projectDatabase: Database | undefined;
   let engine: AgentController | undefined;
   let modelRuntime: ReturnType<typeof createPiModelRuntime> | undefined;
-  let projectTools: Pick<ProjectToolBroker, "start" | "close"> | undefined;
+  let stateLease: Pick<ApplicationStateLease, "start" | "close"> | undefined;
   let stopWorkspaceMaintenance: (() => Promise<void>) | undefined;
 
   try {
     // Bootstrap recovers persistent state, so claim the control socket first.
-    projectTools = options.projectTools ?? new ProjectToolBroker(() => {
-      if (!projectDatabase) throw new Error("project_tool_broker_not_ready");
-      return projectDatabase;
-    }, stateRoot, options.toolRuntime, undefined, error => app.log.error(errorDiagnostic(error)));
-    await projectTools.start();
+    stateLease = options.stateLease ?? new ApplicationStateLease(stateRoot);
+    await stateLease.start();
     const databaseStartedAt = performance.now();
     const database = await openApplicationDatabase(databaseFile);
     connection = database;
@@ -193,18 +187,17 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       try { await stopWorkspaceMaintenance?.(); } catch (error) { failures.push(error); }
       try { await engine?.close?.(); } catch (error) { failures.push(error); }
       try { await modelRuntime?.close(); } catch (error) { failures.push(error); }
-      try { await projectTools?.close(); } catch (error) { failures.push(error); }
+      try { await stateLease?.close(); } catch (error) { failures.push(error); }
       try { await database.close(); } catch (error) { failures.push(error); }
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) throw new AggregateError(failures, "api_close_failed");
     });
-    projectDatabase = database.db;
     return app;
   } catch (error) {
     if (stopWorkspaceMaintenance) await stopWorkspaceMaintenance().catch(() => undefined);
     if (engine?.close) await engine.close().catch(() => undefined);
     await modelRuntime?.close().catch(() => undefined);
-    await projectTools?.close().catch(() => undefined);
+    await stateLease?.close().catch(() => undefined);
     await app.close().catch(() => undefined);
     try { await connection?.close(); } catch {
       // Preserve the startup error that triggered cleanup.

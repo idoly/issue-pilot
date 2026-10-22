@@ -1,8 +1,9 @@
+import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -304,12 +305,12 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const prepareRuntime = (candidate: Pick<typeof issues.$inferSelect, "id" | "key" | "type">) => runtimeProjects.hydrateDevelopmentRuntime(candidate);
     const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
     assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
-    const wrapperRoot = path.join(issueRuntimeRoot(root, issue!.key), "bin");
+    const wrapperRoot = issueRuntimeRoot(root, issue!.key);
     assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
-    assert.equal((await stat(path.join(wrapperRoot, "node-project"))).mode & 0o777, 0o700);
+    await assert.rejects(access(path.join(wrapperRoot, "npm")), { code: "ENOENT" });
     const activeRuntime = issueRuntimeRoot(root, issue!.key);
-    assert.equal(path.resolve(activeRuntime, await readlink(path.join(activeRuntime, "alpha"))), prepared[0]!.workspacePath);
-    assert.equal(path.resolve(activeRuntime, await readlink(path.join(activeRuntime, "beta"))), prepared[1]!.workspacePath);
+    assert.equal(path.join(activeRuntime, "alpha"), prepared[0]!.workspacePath);
+    assert.equal(path.join(activeRuntime, "beta"), prepared[1]!.workspacePath);
 
     const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
     await mkdir(path.dirname(unknownMetadata), { recursive: true });
@@ -346,7 +347,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(released.alreadyReleased, false);
     assert.equal(released.releasedBytes > 0, true);
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    await Promise.all(prepared.map(worktree => assert.rejects(access(worktree.workspacePath))));
+    await Promise.all(prepared.map(async worktree => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal(await readFile(sessionFile, "utf8"), "{}\n");
     assert.deepEqual(engine.closed, [issue!.id]);
@@ -456,7 +457,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await lifecycle.releaseIssue(issue!.id);
     lifecycleWorktrees.remove = removeWorktree;
     assert.equal(await readFile(concurrentRootEntry, "utf8"), "preserve root entry\n");
-    await Promise.all(restoredRows.map((repository) => assert.rejects(access(repository.localPath!))));
+    await Promise.all(restoredRows.map(async repository => assert.equal((await lstat(repository.localPath!)).isSymbolicLink(), true)));
     await lifecycle.reopenIssue(issue!.id);
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
@@ -519,6 +520,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, false);
 
     const reconstruct = async () => {
+      await prepareIssueRuntime(root, issue!.key, [], "write");
       const repositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
       const reconstructed = [];
       for (const repository of repositories) {
@@ -562,7 +564,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const quota = await quotaLifecycle.maintain();
     assert.deepEqual(quota.released.map(({ issueKey }) => issueKey), [issue!.key]);
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    await Promise.all(prepared.map(worktree => assert.rejects(access(worktree.workspacePath))));
+    await Promise.all(prepared.map(async worktree => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
 
     const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment!.id, config: {} });
@@ -678,7 +680,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal(rolledBackIssue!.environmentId, testEnvironment.id);
     assert.equal(rolledBackIssue!.type, "smart_analysis");
     assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
-    await assert.rejects(access(issueWorkspaceRoot(root, issue!.key)));
+    assert.equal((await stat(issueWorkspaceRoot(root, issue!.key))).isDirectory(), true);
     assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))).startsWith(path.join(root, "git", "checkouts")), true);
     assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
@@ -693,8 +695,9 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal(convertedRepositories[0]!.workingBranch, "hotfix-issue-20260814-101");
     assert.equal(await git(["-C", convertedRepositories[0]!.localPath!, "branch", "--show-current"]), "hotfix-issue-20260814-101");
     assert.equal(await git(["-C", convertedRepositories[0]!.localPath!, "status", "--porcelain"]), "");
-    assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))), convertedRepositories[0]!.localPath);
-    assert.equal((await stat(path.join(runtimeRoot, "bin", "node-project"))).mode & 0o777, 0o700);
+    assert.equal(path.join(runtimeRoot, "conversion"), convertedRepositories[0]!.localPath);
+    assert.equal((await stat(path.join(runtimeRoot, "conversion"))).isDirectory(), true);
+    await assert.rejects(access(path.join(runtimeRoot, "npm")), { code: "ENOENT" });
     const [session] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(session!.sessionFile, sessionFile);
     assert.equal(session!.workspacePath, issueWorkspaceRoot(root, issue!.key));

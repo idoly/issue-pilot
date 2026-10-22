@@ -17,13 +17,13 @@ async function runTool(config: DeploymentConfig, capability: CapabilityName, inp
   }
 }
 
-export function createCapabilityTools(context: Pick<AgentSessionContext, "serviceKey" | "environmentKey" | "capabilities" | "canWriteOutputs">, deploymentConfig: DeploymentConfig, options: { outputStore?: IssueOutputStore | undefined; serviceScopes?: ServiceToolScope[] | undefined } = {}): ToolDefinition<any, any, any>[] {
+export function createCapabilityTools(context: Pick<AgentSessionContext, "serviceKey" | "environmentKey" | "capabilities">, deploymentConfig: DeploymentConfig, options: { outputStore?: IssueOutputStore | undefined; serviceScopes?: ServiceToolScope[] | undefined } = {}): ToolDefinition<any, any, any>[] {
   const { outputStore, serviceScopes } = options;
   const scopes = structuredClone(serviceScopes ?? [{ environmentKey: context.environmentKey, serviceKey: context.serviceKey, serviceName: context.serviceKey, config: deploymentConfig }]);
   const schemas: TSchema[] = [];
   for (const scope of scopes) for (const capability of context.capabilities) {
     if (!scope.config[capability]) continue;
-    const schema = capabilityToolInputSchema(capability, scope.config[capability]!, { outputEnabled: context.canWriteOutputs && capability === "dms" });
+    const schema = capabilityToolInputSchema(capability, scope.config[capability]!, { outputEnabled: Boolean(outputStore) && capability === "dms" });
     const union = schema as unknown as { anyOf?: TSchema[] };
     const variants = Array.isArray(union.anyOf) ? union.anyOf : [schema];
     for (const variant of variants) schemas.push(Type.Object({ environment: Type.Literal(scope.environmentKey), service: Type.Literal(scope.serviceKey, { description: scope.serviceName }), capability: Type.Literal(capability), ...(variant as unknown as { properties: Record<string, TSchema> }).properties }, { additionalProperties: false }));

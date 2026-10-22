@@ -81,7 +81,7 @@ export interface IssueDetail extends IssueListItem {
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
   workingDirectory?: string;
-  attachments: Array<{ id: string; fileName: string; workingFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
+  attachments: Array<{ id: string; fileName: string; workingFileName?: string; storedFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   collaboratingServices?: Array<{ key: string; name: string }>;
   outputs: Array<{ fileName: string; size: number; updatedAt: string }>;
   relatedIssues?: IssueExecutionItem[];
@@ -182,12 +182,13 @@ export interface IssueWorkFile {
   name: string;
   path: string;
   kind: "file" | "directory" | "link" | "special";
+  managed?: boolean;
   size: number;
   updatedAt: string;
 }
 export const listIssueWorkFiles = async (key: string, path = "", signal?: AbortSignal): Promise<IssueWorkFile[]> => {
   const rows = await request<unknown>(issuePath(key, `/files${path ? `?path=${encodeURIComponent(path)}` : ""}`), signal ? { signal } : undefined);
-  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || typeof row.name !== "string" || typeof row.path !== "string" || !["file", "directory", "link", "special"].includes(row.kind) || typeof row.size !== "number" || typeof row.updatedAt !== "string")) throw new Error("invalid_issue_files_response");
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || typeof row.name !== "string" || typeof row.path !== "string" || !["file", "directory", "link", "special"].includes(row.kind) || typeof row.size !== "number" || typeof row.updatedAt !== "string" || "managed" in row && row.managed !== undefined && typeof row.managed !== "boolean")) throw new Error("invalid_issue_files_response");
   return rows as IssueWorkFile[];
 };
 export const issueWorkFileUrl = (key: string, path: string) => issuePath(key, `/files/download?path=${encodeURIComponent(path)}`);

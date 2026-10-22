@@ -141,7 +141,7 @@ test("source binding failure rolls back Issue and files and permits retry", asyn
   try {
     await f.database.client.execute("CREATE TRIGGER fail_dingtalk_import BEFORE INSERT ON dingtalk_issue_imports BEGIN SELECT RAISE(ABORT, 'fixture-private-failure'); END");
     const failed = await f.submit(); assert.equal(failed.statusCode, 500); assert.doesNotMatch(failed.body, /fixture-private-failure/);
-    assert.deepEqual(await f.database.db.select().from(issues), []); assert.deepEqual(await readdir(path.join(f.root, "issues")), []);
+    assert.deepEqual(await f.database.db.select().from(issues), []); assert.deepEqual(await readdir(path.join(f.root, "workspaces")), []);
     await f.database.client.execute("DROP TRIGGER fail_dingtalk_import");
     assert.equal((await f.submit()).json().status, "created");
   } finally { await f.cleanup(); }
@@ -152,7 +152,7 @@ test("DingTalk reauthorizes work mode after the remote read", async () => {
   try {
     const waiting = new Promise<void>(resolve => { entered = resolve; }), resume = new Promise<void>(resolve => { release = resolve; });
     f.state.beforeRecords = async () => { entered(); await resume; };
-    const pending = f.submit({ workMode: "production_data" }).then(value => value);
+    const pending = f.submit({ workMode: "development_fix" }).then(value => value);
     await waiting; await f.database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, f.user.subject)); release();
     const response = await pending; assert.equal(response.statusCode, 403, response.body); assert.equal(response.json().error, "developer_role_required");
     assert.deepEqual(await f.database.db.select().from(issues), []);

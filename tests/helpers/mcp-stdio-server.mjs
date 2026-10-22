@@ -19,7 +19,7 @@ else {
   });
   if (process.env.MCP_FIXTURE_RESOURCES) {
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [{ uri: "fixture://evidence", name: "Evidence", mimeType: "text/plain" }] }));
-    server.setRequestHandler(ReadResourceRequestSchema, async request => ({ contents: [{ uri: request.params.uri, mimeType: "text/plain", text: "resource evidence" }] }));
+    server.setRequestHandler(ReadResourceRequestSchema, async request => ({ contents: [request.params.uri.endsWith(".bin") ? { uri: request.params.uri, mimeType: "application/octet-stream", blob: Buffer.from([0, 255, 1, 2]).toString("base64") } : { uri: request.params.uri, mimeType: "text/plain", text: "resource evidence" }] }));
   }
   server.setRequestHandler(CallToolRequestSchema, async (request, context) => {
     if (request.params.name === "fail") throw new Error(secret);

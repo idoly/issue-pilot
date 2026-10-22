@@ -1,6 +1,6 @@
 import { lstat, mkdir, readdir, rename, rmdir } from "node:fs/promises";
 import path from "node:path";
-import { issueRoot, issueWorkDirectory } from "./state.ts";
+import { legacyIssueRoot, issueWorkDirectory } from "./state.ts";
 
 export interface IssueWorkMigrationEntry { issueKey: string; source: string; target: string }
 
@@ -8,7 +8,7 @@ export interface IssueWorkMigrationEntry { issueKey: string; source: string; tar
 export async function planIssueWorkMigration(stateRoot: string, issueKeys: string[]): Promise<IssueWorkMigrationEntry[]> {
   const plan: IssueWorkMigrationEntry[] = [];
   for (const issueKey of issueKeys) {
-    const source = path.join(issueRoot(stateRoot, issueKey), "work");
+    const source = path.join(legacyIssueRoot(stateRoot, issueKey), "work");
     const metadata = await lstat(source).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
     if (!metadata) continue;
     if (!metadata.isDirectory()) throw new Error("issue_work_migration_source_invalid");

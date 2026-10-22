@@ -21,7 +21,7 @@ flowchart LR
 
 ## 首次本地运行
 
-开发与 CI 使用 Node 24.18.0，需要 Python 3.8+（支持 venv）、Git、ripgrep、OpenSSH、aliyun CLI（镜像固定 3.4.11），以及目标项目需要的 npm、Java/Maven。在新项目副本检查[根配置](../issue-pilot.config.ts)，准备模型凭证和 SSH 配置后执行：
+Linux 开发环境需要 Python 3.8+（支持 venv）、Git、ripgrep、fd/fdfind、OpenSSH、bubblewrap、socat、proxychains4、aliyun CLI（镜像固定 3.4.11），以及目标项目需要的 npm、Java/Maven。开发与 CI 使用 Node 24.18.0。在新项目副本检查[根配置](../issue-pilot.config.ts)，准备模型凭证和 SSH 配置后执行：
 
 ```bash
 npm ci
@@ -52,19 +52,17 @@ podman push registry.example.com/issue-pilot:<version>
 
 构建网络需能访问基础镜像、锁文件 npm 下载地址、Python 包源、Debian 仓库和 Git 源码。替换 registry、版本和 namespace 占位符后，使用 [deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml)。
 
-清单为单副本、Recreate，使用本地 SQLite、进程内队列与受管 Git stores，不支持通过直接增加 replicas 共享写入。容器以 UID/GID 1000 运行，只读根文件系统，移除 capabilities，不自动挂载 ServiceAccount token。
+清单为单副本、Recreate，使用本地 SQLite、进程内队列与受管 Git stores，不支持通过直接增加 replicas 共享写入。容器以 UID/GID 1000 运行，只读根文件系统，移除 capabilities，不自动挂载 ServiceAccount token。SRT 在容器内执行工具，目标节点须支持非特权 user/PID/mount/network namespace 及 seccomp；保留正常隔离配置，不通过 privileged、全量开放 socket 或弱隔离选项绕过失败。仅 /health 成功不能代替实际工具隔离验收。
 
 | 宿主或 volume | 容器路径 | 内容 |
 | --- | --- | --- |
 | `/var/lib/issue-pilot` hostPath | `/opt/issue-pilot/.issue-pilot` | 全部业务 state |
 | `/etc/issue-pilot`，只读 hostPath | `/home/node` | Operator Pi、SSH、工具配置 |
 | tmp emptyDir | `/tmp` | 临时文件 |
-| npm-cache emptyDir | `/home/node/.npm` | 缓存卷；broker 在其下创建私有 `issue-pilot` 子目录 |
-| maven-cache emptyDir | `/home/node/.m2/repository` | 缓存卷；broker 在其下创建私有 `issue-pilot` 子目录 |
 
-默认项目缓存使用 `.npm/issue-pilot` 和 `.m2/repository/issue-pilot`，broker 按应用 UID 创建 `0700` 子目录，检查 owner 且拒绝 group/other 写入。fsGroup 管理的卷根可为组可写，但不能直接用作 broker 缓存路径；已有不安全目录会拒绝，不自动 chmod。自定义根配置也须遵守此规则，旧缓存不会自动搬迁。
+Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入 `service.yaml` 的全局 `agent.runtime.networkAllowedDomains`（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。
 
-准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。全局 Pi 资源位于 Operator HOME 中的 `~/.pi/agent`，随 HOME 配置挂载；不再为应用单独挂载 `.pi` 资源目录。
+准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。已有数据转容器时，还须保持数据库和 Git 中的绝对路径可在容器内解析；挂载到另一目录不会自动重写历史 worktree 注册，必须先演练明确的路径方案。全局 Pi 资源位于 Operator HOME 中的 `~/.pi/agent`，随 HOME 配置挂载；不再为应用单独挂载 `.pi` 资源目录。
 
 准备 namespace、配置、网关和数据后部署；已有数据先完成运维流程：
 

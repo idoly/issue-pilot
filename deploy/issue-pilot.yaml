@@ -80,10 +80,6 @@ spec:
             - name: runtime-config
               mountPath: /home/node
               readOnly: true
-            - name: npm-cache
-              mountPath: /home/node/.npm
-            - name: maven-cache
-              mountPath: /home/node/.m2/repository
       volumes:
         - name: state
           hostPath:
@@ -96,12 +92,6 @@ spec:
           hostPath:
             path: /etc/issue-pilot
             type: Directory
-        - name: npm-cache
-          emptyDir:
-            sizeLimit: 2Gi
-        - name: maven-cache
-          emptyDir:
-            sizeLimit: 5Gi
 ---
 apiVersion: v1
 kind: Service

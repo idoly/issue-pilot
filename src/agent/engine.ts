@@ -15,6 +15,7 @@ import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { resolveDeploymentConfiguration } from "../configuration/credentials.ts";
 import { listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
 import { createWorkspaceTool } from "./workspace-tool.ts";
+import { attachmentWorkingFileName } from "../http/attachment-store.ts";
 import { IssueOutputStore } from "../outputs/store.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import type { RunEvent } from "./events.ts";
@@ -280,7 +281,7 @@ export class AgentEngine implements AgentController {
     const environmentKind = service.environmentKind as EnvironmentKind;
     await this.stopSession(issue.id);
     const owner = await loadIssueCredentialOwner(this.database, issue.id);
-    if ((environmentKind === "dev" || issue.type === "data_processing") && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
+    if (environmentKind === "dev" && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
     const agentConfiguration = await loadGlobalAgentConfiguration(this.database);
     let modelApiKey: string | undefined;
     let personalGit: PersonalGitEnvironment | undefined;
@@ -308,7 +309,8 @@ export class AgentEngine implements AgentController {
       if (path.dirname(attachment.objectKey) !== attachmentPath) throw new Error("insecure_issue_attachment_file");
       const original = await lstat(attachment.objectKey);
       if (!original.isFile() || (original.mode & 0o7777) !== 0o400 || original.size !== attachment.size) throw new Error("insecure_issue_attachment_file");
-      const copy = path.join(workDirectory, path.basename(attachment.objectKey));
+      const copy = path.join(workDirectory, attachment.workingFileName ?? attachmentWorkingFileName(attachment.objectKey));
+      if (path.dirname(copy) !== workDirectory) throw new Error("insecure_issue_attachment_file");
       try { await copyFile(attachment.objectKey, copy, constants.COPYFILE_EXCL); await chmod(copy, 0o600); }
       catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error; }
     }
@@ -345,11 +347,11 @@ export class AgentEngine implements AgentController {
       workspaceTool: await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env),
       mcpConfigurations,
       manager,
-      ...(project.executableRoot ? { executableRoot: project.executableRoot } : {}),
+      readRoots: project.relatedIssueKeys.map(key => issueSessionRoot(this.stateRoot, key)),
       gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,
       ...(modelApiKey ? { modelApiKey } : {}),
       ...(personalGit ? { gitEnvironment: personalGit.env } : {}),
-      ...(context.canWriteOutputs ? { outputStore: new IssueOutputStore(this.stateRoot, issue.key) } : {}),
+      outputStore: new IssueOutputStore(this.stateRoot, issue.key),
       systemPrompt: agentSystemPrompt(context),
       onEvent: (event) => this.publishPiEvent(issue.id, event),
     });
@@ -366,8 +368,8 @@ export class AgentEngine implements AgentController {
 
     const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: repository.workspacePath, readOnly: repository.access === "read" }));
     const prompt = hadMessages
-      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys, path.join(project.runtimeRoot, "related-issues"))
-      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, relatedIssueKeys: project.relatedIssueKeys, relatedRoot: path.join(project.runtimeRoot, "related-issues"), ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
+      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys, project.runtimeRoot)
+      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, relatedIssueKeys: project.relatedIssueKeys, relatedRoot: project.runtimeRoot, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
     await managed.prompt(prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined);
     if (sharedRepositories) await this.stopSession(issue.id);
     await this.finalizeRun(issue.id);

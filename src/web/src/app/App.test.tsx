@@ -317,7 +317,7 @@ describe("issue pilot workspace", () => {
     const dialog = await screen.findByRole("dialog", { name: "新建工单" });
     await waitFor(() => expect(within(dialog).getByLabelText("关联工单")).toBeTruthy());
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
-    fireEvent.click(within(await screen.findByRole("listbox")).getByText("正式数据处理"));
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText("测试问题调查"));
     await waitFor(() => expect(within(dialog).getByLabelText("关联工单")).toBeTruthy());
 
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
@@ -334,7 +334,7 @@ describe("issue pilot workspace", () => {
     fireEvent.keyDown(relationSelect, { key: "Escape", code: "Escape" });
     await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
     fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
-    fireEvent.click(await screen.findByRole("option", { name: "正式数据处理" }));
+    fireEvent.click(await screen.findByRole("option", { name: "测试问题调查" }));
     await waitFor(() => expect(within(dialog).getByLabelText("关联工单").closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
   });
 

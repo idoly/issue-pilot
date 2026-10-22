@@ -4,7 +4,7 @@ export const USER_ROLES = ["product", "test", "developer"] as const;
 export type UserRole = typeof USER_ROLES[number];
 export function canCreateDevelopmentIssues(role: UserRole): boolean { return role === "developer"; }
 export function canUseIssueWorkMode(role: UserRole, workMode: IssueWorkMode): boolean {
-  return role === "developer" || (workMode !== "production_data" && issueScopeForWorkMode(workMode).repositoryAccess !== "write");
+  return role === "developer" || issueScopeForWorkMode(workMode).repositoryAccess !== "write";
 }
 
 const ISSUE_KEY = /^ISSUE-[0-9]{8}-[0-9]{3,}$/i;
@@ -42,6 +42,7 @@ export const AGENT_PI_SETTING_KEYS = ["compaction", "retry", "branchSummary", "s
 type PiSettings = NonNullable<Parameters<typeof SettingsManager.inMemory>[0]>;
 export type AgentPiSettings = Omit<Pick<PiSettings, typeof AGENT_PI_SETTING_KEYS[number]>, "codemode"> & { codemode?: { inlineBudget?: number } };
 export interface AgentRuntimeConfiguration {
+  networkAllowedDomains?: string[];
   settings?: AgentPiSettings;
 }
 
@@ -101,20 +102,19 @@ export function configuredCapabilities(config: Partial<Record<CapabilityName, un
 export const ENVIRONMENT_KINDS = ["prod", "test", "dev"] as const;
 export type EnvironmentKind = typeof ENVIRONMENT_KINDS[number];
 
-export const ISSUE_TYPES = ["data_processing", "smart_analysis", "defect_fix", "feature_development"] as const;
+export const ISSUE_TYPES = ["smart_analysis", "defect_fix", "feature_development"] as const;
 export type IssueType = typeof ISSUE_TYPES[number];
 
 export const ISSUE_TYPES_BY_ENVIRONMENT: Record<EnvironmentKind, readonly IssueType[]> = {
-  prod: ["data_processing", "smart_analysis"],
+  prod: ["smart_analysis"],
   test: ["smart_analysis"],
   dev: ["defect_fix", "feature_development"],
 };
 
-export const ISSUE_WORK_MODES = ["production_data", "production_analysis", "test_analysis", "development_fix", "development_feature"] as const;
+export const ISSUE_WORK_MODES = ["production_analysis", "test_analysis", "development_fix", "development_feature"] as const;
 export type IssueWorkMode = typeof ISSUE_WORK_MODES[number];
 
 const ISSUE_SCOPE_BY_WORK_MODE: Record<IssueWorkMode, { environmentKind: EnvironmentKind; issueType: IssueType; repositoryAccess: "read" | "write" }> = {
-  production_data: { environmentKind: "prod", issueType: "data_processing", repositoryAccess: "read" },
   production_analysis: { environmentKind: "prod", issueType: "smart_analysis", repositoryAccess: "read" },
   test_analysis: { environmentKind: "test", issueType: "smart_analysis", repositoryAccess: "read" },
   development_fix: { environmentKind: "dev", issueType: "defect_fix", repositoryAccess: "write" },

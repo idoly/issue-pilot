@@ -11,7 +11,6 @@ import { createPersonalGitEnvironment } from "./git-credentials.ts";
 import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from "./issue-services.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
-import { prepareProjectWrappers } from "./project-wrappers.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RelatedIssueRuntime, type RuntimePreparationResult } from "./runtime.ts";
 import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueSessionRoot, issueWorkspaceRoot, pathExists } from "./state.ts";
 
@@ -28,7 +27,6 @@ export interface PreparedIssueProject {
   deployment: { id: string; config: StoredDeploymentConfig };
   runtimeRoot: string;
   workspaceRoot: string;
-  executableRoot?: string;
   repositories: PreparedIssueRepository[];
   relatedIssueKeys: string[];
   runtimeReady: boolean;
@@ -110,7 +108,6 @@ export class IssueProjectManager {
     if (classifyRepositoryState(repositories) === "development_workspace" && await pathExists(workspaceRoot)) {
       await assertManagedIssueWorkspaceLayout(workspaceRoot, repositories.map((repository) => repository.localPath!));
       runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })), "write", relatedIssues);
-      await prepareProjectWrappers(runtimeRoot);
     } else {
       if (classifyRepositoryState(repositories) !== "development_snapshot") throw new Error("development_repository_state_invalid");
       const snapshots = [];
@@ -135,6 +132,7 @@ export class IssueProjectManager {
     const names = issueRepositoryWorkspaceNames(repositories);
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     try {
+      await prepareIssueRuntime(this.stateRoot, issue.key, [], "write", relatedIssues);
       return await this.worktrees.prepareBatch({
         worktrees: repositories.map((repository) => ({
           issueKey: issue.key,
@@ -147,8 +145,7 @@ export class IssueProjectManager {
         })),
         finalize: async (prepared) => {
           await assertManagedIssueWorkspaceLayout(workspaceRoot, prepared.map(({ workspacePath }) => workspacePath));
-          const runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })), "write", relatedIssues);
-          await prepareProjectWrappers(runtimeRoot);
+          await prepareIssueRuntime(this.stateRoot, issue.key, prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })), "write", relatedIssues);
           return finalize(prepared, names);
         },
       });
@@ -174,26 +171,9 @@ export class IssueProjectManager {
         .where(eq(issues.id, relation.relatedIssueId))
         .limit(1);
       if (!related) throw new Error("related_issue_context_unavailable");
-      const repositories = [];
-      const repositoryMetadata = [];
-      if (related.environment.kind === "dev") {
-        const repositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, related.issue.id));
-        if (["development_workspace", "development_snapshot"].includes(classifyRepositoryState(repositoryRows))) {
-          const names = issueRepositoryWorkspaceNames(repositoryRows);
-          try {
-            for (const repository of repositoryRows) {
-              const snapshot = await this.worktrees.prepareBranchSnapshot({ url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch! });
-              const name = names.get(repository.url)!;
-              repositories.push({ name, repositoryPath: snapshot.workspacePath });
-              repositoryMetadata.push({ name, url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch!, commit: snapshot.baseCommit });
-            }
-          } catch (error) {
-            if (!(error instanceof Error) || !["repository_cache_not_found", "working_branch_not_found"].includes(error.message)) throw error;
-            repositories.length = 0;
-            repositoryMetadata.length = 0;
-          }
-        }
-      }
+      const repositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, related.issue.id));
+      const names = issueRepositoryWorkspaceNames(repositoryRows);
+      const repositoryMetadata = repositoryRows.map(repository => ({ name: names.get(repository.url), url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch, commit: repository.commitBefore }));
       let conversationPath: string | undefined;
       if (related.session) {
         const candidate = path.resolve(related.session.sessionFile);
@@ -201,8 +181,8 @@ export class IssueProjectManager {
       }
       relatedIssues.push({
         key: related.issue.key,
+        workDirectory: issueWorkspaceRoot(this.stateRoot, related.issue.key),
         ...(conversationPath ? { conversationPath } : {}),
-        repositories,
         metadata: {
           key: related.issue.key,
           title: related.issue.title,
@@ -213,10 +193,9 @@ export class IssueProjectManager {
           service: { key: related.service.key, name: related.service.name },
           environmentKey: related.environment.key,
           repositories: repositoryMetadata,
-          ...(conversationPath ? { conversationFile: "conversation.jsonl" } : {}),
-          note: repositories.length
-            ? "Repository links are read-only snapshots of local development Issue branch refs. Uncommitted worktree changes are not included."
-            : "No local development branch snapshot is available for this related Issue.",
+          ...(conversationPath ? { conversationFile: `.related-${related.issue.key.toLowerCase()}.jsonl` } : {}),
+          directory: `.related-${related.issue.key.toLowerCase()}`,
+          note: "The related Issue directory is a read-only reference containing code, attachments, session and working files. Do not modify it.",
         },
       });
     }
@@ -307,6 +286,9 @@ export class IssueProjectManager {
     // individual repository paths and refuses collisions without removing those files.
     const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url));
     try {
+      // A development worktree takes the same root name as the former read-only link.
+      // Remove only manifest-owned links; recovery below restores them on failure.
+      await prepareIssueRuntime(this.stateRoot, issue.key, [], "write");
       return await this.worktrees.prepareBatch({
         worktrees: repositories.map(({ repository, baseBranch }) => ({
           issueKey: issue.key,
@@ -321,7 +303,6 @@ export class IssueProjectManager {
             name: names.get(repositories[index]!.repository.url)!,
             repositoryPath: worktree.workspacePath,
           })), "write");
-          await prepareProjectWrappers(runtimeRoot);
           return finalize({ prepared, repositories, existingRepositories, names, runtimeRoot });
         },
       });
@@ -383,7 +364,6 @@ export class IssueProjectManager {
             name: names.get(repositories[index]!.repository.url)!,
             repositoryPath: worktree.workspacePath,
           })), "write");
-          await prepareProjectWrappers(runtimeRoot);
           const complete = () => finalize({ prepared, repositories, existingRepositories, removedRepositories, names, runtimeRoot });
           if (!removedRepositories.length) return complete();
           let result: T | undefined;
@@ -510,12 +490,10 @@ export class IssueProjectManager {
       relatedIssues,
     );
     const workspaceRoot = shared ? runtimeRoot : issueWorkspaceRoot(this.stateRoot, issue.key);
-    const executableRoot = shared ? undefined : await prepareProjectWrappers(runtimeRoot);
     return {
       deployment: { id: deployment.id, config: deployment.config },
       runtimeRoot,
       workspaceRoot,
-      ...(executableRoot ? { executableRoot } : {}),
       repositories: prepared.map((workspace, index) => {
         const name = names.get(repositoryRows[index]!.repository.url)!;
         return {

@@ -30,7 +30,9 @@ Before an authorized operational change, follow the Runbook, including its bound
 | Tool input and dispatch | src/agent/service-query-tool.ts, src/capabilities/registry.ts |
 | External protocols and Pi MCP integration | src/capabilities, src/mcp/client.ts, src/mcp/pi-extension.ts |
 | Inbound Issue MCP | src/mcp/server.ts |
-| Outputs and publication | src/outputs/store.ts, src/agent/output-tool.ts |
+| Local tools and SRT | src/agent/native-tools.ts, src/agent/issue-sandbox.ts, src/agent/native-tool-executor.ts |
+| Application state lease | src/workspace/state-lease.ts |
+| Working files and legacy downloads | src/workspace/work-file-store.ts, src/outputs/store.ts |
 | Git, projects, runtime and lifecycle | src/workspace |
 | Web requests and DTOs | src/web/src/data/client.ts |
 | Shared configuration and identity | ApplicationResources.tsx |
@@ -73,10 +75,10 @@ For each confirmed finding, give location, evidence, effect, reasonable trigger,
 - Enabled external MCP services expose configured tools through Pi's public MCP integration. Read-only hints are descriptive, not authorization. Preserve authoritative file configuration (or DB configuration when files are absent), literal credentials, SDK transport compatibility, cancellation and input/result budgets; Pi owns discovery, registration, connections and shutdown.
 - Native capabilities are DMS and aliyun SLS CLI; MySQL uses configured external MCP. Retired adapter settings remain private historical state and must not execute or appear in public configuration.
 - Prod/test use read-only snapshots, active dev uses isolated worktrees, released dev restores from local working branches. Source API enforces repository policy; historical branch and workspace names remain history.
-- Agent native coding tools run as the trusted application user in persistent `workspaces/<key>` alongside Issue worktrees. Cwd organizes work and is not OS isolation; native code can bypass business file policies.
+- Each Issue owns one persistent `workspaces/<key>` root containing code, files, original attachments, sessions and runtime metadata. Model-controlled local operations use one SRT boundary; only this root is persistently writable and related Issue directories are read-only. Pi SDK, Operator extensions and application storage owners remain trusted application code; remote MCP services retain their own authority (docs/AGENT.md).
 - Use normal code and installed libraries for formats. Do not add format-specific executors, nested sandboxes or a selectable runtime framework without a concrete need.
 - Attachments have one durable 0400 regular file validated against DB size/hash. Writes belong to Issue transactions. Pasted Agent images belong to Pi messages, not attachment storage.
-- Outputs publish atomically from regular work files, preserving working sources and old deliveries on failure. Runtime/wrappers/checkouts are generated; abnormal or unknown state still requires owner inspection.
+- Query exports atomically replace ordinary working files and preserve old content on failure. New output snapshots and publication tools are retired; legacy downloads resolve through explicit migration mappings. Runtime/wrappers/checkouts are generated; abnormal or unknown state still requires owner inspection.
 - Per-Issue serialization includes failure cleanup. Queued work cannot reuse a disposed session or overwrite a newer round with old failure state.
 - Web Agent drafts, saves and failures belong to application resources, so page navigation does not discard them. Identity changes cancel unsent work for the old identity.
 - Unknown tool input is parsed at the boundary; protocol response and authorization checks stay with the owner. Keep execute checks needed after mutable Pi hooks.

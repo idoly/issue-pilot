@@ -32,7 +32,7 @@ test("rejects a second API before recovering the first API's active Issue state"
     const issue = await createIssue(fixture.app, "startup-ownership");
     await connection.client.execute({ sql: "UPDATE issues SET status = 'in_progress' WHERE key = ?", args: [String(issue.id)] });
     await connection.client.execute({ sql: "UPDATE issue_workspaces SET status = 'running' WHERE issue_id = (SELECT id FROM issues WHERE key = ?)", args: [String(issue.id)] });
-    await assert.rejects(buildApi({ stateRoot: fixture.root, databaseFile: fixture.databaseFile, engine: new StartupEngine(), modelCatalog, logger: false }), /project_tool_broker_already_running/);
+    await assert.rejects(buildApi({ stateRoot: fixture.root, databaseFile: fixture.databaseFile, engine: new StartupEngine(), modelCatalog, logger: false }), /application_already_running/);
     const states = await connection.client.execute({ sql: "SELECT issues.status AS issue_status, issue_workspaces.status AS workspace_status FROM issues JOIN issue_workspaces ON issues.id = issue_workspaces.issue_id WHERE issues.key = ?", args: [String(issue.id)] });
     assert.deepEqual(states.rows, [{ issue_status: "in_progress", workspace_status: "running" }]);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);

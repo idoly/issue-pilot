@@ -119,6 +119,10 @@ export function repositoryWorkspaceNames(urls: string[], existingNames: Readonly
   return names;
 }
 
+export function repositoryStorePath(stateRoot: string, url: string): string {
+  return resolve(repositoriesRoot(stateRoot), repositoryHash(url, 20));
+}
+
 export function issueRepositoryWorkspaceNames(repositories: Array<{ url: string; localPath: string | null; workspaceName: string | null }>): Map<string, string> {
   const existingNames = new Map<string, string>();
   for (const repository of repositories) {

@@ -18,7 +18,7 @@ test("serves application reads over stateless Streamable HTTP without starting a
   const f = await createApiFixture();
   const client = new Client({ name: "external-fixture", version: "1" });
   let workbookDownloads = 0;
-  f.app.addHook("onRequest", async request => { if (request.url.endsWith("/outputs/result.xlsx")) workbookDownloads++; });
+  f.app.addHook("onRequest", async request => { if (request.url.endsWith("/files/download?path=result.xlsx")) workbookDownloads++; });
   try {
     await createService(f.app, "MCP App", ["test"]);
     const issue = await createIssue(f.app, "mcp-app", "test", "MCP inspection");
@@ -27,7 +27,7 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const store = new IssueOutputStore(f.root, String(issue.id));
     await store.write("result.csv", "id,value\n00123,complete\n");
     await store.write("result.xlsx", "synthetic-private-workbook");
-    assert.equal((await f.app.inject({ method: "GET", url: `/api/issues/${issue.id}/outputs/result.xlsx` })).statusCode, 200);
+    assert.equal((await f.app.inject({ method: "GET", url: `/api/issues/${issue.id}/files/download?path=result.xlsx` })).statusCode, 200);
     assert.equal(workbookDownloads, 1);
     workbookDownloads = 0;
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
@@ -43,7 +43,7 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.equal(endpoint.readOnly, false);
     assert.deepEqual(endpoint.tools, listed.tools);
     assert.doesNotMatch(endpointResponse.body, /authorization|accessKeySecret|credentialUpdate/);
-    assert.equal(listed.tools.length, 10);
+    assert.equal(listed.tools.length, 11);
     assert.ok(listed.tools.filter(tool => tool.name !== "issue_create" && tool.name !== "issue_message" && tool.name !== "dingtalk_import").every(tool => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint === false));
     const creation = listed.tools.find(tool => tool.name === "issue_create")!;
     assert.equal(creation.annotations?.readOnlyHint, false);
@@ -59,14 +59,14 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const detail = await client.callTool({ name: "issue_get", arguments: { key: issue.id } });
     assert.ok(text(detail).includes("MCP inspection"));
     assert.equal(text(detail).includes(f.root), false);
-    const outputs = await client.callTool({ name: "issue_get", arguments: { key: issue.id } });
+    const outputs = await client.callTool({ name: "work_files", arguments: { key: issue.id } });
     assert.ok(text(outputs).includes("result.csv"));
     const read = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.csv", offset: 1, limit: 1 } });
     assert.ok(text(read).includes("00123,complete"));
     const workbook = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.xlsx" } });
     assert.equal(workbook.isError, undefined);
     const content = workbook.content as Array<{ type: string; text: string }>;
-    assert.deepEqual(JSON.parse(content[0]!.text), { fileName: "result.xlsx", size: Buffer.byteLength("synthetic-private-workbook"), downloadPath: `/api/issues/${issue.id}/outputs/result.xlsx`, binary: true });
+    assert.deepEqual(JSON.parse(content[0]!.text), { fileName: "result.xlsx", size: Buffer.byteLength("synthetic-private-workbook"), downloadPath: `/api/issues/${issue.id}/files/download?path=result.xlsx`, binary: true });
     assert.doesNotMatch(text(workbook), /synthetic-private-workbook/);
     assert.equal(workbookDownloads, 0);
     const invalid = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "../issues.db" } });
@@ -163,7 +163,7 @@ test("MCP attachment failure rolls back files and Issue and permits an explicit 
     assert.equal(failed.isError, true); assert.doesNotMatch(text(failed), /private-attachment-failure|ZXZpZGVuY2U=/);
     assert.deepEqual(await database.db.select().from(issues), []);
     assert.deepEqual(await database.db.select().from(issueAttachments), []);
-    assert.deepEqual(await readdir(path.join(f.root, "issues")), []);
+    assert.deepEqual(await readdir(path.join(f.root, "workspaces")), []);
     assert.equal(f.engine.enqueued.length, 0);
     await database.client.execute("DROP TRIGGER reject_mcp_attachment");
     const retry = await client.callTool({ name: "issue_create", arguments: args });
