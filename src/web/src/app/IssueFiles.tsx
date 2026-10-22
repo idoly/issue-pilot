@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { Button } from "../ui";
-import { ChevronRight, Download, File, Folder, GitBranch, RefreshCw } from "../ui/icons";
+import { ChevronRight, Download, File, Folder, Repo, RefreshCw } from "../ui/icons";
 import { errorMessage, issueWorkFileUrl, listIssueWorkFiles, type IssueDetail, type IssueWorkFile } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 
@@ -36,7 +36,7 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
     <Show when={loading()}><div class="empty-band">正在读取文件…</div></Show>
     <Show when={!loading() && !error()}>
       <div class="issue-directory-list"><For each={files()} fallback={<div class="empty-band">目录为空</div>}>{file => <div class="issue-attachment-row" title={file.path}>
-        <Show when={file.kind === "directory"} fallback={<File size={15} />}><Show when={repositoryDirectory(file)} fallback={<Folder size={15} />}><GitBranch size={15} /></Show></Show>
+        <Show when={file.kind === "directory"} fallback={<File size={15} />}><Show when={repositoryDirectory(file)} fallback={<Folder size={15} />}><Repo size={15} /></Show></Show>
         <Show when={file.kind === "directory"} fallback={<span class="attachment-file-info"><strong>{file.name}</strong></span>}>
           <button type="button" class="attachment-preview-trigger" aria-label={`打开目录 ${file.name}`} onClick={() => setDirectory(file.path)}><span class="attachment-file-info"><strong>{file.name}</strong></span></button>
         </Show>
