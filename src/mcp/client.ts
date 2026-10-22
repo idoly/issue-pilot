@@ -9,7 +9,7 @@ import type { McpStdioConfiguration, McpTransport } from "../domain/contracts.ts
 
 export interface McpConfiguration { id: string; name: string; url: string; transport: McpTransport; authorization: string; enabled: boolean; stdio?: McpStdioConfiguration | null }
 export interface McpTool { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }
-export interface McpSession { list(): Promise<McpTool[]>; close(): Promise<void> }
+export interface McpSession { list(): Promise<McpTool[]>; call?(name: string, input: Record<string, unknown>): Promise<unknown>; close(): Promise<void> }
 export type McpConnector = (configuration: McpConfiguration, signal: AbortSignal) => Promise<McpSession>;
 const limits = issuePilotConfig.limits.capability.mcp;
 class McpFailure extends Error {}
@@ -71,6 +71,7 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
       if (new Set(tools.map(tool => tool.name)).size !== tools.length) throw new McpFailure("mcp_duplicate_tool_names");
       return tools;
     },
+    call: (name, input) => client.callTool({ name, arguments: input }, undefined, { signal: startupSignal, timeout: limits.executionMs }),
     close: () => client.close(),
   };
 };

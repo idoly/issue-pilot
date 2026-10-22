@@ -9,7 +9,7 @@ import type { FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readInBatches } from "../db/client.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
-import { agentSessions, environments, issueAttachments, issueCcRecipients, issueComments, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
+import { agentSessions, dingtalkIssueImports, environments, issueAttachments, issueCcRecipients, issueComments, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
 import { listIssueOutputs, resolveIssueOutput } from "../outputs/store.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
@@ -57,7 +57,10 @@ async function readIssueInput(request: FastifyRequest): Promise<{ input: Record<
   }
 }
 
-export function registerIssueRoutes(context: ApiRouteContext): void {
+export type DingtalkImportClaim = Pick<typeof dingtalkIssueImports.$inferInsert, "baseId" | "tableId" | "recordId" | "sourceUrl">;
+export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"];
+
+export function registerIssueRoutes(context: ApiRouteContext) {
   const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive } = context;
   const findEnvironmentByKind = async (kind: EnvironmentKind) => (await database.db.select().from(environments).where(eq(environments.kind, kind)).limit(1))[0];
   const findServiceDeployment = async (key: string, environmentId: string) => (await database.db.select({ service: services, deployment: serviceDeployments })
@@ -176,12 +179,18 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     return reply.code(204).send();
   });
 
-  app.post("/api/issues", async (request, reply) => {
-    const { input, attachments: initialAttachments } = await readIssueInput(request);
+  const createIssue = async (input: Record<string, unknown>, request: FastifyRequest, initialAttachments: PendingAttachment[] = [], options: { dingtalk?: DingtalkImportClaim; startAgent?: boolean; signal?: AbortSignal } = {}) => {
     try {
       const reporterSubject = await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
+      let created = true;
     const createdIssue = await runScopeExclusive(async () => {
       await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
+      options.signal?.throwIfAborted();
+      if (options.dingtalk) {
+        const source = options.dingtalk;
+        const [existing] = await database.db.select({ issue: issues }).from(dingtalkIssueImports).innerJoin(issues, eq(issues.id, dingtalkIssueImports.issueId)).where(and(eq(dingtalkIssueImports.baseId, source.baseId), eq(dingtalkIssueImports.tableId, source.tableId), eq(dingtalkIssueImports.recordId, source.recordId))).limit(1);
+        if (existing) { created = false; return existing.issue; }
+      }
       const issueValues = await parseCreateIssueInput(input);
       if (issueValues.environment.kind === "dev" || issueValues.type === "data_processing") {
         const [owner] = await database.db.select().from(subjects).where(eq(subjects.subject, issueValues.assigneeSubject ?? reporterSubject)).limit(1);
@@ -190,6 +199,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
       const relatedIssues = await parseRelatedIssues(input);
       const issueId = randomUUID();
       return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
+        options.signal?.throwIfAborted();
         const prefix = `ISSUE-${regionalDateStamp()}-`;
         const [next] = await database.db.select({ sequence: sql<number>`coalesce(max(cast(substr(${issues.key}, ${prefix.length + 1}) as integer)), 0) + 1` })
           .from(issues).where(and(gte(issues.key, prefix), lt(issues.key, `${prefix}\uffff`)));
@@ -203,6 +213,7 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
             if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: insertedIssue!.id, subject: recipient })));
             if (relatedIssues.length) await transaction.insert(issueRelations).values(relatedIssues.map((relatedIssue) => ({ issueId: insertedIssue!.id, relatedIssueId: relatedIssue.id })));
             await transaction.insert(issueWorkspaces).values({ issueId: insertedIssue!.id });
+            if (options.dingtalk) await transaction.insert(dingtalkIssueImports).values({ ...options.dingtalk, issueId: insertedIssue!.id, importedBy: reporterSubject });
             await writePendingAttachments(transaction, stateRoot, { id: insertedIssue!.id, key: issueKey }, reporterSubject, initialAttachments, writtenObjectKeys);
             return insertedIssue!;
           });
@@ -213,14 +224,19 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
           if (rollbackErrors.length) throw new Error("issue_state_rollback_failed", { cause: new AggregateError([error, ...rollbackErrors], "issue_state_rollback_failed") });
           throw error;
         }
-        reservation.enqueue(issue.id);
+        if (options.startAgent !== false) reservation.enqueue(issue.id);
         return issue;
       });
     });
-      return reply.code(201).send(await serializeIssueSummary(createdIssue));
+      return { issue: await serializeIssueSummary(createdIssue), created };
     } finally {
       await removePendingAttachments(initialAttachments);
     }
+  };
+  app.post("/api/issues", async (request, reply) => {
+    const { input, attachments } = await readIssueInput(request);
+    const result = await createIssue(input, request, attachments);
+    return reply.code(201).send(result.issue);
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
@@ -422,4 +438,5 @@ export function registerIssueRoutes(context: ApiRouteContext): void {
     return reply.code(201).send({ id: comment.id, author: authorSubject, body: comment.body, createdAt: comment.createdAt.toISOString() });
   });
 
+  return { createIssue };
 }

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { DrizzleQueryError } from "drizzle-orm";
+import { errorDiagnostic } from "./error-diagnostic.ts";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 
@@ -8,6 +9,7 @@ import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
 import { AgentEventBus } from "../agent/events.ts";
+import { managesFileUser } from "../configuration/file-layout.ts";
 import { requireCurrentUser } from "./route-context.ts";
 import { applyFileConfiguration } from "../configuration/file-configuration.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
@@ -25,6 +27,8 @@ import { registerAgentRoutes } from "./agent-routes.ts";
 import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
 import { ApiError } from "./input.ts";
+import { registerDingtalkRoutes } from "./dingtalk-routes.ts";
+import type { McpConnector } from "../mcp/client.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
 import { registerSourceBrowserRoutes } from "./source-browser-routes.ts";
 import { registerApplicationMcp } from "../mcp/server.ts";
@@ -38,6 +42,7 @@ import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 export type { AgentController } from "../agent/engine.ts";
 
 export interface ApiOptions {
+  dingtalkConnector?: McpConnector;
   databaseFile?: string;
   stateRoot?: string;
   engine?: AgentController;
@@ -54,23 +59,6 @@ export interface ApiOptions {
 interface ShutdownTarget {
   once(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
   removeListener(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-}
-
-// Drizzle errors embed SQL parameters, including private configuration values.
-function errorDiagnostic(error: unknown): unknown {
-  const pending = [error], seen = new Set<unknown>();
-  while (pending.length) {
-    const current = pending.pop();
-    if (!current || seen.has(current)) continue;
-    seen.add(current);
-    if (current instanceof DrizzleQueryError) {
-      const code = current.cause && typeof current.cause === "object" && "code" in current.cause ? current.cause.code : undefined;
-      return new Error(typeof code === "string" && /^SQLITE_[A-Z_]+$/.test(code) ? `database_operation_failed:${code}` : "database_operation_failed");
-    }
-    if (current instanceof AggregateError) pending.push(...current.errors);
-    if (typeof current === "object" && "cause" in current) pending.push(current.cause);
-  }
-  return error;
 }
 
 export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTarget = process): () => void {
@@ -181,9 +169,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       const mcpTest = request.method === "POST" && /^\/api\/mcp-services\/[^/]+\/test$/.test(url);
       const mcpMutation = /^\/api\/mcp-services(?:\/|$)/.test(url) && !mcpTest;
       if (fileConfiguration.services && serviceMutation || fileConfiguration.mcp && mcpMutation) throw new ApiError(409, "configuration_managed_by_files");
-      if (url === "/api/me/credentials" && fileConfiguration.userSubject) {
+      if (url === "/api/me/credentials" && (fileConfiguration.userSubject || fileConfiguration.userSubjects?.length)) {
         const user = await requireCurrentUser(database, request);
-        if (user.subject === fileConfiguration.userSubject) throw new ApiError(409, "credentials_managed_by_user_file");
+        if (managesFileUser(fileConfiguration, user.subject)) throw new ApiError(409, "credentials_managed_by_user_file");
       }
     });
     app.get("/health", async () => ({ ok: true }));
@@ -193,7 +181,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerMcpRoutes(routeContext);
     registerApplicationMcp(routeContext);
     registerConfigurationRoutes(routeContext);
-    registerIssueRoutes(routeContext);
+    const { createIssue } = registerIssueRoutes(routeContext);
+    registerDingtalkRoutes(routeContext, createIssue, options.dingtalkConnector);
     registerAttachmentRoutes(routeContext);
     registerAgentRoutes(routeContext);
     registerSourceBrowserRoutes(routeContext);

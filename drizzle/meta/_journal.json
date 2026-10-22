@@ -421,6 +421,13 @@
       "when": 1792540800000,
       "tag": "0059_retire_native_adapters",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1792627200000,
+      "tag": "0060_dingtalk_issue_imports",
+      "breakpoints": true
     }
   ]
 }

@@ -4,9 +4,18 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseDocument, stringify } from "yaml";
 import { applicationConfig } from "../src/config.ts";
+import { fileRecord, fillMissingUserCredentials, moveDingtalkSource, simpleServiceFile, simpleTargets, userFileLayout } from "../src/configuration/file-layout.ts";
 
-const { values } = parseArgs({ options: { "state-root": { type: "string" }, output: { type: "string" }, subject: { type: "string" }, "reference-service": { type: "string" }, "reference-mcp": { type: "string" } } });
-if (!values.output || !values.subject) throw new Error("usage: prepare-configuration.ts --output STAGING_DIRECTORY --subject SUBJECT [--state-root ROOT] [--reference-service FILE] [--reference-mcp FILE]");
+async function existingYaml(file: string) {
+  let content: string;
+  try { content = await readFile(file, "utf8"); } catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined; throw new Error("configuration_read_failed"); }
+  const document = parseDocument(content);
+  if (document.errors.length) throw new Error("invalid_reference_configuration");
+  return fileRecord(document.toJS());
+}
+
+const { values } = parseArgs({ options: { "state-root": { type: "string" }, output: { type: "string" }, subject: { type: "string" }, "fill-missing-from": { type: "string" }, "reference-service": { type: "string" }, "reference-mcp": { type: "string" } } });
+if (!values.output || !values.subject) throw new Error("usage: prepare-configuration.ts --output STAGING_DIRECTORY --subject SUBJECT [--state-root ROOT] [--fill-missing-from SUBJECT] [--reference-service FILE] [--reference-mcp FILE]");
 const root = path.resolve(values["state-root"] ?? applicationConfig.stateRoot), output = path.resolve(values.output);
 if (root === output) throw new Error("configuration_output_must_be_staging");
 const database = new DatabaseSync(path.join(root, applicationConfig.state.databaseFile), { readOnly: true });
@@ -15,7 +24,20 @@ database.exec("BEGIN");
 try {
   const owner = database.prepare("SELECT * FROM subjects WHERE subject=? AND active=1").get(values.subject);
   if (!owner) throw new Error("configuration_user_not_active");
-  const credentials = database.prepare("SELECT * FROM user_credentials WHERE subject=?").get(values.subject);
+  const existingUser = await existingYaml(path.join(root, "user.yaml"));
+  const layout = userFileLayout(existingUser);
+  for (const row of database.prepare("SELECT s.subject AS account,c.* FROM subjects s LEFT JOIN user_credentials c ON c.subject=s.subject ORDER BY s.subject").all()) {
+    const subject = String(row.account);
+    if (layout.users[subject]) continue;
+    if (Boolean(row.production_sls_access_key_id) !== Boolean(row.production_sls_access_key_secret) || Boolean(row.production_dms_url) !== Boolean(row.production_dms_authorization)) throw new Error("incomplete_personal_credentials_require_review");
+    layout.users[subject] = {
+      apiKeys: JSON.parse(String(row.model_api_keys ?? "{}")),
+      ssh: row.git_private_key ? { privateKey: row.git_private_key } : {},
+      sls: row.production_sls_access_key_id ? { accessKeyId: row.production_sls_access_key_id, accessKeySecret: row.production_sls_access_key_secret } : {},
+      dms: row.production_dms_url ? { url: row.production_dms_url, authorization: row.production_dms_authorization } : {},
+      dingtalk: {},
+    };
+  }
   const agent = database.prepare("SELECT * FROM global_agent_configuration WHERE id=1").get();
   if (!agent) throw new Error("global_agent_configuration_missing");
   const repositoryRows = database.prepare("SELECT * FROM repositories ORDER BY name,url").all();
@@ -24,7 +46,7 @@ try {
     let alias = String(repository.name).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "repository";
     const base = alias; let suffix = 2;
     while (definitions[alias]) alias = `${base}-${suffix++}`;
-    definitions[alias] = { url: repository.url }; aliases.set(String(repository.url), alias);
+    definitions[alias] = repository.url; aliases.set(String(repository.url), alias);
   }
   const slsCredentials = new Map<string, { accessKeyId: string; accessKeySecret: string }>();
   const dmsConnections = new Map<string, { url: string; authorization: string }>();
@@ -39,12 +61,13 @@ try {
       if (configuration.dms) {
         const dms = configuration.dms;
         dmsConnections.set(JSON.stringify([dms.url,dms.authorization]), { url: dms.url, authorization: dms.authorization });
-        scope.dms = Object.fromEntries(dms.databases.map((target: { instanceAlias: string; schemaName: string }) => [target.schemaName, { alias: target.instanceAlias, schema: target.schemaName }]));
+        scope.dms = simpleTargets("dms", dms.databases.map((target: { instanceAlias: string; schemaName: string }) => ({ name: target.schemaName, value: { alias: target.instanceAlias, schema: target.schemaName } })));
       }
       if (configuration.sls) {
         const sls = configuration.sls;
         slsCredentials.set(JSON.stringify([sls.accessKeyId,sls.accessKeySecret]), { accessKeyId: sls.accessKeyId, accessKeySecret: sls.accessKeySecret });
-        scope.sls = sls.targets ? Object.fromEntries(sls.targets.map((target: { name: string; region: string; project: string; logstores: string[] }) => [target.name, { region: target.region, project: target.project, logstores: target.logstores }])) : { [String(deployment.environment_key)]: { region: sls.region, project: sls.project, logstores: sls.logstores } };
+        const targets = sls.targets ?? [{ name: String(deployment.environment_key), region: sls.region, project: sls.project, logstores: sls.logstores }];
+        scope.sls = simpleTargets("sls", targets.map((target: { name: string; region: string; project: string; logstores: string[] }) => ({ name: target.name, value: { region: target.region, project: target.project, logstores: target.logstores } })), String(deployment.environment_key));
       }
       if (configuration.db) scope.mysql = configuration.db.databases.map((target: { url: string; username: string; password: string }) => {
         const url = new URL(target.url);
@@ -55,21 +78,19 @@ try {
     serviceDefinitions[String(service.key)] = { name: service.name, description: service.description, environments: configurations };
   }
   if (slsCredentials.size > 1 || dmsConnections.size > 1) throw new Error("multiple_credential_groups_require_owner_review");
-  if (credentials?.production_sls_access_key_id && credentials.production_sls_access_key_secret && slsCredentials.size && !slsCredentials.has(JSON.stringify([credentials.production_sls_access_key_id, credentials.production_sls_access_key_secret]))) throw new Error("personal_and_shared_credentials_require_owner_review");
-  if (credentials?.production_dms_url && credentials.production_dms_authorization && dmsConnections.size && !dmsConnections.has(JSON.stringify([credentials.production_dms_url, credentials.production_dms_authorization]))) throw new Error("personal_and_shared_credentials_require_owner_review");
-  const user: Record<string, unknown> = { version: 1, user: { subject: values.subject }, apiKeys: JSON.parse(String(credentials?.model_api_keys ?? "{}")) };
-  if (credentials?.git_private_key) user.ssh = { privateKey: credentials.git_private_key };
-  const sls = credentials?.production_sls_access_key_id && credentials.production_sls_access_key_secret ? { accessKeyId: credentials.production_sls_access_key_id, accessKeySecret: credentials.production_sls_access_key_secret } : [...slsCredentials.values()][0];
-  if (sls) user.sls = sls;
-  const dms = credentials?.production_dms_url && credentials.production_dms_authorization ? { url: credentials.production_dms_url, authorization: credentials.production_dms_authorization } : [...dmsConnections.values()][0];
-  if (dms) user.dms = dms;
-  const service: Record<string, unknown> = { version: 1, issuesDirectory: "workspaces", agent: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinking_level, codemode: agent.codemode, runtime: JSON.parse(String(agent.runtime ?? "{}")) }, automation: { maxConcurrentIssues: 3 }, repositories: definitions, services: serviceDefinitions };
-  if (values["reference-service"]) {
-    const reference = parseDocument(await readFile(values["reference-service"], "utf8"));
-    if (reference.errors.length) throw new Error("invalid_reference_configuration");
-    const data = reference.toJS();
-    if (data?.sources) service.sources = data.sources;
-    if (data?.automation?.maxConcurrentIssues) service.automation = { maxConcurrentIssues: data.automation.maxConcurrentIssues };
+  if (!existingUser) {
+    const sls = [...slsCredentials.values()][0], dms = [...dmsConnections.values()][0];
+    if (sls) layout.shared.sls = sls;
+    if (dms) layout.shared.dms = dms;
+  }
+  const dms = layout.shared.dms === undefined ? undefined : fileRecord(layout.shared.dms);
+  const user: Record<string, unknown> = { version: 2, shared: layout.shared, users: layout.users };
+  const service: Record<string, unknown> = { version: 2, issuesDirectory: "workspaces", agent: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinking_level, codemode: agent.codemode, runtime: JSON.parse(String(agent.runtime ?? "{}")) }, automation: { maxConcurrentIssues: 3 }, repositories: definitions, services: serviceDefinitions };
+  const referenceService = await existingYaml(values["reference-service"] ?? path.join(root, "service.yaml"));
+  if (referenceService) {
+    if (referenceService.sources) service.sources = referenceService.sources;
+    const automation = referenceService.automation === undefined ? {} : fileRecord(referenceService.automation);
+    if (automation.maxConcurrentIssues) service.automation = { maxConcurrentIssues: automation.maxConcurrentIssues };
   }
   const mcp: { mcpServers: Record<string, Record<string, unknown>> } = { mcpServers: {} };
   for (const row of database.prepare("SELECT * FROM mcp_services ORDER BY name").all()) {
@@ -87,17 +108,25 @@ try {
   if (mcp.mcpServers.dingtalk?.url) {
     const url = new URL(String(mcp.mcpServers.dingtalk.url));
     const apiKey = url.searchParams.get("key");
-    if (apiKey) { user.dingtalk = { apiKey }; url.searchParams.delete("key"); mcp.mcpServers.dingtalk.url = url.toString(); }
+    if (apiKey) {
+      const shared = fileRecord(layout.shared.dingtalk ?? {});
+      if (shared.apiKey !== undefined && shared.apiKey !== apiKey) throw new Error("conflicting_shared_dingtalk_credentials");
+      layout.shared.dingtalk = { ...shared, apiKey };
+      url.searchParams.delete("key"); mcp.mcpServers.dingtalk.url = url.toString();
+    }
   }
+  const simplified = simpleServiceFile(service);
+  moveDingtalkSource(simplified, layout.users, values.subject);
+  const filledCredentials = values["fill-missing-from"] ? fillMissingUserCredentials(layout.users, values["fill-missing-from"]) : undefined;
   await mkdir(output, { recursive: true, mode: 0o700 });
   const metadata = await lstat(output);
   if (!metadata.isDirectory() || (metadata.mode & 0o077) !== 0) throw new Error("insecure_configuration_staging_directory");
-  for (const [name, content] of [["service.yaml", stringify(service)], ["user.yaml", stringify(user)], ["mcp.json", JSON.stringify(mcp, null, 2) + "\n"]]) {
+  for (const [name, content] of [["service.yaml", stringify(simplified)], ["user.yaml", stringify(user)], ["mcp.json", JSON.stringify(mcp, null, 2) + "\n"]]) {
     const file = path.join(output, name!);
     const handle = await open(file, "wx", 0o600); created.push(file);
     try { await handle.writeFile(content!); } finally { await handle.close(); }
   }
-  console.log(JSON.stringify({ output, files: created.map(file => path.basename(file)), services: Object.keys(serviceDefinitions).length, repositories: Object.keys(definitions).length, preservedServiceKeys: true, liveStateChanged: false }));
+  console.log(JSON.stringify({ output, files: created.map(file => path.basename(file)), services: Object.keys(serviceDefinitions).length, repositories: Object.keys(definitions).length, users: Object.keys(layout.users).length, ...(filledCredentials ? { filledCredentials } : {}), preservedServiceKeys: true, liveStateChanged: false }));
 } catch {
   let cleanupFailures = 0;
   for (const file of created.reverse()) try { await unlink(file); } catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) cleanupFailures++; }

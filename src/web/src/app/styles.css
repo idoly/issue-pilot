@@ -46,7 +46,7 @@ button, input, textarea { font: inherit; }
   font-weight: 800;
 }
 .brand strong { font-size: 16px; letter-spacing: 0; }
-.header-context { grid-column: 2; grid-row: 1; justify-self: center; color: #c9d2cf; font-size: 13px; }
+.header-context { gap: 8px; grid-column: 2; grid-row: 1; justify-self: center; color: #c9d2cf; font-size: 13px; }
 .app-header .ui-segmented { background: #21262d; color: #b8c3be; }
 .app-header .ui-segmented button { color: #b8c3be; box-shadow: none; }
 .app-header .ui-segmented button:hover { color: #fff; }
@@ -797,6 +797,24 @@ button, input, textarea { font: inherit; }
 .capability-labels code, .deployment-summary .capability-labels button { padding: 4px 8px; border: 1px solid #d7e1dd; border-radius: 4px; background: #f4f7f6; color: #38564b; font: 10px/1.4 var(--mono-font); white-space: nowrap; }
 .deployment-summary .capability-labels button { cursor: pointer; }
 .deployment-summary .capability-labels button:hover { border-color: #86aa9d; color: #176b5b; }
+.app-header .dingtalk-nav-button { flex: 0 0 auto; color: #edf5f2; border-color: #52605b; background: transparent; }
+.dingtalk-import { gap: 12px; }
+.dingtalk-identity, .dingtalk-note { margin: 0; color: #62716a; font-size: 12px; }
+.dingtalk-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.dingtalk-read-actions { display: flex; align-items: end; gap: 10px; }
+.dingtalk-read-actions > label { min-width: 200px; }
+.dingtalk-table-scroll { max-height: 45vh; overflow: auto; border: 1px solid #dde5e0; border-radius: 6px; }
+.dingtalk-preview { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 12px; }
+.dingtalk-preview th, .dingtalk-preview td { padding: 10px; border-bottom: 1px solid #e5ebe7; text-align: left; vertical-align: top; }
+.dingtalk-preview th { position: sticky; top: 0; background: #f3f7f4; z-index: 1; }
+.dingtalk-preview td:nth-child(2) { min-width: 250px; max-width: 420px; overflow-wrap: anywhere; }
+.dingtalk-preview td small { display: block; color: #a52d28; }
+.dingtalk-preview details { margin-top: 6px; }
+.dingtalk-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font: inherit; }
+.dingtalk-import .dingtalk-start-agent { display: flex; align-items: center; gap: 8px; }
+.dingtalk-footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.dingtalk-footer > span { margin-right: auto; color: #62716a; font-size: 12px; }
+
 .service-form-empty { padding: 16px; border: 1px dashed #d8dfdb; border-radius: 5px; color: #7d8883; text-align: center; font-size: 12px; }
 .destructive-action { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid #ecefed; }
 

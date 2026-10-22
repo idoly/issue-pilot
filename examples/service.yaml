@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 # Relative to the application's .issue-pilot data root.
 issuesDirectory: workspaces
@@ -13,8 +13,7 @@ automation:
   maxConcurrentIssues: 3
 
 repositories:
-  srm-server:
-    url: git@example.com:srm/srm-server.git
+  srm-server: git@example.com:srm/srm-server.git
 
 services:
   srm:
@@ -33,19 +32,16 @@ services:
             password: "${MYSQL_PASSWORD}"
             database: srm
         sls:
-          test:
-            region: cn-hangzhou
-            project: example-test
-            logstores: [srm]
+          region: cn-hangzhou
+          project: example-test
+          logstores: [srm]
       prod:
         repositories:
           srm-server: prod
         dms:
-          prod:
-            alias: RDS-SRM
-            schema: srm
+          alias: RDS-SRM
+          schema: srm
         sls:
-          prod:
-            region: cn-hangzhou
-            project: example-production
-            logstores: [srm-api, srm-batch]
+          region: cn-hangzhou
+          project: example-production
+          logstores: [srm-api, srm-batch]

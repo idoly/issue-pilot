@@ -7,20 +7,20 @@
 | 位置 | 内容 |
 | --- | --- |
 | `.issue-pilot/service.yaml` | 全局 Agent 选择、并发、仓库、服务环境、分支及查询目标 |
-| `.issue-pilot/user.yaml` | 一个指定活跃用户的模型 API Key、SSH 私钥、SLS、DMS、钉钉凭证 |
+| `.issue-pilot/user.yaml` | 所有已登记账号的凭证、各账号的钉钉来源，以及显式共享的服务凭证 |
 | `.issue-pilot/mcp.json` | MCP 地址、协议和本地程序启动方式；MySQL 使用 stdio 模板 |
 | Pi 全局目录 | `models.json`、Operator 认证、settings、Skills、Prompts、Extensions、全局指令 |
 | SQLite | 工单与执行状态、配置的校验投影、既有用户和历史执行事实 |
 | `issue-pilot.config.ts` | 程序路径、默认值、预算和维护策略 |
 
-没有文件时继续使用既有数据库配置，便于逐步迁移。存在相应文件时，启动阶段在 Agent 和维护任务运行之前校验、事务应用配置，数据库作为运行投影与历史存储；页面返回 `fileManaged` 标记并禁止维护第二份配置。文件变更重启生效。省略旧服务或仓库不自动删除其历史记录；MCP 文件中省略的旧连接会停用并从普通列表、连接测试和编辑入口隐藏，私有历史记录保留。不要直接修改数据库来绕过文件配置。
+没有文件时继续使用既有数据库配置，便于逐步迁移。存在相应文件时，启动阶段在 Agent 和维护任务运行之前校验、事务应用配置，数据库作为运行投影与历史存储；页面返回 `fileManaged` 标记并禁止维护第二份配置。文件变更重启生效；钉钉导入在请求时读取当前账号的连接与来源配置。省略旧服务或仓库不自动删除其历史记录；MCP 文件中省略的旧连接会停用并从普通列表、连接测试和编辑入口隐藏，私有历史记录保留。不要直接修改数据库来绕过文件配置。
 
 三个文件都必须是私有 regular file，权限 `0600`，父目录 `0700`。支持 `${ENV_VAR}`，变量不存在时报稳定错误；不运行 `!command` 或 shell 展开。解析失败不返回 YAML 原文、SQL 参数或认证信息。完整示例见 [service.yaml](../examples/service.yaml)、[user.yaml](../examples/user.yaml)、[mcp.json](../examples/mcp.json)。
 
 ### service.yaml
 
 ```yaml
-version: 1
+version: 2
 issuesDirectory: workspaces
 agent:
   provider: xhgj
@@ -30,8 +30,7 @@ agent:
 automation:
   maxConcurrentIssues: 3
 repositories:
-  app:
-    url: git@example.com:team/app.git
+  app: git@example.com:team/app.git
 services:
   orders:
     name: Orders
@@ -52,43 +51,85 @@ services:
         repositories:
           app: prod
         dms:
-          prod:
-            alias: ORDERS-PROD
-            schema: orders
+          alias: ORDERS-PROD
+          schema: orders
         sls:
-          main:
-            region: cn-hangzhou
-            project: example-production
-            logstores: [application]
+          region: cn-hangzhou
+          project: example-production
+          logstores: [application]
 ```
 
 仓库在顶层保存别名和地址，环境保存分支。新工单采用当前基线，既有开发分支和工作区不自动切换。当前目录升级保留 `issuesDirectory: workspaces`，相对 `.issue-pilot` 解析；更换已有 Git worktree 的根路径需要单独的显式迁移，不能只改配置。
 
-DMS 支持多个 alias/schema；已有准确数据库绑定在目标相同时复用，新的 alias/schema 在首次查询前严格解析。SLS 支持多个具名目标，多目标查询必须同时选择 `target` 和该目标的 `logstore`。开发工单仍显式选择 prod/test 证据；开发配置中的 DMS/SLS 声明必须已存在于正式或测试部署，不能暗中创建不同的查询来源。MySQL 可在各环境配置多个连接。
+单个 DMS/SLS 目标直接填写字段，多个目标用数组；SLS 多目标显式填写各自的 `name`。例如：
 
-`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。`sources` 可保留既有来源声明供接入使用，本次改造不新增定时钉钉同步器；不要把来源声明当作已经执行的同步任务。
+```yaml
+dms:
+  - alias: ORDERS-FIRST
+    schema: orders
+  - alias: ORDERS-SECOND
+    schema: orders_archive
+sls:
+  - name: application
+    region: cn-hangzhou
+    project: example-production
+    logstores: [application]
+  - name: gateway
+    region: cn-shanghai
+    project: example-gateway
+    logstores: [access]
+```
+
+DMS 已有准确数据库绑定在目标相同时复用，新的 alias/schema 在首次查询前严格解析。SLS 多目标查询必须同时选择 `target` 和该目标的 `logstore`。开发工单仍显式选择 prod/test 证据；开发配置中的 DMS/SLS 声明必须已存在于正式或测试部署，不能暗中创建不同的查询来源。MySQL 可在各环境配置多个连接。
+
+`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉导入”手动读取，不启动定时同步器。旧版服务与单用户文件仍可读取，准备脚本输出新版 YAML。
 
 ### user.yaml
 
 ```yaml
-version: 1
-user:
-  subject: user@example.com
-apiKeys:
-  xhgj: "${MODEL_API_KEY}"
-ssh:
-  privateKey: "${GIT_SSH_PRIVATE_KEY}"
-sls:
-  accessKeyId: "${SLS_ACCESS_KEY_ID}"
-  accessKeySecret: "${SLS_ACCESS_KEY_SECRET}"
-dms:
-  url: https://dms.example.com/sse
-  authorization: "${DMS_AUTHORIZATION}"
-dingtalk:
-  apiKey: "${DINGTALK_MCP_KEY}"
+version: 2
+shared:
+  sls:
+    accessKeyId: "${SLS_ACCESS_KEY_ID}"
+    accessKeySecret: "${SLS_ACCESS_KEY_SECRET}"
+  dms:
+    url: https://dms.example.com/sse
+    authorization: "${DMS_AUTHORIZATION}"
+  dingtalk:
+    apiKey: "${DINGTALK_MCP_KEY}"
+users:
+  user@example.com:
+    apiKeys:
+      xhgj: "${MODEL_API_KEY}"
+    ssh:
+      privateKey: "${GIT_SSH_PRIVATE_KEY}"
+    dingtalk:
+      source:
+        mcp: dingtalk
+        url: https://alidocs.dingtalk.com/i/nodes/YOUR_BASE_ID?sheetId=YOUR_TABLE_ID
+        assignee: 示例用户
+        intervalMinutes: 15
+  another@example.com:
+    apiKeys: {}
+    ssh: {}
+    dms: {}
+    sls: {}
+    dingtalk: {}
 ```
 
-`subject` 必须是已有活跃用户，文件不授予角色或管理权限。API Key 按 Pi provider 名称关联；SSH 私钥可以用 YAML 块字符串直接保存。缺少组代表文件未提供该组；文件管理的这个用户凭证按文件完整投影，其他用户不受影响。DMS 连接与认证、SLS 两个 Key 分别完整配置，不拼接不同身份。钉钉 Key 在运行时注入对应 MCP URL，DMS 认证注入其 MCP Header。
+`users` 以已有账号的 `subject` 为键，可保留停用账号的配置，但不会启用账号或授予角色、管理权限。每个列出的账号按文件完整投影，未列出的账号仍保留数据库配置。API Key 按 Pi provider 名称关联；SSH 私钥可以用 YAML 块字符串直接保存。个人 DMS 的 `url/authorization`、SLS 的两个 Key 分别组成完整组，不拼接不同身份。
+
+`shared` 提供部署查询与全局 MCP 连接的凭证。个人 DMS/SLS 组仍各自完整覆盖部署组。钉钉导入优先采用当前账号的 `dingtalk.apiKey` 和可选 `url`，没有个人连接组时采用显式共享连接；个人连接失败后不会换用共享连接。来源和人员筛选只读取当前账号的声明，未声明来源时可在弹窗填写链接，人员默认采用当前用户姓名。
+
+准备脚本导出数据库中全部账号并保留已有文件配置。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
+
+### 钉钉导入
+
+顶部“钉钉导入”打开当前用户的预览弹窗。填写包含 `sheetId` 的数据表链接后读取字段和记录，可选择标题、描述、人员、状态、模块、编号字段；默认匹配已知的非归档字段。人员字段按当前用户的钉钉姓名筛选，状态使用实际返回值，可继续读取后续记录。读取覆盖数据表全部行，不沿用 URL 中的视图筛选。仅调用 `get_tables` 和 `query_records`，不写钉钉数据。
+
+读取与勾选都不创建工单。选择记录、入口服务、处理方式与优先级后点击“创建选中工单”；“创建后立即启动 Agent”默认关闭。创建前重新读取所选记录并验证预览签名、人员和状态，已变化的记录须重新预览。来源绑定与工单、Workspace 在同一数据库事务中保存，失败清理文件；同一个 Base/Table/Record 重复提交返回已有工单。逐条展示创建、已存在、变化和失败结果，失败项可重试。既有手工工单不会仅凭标题被自动关联。
+
+切换身份或关闭弹窗会取消未发送操作并忽略旧响应；已提交的单个工单事务可能已完成，再次读取会显示已有工单。游标异常、版本变化、读取失败均丢弃本轮结果，不能拼接不同快照。导入不自动下载附件，只保留所选文本和去除共享链接认证参数的来源地址。
 
 ## 凭证与 owner
 

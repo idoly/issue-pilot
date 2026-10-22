@@ -1,3 +1,4 @@
+import { publicFileState } from "../configuration/file-layout.ts";
 import { resolveDmsScope } from "../capabilities/dms.ts";
 import { parseDmsConnectionConfiguration, CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
@@ -8,7 +9,7 @@ import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDe
 import { environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
 import { ApiError, choice, optionalText, record, text } from "./input.ts";
-import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
@@ -67,7 +68,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     }
   });
   app.get("/api/catalog", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); return runScopeExclusive(() => loadConfigurationCatalog(database.db)); });
-  app.get("/api/config", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(async () => ({ ...await loadConfiguration(database.db, modelCatalog), fileManaged: context.fileConfiguration ?? { services: false, mcp: false } })); });
+  app.get("/api/config", async (request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(async () => ({ ...await loadConfiguration(database.db, modelCatalog), fileManaged: publicFileState(context.fileConfiguration, await ensureCurrentSubject(database, request)) })); });
   app.put("/api/config/agent", async (request) => runScopeExclusive(async () => {
     await requireDeveloper(database, request);
     const input = record(request.body);

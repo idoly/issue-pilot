@@ -1,21 +1,38 @@
-version: 1
+version: 2
 
-user:
-  subject: user@example.com
+# Deployment/native query groups and globally configured MCP connections.
+shared:
+  sls:
+    accessKeyId: "${SLS_ACCESS_KEY_ID}"
+    accessKeySecret: "${SLS_ACCESS_KEY_SECRET}"
+  dms:
+    url: https://dms.example.com/sse
+    authorization: "${DMS_AUTHORIZATION}"
+  dingtalk:
+    apiKey: "${DINGTALK_MCP_KEY}"
 
-apiKeys:
-  xhgj: "${MODEL_API_KEY}"
-
-ssh:
-  privateKey: "${GIT_SSH_PRIVATE_KEY}"
-
-sls:
-  accessKeyId: "${SLS_ACCESS_KEY_ID}"
-  accessKeySecret: "${SLS_ACCESS_KEY_SECRET}"
-
-dms:
-  url: https://dms.example.com/sse
-  authorization: "${DMS_AUTHORIZATION}"
-
-dingtalk:
-  apiKey: "${DINGTALK_MCP_KEY}"
+users:
+  user@example.com:
+    apiKeys:
+      xhgj: "${MODEL_API_KEY}"
+    ssh:
+      privateKey: "${GIT_SSH_PRIVATE_KEY}"
+    sls:
+      accessKeyId: "${USER_SLS_ACCESS_KEY_ID}"
+      accessKeySecret: "${USER_SLS_ACCESS_KEY_SECRET}"
+    dms:
+      url: https://dms.example.com/sse
+      authorization: "${USER_DMS_AUTHORIZATION}"
+    dingtalk:
+      apiKey: "${USER_DINGTALK_MCP_KEY}"
+      source:
+        mcp: dingtalk
+        url: https://alidocs.dingtalk.com/i/nodes/YOUR_BASE_ID?entrance=data&sheetId=YOUR_TABLE_ID
+        assignee: 示例用户
+        intervalMinutes: 15
+  another@example.com:
+    apiKeys: {}
+    ssh: {}
+    sls: {}
+    dms: {}
+    dingtalk: {}

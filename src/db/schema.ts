@@ -92,6 +92,14 @@ export const issues = sqliteTable("issues", {
   resolvedAt: date("resolved_at"), ...timestamps,
 }, (table) => [uniqueIndex("issues_key_unique").on(table.key), index("issues_queue_idx").on(table.status, table.priority, table.updatedAt), index("issues_assignee_idx").on(table.assigneeSubject, table.status)]);
 
+export const dingtalkIssueImports = sqliteTable("dingtalk_issue_imports", {
+  baseId: text("base_id").notNull(), tableId: text("table_id").notNull(), recordId: text("record_id").notNull(),
+  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  sourceUrl: text("source_url").notNull(),
+  importedBy: text("imported_by").notNull().references(() => subjects.subject),
+  createdAt: date("created_at").notNull().$defaultFn(() => new Date()),
+}, table => [primaryKey({ columns: [table.baseId, table.tableId, table.recordId] }), index("dingtalk_issue_imports_issue_idx").on(table.issueId)]);
+
 export const issueServiceScopes = sqliteTable("issue_service_scopes", {
   issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
   serviceId: text("service_id").notNull().references(() => services.id),

@@ -101,7 +101,7 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 
 ## 配置文件准备
 
-用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，把当前有效的凭证归到指定用户；多个不同凭证组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。已退役的 Playwright MCP 不进入草稿。输出目录必须与真实 state root 不同，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
+用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，导出全部已登记账号各自的凭证与已有文件来源，输出 v2 YAML。共享部署凭证有多个不同组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。已退役的 Playwright MCP 不进入草稿。输出目录必须与真实 state root 不同，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
 
 ```bash
 node --experimental-strip-types scripts/prepare-configuration.ts \
@@ -112,7 +112,9 @@ node --experimental-strip-types scripts/prepare-configuration.ts \
   --reference-mcp /path/to/reference/mcp.json
 ```
 
-审核 `service.yaml`、`user.yaml`、`mcp.json` 的目标、模型和认证归属，不把内容粘贴进日志。按前述维护与一致备份流程停止旧进程后，安装已验证的新代码，将三个文件放入真实 state root，再执行下面的工作目录迁移，最后重启。文件缺失时数据库仍是配置来源；相应文件存在时页面只读，不能用 API 修改另一份投影。
+`--subject` 指定旧 `service.yaml.sources.dingtalk` 的迁移归属。脚本默认保留缺失项；用户明确授权复用某个账号的凭证时，可增加 `--fill-missing-from user@example.com`，只补其他账号缺失项，不替换已有完整凭证，也不复制来源或人员筛选。检查暂存文件中每个账号的归属后，再按发布流程安装；运行时失败不会改用另一账号。
+
+审核 `service.yaml`、`user.yaml`、`mcp.json` 的目标、模型和认证归属，不把内容粘贴进日志。按前述维护与一致备份流程停止旧进程后，安装已验证的新代码，将三个文件放入真实 state root；仅在存在旧工作目录布局时执行下面的工作目录迁移，最后重启。文件缺失时数据库仍是配置来源；相应文件存在时页面只读，不能用 API 修改另一份投影。
 
 ## 工单工作目录迁移
 

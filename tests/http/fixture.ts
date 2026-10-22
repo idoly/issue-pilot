@@ -10,6 +10,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
 import { AGENT_THINKING_LEVELS, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
+import type { McpConnector } from "../../src/mcp/client.ts";
 import { buildApi } from "../../src/http/api.ts";
 
 export const testAgent = { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" as const, codemode: "off" as const, runtime: {} };
@@ -79,11 +80,11 @@ export interface ApiFixture {
   cleanup(): Promise<void>;
 }
 
-export async function createApiFixture(options: { events?: AgentEventBus } = {}): Promise<ApiFixture> {
+export async function createApiFixture(options: { events?: AgentEventBus; dingtalkConnector?: McpConnector } = {}): Promise<ApiFixture> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
   const engine = new TestAgentController();
-  const app = await buildApi({ databaseFile, stateRoot: root, engine, ...(options.events ? { events: options.events } : {}), modelCatalog, logger: false });
+  const app = await buildApi({ databaseFile, stateRoot: root, engine, ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}), ...(options.events ? { events: options.events } : {}), modelCatalog, logger: false });
   let stopped = false;
   const stop = async () => {
     if (stopped) return;

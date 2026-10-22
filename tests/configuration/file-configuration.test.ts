@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { stringify } from "yaml";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { applyFileConfiguration } from "../../src/configuration/file-configuration.ts";
+import { applyFileConfiguration, loadDingtalkUserSettings } from "../../src/configuration/file-configuration.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { globalAgentConfiguration, mcpServices, serviceDeployments, services, userCredentials } from "../../src/db/schema.ts";
+import { fileRecord, simpleServiceFile, userFileLayout } from "../../src/configuration/file-layout.ts";
+import { eq } from "drizzle-orm";
+import { globalAgentConfiguration, mcpServices, serviceDeployments, services, subjects, userCredentials } from "../../src/db/schema.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { modelCatalog, TestAgentController, testAgent } from "../http/fixture.ts";
 
@@ -29,6 +31,7 @@ async function files(root: string, invalid = false) {
   };
   const mcp = { mcpServers: { mysql: { type: "stdio", command: process.execPath, args: ["mysql-fixture.mjs"] }, dms: { type: "sse", url: "https://dms.example.test/sse" }, dingtalk: { type: "streamable-http", url: "https://dingtalk.example.test/server" } } };
   await Promise.all([writeFile(path.join(root, "service.yaml"), stringify(service), { mode: 0o600 }), writeFile(path.join(root, "user.yaml"), stringify(user), { mode: 0o600 }), writeFile(path.join(root, "mcp.json"), JSON.stringify(mcp), { mode: 0o600 })]);
+  return { user, service, mcp };
 }
 
 test("files project services, named SLS targets, user credentials and exact MySQL MCP environments atomically", async () => {
@@ -99,5 +102,68 @@ test("API exposes safe file ownership status and prevents editing a second confi
     assert.equal((await app.inject({ method: "PATCH", url: "/api/services/orders", payload: {} })).json().error, "configuration_managed_by_files");
     assert.equal((await app.inject({ method: "PUT", url: "/api/me/credentials", payload: {} })).json().error, "credentials_managed_by_user_file");
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
+  } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("version two keeps each account independent, including inactive and empty accounts, with shared service credentials", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-multi-user-config-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const original = await files(root), service = simpleServiceFile(original.service), layout = userFileLayout(original.user);
+    const production = fileRecord(fileRecord(fileRecord(service.services).orders).environments).prod;
+    assert.deepEqual(fileRecord(production).dms, { alias: "ORDERS", schema: "orders" });
+    assert.equal(fileRecord(service.repositories).app, "git@example.test:app.git");
+    await database.db.insert(subjects).values([
+      { subject: "bob", displayName: "Bob", role: "developer" },
+      { subject: "empty", displayName: "Empty", role: "product" },
+      { subject: "inactive", displayName: "Inactive", role: "developer", active: false },
+    ]);
+    layout.users.bob = { apiKeys: { [testAgent.provider]: "bob-model-key" }, dms: { url: "https://bob.example.test/sse", authorization: "Bearer bob-dms-token" } };
+    layout.users.empty = {};
+    layout.users.inactive = { apiKeys: { [testAgent.provider]: "inactive-model-key" } };
+    const owner = layout.users[issuePilotConfig.bootstrapUser.subject]!;
+    owner.dingtalk = { apiKey: "owner-personal-key", source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table", assignee: "Owner", intervalMinutes: 15 } };
+    await Promise.all([writeFile(path.join(root, "service.yaml"), stringify(service)), writeFile(path.join(root, "user.yaml"), stringify({ version: 2, shared: layout.shared, users: layout.users }))]);
+    const status = await applyFileConfiguration(database.db, root);
+    assert.deepEqual(new Set(status.userSubjects), new Set(Object.keys(layout.users)));
+    const rows = await database.db.select().from(userCredentials), byUser = new Map(rows.map(row => [row.subject, row]));
+    assert.equal(byUser.get("bob")!.modelApiKeys[testAgent.provider], "bob-model-key");
+    assert.equal(byUser.get("bob")!.productionDmsAuthorization, "Bearer bob-dms-token");
+    assert.equal(byUser.get("bob")!.productionSlsAccessKeyId, "");
+    assert.deepEqual(byUser.get("empty")!.modelApiKeys, {});
+    assert.equal(byUser.get("empty")!.gitPrivateKey, "");
+    assert.equal(byUser.get("inactive")!.modelApiKeys[testAgent.provider], "inactive-model-key");
+    assert.equal((await database.db.select().from(subjects).where(eq(subjects.subject, "inactive")))[0]!.active, false);
+    const deployment = (await database.db.select().from(serviceDeployments)).find(row => row.config.dms)!;
+    assert.equal(deployment.config.dms!.authorization, "Bearer private-dms-token");
+    const bob = await loadDingtalkUserSettings(root, "bob"), own = await loadDingtalkUserSettings(root, issuePilotConfig.bootstrapUser.subject);
+    assert.equal(bob.personal, undefined); assert.equal(bob.source, undefined); assert.equal(bob.shared?.apiKey, "private-dingtalk-key");
+    assert.equal(own.personal?.apiKey, "owner-personal-key"); assert.equal(own.source?.assignee, "Owner");
+    owner.apiKeys = { [testAgent.provider]: "must-roll-back" };
+    layout.users.bob = { dms: { authorization: "incomplete-private-group" } };
+    await writeFile(path.join(root, "user.yaml"), stringify({ version: 2, shared: layout.shared, users: layout.users }));
+    await assert.rejects(applyFileConfiguration(database.db, root), error => error instanceof Error && !error.message.includes("incomplete-private-group"));
+    assert.equal((await database.db.select().from(userCredentials).where(eq(userCredentials.subject, issuePilotConfig.bootstrapUser.subject)))[0]!.modelApiKeys[testAgent.provider], "private-model-key");
+  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("multi-user file management status follows the caller and does not disclose other file subjects", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-file-users-api-"));
+  const seed = await openApplicationDatabase(path.join(root, "issues.db"));
+  const original = await files(root), layout = userFileLayout(original.user);
+  await seed.db.insert(subjects).values({ subject: "bob", displayName: "Bob", role: "developer" }); seed.close();
+  layout.users.bob = { apiKeys: {} };
+  await writeFile(path.join(root, "service.yaml"), stringify(simpleServiceFile(original.service)));
+  await writeFile(path.join(root, "user.yaml"), stringify({ version: 2, shared: layout.shared, users: layout.users }));
+  const app = await buildApi({ stateRoot: root, databaseFile: path.join(root, "issues.db"), engine: new TestAgentController(), modelCatalog, logger: false });
+  try {
+    for (const subject of ["bob", issuePilotConfig.bootstrapUser.subject]) {
+      const headers = { "x-issue-pilot-subject": subject }, configuration = await app.inject({ method: "GET", url: "/api/config", headers });
+      assert.equal(configuration.statusCode, 200, configuration.body);
+      assert.equal(configuration.json().fileManaged.userSubject, subject);
+      assert.equal(configuration.json().fileManaged.userSubjects, undefined);
+      const update = await app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: {} });
+      assert.equal(update.json().error, "credentials_managed_by_user_file");
+    }
   } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
 });

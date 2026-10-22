@@ -2,6 +2,7 @@ import { Segmented, Select, Skeleton } from "../ui";
 import { createEffect, createSignal, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
+import { DingtalkImportButton } from "./DingtalkImportDialog";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
 import { SettingsView } from "./SettingsView";
@@ -140,6 +141,11 @@ export function App(props: { initialView?: AppView } = {}) {
               options={viewOptions}
               onChange={(value) => { if (value !== view() && mayNavigate()) { setSourceDirty(false); setView(value as AppView); } }}
             />
+            <DingtalkImportButton onCreated={() => setIssueRefreshToken(value => value + 1)} onOpenIssue={key => {
+              if (!mayNavigate()) return false;
+              setKeepExternalSelection(true); setDashboardTarget(key); setSelectedId(key); setView("issues");
+              return true;
+            }} />
           </div>
           <CurrentUserIdentity mayChange={() => { if (!mayNavigate()) return false; setSourceExpanded(false); setSourceDirty(false); return true; }} />
         </header>

@@ -52,7 +52,11 @@ export interface ServiceConfiguration {
   repositories: Array<{ id: string; alias: string; url: string }>;
 }
 
-export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number; mcpServiceNames?: string[] }
+export interface DingtalkConnectionSettings { apiKey: string; url?: string }
+export interface DingtalkSourceSettings { mcp: string; url: string; assignee: string; intervalMinutes?: number; environment?: "dev" | "test" | "prod" }
+export interface DingtalkUserSettings { source?: DingtalkSourceSettings; personal?: DingtalkConnectionSettings; shared?: DingtalkConnectionSettings }
+
+export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number; userSubjects?: string[]; mcpServiceNames?: string[] }
 
 export interface Configuration extends ConfigurationCatalog {
   fileManaged?: FileConfigurationState;

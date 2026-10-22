@@ -1,3 +1,7 @@
+import type { DingtalkSourceResponse, DingtalkPreviewInput, DingtalkPreviewResponse, DingtalkImportInput, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
+export type { DingtalkSourceResponse, DingtalkColumns, DingtalkField, DingtalkPreviewRecord, DingtalkPreviewResponse, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
+export { DINGTALK_COLUMNS } from "../../../mcp/dingtalk-contracts";
+
 import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
 import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
@@ -167,6 +171,10 @@ export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage"
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
+export const loadDingtalkSource = (signal?: AbortSignal) => request<DingtalkSourceResponse>("/api/dingtalk/source", { signal });
+export const previewDingtalkRecords = (input: DingtalkPreviewInput, signal?: AbortSignal) => request<DingtalkPreviewResponse>("/api/dingtalk/preview", { method: "POST", body: JSON.stringify(input), signal });
+export const importDingtalkRecords = (input: DingtalkImportInput, signal?: AbortSignal) => request<DingtalkImportResponse>("/api/dingtalk/import", { method: "POST", body: JSON.stringify(input), signal });
+
 export const listIssues = (signal?: AbortSignal) => request<IssueExecutionItem[]>("/api/issues", signal ? { signal } : undefined);
 export const listIssuePins = (signal?: AbortSignal) => request<string[]>("/api/issue-pins", signal ? { signal } : undefined);
 export const setIssuePinned = (key: string, pinned: boolean) => request<void>(issuePath(key, "/pin"), { method: pinned ? "PUT" : "DELETE" });
