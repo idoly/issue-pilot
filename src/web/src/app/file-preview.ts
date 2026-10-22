@@ -10,6 +10,15 @@ export function attachmentPreviewKind(attachment: IssueDetail["attachments"][num
   return "unsupported";
 }
 
+export function workingFileMediaType(fileName: string): string | undefined {
+  const extension = fileName.split(".").at(-1)?.toLowerCase() ?? "";
+  const images: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+  if (images[extension]) return images[extension];
+  if (extension === "pdf") return "application/pdf";
+  if (["txt", "log", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "yaml", "yml", "properties", "sql", "js", "mjs", "cjs", "ts", "tsx", "jsx", "java", "kt", "py", "sh", "bash", "css", "html", "vue", "svelte", "c", "h", "cpp", "hpp", "go", "rs", "toml", "ini"].includes(extension) || /^(?:Dockerfile|Makefile|\.gitignore)$/i.test(fileName)) return "text/plain";
+  return undefined;
+}
+
 export function outputPreviewUnavailable(output: Pick<IssueDetail["outputs"][number], "fileName" | "size">): string | undefined {
   if (!/\.(csv|json|jsonl|sql|txt|md|markdown|log|ya?ml|xml|tsv)$/i.test(output.fileName)) return "此格式暂不支持预览，请下载查看";
   if (output.size > issuePilotConfig.web.outputPreviewBytes) return "文件过大，请下载查看完整内容";

@@ -192,6 +192,11 @@ export const listIssueWorkFiles = async (key: string, path = "", signal?: AbortS
 };
 export const issueWorkFileUrl = (key: string, path: string) => issuePath(key, `/files/download?path=${encodeURIComponent(path)}`);
 
+export async function fetchIssueWorkFile(key: string, path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(issueWorkFileUrl(key, path), signal ? { signal } : undefined);
+  if (!response.ok) throw await requestError(response);
+  return response.blob();
+}
 export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
 
 type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite" | "Offset";
