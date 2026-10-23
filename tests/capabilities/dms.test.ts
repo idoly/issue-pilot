@@ -504,6 +504,18 @@ test("calls only MCP executeScript and binds it to the configured deployment dat
   assert.equal(fixture.closes(), 1);
 });
 
+test("returns requested business login tokens without including DMS connection authorization", async () => {
+  const rows = [{ token: "business-login-token", Authorization: "Bearer business-login-token", createdAt: "2026-10-23T03:00:00Z" }];
+  const fixture = fixtureSession({
+    async listTools() { return [executeScriptTool]; },
+    async callTool() { return { content: [{ type: "text", text: JSON.stringify(rows) }] }; },
+  });
+  const result = await queryDms({ schema: "orders", script: "SELECT token, Authorization, createdAt FROM login_sessions ORDER BY createdAt DESC LIMIT 1" }, configured, undefined, fixture.connect);
+  assert.deepEqual(JSON.parse(JSON.parse(result.content[0]!.text).result.content[0].text), rows);
+  assert.doesNotMatch(JSON.stringify(result), /fixture-token/);
+  assert.equal(fixture.closes(), 1);
+});
+
 test("rejects writes, multiple statements, missing scope, and unavailable executeScript", async () => {
   const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; } });
   await assert.rejects(queryDms({ schema: "orders", script: "UPDATE suppliers SET active = 1" }, configured, undefined, fixture.connect), /database_query_must_be_read_only/);

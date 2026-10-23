@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext, type Tool } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext, type Tool, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { defineTool, ModelRuntime, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentCodemodeMode } from "../../src/domain/contracts.ts";
@@ -105,6 +105,30 @@ for (const nested of [false, true]) test(`${nested ? "codemode" : "direct"} writ
     managed = await f.runtime.start(f.options); await managed.prompt("Write a synthetic file.");
     await assert.rejects(readFile(path.join(f.root, "must-not-exist.txt")), { code: "ENOENT" });
     assert.equal(managed.session.getLastAssistantText(), "Invalid write rejected.");
+  } finally { await managed?.stop(); await f.close(); }
+});
+
+for (const autoResize of [true, false]) test(`native image reads retain resize settings and model limits (${autoResize})`, async () => {
+  const f = await fixture("off", { runtime: { settings: { images: { autoResize } } } });
+  let managed;
+  try {
+    // Valid JPEG with trailing padding exercises the SDK's encoded-size limit without a new image dependency.
+    const original = Buffer.concat([await readFile(new URL("../../docs/images/workspace.jpg", import.meta.url)), Buffer.alloc(4 * 1024 * 1024)]);
+    await writeFile(path.join(f.root, "input.jpg"), original);
+    const model = f.models.getModel("codemode-fixture", "fixture");
+    assert.ok(model);
+    model.inputLimits = { images: { resize: { maxWidth: 32, maxHeight: 32 } } };
+    f.faux.setResponses([fauxAssistantMessage(fauxToolCall("read", { path: "input.jpg" }, { id: "image" }), { stopReason: "toolUse" }), fauxAssistantMessage("Read image.")]);
+    managed = await f.runtime.start(f.options);
+    await managed.prompt("Read the fixture image.");
+    const event = f.events.find(event => event.type === "tool_execution_end" && event.toolCallId === "image");
+    assert.ok(event && event.type === "tool_execution_end");
+    assert.equal(event.isError, false);
+    const image = event.result.content.find((item: TextContent | ImageContent) => item.type === "image");
+    assert.ok(image && image.type === "image");
+    const bytes = Buffer.from(image.data, "base64");
+    if (autoResize) assert.equal(bytes.equals(original), false);
+    else assert.equal(bytes.equals(original), true);
   } finally { await managed?.stop(); await f.close(); }
 });
 

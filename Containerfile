@@ -19,20 +19,20 @@ FROM docker.io/library/maven:3.9-eclipse-temurin-8 AS maven
 
 FROM docker.io/library/debian:bookworm-slim AS git
 
-ARG GIT_VERSION=2.53.0
+ARG GIT_VERSION=2.56.0
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends build-essential ca-certificates curl libcurl4-openssl-dev libexpat1-dev libssl-dev zlib1g-dev \
     && curl --fail --location --silent --show-error "https://mirrors.edge.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.xz" --output /tmp/git.tar.xz \
     && tar --extract --xz --file /tmp/git.tar.xz --directory /tmp \
-    && make -C "/tmp/git-${GIT_VERSION}" -j"$(nproc)" prefix=/opt/git NO_GETTEXT=YesPlease NO_TCLTK=YesPlease all \
-    && make -C "/tmp/git-${GIT_VERSION}" prefix=/opt/git NO_GETTEXT=YesPlease NO_TCLTK=YesPlease install
+    && make -C "/tmp/git-${GIT_VERSION}" -j"$(nproc)" prefix=/opt/git NO_RUST=YesPlease NO_GETTEXT=YesPlease NO_TCLTK=YesPlease all \
+    && make -C "/tmp/git-${GIT_VERSION}" prefix=/opt/git NO_RUST=YesPlease NO_GETTEXT=YesPlease NO_TCLTK=YesPlease install
 
 FROM docker.io/library/node:26-bookworm-slim
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl libexpat1 openssh-client perl python3 python3-venv ripgrep fd-find bubblewrap socat proxychains4 \
     && rm -rf /var/lib/apt/lists/*
-ARG ALIYUN_CLI_VERSION=3.4.11
+ARG ALIYUN_CLI_VERSION=3.5.2
 RUN curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-${ALIYUN_CLI_VERSION}-$(dpkg --print-architecture).tgz" --output /tmp/aliyun.tgz \
     && tar --extract --gzip --file /tmp/aliyun.tgz --directory /usr/local/bin aliyun \
     && chmod 0755 /usr/local/bin/aliyun \

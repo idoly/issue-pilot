@@ -33,7 +33,7 @@ try {
     finally { await rm(temporary, { force: true }); }
   };
   const factories = {
-    read: () => createReadToolDefinition(root),
+    read: () => createReadToolDefinition(root, { autoResizeImages: process.env.ISSUE_PILOT_IMAGE_AUTO_RESIZE !== "false" }),
     bash: () => createBashToolDefinition(root, { ...(process.env.ISSUE_PILOT_SHELL_PATH ? { shellPath: process.env.ISSUE_PILOT_SHELL_PATH } : {}), ...(process.env.ISSUE_PILOT_SHELL_PREFIX ? { commandPrefix: process.env.ISSUE_PILOT_SHELL_PREFIX } : {}) }),
     grep: () => createGrepToolDefinition(root),
     find: () => createFindToolDefinition(root),
@@ -48,7 +48,7 @@ try {
   if (!Compile(tool.parameters).Check(input)) throw new Error("invalid_issue_tool_input");
   const signal = new AbortController();
   process.once("SIGTERM", () => signal.abort(new Error("issue_tool_cancelled")));
-  const context = { cwd: root, sessionManager: { getSessionId: () => process.env.PI_SESSION_ID ?? "", getSessionFile: () => process.env.PI_SESSION_FILE }, model: { provider: process.env.PI_PROVIDER ?? "", id: process.env.PI_MODEL ?? "", input: JSON.parse(process.env.PI_MODEL_INPUT ?? '["text","image"]') }, thinkingLevel: process.env.PI_REASONING_LEVEL };
+  const context = { cwd: root, sessionManager: { getSessionId: () => process.env.PI_SESSION_ID ?? "", getSessionFile: () => process.env.PI_SESSION_FILE }, model: { provider: process.env.PI_PROVIDER ?? "", id: process.env.PI_MODEL ?? "", input: JSON.parse(process.env.PI_MODEL_INPUT ?? '["text","image"]'), inputLimits: { images: { resize: JSON.parse(process.env.PI_MODEL_IMAGE_RESIZE ?? "null") ?? undefined } } }, thinkingLevel: process.env.PI_REASONING_LEVEL };
   const result = await tool.execute("issue-local", input as never, signal.signal, value => send("update", value), context as never);
   send("result", result);
 } catch (error) { send("error", error instanceof Error ? error.message : "issue_native_tool_failed"); process.exitCode = 1; }

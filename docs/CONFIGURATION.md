@@ -27,6 +27,10 @@ agent:
   model: your-model-id
   thinkingLevel: medium
   codemode: on
+  runtime:
+    networkAllowedDomains:
+      - packages.example.com:443
+      - git.example.com:22
 automation:
   maxConcurrentIssues: 3
 repositories:
@@ -58,6 +62,8 @@ services:
           project: example-production
           logstores: [application]
 ```
+
+`agent.runtime.networkAllowedDomains` 为模型本地工具和 stdio MCP 追加出口，按域名或 `host:port` 限定。SSH 使用的 22 端口与 HTTPS 的 443 端口应分别配置；代码仓库地址本身不会自动放通网络。规则在启动时投影，文件变更需重启应用重新应用，并重建工单会话；不能覆盖宿主地址和应用控制端口的拒绝规则。它不改变 DMS/SLS 业务查询的服务、环境及目标校验。
 
 仓库在顶层保存别名和地址，环境保存分支。新工单采用当前基线，既有开发分支和工作区不自动切换。当前目录升级保留 `issuesDirectory: workspaces`，相对 `.issue-pilot` 解析；更换已有 Git worktree 的根路径需要单独的显式迁移，不能只改配置。
 
@@ -148,6 +154,8 @@ MCP 端点提供 `dingtalk_import`，与页面复用同一接口和配置。参�
 
 工单 owner 为 assignee，未分配时为 reporter，必须活跃。开发要求 owner 为 developer。developer owner 使用个人模型和 Git 身份，缺失或失败不回退到其他身份。个人正式 DMS/SLS 配置各自完整覆盖部署组，没有该组则使用部署配置，不能创建不存在的目标。普通配置 GET 隐藏凭证；选定 MCP 编辑配置的开发者接口可以展示其文档约定的私有值。用户文件不会注入 Agent 提示词或工具输入；本地工具经 SRT 限制持久文件写入范围，执行与远程服务的信任边界见 [Agent](AGENT.md#执行边界)。
 
+用户明确请求的业务登录 token、session token 和业务 Authorization 可以作为 SLS/DMS 查询结果返回，并注明来源与时间，不需要重复确认。该规则针对授权查询返回的业务证据；用于连接 SLS、DMS、MCP、模型和 Git 的应用配置密钥仍隐藏。查询结果不授予额外服务或环境权限。
+
 ## 内建能力与工具
 
 配置页不再提供独立的“能力”和“基座”分类。用户页只展示当前账号的 API Key、SSH Key、SLS、DMS 和钉钉凭证状态，不展示密钥正文或人员管理；仓库页只展示名称与地址，不提供维护操作和引用服务列。顶层 repositories 和 services 仍同属 service.yaml，仓库可独立登记，不要求绑定服务。DMS/SLS 的查询目标继续在服务详情展示，MySQL 和钉钉通过 MCP 提供；同一种能力可以有多个服务环境连接，不将连接实例数量当作能力种类数量。
@@ -158,11 +166,11 @@ MCP 端点提供 `dingtalk_import`，与页面复用同一接口和配置。参�
 
 `mcp.json` 的 `mysql` 项是 stdio 启动模板，连接参数只在 `service.yaml` 中填写。应用按服务、环境、数据库展开连接，注入 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB`；固定关闭 INSERT/UPDATE/DELETE 开关。密码保留有效空白，不进入 argv。示例固定 `@benborla29/mcp-server-mysql@2.0.9`。模板本身不作为无连接参数的服务器启动。
 
-Pi 在同一工单会话中复用对应 MCP 连接。MySQL 的 SQL 能力、结果格式和读取限制由所选 MCP 服务及数据库账号负责；不再提供原生 `db` 查询、导出接口或其事务保证。需要交付时在工单工作目录处理 MCP 返回结果，再使用 `output publish`。
+Pi 在同一工单会话中复用对应 MCP 连接。MySQL 的 SQL 能力、结果格式和读取限制由所选 MCP 服务及数据库账号负责；不再提供原生 `db` 查询、导出接口或其事务保证。需要交付时在工单工作目录处理 MCP 返回结果，直接保存普通文件并使用工作文件下载链接。
 
 ### DMS
 
-DMS 使用原生 SSE，只执行验证过的只读 SQL；导出完整 MCP JSON 到成果存储。一次操作预算 120 秒，首次握手预算 12 秒，握手最多两次。429 优先遵守有效 `Retry-After`，最多等待 5 秒后进行一次握手重试；更长提示直接报告限流。401/403 不重试，已发送的 SQL 不自动重放。
+DMS 使用原生 SSE，只执行验证过的只读 SQL；导出完整 MCP JSON 到工单根目录的普通工作文件，完成写入后原子替换目标。一次操作预算 120 秒，首次握手预算 12 秒，握手最多两次。429 优先遵守有效 `Retry-After`，最多等待 5 秒后进行一次握手重试；更长提示直接报告限流。401/403 不重试，已发送的 SQL 不自动重放。
 
 失败通过工具错误 JSON 返回稳定 `error` 和脱敏 `diagnostics`：阶段 connect/discovery/execute/publish/close、总耗时、阶段耗时、`sqlDispatchAttempted` 和可用的 `retryAfterSeconds`。阶段时间可能重叠，不能求和；尝试发送不证明服务端执行。原始错误、目标 URL、SQL 和认证不进入该错误 JSON。取消保留原原因。
 
@@ -170,7 +178,7 @@ DMS 使用原生 SSE，只执行验证过的只读 SQL；导出完整 MCP JSON �
 
 ### aliyun sls
 
-SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 aliyun CLI；镜像安装固定版本 3.4.11。应用用 `0600` 临时配置注入选定凭证，关闭 CLI 自动重试，使用 HTTPS，结束或取消后删除临时配置，不修改宿主默认 profile，不把密钥放进 argv。
+SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 aliyun CLI；镜像安装固定版本 3.5.2。应用用 `0600` 临时配置注入选定凭证，关闭 CLI 自动重试，使用 HTTPS，结束或取消后删除临时配置，不修改宿主默认 profile，不把密钥放进 argv。
 
 保留明确时间范围、Trace ID、目标校验和分页预算。只有 meta.progress=Complete 才接受结果；SQL 分析按 SQL LIMIT/ORDER BY 返回一页，普通查询按 offset 分页。晚一页失败时整次调用失败，不返回前面页面作为完整结果。未知 CLI 错误统一隐藏，已知 Code/StatusCode 转为稳定诊断。CLI 缺失报 `sls_cli_not_available`；超时或取消终止进程组并完成凭证清理。
 
@@ -182,7 +190,7 @@ SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 ali
 
 ## Agent 基座与资源
 
-Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，`service.yaml` 的 `agent.runtime.settings` 可显式覆盖运行参数；`agent.runtime.networkAllowedDomains` 为本地工具和 stdio MCP 追加按域名或 `host:port` 限定的出口，使用 SRT 的域名规则校验，不能覆盖宿主控制地址与端口的拒绝规则。该项省略时清除旧数据库覆盖，采用全局 Pi 默认值，避免隐藏的旧配置继续生效。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
+Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，`service.yaml` 的 `agent.runtime.settings` 可显式覆盖运行参数；`agent.runtime.networkAllowedDomains` 为本地工具和 stdio MCP 追加按域名或 `host:port` 限定的出口，使用 SRT 的域名规则校验，不能覆盖宿主控制地址与端口的拒绝规则。省略运行设置时清除旧数据库设置覆盖并采用全局 Pi settings；省略网络追加项时清除旧数据库网络覆盖，采用根配置的基础域名列表。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
 
 资源检查 GET 仅发现扩展路径，不执行用户扩展。实际会话创建时加载资源，正常触发扩展启动和关闭。模型接口定义继续由全局 Pi `models.json` 管理。改变资源后重建会话或重启应用。
 

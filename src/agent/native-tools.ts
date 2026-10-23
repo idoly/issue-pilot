@@ -6,7 +6,7 @@ import { KeyedSerialQueue } from "../serial.ts";
 import { executeLocalCommand } from "../process.ts";
 import { assertIssueLaunchEnvironment, prepareIssueCommand, type IssueFilesystemPolicy } from "./issue-sandbox.ts";
 
-const commands = new KeyedSerialQueue();
+export const issueLocalCommands = new KeyedSerialQueue();
 /** Shared writable inodes would bypass the mount boundary. Inspect before starting a session. */
 export async function assertIssueHardlinks(root: string): Promise<void> {
   const linked = new Map<string, { seen: number; links: number }>();
@@ -24,10 +24,18 @@ function environment(extra: Record<string, string> = {}): Record<string, string>
   const result: Record<string, string> = {};
   for (const name of ["PATH", "HOME", "LANG", "LANGUAGE", "LC_ALL", "TZ", "JAVA_HOME", "MAVEN_HOME", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"]) if (process.env[name] !== undefined) result[name] = process.env[name]!;
   assertIssueLaunchEnvironment(extra);
-  return { ...result, NODE_PATH: path.resolve(import.meta.dirname, "../../node_modules"), ...extra };
+  const gitConfigCount = Number(extra.GIT_CONFIG_COUNT ?? "0");
+  if (!Number.isInteger(gitConfigCount) || gitConfigCount < 0 || gitConfigCount > 128) throw new Error("invalid_issue_git_environment");
+  const gitConfig = Array.from({ length: gitConfigCount }, (_, index) => [extra[`GIT_CONFIG_KEY_${index}`], extra[`GIT_CONFIG_VALUE_${index}`]]);
+  if (gitConfig.some(([key, value]) => !key || value === undefined)) throw new Error("invalid_issue_git_environment");
+  return {
+    ...result, NODE_PATH: path.resolve(import.meta.dirname, "../../node_modules"), ...extra,
+    ...(extra.GIT_SSH_COMMAND ? { ISSUE_PILOT_PERSONAL_GIT_SSH: extra.GIT_SSH_COMMAND } : {}),
+    ...(gitConfig.length ? { ISSUE_PILOT_GIT_CONFIG: JSON.stringify(gitConfig) } : {}),
+  };
 }
 export function issueBashOperations(root: string, shell = "/bin/bash"): BashOperations {
-  return { exec: (command, cwd, options) => commands.run(root, async () => {
+  return { exec: (command, cwd, options) => issueLocalCommands.run(root, async () => {
     options.signal?.throwIfAborted();
     const prepared = await prepareIssueCommand({ writeRoot: root }, [shell, "-c", command], cwd);
     let failed = false, primary: unknown;
@@ -45,7 +53,7 @@ export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: 
   return [createReadToolDefinition(root), createBashToolDefinition(root), createEditToolDefinition(root), createWriteToolDefinition(root), createGrepToolDefinition(root), createFindToolDefinition(root), createLsToolDefinition(root)].map(tool => {
     const validate = Compile(tool.parameters);
     const { renderCall: _renderCall, renderResult: _renderResult, ...metadata } = tool;
-    return { ...metadata, execute: (_id: string, input: unknown, signal: AbortSignal | undefined, update: ((value: any) => void) | undefined) => commands.run(root, async () => {
+    return { ...metadata, execute: (_id: string, input: unknown, signal: AbortSignal | undefined, update: ((value: any) => void) | undefined) => issueLocalCommands.run(root, async () => {
       if (!validate.Check(input)) throw new Error(`invalid_issue_${tool.name}_input`);
       signal?.throwIfAborted();
       const prepared = await prepareIssueCommand(policy, [process.execPath, "--experimental-strip-types", path.join(import.meta.dirname, "native-tool-executor.ts"), tool.name, root]);

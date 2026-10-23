@@ -1,10 +1,67 @@
+import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { syncBuiltinESMExports } from "node:module";
 import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { IssueWorkFileStore } from "../../src/workspace/work-file-store.ts";
+import { generatedWorkFileSaver, IssueWorkFileStore } from "../../src/workspace/work-file-store.ts";
+
+test("SDK output collisions preserve a temporary file owned by another operation", async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-sdk-output-collision-"));
+  const id = "11111111-1111-4111-8111-111111111111";
+  const temporary = path.join(root, `.work-file-${id}.tmp`);
+  try {
+    await writeFile(temporary, "existing evidence", { mode: 0o600 });
+    context.mock.method(crypto, "randomUUID", () => id);
+    syncBuiltinESMExports();
+    await assert.rejects(generatedWorkFileSaver(root, "mcp")("new output", ".txt"), { code: "EEXIST" });
+    assert.equal(await readFile(temporary, "utf8"), "existing evidence");
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("separate store instances share destination serialization and queued cancellation", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-instances-"));
+  const first = new IssueWorkFileStore(root, "ISSUE-20261022-001");
+  const second = new IssueWorkFileStore(root, "issue-20261022-001");
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const controller = new AbortController();
+  const reason = new Error("queued_store_cancelled");
+  let secondStarted = false;
+  let secondSettled = false;
+  let writing: Promise<unknown> | undefined;
+  let queued: Promise<unknown> | undefined;
+  try {
+    writing = first.generate("result.txt", async append => {
+      entered();
+      await gate;
+      await append("first");
+    });
+    await started;
+    queued = second.generate("result.txt", async () => { secondStarted = true; }, controller.signal);
+    const observed = queued.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+    controller.abort(reason);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(secondSettled, false);
+    release();
+    await writing;
+    await assert.rejects(queued, error => error === reason);
+    await observed;
+    assert.equal(secondStarted, false);
+    assert.equal((await first.read("result.txt")).toString(), "first");
+  } finally {
+    release();
+    await Promise.allSettled([writing, queued]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("query results are ordinary working files with direct download links", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-")), store = new IssueWorkFileStore(root, "ISSUE-20261022-001");

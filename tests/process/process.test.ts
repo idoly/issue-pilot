@@ -1,3 +1,7 @@
+import subprocess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { syncBuiltinESMExports } from "node:module";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -8,6 +12,56 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { executeLocalCommand } from "../../src/process.ts";
+
+test("a subprocess error does not release its owner before stdio closes", async context => {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdin: new PassThrough(),
+    kill() { return true; },
+  });
+  context.mock.method(subprocess, "spawn", () => child as unknown as ReturnType<typeof subprocess.spawn>);
+  syncBuiltinESMExports();
+  let settled = false;
+  const reason = new Error("spawn_or_termination_failed");
+  const execution = executeLocalCommand("fixture", []);
+  const observed = execution.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    child.emit("error", reason);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    child.emit("close", 1);
+    await assert.rejects(execution, error => error === reason);
+  } finally {
+    child.emit("close", 1);
+    await observed;
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+for (const channel of ["stdout", "stderr", "stdin"] as const) test(`handles a ${channel} pipe error and waits for process cleanup`, async context => {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(),
+    kill() { return true; },
+  });
+  context.mock.method(subprocess, "spawn", () => child as unknown as ReturnType<typeof subprocess.spawn>);
+  syncBuiltinESMExports();
+  const reason = new Error(`${channel}_io_failed`);
+  const execution = executeLocalCommand("fixture", [], { input: Buffer.from("input") });
+  let settled = false;
+  const observed = execution.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    assert.doesNotThrow(() => child[channel].emit("error", reason));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    child.emit("close", 1);
+    await assert.rejects(execution, error => error === reason);
+  } finally {
+    child.emit("close", 1); await observed;
+    context.mock.restoreAll(); syncBuiltinESMExports();
+  }
+});
 
 test("rejects an already cancelled command before attempting to spawn", async () => {
   const reason = new Error("cancelled_before_spawn");
@@ -80,20 +134,26 @@ test("passes binary stdin without argv exposure and tolerates an early reader ex
 test("terminates descendant processes after the grace period", { skip: process.platform === "win32" }, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-process-"));
   const pidFile = join(root, "descendant.pid");
-  const descendant = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+  const descendant = "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000)";
   const parent = [
     "const { spawn } = require('node:child_process')",
     "const { writeFileSync } = require('node:fs')",
-    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'ignore' })`,
-    `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid))`,
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 'pipe', 'ignore'] })`,
+    `child.stdout.once('data', () => { writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); process.stdout.write('ready'); })`,
     "setInterval(() => {}, 1000)",
   ].join(";");
 
   try {
-    const result = await executeLocalCommand(process.execPath, ["-e", parent], { timeout: 250 });
+    const controller = new AbortController();
+    const result = await executeLocalCommand(process.execPath, ["-e", parent], {
+      signal: controller.signal,
+      timeout: 5000,
+      onStdout: text => { if (text.includes("ready")) controller.abort(); },
+    });
     assert.equal(result.killed, true);
     const descendantPid = Number(await readFile(pidFile, "utf8"));
-    await delay(issuePilotConfig.limits.process.terminationGraceMs + 250);
+    // Completion must include escalation, even when descendants don't retain stdio.
+    await delay(25);
     assert.throws(() => process.kill(descendantPid, 0), (error: NodeJS.ErrnoException) => error.code === "ESRCH");
   } finally {
     await rm(root, { recursive: true, force: true });

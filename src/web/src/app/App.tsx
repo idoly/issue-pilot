@@ -67,21 +67,52 @@ function ResourceBackedOverview(props: { onSelectIssue: (issueKey: string) => vo
   return <OverviewView onSelectIssue={(issueKey, subject) => { void open(issueKey, subject); }} />;
 }
 
+function linkedIssueFromUrl(): string {
+  const key = new URLSearchParams(window.location.search).get("issue") ?? "";
+  return /^ISSUE-\d{8}-\d{3,}$/i.test(key) ? key.toUpperCase() : "";
+}
+
 export function App(props: { initialView?: AppView } = {}) {
-  const [view, setView] = createSignal<AppView>(props.initialView ?? "dashboard", { ownedWrite: true });
-  const [selectedId, setSelectedId] = createSignal("", { ownedWrite: true });
+  const linkedIssue = linkedIssueFromUrl();
+  const [view, setView] = createSignal<AppView>(props.initialView ?? (linkedIssue ? "issues" : "dashboard"), { ownedWrite: true });
+  const [selectedId, setSelectedId] = createSignal(linkedIssue, { ownedWrite: true });
   const [issue, setIssue] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
-  const [keepExternalSelection, setKeepExternalSelection] = createSignal(false, { ownedWrite: true });
-  const [dashboardTarget, setDashboardTarget] = createSignal("", { ownedWrite: true });
+  const [keepExternalSelection, setKeepExternalSelection] = createSignal(Boolean(linkedIssue), { ownedWrite: true });
+  const [dashboardTarget, setDashboardTarget] = createSignal(linkedIssue, { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDetailsOpen, setSourceDetailsOpen] = createSignal(true, { ownedWrite: true });
   const [sourceDirty, setSourceDirty] = createSignal(false, { ownedWrite: true });
   const [sourceSizes, setSourceSizes] = createSignal<Partial<Record<SourcePanel, number>>>({}, { ownedWrite: true });
   const mayNavigate = () => !sourceExpanded() || !sourceDirty() || window.confirm("文件有未保存修改，是否放弃这些修改？");
+  const initialNavigationIndex: unknown = window.history.state?.issuePilotNavigationIndex;
+  let navigationIndex = typeof initialNavigationIndex === "number" && Number.isSafeInteger(initialNavigationIndex) ? initialNavigationIndex : 0;
+  let acceptedUrl = window.location.href;
+  let restoringHistory = false;
+  const onHistoryNavigation = (event: PopStateEvent) => {
+    if (restoringHistory) { restoringHistory = false; return; }
+    const nextIndex: unknown = event.state?.issuePilotNavigationIndex;
+    if (!mayNavigate()) {
+      if (typeof nextIndex === "number" && Number.isSafeInteger(nextIndex) && nextIndex !== navigationIndex) {
+        restoringHistory = true;
+        window.history.go(navigationIndex - nextIndex);
+      } else window.history.pushState({ ...window.history.state, issuePilotNavigationIndex: navigationIndex }, "", acceptedUrl);
+      return;
+    }
+    if (typeof nextIndex === "number" && Number.isSafeInteger(nextIndex)) navigationIndex = nextIndex;
+    const key = linkedIssueFromUrl();
+    setSourceExpanded(false);
+    setSourceDirty(false);
+    setKeepExternalSelection(Boolean(key));
+    setDashboardTarget(key);
+    setSelectedId(key);
+    setView(key ? "issues" : event.state?.issuePilotView === "configuration" ? "configuration" : "dashboard");
+  };
+  window.addEventListener("popstate", onHistoryNavigation);
+  onCleanup(() => window.removeEventListener("popstate", onHistoryNavigation));
   let issueWorkspace: HTMLElement | undefined;
   let selectionGeneration = 0;
   const issueRefreshes = new Map<string, number>();
@@ -109,6 +140,14 @@ export function App(props: { initialView?: AppView } = {}) {
       });
     },
   );
+  createEffect(() => ({ id: selectedId(), currentView: view() }), ({ id, currentView }) => {
+    const url = new URL(window.location.href);
+    url.pathname = "/";
+    if (currentView === "issues" && id) url.searchParams.set("issue", id);
+    else url.searchParams.delete("issue");
+    window.history.replaceState({ ...window.history.state, issuePilotNavigationIndex: navigationIndex, issuePilotView: currentView }, "", url);
+    acceptedUrl = url.href;
+  });
   createEffect(() => ({ current: issue()?.id, target: dashboardTarget(), currentView: view() }), ({ current, target, currentView }) => {
     if (!target || current !== target || currentView !== "issues") return;
     setDashboardTarget("");
@@ -163,6 +202,14 @@ export function App(props: { initialView?: AppView } = {}) {
                         setSourceAgentOpen(true);
                         setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 699px)").matches);
                         setSourceExpanded(true);
+                      }} onOpenIssue={(issueKey) => {
+                        if (issueKey === selectedId() || !mayNavigate()) return;
+                        const url = new URL(`/?issue=${encodeURIComponent(issueKey)}`, window.location.origin);
+                        window.history.pushState({ ...window.history.state, issuePilotNavigationIndex: ++navigationIndex, issuePilotView: "issues" }, "", url);
+                        setKeepExternalSelection(true);
+                        setDashboardTarget(issueKey);
+                        setSelectedId(issueKey);
+                        setView("issues");
                       }} onUpdated={async () => { await refreshIssue(current().id, true); }} onCreatedFollowUp={(issueKey) => {
                         setIssueRefreshToken((value) => value + 1);
                         if (!mayNavigate()) return;

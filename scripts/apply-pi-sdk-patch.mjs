@@ -3,16 +3,20 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const packageFile = new URL("../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url);
-const { version } = JSON.parse(readFileSync(packageFile, "utf8"));
-if (version !== "1.3.0") throw new Error("pi_sdk_patch_version_mismatch");
-const patch = "patches/@earendil-works+pi-coding-agent+1.3.0.patch";
-const check = args => {
-  try { execFileSync("git", ["apply", ...args, patch], { cwd: root, stdio: "ignore" }); return true; }
-  catch (error) { if (error.code === "ENOENT") throw new Error("git_required_for_pi_sdk_patch"); return false; }
-};
-if (!check(["--reverse", "--check"])) {
-  if (!check(["--check"])) throw new Error("pi_sdk_patch_does_not_apply");
-  execFileSync("git", ["apply", patch], { cwd: root, stdio: "inherit" });
+const patches = [
+  { name: "@earendil-works/pi-coding-agent", version: "1.4.0", file: "patches/@earendil-works+pi-coding-agent+1.4.0.patch" },
+  { name: "node-forge", version: "1.4.0", file: "patches/node-forge+1.4.0.patch" },
+];
+for (const patch of patches) {
+  const packageFile = new URL(`../node_modules/${patch.name}/package.json`, import.meta.url);
+  if (JSON.parse(readFileSync(packageFile, "utf8")).version !== patch.version) throw new Error(`dependency_patch_version_mismatch:${patch.name}`);
+  const check = args => {
+    try { execFileSync("git", ["apply", ...args, patch.file], { cwd: root, stdio: "ignore" }); return true; }
+    catch (error) { if (error.code === "ENOENT") throw new Error("git_required_for_dependency_patches"); return false; }
+  };
+  if (!check(["--reverse", "--check"])) {
+    if (!check(["--check"])) throw new Error(`dependency_patch_does_not_apply:${patch.name}`);
+    execFileSync("git", ["apply", patch.file], { cwd: root, stdio: "inherit" });
+  }
+  console.log(`Verified dependency patch: ${patch.name}@${patch.version}.`);
 }
-console.log("Verified Pi SDK output callbacks (1.3.0).");

@@ -17,7 +17,7 @@ export interface WorkFileAccess { readRoots?: Record<string, string> }
 export function isManagedIssueFile(relative: string): boolean {
   const segments = relative.split(path.sep), first = segments[0] ?? "";
   const name = /^\.related-issue-[0-9]{8}-[0-9]{3,}$/.test(first) ? segments[1] ?? "" : first;
-  return name.startsWith(".session-") || name.startsWith(".runtime-") || name.startsWith(".attachment-") || name === ".issue-runtime.json" || name === ".legacy-output-links.json" || /^\.related-issue-[0-9]{8}-[0-9]{3,}\.jsonl?$/.test(name);
+  return name === ".issue-git" || name.startsWith(".session-") || name.startsWith(".runtime-") || name.startsWith(".attachment-") || name === ".issue-runtime.json" || name === ".legacy-output-links.json" || /^\.related-issue-[0-9]{8}-[0-9]{3,}\.jsonl?$/.test(name);
 }
 function inside(root: string, selected: string): boolean { const relative = path.relative(root, selected); return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative); }
 

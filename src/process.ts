@@ -41,12 +41,15 @@ export async function executeLocalCommand(command: string, args: string[], optio
     let killed = false;
     let settled = false;
     let outputBytes = 0;
-    let outputLimitExceeded = false;
-    let streamError: Error | undefined;
+    let failure: Error | undefined;
+    let closed = false;
+    let exitCode: number | null = null;
+    let escalation: ReturnType<typeof setTimeout> | undefined;
     const finish = (operation: () => void) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (escalation) clearTimeout(escalation);
       options.signal?.removeEventListener("abort", abort);
       operation();
     };
@@ -62,11 +65,30 @@ export async function executeLocalCommand(command: string, args: string[], optio
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill(signal);
       }
     };
+    const groupAlive = () => {
+      if (!usesProcessGroup || child.pid === undefined) return false;
+      try { process.kill(-child.pid, 0); return true; }
+      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+    };
+    const complete = () => {
+      if (!closed || settled || escalation) return;
+      finish(() => failure
+        ? reject(failure)
+        : resolve({ stdout, stderr, code: exitCode ?? 1, killed }));
+    };
     const terminate = () => {
       if (killed) return;
       killed = true;
       signalProcess("SIGTERM");
-      setTimeout(() => signalProcess("SIGKILL"), issuePilotConfig.limits.process.terminationGraceMs).unref();
+      escalation = setTimeout(() => {
+        escalation = undefined;
+        signalProcess("SIGKILL");
+        complete();
+      }, issuePilotConfig.limits.process.terminationGraceMs);
+    };
+    const fail = (error: Error) => {
+      failure ??= error;
+      terminate();
     };
     const abort = () => terminate();
     const timer = options.timeout ? setTimeout(terminate, options.timeout) : undefined;
@@ -76,29 +98,28 @@ export async function executeLocalCommand(command: string, args: string[], optio
     const capture = (append: (chunk: string) => void) => (chunk: string) => {
       outputBytes += Buffer.byteLength(chunk);
       if (maximumOutputBytes !== null && outputBytes > maximumOutputBytes) {
-        outputLimitExceeded = true;
-        terminate();
+        fail(new Error("command_output_too_large"));
         return;
       }
       append(chunk);
     };
     child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
-      if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") terminate();
+      if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") fail(error);
     });
     if (options.input) child.stdin?.end(options.input);
     child.stderr!.setEncoding("utf8");
     const captureStdout = capture((chunk) => {
       if (!options.onStdout) { stdout += chunk; return; }
       try { options.onStdout(chunk); }
-      catch (error) { streamError = error instanceof Error ? error : new Error("command_output_processing_failed"); terminate(); }
+      catch (error) { fail(error instanceof Error ? error : new Error("command_output_processing_failed")); }
     });
     if (options.strictStdoutUtf8) {
       const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
       const decode = (chunk?: Buffer) => {
-        if (streamError || killed) return;
+        if (failure || killed) return;
         let text: string;
         try { text = decoder.decode(chunk, { stream: chunk !== undefined }); }
-        catch { streamError = new Error("command_stdout_not_utf8"); terminate(); return; }
+        catch { fail(new Error("command_stdout_not_utf8")); return; }
         if (text) captureStdout(text);
       };
       child.stdout!.on("data", decode);
@@ -108,12 +129,21 @@ export async function executeLocalCommand(command: string, args: string[], optio
       child.stdout!.on("data", captureStdout);
     }
     child.stderr!.on("data", capture((chunk) => { stderr += chunk; }));
-    child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => finish(() => streamError
-      ? reject(streamError)
-      : outputLimitExceeded
-        ? reject(new Error("command_output_too_large"))
-        : resolve({ stdout, stderr, code: code ?? 1, killed })));
+    child.stdout!.on("error", fail);
+    child.stderr!.on("error", fail);
+    child.on("error", (error) => {
+      failure ??= error;
+      if (child.pid !== undefined) terminate();
+    });
+    child.on("close", (code) => {
+      closed = true;
+      exitCode = code;
+      if (escalation && !groupAlive()) {
+        clearTimeout(escalation);
+        escalation = undefined;
+      }
+      complete();
+    });
     if (options.signal?.aborted) terminate();
   });
 }

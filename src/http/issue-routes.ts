@@ -49,10 +49,9 @@ async function readIssueInput(request: FastifyRequest): Promise<{ input: Record<
     }
     return { input: record(JSON.parse(text(issueField, "issue", 100_000))), attachments };
   } catch (error) {
-    await removePendingAttachments(attachments);
-    if (error instanceof ApiError) throw error;
-    if (error instanceof SyntaxError) throw new ApiError(400, "invalid_issue");
-    throw error;
+    const failure = error instanceof SyntaxError ? new ApiError(400, "invalid_issue") : error;
+    await removePendingAttachments(attachments, [failure]);
+    throw failure;
   }
 }
 
@@ -179,6 +178,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   });
 
   const createIssue = async (input: Record<string, unknown>, request: FastifyRequest, initialAttachments: PendingAttachment[] = [], options: { dingtalk?: DingtalkImportClaim; startAgent?: boolean; signal?: AbortSignal } = {}) => {
+    const failures: unknown[] = [];
     try {
       const reporterSubject = await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
       let created = true;
@@ -228,8 +228,11 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       });
     });
       return { issue: await serializeIssueSummary(createdIssue), created };
+    } catch (error) {
+      failures.push(error);
+      throw error;
     } finally {
-      await removePendingAttachments(initialAttachments);
+      await removePendingAttachments(initialAttachments, failures);
     }
   };
   app.post("/api/issues", async (request, reply) => {
@@ -241,6 +244,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
     const { input, attachments: pendingAttachments } = await readIssueInput(request);
+    const failures: unknown[] = [];
     try {
       const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
       if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new ApiError(400, "issue_scope_update_not_allowed");
@@ -300,8 +304,11 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       }
         return serializeIssueSummary(await requireIssue(database, issue.key));
       }));
+    } catch (error) {
+      failures.push(error);
+      throw error;
     } finally {
-      await removePendingAttachments(pendingAttachments);
+      await removePendingAttachments(pendingAttachments, failures);
     }
   });
 

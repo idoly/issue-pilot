@@ -13,16 +13,27 @@ export async function legacyOutputLinks(stateRoot: string, issueKey: string): Pr
   const metadata = await lstat(file).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
   if (!metadata) return {};
   if (!metadata.isFile() || metadata.mode & 0o077) throw new Error("insecure_legacy_output_links");
-  const data = JSON.parse(await readFile(file, "utf8"));
-  if (data.version !== 1 || !data.files || typeof data.files !== "object" || Array.isArray(data.files)) throw new Error("invalid_legacy_output_links");
-  for (const [name, target] of Object.entries(data.files)) { workFileName(name); if (typeof target !== "string") throw new Error("invalid_legacy_output_links"); workFileName(target); }
-  return data.files;
+  const data: unknown = JSON.parse(await readFile(file, "utf8"));
+  if (!data || typeof data !== "object" || Array.isArray(data) || !("version" in data) || data.version !== 1 || !("files" in data)) throw new Error("invalid_legacy_output_links");
+  const files = data.files;
+  if (!files || typeof files !== "object" || Array.isArray(files)) throw new Error("invalid_legacy_output_links");
+  const links: Record<string, string> = Object.create(null);
+  for (const [name, target] of Object.entries(files)) {
+    workFileName(name);
+    if (typeof target !== "string") throw new Error("invalid_legacy_output_links");
+    links[name] = workFileName(target);
+  }
+  return links;
 }
-export async function resolveIssueOutput(stateRoot: string, issueKey: string, fileName: string): Promise<string> {
-  const selected = workFileName(fileName), links = await legacyOutputLinks(stateRoot, issueKey);
+async function resolveOutputFile(stateRoot: string, issueKey: string, selected: string, links: Readonly<Record<string, string>>): Promise<string> {
   const target = Object.hasOwn(links, selected) ? path.join(issueWorkDirectory(stateRoot, issueKey), links[selected]!) : path.join(issueOutputRoot(stateRoot, issueKey), selected);
   if (!(await lstat(target)).isFile() || await realpath(target) !== target) throw new Error("insecure_issue_output_file");
   return target;
+}
+
+export async function resolveIssueOutput(stateRoot: string, issueKey: string, fileName: string): Promise<string> {
+  const selected = workFileName(fileName);
+  return resolveOutputFile(stateRoot, issueKey, selected, await legacyOutputLinks(stateRoot, issueKey));
 }
 export async function openLegacyIssueOutput(stateRoot: string, issueKey: string, fileName: string) {
   const target = await resolveIssueOutput(stateRoot, issueKey, fileName);
@@ -37,7 +48,7 @@ export async function listIssueOutputs(stateRoot: string, issueKey: string): Pro
   if (metadata && !metadata.isDirectory()) throw new Error("insecure_issue_output_root");
   const names = new Set([...Object.keys(links), ...(metadata ? await readdir(legacy) : [])]);
   const files = await Promise.all([...names].map(async name => {
-    const file = await resolveIssueOutput(stateRoot, issueKey, name), info = await lstat(file);
+    const file = await resolveOutputFile(stateRoot, issueKey, workFileName(name), links), info = await lstat(file);
     return { fileName: name, size: info.size, updatedAt: info.mtime.toISOString() };
   }));
   return files.sort((a, b) => a.fileName.localeCompare(b.fileName));

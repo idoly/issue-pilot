@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, lstat, type FileHandle } from "node:fs/promises";
+import { constants, createReadStream, type ReadStream } from "node:fs";
+import { chmod, mkdir, mkdtemp, open, rename, rm, lstat, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -45,22 +45,64 @@ export async function stageAttachment(fileName: string, mediaType: string, chunk
     await handle.close();
     return { fileName, mediaType, temporaryPath, size, sha256: sha256.digest("hex") };
   } catch (error) {
-    await handle?.close().catch(() => undefined);
-    await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    const failures: unknown[] = [error];
+    try { await handle?.close(); } catch (failure) { if (!failures.includes(failure)) failures.push(failure); }
+    try { await rm(stagingRoot, { recursive: true, force: true }); } catch (failure) { failures.push(failure); }
+    if (failures.length > 1) throw new AggregateError(failures, "attachment_staging_cleanup_failed");
     throw error;
   }
 }
 
-export async function removePendingAttachments(pendingAttachments: PendingAttachment[]): Promise<void> {
+export async function removePendingAttachments(pendingAttachments: PendingAttachment[], primaryFailures: readonly unknown[] = []): Promise<void> {
   const stagingRoots = [...new Set(pendingAttachments.map(({ temporaryPath }) => path.dirname(temporaryPath)))];
-  await Promise.all(stagingRoots.map((stagingRoot) => rm(stagingRoot, { recursive: true, force: true })));
+  const results = await Promise.allSettled(stagingRoots.map(stagingRoot => rm(stagingRoot, { recursive: true, force: true })));
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+  if (failures.length) throw new AggregateError([...primaryFailures, ...failures], "attachment_staging_cleanup_failed");
+}
+
+function validateAttachmentFile(metadata: { isFile(): boolean; mode: number; size: number } | undefined, expectedSize?: number): void {
+  if (!metadata?.isFile() || (metadata.mode & 0o7777) !== 0o400 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
 }
 
 export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
   const attachmentPath = path.resolve(objectKey);
   const metadata = await lstat(attachmentPath).catch(() => undefined);
-  if (path.dirname(attachmentPath) !== attachmentRoot || !metadata?.isFile() || (metadata.mode & 0o7777) !== 0o400 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
+  if (path.dirname(attachmentPath) !== attachmentRoot) throw new Error("insecure_issue_attachment_file");
+  validateAttachmentFile(metadata, expectedSize);
   return attachmentPath;
+}
+
+export async function openVerifiedAttachmentStream(
+  attachmentRoot: string,
+  objectKey: string,
+  size: number,
+  sha256: string,
+  signal?: AbortSignal,
+): Promise<ReadStream> {
+  signal?.throwIfAborted();
+  const file = await resolveSecureAttachmentFile(attachmentRoot, objectKey, size);
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    validateAttachmentFile(await handle.stat(), size);
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(64 * 1024);
+    let position = 0;
+    while (true) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+      if (!bytesRead) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    signal?.throwIfAborted();
+    if (position !== size || hash.digest("hex") !== sha256) throw new Error("attachment_integrity_check_failed");
+    // The original is immutable. Reuse the verified descriptor rather than reopening a replaceable path.
+    return handle.createReadStream({ start: 0, autoClose: true, ...(signal ? { signal } : {}) });
+  } catch (error) {
+    try { await handle.close(); }
+    catch (cleanup) { throw new AggregateError([error, cleanup], "attachment_read_cleanup_failed"); }
+    throw error;
+  }
 }
 
 export function attachmentWorkingFileName(objectKey: string): string {
@@ -143,9 +185,27 @@ export async function writePendingAttachments(
   const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
   for (const pendingAttachment of pendingAttachments) {
     const objectKey = path.join(attachmentRoot, attachmentObjectName(pendingAttachment.fileName));
+    const handle = await open(objectKey, "wx", 0o600);
+    // Register only paths exclusively created by this transaction, including partial copies.
     writtenObjectKeys.push(objectKey);
-    await copyFile(pendingAttachment.temporaryPath, objectKey, constants.COPYFILE_EXCL);
-    await chmod(objectKey, 0o400);
+    let failed = false;
+    let failure: unknown;
+    try {
+      for await (const chunk of createReadStream(pendingAttachment.temporaryPath)) {
+        await handle.writeFile(chunk);
+      }
+      await handle.chmod(0o400);
+    } catch (error) {
+      failed = true;
+      failure = error;
+      throw error;
+    } finally {
+      try { await handle.close(); }
+      catch (error) {
+        if (failed) throw new AggregateError([failure, error], "attachment_copy_cleanup_failed");
+        throw error;
+      }
+    }
     const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, workingFileName: attachmentWorkingFileName(objectKey), mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
     createdAttachments.push(serializeAttachment(attachment!));
   }

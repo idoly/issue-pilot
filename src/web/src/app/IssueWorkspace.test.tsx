@@ -47,6 +47,27 @@ for (const outcome of ["success", "failure"] as const) for (const currentPending
   } finally { finishOld?.(); finishCurrent?.(); }
 });
 
+it("shows related Issue handler, status, service and environment with a navigable card", async () => {
+  const open = vi.fn();
+  const related = { ...issue, id: "ISSUE-20261017-002", assignee: "处理人甲", assigneeSubject: "handler", workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null };
+  const unassigned = { ...related, id: "ISSUE-20261017-003", assignee: null, assigneeSubject: null };
+  const detailed = { ...issue, description: "[诊断日志](work/diagnostics.log)", relatedIssues: [related, unassigned] };
+  render(() => <IssueWorkspace issue={detailed} onOpenIssue={open} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  const link = screen.getByRole("link", { name: `打开关联工单 ${related.id}` });
+  expect(link.getAttribute("href")).toBe(`/?issue=${related.id}`);
+  expect(within(link).getByText("处理人甲")).toBeTruthy();
+  expect(within(link).getByText("待确认")).toBeTruthy();
+  expect(within(link).getByText("Orders")).toBeTruthy();
+  expect(within(link).getByText("正式")).toBeTruthy();
+  expect(within(link).queryByText(related.title)).toBeNull();
+  expect(link.getAttribute("title")).toBe(related.title);
+  expect(link.querySelectorAll("[title]")).toHaveLength(0);
+  expect(within(screen.getByRole("link", { name: `打开关联工单 ${unassigned.id}` })).getByText("未分配")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "诊断日志" }).getAttribute("href")).toBe(`/api/issues/${issue.id}/files/download?path=diagnostics.log`);
+  fireEvent.click(link);
+  expect(open).toHaveBeenCalledWith(related.id);
+});
+
 it("omits comments and places attachments immediately after the Issue header", () => {
   render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   expect(screen.queryByRole("heading", { name: "评论与备注" })).toBeNull();

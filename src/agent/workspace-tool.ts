@@ -9,7 +9,7 @@ import { resolveDeploymentConfiguration } from "../configuration/credentials.ts"
 import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, mcpServices, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
-import { SerialQueue } from "../serial.ts";
+import { issueLocalCommands } from "./native-tools.ts";
 import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
 import { loadDeploymentRepositories } from "../workspace/deployment.ts";
 import path from "node:path";
@@ -26,7 +26,6 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
     Type.Object({ operation: Type.Union([Type.Literal("include"), Type.Literal("remove")]), service: Type.Union(keys.map((key) => Type.Literal(key))) }, { additionalProperties: false }),
   ]);
   const validateInput = Compile(schema);
-  const queue = new SerialQueue();
   return defineTool({ name: "workspace", label: "Cross-service workspace", description: "List code services and permitted investigation sources; development Issues can describe production/test services. Describe with an explicit source environment before service_query. include/remove manage repositories only in this Issue's code environment; investigations get read-only snapshots. Existing Issue branches are preserved. remove can detach an additional service only when its repositories are safe to remove.", parameters: schema, outputSchema: Type.Unknown(),
     execute: async (_id, raw, signal) => {
       if (!validateInput.Check(raw)) throw new Error("invalid_workspace_input");
@@ -51,7 +50,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         const context = deploymentContext(target.environment, target.deployment.config, mcp);
         return structuredJsonResult(capabilityTextResult(JSON.stringify({ service: target.service.key, name: target.service.name, environment: target.environment.key, repositories, description: [target.service.description, context].filter(Boolean).join("\n\n"), capabilities: configuredCapabilities(target.environment.kind === "dev" ? {} : resolveDeploymentConfiguration(target.deployment.config)), mcp: mcp.filter(row => row.enabled).map(row => ({ ...row, url: publicMcpUrl(row.url) })) }), { operation: "describe" }));
       }
-      return queue.run(async () => {
+      return issueLocalCommands.run(runtimeRoot, async () => {
         signal?.throwIfAborted();
         const [current] = await database.select().from(issues).where(eq(issues.id, issue.id)).limit(1);
         if (!current || current.status === "resolved" || current.environmentId !== issue.environmentId || current.serviceId !== issue.serviceId) throw new Error("issue_scope_changed");

@@ -32,11 +32,13 @@ function fixture(pages: unknown[]) {
 const page = (data: unknown[], meta: Record<string, unknown> = {}) => ({ data, meta: { progress: "Complete", hasSQL: false, mode: 0, ...meta } });
 
 test("aliyun sls paginates complete results and keeps credentials out of argv, results and the host profile", async () => {
-  const f = fixture([page(Array.from({ length: 100 }, (_, i) => ({ message: String(i) }))), page([{ message: "last", password: "business-value" }])]);
+  const f = fixture([page(Array.from({ length: 100 }, (_, i) => ({ message: String(i) }))), page([{ message: "last", password: "business-value", token: "business-login-token", Authorization: "Bearer business-login-token" }])]);
   const result = await readSlsLogs(base, configured, undefined, f.executor);
   const output = JSON.parse(result.content[0]!.text);
   assert.equal(output.records.length, 101);
   assert.equal(output.records[100].password, "business-value");
+  assert.equal(output.records[100].token, "business-login-token");
+  assert.equal(output.records[100].Authorization, "Bearer business-login-token");
   assert.equal(result.details.provider, "aliyun-sls-cli");
   assert.deepEqual(f.calls.map(call => call.body.offset), [0, 100]);
   assert.equal(f.calls[0]!.body.reverse, true);

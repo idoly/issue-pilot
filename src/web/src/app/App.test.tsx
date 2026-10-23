@@ -175,7 +175,67 @@ import { setCurrentUserSubject } from "../data/client";
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
-  afterEach(() => { cleanup(); setCurrentUserSubject(null); localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); setCurrentUserSubject(null); localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); window.history.replaceState(null, "", window.location.pathname); });
+
+  test("opens a linked Issue even when it is outside the current user's queue", async () => {
+    window.history.replaceState(null, "", "/home/idoly/issue-pilot/.issue-pilot/issues/issue-20260901-002/work/customer-state-sync-java8-tests.log?issue=ISSUE-20260810-038");
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "批量审批偶发超时" });
+    expect(screen.getByRole("radio", { name: "工单" }).getAttribute("aria-checked")).toBe("true");
+    await waitFor(() => expect(within(screen.getByLabelText("工单队列")).queryByText("ISSUE-20260810-038")).toBeNull());
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe("ISSUE-20260810-038");
+    expect(window.location.pathname).toBe("/");
+  });
+
+  test("navigates through a related Issue card without changing identity or losing external selection", async () => {
+    const client = await import("../data/client");
+    const source = (await client.getIssue("ISSUE-20260810-042"))!;
+    const target = (await client.getIssue("ISSUE-20260810-038"))!;
+    source.relatedIssues = [{ ...target, workspaceStatus: target.workspace.status, agentRunning: false, resolvedAt: null }];
+    vi.mocked(client.getIssue).mockResolvedValueOnce(source);
+    render(() => <App initialView="issues" />);
+    const link = await screen.findByRole("link", { name: `打开关联工单 ${target.id}` });
+    expect(link.getAttribute("href")).toBe(`/?issue=${target.id}`);
+    fireEvent.click(link);
+    await screen.findByRole("heading", { name: target.title });
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe(target.id);
+    expect(client.currentUserSubject()).toBe("fixture-user");
+    await waitFor(() => expect(within(screen.getByLabelText("工单队列")).queryByText(target.id)).toBeNull());
+    expect(screen.getByRole("heading", { name: target.title })).toBeTruthy();
+    window.history.back();
+    await screen.findByRole("heading", { name: source.title });
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe(source.id);
+    window.history.forward();
+    await screen.findByRole("heading", { name: target.title });
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe(target.id);
+  });
+
+  test("keeps the current Issue and draft when browser back is declined", async () => {
+    const client = await import("../data/client");
+    const source = (await client.getIssue("ISSUE-20260810-042"))!;
+    const target = (await client.getIssue("ISSUE-20260810-038"))!;
+    source.relatedIssues = [{ ...target, workspaceStatus: target.workspace.status, agentRunning: false, resolvedAt: null }];
+    vi.mocked(client.getIssue).mockResolvedValueOnce(source);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(() => <App initialView="issues" />);
+    fireEvent.click(await screen.findByRole("link", { name: `打开关联工单 ${target.id}` }));
+    await screen.findByRole("heading", { name: target.title });
+    fireEvent.click(await screen.findByRole("button", { name: "浏览工单代码" }));
+    const browser = await screen.findByRole("region", { name: `${target.id} 代码浏览器` });
+    fireEvent.click(await within(browser).findByRole("button", { name: /README\.md/ }));
+    const editor = await within(browser).findByLabelText("代码内容 README.md") as HTMLTextAreaElement;
+    await fireEvent.input(editor, { target: { value: "preserve draft on browser back" } });
+    await screen.findByText(/README.md · 未保存/);
+    window.history.back();
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("issue")).toBe(target.id));
+    expect(browser.isConnected).toBe(true);
+    expect(editor.value).toBe("preserve draft on browser back");
+    confirm.mockReturnValue(true);
+    window.history.back();
+    await screen.findByRole("heading", { name: source.title });
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe(source.id);
+  });
 
   test("shows operational attention and workload on the home dashboard and opens an Issue", async () => {
     const client = await import("../data/client");
@@ -379,6 +439,11 @@ describe("issue pilot workspace", () => {
   });
 
   test("keeps an unsaved code draft when navigation or identity changes are declined", async () => {
+    const client = await import("../data/client");
+    const source = (await client.getIssue("ISSUE-20260810-042"))!;
+    const target = (await client.getIssue("ISSUE-20260810-038"))!;
+    source.relatedIssues = [{ ...target, workspaceStatus: target.workspace.status, agentRunning: false, resolvedAt: null }];
+    vi.mocked(client.getIssue).mockResolvedValueOnce(source);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(() => <App initialView="issues" />);
     fireEvent.click(await screen.findByRole("button", { name: "浏览工单代码" }));
@@ -396,6 +461,9 @@ describe("issue pilot workspace", () => {
     expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test");
     fireEvent.click(within(browser).getByRole("button", { name: "关闭代码浏览器" }));
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(3));
+    fireEvent.click(screen.getByRole("link", { name: "打开关联工单 ISSUE-20260810-038" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(4));
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe("ISSUE-20260810-042");
     expect(editor.value).toBe("keep unsaved code");
     expect(browser.isConnected).toBe(true);
   });

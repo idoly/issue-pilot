@@ -1,6 +1,6 @@
 # 部署指南
 
-生产使用一个内置 Node、Python/openpyxl、Git、Java/Maven 和 aliyun CLI 的应用镜像。Fastify 同源提供网页、API、SSE 和入站 MCP，业务数据独立持久化。已有状态升级先按[运维手册](RUNBOOK.md)备份和演练。
+应用支持主机运行和单副本容器部署，两者使用相同的状态与身份规则。容器内置 Node、Python/openpyxl、Git、Java/Maven 和 aliyun CLI，Fastify 同源提供网页、API、SSE 和入站 MCP；主机开发可以另启 Vite 前端。业务数据独立持久化，同一 state 同时只允许一个 API 实例。已有状态升级先按[运维手册](RUNBOOK.md)备份和演练。
 
 ## 部署结构
 
@@ -17,11 +17,13 @@ flowchart LR
 
 应用代码、npm 生产依赖、Python `.venv` 和编译后的网页随镜像发布。启动不下载基础运行时，也不启动每工单容器或 Excel 服务。Bash 自动使用应用 `.venv`。
 
-[Containerfile](../Containerfile) 使用 Node 构建网页、移除 dev 依赖，复制 Git 与 Java/Maven 产物，再安装 Python 库，以 UID/GID 1000 启动。Node 固定到主版本 26，Python 跟随 Debian bookworm，库版本见 [package-lock.json](../package-lock.json) 和 [requirements.txt](../requirements.txt)。基础镜像没有固定摘要，不能声称逐字节可复现。
+[Containerfile](../Containerfile) 使用 Node 构建网页、移除 dev 依赖，复制 Git 与 Java/Maven 产物，再安装 Python 库，以 UID/GID 1000 启动。Node 固定到主版本 26，Python 跟随 Debian bookworm，库版本见 [package-lock.json](../package-lock.json) 和 [requirements.txt](../requirements.txt)。Git 2.56.0 采用官方 `NO_RUST` 构建选项，aliyun CLI 固定为 3.5.2；开发机的软件版本应独立核对，构建镜像不会升级宿主机。基础镜像没有固定摘要，不能声称逐字节可复现。
+
+`npm ci` 会校验并应用 Pi 1.4.0 输出回调和 node-forge 1.4.0 验签回补；Git 是安装脚本的必要工具，版本或补丁不匹配即安装失败。私有配置在 state root 中独立部署，不复制进镜像。详见[依赖补丁](../patches/README.md)。
 
 ## 首次本地运行
 
-Linux 开发环境需要 Python 3.8+（支持 venv）、Git、ripgrep、fd/fdfind、OpenSSH、bubblewrap、socat、proxychains4、aliyun CLI（镜像固定 3.4.11），以及目标项目需要的 npm、Java/Maven。开发与 CI 使用 Node 24.18.0。在新项目副本检查[根配置](../issue-pilot.config.ts)，准备模型凭证和 SSH 配置后执行：
+Linux 开发环境需要 Python 3.8+（支持 venv）、Git、ripgrep、fd/fdfind、OpenSSH、bubblewrap、socat、proxychains4、aliyun CLI（镜像固定 3.5.2），以及目标项目需要的 npm、Java/Maven。开发与 CI 使用 Node 24.18.0。在新项目副本检查[根配置](../issue-pilot.config.ts)，准备模型凭证和 SSH 配置后执行：
 
 ```bash
 npm ci
@@ -60,7 +62,7 @@ podman push registry.example.com/issue-pilot:<version>
 | `/etc/issue-pilot`，只读 hostPath | `/home/node` | Operator Pi、SSH、工具配置 |
 | tmp emptyDir | `/tmp` | 临时文件 |
 
-Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入 `service.yaml` 的全局 `agent.runtime.networkAllowedDomains`（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。
+Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入 `service.yaml` 的全局 `agent.runtime.networkAllowedDomains`（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。SSH Git 目标应包含对应 22 端口；“host is not on the allow list”属于本地工具网络策略，不等于 Git 权限验证失败。文件配置变更需按运维流程重启应用重新投影。
 
 准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。已有数据转容器时，还须保持数据库和 Git 中的绝对路径可在容器内解析；挂载到另一目录不会自动重写历史 worktree 注册，必须先演练明确的路径方案。全局 Pi 资源位于 Operator HOME 中的 `~/.pi/agent`，随 HOME 配置挂载；不再为应用单独挂载 `.pi` 资源目录。
 
@@ -79,5 +81,7 @@ kubectl -n issue-pilot get deployment,pod,service
 可信网关负责认证，并约束已认证身份与 `X-Issue-Pilot-Subject` 的关系。保护 API、源码、下载、私有配置和 MCP，访问日志不记录完整敏感内容。反向代理禁用 SSE 缓冲并允许长连接。
 
 应用层不设附件业务大小/数量上限，边缘限制由部署方明确；Agent 图片、MCP 和预览预算见根配置。模型、Git、证据目标及外部 MCP 需要对应网络；stdio MCP 的程序和依赖由部署环境准备。
+
+验收应包含临时工单目录中的 Native 写入与越界拒绝、标准命令、Python/Excel、stdio MCP 和 Git 暂存／提交。个人 SSH 使用临时测试账号或自建 SSH fixture 验证认证成功、错误身份及未知主机拒绝；连接配置不得进入日志。原始生产依赖审计仍会按未升级的 node-forge 包版本报告回补公告，须同时检查安装补丁和攻击回归证据，不能只以 audit 数字判断已回补代码。
 
 `/health` 成功不等于所有工单、凭证或远程目标正常。启动、关闭和业务边界见[系统架构](ARCHITECTURE.md)，容器的可信执行边界见 [Agent 与能力](AGENT.md#执行边界)。发布验收与回退统一按[运维手册](RUNBOOK.md)执行。

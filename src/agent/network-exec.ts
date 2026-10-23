@@ -13,6 +13,27 @@ try {
   const existing = await lstat(config).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
   if (existing) { if (!existing.isFile() || (existing.mode & 0o7777) !== 0o600 || await readFile(config, "utf8") !== content) throw new Error("issue_network_config_changed"); }
   else await writeFile(config, content, { flag: "wx", mode: 0o600 });
+  // SRT supplies proxy SSH/config entries after spawn. Compose personal identity instead of losing either side.
+  const personalSsh = process.env.ISSUE_PILOT_PERSONAL_GIT_SSH;
+  if (personalSsh !== undefined) {
+    const sandboxSsh = process.env.GIT_SSH_COMMAND;
+    if (!personalSsh.startsWith("ssh ") || !sandboxSsh?.startsWith("ssh ")) throw new Error("invalid_issue_git_ssh_environment");
+    process.env.GIT_SSH_COMMAND = `${personalSsh} ${sandboxSsh.slice(4)}`;
+    delete process.env.ISSUE_PILOT_PERSONAL_GIT_SSH;
+  }
+  const personalConfig = process.env.ISSUE_PILOT_GIT_CONFIG;
+  if (personalConfig !== undefined) {
+    const entries: unknown = JSON.parse(personalConfig);
+    let count = Number(process.env.GIT_CONFIG_COUNT ?? "0");
+    if (!Array.isArray(entries) || entries.length > 128 || !Number.isInteger(count) || count < 0 || count > 1024) throw new Error("invalid_issue_git_environment");
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 2 || entry.some(value => typeof value !== "string" || value.includes("\0"))) throw new Error("invalid_issue_git_environment");
+      process.env[`GIT_CONFIG_KEY_${count}`] = entry[0];
+      process.env[`GIT_CONFIG_VALUE_${count++}`] = entry[1];
+    }
+    process.env.GIT_CONFIG_COUNT = String(count);
+    delete process.env.ISSUE_PILOT_GIT_CONFIG;
+  }
   process.env.TMPDIR = root;
   process.env.XDG_CACHE_HOME = path.join(root, ".cache");
   process.env.NPM_CONFIG_CACHE = path.join(root, ".npm-cache");

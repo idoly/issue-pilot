@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { omit } from "solid-js";
-import "monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
+import "monaco-editor-codicons.css";
 import "./icons.css";
 
 // Names and code points from the pinned Monaco Codicon font.

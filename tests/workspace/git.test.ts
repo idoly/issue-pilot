@@ -121,7 +121,7 @@ for (const missingBranch of [false, true]) test(`restores recorded development b
     if (missingBranch) {
       await git(["-C", prepared.cachePath, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`]);
       await assert.rejects(manager.prepare(restore), /working_branch_not_found/);
-      await assert.rejects(manager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }), /working_branch_not_found/);
+      await assert.rejects(manager.prepareBranchSnapshot({ issueKey: input.issueKey, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }), /working_branch_not_found/);
       await assert.rejects(access(prepared.workspacePath));
       await assert.rejects(git(["-C", prepared.cachePath, "show-ref", "--verify", `refs/heads/${prepared.workingBranch}`]));
     } else {
@@ -151,7 +151,7 @@ for (const malformed of [true, false]) test(`does not disguise ${malformed ? "a 
     await writeFile(ref, evidence);
     for (const operation of [
       () => manager.prepare({ ...input, workingBranch: prepared.workingBranch!, existingBaseCommit: prepared.baseCommit }),
-      () => manager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }),
+      () => manager.prepareBranchSnapshot({ issueKey: input.issueKey, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }),
     ]) {
       await assert.rejects(operation(), error => error instanceof Error && error.message !== "working_branch_not_found" && "code" in error && error.code === (malformed ? 1 : 128));
       assert.equal(await readFile(ref, "utf8"), evidence);
@@ -250,12 +250,12 @@ test("shares immutable latest baselines for read-only environments and creates p
     assert.equal(await git(["-C", hotfix.workspacePath, "branch", "--show-current"]), hotfix.workingBranch);
     await assert.rejects(git(["-C", hotfix.workspacePath, "rev-parse", "@{upstream}"]));
     await assert.rejects(git(["--git-dir", remote, "rev-parse", `refs/heads/${hotfix.workingBranch}`]));
-    const unchangedSnapshot = await worktreeManager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: hotfix.workingBranch! });
+    const unchangedSnapshot = await worktreeManager.prepareBranchSnapshot({ issueKey: "ISSUE-20260805-011", url: remote, baseBranch: "main", workingBranch: hotfix.workingBranch! });
     assert.equal(unchangedSnapshot.workspacePath, refreshed.workspacePath);
     await writeFile(join(hotfix.workspacePath, "branch.txt"), "branch snapshot\n", "utf8");
     await git(["-C", hotfix.workspacePath, "add", "."]);
     await git(["-C", hotfix.workspacePath, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "branch snapshot"]);
-    const changedSnapshot = await worktreeManager.prepareBranchSnapshot({ url: remote, baseBranch: "main", workingBranch: hotfix.workingBranch! });
+    const changedSnapshot = await worktreeManager.prepareBranchSnapshot({ issueKey: "ISSUE-20260805-011", url: remote, baseBranch: "main", workingBranch: hotfix.workingBranch! });
     assert.equal(await git(["-C", changedSnapshot.workspacePath, "rev-parse", "HEAD"]), await git(["-C", hotfix.workspacePath, "rev-parse", "HEAD"]));
     assert.equal(await readFile(join(changedSnapshot.workspacePath, "branch.txt"), "utf8"), "branch snapshot\n");
     assert.doesNotMatch(await readFile(join(hotfix.workspacePath, ".git"), "utf8"), new RegExp(root));

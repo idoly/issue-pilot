@@ -1,13 +1,59 @@
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createUnixServer } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { issueBashOperations, issueNativeTools } from "../../src/agent/native-tools.ts";
 import { prepareIssueCommand, shellQuote } from "../../src/agent/issue-sandbox.ts";
 import { executeLocalCommand } from "../../src/process.ts";
+
+test("concurrent sandbox cleanup calls wait for the same resource shutdown", async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-sandbox-cleanup-"));
+  const prepared = await prepareIssueCommand({ writeRoot: root }, [process.execPath, "-e", ""]);
+  const remove = fs.rm;
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let first: Promise<void> | undefined, second: Promise<void> | undefined;
+  let secondSettled = false, removals = 0;
+  try {
+    context.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+      if (String(args[0]).startsWith(path.join(root, ".runtime-proxy-"))) {
+        removals++; entered(); await gate;
+      }
+      return remove(...args);
+    });
+    syncBuiltinESMExports();
+    first = prepared.cleanup(); await started;
+    second = prepared.cleanup();
+    const observed = second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(secondSettled, false);
+    release(); await Promise.all([first, second]); await observed;
+    assert.equal(removals, 1);
+  } finally {
+    release(); await Promise.allSettled([first, second]);
+    context.mock.restoreAll(); syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stdio sandbox Git protection includes stores created after the connection starts", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-mcp-git-"));
+  const store = path.join(root, ".issue-git", "a".repeat(20)), config = path.join(store, "config");
+  const code = `try { require('node:fs').writeFileSync(${JSON.stringify(config)}, 'compromised'); process.exit(0); } catch { process.exit(17); }`;
+  const prepared = await prepareIssueCommand({ writeRoot: root, gitAccess: "read" }, [process.execPath, "-e", code]);
+  try {
+    await mkdir(store, { recursive: true });
+    await writeFile(config, "trusted");
+    const result = await executeLocalCommand(prepared.argv[0]!, prepared.argv.slice(1), { cwd: root });
+    assert.equal(result.code, 17);
+    assert.equal(await readFile(config, "utf8"), "trusted");
+  } finally { await prepared.cleanup(); await rm(root, { recursive: true, force: true }); }
+});
 
 test("SRT blocks direct and proxy access to host HTTP and visible Unix sockets that could write another Issue", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-host-services-")), own = path.join(root, "own"), outside = path.join(root, "outside.txt");

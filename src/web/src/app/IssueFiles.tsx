@@ -45,8 +45,7 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
   const repositoryDirectory = (file: IssueWorkFile) => file.kind === "directory" && props.issue.repositories.some(repo => repo.name === file.path);
   const parent = () => directory().split("/").slice(0, -1).join("/");
   return <section class="attachment-band" aria-labelledby="working-files-title">
-    <div class="band-title"><File size={16} /><h2 id="working-files-title">工作目录</h2><Show when={directory()}><span title={directory()}>{directory()}</span></Show><Button size="small" aria-label="刷新工作目录" onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /></Button></div>
-    <Show when={directory()}><Button size="small" onClick={() => setDirectory(parent())}>返回上级</Button></Show>
+    <div class="band-title working-files-heading"><File size={16} /><h2 id="working-files-title">工作目录</h2><Show when={directory()}><span class="working-directory-path" title={directory()}>{directory()}</span></Show><div class="working-files-actions"><Show when={directory()}><Button type="text" size="small" aria-label="返回上级" title="返回上级" onClick={() => setDirectory(parent())}><ChevronRight class="directory-up-icon" size={14} /></Button></Show><Button type="text" size="small" aria-label="刷新工作目录" title="刷新工作目录" onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /></Button></div></div>
     <Show when={error()}><div role="alert">{error()}</div></Show>
     <Show when={loading()}><div class="empty-band">正在读取文件…</div></Show>
     <Show when={!loading() && !error()}>

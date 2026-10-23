@@ -8,7 +8,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
-import { issueRepositoryWorkspaceNames, repositoryStorePath } from "./git.ts";
+import { developmentRepositoryStorePath, issueRepositoryWorkspaceNames, repositoryStorePath } from "./git.ts";
 import { classifyRepositoryState, issueRuntimeRoot, sharedCheckoutsRoot } from "./state.ts";
 
 import type { SourceBlame, SourceChanges, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "./source-contracts.ts";
@@ -534,7 +534,7 @@ export class SourceBrowser {
     if (context.source.access !== "write") throw new Error("source_read_only");
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"], this.mutationOptions());
     const [gitDirectory, commonDirectory, workingDirectory, branch] = result.stdout.trim().split("\n");
-    const expectedStore = repositoryStorePath(this.stateRoot, context.repository.url);
+    const expectedStore = await developmentRepositoryStorePath(this.stateRoot, issue.key, context.repository.url);
     if (result.code !== 0 || commonDirectory !== expectedStore || workingDirectory !== context.root || branch !== context.repository.workingBranch || !gitDirectory || path.dirname(gitDirectory) !== path.join(expectedStore, "worktrees")) throw new Error("source_git_binding_invalid");
     const pointer = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
     if (path.resolve(gitDirectory, pointer) !== path.join(context.root, ".git")) throw new Error("source_git_binding_invalid");
@@ -602,7 +602,7 @@ export class SourceBrowser {
     try { root = await realpath(runtimeRepository); } catch (error) { missingPathError(error); }
     if (state === "development_workspace") {
       if (!repository.localPath || path.resolve(repository.localPath) !== root) throw new Error("source_runtime_invalid");
-      const store = repositoryStorePath(this.stateRoot, repository.url);
+      const store = await developmentRepositoryStorePath(this.stateRoot, issue.key, repository.url);
       try {
         const pointerFile = path.join(root, ".git");
         if (!(await lstat(pointerFile)).isFile()) throw new Error("source_git_binding_invalid");

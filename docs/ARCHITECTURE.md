@@ -12,11 +12,20 @@ flowchart LR
   API --> Engine[工单调度]
   Engine --> Pi[Pi 会话与工具管线]
   Pi <--> Model[模型服务]
-  Pi --> Tools[原生工具 / 业务工具 / 外部 MCP]
+  Pi --> Native[原生文件与 Bash 工具]
+  Pi --> Business[受校验的业务查询]
+  Pi --> Stdio[stdio MCP]
+  Pi --> Remote[远程 MCP]
+  Native --> SRT[SRT 本地执行边界]
+  Stdio --> SRT
+  SRT --> Runtime[Node / Python / Git / npm / Maven]
+  Business --> Evidence[已配置证据系统]
+  Remote --> ExternalTools[外部服务权限范围]
   Engine --> Workspace[工作区与 Git 管理]
   API --> State[SQLite / JSONL / 文件 / Git]
   Workspace --> State
-  Tools --> State
+  Runtime --> State
+  Business --> State
 ```
 
 | 模块 | 职责 | 入口 |
@@ -28,7 +37,9 @@ flowchart LR
 | 文件存储 | 附件事务、普通工作文件和旧下载兼容 | [attachment-store.ts](../src/http/attachment-store.ts)、[work-file-store.ts](../src/workspace/work-file-store.ts)、[store.ts](../src/outputs/store.ts) |
 | 配置 | 凭证选择、配置更新与公开投影 | [src/configuration](../src/configuration) |
 
-路由协调这些 owner，不重新实现 Git、协议或文件存储。入站 MCP 复用 HTTP 业务入口。模型调用可以启动 Bash、Node、Python、Git、stdio MCP 和 aliyun CLI 子进程；Codemode 使用 Pi 的脚本 Worker。
+路由协调这些 owner，不重新实现 Git、协议或文件存储。入站 MCP 复用 HTTP 业务入口。模型控制的本地文件工具、Bash 和 stdio MCP 经 SRT 执行；应用自身的 DMS/SLS 查询由业务 owner 绑定配置、注入凭据并验证只读操作。远程 MCP 使用远程服务自身权限。Codemode 使用 Pi 的脚本 Worker，应用没有每工单常驻 Worker 或容器。
+
+开发代码位于工单目录，索引、分支和新对象存于同一工单的 `.issue-git/<url-hash>`。公共 Git 基线只读复用，其他工单和共享库不获得模型写权限。详情见[Git 与工作区](STORAGE.md#git-与工作区)。
 
 ## 工单流程
 
@@ -82,6 +93,14 @@ sequenceDiagram
 
 入口：[agent-routes.ts](../src/http/agent-routes.ts)、[sse.ts](../src/http/sse.ts)、[agent-stream.ts](../src/web/src/app/agent-stream.ts)、[ApplicationResources.tsx](../src/web/src/app/ApplicationResources.tsx)。
 
+## 工单导航与关联材料
+
+工单链接固定使用应用根路径 `/?issue=<key>`。关联卡片展示编号、处理人、状态、服务及环境，标题只在悬停时展示；列表限高并内部滚动。普通点击在当前应用中切换工单，保留当前身份和队列筛选；Ctrl／⌘ 或中键可在新标签打开。关联跳转记录浏览器历史，后退／前进恢复对应工单；有未保存代码时先确认，拒绝后恢复当前地址和草稿。
+
+Markdown 与原始 HTML 链接统一经工单文件解析和 HTML 清洗。同源历史 `issues/<key>/work` 与当前工作目录路径映射到文件 API；显式关联的其他工单工作文件通过当前关系的只读引用访问。未关联工单、路径越界、Git 控制文件和未知本地路径不会转换成可下载链接。普通外部网页链接保持原语义。
+
+数据库保存有方向的 `issue_relations`。准备工作区时生成 `.related-<key>.json` 元信息快照，并建立关联目录及可用会话的只读链接。修改关联会关闭原会话并重新排队准备。原工单后续变化不会自动改写当前工单的回答，也没有后台摘要、结构化三类摘要或预览弹窗。复用的开发会话继续处理时没有重新生成关联元信息；目录和会话链接也应按实际绑定核对，不能把准备时快照描述成永远最新。
+
 ## 并发与失败清理
 
 | 协调范围 | 保护什么 |
@@ -102,7 +121,7 @@ sequenceDiagram
 释放/重开：lifecycle queue → inspection queue → Issue reservation
 ```
 
-预约遇到活动工单会拒绝；不能用一个全局 mutex 替代这些协调范围。等待队列后需重新检查相关授权。应用外部命令执行器在创建进程前检查取消，没有 PID 时不发送终止信号。失败任务先停止会话并清理资源，再回写状态，防止旧轮次覆盖新轮次。排队消息执行时也要确认捕获的会话仍有效。
+预约遇到活动工单会拒绝；不能用一个全局 mutex 替代这些协调范围。等待队列后需重新检查相关授权。应用外部命令执行器在创建进程前检查取消，没有 PID 时不发送终止信号。发生取消、超时、流错误或输出消费错误时，保留首个错误，等待 stdio 关闭及必要的进程组终止升级完成后才释放执行资源。工作文件按真实目标路径跨实例串行；附件清理等待所有暂存目录结束并聚合原操作与清理错误。失败任务先停止会话并清理资源，再回写状态，防止旧轮次覆盖新轮次。排队消息执行时也要确认捕获的会话仍有效。
 
 ## 代码浏览与运行生命周期
 
@@ -110,6 +129,6 @@ Monaco 负责文本编辑和差异显示，不加载 VS Code 扩展宿主。变�
 
 默认启动顺序为：占有应用实例控制 Socket → 数据库迁移与中断状态恢复 → 私有配置文件校验与事务投影 → 检查未知目录和共享 checkout → 准备工单 runtime → 确认模型基座 → 维护与路由 → 监听 HTTP。竞争实例在数据库恢复与目录清理之前拒绝；控制 Socket 只用于实例互斥，不接受项目命令。单个 runtime 可以被报告为 blocked，`/health` 成功不代表全部工单资源或远程服务正常。
 
-队列在内存中，进程重启不会自动恢复未完成的模型调用；持久工单和会话支持后续重试或继续。关闭时先等待维护与 Agent 活动，再释放会话/MCP、模型运行时、SRT 代理、应用实例租约，最后关闭数据库，清理错误聚合报告。单工单会话停止和个人 Git 临时身份清理都会尝试执行；单一失败保留原错误，多重失败聚合报告，避免后一个清理异常覆盖前一个。应用租约的并发启动共享同一次初始化，关闭等待启动结束；重复关闭共享清理结果，再次启动等待前次关闭完成。Native 工具按工单串行执行并等待取消后的进程退出；不同工单可并行，SRT 共享代理另有生命周期队列。
+队列在内存中，进程重启不会自动恢复未完成的模型调用；持久工单和会话支持后续重试或继续。关闭时先等待维护与 Agent 活动，再释放会话/MCP、模型运行时、SRT 代理、应用实例租约，最后关闭数据库，清理错误聚合报告。单工单会话停止和个人 Git 临时身份清理都会尝试执行；单一失败保留原错误，多重失败聚合报告，避免后一个清理异常覆盖前一个。应用租约的并发启动共享同一次初始化，关闭等待启动结束；重复关闭共享清理结果，再次启动等待前次关闭完成。Native 工具和代码集合 include/remove 共享每工单本地执行队列，并等待取消后的进程退出；不同工单可并行。重复的 SRT 命令清理调用共享同一次关闭结果，SRT 共享代理另有生命周期队列。
 
 组装入口为 [api.ts](../src/http/api.ts)，部署和恢复步骤见[部署指南](DEPLOYMENT.md)与[运维手册](RUNBOOK.md)。

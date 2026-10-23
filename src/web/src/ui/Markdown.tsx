@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { marked, Renderer } from "marked";
+import { marked } from "marked";
 import { createMemo } from "solid-js";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
@@ -33,16 +33,17 @@ function renderMarkdown(source: string): string {
 export function Markdown(props: { source: string; cache?: boolean; resolveLink?: (href: string) => string | null | undefined }) {
   const html = createMemo(() => {
     if (!props.resolveLink) return props.cache === false ? DOMPurify.sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source);
-    const resolve = props.resolveLink;
-    const renderer = new Renderer();
-    const defaultLink = renderer.link;
-    renderer.link = function (token) {
-      const href = resolve(token.href);
-      if (href === null) return this.parser.parseInline(token.tokens);
-      const rendered = defaultLink.call(this, href === undefined ? token : { ...token, href });
-      return href === undefined ? rendered : rendered.replace("<a ", "<a download ");
-    };
-    return DOMPurify.sanitize(marked.parse(props.source, { async: false, renderer }) as string);
+    const template = document.createElement("template");
+    template.innerHTML = marked.parse(props.source, { async: false }) as string;
+    for (const link of template.content.querySelectorAll("a[href]")) {
+      const href = props.resolveLink(link.getAttribute("href")!);
+      if (href === null) link.replaceWith(...Array.from(link.childNodes));
+      else if (href !== undefined) {
+        link.setAttribute("href", href);
+        link.setAttribute("download", "");
+      }
+    }
+    return DOMPurify.sanitize(template.innerHTML);
   });
   return <div class="markdown markdown-body" innerHTML={html()} />;
 }

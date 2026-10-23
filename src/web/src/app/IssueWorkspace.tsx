@@ -6,7 +6,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
 import { canUseIssueWorkMode, applyIssueScopeTransition, attachmentUrl, createIssue, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, listIssues, planIssueScopeTransition, retryIssue, updateIssue, updateIssueRelatedIssues, updateIssueStatus, type IssueDetail, type IssueExecutionItem, type IssuePriority, type IssueScopeTransitionPlan, type IssueWorkMode } from "../data/client";
 import { IssueFiles } from "./IssueFiles";
-import { Markdown } from "../ui/Markdown";
+import { IssueMarkdown } from "./IssueMarkdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
@@ -38,7 +38,7 @@ function localDateTime(value: string): string {
   return issueDateTimeFormat.format(new Date(value));
 }
 
-export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (element: HTMLElement) => void; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void>; onCreatedFollowUp: (issueKey: string) => void }) {
+export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (element: HTMLElement) => void; hidden?: boolean; sourcePanel?: boolean; sourcePanelOpen?: boolean; onOpenSource: () => void; onUpdated: () => Promise<void>; onOpenIssue?: (issueKey: string) => void; onCreatedFollowUp: (issueKey: string) => void }) {
   const { catalog, people, currentUser, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
@@ -251,7 +251,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
           <h1>{props.issue.title}</h1>
           <Show when={props.issue.description.trim()}>
             <div class={`issue-description${descriptionNeedsCollapse() ? " collapsible" : ""}${descriptionExpanded() ? " expanded" : ""}`}>
-              <div class="issue-description-content"><Markdown source={props.issue.description} /></div>
+              <div class="issue-description-content"><IssueMarkdown issue={props.issue} source={props.issue.description} /></div>
               <Show when={descriptionNeedsCollapse()}><button type="button" class="issue-description-toggle" aria-expanded={descriptionExpanded() ? "true" : "false"} onClick={() => setDescriptionExpanded((expanded) => !expanded)}>{descriptionExpanded() ? "收起描述" : "展开完整描述"}</button></Show>
             </div>
           </Show>
@@ -290,8 +290,18 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
       <Show when={canEditRelatedIssues() || (props.issue.relatedIssues ?? []).length}>
         <section class="repository-band" aria-labelledby="related-issues-title">
           <div class="band-title"><MessageSquare size={16} /><h2 id="related-issues-title">关联工单</h2><span>{props.issue.relatedIssues?.length ?? 0}</span><Show when={canEditRelatedIssues()}><Button type="text" icon={<Pencil size={14} />} disabled={Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status)} onClick={() => { void openRelatedEditor(); }}>编辑关联</Button></Show></div>
-          <div class="issue-attachment-list">
-            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>{(relatedIssue) => <div class="issue-attachment-row"><GitBranch size={15} /><span><strong>{relatedIssue.id}</strong><small>{relatedIssue.title} · {relatedIssue.service.name} / {relatedIssue.environmentKey}</small></span></div>}</For>
+          <div class="related-issue-list">
+            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>{(relatedIssue) => {
+              const assignee = relatedIssue.assignee || relatedIssue.assigneeSubject || "未分配";
+              const environment = () => catalog().environments.find(item => item.key === relatedIssue.environmentKey)?.name ?? relatedIssue.environmentKey;
+              return <a class="related-issue-row" href={`/?issue=${encodeURIComponent(relatedIssue.id)}`} aria-label={`打开关联工单 ${relatedIssue.id}`} title={relatedIssue.title} onClick={event => { if (props.onOpenIssue && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); props.onOpenIssue(relatedIssue.id); } }}>
+                <strong>{relatedIssue.id}</strong>
+                <small class="related-issue-assignee">{assignee}</small>
+                <Badge status={statusBadge[relatedIssue.status]} text={statusLabel[relatedIssue.status]} />
+                <small class="related-issue-service">{relatedIssue.service.name}</small>
+                <small class="related-issue-environment">{environment()}</small>
+              </a>;
+            }}</For>
           </div>
         </section>
       </Show>

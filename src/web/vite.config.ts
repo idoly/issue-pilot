@@ -9,13 +9,14 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const require = createRequire(import.meta.url);
 const materialRoot = path.dirname(require.resolve("material-icon-theme/package.json"));
-const monacoRoot = path.dirname(require.resolve("monaco-editor/package.json"));
+const monacoRoot = path.resolve(path.dirname(require.resolve("monaco-editor")), "../..");
+const monacoVersion = (JSON.parse(readFileSync(path.join(monacoRoot, "package.json"), "utf8")) as { version: string }).version;
 const materialVersion = (require("material-icon-theme/package.json") as { version: string }).version;
 const iconRoot = path.join(materialRoot, "icons");
 const iconFiles = readdirSync(iconRoot).filter(name => name.endsWith(".svg"));
 const iconNames = new Set(iconFiles);
 const iconPrefix = `assets/editor-icons-${materialVersion}/`;
-const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The application and editor share the unchanged font distributed in monaco-editor 0.55.1, from https://github.com/microsoft/vscode-codicons.\n${readFileSync(path.resolve("src/web/src/ui/codicons.LICENSE"), "utf8")}\n\nMonaco Editor © Microsoft Corporation — https://github.com/microsoft/monaco-editor\n${readFileSync(path.join(monacoRoot, "LICENSE"), "utf8")}\n${readFileSync(path.join(monacoRoot, "ThirdPartyNotices.txt"), "utf8")}`;
+const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The application and editor share the unchanged font distributed in monaco-editor ${monacoVersion}, from https://github.com/microsoft/vscode-codicons.\n${readFileSync(path.resolve("src/web/src/ui/codicons.LICENSE"), "utf8")}\n\nMonaco Editor © Microsoft Corporation — https://github.com/microsoft/monaco-editor\n${readFileSync(path.join(monacoRoot, "LICENSE"), "utf8")}\n${readFileSync(path.join(monacoRoot, "ThirdPartyNotices.txt"), "utf8")}`;
 
 function editorIconAssets(): Plugin {
   return {
@@ -41,6 +42,7 @@ export default defineConfig({
   root: import.meta.dirname,
   cacheDir: "../../node_modules/.vite/issue-pilot-web",
   plugins: [editorIconAssets(), solidPlugin()],
+  resolve: { alias: { "monaco-editor-codicons.css": path.join(monacoRoot, "esm/vs/base/browser/ui/codicons/codicon/codicon.css") } },
   server: {
     host: issuePilotConfig.web.host,
     port: issuePilotConfig.web.port,

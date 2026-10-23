@@ -41,6 +41,8 @@ export interface StartPiSessionOptions {
   readRoots?: string[];
   modelApiKey?: string;
   gitEnvironment?: Record<string, string>;
+  gitAccess?: "write" | "read";
+  gitReadRoots?: readonly string[];
   gitIdentity?: GitCommitIdentity;
   serviceScopes?: ServiceToolScope[];
   workspaceTool?: ToolDefinition<any, any, any>;
@@ -155,8 +157,10 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
 function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, settings: SettingsManager, model: AgentSession["model"]): ToolDefinition<any, any, any>[] {
   const { context, deploymentConfig, workspaceRoot, outputStore, gitEnvironment, serviceScopes } = options;
   const tools = createCapabilityTools(context, deploymentConfig, { outputStore, serviceScopes });
-  tools.unshift(...issueNativeTools({ writeRoot: workspaceRoot, readRoots: [...(options.readRoots ?? []), options.agentDirectory ?? getAgentDir()], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, () => ({
+  tools.unshift(...issueNativeTools({ writeRoot: workspaceRoot, gitAccess: options.gitAccess ?? (context.canModifyCode ? "write" : "read"), readRoots: [...(options.readRoots ?? []), ...(options.gitReadRoots ?? []), options.agentDirectory ?? getAgentDir()], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, () => ({
     AI_AGENT: "pi", PI_CODING_AGENT: "true", GIT_OPTIONAL_LOCKS: "0",
+    ISSUE_PILOT_IMAGE_AUTO_RESIZE: String(settings.getImageAutoResize()),
+    PI_MODEL_IMAGE_RESIZE: JSON.stringify(model?.inputLimits?.images?.resize ?? null),
     PI_MODEL_INPUT: JSON.stringify(model?.input ?? ["text", "image"]),
     PI_SESSION_ID: options.manager.getSessionId(), PI_SESSION_FILE: options.manager.getSessionFile() ?? "", PI_PROVIDER: context.model.provider, PI_MODEL: context.model.modelId, PI_REASONING_LEVEL: context.model.thinkingLevel,
     PATH: [path.resolve(import.meta.dirname, "../../.venv/bin"), process.env.PATH].filter(Boolean).join(path.delimiter),
@@ -246,7 +250,7 @@ export class PiSessionRuntime {
       if (!configuration.enabled || configuration.transport !== "stdio" || !configuration.stdio) { mcpConfigurations.push(configuration); continue; }
       assertIssueLaunchEnvironment(configuration.stdio.env ?? {});
       const cwd = path.resolve(workspaceRoot, configuration.stdio.cwd ?? ".");
-      const prepared = await prepareIssueCommand({ writeRoot: workspaceRoot, readRoots: options.readRoots ?? [], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, [configuration.stdio.command, ...configuration.stdio.args], cwd);
+      const prepared = await prepareIssueCommand({ writeRoot: workspaceRoot, gitAccess: "read", readRoots: options.readRoots ?? [], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, [configuration.stdio.command, ...configuration.stdio.args], cwd);
       commands.push(prepared);
       mcpConfigurations.push({ ...configuration, stdio: { ...configuration.stdio, command: prepared.argv[0]!, args: prepared.argv.slice(1), cwd, env: { ...configuration.stdio.env, NPM_CONFIG_CACHE: path.join(workspaceRoot, ".npm-cache"), TMPDIR: workspaceRoot } } });
     }

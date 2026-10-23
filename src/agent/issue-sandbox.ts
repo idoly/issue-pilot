@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, lstat, readdir, realpath, rm } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { SerialQueue } from "../serial.ts";
 import { isManagedIssueFile } from "../workspace/working-files.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
-export interface IssueFilesystemPolicy { writeRoot: string; readRoots?: readonly string[]; networkDomains?: readonly string[] }
+export interface IssueFilesystemPolicy { writeRoot: string; readRoots?: readonly string[]; networkDomains?: readonly string[]; gitAccess?: "write" | "read" }
 export interface PreparedIssueCommand { argv: string[]; cleanup(): Promise<void> }
 const lifecycle = new SerialQueue();
 async function executable(name: string): Promise<string> {
@@ -45,13 +45,17 @@ const within = (root: string, value: string) => { const relative = path.relative
 export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command: readonly string[], cwd = policy.writeRoot): Promise<PreparedIssueCommand> {
   const root = path.resolve(policy.writeRoot);
   if (await realpath(root) !== root || !(await lstat(root)).isDirectory()) throw new Error("invalid_issue_sandbox_root");
+  const gitRoot = path.join(root, ".issue-git");
+  await mkdir(gitRoot, { recursive: true, mode: 0o700 });
+  if (await realpath(gitRoot) !== gitRoot || !(await lstat(gitRoot)).isDirectory()) throw new Error("workspace_git_store_invalid");
   const directory = await realpath(cwd);
   if (!within(root, directory)) throw new Error("issue_sandbox_cwd_outside_issue");
   if (!command.length || command.some(value => value.includes("\0"))) throw new Error("invalid_issue_command");
   const id = randomUUID(), release = await acquireIssueSandbox(), config = path.join(root, `.runtime-proxy-${id}.conf`);
-  let wrapped = false, closed = false;
-  const cleanup = async () => {
-    if (closed) return; closed = true;
+  let wrapped = false;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => cleanupPromise ??= cleanupResources();
+  const cleanupResources = async () => {
     const failures: unknown[] = [];
     try { await rm(config, { force: true }); } catch (error) { failures.push(error); }
     try { SandboxManager.unregisterCommandNetworkLists(id); if (wrapped) SandboxManager.cleanupAfterCommand(); } catch (error) { failures.push(error); }
@@ -61,6 +65,15 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
   };
   try {
     const denyWrite = ["/tmp/claude", "/private/tmp/claude", path.join(os.homedir(), ".npm/_logs"), path.join(os.homedir(), ".claude/debug")];
+    if (policy.gitAccess === "read") denyWrite.push(gitRoot);
+    else for (const name of await readdir(gitRoot)) {
+      if (!/^[a-f0-9]{20}$/.test(name)) throw new Error("workspace_git_store_requires_inspection");
+      const file = path.join(gitRoot, name);
+      denyWrite.push(path.join(file, "config"), path.join(file, "hooks"), path.join(file, "issue-pilot-published.json"), path.join(file, "objects/info/alternates"));
+      for (const worktree of await readdir(path.join(file, "worktrees")).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; })) {
+        for (const protectedName of ["commondir", "gitdir", "config.worktree"]) denyWrite.push(path.join(file, "worktrees", worktree, protectedName));
+      }
+    }
     for (const name of await readdir(root)) {
       const file = path.join(root, name), info = await lstat(file);
       if (isManagedIssueFile(name) && info.isFile()) denyWrite.push(file);
