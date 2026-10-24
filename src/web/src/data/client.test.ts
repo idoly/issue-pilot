@@ -1,19 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyIssueScopeTransition, createIssue, createUser, currentUserSubject, deleteService, fetchOutput, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadManagedUsers, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updatePersonalCredentials, updateService, updateUser } from "./client";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { applyIssueScopeTransition, createIssue, currentUserSubject, deleteService, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService } from "./client";
 
 describe("API client", () => {
   afterEach(() => { setCurrentUserSubject(null); localStorage.clear(); vi.unstubAllGlobals(); });
 
   it("keeps this page's request identity when another tab changes the remembered user", async () => {
     const fetch = vi.fn()
-      .mockResolvedValueOnce(Response.json({ modelProviders: ["fixture"], gitSshConfigured: false }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json({ subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" }));
     vi.stubGlobal("fetch", fetch);
     setCurrentUserSubject("alice");
     localStorage.setItem("issue-pilot.current-user", "bob");
-    await updatePersonalCredentials({ model: { provider: "fixture", mode: "replace", apiKey: "alice-private-key" } });
+    await setIssuePinned("ISSUE-20260810-001", true);
     expect(currentUserSubject()).toBe("alice");
     expect(new Headers(fetch.mock.calls[0]![1].headers).get("X-Issue-Pilot-Subject")).toBe("alice");
     setCurrentUserSubject("bob");
@@ -75,22 +74,6 @@ describe("API client", () => {
     expect((init.headers as Headers).get("X-Issue-Pilot-Subject")).toBe("lyz5613@xianhengguoji.com");
   });
 
-  it("uses the managed user endpoints without putting subjects in query strings", async () => {
-    const user = { subject: "operator@example.test", name: "Operator", email: "operator@example.test", active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify(user), { status: 200 }));
-    vi.stubGlobal("fetch", fetch);
-
-    await loadManagedUsers();
-    await createUser({ subject: user.subject, name: user.name, email: user.email });
-    await updateUser(user.subject, { name: "Operations", email: user.email, active: false });
-
-    expect(fetch.mock.calls[0]![0]).toBe("/api/users/manage");
-    expect(fetch.mock.calls[1]![0]).toBe("/api/users");
-    expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "POST" });
-    expect(fetch.mock.calls[2]![0]).toBe("/api/users/operator%40example.test");
-    expect(fetch.mock.calls[2]![1]).toMatchObject({ method: "PATCH" });
-  });
-
   it("loads the non-secret configuration catalog independently", async () => {
     const catalog = { environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }] };
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
@@ -121,48 +104,6 @@ describe("API client", () => {
 
     expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
     expect(fetch).toHaveBeenCalledWith("/api/issue-pins", expect.objectContaining({ signal: controller.signal }));
-  });
-
-  it("decodes exact byte views and returns immutable output text", async () => {
-    const expected = "订单🙂", bytes = new TextEncoder().encode(expected);
-    const backing = new Uint8Array(bytes.length + 4).fill(127); backing.set(bytes, 2);
-    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) {
-      controller.enqueue(backing.subarray(2, 3));
-      controller.enqueue(backing.subarray(3, bytes.length + 2));
-      controller.close();
-    } }));
-    const fetch = vi.fn().mockResolvedValue(response); vi.stubGlobal("fetch", fetch);
-    const controller = new AbortController();
-    const text = await fetchOutput("ISSUE-1", "report.txt", controller.signal);
-    backing.fill(0);
-    expect(text).toBe(expected);
-    expect(response.body!.locked).toBe(false);
-    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-1/outputs/report.txt", { signal: controller.signal });
-  });
-
-  it("cancels output streams at the preview limit and releases the body", async () => {
-    let reads = 0;
-    const cancel = vi.fn();
-    const response = new Response(new ReadableStream<Uint8Array>({
-      pull(controller) { controller.enqueue(reads++ === 0 ? new Uint8Array(issuePilotConfig.web.outputPreviewBytes) : new Uint8Array([1])); },
-      cancel,
-    }, { highWaterMark: 0 }));
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-    await expect(fetchOutput("ISSUE-1", "report.txt")).rejects.toThrow("文件过大");
-    expect(reads).toBe(2); expect(cancel).toHaveBeenCalledOnce(); expect(response.body!.locked).toBe(false);
-  });
-
-  it("retains output read failures and releases the failed body", async () => {
-    const reason = new Error("fixture_read_failed");
-    const response = new Response(new ReadableStream<Uint8Array>({ pull(controller) { controller.error(reason); } }));
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-    await expect(fetchOutput("ISSUE-1", "report.txt")).rejects.toBe(reason);
-    expect(response.body!.locked).toBe(false);
-  });
-
-  it("rejects incomplete UTF-8 instead of replacing invalid output text", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array([0xf0, 0x9f]))));
-    await expect(fetchOutput("ISSUE-1", "report.txt")).rejects.toMatchObject({ name: "TypeError" });
   });
 
   it("replaces an Issue's related Issues", async () => {

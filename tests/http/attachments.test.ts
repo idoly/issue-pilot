@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { createApiFixture, createService, issueMetadataPayload } from "./fixture.ts";
 import type { MultipartFile } from "@fastify/multipart";
 import { finalizeQuarantinedAttachments, readMultipartAttachment, stageAttachment, removePendingAttachments, openVerifiedAttachmentStream, removeWrittenAttachments, resolveSecureAttachmentFile, writePendingAttachments } from "../../src/http/attachment-store.ts";
-import { claimIssueRoot, issueAttachmentRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
 
 for (const stage of ["open", "close"] as const) test(`removes attachment staging after a file ${stage} failure`, async context => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-io-"));
@@ -127,7 +127,7 @@ test("rolls back only empty state claimed for a failed Issue creation", async ()
   const issueKey = "ISSUE-20260813-001";
   try {
     await claimIssueRoot(root, issueKey);
-    const attachmentRoot = issueAttachmentRoot(root, issueKey);
+    const attachmentRoot = issueRoot(root, issueKey);
     assert.equal(attachmentRoot, issueRoot(root, issueKey));
     const objectKey = path.join(attachmentRoot, "new.txt");
     await writeFile(objectKey, "new", { mode: 0o400 });
@@ -150,7 +150,7 @@ test("an attachment collision never registers another transaction's original for
   const key = "ISSUE-20261023-001", id = "11111111-1111-4111-8111-111111111111";
   try {
     await claimIssueRoot(root, key);
-    const original = path.join(issueAttachmentRoot(root, key), `.attachment-${id}-evidence.txt`);
+    const original = path.join(issueRoot(root, key), `.attachment-${id}-evidence.txt`);
     const pending = path.join(root, "pending.txt");
     await writeFile(original, "original evidence", { mode: 0o400 });
     await writeFile(pending, "new content");

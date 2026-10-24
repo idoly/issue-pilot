@@ -5,7 +5,8 @@ import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
-import { legacyIssueRoot, issueWorkDirectory } from "../../src/workspace/state.ts";
+import { legacyIssueRoot, issueRoot } from "../../src/workspace/state.ts";
+import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 
 test("offline migration refuses a live API, preserves a plan-only run and supports repeated application", async () => {
   const fixture = await createApiFixture();
@@ -24,18 +25,18 @@ test("offline migration refuses a live API, preserves a plan-only run and suppor
     assert.equal(await readFile(path.join(oldRoot, "checkpoint.json"), "utf8"), "{}");
     await fixture.stop();
     await run(process.execPath, [...args, "--apply"]);
-    assert.equal(await readFile(path.join(issueWorkDirectory(fixture.root, key), "checkpoint.json"), "utf8"), "{}");
+    assert.equal(await readFile(path.join(issueRoot(fixture.root, key), "checkpoint.json"), "utf8"), "{}");
     const repeated = await run(process.execPath, [...args, "--apply"]);
     assert.equal(JSON.parse(repeated.stdout.trim().split("\n")[0]!).entries, 0);
   } finally { await fixture.cleanup(); }
 });
 
-test("serves working files separately from attachments and published deliveries", async () => {
+test("serves current work files with exact names and traversal checks", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Files", ["test"]);
     const issue = await createIssue(fixture.app, "files", "test", "Working files");
-    const key = String(issue.id), root = issueWorkDirectory(fixture.root, key);
+    const key = String(issue.id), root = issueRoot(fixture.root, key);
     const base = `/api/issues/${key}/files`;
     assert.deepEqual((await fixture.app.inject({ method: "GET", url: base })).json(), []);
     await mkdir(root, { recursive: true });
@@ -60,9 +61,30 @@ test("serves working files separately from attachments and published deliveries"
     }
     const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${key}` })).json();
     assert.equal(detail.workingDirectory, root);
-    assert.deepEqual(detail.outputs, []);
+    assert.equal("outputs" in detail, false);
     assert.deepEqual(detail.attachments, []);
     await rm(path.join(root, "结果 #1.xlsx"));
     assert.equal((await fixture.app.inject({ method: "GET", url: `${base}/download?path=${encodeURIComponent("结果 #1.xlsx")}` })).statusCode, 404);
+  } finally { await fixture.cleanup(); }
+});
+
+test("current downloads ignore migration indexes and expose updated working bytes", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Files", ["prod"]);
+    const issue = await createIssue(fixture.app, "files", "prod", "Current download");
+    const key = String(issue.id), root = issueRoot(fixture.root, key);
+    const workFiles = new IssueWorkFileStore(fixture.root, key);
+    await workFiles.generate("orders.csv", async append => { await append("count\n3\n"); });
+    await writeFile(path.join(root, ".legacy-output-links.json"), "invalid historical index");
+    assert.equal((await fixture.app.inject({ method: "GET", url: `/api/issues/${key}` })).statusCode, 200);
+    assert.equal((await fixture.app.inject({ method: "GET", url: `/api/issues/${key}/outputs/orders.csv` })).statusCode, 404);
+    const download = `/api/issues/${key}/files/download?path=orders.csv`;
+    const first = await fixture.app.inject({ method: "GET", url: download });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.headers["cache-control"], "private, no-store");
+    assert.equal(first.body, "count\n3\n");
+    await workFiles.generate("orders.csv", async append => { await append("count\n4\n"); });
+    assert.equal((await fixture.app.inject({ method: "GET", url: download })).body, "count\n4\n");
   } finally { await fixture.cleanup(); }
 });

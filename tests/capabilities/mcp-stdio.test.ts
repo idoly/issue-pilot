@@ -11,7 +11,13 @@ const server = fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.m
 const configuration = (root: string, env: Record<string, string> = {}): McpConfiguration => ({ id: "stdio-fixture", name: "Fixture", url: "", transport: "stdio", authorization: "", enabled: true, stdio: { command: process.execPath, args: [server], env: { MCP_FIXTURE_PID_FILE: path.join(root, "pid"), MCP_FIXTURE_SECRET: "mcp_private_token", ...env } } });
 async function pid(root: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { return Number(await readFile(path.join(root, "pid"), "utf8")); } catch { await pause(20); }
+    try {
+      const value = Number(await readFile(path.join(root, "pid"), "utf8"));
+      if (Number.isSafeInteger(value) && value > 0) return value;
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+    }
+    await pause(20);
   }
   throw new Error("fixture_file_not_written");
 }

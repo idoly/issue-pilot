@@ -3,7 +3,6 @@ import { readFile, stat, access } from "node:fs/promises";
 import { test } from "node:test";
 import type { CommandExecutor } from "../../src/process.ts";
 import { prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
-import { slsFailureCode } from "../../src/capabilities/sls-errors.ts";
 import { capabilityDefinitions } from "../../src/capabilities/registry.ts";
 
 const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
@@ -97,7 +96,7 @@ test("SQL analysis returns one page and never replays a failed later page", asyn
 });
 
 for (const [code, expected] of [
-  ["SignatureNotMatch", "sls_signature_mismatch"], ["AccessKeyIdNotExist", "sls_invalid_access_key"], ["ProjectNotExist", "sls_project_not_found"], ["LogStoreNotExist", "sls_logstore_not_found"], ["Throttling", "sls_rate_limited"], ["QuotaExceed", "sls_quota_exceeded"],
+  ["ClientConfigError", "sls_client_configuration_invalid"], ["SignatureNotMatch", "sls_signature_mismatch"], ["AccessKeyIdNotExist", "sls_invalid_access_key"], ["ProjectNotExist", "sls_project_not_found"], ["LogStoreNotExist", "sls_logstore_not_found"], ["Throttling", "sls_rate_limited"], ["QuotaExceed", "sls_quota_exceeded"],
 ] as const) test(`SLS CLI exposes only safe diagnostic ${expected}`, async () => {
   const f = fixture([new Error(`\u001b[1;31mERROR:\n Code: ${code}\n Message: fixture-secret\u001b[0m`)]);
   await assert.rejects(readSlsLogs(base, configured, undefined, f.executor), error => error instanceof Error && error.message === expected && error.cause === undefined);
@@ -124,7 +123,4 @@ test("SLS does not expose raw CLI errors and classifies missing CLI without a fa
   const f = fixture([new Error("fixture-secret private log content")]);
   await assert.rejects(readSlsLogs(base, configured, undefined, f.executor), { message: "sls_query_failed" });
   await assert.rejects(readSlsLogs(base, configured, undefined, { async execute() { throw Object.assign(new Error("private executable path"), { code: "ENOENT" }); } }), { message: "sls_cli_not_available" });
-  const failure = Object.assign(new Error(), { code: "ClientConfigError" });
-  Object.defineProperty(failure, "message", { get() { throw new Error("must_not_read_message"); } });
-  assert.equal(slsFailureCode(failure), "sls_client_configuration_invalid");
 });

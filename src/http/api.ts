@@ -122,7 +122,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
     const maintenanceStartedAt = performance.now();
-    await workspaces.maintain();
+    const maintenance = await workspaces.maintain();
+    for (const failure of maintenance.failures) app.log.error({ issueKey: failure.issueKey, err: errorDiagnostic(failure.error) }, "Workspace automatic release failed");
     app.log.info({ durationMs: Math.round(performance.now() - maintenanceStartedAt) }, "Completed workspace maintenance");
     stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(errorDiagnostic(error)));
 
@@ -141,7 +142,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
         if (errorChain.includes(conflict)) return reply.code(409).send({ error: conflict });
       }
-      for (const operationalError of ["attachment_finalize_failed", "attachment_rollback_failed", "issue_state_rollback_failed", "issue_update_rollback_failed", "source_rename_rollback_failed", "source_rename_finalize_failed", "issue_workspace_missing"]) {
+      for (const operationalError of ["attachment_finalize_failed", "attachment_rollback_failed", "issue_state_rollback_failed", "issue_update_rollback_failed", "source_rename_rollback_failed", "source_rename_finalize_failed", "source_save_cleanup_failed", "workspace_runtime_restore_failed", "issue_workspace_missing", "agent_session_file_incomplete", "agent_session_file_missing"]) {
         if (errorChain.includes(operationalError)) {
           app.log.error(errorDiagnostic(error));
           return reply.code(500).send({ error: operationalError });
@@ -163,7 +164,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       const mcpTest = request.method === "POST" && /^\/api\/mcp-services\/[^/]+\/test$/.test(url);
       const mcpMutation = /^\/api\/mcp-services(?:\/|$)/.test(url) && !mcpTest;
       if (fileConfiguration.services && serviceMutation || fileConfiguration.mcp && mcpMutation) throw new ApiError(409, "configuration_managed_by_files");
-      if (url === "/api/me/credentials" && (fileConfiguration.userSubject || fileConfiguration.userSubjects?.length)) {
+      if (url === "/api/me/credentials" && fileConfiguration.userSubjects?.length) {
         const user = await requireCurrentUser(database, request);
         if (managesFileUser(fileConfiguration, user.subject)) throw new ApiError(409, "credentials_managed_by_user_file");
       }

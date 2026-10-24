@@ -85,7 +85,7 @@ integrity 应为 ok，FK 和前三个异常查询为空，全局基座只有 id=
 
 ## 文件与 Git 核对
 
-附件必须为 regular file，直属工单根目录，size/hash 与 DB 一致，mode 为 0400；JSONL 为 0600。迁移核对原件、工作副本、会话、普通文件和旧下载映射，不能把生成状态变化当作持久文件损失。DB 和 JSONL 私有，state 目录为 0700，数据库为 0600，project-tool socket 为 0600。`.deleting`、quarantine 和异常临时文件要调查事务阶段。
+附件必须为 regular file，直属工单根目录，size/hash 与 DB 一致，mode 为 0400；JSONL 为 0600。迁移核对原件、工作副本、会话、普通文件和离线迁移索引，不能把生成状态变化当作持久文件损失。DB 和 JSONL 私有，state 目录为 0700，数据库为 0600，project-tool socket 为 0600。`.deleting`、quarantine 和异常临时文件要调查事务阶段。
 
 Git 只读检查示例：
 
@@ -99,11 +99,15 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 
 ## Workspace 回收与历史清理
 
+Agent 中断后，先核对 Pi 对话和工作结果，再通过重试或新消息继续。新版尚未交付的排队输入会按顺序恢复；已有 started 记录的输入可能已产生效果，不会重新注入。`agent_message_scope_changed` 表示旧服务／环境的排队意图已记录拒绝，原文仍保留，核对范围后再继续；`agent_message_state_invalid`／`agent_message_state_changed` 需检查会话分支与交付记录，不能修改标记来强制重放。旧会话中无交付元信息的消息仍需人工核对。
+
+收到 `agent_session_file_missing` 或 `agent_session_file_incomplete` 时，消息未成功接收，页面保留草稿。保留会话原件与数据库绑定，先核查写入是否仍在进行、磁盘容量与 I/O 错误；需要操作真实状态时按本手册的停止写入、恢复点与保留策略执行。在独立恢复副本中按 Pi 格式核查后确定恢复方案，不直接给原件补换行、截断或改指针来绕过检查。
+
 维护策略来自根配置，仅释放 resolved、空闲、非 preparing/running、布局完整且 clean 的开发工单。默认启动时检查一次，随后每 15 分钟检查；已解决满 7 天按保留期回收，超过 20 GiB 时对符合条件的候选提前回收，目标 16 GiB。压力回收不承诺至少保留 7 天。手动释放使用 `DELETE /api/issues/:key/workspace`，没有 force；重开经状态流程，从本地分支恢复。dirty、untracked 或路径/分支不符时保留并调查。
 
 容量统计针对 `workspaces` 工单根目录，包含附件、对话、工作文件、工单内缓存和私有 Git 数据，不包含共享 `git/repositories`、`git/checkouts` 或外部恢复点。释放只移除登记的代码 worktree，随后可能建立只读快照；保留内容仍会占用空间，因此页面候选总容量不等于实际磁盘可释放量。
 
-当前维护实现有已知记账限制：成功释放后会在当轮维护结果和短期容量缓存中扣除释放前整目录大小，而非仅扣实际释放字节；压力回收可能提前判断达到目标。只读和已释放工单的拒绝原因也可能显示为通用安全检查提示。这些行为尚未修复，不能把页面“待自动回收”作为本轮保证释放量；容量验收应独立核对实际目录。不要为纠正统计而删除工作文件、Git 状态或绕过安全检查。
+维护结果和短期容量缓存使用释放后实际剩余的目录占用更新，保留内容会继续计入压力回收判断；如果附件、对话、工作文件或私有 Git 数据已经超过目标，释放所有合格代码目录后仍可能高于目标。页面“回收候选占用”表示候选工单根目录的总容量，不是保证可释放量。只读工单和已释放代码的工单显示正常保留状态，真实缺失目录、dirty、路径或分支异常仍按安全检查阻断。容量验收应独立核对实际目录，不要为纠正统计而删除工作文件、Git 状态或绕过安全检查。
 
 默认保留最近两份已验证的完整状态恢复点：最新一份和上一份。新快照、匹配代码及重启验收全部成功后，再轮换删除更旧的完整状态快照；失败现场调查完成前不纳入普通轮换。创建前检查现有恢复点，同一已验证状态不重复建立大快照。小型提交、清理和验证记录可单独保留，不把它们误算成完整状态备份。
 
@@ -119,7 +123,7 @@ Podman 镜像、容器写层和 volume 分开处理，空闲不等于没有数�
 
 ## 配置文件准备
 
-用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，导出全部已登记账号各自的凭证与已有文件来源，输出 v2 YAML。共享部署凭证有多个不同组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。已退役的 Playwright MCP 不进入草稿。输出目录必须与真实 state root 不同，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
+用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，导出全部已登记账号各自的凭证与已有文件来源，输出 v2 YAML。旧格式转换只在该显式命令中执行；正常运行仅加载 `version: 2` 的服务与多账号用户文件。共享部署凭证有多个不同组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。已退役的 Playwright MCP 不进入草稿。输出目录必须与真实 state root 不同，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
 
 ```bash
 node --experimental-strip-types scripts/prepare-configuration.ts \
@@ -149,7 +153,7 @@ node --experimental-strip-types scripts/migrate-flat-issue-layout.ts --state-roo
 
 应用先独占 API 使用的实例控制 Socket（沿用 `control/project-tools.sock` 以阻止旧版本并发启动，不处理项目命令），预检完整布局并写 `0600` 计划记录，然后调用数据库 migration owner 执行尚未应用的迁移。0061 增加附件工作副本名，0062 将旧正式数据处理工单及 SQL 处理历史统一转为正式问题调查，并拒绝新写入旧值。此步骤不启动 Agent 或运行应用的中断恢复逻辑。
 
-文件迁移校验 mode/hash、原件与 DB 的关系、会话头和路径、目标重名及旧运行目录结构。编辑过的工作副本保持原样；同内容旧交付复用当前文件，不同内容交付保留摘要后缀文件和下载映射。历史运行普通文件也保留为根目录 `.runtime-legacy-*`，原目录内已识别链接和空目录经 quarantine 后清理。未知目录或非预期文件停止供 owner 检查。
+文件迁移校验 mode/hash、原件与 DB 的关系、会话头和路径、目标重名及旧运行目录结构。编辑过的工作副本保持原样；同内容旧交付复用当前文件，不同内容交付保留摘要后缀文件和离线迁移索引。历史运行普通文件也保留为根目录 `.runtime-legacy-*`，原目录内已识别链接和空目录经 quarantine 后清理。未知目录或非预期文件停止供 owner 检查。
 
 文件移动或绑定事务失败会回移本次文件；回滚失败聚合报告并保留证据。数据库 schema 升级不随文件回滚自动撤销，回退旧版本必须恢复匹配的完整恢复点。`flat_layout_committed_finalize_failed` 表示绑定已提交、最终清理失败，应先按私有计划核对现场。不要只替换 DB，也不要直接重试掩盖失败状态。重复成功应用不重新移动文件，但仍校验已迁移的原件和会话。
 
@@ -165,10 +169,14 @@ node --experimental-strip-types scripts/migrate-flat-issue-layout.ts --state-roo
 | unmanaged_issue_state | 保留未知目录、DB 和 Git，调查对应关系，不能自动收编 |
 | shared_checkout_changed | 保留 checkout/store，检查 HEAD、common dir 和改动 |
 | workspace_branch_does_not_match_issue_policy | 备份 refs、staged/untracked 和 DB，确认历史归属，不猜测修复 |
-| workspace_has_changes / workspace_has_untracked_files | 完成处理或单独归档，再走受管释放 |
+| workspace_has_changes / workspace_has_untracked_files | 检查未提交、未跟踪及 Git 忽略的文件／目录，完成处理或单独归档后再走受管释放；不自动认定忽略目录是可删缓存 |
+| workspace_git_binding_invalid / source_git_binding_invalid | 保留工作目录，核对自身 store、`.git`、common dir、backpointer、原 index／HEAD 和登记分支；依据匹配恢复证据处理，不创建空索引、不 reset、不用远程 clone 猜测补齐 |
+| workspace_git_inspection_failed / workspace_git_unavailable | 检查 Git 是否可执行及仓库读权限；检查失败不等于内容可删除 |
+| issue_runtime_entry_missing / issue_runtime_entry_changed / invalid_issue_runtime_manifest | 核对运行视图记录与条目，保留现场，不通过删除 manifest 绕过检查 |
+| workspace_runtime_not_ready / workspace_runtime_restore_failed | 代码可能已经释放，原始文件和分支继续保留；按错误记录检查本地 refs／受管视图。下一轮维护会重新检查后尝试恢复，也可显式重试释放；不使用 reset 或远程回退修复 |
+| source_save_cleanup_failed | 核对目标文件和保留的 `.issue-pilot-*.tmp`，保留原失败及清理错误，确认内容后显式重试 |
 | host is not on the allow list | 核对当前身份与工单仓库，向私有配置追加精确域名／端口，按流程重启投影；不全局开放网络 |
 | SSH host key verification failed | 核对 Operator known_hosts 与当前 owner 的个人身份；不关闭严格主机校验或换用其他账号 |
-| workspace_git_binding_invalid / source_git_binding_invalid | 检查自身 store、Git 指针、common dir、backpointer 与分支；保留现场，不自动 repair 外部绑定 |
 | workspace_git_configuration_invalid / workspace_git_hooks_require_inspection | 私有 Git 配置或 hooks 超出受信范围，先核对来源，不放开任意 hooks／配置 |
 | working_branch_changed_outside_issue | 共享分支不同于已记录发布提交，检查外部变更，不覆盖或强推 |
 | rollback / finalize / cleanup failed | 保留新旧文件、quarantine、refs 与 rows，停止重复 mutation |

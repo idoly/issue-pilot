@@ -9,14 +9,15 @@ vi.mock("../data/client", async original => ({ ...await original<typeof import("
 import { PersonalCredentials } from "./PersonalCredentials";
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
 
-test("shows exactly five personal credential groups without revealing secret values or account management", async () => {
+test("shows exactly four personal credential groups without revealing secret values or account management", async () => {
   state.user = () => ({ subject: "alice", name: "Alice", role: "developer" });
-  state.load.mockResolvedValue({ modelProviders: ["fixture"], gitSshConfigured: true, productionDmsConfigured: true, productionSlsConfigured: true, dingtalkConfigured: true });
+  state.load.mockResolvedValue({ modelProviders: ["fixture"], gitSshConfigured: true, productionDmsConfigured: true, productionSlsConfigured: true });
   render(() => <PersonalCredentials />);
   const region = screen.getByRole("region", { name: "我的凭证" });
   await within(region).findByText("API Key");
-  for (const label of ["API Key", "SSH Key", "SLS", "DMS", "钉钉"]) expect(within(region).getByText(label)).toBeTruthy();
-  expect(within(region).getAllByText("已配置")).toHaveLength(5);
+  for (const label of ["API Key", "SSH Key", "SLS", "DMS"]) expect(within(region).getByText(label)).toBeTruthy();
+  expect(within(region).getAllByText("已配置")).toHaveLength(4);
+  expect(within(region).queryByText("钉钉")).toBeNull();
   expect(within(region).queryByRole("textbox")).toBeNull();
   expect(within(region).queryByRole("button")).toBeNull();
   expect(screen.queryByRole("region", { name: "用户列表" })).toBeNull();
@@ -30,8 +31,8 @@ test("ignores a credential response belonging to the previously selected user", 
   await waitFor(() => expect(state.load).toHaveBeenCalledOnce());
   setUser({ subject: "bob", name: "Bob" });
   await screen.findByText("API Key");
-  finish({ modelProviders: ["fixture"], gitSshConfigured: true, dingtalkConfigured: true });
-  await waitFor(() => expect(screen.getAllByText("未配置")).toHaveLength(5));
+  finish({ modelProviders: ["fixture"], gitSshConfigured: true });
+  await waitFor(() => expect(screen.getAllByText("未配置")).toHaveLength(4));
 });
 
 test("reports credential status failures without showing false configuration state", async () => {

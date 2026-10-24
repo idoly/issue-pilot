@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -9,7 +9,7 @@ import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
 import { developmentRepositoryStorePath, issueRepositoryWorkspaceNames, repositoryStorePath } from "./git.ts";
-import { classifyRepositoryState, issueRuntimeRoot, sharedCheckoutsRoot } from "./state.ts";
+import { classifyRepositoryState, issueRoot, sharedCheckoutsRoot } from "./state.ts";
 
 import type { SourceBlame, SourceChanges, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "./source-contracts.ts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTreeEntry, SourceWorkspaceFile } from "./source-contracts.ts";
@@ -125,11 +125,22 @@ export class SourceBrowser {
     if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw new Error("source_file_changed");
     const next = Buffer.from(content, "utf8");
     const temporary = path.join(path.dirname(candidate), `.issue-pilot-${randomUUID()}.tmp`);
+    const handle = await open(temporary, "wx", metadata!.mode & 0o777);
+    const failures: unknown[] = [];
+    let published = false;
     try {
-      await writeFile(temporary, next, { flag: "wx", mode: metadata!.mode & 0o777 });
+      await handle.writeFile(next);
+      await handle.close();
       await rename(temporary, candidate);
+      published = true;
+    } catch (error) {
+      failures.push(error);
+      throw error;
     } finally {
-      await rm(temporary, { force: true });
+      const cleanup: unknown[] = [];
+      try { await handle.close(); } catch (error) { cleanup.push(error); }
+      if (!published) try { await rm(temporary, { force: true }); } catch (error) { cleanup.push(error); }
+      if (cleanup.length) throw new AggregateError([...failures, ...cleanup], "source_save_cleanup_failed");
     }
     return this.workingFile(context, selected);
   }
@@ -594,7 +605,7 @@ export class SourceBrowser {
     const names = issueRepositoryWorkspaceNames(rows);
     const repository = rows.find((candidate) => names.get(candidate.url) === repositoryName);
     if (!repository) throw new Error("source_repository_not_found");
-    const runtimeRepository = path.join(issueRuntimeRoot(this.stateRoot, issue.key), repositoryName);
+    const runtimeRepository = path.join(issueRoot(this.stateRoot, issue.key), repositoryName);
     let metadata;
     try { metadata = await lstat(runtimeRepository); } catch (error) { missingPathError(error); }
     if (state === "development_workspace" ? !metadata!.isDirectory() : !metadata!.isSymbolicLink()) throw new Error("source_runtime_invalid");

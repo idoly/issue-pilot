@@ -1,3 +1,5 @@
+import { buildApi } from "../../src/http/api.ts";
+import { modelCatalog, TestAgentController } from "../http/fixture.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
@@ -18,7 +20,7 @@ import { WorktreeManager } from "../../src/workspace/git.ts";
 import { WorkspaceConversionRefusal, WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, WorkspaceScopeMigrationRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
 import { IssueProjectManager, prepareDevelopmentIssueRuntimes } from "../../src/workspace/project.ts";
 import { IssueScopeTransitionManager, ScopeTransitionRefusal } from "../../src/workspace/scope-transition.ts";
-import { classifyRepositoryState, issueAttachmentRoot, issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot } from "../../src/workspace/state.ts";
+import { classifyRepositoryState, gitRoot, issueRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +61,141 @@ const engine = {
   },
   async closeSession(issueId: string) { this.closed.push(issueId); if (this.closeError) throw this.closeError; },
 };
+
+for (const failureStage of ["session", "runtime"] as const) test(`automatic release isolates a ${failureStage} failure, preserves unresolved failures and retries`, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-maintenance-retry-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+    await database.db.insert(subjects).values({ subject: "maintenance-owner", role: "developer" });
+    const [service] = await database.db.insert(services).values({ key: "maintenance-retry", name: "Maintenance retry" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const remote = await createRemote(root, "retry");
+    const worktrees = new WorktreeManager(root);
+    const created: Array<typeof issues.$inferSelect> = [], paths: string[] = [];
+    for (const index of [0, 1, 2]) {
+      const [issue] = await database.db.insert(issues).values({ key: `ISSUE-20261024-${940 + index}`, title: "Maintenance retry", status: index === 2 ? "open" : "resolved", resolvedAt: index === 2 ? null : new Date(0), type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "maintenance-owner", updatedAt: new Date(index) }).returning();
+      await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
+      const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+      await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
+      created.push(issue!); paths.push(prepared.workspacePath);
+    }
+    const failure = new Error("fixture_maintenance_failed");
+    let fail = true;
+    const scopedEngine = { ...engine, running: new Set<string>(), closed: [] as string[], async closeSession(id: string) { this.closed.push(id); if (fail && failureStage === "session" && id === created[0]!.id) throw failure; } };
+    const projects = new IssueProjectManager(database.db, root);
+    const manager = new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 }, async issue => {
+      if (fail && failureStage === "runtime" && issue.id === created[0]!.id) throw failure;
+      return projects.hydrateDevelopmentRuntime(issue);
+    });
+    const first = await manager.maintain();
+    assert.deepEqual(first.released.map(row => row.issueKey), [created[1]!.key]);
+    assert.equal(first.failures.length, 1);
+    assert.equal(first.failures[0]!.issueKey, created[0]!.key);
+    assert.ok(first.failures[0]!.error === failure || first.failures[0]!.error instanceof Error && first.failures[0]!.error.cause === failure);
+    const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).stats();
+    assert.equal(first.totalBytes, independentlyMeasured.totalBytes);
+    assert.equal((await manager.stats()).totalBytes, independentlyMeasured.totalBytes);
+    await access(paths[2]!);
+    assert.equal(scopedEngine.closed.includes(created[2]!.id), false);
+    if (failureStage === "session") await access(paths[0]!);
+    else {
+      assert.equal((await manager.inspectIssue(created[0]!.id)).blockedReason, "workspace_runtime_restore_failed");
+      const [state] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, created[0]!.id));
+      assert.equal(state!.runtimeReady, false);
+    }
+    fail = false;
+    if (failureStage === "runtime") {
+      // A stopped but still active checkout must not be deleted by view recovery.
+      await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, created[2]!.id));
+      await database.db.update(issueWorkspaces).set({ status: "stopped", runtimeReady: false }).where(eq(issueWorkspaces.issueId, created[2]!.id));
+    }
+    const retryManager = failureStage === "runtime"
+      ? new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 })
+      : manager;
+    const retried = await retryManager.maintain();
+    assert.deepEqual(retried.failures, []);
+    assert.equal((await retryManager.inspectIssue(created[0]!.id)).blockedReason, "workspace_released");
+    await access(paths[2]!);
+  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("API startup continues after one automatic release fails and preserves its checkout", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-startup-release-failure-"));
+  const databaseFile = path.join(root, "issues.db");
+  const database = await openApplicationDatabase(databaseFile);
+  let closedDatabase = false;
+  let app: Awaited<ReturnType<typeof buildApi>> | undefined;
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+    await database.db.insert(subjects).values({ subject: "startup-owner", role: "developer" });
+    const [service] = await database.db.insert(services).values({ key: "startup-release", name: "Startup release" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261024-961", title: "Startup release", status: "resolved", resolvedAt: new Date(0), type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "startup-owner" }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
+    const remote = await createRemote(root, "startup");
+    const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
+    await database.close(); closedDatabase = true;
+    const controller = new TestAgentController();
+    controller.closeSessionHook = async () => { throw new Error("fixture_session_close_failed"); };
+    app = await buildApi({ stateRoot: root, databaseFile, engine: controller, modelCatalog, logger: false, workspacePolicy: { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 } });
+    assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
+    assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "startup\n");
+    assert.deepEqual(controller.closedSessions, [issue!.id]);
+  } finally { await app?.close(); if (!closedDatabase) await database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("quota maintenance keeps retained Issue bytes and continues to the next worktree", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-quota-accounting-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  const quotaEngine = { ...engine, running: new Set<string>(), closed: [] as string[] };
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    await database.db.insert(subjects).values({ subject: "quota-owner", role: "developer" });
+    const [service] = await database.db.insert(services).values({ key: "quota", name: "Quota" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const remote = await createRemote(root, "quota");
+    const worktrees = new WorktreeManager(root);
+    const created: Array<typeof issues.$inferSelect> = [];
+    for (const index of [0, 1]) {
+      const [issue] = await database.db.insert(issues).values({ key: `ISSUE-20261023-${910 + index}`, title: "Quota accounting", status: "resolved", resolvedAt: new Date(0), type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "quota-owner" }).returning();
+      await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true, updatedAt: new Date(index) });
+      const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+      await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
+      if (index === 0) await writeFile(path.join(issueRoot(root, issue!.key), "retained.bin"), Buffer.alloc(4 * 1024 ** 2, 7));
+      else {
+        await writeFile(path.join(prepared.workspacePath, "committed.bin"), Buffer.alloc(3 * 1024 ** 2, 7));
+        await git(["-C", prepared.workspacePath, "add", "committed.bin"]);
+        await git(["-C", prepared.workspacePath, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "large committed file"]);
+      }
+      created.push(issue!);
+    }
+    const policy = { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 };
+    await writeFile(path.join(gitRoot(root), "shared-accounting-probe"), Buffer.alloc(2 * 1024 ** 2, 11));
+    const initial = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).stats();
+    const sharedUsage = await execFileAsync("du", ["-sk", "--", gitRoot(root)]);
+    assert.equal(initial.sharedGitBytes, Number(sharedUsage.stdout.trim().split(/\s+/, 1)[0]) * 1024);
+    assert.ok(initial.sharedGitBytes >= 2 * 1024 ** 2);
+    assert.equal(initial.totalBytes, initial.workspaces.reduce((total, item) => total + item.bytes, 0));
+    const manager = new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, { ...policy, highWaterBytes: initial.totalBytes - 1, targetBytes: initial.workspaces.find(item => item.issueId === created[1]!.id)!.bytes });
+    const result = await manager.maintain();
+    assert.deepEqual(result.released.map(item => item.issueKey), created.map(item => item.key));
+    const fresh = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).stats();
+    assert.equal(result.totalBytes, fresh.totalBytes);
+    assert.equal((await manager.stats()).totalBytes, fresh.totalBytes);
+    assert.equal((await manager.stats()).sharedGitBytes, fresh.sharedGitBytes);
+    assert.ok(fresh.workspaces.find(item => item.issueId === created[0]!.id)!.bytes >= 4 * 1024 ** 2);
+    assert.equal((await readFile(path.join(issueRoot(root, created[0]!.key), "retained.bin"))).length, 4 * 1024 ** 2);
+    const repeated = await manager.maintain();
+    assert.deepEqual(repeated.released, []);
+    assert.equal(repeated.totalBytes, fresh.totalBytes);
+    assert.deepEqual(Object.keys(await manager.releaseIssue(created[0]!.id)).sort(), ["alreadyReleased", "issueKey", "releasedBytes"]);
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("rejects invalid Workspace task concurrency", () => {
   assert.throws(
@@ -109,13 +246,13 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   });
   const internal = manager as unknown as {
     issueRow(issueId: string): Promise<{ issue: { id: string; key: string }; workspace: null }>;
-    inspectLocked(issue: { id: string; key: string }, workspace: null): Promise<WorkspaceInspection>;
+    inspectLocked(row: { issue: { id: string; key: string } }): Promise<WorkspaceInspection>;
   };
   internal.issueRow = async (issueId) => ({ issue: { id: issueId, key: issueId }, workspace: null });
   let releaseFirst!: () => void;
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const inspected: string[] = [];
-  internal.inspectLocked = async (issue) => {
+  internal.inspectLocked = async ({ issue }) => {
     inspected.push(issue.id);
     if (issue.id === "issue-a" && inspected.filter((id) => id === "issue-a").length === 1) await firstGate;
     return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
@@ -146,7 +283,7 @@ test("shares one active Workspace statistics scan across concurrent callers", as
   });
   const internal = manager as unknown as {
     issueRows(): Promise<Array<{ issue: { id: string; key: string }; workspace: null }>>;
-    inspectLocked(issue: { id: string; key: string }, workspace: null, repositories?: unknown, knownBytes?: number): Promise<WorkspaceInspection>;
+    inspectLocked(row: { issue: { id: string; key: string } }, repositories?: unknown, knownBytes?: number): Promise<WorkspaceInspection>;
   };
   internal.issueRows = async () => [{ issue: { id: "issue-a", key: "ISSUE-20260814-001" }, workspace: null }];
   let releaseFirst!: () => void;
@@ -155,7 +292,7 @@ test("shares one active Workspace statistics scan across concurrent callers", as
   const started = new Promise<void>((resolve) => { markStarted = resolve; });
   let inspections = 0;
   const knownMeasurements: Array<number | undefined> = [];
-  internal.inspectLocked = async (issue, _workspace, _repositories, knownBytes) => {
+  internal.inspectLocked = async ({ issue }, _repositories, knownBytes) => {
     inspections += 1;
     knownMeasurements.push(knownBytes);
     if (inspections === 1) {
@@ -190,7 +327,7 @@ test("bounds concurrent Workspace inspections while preserving Issue order", asy
   const issueRows = Array.from({ length: 5 }, (_, index) => ({ issue: { id: `issue-${index}`, key: `ISSUE-20260814-10${index}` }, workspace: null }));
   const internal = manager as unknown as {
     issueRows(): Promise<typeof issueRows>;
-    inspectLocked(issue: { id: string; key: string }, workspace: null): Promise<WorkspaceInspection>;
+    inspectLocked(row: { issue: { id: string; key: string } }): Promise<WorkspaceInspection>;
   };
   internal.issueRows = async () => issueRows;
   let active = 0;
@@ -200,7 +337,7 @@ test("bounds concurrent Workspace inspections while preserving Issue order", asy
   let markConcurrencyReached!: () => void;
   const inspectionGate = new Promise<void>((resolve) => { releaseInspections = resolve; });
   const concurrencyReached = new Promise<void>((resolve) => { markConcurrencyReached = resolve; });
-  internal.inspectLocked = async (issue) => {
+  internal.inspectLocked = async ({ issue }) => {
     active += 1;
     started += 1;
     maximumActive = Math.max(maximumActive, active);
@@ -236,6 +373,20 @@ test("isolates maintenance reporter failures", async () => {
   while (!reports) await new Promise((resolve) => setTimeout(resolve, 1));
   await stop();
   assert.ok(reports >= 1);
+});
+
+test("maintenance reports each failed Issue even when the reporter itself fails", async () => {
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 1, taskConcurrency: 1 });
+  const first = new Error("first failure"), second = new Error("second failure");
+  manager.maintain = async () => ({ totalBytes: 0, released: [], blocked: [], failures: [{ issueKey: "ISSUE-20261024-951", error: first }, { issueKey: "ISSUE-20261024-952", error: second }] });
+  const reported: Error[] = [];
+  const stop = manager.start(error => { assert(error instanceof Error); reported.push(error); throw new Error("reporter failed"); });
+  while (reported.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+  await stop();
+  assert.match(reported[0]!.message, /ISSUE-20261024-951/);
+  assert.equal(reported[0]!.cause, first);
+  assert.match(reported[1]!.message, /ISSUE-20261024-952/);
+  assert.equal(reported[1]!.cause, second);
 });
 
 test("releases clean workspaces while preserving attachments, sessions, and branches", async () => {
@@ -277,7 +428,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       });
     }
 
-    const sessionRoot = issueSessionRoot(root, issue!.key);
+    const sessionRoot = issueRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "session.jsonl");
     await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
     await writeFile(sessionFile, "{}\n", { mode: 0o600 });
@@ -285,7 +436,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     const attachmentContent = "preserved evidence\n";
     const attachmentHash = createHash("sha256").update(attachmentContent).digest("hex");
-    const attachmentRoot = issueAttachmentRoot(root, issue!.key);
+    const attachmentRoot = issueRoot(root, issue!.key);
     const durableAttachment = path.join(attachmentRoot, "attachment-evidence.txt");
     await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
     await writeFile(durableAttachment, attachmentContent, { mode: 0o400 });
@@ -305,10 +456,10 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const prepareRuntime = (candidate: Pick<typeof issues.$inferSelect, "id" | "key" | "type">) => runtimeProjects.hydrateDevelopmentRuntime(candidate);
     const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
     assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
-    const wrapperRoot = issueRuntimeRoot(root, issue!.key);
+    const wrapperRoot = issueRoot(root, issue!.key);
     assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
     await assert.rejects(access(path.join(wrapperRoot, "npm")), { code: "ENOENT" });
-    const activeRuntime = issueRuntimeRoot(root, issue!.key);
+    const activeRuntime = issueRoot(root, issue!.key);
     assert.equal(path.join(activeRuntime, "alpha"), prepared[0]!.workspacePath);
     assert.equal(path.join(activeRuntime, "beta"), prepared[1]!.workspacePath);
 
@@ -338,6 +489,14 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(dirtyRows.every((repository) => repository.localPath !== null), true);
 
     await unlink(path.join(prepared[1]!.workspacePath, "untracked.txt"));
+    await writeFile(path.join(prepared[1]!.cachePath, "info/exclude"), "ignored-evidence.txt\n");
+    const ignoredEvidence = path.join(prepared[1]!.workspacePath, "ignored-evidence.txt");
+    await writeFile(ignoredEvidence, "uncommitted evidence");
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_has_changes");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), error => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
+    assert.equal(await readFile(ignoredEvidence, "utf8"), "uncommitted evidence");
+    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every(repository => repository.localPath !== null), true);
+    await unlink(ignoredEvidence);
     const statsBeforeRelease = await lifecycle.stats();
     assert.equal(statsBeforeRelease.totalBytes > 0, true);
     assert.equal(statsBeforeRelease.workspaces[0]?.releasable, true);
@@ -345,6 +504,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await writeFile(checkpoint, '{"remaining":10}\n');
     const released = await lifecycle.releaseIssue(issue!.id);
     assert.equal(released.alreadyReleased, false);
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_released");
+    const manifestPath = path.join(issueRoot(root, issue!.key), ".issue-runtime.json");
+    const originalManifest = await readFile(manifestPath);
+    await writeFile(manifestPath, JSON.stringify({ version: 1, entries: [{ name: "missing-reference", kind: "file", value: "a".repeat(64) }] }));
+    assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "issue_runtime_entry_missing");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), error => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_runtime_entry_missing");
+    await writeFile(manifestPath, originalManifest);
     assert.equal(released.releasedBytes > 0, true);
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
     await Promise.all(prepared.map(async worktree => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
@@ -360,7 +526,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(releasedWorkspace!.status, "stopped");
     assert.equal(releasedWorkspace!.runtimeReady, true);
     for (const [index, repository] of releasedRows.entries()) {
-      const runtimeRepository = path.join(issueRuntimeRoot(root, issue!.key), index === 0 ? "alpha" : "beta");
+      const runtimeRepository = path.join(issueRoot(root, issue!.key), index === 0 ? "alpha" : "beta");
       const repositoryRoot = path.join(root, "git", "repositories", createHash("sha256").update(repository.url).digest("hex").slice(0, 20));
       assert.equal(await git(["-C", runtimeRepository, "rev-parse", "HEAD"]), await git(["-C", repositoryRoot, "rev-parse", `refs/heads/${repository.workingBranch}`]));
     }
@@ -398,14 +564,14 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(reopenedIssue.status, "open");
     assert.equal(reopenedIssue.resolvedAt, null);
     const restoredRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(restoredRows.every((repository) => repository.localPath?.startsWith(issueWorkspaceRoot(root, issue!.key))), true);
+    assert.equal(restoredRows.every((repository) => repository.localPath?.startsWith(issueRoot(root, issue!.key))), true);
     assert.deepEqual(restoredRows.map((repository) => repository.workspaceName), ["alpha", "beta"]);
     for (const repository of restoredRows) {
       assert.equal(await git(["-C", repository.localPath!, "branch", "--show-current"]), repository.workingBranch);
     }
-    const restoredFile = path.join(issueRuntimeRoot(root, issue!.key), "alpha", "restored.txt");
+    const restoredFile = path.join(issueRoot(root, issue!.key), "alpha", "restored.txt");
     await writeFile(restoredFile, "writable again\n", "utf8");
-    assert.equal(await readFile(path.join(issueWorkspaceRoot(root, issue!.key), "alpha", "restored.txt"), "utf8"), "writable again\n");
+    assert.equal(await readFile(path.join(issueRoot(root, issue!.key), "alpha", "restored.txt"), "utf8"), "writable again\n");
     await unlink(restoredFile);
     const [restoredWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(restoredWorkspace!.status, "ready");
@@ -415,7 +581,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
 
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
-    const unmanagedRootEntry = path.join(issueWorkspaceRoot(root, issue!.key), "unmanaged-root.sql");
+    const unmanagedRootEntry = path.join(issueRoot(root, issue!.key), "unmanaged-root.sql");
     await writeFile(unmanagedRootEntry, "select 1;\n", "utf8");
     await lifecycle.reopenIssue(issue!.id);
     assert.equal(await readFile(unmanagedRootEntry, "utf8"), "select 1;\n");
@@ -447,7 +613,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.deepEqual(rowsAfterRollback.map((repository) => repository.localPath).sort(), restoredRows.map((repository) => repository.localPath).sort());
 
     removalCount = 0;
-    const concurrentRootEntry = path.join(issueWorkspaceRoot(root, issue!.key), "concurrent-root.txt");
+    const concurrentRootEntry = path.join(issueRoot(root, issue!.key), "concurrent-root.txt");
     lifecycleWorktrees.remove = async (url, workspacePath) => {
       removalCount += 1;
       const commit = await removeWorktree(url, workspacePath);
@@ -506,7 +672,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
     for (const repository of restoredRows) await worktrees.remove(repository.url, repository.localPath!);
-    await rm(issueWorkspaceRoot(root, issue!.key), { recursive: true, force: true });
+    await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
     await database.db.update(issueWorkspaces).set({ status: "running" }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_busy");
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
@@ -581,6 +747,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });
     await database.db.insert(issueRepositories).values({ issueId: readOnlyIssue!.id, url: remotes[0]!, baseBranch: "main", workingBranch: null, localPath: null, commitBefore: "a".repeat(40) });
     const readOnlyMaintenance = await retentionLifecycle.maintain();
+    assert.equal((await retentionLifecycle.inspectIssue(readOnlyIssue!.id)).blockedReason, "workspace_not_development");
     assert.equal(readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key), false);
     await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_not_development");
     const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
@@ -625,12 +792,12 @@ test("converts a ready test analysis to a development defect while preserving Is
     const worktrees = new WorktreeManager(root);
     const projects = new IssueProjectManager(database.db, root, worktrees);
     const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!);
-    const sessionRoot = issueSessionRoot(root, issue!.key);
+    const sessionRoot = issueRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "analysis.jsonl");
     await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
     await writeFile(sessionFile, "{\"type\":\"session\"}\n", { mode: 0o600 });
     await database.db.insert(agentSessions).values({ issueId: issue!.id, sessionFile, workspacePath: runtimeRoot });
-    const attachmentRoot = issueAttachmentRoot(root, issue!.key);
+    const attachmentRoot = issueRoot(root, issue!.key);
     const attachmentFile = path.join(attachmentRoot, "evidence.txt");
     const attachmentContent = "production evidence\n";
     await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
@@ -680,7 +847,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal(rolledBackIssue!.environmentId, testEnvironment.id);
     assert.equal(rolledBackIssue!.type, "smart_analysis");
     assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
-    assert.equal((await stat(issueWorkspaceRoot(root, issue!.key))).isDirectory(), true);
+    assert.equal((await stat(issueRoot(root, issue!.key))).isDirectory(), true);
     assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))).startsWith(path.join(root, "git", "checkouts")), true);
     assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
@@ -700,7 +867,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     await assert.rejects(access(path.join(runtimeRoot, "npm")), { code: "ENOENT" });
     const [session] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(session!.sessionFile, sessionFile);
-    assert.equal(session!.workspacePath, issueWorkspaceRoot(root, issue!.key));
+    assert.equal(session!.workspacePath, issueRoot(root, issue!.key));
     assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.equal((await stat(attachmentFile)).mode & 0o777, 0o400);

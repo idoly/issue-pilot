@@ -1,6 +1,6 @@
 import { addAbortListener } from "node:events";
 import { createCodemodeExtension, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { generatedWorkFileSaver } from "../workspace/work-file-store.ts";
+import { generatedWorkFileSaver } from "../workspace/work-files.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const limits = issuePilotConfig.limits.codemode;

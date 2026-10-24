@@ -9,7 +9,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issues as issueRecords, issueWorkspaces, serviceDeployments, services } from "../../src/db/schema.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch } from "../../src/workspace/runtime.ts";
-import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 test("bounds runtime preparation concurrency and preserves Issue result order", async () => {
   const issues = ["001", "002", "003", "004"].map((suffix) => ({ id: suffix, key: `ISSUE-20260816-${suffix}` }));
@@ -77,24 +77,24 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     await writeFile(path.join(checkout, "README.md"), "shared checkout\n", "utf8");
 
     const readOnlyRuntime = await prepareIssueRuntime(root, readOnlyIssue, [{ name: "orders", repositoryPath: checkout }], "read");
-    assert.equal(readOnlyRuntime, issueRuntimeRoot(root, readOnlyIssue));
+    assert.equal(readOnlyRuntime, issueRoot(root, readOnlyIssue));
     assert.equal((await lstat(path.join(readOnlyRuntime, "orders"))).isSymbolicLink(), true);
     const readOnlyLink = await readlink(path.join(readOnlyRuntime, "orders"));
     assert.equal(path.isAbsolute(readOnlyLink), false);
     assert.equal(path.resolve(readOnlyRuntime, readOnlyLink), checkout);
     assert.equal(await readFile(path.join(readOnlyRuntime, "orders", "README.md"), "utf8"), "shared checkout\n");
-    assert.equal((await lstat(issueWorkspaceRoot(root, readOnlyIssue))).isDirectory(), true);
+    assert.equal((await lstat(issueRoot(root, readOnlyIssue))).isDirectory(), true);
 
-    const worktree = path.join(issueWorkspaceRoot(root, writableIssue), "orders");
+    const worktree = path.join(issueRoot(root, writableIssue), "orders");
     await mkdir(worktree, { recursive: true });
     await writeFile(path.join(worktree, "README.md"), "writable worktree\n", "utf8");
     const writableRuntime = await prepareIssueRuntime(root, writableIssue, [{ name: "orders", repositoryPath: worktree }], "write");
-    assert.equal(writableRuntime, issueWorkspaceRoot(root, writableIssue));
+    assert.equal(writableRuntime, issueRoot(root, writableIssue));
     assert.equal((await lstat(path.join(writableRuntime, "orders"))).isDirectory(), true);
     await writeFile(path.join(writableRuntime, "orders", "created-through-runtime.txt"), "writable\n", "utf8");
     assert.equal(await readFile(path.join(worktree, "created-through-runtime.txt"), "utf8"), "writable\n");
 
-    const relatedDirectory = issueWorkspaceRoot(root, "ISSUE-20260809-099");
+    const relatedDirectory = issueRoot(root, "ISSUE-20260809-099");
     await mkdir(relatedDirectory, { recursive: true });
     const conversation = path.join(relatedDirectory, ".session-related.jsonl");
     await writeFile(conversation, "{\"type\":\"session\"}\n", "utf8");

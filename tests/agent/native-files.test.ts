@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { PiSessionRuntime, createPrivateSessionManager } from "../../src/agent/p
 const execFileAsync = promisify(execFile);
 const python = fileURLToPath(new URL("../../.venv/bin/python3", import.meta.url));
 
-test("native tools read and edit .xlsx with Python and retain arbitrary working formats", async () => {
+test("native tools read a readonly attachment original directly and explicitly save an edited workbook", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-native-files-"));
   let managed;
   let runtime: PiSessionRuntime | undefined;
@@ -27,7 +27,8 @@ sheet.title = 'input'
 sheet.append(['id', 'amount'])
 sheet.append(['synthetic-private-row', 42])
 sheet.append(['00123', 8])
-book.save(sys.argv[1])`, join(root, "input.xlsx")]);
+book.save(sys.argv[1])`, join(root, ".attachment-fixture-input.xlsx")]);
+    await chmod(join(root, ".attachment-fixture-input.xlsx"), 0o400);
     const models = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null, modelsStorePath: join(root, "models.json"), refreshOnCreate: false });
     const faux = fauxProvider({ provider: "native-files-fixture", models: [{ id: "fixture", contextWindow: 64000 }], tokensPerSecond: 100000 });
     models.registerNativeProvider(faux.provider);
@@ -37,7 +38,7 @@ book.save(sys.argv[1])`, join(root, "input.xlsx")]);
     faux.setResponses([
       call("write", { path: "process.py", content: `from pathlib import Path
 from openpyxl import load_workbook
-book = load_workbook('input.xlsx')
+book = load_workbook('.attachment-fixture-input.xlsx')
 book['input']['B2'].value *= 2
 book['input']['B2'].number_format = '0.00'
 summary = book.create_sheet('汇总')
@@ -63,8 +64,9 @@ book = load_workbook(sys.argv[1])
 original = load_workbook(sys.argv[2])
 print(json.dumps({'sheets': book.sheetnames, 'row': [cell.value for cell in book['input'][2]], 'identifier': book['input']['A3'].value, 'format': book['input']['B2'].number_format, 'formula': book['汇总']['B1'].value, 'original': original['input']['B2'].value}))
 book.close()
-original.close()`, join(work, "delivery.xlsx"), join(root, "input.xlsx")]);
+original.close()`, join(work, "delivery.xlsx"), join(root, ".attachment-fixture-input.xlsx")]);
     assert.deepEqual(JSON.parse(checked.stdout), { sheets: ["input", "汇总"], row: ["synthetic-private-row", 84], identifier: "00123", format: "0.00", formula: "=SUM(input!B2:B3)", original: 42 });
+    assert.equal((await stat(join(root, ".attachment-fixture-input.xlsx"))).mode & 0o7777, 0o400);
     assert.deepEqual(await readFile(join(work, "opaque.bin")), Buffer.from([0, 255, 1, 2]));
     assert.equal(managed.session.getLastAssistantText(), "Delivered files.");
     assert.ok(!(await readFile(manager.getSessionFile()!, "utf8")).includes("synthetic-private-row"));

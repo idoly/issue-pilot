@@ -1,20 +1,21 @@
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
+import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, globalAgentConfiguration, issueRepositories, issues, issueWorkspaces, mcpServices, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
+import { agentSessions, environments, globalAgentConfiguration, issueAttachments, issueRepositories, issues, issueWorkspaces, mcpServices, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
-import { issueRuntimeRoot, issueWorkDirectory, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,10 +74,10 @@ test("atomically switches development repository sets across preparation and fin
     };
     const [unmanagedIssue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-104", title: "Preserve unmanaged workspace", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: unmanagedIssue!.id });
-    const unmanagedEvidence = path.join(issueWorkspaceRoot(stateRoot, unmanagedIssue!.key), "operator-evidence.txt");
+    const unmanagedEvidence = path.join(issueRoot(stateRoot, unmanagedIssue!.key), "operator-evidence.txt");
     await mkdir(path.dirname(unmanagedEvidence), { recursive: true });
     await writeFile(unmanagedEvidence, "preserve\n", "utf8");
-    const collision = path.join(issueWorkspaceRoot(stateRoot, unmanagedIssue!.key), repositoryWorkspaceNames(remotes).get(remotes[0]!)!);
+    const collision = path.join(issueRoot(stateRoot, unmanagedIssue!.key), repositoryWorkspaceNames(remotes).get(remotes[0]!)!);
     await mkdir(collision);
     await writeFile(path.join(collision, "operator-file.txt"), "do not adopt");
     await assert.rejects(internal.run(unmanagedIssue!.id), /workspace_path_already_exists/);
@@ -99,7 +100,7 @@ test("atomically switches development repository sets across preparation and fin
     const targetRepositories = await database.db.insert(serviceRepositories).values(targetRemotes.map((url, index) => ({ serviceId: service!.id, alias: `target-${index}`, url }))).returning();
     await database.db.insert(serviceDeploymentRepositories).values(targetRepositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
     const targetNames = repositoryWorkspaceNames(targetRemotes);
-    const targetPaths = targetRemotes.map((remote) => path.join(issueWorkspaceRoot(stateRoot, issue!.key), targetNames.get(remote)!));
+    const targetPaths = targetRemotes.map((remote) => path.join(issueRoot(stateRoot, issue!.key), targetNames.get(remote)!));
 
     await assert.rejects(internal.run(issue!.id), /workspace_has_changes/);
     await Promise.all([access(firstRemovedPath), access(dirtyRemovedPath), ...targetPaths.map((targetPath) => assert.rejects(access(targetPath)))]);
@@ -145,7 +146,7 @@ test("atomically switches development repository sets across preparation and fin
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, targetRepositories[1]!.id));
     await internal.run(issue!.id);
     await assert.rejects(access(targetPaths[1]!));
-    assert.equal((await readdir(issueWorkspaceRoot(stateRoot, issue!.key))).includes(retainedTargetName), true);
+    assert.equal((await readdir(issueRoot(stateRoot, issue!.key))).includes(retainedTargetName), true);
     const reduced = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.deepEqual(reduced.map((repository) => repository.url), [remotes[0], targetRemotes[0]]);
     assert.equal(reduced.find((repository) => repository.url === targetRemotes[0])!.localPath, retainedTarget.localPath);
@@ -207,7 +208,34 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       },
       async close() {},
     };
+    const prodRoot = issueRoot(stateRoot, prodIssue!.key);
+    await mkdir(prodRoot, { recursive: true });
+    const originals = [
+      { name: ".attachment-untouched-source.csv", workingFileName: "untouched-source.csv", content: "id,value\n1,original\n" },
+      { name: ".attachment-edited-source.csv", workingFileName: "edited-source.csv", content: "id,value\n2,original\n" },
+    ];
+    for (const original of originals) {
+      const objectKey = path.join(prodRoot, original.name);
+      await writeFile(objectKey, original.content);
+      await chmod(objectKey, 0o400);
+      await database.db.insert(issueAttachments).values({
+        issueId: prodIssue!.id, fileName: original.workingFileName, workingFileName: original.workingFileName,
+        mediaType: "text/csv", objectKey, size: Buffer.byteLength(original.content),
+        sha256: createHash("sha256").update(original.content).digest("hex"), uploadedBy: "tester",
+      });
+    }
+    await writeFile(path.join(prodRoot, "edited-source.csv"), "already edited evidence");
+    const checkOriginalsAndWorkingFiles = async () => {
+      await assert.rejects(stat(path.join(prodRoot, "untouched-source.csv")), { code: "ENOENT" });
+      assert.equal(await readFile(path.join(prodRoot, "edited-source.csv"), "utf8"), "already edited evidence");
+      for (const original of originals) {
+        const file = path.join(prodRoot, original.name);
+        assert.equal(await readFile(file, "utf8"), original.content);
+        assert.equal((await stat(file)).mode & 0o7777, 0o400);
+      }
+    };
     await internal.run(prodIssue!.id);
+    await checkOriginalsAndWorkingFiles();
     const prodRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, prodIssue!.id));
     const prodRepositoryByUrl = new Map(prodRepositories.map((repository) => [repository.url, repository]));
     const prodRepository = prodRepositoryByUrl.get(remotes[0])!;
@@ -221,14 +249,14 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(prodRepository!.workingBranch, null);
     assert.equal(prodRepository!.localPath, null);
     assert.equal(prodWorkspace!.runtimeReady, true);
-    assert.equal(prodSession!.workspacePath, issueWorkDirectory(stateRoot, prodIssue!.key));
+    assert.equal(prodSession!.workspacePath, issueRoot(stateRoot, prodIssue!.key));
     const prodRuntimeName = repositoryWorkspaceNames(remotes).get(remotes[0])!;
     assert.equal(starts[0]!.context.canModifyCode, false);
     assert.equal(sessionStops, 1);
-    assert.equal(starts[0]!.workspaceRoot, issueWorkDirectory(stateRoot, prodIssue!.key));
+    assert.equal(starts[0]!.workspaceRoot, issueRoot(stateRoot, prodIssue!.key));
     await writeFile(path.join(starts[0]!.workspaceRoot, "notes.txt"), "retain analysis");
-    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRuntimeRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
-    await access(issueWorkspaceRoot(stateRoot, prodIssue!.key));
+    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
+    await access(issueRoot(stateRoot, prodIssue!.key));
 
     const firstProdCommit = prodRepository.commitBefore;
     const firstSecondaryCommit = prodRepositoryByUrl.get(remotes[1])!.commitBefore;
@@ -237,6 +265,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "new snapshot"]);
     await git(["-C", source, "push", "origin", "prod"]);
     await internal.run(prodIssue!.id);
+    await checkOriginalsAndWorkingFiles();
     const refreshedProdRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, prodIssue!.id));
     const refreshedProdRepositoryByUrl = new Map(refreshedProdRepositories.map((repository) => [repository.url, repository]));
     const refreshedProdRepository = refreshedProdRepositoryByUrl.get(remotes[0])!;
@@ -256,7 +285,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const [devWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, devIssue!.id));
     assert.equal(devRepository!.baseBranch, "develop");
     assert.equal(devRepository!.workingBranch, `hotfix-${devIssue!.key.toLowerCase()}`);
-    assert.equal(devRepository!.localPath?.startsWith(issueWorkspaceRoot(stateRoot, devIssue!.key)), true);
+    assert.equal(devRepository!.localPath?.startsWith(issueRoot(stateRoot, devIssue!.key)), true);
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.runtimeReady, true);
     assert.equal(starts[2]!.context.canModifyCode, true);
@@ -279,6 +308,14 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     for (const start of starts) {
       assert.deepEqual(start.mcpConfigurations?.map(row => row.id), [globalMcp!.id]);
     }
+    const startsBeforeCorruption = starts.length;
+    const corrupted = path.join(prodRoot, originals[0]!.name);
+    await chmod(corrupted, 0o600);
+    await writeFile(corrupted, originals[0]!.content.replace("original", "tampered"));
+    await chmod(corrupted, 0o400);
+    await assert.rejects(internal.run(prodIssue!.id), /attachment_integrity_check_failed/);
+    assert.equal(starts.length, startsBeforeCorruption);
+    assert.equal(await readFile(corrupted, "utf8"), originals[0]!.content.replace("original", "tampered"));
     await engine.close();
     assert.equal(sessionStops, 4);
   } finally {

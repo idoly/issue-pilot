@@ -8,7 +8,6 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService } from "../http/fixture.ts";
 import { issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
-import { resolveIssueOutput } from "../../src/outputs/store.ts";
 const execute = promisify(execFile);
 
 test("the offline CLI upgrades a previous database and moves durable files, then safely repeats", async () => {
@@ -55,7 +54,8 @@ test("the offline CLI upgrades a previous database and moves durable files, then
       assert.deepEqual(after.prepare("PRAGMA foreign_key_check").all(), []);
     } finally { after.close(); }
     assert.equal(await readFile(path.join(root, "report.csv"), "utf8"), "working source");
-    assert.equal(await readFile(await resolveIssueOutput(fixture.root, key, "report.csv"), "utf8"), "delivery");
+    const preservedOutputs = JSON.parse(await readFile(path.join(root, ".legacy-output-links.json"), "utf8")).files;
+    assert.equal(await readFile(path.join(root, preservedOutputs["report.csv"]), "utf8"), "delivery");
     const preserved = (await readdir(root)).find(name => name.startsWith(".runtime-legacy-") && name.endsWith("node-project"));
     assert.ok(preserved); assert.equal(await readFile(path.join(root, preserved), "utf8"), wrapper);
     const repeated = await execute(process.execPath, [...args, "--apply"]);

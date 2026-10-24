@@ -11,12 +11,11 @@ import { parseAgentRuntime } from "./pi-runtime.ts";
 import { parseMcpImport } from "./mcp.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "../http/service-configuration.ts";
 
-import type { DingtalkConnectionSettings, DingtalkSourceSettings, DingtalkUserSettings, FileConfigurationState } from "./contracts.ts";
+import type { DingtalkSourceSettings, DingtalkUserSettings, FileConfigurationState } from "./contracts.ts";
 export type { FileConfigurationState } from "./contracts.ts";
-import { FileConfigurationError, queryTargets, repositoryAddress, serviceVersion, userFileLayout, dingtalkFieldConfiguration, validateDingtalkSource } from "./file-layout.ts";
+import { FileConfigurationError, queryTargets, repositoryAddress, fileRecord as record, userFileLayout, dingtalkFieldConfiguration, validateDingtalkSource } from "./file-layout.ts";
 export { FileConfigurationError } from "./file-layout.ts";
 const fail = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };
-function record(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) return fail(); return value as Record<string, unknown>; }
 function text(value: unknown): string { if (typeof value !== "string" || !value.trim() || value.includes("\0")) return fail(); return value.trim(); }
 function secret(value: unknown): string { text(value); return value as string; }
 function optionalRecord(value: unknown) { return value === undefined ? {} : record(value); }
@@ -58,22 +57,17 @@ export async function loadDingtalkUserSettings(stateRoot: string, subject: strin
   const layout = userFileLayout(await readConfiguration(stateRoot, "user.yaml"));
   const own = optionalRecord(layout.users[subject]?.dingtalk), shared = optionalRecord(layout.shared.dingtalk);
   validateDingtalkSource(own.source);
-  const connection = (value: Record<string, unknown>): DingtalkConnectionSettings | undefined => {
-    if (value.apiKey === undefined && value.url === undefined) return undefined;
-    return { apiKey: secret(value.apiKey), ...(value.url === undefined ? {} : { url: text(value.url) }) };
-  };
-  const personal = connection(own), global = connection(shared);
   const source = own.source === undefined ? undefined : structuredClone(own.source) as DingtalkSourceSettings;
   if (source) { source.mcp = text(source.mcp); source.url = text(source.url); source.assignee = text(source.assignee); }
   const fields = { ...dingtalkFieldConfiguration(shared.fields), ...dingtalkFieldConfiguration(own.fields) };
-  return { fields, ...(source ? { source } : {}), ...(personal ? { personal } : {}), ...(global ? { shared: global } : {}) };
+  return { fields, ...(source ? { source } : {}) };
 }
 
 /** Files are authoritative; SQLite retains the validated projection and historical identities. Runs before Agent startup. */
 export async function applyFileConfiguration(database: Database, stateRoot: string): Promise<FileConfigurationState> {
   const [serviceFile, userFile, mcpFile] = await Promise.all([readConfiguration(stateRoot, "service.yaml"), readConfiguration(stateRoot, "user.yaml"), readConfiguration(stateRoot, "mcp.json")]);
-  const version = serviceVersion(serviceFile);
-  if (version === 2 && serviceFile?.sources !== undefined) throw new FileConfigurationError("sources_belong_in_user_file");
+  if (serviceFile && serviceFile.version !== 2) return fail();
+  if (serviceFile?.sources !== undefined) throw new FileConfigurationError("sources_belong_in_user_file");
   const userLayout = userFileLayout(userFile);
   const status: FileConfigurationState = { services: Boolean(serviceFile), mcp: Boolean(mcpFile) };
   if (!serviceFile && !userFile && !mcpFile) return status;
@@ -112,7 +106,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
       const managedUsers: string[] = [];
       for (const [userSubject, personal] of Object.entries(userLayout.users)) {
         const [owner] = await transaction.select().from(subjects).where(eq(subjects.subject, userSubject));
-        if (!owner || userFile?.version !== 2 && !owner.active) throw new FileConfigurationError("file_configuration_user_not_active");
+        if (!owner) throw new FileConfigurationError("file_configuration_user_not_active");
         managedUsers.push(userSubject);
         const apiKeys = Object.fromEntries(Object.entries(optionalRecord(personal.apiKeys)).map(([provider, value]) => [text(provider), secret(value)]));
         const ssh = optionalRecord(personal.ssh), personalDms = optionalRecord(personal.dms), personalSls = optionalRecord(personal.sls);
@@ -120,14 +114,13 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
         validateDingtalkSource(optionalRecord(personal.dingtalk).source);
         const privateKey = ssh.privateKey === undefined ? "" : secret(ssh.privateKey);
         if (privateKey && !/^-----BEGIN (?:OPENSSH|RSA|EC|PRIVATE|ENCRYPTED)/.test(privateKey)) return fail();
-        const ownDms = Object.keys(personalDms).length ? parseDmsConnectionConfiguration({ ...personalDms, url: personalDms.url ?? (userFile?.version === 2 ? undefined : dmsConnection?.url) }) : undefined;
+        const ownDms = Object.keys(personalDms).length ? parseDmsConnectionConfiguration(personalDms) : undefined;
         const ownSls = Object.keys(personalSls).length ? parseSlsConnectionConfiguration(personalSls) : undefined;
         const values = { modelApiKeys: apiKeys, gitPrivateKey: privateKey ? privateKey.trimEnd() + "\n" : "", productionDmsUrl: ownDms?.url ?? "", productionDmsAuthorization: ownDms?.authorization ?? "", productionSlsAccessKeyId: ownSls?.accessKeyId ?? "", productionSlsAccessKeySecret: ownSls?.accessKeySecret ?? "" };
         const [existing] = await transaction.select().from(userCredentials).where(eq(userCredentials.subject, userSubject));
         if (!existing || !Object.entries(values).every(([key, value]) => same(existing[key as keyof typeof values], value))) await transaction.insert(userCredentials).values({ subject: userSubject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } });
       }
-      if (userFile?.version === 2) status.userSubjects = managedUsers;
-      else if (managedUsers[0]) status.userSubject = managedUsers[0];
+      if (userFile) status.userSubjects = managedUsers;
       if (Object.keys(agent).length) {
         const provider = text(agent.provider), model = text(agent.model), thinkingLevel = text(agent.thinkingLevel ?? "medium"), codemode = text(agent.codemode ?? "on");
         if (!AGENT_THINKING_LEVELS.includes(thinkingLevel as typeof AGENT_THINKING_LEVELS[number]) || !AGENT_CODEMODE_MODES.includes(codemode as typeof AGENT_CODEMODE_MODES[number])) return fail();
@@ -136,7 +129,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
         if (!existing || !Object.entries(values).every(([key, value]) => same(existing[key as keyof typeof values], value))) await transaction.insert(globalAgentConfiguration).values({ id: 1, ...values }).onConflictDoUpdate({ target: globalAgentConfiguration.id, set: { ...values, updatedAt: new Date() } });
       }
       for (const [alias, raw] of Object.entries(repositoryDefinitions)) {
-        const url = repositoryAddress(raw, version);
+        const url = repositoryAddress(raw);
         if (!/^[a-z0-9][a-z0-9._-]*$/i.test(alias) || url.startsWith("-")) return fail();
         await transaction.insert(repositories).values({ name: alias, url }).onConflictDoNothing();
       }
@@ -156,8 +149,8 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
             // Development declarations may reference production/test evidence, but
             // must not silently create a second, differently configured source.
             for (const kind of ["dms", "sls"] as const) if (scope[kind]) {
-              const available = Object.entries(scopes).filter(([key]) => key !== "dev").flatMap(([, raw]) => queryTargets(kind, record(raw)[kind], version).map(target => target.value));
-              for (const { value: raw } of queryTargets(kind, scope[kind], version)) {
+              const available = Object.entries(scopes).filter(([key]) => key !== "dev").flatMap(([, raw]) => queryTargets(kind, record(raw)[kind]).map(target => target.value));
+              for (const { value: raw } of queryTargets(kind, scope[kind])) {
                 const target = record(raw);
                 const matches = available.some(raw => {
                   const source = record(raw);
@@ -174,7 +167,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
           const configuration: CapabilityConfiguration = {};
           if (environmentKey !== "dev" && scope.dms) {
             if (!dmsConnection) return fail();
-            const targets = queryTargets("dms", scope.dms, version).map(({ value }) => {
+            const targets = queryTargets("dms", scope.dms).map(({ value }) => {
               const target = record(value), instanceAlias = text(target.alias), schemaName = text(target.schema);
               const previous = existingDeployment?.config.dms?.url === dmsConnection.url ? existingDeployment.config.dms.databases.find(database => database.instanceAlias === instanceAlias && database.schemaName === schemaName) : undefined;
               return { instanceAlias, schemaName, ...(previous ?? {}) };
@@ -183,7 +176,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
           }
           if (environmentKey !== "dev" && scope.sls) {
             if (!slsConnection) return fail();
-            const targets = queryTargets("sls", scope.sls, version, environmentKey).map(({ name, value }) => {
+            const targets = queryTargets("sls", scope.sls, environmentKey).map(({ name, value }) => {
               const target = record(value);
               return { name, region: text(target.region), project: text(target.project), logstores: target.logstores };
             });
@@ -208,7 +201,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
           deployments.push({ environmentKey, repositoryBranches: Object.entries(branches).map(([repositoryAlias, branch]) => ({ repositoryAlias, baseBranch: text(branch) })), capabilities: Object.keys(configuration), ...credentialInput(configuration) });
         }
         const input = { name: text(definition.name ?? key), description: typeof definition.description === "string" ? definition.description : "", repositories: aliases.map(alias => {
-          const url = repositoryAddress(repositoryDefinitions[alias], version);
+          const url = repositoryAddress(repositoryDefinitions[alias]);
           const previous = oldRepositories.find(repository => repository.url === url);
           return { ...(previous ? { id: previous.id } : {}), alias, url };
         }), deployments };

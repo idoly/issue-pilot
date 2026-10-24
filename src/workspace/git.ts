@@ -9,7 +9,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { isolateIssueWorktree, publishIssueBranch, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
-import { issueWorkspaceRoot, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
+import { issueRoot, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -126,7 +126,7 @@ export function repositoryStorePath(stateRoot: string, url: string): string {
 }
 
 export function issueRepositoryStorePath(stateRoot: string, issueKey: string, url: string): string {
-  return resolve(issueWorkspaceRoot(stateRoot, normalizeIssueKey(issueKey)), ".issue-git", repositoryHash(url, 20));
+  return resolve(issueRoot(stateRoot, normalizeIssueKey(issueKey)), ".issue-git", repositoryHash(url, 20));
 }
 
 export async function developmentRepositoryStorePath(stateRoot: string, issueKey: string, url: string): Promise<string> {
@@ -199,11 +199,21 @@ export class WorktreeManager {
 
   private async assertCleanLocked(resolvedWorkspace: string, expectedBranch?: string): Promise<void> {
     if (!await pathExists(resolvedWorkspace)) throw new Error("workspace_repository_missing");
+    const inspect = async (args: string[]): Promise<string> => {
+      try { return await this.git(args); }
+      catch (error) {
+        const failure = error as NodeJS.ErrnoException & { stderr?: unknown };
+        const diagnostic = typeof failure?.stderr === "string" ? failure.stderr : "";
+        const reason = /gitfile does not point to a valid repository|not a git repository|invalid gitfile format/i.test(diagnostic)
+          ? "workspace_git_binding_invalid" : failure?.code === "ENOENT" ? "workspace_git_unavailable" : "workspace_git_inspection_failed";
+        throw new Error(reason, { cause: error });
+      }
+    };
     if (expectedBranch !== undefined) {
-      const branch = (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
+      const branch = (await inspect(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
       if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
     }
-    const dirty = (await this.git(["-C", resolvedWorkspace, "status", "--porcelain"])).trim();
+    const dirty = (await inspect(["-C", resolvedWorkspace, "status", "--porcelain", "--ignored=matching"])).trim();
     if (dirty) throw new Error("workspace_has_changes");
   }
 
@@ -233,13 +243,13 @@ export class WorktreeManager {
     const prepared: PreparedWorktree[] = [];
     const workspaceRoots = new Map<string, boolean>();
     for (const worktree of input.worktrees) {
-      const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
-      if (!workspaceRoots.has(issueRoot)) workspaceRoots.set(issueRoot, await pathExists(issueRoot));
+      const root = issueRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
+      if (!workspaceRoots.has(root)) workspaceRoots.set(root, await pathExists(root));
     }
     try {
       for (const worktree of input.worktrees) {
-        const issueRoot = issueWorkspaceRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
-        const workspacePath = this.resolveIssueWorkspacePath(issueRoot, worktree.workspaceName, worktree.existingWorkspacePath);
+        const root = issueRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
+        const workspacePath = this.resolveIssueWorkspacePath(root, worktree.workspaceName, worktree.existingWorkspacePath);
         const workspaceExists = await pathExists(workspacePath);
         if (workspaceExists && !worktree.existingWorkspacePath) throw new Error("workspace_path_already_exists");
         if (!workspaceExists) created.push({ input: worktree, workspacePath });
@@ -371,8 +381,8 @@ export class WorktreeManager {
   private async restoreLocalLocked(input: RestoreWorktreeInput, issueKey: string): Promise<void> {
     const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url);
     if (!await pathExists(cachePath)) throw new Error("repository_cache_not_found");
-    const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
-    const workspacePath = this.resolveIssueWorkspacePath(issueRoot, input.workspaceName, input.workspacePath);
+    const root = issueRoot(this.stateRoot, issueKey);
+    const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.workspacePath);
     if (await pathExists(workspacePath)) throw new Error("workspace_path_already_exists");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
     if (!input.workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
@@ -390,8 +400,8 @@ export class WorktreeManager {
     if (cachePath !== sharedStore && !input.workingBranch) await this.git(["-C", cachePath, "fetch", "--no-tags", sharedStore, `+refs/remotes/origin/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`]);
     if (input.workingBranch && !await pathExists(cachePath)) throw new Error("repository_cache_not_found");
 
-    const issueRoot = issueWorkspaceRoot(this.stateRoot, issueKey);
-    const workspacePath = this.resolveIssueWorkspacePath(issueRoot, input.workspaceName, input.existingWorkspacePath);
+    const root = issueRoot(this.stateRoot, issueKey);
+    const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     await this.git(["check-ref-format", "--branch", workingBranch]);
     if (!workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");

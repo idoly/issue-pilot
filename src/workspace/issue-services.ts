@@ -5,8 +5,8 @@ import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 
 type IssueScope = { id: string; serviceId: string; environmentId: string };
-export async function listEnvironmentServices(database: Database, environmentId: string, investigation = false) {
-  const [current] = investigation ? await database.select().from(environments).where(eq(environments.id, environmentId)).limit(1) : [];
+export async function listEnvironmentServices(database: Database, environmentId: string) {
+  const [current] = await database.select().from(environments).where(eq(environments.id, environmentId)).limit(1);
   const includeSources = current?.kind === "dev";
   return database.select({ service: services, deployment: serviceDeployments, environment: environments }).from(serviceDeployments)
     .innerJoin(services, eq(services.id, serviceDeployments.serviceId)).innerJoin(environments, eq(environments.id, serviceDeployments.environmentId))

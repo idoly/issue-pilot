@@ -4,7 +4,8 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseDocument, stringify } from "yaml";
 import { applicationConfig } from "../src/config.ts";
-import { fileRecord, fillMissingUserCredentials, moveDingtalkSource, simpleServiceFile, simpleTargets, userFileLayout } from "../src/configuration/file-layout.ts";
+import { fileRecord } from "../src/configuration/file-layout.ts";
+import { fillMissingUserCredentials, moveDingtalkSource, convertServiceFile, simpleTargets, convertUserFile } from "./configuration-conversion.ts";
 
 async function existingYaml(file: string) {
   let content: string;
@@ -25,7 +26,7 @@ try {
   const owner = database.prepare("SELECT * FROM subjects WHERE subject=? AND active=1").get(values.subject);
   if (!owner) throw new Error("configuration_user_not_active");
   const existingUser = await existingYaml(path.join(root, "user.yaml"));
-  const layout = userFileLayout(existingUser);
+  const layout = convertUserFile(existingUser);
   for (const row of database.prepare("SELECT s.subject AS account,c.* FROM subjects s LEFT JOIN user_credentials c ON c.subject=s.subject ORDER BY s.subject").all()) {
     const subject = String(row.account);
     if (layout.users[subject]) continue;
@@ -115,7 +116,7 @@ try {
       url.searchParams.delete("key"); mcp.mcpServers.dingtalk.url = url.toString();
     }
   }
-  const simplified = simpleServiceFile(service);
+  const simplified = convertServiceFile(service);
   moveDingtalkSource(simplified, layout.users, values.subject);
   const filledCredentials = values["fill-missing-from"] ? fillMissingUserCredentials(layout.users, values["fill-missing-from"]) : undefined;
   await mkdir(output, { recursive: true, mode: 0o700 });

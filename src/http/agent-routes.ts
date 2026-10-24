@@ -50,6 +50,8 @@ async function readAgentMessage(request: FastifyRequest): Promise<{ message: str
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
   const { app, database, engine, events, modelCatalog } = context;
+  const recentEventLimit = issuePilotConfig.http.sseRecentEventIds;
+  if (!Number.isSafeInteger(recentEventLimit) || recentEventLimit < 1) throw new Error("invalid_sse_event_id_budget");
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
@@ -101,21 +103,48 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
           reply.raw.destroy();
         }
       });
-      const sent = new Set<string>();
+      const sentEntries = new Set<string>();
+      const sentTransient = new Set<string>();
+      let replayComplete = false;
+      let recentIds: string[] = [];
+      let nextRecent = 0;
       const send = (event: RunEvent) => {
-        const key = event.event.type === "entry_appended" ? event.event.entry.id : event.id;
-        if (sent.has(key)) return;
-        sent.add(key);
-        writer.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+        if (event.event.type === "entry_appended") {
+          if (sentEntries.has(event.event.entry.id)) return;
+          sentEntries.add(event.event.entry.id);
+        } else {
+          if (sentTransient.has(event.id)) return;
+          if (replayComplete) {
+            if (recentIds.length === recentEventLimit) {
+              sentTransient.delete(recentIds[nextRecent]!);
+              recentIds[nextRecent] = event.id;
+              nextRecent = (nextRecent + 1) % recentEventLimit;
+            } else recentIds.push(event.id);
+          }
+          sentTransient.add(event.id);
+        }
+        let serialized: string;
+        try { serialized = JSON.stringify(event); }
+        catch (error) {
+          cleanup();
+          reply.raw.destroy();
+          throw error;
+        }
+        writer.write(`id: ${event.id}\ndata: ${serialized}\n\n`);
       };
       for (const event of transcript) send(event);
       // Snapshot totals also include hidden entries, such as cache-warming usage.
-      for (const entry of manager?.getEntries() ?? []) sent.add(entry.id);
+      for (const entry of manager?.getEntries() ?? []) sentEntries.add(entry.id);
       for (const event of currentEvents) send(event);
       writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
       liveEvents.activate(send);
+      // Replay can exceed the live window; prune only after its buffered overlap is deduplicated.
+      replayComplete = true;
+      recentIds = [...sentTransient].slice(-recentEventLimit);
+      sentTransient.clear();
+      for (const id of recentIds) sentTransient.add(id);
     } catch (error) {
       cleanup();
       if (hijacked && !reply.raw.destroyed) reply.raw.destroy();
@@ -135,7 +164,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       }, images);
     }
     catch (error) {
-      if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent"].includes(error.message)) throw new ApiError(409, error.message);
+      if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown"].includes(error.message)) throw new ApiError(409, error.message);
       throw error;
     }
     return reply.code(202).send();

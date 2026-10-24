@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
+import fs, { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -12,7 +14,7 @@ import { executeLocalCommand, type CommandExecutor } from "../../src/process.ts"
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { repositoryStorePath } from "../../src/workspace/git.ts";
-import { issueWorkspaceRoot } from "../../src/workspace/state.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import { TestAgentController } from "../http/fixture.ts";
 
@@ -24,7 +26,7 @@ async function fixture() {
   const [service] = await database.db.insert(services).values({ key: "source-pages", name: "Source pages" }).returning();
   await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
   const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261017-991", title: "Synthetic source", type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "browser-test" }).returning();
-  const repository = path.join(issueWorkspaceRoot(root, issue!.key), "application");
+  const repository = path.join(issueRoot(root, issue!.key), "application");
   await mkdir(repository, { recursive: true });
   const git = async (args: string[]) => {
     const result = await executeLocalCommand("git", ["-C", repository, ...args]);
@@ -41,6 +43,72 @@ async function fixture() {
   await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
   return { root, database, issue: issue!, repository, git, browser: new SourceBrowser(database.db, root), close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
+
+test("source save collisions preserve another operation's temporary file and the current source", async context => {
+  const f = await fixture();
+  const id = "11111111-1111-4111-8111-111111111111";
+  try {
+    const original = await f.browser.createFile(f.issue, "application", "report.txt", "original source");
+    const temporary = path.join(f.repository, `.issue-pilot-${id}.tmp`);
+    await writeFile(temporary, "other operation evidence");
+    context.mock.method(crypto, "randomUUID", () => id);
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.writeFile(f.issue, "application", "report.txt", "replacement", original.sha256), { code: "EEXIST" });
+    assert.equal(await readFile(temporary, "utf8"), "other operation evidence");
+    assert.equal(await readFile(path.join(f.repository, "report.txt"), "utf8"), "original source");
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
+
+for (const cleanupFails of [false, true]) test(`failed source saves retain the primary error and release their descriptor (cleanup fails: ${cleanupFails})`, async context => {
+  const f = await fixture();
+  const openFile = fs.open, remove = fs.rm;
+  const primary = new Error("fixture_source_write_failed"), cleanup = new Error("fixture_source_cleanup_failed");
+  let closed = false, temporary = "";
+  try {
+    const original = await f.browser.createFile(f.issue, "application", "report.txt", "original source");
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await openFile(...args);
+      if (path.basename(String(args[0])).startsWith(".issue-pilot-")) {
+        temporary = String(args[0]);
+        const close = handle.close.bind(handle), write = handle.writeFile.bind(handle);
+        context.mock.method(handle, "writeFile", async () => { await write("partial"); throw primary; });
+        context.mock.method(handle, "close", async () => { await close(); closed = true; });
+      }
+      return handle;
+    });
+    context.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+      if (cleanupFails && String(args[0]) === temporary) throw cleanup;
+      return remove(...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.writeFile(f.issue, "application", "report.txt", "replacement", original.sha256), error => cleanupFails
+      ? error instanceof AggregateError && error.message === "source_save_cleanup_failed" && error.errors.includes(primary) && error.errors.includes(cleanup)
+      : error === primary);
+    assert.equal(closed, true);
+    assert.equal(await readFile(path.join(f.repository, "report.txt"), "utf8"), "original source");
+    if (cleanupFails) assert.equal(await readFile(temporary, "utf8"), "partial");
+    else await assert.rejects(lstat(temporary), { code: "ENOENT" });
+    context.mock.restoreAll(); syncBuiltinESMExports();
+    assert.equal((await f.browser.writeFile(f.issue, "application", "report.txt", "retried", original.sha256)).content, "retried");
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
+
+test("a completed save does not delete a newly reused temporary pathname", async context => {
+  const f = await fixture();
+  const move = fs.rename;
+  let reused = "";
+  try {
+    const original = await f.browser.createFile(f.issue, "application", "report.txt", "original source");
+    context.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) => {
+      await move(...args);
+      reused = String(args[0]);
+      await writeFile(reused, "new owner's evidence");
+    });
+    syncBuiltinESMExports();
+    assert.equal((await f.browser.writeFile(f.issue, "application", "report.txt", "saved source", original.sha256)).content, "saved source");
+    assert.equal(await readFile(reused, "utf8"), "new owner's evidence");
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
 
 test("source mutations reject a Git pointer redirected to another Issue's worktree", async () => {
   const f = await fixture();

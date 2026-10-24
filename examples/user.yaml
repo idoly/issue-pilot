@@ -29,7 +29,6 @@ users:
       url: https://dms.example.com/sse
       authorization: "${USER_DMS_AUTHORIZATION}"
     dingtalk:
-      apiKey: "${USER_DINGTALK_MCP_KEY}"
       source:
         mcp: dingtalk
         url: https://alidocs.dingtalk.com/notable/record?dentryUuid=YOUR_BASE_ID&sheetId=YOUR_TABLE_ID&rowId=YOUR_RECORD_ID

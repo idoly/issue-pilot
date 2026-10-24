@@ -41,40 +41,14 @@ export function workspacesRoot(stateRoot: string): string {
   return path.resolve(stateRoot, "workspaces");
 }
 
-export function issueWorkspaceRoot(stateRoot: string, issueKey: string): string {
+/** Current flat Issue root: repositories, working files and private application files share it. */
+export function issueRoot(stateRoot: string, issueKey: string): string {
   return path.join(workspacesRoot(stateRoot), issueSegment(issueKey));
 }
 
-function issuesRoot(stateRoot: string): string {
-  return path.resolve(stateRoot, "issues");
-}
-
+/** Old layout is inspected only by migration tools and guards against unmigrated state. */
 export function legacyIssueRoot(stateRoot: string, issueKey: string): string {
-  return path.join(issuesRoot(stateRoot), issueSegment(issueKey));
-}
-
-export function issueRoot(stateRoot: string, issueKey: string): string {
-  return issueWorkspaceRoot(stateRoot, issueKey);
-}
-
-export function issueWorkDirectory(stateRoot: string, issueKey: string): string {
-  return issueWorkspaceRoot(stateRoot, issueKey);
-}
-
-export function issueSessionRoot(stateRoot: string, issueKey: string): string {
-  return issueRoot(stateRoot, issueKey);
-}
-
-export function issueRuntimeRoot(stateRoot: string, issueKey: string): string {
-  return issueRoot(stateRoot, issueKey);
-}
-
-export function issueAttachmentRoot(stateRoot: string, issueKey: string): string {
-  return issueRoot(stateRoot, issueKey);
-}
-
-export function issueOutputRoot(stateRoot: string, issueKey: string): string {
-  return path.join(legacyIssueRoot(stateRoot, issueKey), "outputs");
+  return path.resolve(stateRoot, "issues", issueSegment(issueKey));
 }
 
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
@@ -88,17 +62,14 @@ export async function claimIssueRoot(stateRoot: string, issueKey: string): Promi
 }
 
 export async function removeEmptyIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
-  const failures: unknown[] = [];
-  for (const directory of [issueRoot(stateRoot, issueKey)]) {
-    try { await rmdir(directory); }
-    catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) failures.push(error);
-    }
+  try { await rmdir(issueRoot(stateRoot, issueKey)); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw new Error("issue_state_rollback_failed", { cause: new AggregateError([error], "issue_state_rollback_failed") });
   }
-  if (failures.length) throw new Error("issue_state_rollback_failed", { cause: new AggregateError(failures, "issue_state_rollback_failed") });
 }
 
-function gitRoot(stateRoot: string): string {
+export function gitRoot(stateRoot: string): string {
   return path.resolve(stateRoot, "git");
 }
 

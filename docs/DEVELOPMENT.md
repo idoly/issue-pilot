@@ -2,6 +2,22 @@
 
 先读[系统架构](ARCHITECTURE.md)，按任务查看 [Agent](AGENT.md)、[存储](STORAGE.md)或[配置](CONFIGURATION.md)。设计与审查规则以 [AGENTS.md](../AGENTS.md) 为准，已有状态操作按[运维手册](RUNBOOK.md)。
 
+## 代码风格
+
+TypeScript 修改参考 [Google TypeScript Style Guide](https://google.github.io/styleguide/tsguide.html)，页面结构和样式参考 [Google HTML/CSS Style Guide](https://google.github.io/styleguide/htmlcssguide.html)。保持命名清晰、类型边界明确、语义化 HTML 和局部可审查的差异；不为风格一致性批量重排无关代码。
+
+项目运行方式优先于指南中的通用建议：后端使用 Node 原生 strip-types，不引入需要生成运行时代码的 enum、参数属性或装饰器；Solid TSX 保留 JSX 要求的闭合标签。现有文件沿用相邻代码的引号、导入和格式约定，新逻辑避免用类型断言绕过边界校验。
+
+目录和普通模块使用 `kebab-case`，TSX 组件文件与组件使用 `PascalCase`，类型使用 `PascalCase`，函数、参数和局部变量使用 `camelCase`。名称说明当前职责：工作文件统一使用 `workFile`／`workFiles`，原始上传使用 `attachment`，离线转换入口明确包含 `migration`；不保留只做转发的旧业务名称。`issueId` 表示数据库标识，`issueKey` 表示面向用户的工单编号；短名称只在上下文明确的局部使用。已经落盘的文件名、Git refs、迁移记录和外部协议字段按各自契约演进，不为代码风格批量改写。
+
+## Schema 与运行时校验
+
+项目自有的结构化 schema 统一使用 TypeBox，沿用 Pi 的工具参数与 JSON Schema 契约。Agent 工具、入站 MCP 工具和配置结构校验不再新增直接的 Zod 业务 schema。同一规则有模型参数、MCP 描述和执行校验等消费者时，复用其 owner 定义，不各写一份。复用规则不等于共享可变实例；交给 SDK 的工具参数若含共享节点，按工具实例使用 `Value.Clone` 隔离，保留 TypeBox 的可选性和非枚举元信息，避免扩展修改影响后续工单。
+
+结构化外部输入采用 TypeBox 严格检查：低频入口使用 `Value.Check`，重复使用的工具执行热路径使用一次 `Compile(schema)` 后的 `.Check`。不依赖 `Value.Parse` 的全局纠正解析选项进行隐式类型转换、默认值补齐或删除未知字段。默认值、规范化、引用检查和授权仍归对应业务 owner；已有小型语义解析器不为形式统一重写成大 schema，也不新增万能校验包装层。
+
+MCP SDK 的协议 envelope 校验和 SRT 的域名／沙箱规则继续使用 SDK 原有 schema。它们内部的 Zod 是传递依赖，不能通过业务代码改写安全地移除；例如 `NetworkConfigSchema.safeParse` 复用 SRT 的完整域名与端口规则，不另写 TypeBox 正则副本。第三方 Zod 安全回归可以直接使用 Zod API，应用层不维护 TypeBox 与 Zod 两套同义 schema。
+
 ## 环境
 
 安装步骤统一见[首次本地运行](DEPLOYMENT.md#首次本地运行)。开发与 CI 使用 Node 24.18.0，镜像使用 Node 26。后端直接运行 TypeScript，不使用 strip-types 不支持的语法；前端采用匹配的 Solid 2 runtime/compiler。
@@ -17,7 +33,7 @@ Python 库安装在应用根 `.venv`，版本由 `requirements.txt` 固定。原
 | 容器 Git / aliyun CLI | 2.56.0 / 3.5.2 |
 | Python 库 | openpyxl 3.1.5、et_xmlfile 2.0.0 |
 
-准确依赖及传递依赖以 [package.json](../package.json) 和 [package-lock.json](../package-lock.json) 为准。Pi 与 node-forge 的安装回补见[补丁说明](../patches/README.md)，不能跳过 postinstall 后直接使用未修补 SDK。
+准确依赖及传递依赖以 [package.json](../package.json) 和 [package-lock.json](../package-lock.json) 为准。Pi、node-forge 与 Zod 的安装回补见[补丁说明](../patches/README.md)，不能跳过 postinstall 后直接使用未修补 SDK。
 
 ## 验证
 
@@ -55,6 +71,8 @@ npm audit --omit=dev --audit-level=high
 
 SRT 0.0.81 的传递依赖 node-forge 1.4.0 尚无 npm 正式修复版。安装时回补上游 RSA 验签修复，并运行恶意 ASN.1 签名回归，详见[依赖补丁](../patches/README.md)。原始生产审计仍会按 1.4.0 版本报告该包及 SRT 的两项高危影响链；这不等于回补后的代码仍接受该攻击，也不是零漏洞结论。不屏蔽审计或退回旧 SRT；正式修复版发布后移除回补。
 
+最新审计还报告 Zod 的大集合校验内存耗尽通告 [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)，生产审计变为 3 个 high 影响包条目（SRT、node-forge、Zod，两条底层通告）。安装与锁文件中的 Zod 均为 3.25.76；SRT 使用 `zod/v3`，MCP SDK 的协议类型使用包内 `zod/v4`，不能仅凭主版本 3 忽略通告。本轮已交付固定版本的集合上限前置回补，覆盖包内 v3／v4 的 ESM、CJS 及 Mini 运行路径；隔离安全与 MCP／SRT 兼容回归通过，详见[依赖补丁](../patches/README.md#zod-集合上限前置检查)。测试只修改复制的包，并核对共享安装文件 hash；正在运行的共享依赖未改动。该回补不为无上限 schema 新增限制，生产审计仍按版本报告。后续安装／部署需按授权流程应用，不能直接采用审计提出的 SRT 降级或屏蔽通告。
+
 | 检查 | 主要验证 |
 | --- | --- |
 | typecheck | 前后端类型、DTO 使用和未使用局部符号 |
@@ -71,6 +89,14 @@ SRT 0.0.81 的传递依赖 node-forge 1.4.0 尚无 npm 正式修复版。安装�
 
 文档变更检查链接、锚点、图的解析与渲染，并核对 owner 代码。完成检查后只在新改动、失败或未解决风险需要时扩大验证。
 
+SSE 连接的保留堆验证可运行：
+
+```bash
+node --expose-gc --experimental-strip-types docs/experiments/sse-event-id-memory.mjs 100000
+```
+
+该脚本使用临时数据库、合成事件与本地 HTTP 消费者，排空数据并 GC 后比较保留堆；不读取真实工单、不调用模型。它测量 ID 跟踪的连接保留成本，不代表慢客户端背压、总内存峰值或真实模型吞吐。
+
 ## 修改入口
 
 | 关注点 | Owner |
@@ -78,13 +104,13 @@ SRT 0.0.81 的传递依赖 node-forge 1.4.0 尚无 npm 正式修复版。安装�
 | 默认值、路径、预算、保留 | issue-pilot.config.ts、src/config.ts |
 | 角色、处理方式、状态 | src/domain/contracts.ts |
 | schema、启动迁移、升级历史 | src/db/schema.ts、bootstrap.ts、drizzle/ |
-| 用户、凭证、配置投影 | src/configuration、http/route-context.ts |
+| 用户、凭证、配置投影 | src/configuration、http/route-context.ts；离线格式转换：scripts/configuration-conversion.ts |
 | 工单及附件事务 | http/issue-routes.ts、attachment-store.ts |
 | Agent 排队、会话、模型、资源 | src/agent、configuration/pi-runtime.ts |
 | 工具输入与外部协议 | capabilities/registry.ts、src/capabilities、src/mcp |
 | Git、代码集合、生命周期 | workspace/git.ts、issue-git.ts、project.ts、lifecycle.ts |
 | 凭据与 SSH 传输 | workspace/git-credentials.ts、agent/network-exec.ts |
-| 工作文件与旧下载兼容 | workspace/work-file-store.ts、outputs/store.ts |
+| 工作文件访问与原子查询导出 | workspace/work-files.ts |
 | 本地工具执行与隔离 | agent/native-tools.ts、issue-sandbox.ts、native-tool-executor.ts |
 | 单实例保护 | workspace/state-lease.ts |
 | Web DTO、请求、SSE | web/src/data/client.ts、app/agent-stream.ts |

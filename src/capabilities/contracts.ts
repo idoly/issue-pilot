@@ -9,11 +9,6 @@ export function capabilityResultText(value: unknown): string {
   return text;
 }
 
-export function capabilitySignal(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(limits.timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 export function structuredJsonResult<Details>(result: AgentToolResult<Details>): AgentToolResult<Details> {
   const text = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
   try { return { ...result, structuredContent: JSON.parse(text) }; }

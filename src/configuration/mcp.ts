@@ -1,20 +1,7 @@
-import type { DingtalkUserSettings } from "./contracts.ts";
-import type { McpConfiguration } from "../mcp/client.ts";
 import { mcpServices } from "../db/schema.ts";
 import { MCP_TRANSPORTS, type McpStdioConfiguration } from "../domain/contracts.ts";
 import { ApiError, choice, record, text } from "../http/input.ts";
 type McpRow = typeof mcpServices.$inferSelect;
-/** A supplied personal group replaces the shared gateway identity completely. */
-export function dingtalkConnection(configuration: McpConfiguration, settings: DingtalkUserSettings): McpConfiguration {
-  const credentials = settings.personal ?? settings.shared;
-  if (!credentials) return configuration;
-  if (configuration.transport === "stdio") throw new ApiError(400, "dingtalk_credentials_require_http");
-  let url: URL;
-  try { url = new URL(credentials.url ?? configuration.url); } catch { throw new ApiError(400, "invalid_dingtalk_connection"); }
-  if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new ApiError(400, "invalid_dingtalk_connection");
-  url.searchParams.set("key", credentials.apiKey);
-  return { ...configuration, url: url.toString(), authorization: "" };
-}
 export function publicMcpUrl(value: string): string {
   if (!value) return "";
   const url = new URL(value); url.search = ""; url.hash = "";

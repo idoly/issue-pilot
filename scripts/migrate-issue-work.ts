@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { applicationConfig } from "../src/config.ts";
 import { applyIssueWorkMigration, planIssueWorkMigration } from "../src/workspace/work-directory-migration.ts";
-import { issueWorkDirectory } from "../src/workspace/state.ts";
+import { issueRoot } from "../src/workspace/state.ts";
 
 const { values } = parseArgs({ options: { apply: { type: "boolean", default: false }, "state-root": { type: "string" } } });
 const apply = values.apply;
@@ -39,7 +39,7 @@ try {
       try {
         const update = database!.prepare("UPDATE issue_pilot_sessions SET workspace_path = ?, updated_at = unixepoch() WHERE issue_id = ? AND workspace_path <> ?");
         for (const issue of rows) {
-          const directory = issueWorkDirectory(root, issue.key);
+          const directory = issueRoot(root, issue.key);
           update.run(directory, issue.id, directory);
         }
         database!.exec("COMMIT");

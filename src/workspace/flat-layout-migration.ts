@@ -3,8 +3,26 @@ import { createReadStream } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { issueRoot, legacyIssueRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
-import { legacyOutputLinks, legacyOutputLinksFile } from "../outputs/store.ts";
-import { workFileName } from "./work-file-store.ts";
+import { workFileName } from "./work-files.ts";
+
+const outputLinksFile = ".legacy-output-links.json";
+async function readOutputLinks(stateRoot: string, issueKey: string): Promise<Record<string, string>> {
+  const root = issueRoot(stateRoot, issueKey), file = path.join(root, outputLinksFile);
+  const metadata = await lstat(file).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
+  if (!metadata) return {};
+  if (!metadata.isFile() || metadata.mode & 0o077) throw new Error("insecure_legacy_output_links");
+  const data: unknown = JSON.parse(await readFile(file, "utf8"));
+  if (!data || typeof data !== "object" || Array.isArray(data) || !("version" in data) || data.version !== 1 || !("files" in data)) throw new Error("invalid_legacy_output_links");
+  const files = data.files;
+  if (!files || typeof files !== "object" || Array.isArray(files)) throw new Error("invalid_legacy_output_links");
+  const links: Record<string, string> = Object.create(null);
+  for (const [name, target] of Object.entries(files)) {
+    workFileName(name);
+    if (typeof target !== "string") throw new Error("invalid_legacy_output_links");
+    links[name] = workFileName(target);
+  }
+  return links;
+}
 
 export interface FlatLayoutIssue { id: string; key: string; repositoryNames: string[] }
 export interface FlatLayoutAttachment { id: string; issueId: string; objectKey: string; size: number; sha256: string; workingFileName: string | null }
@@ -135,7 +153,7 @@ export async function planFlatIssueLayout(stateRoot: string, issues: FlatLayoutI
       plan.attachments.push({ id: file.id, objectKey: target, workingFileName });
     }
     if ((await entries(path.join(old, "attachments"))).some(name => !tracked.has(name))) throw new Error(`flat_layout_untracked_attachment:${issue.key}`);
-    const oldOutputs = path.join(old, "outputs"), outputs = await entries(oldOutputs), links = Object.assign(Object.create(null) as Record<string, string>, await legacyOutputLinks(stateRoot, issue.key));
+    const oldOutputs = path.join(old, "outputs"), outputs = await entries(oldOutputs), links = Object.assign(Object.create(null) as Record<string, string>, await readOutputLinks(stateRoot, issue.key));
     for (const name of outputs) {
       workFileName(name);
       const source = path.join(oldOutputs, name);
@@ -153,7 +171,7 @@ export async function planFlatIssueLayout(stateRoot: string, issues: FlatLayoutI
       await add(issue.key, source, path.join(root, chosen), true);
     }
     if (outputs.length) {
-      const file = path.join(root, legacyOutputLinksFile), info = await metadata(file);
+      const file = path.join(root, outputLinksFile), info = await metadata(file);
       if (info && (!info.isFile() || info.mode & 0o077)) throw new Error("insecure_legacy_output_links");
       plan.manifests.push({ path: file, ...(info ? { previous: await readFile(file, "utf8") } : {}), content: JSON.stringify({ version: 1, files: links }, null, 2) + "\n" });
     }

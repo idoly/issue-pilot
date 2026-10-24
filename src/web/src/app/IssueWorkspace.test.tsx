@@ -1,6 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
 const state = vi.hoisted(() => ({ plan: vi.fn(), create: vi.fn(), list: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
@@ -14,7 +13,7 @@ vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({
 }) }));
 import { IssueWorkspace } from "./IssueWorkspace";
 
-const issue: IssueDetail = { id: "ISSUE-20261018-001", title: "Synthetic scope", description: "", priority: "p2", type: "smart_analysis", status: "pending", assignee: null, assigneeSubject: null, service: { key: "orders", name: "Orders" }, environmentKey: "prod", updatedAt: "2026-10-18T00:00:00Z", repositories: [], workspace: { status: "ready", sourceAvailable: false }, attachments: [], outputs: [], comments: [] };
+const issue: IssueDetail = { id: "ISSUE-20261018-001", title: "Synthetic scope", description: "", priority: "p2", type: "smart_analysis", status: "pending", assignee: null, assigneeSubject: null, service: { key: "orders", name: "Orders" }, environmentKey: "prod", updatedAt: "2026-10-18T00:00:00Z", repositories: [], workspace: { status: "ready", sourceAvailable: false }, attachments: [], comments: [] };
 function plan(current: boolean): IssueScopeTransitionPlan {
   return { planHash: `sha256:${"a".repeat(64)}`, expectedIssueUpdatedAt: issue.updatedAt, action: "rebind_read_only", current: { service: issue.service, workMode: "production_analysis", repositoryAccess: "read" }, target: { service: current ? { key: "inventory", name: "Inventory" } : issue.service, workMode: current ? "test_analysis" : "production_analysis", repositoryAccess: "read" }, repositories: { retained: [], removed: [], added: [{ name: current ? "current-plan-repository" : "stale-plan-repository", url: "https://example.test/repo.git", baseBranch: "main" }] }, branch: null, session: { closeCurrent: true, preserveConversation: true }, preserved: ["attachments", "comments", "conversation"], warnings: [] };
 }
@@ -45,6 +44,13 @@ for (const outcome of ["success", "failure"] as const) for (const currentPending
     if (currentPending) finishCurrent();
     await within(current).findByText("关联工单（2 个可选，最多选择 20 个）");
   } finally { finishOld?.(); finishCurrent?.(); }
+});
+
+it("explains why queued intent from an earlier scope was not replayed", () => {
+  const failed: IssueDetail = { ...issue, status: "open", workspace: { ...issue.workspace, status: "failed", retryable: true, lastError: "agent_message_scope_changed" } };
+  render(() => <IssueWorkspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  expect(screen.getByRole("alert").textContent).toBe("历史排队消息的处理范围已变更，已停止恢复。请核对历史输入后重试，或按当前范围重新发送。");
+  expect(screen.getByRole("button", { name: "重试处理" })).toBeTruthy();
 });
 
 it("shows related Issue handler, status, service and environment with a navigable card", async () => {
@@ -91,21 +97,16 @@ it("does not navigate to a follow-up created after the workspace unmounts", asyn
   expect(created).not.toHaveBeenCalled();
 });
 
-it("offers previews for supported attachments without a separate outputs section", async () => {
+it("offers previews for supported attachments", async () => {
   const fetchMock = vi.fn().mockResolvedValue(new Response('{"result":"previewed-json"}'));
   vi.stubGlobal("fetch", fetchMock);
-  const detailed: IssueDetail = { ...issue, outputs: [
-    { fileName: "delivery.xlsx", size: 512, updatedAt: issue.updatedAt },
-    { fileName: "results.json", size: 30, updatedAt: issue.updatedAt },
-    { fileName: "large.txt", size: issuePilotConfig.web.outputPreviewBytes + 1, updatedAt: issue.updatedAt },
-  ], attachments: [
+  const detailed: IssueDetail = { ...issue, attachments: [
     { id: "text", fileName: "results.json", mediaType: "application/json", size: 30, sha256: "a".repeat(64) },
     { id: "workbook", fileName: "input.xlsx", mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 512, sha256: "a".repeat(64) },
     { id: "image", fileName: "image.png", mediaType: "image/png", size: 512, sha256: "a".repeat(64) },
     { id: "archive", fileName: "archive.zip", mediaType: "application/zip", size: 512, sha256: "a".repeat(64) },
   ] };
   render(() => <IssueWorkspace issue={detailed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
-  expect(screen.queryByRole("link", { name: "下载 delivery.xlsx" })).toBeNull();
   for (const fileName of ["input.xlsx", "archive.zip"]) {
     expect(screen.queryByRole("button", { name: `预览 ${fileName}` })).toBeNull();
     expect(screen.getByRole("link", { name: `下载 ${fileName}` })).toBeTruthy();

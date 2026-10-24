@@ -44,7 +44,7 @@ export class AgentEventBus {
     const issueListeners = this.listeners.get(event.issueId);
     if (!issueListeners) return;
     for (const listener of [...issueListeners]) if (!this.deliver(listener, event)) issueListeners.delete(listener);
-    if (!issueListeners.size) this.listeners.delete(event.issueId);
+    if (!issueListeners.size && this.listeners.get(event.issueId) === issueListeners) this.listeners.delete(event.issueId);
   }
 
   deliver(listener: RunEventListener, event: RunEvent): boolean {
@@ -72,7 +72,7 @@ export class AgentEventBus {
       if (!subscribed) return;
       subscribed = false;
       issueListeners.delete(listener);
-      if (!issueListeners.size) this.listeners.delete(issueId);
+      if (!issueListeners.size && this.listeners.get(issueId) === issueListeners) this.listeners.delete(issueId);
     };
   }
 

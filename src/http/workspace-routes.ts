@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { issueRelations, issues } from "../db/schema.ts";
-import { issueWorkspaceRoot } from "../workspace/state.ts";
-import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/working-files.ts";
+import { issueRoot } from "../workspace/state.ts";
+import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
 import { ScopeTransitionRefusal } from "../workspace/scope-transition.ts";
@@ -28,7 +28,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const related = await database.db.select({ id: issues.id, key: issues.key }).from(issueRelations).innerJoin(issues, eq(issues.id, issueRelations.relatedIssueId)).where(eq(issueRelations.issueId, issue.id));
     for (const row of related) {
       const prefix = `.related-${row.key.toLowerCase()}`;
-      readRoots[prefix] = issueWorkspaceRoot(context.stateRoot, row.key);
+      readRoots[prefix] = issueRoot(context.stateRoot, row.key);
       for (const [name, root] of Object.entries(await context.sourceBrowser.readRoots(row))) readRoots[`${prefix}/${name}`] = root;
     }
     return { readRoots };

@@ -221,6 +221,20 @@ test("serializes retries, status transitions, messages, and comments with one Is
   }
 });
 
+for (const [code, status] of [["agent_message_outcome_unknown", 409], ["agent_session_file_incomplete", 500], ["agent_session_file_missing", 500]] as const) test(`classifies ${code} without resubmitting the message`, async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Uncertain");
+    const issue = await createIssue(fixture.app, "uncertain", "test", "Uncertain message");
+    const queued = fixture.engine.enqueued.length;
+    fixture.engine.send = async () => { throw new Error(code); };
+    const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "check the outcome" } });
+    assert.equal(response.statusCode, status);
+    assert.deepEqual(JSON.parse(response.body), { error: code });
+    assert.equal(fixture.engine.enqueued.length, queued);
+  } finally { await fixture.cleanup(); }
+});
+
 test("serializes Issue assignee changes with user deactivation", async () => {
   const fixture = await createApiFixture();
   let release!: () => void;

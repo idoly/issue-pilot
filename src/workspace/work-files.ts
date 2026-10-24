@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, realpath, stat } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, realpath, rename, stat, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { legacyIssueRoot, issueWorkDirectory } from "./state.ts";
+import { KeyedSerialQueue } from "../serial.ts";
+import { legacyIssueRoot, issueRoot } from "./state.ts";
 
 export interface IssueWorkFile {
   name: string;
@@ -28,7 +30,7 @@ export async function prepareIssueWorkDirectory(stateRoot: string, issueKey: str
     throw error;
   });
   if (oldEntries.length) throw new Error("issue_layout_migration_required");
-  const root = issueWorkDirectory(stateRoot, issueKey);
+  const root = issueRoot(stateRoot, issueKey);
   await mkdir(root, { recursive: true, mode: 0o700 });
   if (!(await lstat(root)).isDirectory() || await realpath(root) !== root) throw new Error("invalid_issue_work_directory");
   return root;
@@ -36,7 +38,7 @@ export async function prepareIssueWorkDirectory(stateRoot: string, issueKey: str
 
 async function resolveWorkPath(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess): Promise<string> {
   if (relative.includes("\0") || relative.includes("\\") || path.isAbsolute(relative) || relative.split("/").some(segment => segment === ".." || segment.toLowerCase() === ".git")) throw new Error("invalid_issue_file_path");
-  const root = issueWorkDirectory(stateRoot, issueKey);
+  const root = issueRoot(stateRoot, issueKey);
   if (!(await lstat(root)).isDirectory() || await realpath(root) !== root) throw new Error("invalid_issue_work_directory");
   const target = await realpath(path.resolve(root, relative || "."));
   const selected = path.relative(root, target);
@@ -68,7 +70,7 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
 
 export async function openIssueWorkFile(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess = {}) {
   const target = await resolveWorkPath(stateRoot, issueKey, relative, access);
-  const issueRoots = [issueWorkDirectory(stateRoot, issueKey), ...Object.entries(access.readRoots ?? {}).filter(([prefix]) => /^\.related-issue-[0-9]{8}-[0-9]{3,}$/.test(prefix)).map(([, root]) => root)];
+  const issueRoots = [issueRoot(stateRoot, issueKey), ...Object.entries(access.readRoots ?? {}).filter(([prefix]) => /^\.related-issue-[0-9]{8}-[0-9]{3,}$/.test(prefix)).map(([, root]) => root)];
   if (isManagedIssueFile(relative) || issueRoots.some(root => inside(root, target) && isManagedIssueFile(path.relative(root, target)))) throw new Error("managed_issue_file_private");
   const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -76,4 +78,113 @@ export async function openIssueWorkFile(stateRoot: string, issueKey: string, rel
     if (!metadata.isFile()) throw new Error("issue_file_not_regular");
     return { handle, size: metadata.size, fileName: path.basename(target) };
   } catch (error) { await handle.close(); throw error; }
+}
+
+export interface WorkFileMetadata {
+  fileName: string;
+  size: number;
+  updatedAt: string;
+}
+
+// A destination can have several store instances, but only one active producer.
+const writes = new KeyedSerialQueue();
+
+export function workFileName(value: string): string {
+  if (!value || /[/\\\0]/.test(value) || value === "." || value === ".." || value.toLowerCase() === ".git" || isManagedIssueFile(value) || Buffer.byteLength(value) > issuePilotConfig.limits.filesystemNameBytes) {
+    throw new Error("invalid_work_file_name");
+  }
+  return value;
+}
+
+async function cleanupWorkFile(handle: FileHandle, temporary: string, primary: unknown[]): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    await handle.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await unlink(temporary);
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) failures.push(error);
+  }
+  if (failures.length) throw new AggregateError([...primary, ...failures], "work_file_cleanup_failed");
+}
+
+/** Publish unique SDK files only after their complete contents have been written. */
+export function generatedWorkFileSaver(root: string, prefix: "codemode" | "mcp") {
+  return async (data: string | Uint8Array, extension: string): Promise<string> => {
+    if (!/^\.[a-z0-9]{1,8}$/i.test(extension)) throw new Error("invalid_work_file_extension");
+    if (!(await lstat(root)).isDirectory() || await realpath(root) !== root) throw new Error("invalid_issue_work_directory");
+    const id = randomUUID();
+    const target = path.join(root, `${prefix}-${id}${extension}`);
+    const temporary = path.join(root, `.work-file-${id}.tmp`);
+    // A failed exclusive open does not transfer ownership of the existing path.
+    const handle = await open(temporary, "wx", 0o600);
+    const failures: unknown[] = [];
+    try {
+      await handle.writeFile(data);
+      await handle.close();
+      await link(temporary, target);
+      return target;
+    } catch (error) {
+      failures.push(error);
+      throw error;
+    } finally {
+      await cleanupWorkFile(handle, temporary, failures);
+    }
+  };
+}
+
+export class IssueWorkFileStore {
+  private readonly stateRoot: string;
+  private readonly issueKey: string;
+
+  constructor(stateRoot: string, issueKey: string) {
+    this.stateRoot = stateRoot;
+    this.issueKey = issueKey;
+  }
+
+  get directory(): string {
+    return issueRoot(this.stateRoot, this.issueKey);
+  }
+
+  downloadPath(fileName: string): string {
+    return `/api/issues/${encodeURIComponent(this.issueKey.toUpperCase())}/files/download?path=${encodeURIComponent(workFileName(fileName))}`;
+  }
+
+  async generate<T>(
+    fileName: string,
+    producer: (append: (content: string | Uint8Array) => Promise<void>) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<WorkFileMetadata & { result: T }> {
+    const selected = workFileName(fileName);
+    const target = path.join(this.directory, selected);
+    return writes.run(target, async () => {
+      signal?.throwIfAborted();
+      await prepareIssueWorkDirectory(this.stateRoot, this.issueKey);
+      const temporary = path.join(this.directory, `.work-file-${randomUUID()}.tmp`);
+      const present = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (present && !present.isFile()) throw new Error("invalid_work_file");
+      const handle = await open(temporary, "wx", 0o600);
+      const failures: unknown[] = [];
+      try {
+        signal?.throwIfAborted();
+        const result = await producer(async content => { await handle.writeFile(content); });
+        const metadata = await handle.stat();
+        await handle.close();
+        signal?.throwIfAborted();
+        await rename(temporary, target);
+        return { fileName: selected, size: metadata.size, updatedAt: metadata.mtime.toISOString(), result };
+      } catch (error) {
+        failures.push(error);
+        throw error;
+      } finally {
+        await cleanupWorkFile(handle, temporary, failures);
+      }
+    });
+  }
 }

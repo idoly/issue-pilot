@@ -8,7 +8,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { MultipartFile } from "@fastify/multipart";
 import type { Database } from "../db/client.ts";
 import { issueAttachments } from "../db/schema.ts";
-import { issueAttachmentRoot } from "../workspace/state.ts";
+import { issueRoot } from "../workspace/state.ts";
 import { ApiError } from "./input.ts";
 
 export interface PendingAttachment {
@@ -72,13 +72,13 @@ export async function resolveSecureAttachmentFile(attachmentRoot: string, object
   return attachmentPath;
 }
 
-export async function openVerifiedAttachmentStream(
+export async function openVerifiedAttachmentFile(
   attachmentRoot: string,
   objectKey: string,
   size: number,
   sha256: string,
   signal?: AbortSignal,
-): Promise<ReadStream> {
+): Promise<FileHandle> {
   signal?.throwIfAborted();
   const file = await resolveSecureAttachmentFile(attachmentRoot, objectKey, size);
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -96,7 +96,24 @@ export async function openVerifiedAttachmentStream(
     }
     signal?.throwIfAborted();
     if (position !== size || hash.digest("hex") !== sha256) throw new Error("attachment_integrity_check_failed");
-    // The original is immutable. Reuse the verified descriptor rather than reopening a replaceable path.
+    return handle;
+  } catch (error) {
+    try { await handle.close(); }
+    catch (cleanup) { throw new AggregateError([error, cleanup], "attachment_read_cleanup_failed"); }
+    throw error;
+  }
+}
+
+export async function openVerifiedAttachmentStream(
+  attachmentRoot: string,
+  objectKey: string,
+  size: number,
+  sha256: string,
+  signal?: AbortSignal,
+): Promise<ReadStream> {
+  const handle = await openVerifiedAttachmentFile(attachmentRoot, objectKey, size, sha256, signal);
+  try {
+    // Reuse the verified descriptor rather than reopening a replaceable path.
     return handle.createReadStream({ start: 0, autoClose: true, ...(signal ? { signal } : {}) });
   } catch (error) {
     try { await handle.close(); }
@@ -105,16 +122,11 @@ export async function openVerifiedAttachmentStream(
   }
 }
 
-export function attachmentWorkingFileName(objectKey: string): string {
-  return path.basename(objectKey).replace(/^\.attachment-/, "");
-}
-
 export function serializeAttachment(attachment: typeof issueAttachments.$inferSelect) {
   return {
     id: attachment.id,
     fileName: attachment.fileName,
     storedFileName: path.basename(attachment.objectKey),
-    workingFileName: attachment.workingFileName ?? attachmentWorkingFileName(attachment.objectKey),
     mediaType: attachment.mediaType,
     size: attachment.size,
     sha256: attachment.sha256,
@@ -179,7 +191,7 @@ export async function writePendingAttachments(
   writtenObjectKeys: string[],
 ): Promise<Array<ReturnType<typeof serializeAttachment>>> {
   if (!pendingAttachments.length) return [];
-  const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+  const attachmentRoot = issueRoot(stateRoot, issue.key);
   await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
   await Promise.all([chmod(path.dirname(attachmentRoot), 0o700), chmod(attachmentRoot, 0o700)]);
   const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
@@ -206,7 +218,7 @@ export async function writePendingAttachments(
         throw error;
       }
     }
-    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, workingFileName: attachmentWorkingFileName(objectKey), mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
+    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
     createdAttachments.push(serializeAttachment(attachment!));
   }
   return createdAttachments;

@@ -13,7 +13,9 @@
 | SQLite | 工单与执行状态、配置的校验投影、既有用户和历史执行事实 |
 | `issue-pilot.config.ts` | 程序路径、默认值、预算和维护策略 |
 
-没有文件时继续使用既有数据库配置，便于逐步迁移。存在相应文件时，启动阶段在 Agent 和维护任务运行之前校验、事务应用配置，数据库作为运行投影与历史存储；页面返回 `fileManaged` 标记并禁止维护第二份配置。文件变更重启生效；钉钉导入在请求时读取当前账号的连接与来源配置。省略旧服务或仓库不自动删除其历史记录；MCP 文件中省略的旧连接会停用并从普通列表、连接测试和编辑入口隐藏，私有历史记录保留。不要直接修改数据库来绕过文件配置。
+根配置中的 `http.sseRecentEventIds` 默认 4096，必须为正整数，控制单条 SSE 连接实时阶段保留的近期临时事件 ID 数量。完整回放及缓冲重叠先完成去重，再切换到这个窗口；持久条目 ID 在连接期间继续保留去重。该预算不限制消息内容、历史回放条数或网络背压队列，修改后随应用重启生效。
+
+没有文件时继续使用既有数据库配置，便于逐步迁移。存在相应文件时，启动阶段在 Agent 和维护任务运行之前校验、事务应用配置，数据库作为运行投影与历史存储；页面返回 `fileManaged` 标记并禁止维护第二份配置。文件变更重启生效；钉钉导入在请求时读取全局连接及当前账号的来源、字段映射。省略旧服务或仓库不自动删除其历史记录；MCP 文件中省略的旧连接会停用并从普通列表、连接测试和编辑入口隐藏，私有历史记录保留。不要直接修改数据库来绕过文件配置。
 
 三个文件都必须是私有 regular file，权限 `0600`，父目录 `0700`。支持 `${ENV_VAR}`，变量不存在时报稳定错误；不运行 `!command` 或 shell 展开。解析失败不返回 YAML 原文、SQL 参数或认证信息。完整示例见 [service.yaml](../examples/service.yaml)、[user.yaml](../examples/user.yaml)、[mcp.json](../examples/mcp.json)。
 
@@ -88,7 +90,7 @@ sls:
 
 DMS 已有准确数据库绑定在目标相同时复用，新的 alias/schema 在首次查询前严格解析。SLS 多目标查询必须同时选择 `target` 和该目标的 `logstore`。开发工单仍显式选择 prod/test 证据；开发配置中的 DMS/SLS 声明必须已存在于正式或测试部署，不能暗中创建不同的查询来源。MySQL 可在各环境配置多个连接。
 
-`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉”手动读取，不启动定时同步器。旧版服务与单用户文件仍可读取，准备脚本输出新版 YAML。
+`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉”手动读取，不启动定时同步器。旧版服务与单用户配置仅由 `scripts/prepare-configuration.ts` 显式离线转换，转换实现位于 `scripts/configuration-conversion.ts`；正常启动只接受数值 `version: 2`，不自动采纳旧格式、对象包装仓库地址或旧查询目标字典。配置版本不符时拒绝启动并保留原文件，不改写或自动迁移。个人 DMS 配置必须独立提供 URL 与 Authorization。
 
 ### user.yaml
 
@@ -112,7 +114,7 @@ users:
     dingtalk:
       source:
         mcp: dingtalk
-        url: https://alidocs.dingtalk.com/i/nodes/YOUR_BASE_ID?sheetId=YOUR_TABLE_ID
+        url: https://alidocs.dingtalk.com/notable/record?dentryUuid=YOUR_BASE_ID&sheetId=YOUR_TABLE_ID&rowId=YOUR_RECORD_ID
         assignee: 示例用户
         intervalMinutes: 15
   another@example.com:
@@ -125,9 +127,9 @@ users:
 
 `users` 以已有账号的 `subject` 为键，可保留停用账号的配置，但不会启用账号或授予角色、管理权限。每个列出的账号按文件完整投影，未列出的账号仍保留数据库配置。API Key 按 Pi provider 名称关联；SSH 私钥可以用 YAML 块字符串直接保存。个人 DMS 的 `url/authorization`、SLS 的两个 Key 分别组成完整组，不拼接不同身份。
 
-`shared` 提供部署查询与全局 MCP 连接的凭证。个人 DMS/SLS 组仍各自完整覆盖部署组。钉钉导入优先采用当前账号的 `dingtalk.apiKey` 和可选 `url`，没有个人连接组时采用显式共享连接；个人连接失败后不会换用共享连接。默认来源链接只读取当前账号的声明，未声明单条记录来源时在弹窗填写。钉钉记录不再按人员或状态过滤。
+`shared` 提供部署查询与全局 MCP 连接的凭证。个人 DMS/SLS 组仍各自完整覆盖部署组。钉钉导入只使用选定的全局 MCP 连接。`shared.dingtalk.apiKey` 在启动投影时写入全局连接，用户不再配置钉钉 API Key 或连接地址，也没有个人身份覆盖、凭证补齐或失败回退分支。用户凭证页仅展示模型、SSH、DMS、SLS。默认来源链接只读取当前账号的声明，未声明单条记录来源时在弹窗填写。钉钉记录不再按人员或状态过滤。
 
-准备脚本导出数据库中全部账号并保留已有文件配置。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
+准备脚本导出数据库中全部账号并保留已有文件配置，但不再输出个人钉钉 API Key／连接地址。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
 
 ### 钉钉导入
 
@@ -158,7 +160,7 @@ MCP 端点提供 `dingtalk_import`，与页面复用同一接口和配置。参�
 
 ## 内建能力与工具
 
-配置页不再提供独立的“能力”和“基座”分类。用户页只展示当前账号的 API Key、SSH Key、SLS、DMS 和钉钉凭证状态，不展示密钥正文或人员管理；仓库页只展示名称与地址，不提供维护操作和引用服务列。顶层 repositories 和 services 仍同属 service.yaml，仓库可独立登记，不要求绑定服务。DMS/SLS 的查询目标继续在服务详情展示，MySQL 和钉钉通过 MCP 提供；同一种能力可以有多个服务环境连接，不将连接实例数量当作能力种类数量。
+配置页不再提供独立的“能力”和“基座”分类。用户页只展示当前账号的 API Key、SSH Key、SLS 和 DMS 凭证状态，不展示密钥正文或人员管理；仓库页只展示名称与地址，不提供维护操作和引用服务列。顶层 repositories 和 services 仍同属 service.yaml，仓库可独立登记，不要求绑定服务。DMS/SLS 的查询目标继续在服务详情展示，MySQL 和钉钉通过 MCP 提供；同一种能力可以有多个服务环境连接，不将连接实例数量当作能力种类数量。
 
 原生 `service_query` 只提供 DMS 和 SLS，显式选择 service/environment。Nacos、Redis、RabbitMQ、Elasticsearch 和原生 MySQL 已移除。旧部署 JSON 仅作为私有恢复证据保留，不投影、不执行；新增迁移移除旧开关，历史迁移保持不变。
 
@@ -172,7 +174,7 @@ Pi 在同一工单会话中复用对应 MCP 连接。MySQL 的 SQL 能力、结�
 
 DMS 使用原生 SSE，只执行验证过的只读 SQL；导出完整 MCP JSON 到工单根目录的普通工作文件，完成写入后原子替换目标。一次操作预算 120 秒，首次握手预算 12 秒，握手最多两次。429 优先遵守有效 `Retry-After`，最多等待 5 秒后进行一次握手重试；更长提示直接报告限流。401/403 不重试，已发送的 SQL 不自动重放。
 
-失败通过工具错误 JSON 返回稳定 `error` 和脱敏 `diagnostics`：阶段 connect/discovery/execute/publish/close、总耗时、阶段耗时、`sqlDispatchAttempted` 和可用的 `retryAfterSeconds`。阶段时间可能重叠，不能求和；尝试发送不证明服务端执行。原始错误、目标 URL、SQL 和认证不进入该错误 JSON。取消保留原原因。
+失败通过工具错误 JSON 返回稳定 `error` 和脱敏 `diagnostics`：阶段 connect/discovery/execute/export/close、总耗时、阶段耗时、`sqlDispatchAttempted` 和可用的 `retryAfterSeconds`。阶段时间可能重叠，不能求和；`export` 指普通工作文件写入和原子替换，导出失败不会自动重试 SQL；尝试发送不证明服务端执行。原始错误、目标 URL、SQL 和认证不进入该错误 JSON。取消保留原原因。
 
 批量任务串行并保留间隔，根据耗时与错误调整批量。核对已保存结果后才主动重查只读批次，同一批次重查一次仍失败则拆分或暂停。连续两次恢复探测失败，或单轮累计五次 DMS 调用失败即保存断点并停止，探测成功不清零累计失败数。该规则是 Agent 指引，不是服务端限流器。未完成不能推断成零值或无记录。
 
@@ -224,4 +226,4 @@ Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi �
 }
 ```
 
-二进制工作文件返回已验证的下载路径，不把文件内容塞进 MCP 文本。DMS 导出返回 `downloadPath`，对话应使用该路径提供下载。`work_files` 列出当前工作文件，`output_read` 保留旧成果及根目录普通文件的读取兼容。
+二进制工作文件返回已验证的下载路径，不把文件内容塞进 MCP 文本。DMS 导出返回 `downloadPath`，对话应使用该路径提供下载。`work_files` 列出当前工作文件，`work_file_read` 使用列表返回的 `path` 读取根目录或子目录普通文件。两者统一使用 `/api/issues/:key/files`；旧 `output_read` 名称、`fileName` 读取参数、`/outputs/:fileName` 路由和 Issue 详情的 `outputs` 字段已经移除。DMS 用 `export: { fileName: "evidence.json" }` 请求导出，结果的 `export` 对象包含 `fileName`、`size`、`format` 和 `downloadPath`，不接受旧 `output` 导出字段。

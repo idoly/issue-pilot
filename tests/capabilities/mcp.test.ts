@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { connectMcp, inspectMcp, type McpConfiguration, type McpTool } from "../../src/mcp/client.ts";
+import { connectMcp, createMcpFetch, inspectMcp, type McpConfiguration, type McpTool } from "../../src/mcp/client.ts";
 
 const configuration: McpConfiguration = { id: "service-1", name: "Documents", url: "https://mcp.example.test/mcp", transport: "streamable_http", authorization: "Bearer private-token", enabled: true };
 const schema = { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false };
@@ -42,6 +42,43 @@ for (const transport of ["streamable_http", "sse"] as const) {
     } finally { globalThis.fetch = original; }
   });
 }
+
+test("guarded fetch preserves Request cancellation and RequestInit signal overrides", async () => {
+  const original = globalThis.fetch;
+  const requests: RequestInit[] = [];
+  globalThis.fetch = async (input, init) => {
+    assert.ok(input instanceof Request);
+    assert.ok(init);
+    requests.push(init);
+    return new Response("ok");
+  };
+  try {
+    for (const override of [undefined, null, new AbortController().signal]) {
+      const lifetime = new AbortController();
+      const caller = new AbortController();
+      const request = new Request(configuration.url, { signal: caller.signal });
+      await createMcpFetch(configuration, lifetime.signal)(request, override === undefined ? undefined : { signal: override });
+      const forwarded = requests.at(-1)?.signal;
+      assert.ok(forwarded);
+      const reason = new Error("caller_cancelled");
+      caller.abort(reason);
+      assert.equal(forwarded.aborted, override === undefined);
+      if (override === undefined) assert.equal(forwarded.reason, reason);
+      else {
+        lifetime.abort(reason);
+        assert.equal(forwarded.aborted, true);
+        assert.equal(forwarded.reason, reason);
+      }
+    }
+    const lifetime = new AbortController();
+    const caller = new AbortController();
+    await createMcpFetch(configuration, lifetime.signal)(new Request(configuration.url), { signal: caller.signal });
+    caller.abort();
+    assert.equal(requests.at(-1)?.signal?.aborted, true);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 
 test("rejects redirects and cross-origin SSE targets without leaking remote errors", async () => {
   const original = globalThis.fetch;

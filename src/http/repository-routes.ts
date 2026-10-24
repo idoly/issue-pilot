@@ -1,5 +1,5 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
-import { repositories, serviceRepositories, services, issues } from "../db/schema.ts";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
+import { repositories, serviceRepositories, services, issues, issueServiceScopes } from "../db/schema.ts";
 import { ApiError, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
@@ -45,15 +45,22 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
       const [existing] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
       if (!existing) throw new ApiError(404, "repository_not_found");
       if (existing.name === input.name && existing.url === input.url) return { ok: true };
-      const bindings = await database.db.select().from(serviceRepositories).where(eq(serviceRepositories.url, existing.url));
-      const serviceIds = [...new Set(bindings.map((row) => row.serviceId))];
-      const affected = serviceIds.length ? await database.db.select({ id: issues.id }).from(issues) : [];
+      if (existing.url === input.url) {
+        await database.db.update(repositories).set({ name: input.name, updatedAt: new Date() }).where(eq(repositories.id, existing.id));
+        return { ok: true };
+      }
+      const bindings = await database.db.select({ serviceId: serviceRepositories.serviceId }).from(serviceRepositories).where(eq(serviceRepositories.url, existing.url));
+      const serviceIds = [...new Set(bindings.map(row => row.serviceId))];
+      const affected = serviceIds.length ? await database.db.select({ id: issues.id }).from(issues).where(or(
+        inArray(issues.serviceId, serviceIds),
+        inArray(issues.id, database.db.select({ issueId: issueServiceScopes.issueId }).from(issueServiceScopes).where(inArray(issueServiceScopes.serviceId, serviceIds))),
+      )) : [];
       return runIssueExclusive(engine, affected.map(({ id }) => id), async (reservation) => {
-        if (existing.url !== input.url) for (const { id } of affected) await reservation.closeSession(id);
+        for (const { id } of affected) await reservation.closeSession(id);
         await database.db.transaction(async (tx) => {
           const now = new Date();
           await tx.update(repositories).set({ ...input, updatedAt: now }).where(eq(repositories.id, existing.id));
-          if (existing.url !== input.url && serviceIds.length) {
+          if (serviceIds.length) {
             await tx.update(services).set({ updatedAt: now }).where(inArray(services.id, serviceIds));
             await tx.update(serviceRepositories).set({ updatedAt: now }).where(and(inArray(serviceRepositories.serviceId, serviceIds), eq(serviceRepositories.url, input.url)));
           }

@@ -10,10 +10,9 @@ import { readInBatches } from "../db/client.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { agentSessions, dingtalkIssueImports, environments, issueAttachments, issueCcRecipients, issueComments, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
-import { listIssueOutputs, openLegacyIssueOutput } from "../outputs/store.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
-import { claimIssueRoot, classifyRepositoryState, issueAttachmentRoot, issueWorkDirectory, issueRuntimeRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
+import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import { finalizeQuarantinedAttachments, type PendingAttachment, type QuarantinedAttachment, readMultipartAttachment, removePendingAttachments, removeWrittenAttachments, resolveSecureAttachmentFile, restoreQuarantinedAttachments, serializeAttachment, writePendingAttachments } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
@@ -265,7 +264,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         const [owner] = await database.db.select().from(subjects).where(eq(subjects.subject, issueValues.assigneeSubject ?? currentIssue.reporterSubject)).limit(1);
         if (owner?.role !== "developer") throw new ApiError(400, "issue_developer_owner_required");
       }
-      const attachmentRoot = issueAttachmentRoot(stateRoot, issue.key);
+      const attachmentRoot = issueRoot(stateRoot, issue.key);
       const removableFiles = await Promise.all(removedAttachments.map(async (attachment) => ({
         attachment,
         sourcePath: await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey, attachment.size),
@@ -374,8 +373,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
 
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
-    const [summary, repositoryRows, attachmentRows, outputRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relationRows, scopeHistory] = await Promise.all([
-      serializeIssueSummary(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)), listIssueOutputs(stateRoot, issue.key),
+    const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relationRows, scopeHistory] = await Promise.all([
+      serializeIssueSummary(issue), database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)), database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
       database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
       database.db.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)), database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
       database.db.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)), database.db.select({ comment: issueComments, person: subjects }).from(issueComments).innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject)).where(eq(issueComments.issueId, issue.id)).orderBy(asc(issueComments.createdAt)),
@@ -391,14 +390,13 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const repositoryState = classifyRepositoryState(repositoryRows);
     let repositoryNames = new Map<string, string>();
     if (repositoryState !== "invalid") repositoryNames = issueRepositoryWorkspaceNames(repositoryRows);
-    const sourceAvailable = Boolean(workspace?.runtimeReady && repositoryState !== "invalid" && await pathExists(issueRuntimeRoot(stateRoot, issue.key)));
+    const sourceAvailable = Boolean(workspace?.runtimeReady && repositoryState !== "invalid" && await pathExists(issueRoot(stateRoot, issue.key)));
     return {
       ...summary, description: issue.description,
       repositories: repositoryRows.map((repository) => ({ name: repositoryNames.get(repository.url) ?? "", url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch })),
-      workingDirectory: issueWorkDirectory(stateRoot, issue.key),
+      workingDirectory: issueRoot(stateRoot, issue.key),
       attachments: attachmentRows.map(serializeAttachment),
       collaboratingServices: await participatingServices(database.db, issue),
-      outputs: outputRows,
       relatedIssues,
       scopeTransitions: scopeHistory,
       workspace: {
@@ -414,22 +412,6 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),
       comments: commentRows.map(({ comment, person }) => ({ id: comment.id, author: person.displayName ?? person.subject, body: comment.body, createdAt: comment.createdAt.toISOString() })),
     };
-  });
-
-  app.get<{ Params: { key: string; fileName: string } }>("/api/issues/:key/outputs/:fileName", { logLevel: "silent" }, async (request, reply) => {
-    const issue = await requireIssue(database, request.params.key);
-    let output: Awaited<ReturnType<typeof openLegacyIssueOutput>>;
-    try { output = await openLegacyIssueOutput(stateRoot, issue.key, request.params.fileName); }
-    catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new ApiError(404, "issue_output_not_found");
-      if (error instanceof Error && error.message === "invalid_work_file_name") throw new ApiError(400, error.message);
-      throw error;
-    }
-    const extension = path.extname(request.params.fileName).toLowerCase();
-    const mediaType = new Map([[".csv", "text/csv; charset=utf-8"], [".json", "application/json; charset=utf-8"], [".jsonl", "application/x-ndjson; charset=utf-8"], [".sql", "text/plain; charset=utf-8"], [".txt", "text/plain; charset=utf-8"], [".md", "text/markdown; charset=utf-8"]]).get(extension) ?? "application/octet-stream";
-    reply.header("Cache-Control", "private, no-store");
-    reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(request.params.fileName)}`);
-    return reply.type(mediaType).header("Content-Length", output.size).send(output.handle.createReadStream({ autoClose: true }));
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/comments", async (request, reply) => {

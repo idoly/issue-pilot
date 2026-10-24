@@ -21,12 +21,11 @@ export function PersonalCredentials() {
     <header class="user-management-header"><div><strong>个人凭证</strong><span>{currentUser()?.name} · {currentUser()?.subject}</span></div></header>
     <div class="empty-band">凭证由 user.yaml 管理。这里只展示配置状态，不显示密钥正文。</div>
     <Show when={error()}><div role="alert" class="user-management-error">{error()}<Button size="small" onClick={() => { void load(); }}>重试</Button></div></Show>
-    <Show when={status()} fallback={<Show when={!error()}><div class="user-management-loading"><Skeleton active paragraph={{ rows: 5 }} /></div></Show>}>{value => <div class="personal-credential-summary">
+    <Show when={status()} fallback={<Show when={!error()}><div class="user-management-loading"><Skeleton active paragraph={{ rows: 4 }} /></div></Show>}>{value => <div class="personal-credential-summary">
       <div><strong>API Key</strong><span>{provider() || "模型服务商"}</span>{configured(Boolean(provider() && value().modelProviders.includes(provider()!)))}</div>
       <div><strong>SSH Key</strong><span>Git SSH 私钥</span>{configured(value().gitSshConfigured)}</div>
       <div><strong>SLS</strong><span>AccessKey ID / AccessKey Secret</span>{configured(value().productionSlsConfigured)}</div>
       <div><strong>DMS</strong><span>连接地址 / Authorization</span>{configured(value().productionDmsConfigured)}</div>
-      <div><strong>钉钉</strong><span>MCP API Key</span>{configured(value().dingtalkConfigured)}</div>
     </div>}</Show>
   </section></Show>;
 }

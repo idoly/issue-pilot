@@ -119,7 +119,7 @@ for (const [sessionFails, gitFails] of [[true, true], [true, false], [false, tru
   } finally { await engine.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test("does not record queued user messages after an issue becomes resolved", async () => {
+test("retains an accepted message without dispatching it after the Issue becomes resolved", async () => {
   let status = "pending";
   let recorded = 0;
   let prompted = 0;
@@ -156,10 +156,10 @@ test("does not record queued user messages after an issue becomes resolved", asy
     status = "resolved";
   });
   await waitFor(() => !engine.isRunning("issue-1"));
-  assert.equal(recorded, 0);
+  assert.equal(recorded, 1);
   assert.equal(prompted, 0);
   assert.equal(workspaceUpdates, 0);
-  assert.equal(published.length, 0);
+  assert.equal(published.length, 1);
 });
 
 test("serializes streaming messages and records only accepted steering", async () => {
@@ -198,6 +198,126 @@ test("serializes streaming messages and records only accepted steering", async (
   assert.equal(steers[1]?.includes("second"), true);
   assert.deepEqual(records, ["first"]);
   assert.equal(engine.isRunning("issue-1"), false);
+});
+
+test("queues a waiting steering message when the preceding turn becomes idle", { timeout: 5_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-steer-idle-"));
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
+  const engine = new AgentEngine(database as never, root);
+  const internal = engine as unknown as {
+    sessions: Map<string, unknown>;
+    promptExisting(issueId: string, managed: unknown, message: string, images: unknown[]): Promise<void>;
+  };
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const steering = new Promise<void>(resolve => { started = resolve; });
+  let streaming = true;
+  const records: string[] = [];
+  const prompts: Array<{ message: string; images: unknown[] }> = [];
+  const images = [{ type: "image" as const, mimeType: "image/png", data: "aW1hZ2U=" }];
+  internal.sessions.set("issue-1", {
+    get streaming() { return streaming; },
+    session: {
+      sessionManager: { appendCustomEntry(_type: string, data: { message: string }) { records.push(data.message); } },
+      async steer() { started(); await gate; streaming = false; },
+    },
+    async stop() {},
+  });
+  internal.promptExisting = async (_issueId, _managed, message, acceptedImages) => {
+    prompts.push({ message, images: acceptedImages });
+  };
+  const first = engine.send("issue-1", "first");
+  await steering;
+  const second = engine.send("issue-1", "second", undefined, images);
+  const accepted = Promise.all([first, second]);
+  let closed = false;
+  const closing = engine.close().then(() => { closed = true; });
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(closed, false);
+    release();
+    await accepted;
+    await closing;
+    assert.equal(closed, true);
+    assert.deepEqual(records, ["first", "second"]);
+    assert.deepEqual(prompts, [{ message: "second", images }]);
+  } finally {
+    release();
+    await accepted.catch(() => undefined);
+    await engine.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("does not record or replay an uncertain steer after failed-round cleanup replaces its session", { timeout: 5_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-steer-replaced-"));
+  const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
+  const database = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }),
+    transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction),
+  };
+  const engine = new AgentEngine(database as never, root);
+  const internal = engine as unknown as {
+    sessions: Map<string, unknown>;
+    schedule(issueId: string, operation: () => Promise<void>): void;
+    run(issueId: string, message?: string): Promise<void>;
+  };
+  let fail!: () => void;
+  let releaseSteer!: () => void;
+  let started!: () => void;
+  let replaced!: () => void;
+  const failure = new Promise<void>(resolve => { fail = resolve; });
+  const gate = new Promise<void>(resolve => { releaseSteer = resolve; });
+  const steering = new Promise<void>(resolve => { started = resolve; });
+  const replacementReady = new Promise<void>(resolve => { replaced = resolve; });
+  const records: string[] = [];
+  let oldStops = 0;
+  let newStops = 0;
+  const dispatched: Array<string | undefined> = [];
+  const newRecords: string[] = [];
+  const replacement = {
+    streaming: false,
+    session: { sessionManager: { appendCustomEntry(_type: string, data: { message: string }) { newRecords.push(data.message); } } },
+    async stop() { newStops += 1; },
+  };
+  internal.run = async (_issueId, message) => { dispatched.push(message); };
+  internal.sessions.set("issue-1", {
+    streaming: true,
+    session: {
+      sessionManager: { appendCustomEntry(_type: string, data: { message: string }) { records.push(data.message); } },
+      async steer() { started(); await gate; },
+    },
+    async stop() { oldStops += 1; },
+  });
+  internal.schedule("issue-1", async () => { await failure; throw new Error("preceding_round_failed"); });
+  internal.schedule("issue-1", async () => { internal.sessions.set("issue-1", replacement); replaced(); });
+  const sending = engine.send("issue-1", "uncertain");
+  const rejected = assert.rejects(sending, /agent_message_outcome_unknown/);
+  let next: Promise<void> | undefined;
+  try {
+    await steering;
+    next = engine.send("issue-1", "not dispatched yet");
+    fail();
+    await replacementReady;
+    releaseSteer();
+    await rejected;
+    await next;
+    await waitFor(() => !engine.isRunning("issue-1"));
+    assert.deepEqual(records, []);
+    assert.equal(oldStops, 1);
+    assert.equal(newStops, 0);
+    assert.deepEqual(dispatched, ["not dispatched yet"]);
+    assert.deepEqual(newRecords, ["not dispatched yet"]);
+    assert.equal(internal.sessions.get("issue-1"), replacement);
+  } finally {
+    fail();
+    releaseSteer();
+    await rejected.catch(() => undefined);
+    await next?.catch(() => undefined);
+    await engine.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("isolates publisher failures after recording a streaming message", async () => {
@@ -282,7 +402,7 @@ test("reopens a session for a queued message after the preceding round failed", 
     await engine.send("issue-1", "second"); fail(); await stopped;
     await new Promise<void>(resolve => setImmediate(resolve)); assert.deepEqual(reopened, []);
     release(); await waitFor(() => !engine.isRunning("issue-1"));
-    assert.deepEqual(recorded, ["first"]); assert.deepEqual(reopened, ["second"]);
+    assert.deepEqual(recorded, ["first", "second"]); assert.deepEqual(reopened, ["second"]);
   } finally { fail(); release(); await waitFor(() => !engine.isRunning("issue-1")); await engine.close(); await rm(root, { recursive: true, force: true }); }
 });
 

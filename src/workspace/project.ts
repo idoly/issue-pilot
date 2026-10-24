@@ -12,7 +12,7 @@ import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from 
 import { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RelatedIssueRuntime, type RuntimePreparationResult } from "./runtime.ts";
-import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueSessionRoot, issueWorkspaceRoot, pathExists } from "./state.ts";
+import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueRoot, pathExists } from "./state.ts";
 
 interface PreparedIssueRepository {
   name: string;
@@ -101,7 +101,7 @@ export class IssueProjectManager {
   async hydrateDevelopmentRuntime(issue: Pick<ProjectIssue, "id" | "key" | "type">): Promise<string> {
     const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
     if (!repositories.length) throw new Error("issue_has_no_repositories");
-    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
+    const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     const names = issueRepositoryWorkspaceNames(repositories);
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     let runtimeRoot: string;
@@ -127,7 +127,7 @@ export class IssueProjectManager {
     recoverRuntime: () => Promise<void>,
     finalize: (prepared: PreparedWorktree[], names: Map<string, string>) => Promise<T>,
   ): Promise<T> {
-    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
+    const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     const mode = developmentWorktreeMode(issue.type);
     const names = issueRepositoryWorkspaceNames(repositories);
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
@@ -177,11 +177,11 @@ export class IssueProjectManager {
       let conversationPath: string | undefined;
       if (related.session) {
         const candidate = path.resolve(related.session.sessionFile);
-        if (path.dirname(candidate) === issueSessionRoot(this.stateRoot, related.issue.key) && await pathExists(candidate)) conversationPath = candidate;
+        if (path.dirname(candidate) === issueRoot(this.stateRoot, related.issue.key) && await pathExists(candidate)) conversationPath = candidate;
       }
       relatedIssues.push({
         key: related.issue.key,
-        workDirectory: issueWorkspaceRoot(this.stateRoot, related.issue.key),
+        workDirectory: issueRoot(this.stateRoot, related.issue.key),
         ...(conversationPath ? { conversationPath } : {}),
         metadata: {
           key: related.issue.key,
@@ -260,7 +260,7 @@ export class IssueProjectManager {
         workspaceName: null,
         commitBefore: checkout.baseCommit,
       })), now);
-      const workDirectory = issueWorkspaceRoot(this.stateRoot, issue.key);
+      const workDirectory = issueRoot(this.stateRoot, issue.key);
       await transaction.update(agentSessions).set({ workspacePath: workDirectory, updatedAt: now }).where(and(eq(agentSessions.issueId, issue.id), ne(agentSessions.workspacePath, workDirectory)));
       await transaction.update(issueWorkspaces).set({ runtimeReady: true, lastError: null, updatedAt: now }).where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     });
@@ -281,7 +281,7 @@ export class IssueProjectManager {
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
-    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
+    const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     // Read-only Issues already have working files here. Worktree preparation claims
     // individual repository paths and refuses collisions without removing those files.
     const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url));
@@ -328,7 +328,7 @@ export class IssueProjectManager {
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (classifyRepositoryState(existingRepositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
-    const workspaceRoot = issueWorkspaceRoot(this.stateRoot, issue.key);
+    const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     if (!await pathExists(workspaceRoot)) throw new Error("workspace_missing");
     await assertManagedIssueWorkspaceLayout(workspaceRoot, existingRepositories.map((repository) => repository.localPath!));
 
@@ -417,8 +417,8 @@ export class IssueProjectManager {
 
     const existingByUrl = new Map(existingRepositoryRows.map((repository) => [repository.url, repository]));
     const existingNames = shared ? new Map<string, string>() : issueRepositoryWorkspaceNames(existingRepositoryRows);
-    if (!shared && await pathExists(issueWorkspaceRoot(this.stateRoot, issue.key))) {
-      await assertManagedIssueWorkspaceLayout(issueWorkspaceRoot(this.stateRoot, issue.key), existingRepositoryRows.map((repository) => repository.localPath!));
+    if (!shared && await pathExists(issueRoot(this.stateRoot, issue.key))) {
+      await assertManagedIssueWorkspaceLayout(issueRoot(this.stateRoot, issue.key), existingRepositoryRows.map((repository) => repository.localPath!));
     }
     const names = repositoryWorkspaceNames(repositoryRows.map(({ repository }) => repository.url), existingNames);
     const saveRepositoryRows = async (prepared: PreparedWorktree[]) => {
@@ -489,7 +489,7 @@ export class IssueProjectManager {
       shared ? "read" : "write",
       relatedIssues,
     );
-    const workspaceRoot = shared ? runtimeRoot : issueWorkspaceRoot(this.stateRoot, issue.key);
+    const workspaceRoot = shared ? runtimeRoot : issueRoot(this.stateRoot, issue.key);
     return {
       deployment: { id: deployment.id, config: deployment.config },
       runtimeRoot,

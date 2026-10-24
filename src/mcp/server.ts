@@ -1,7 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema, ListResourceTemplatesRequestSchema, ListResourcesRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { Type, type TSchema } from "typebox";
+import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { FastifyRequest } from "fastify";
 import { eq } from "drizzle-orm";
@@ -12,7 +12,7 @@ import { ISSUE_PRIORITIES, ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
 import { sessionTranscript } from "../agent/events.ts";
-import { issueSessionRoot } from "../workspace/state.ts";
+import { issueRoot } from "../workspace/state.ts";
 import { ensureCurrentSubject, requireIssue, type ApiRouteContext } from "../http/route-context.ts";
 
 const limits = issuePilotConfig.limits.mcpServer;
@@ -24,20 +24,20 @@ const attachment = Type.Object({
   mediaType: Type.Optional(Type.String({ maxLength: 200, description: "MIME 类型，默认 application/octet-stream" })),
   contentBase64: Type.String({ description: "标准 Base64 编码的完整文件内容，不含 data: 前缀" }),
 }, { additionalProperties: false });
-interface McpAttachment { fileName: string; mediaType?: string; contentBase64: string }
+type McpAttachment = Static<typeof attachment>;
 const mutations = new Set(["issue_create", "issue_message", "dingtalk_import"]);
 const definitions = [
   { name: "services_list", description: "列出可选服务和环境，创建工单前据此选择 serviceKey。", inputSchema: Type.Object({}, { additionalProperties: false }) },
   { name: "users_list", description: "查看当前连接身份和可分配的用户，subject 用作工单处理人或抄送人；不返回凭证。", inputSchema: Type.Object({}, { additionalProperties: false }) },
   { name: "issues_search", description: "按编号、标题、服务、环境或状态搜索工单。支持分页，offset 从 0 开始；创建请求结果不明时先搜索核对，避免重复创建。", inputSchema: Type.Object({ query: Type.Optional(Type.String({ maxLength: 200 })), service: Type.Optional(Type.String()), environment: Type.Optional(Type.String()), status: Type.Optional(Type.String()), ...paging }, { additionalProperties: false }) },
-  { name: "issue_get", description: "读取工单详情、智能体是否正在运行、工作区状态、关联工单、附件和成果列表。创建或发送消息后调用本工具查看进展，再用 issue_conversation 读取回复。", inputSchema: Type.Object({ key }, { additionalProperties: false }) },
+  { name: "issue_get", description: "读取工单详情、智能体是否正在运行、工作区状态、关联工单和附件。创建或发送消息后调用本工具查看进展，再用 issue_conversation 读取回复。", inputSchema: Type.Object({ key }, { additionalProperties: false }) },
   { name: "issue_create", description: "创建工单，可通过 attachments 上传 Base64 附件，工单与附件一起保存后自动入队处理，立即返回工单编号。服务和用户由 services_list/users_list 发现。开发需要开发角色；不要在超时后盲目重试，先搜索确认是否已创建。", inputSchema: Type.Object({ title: Type.String({ minLength: 1, maxLength: 300, description: "工单标题" }), serviceKey: Type.String({ minLength: 1, maxLength: 100, description: "服务 key" }), workMode: Type.Union(ISSUE_WORK_MODES.map(mode => Type.Literal(mode)), { description: "production_analysis 正式调查；test_analysis 测试调查；development_fix 开发修复；development_feature 功能开发" }), description: Type.Optional(Type.String({ maxLength: 10000, description: "问题背景、需要完成的工作和验收要求" })), priority: Type.Optional(Type.Union(ISSUE_PRIORITIES.map(priority => Type.Literal(priority)), { description: "默认 p2" })), assigneeSubject: Type.Optional(Type.Union([Type.String({ maxLength: 255 }), Type.Null()], { description: "处理人 subject，省略时未分配" })), ccSubjects: Type.Optional(Type.Array(Type.String({ maxLength: 255 }), { uniqueItems: true })), relatedIssueKeys: Type.Optional(Type.Array(key, { maxItems: issuePilotConfig.limits.relatedIssues, uniqueItems: true })), attachments: Type.Optional(Type.Array(attachment, { description: "创建时上传的附件；支持文本、图片和二进制文件" })) }, { additionalProperties: false }) },
   { name: "dingtalk_import", description: "从钉钉单条记录链接直接创建工单并保存记录附件，不预览、不按人员或状态筛选。字段映射来自 user.yaml，默认标题使用序号。重复导入返回已有工单。服务和处理方式可由 services_list 发现。", inputSchema: Type.Object({ url: Type.String({ minLength: 1, maxLength: 4096, description: "钉钉 /notable/record 单条记录链接，包含 dentryUuid、sheetId、rowId" }), serviceKey: Type.String({ minLength: 1, maxLength: 100, description: "目标服务 key" }), workMode: Type.Union(ISSUE_WORK_MODES.map(mode => Type.Literal(mode)), { description: "production_analysis 正式调查；test_analysis 测试调查；development_fix 开发修复；development_feature 功能开发" }), priority: Type.Optional(Type.Union(ISSUE_PRIORITIES.map(priority => Type.Literal(priority)), { description: "默认 p2" })), startAgent: Type.Optional(Type.Boolean({ description: "创建后立即启动 Agent，默认 false" })) }, { additionalProperties: false }) },
   { name: "issue_message", description: "向指定工单的智能体发送补充信息、问题或继续处理要求。运行中进入引导/排队流程，空闲时继续处理，已解决工单拒绝。成功只表示已受理，随后读取 issue_get/issue_conversation 查看进展；响应不明时先核对对话，不自动重复发送。", inputSchema: Type.Object({ key, message: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.agentMessageChars, description: "发送给工单智能体的文本" }) }, { additionalProperties: false }) },
   { name: "issue_conversation", description: "分页读取工单对话和当前轮次进展，不包含内部提示词或凭证。offset 从 0 开始，nextOffset 指向后续内容；使用 issue_get 判断处理是否结束。", inputSchema: Type.Object({ key, ...paging }, { additionalProperties: false }) },
   { name: "attachment_read", description: "按工单和附件 ID 读取文本附件，先校验完整性。offset 从 0 开始；Excel 等二进制文件返回下载路径。附件 ID 从 issue_get 获取。", inputSchema: Type.Object({ key, attachmentId: Type.String(), ...linePaging }, { additionalProperties: false }) },
   { name: "work_files", description: "分页列出本工单工作目录的文件和文件夹。path 省略时为工单根目录，目录可继续进入；会话和运行元数据只列出名称，不提供原始内容。", inputSchema: Type.Object({ key, path: Type.Optional(Type.String({ maxLength: 4096 })), ...paging }, { additionalProperties: false }) },
-  { name: "output_read", description: "读取工单工作目录文件的文本内容，兼容旧成果文件名。二进制文件返回下载路径；文件名从 work_files 获取。",inputSchema: Type.Object({ key, fileName: Type.String({ minLength: 1, maxLength: 255 }), ...linePaging }, { additionalProperties: false }) },
+  { name: "work_file_read", description: "读取工单工作目录文件的文本内容。二进制文件返回下载路径；path 使用 work_files 返回的相对路径，支持子目录。", inputSchema: Type.Object({ key, path: Type.String({ minLength: 1, maxLength: 4096 }), ...linePaging }, { additionalProperties: false }) },
 ];
 const applicationTools = () => definitions.map(definition => ({ ...definition, annotations: { readOnlyHint: !mutations.has(definition.name), destructiveHint: false, ...mutations.has(definition.name) ? { idempotentHint: false } : {}, openWorldHint: mutations.has(definition.name) } }));
 type Input = Record<string, unknown>;
@@ -107,12 +107,22 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       const [binding] = await context.database.db.select().from(agentSessions).where(eq(agentSessions.issueId, row.id)).limit(1);
       let transcript = [] as ReturnType<typeof sessionTranscript>;
       if (binding) {
-        if (path.dirname(path.resolve(binding.sessionFile)) !== issueSessionRoot(context.stateRoot, key)) throw new Error("mcp_session_path_invalid");
+        if (path.dirname(path.resolve(binding.sessionFile)) !== issueRoot(context.stateRoot, key)) throw new Error("mcp_session_path_invalid");
         if (!(await lstat(binding.sessionFile)).isFile()) throw new Error("mcp_session_path_invalid");
         transcript = sessionTranscript(SessionManager.open(binding.sessionFile), row.id);
       }
       const seen = new Set(transcript.map(event => event.id));
       return page([...transcript, ...context.events.replayCurrent(row.id).filter(event => !seen.has(event.id))], input);
+    }
+    if (name === "work_file_read") {
+      const parent = path.posix.dirname(String(input.path));
+      const rows = JSON.parse((await api(`/api/issues/${key}/files?path=${encodeURIComponent(parent)}`)).body) as Array<{ name: string; path: string; kind: string; size: number; managed?: boolean }>;
+      const file = rows.find(file => file.path === input.path && file.kind === "file" && !file.managed);
+      if (!file) throw new Error("issue_work_file_not_found");
+      const { name: fileName, size } = file;
+      const downloadPath = `/api/issues/${key}/files/download?path=${encodeURIComponent(file.path)}`;
+      if (!isTextFile(fileName)) return { fileName, size, downloadPath, binary: true };
+      return fileText((await api(downloadPath)).rawPayload, fileName, downloadPath, input);
     }
     const detail = await issue(key);
     if (name === "issue_get") { delete detail.workspace?.lastError; delete detail.workingDirectory; return detail; }
@@ -122,16 +132,6 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       const downloadPath = `/api/issues/${key}/attachments/${encodeURIComponent(file.id)}`;
       return fileText((await api(downloadPath)).rawPayload, file.fileName, downloadPath, input);
     }
-    if (name === "output_read") {
-      const legacy = detail.outputs.find((file: { fileName: string }) => file.fileName === input.fileName);
-      const rows = legacy ? [] : JSON.parse((await api(`/api/issues/${key}/files`)).body) as Array<{ name: string; path: string; kind: string; size: number; managed?: boolean }>;
-      const current = rows.find(file => file.path === input.fileName && file.kind === "file" && !file.managed);
-      if (!legacy && !current) throw new Error("issue_work_file_not_found");
-      const fileName = legacy?.fileName ?? current!.name, size = legacy?.size ?? current!.size;
-      const downloadPath = legacy ? `/api/issues/${key}/outputs/${encodeURIComponent(fileName)}` : `/api/issues/${key}/files/download?path=${encodeURIComponent(current!.path)}`;
-      if (!isTextFile(fileName)) return { fileName, size, downloadPath, binary: true };
-      return fileText((await api(downloadPath)).rawPayload, fileName, downloadPath, input);
-    }
     throw new Error("mcp_tool_not_found");
   };
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: applicationTools() }));
@@ -139,7 +139,8 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
     try {
       const definition = definitions.find(row => row.name === request.params.name);
       if (!definition) throw new Error("mcp_tool_not_found");
-      const input = Value.Parse(definition.inputSchema as TSchema, request.params.arguments ?? {}) as Input;
+      const input = request.params.arguments ?? {};
+      if (!Value.Check(definition.inputSchema, input)) throw new Error("mcp_invalid_input_or_operation_failed");
       return bounded(await call(definition.name, input));
     } catch (error) {
       const message = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "mcp_invalid_input_or_operation_failed";

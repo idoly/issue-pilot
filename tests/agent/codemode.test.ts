@@ -164,12 +164,12 @@ for (const withTool of [false, true]) test(`keeps the model response timeout act
       ...(withTool ? [fauxAssistantMessage(fauxToolCall("read", { path: "evidence.txt" }), { stopReason: "toolUse" })] : []),
       async (_context, options) => new Promise(resolve => {
         release = () => resolve(fauxAssistantMessage("Released stalled response."));
+        safety = setTimeout(() => release?.(), 1_000);
         if (options?.signal?.aborted) release();
         else options?.signal?.addEventListener("abort", release, { once: true });
       }),
     ]);
     managed = await f.runtime.start(f.options);
-    safety = setTimeout(() => release?.(), 1_000);
     await assert.rejects(managed.prompt("Read the evidence, then wait for the model."), { message: "model_response_idle_timeout" });
     assert.ok(f.events.some(event => event.type === "message_end" && event.message.role === (withTool ? "toolResult" : "user")));
   } finally { clearTimeout(safety); release?.(); await managed?.stop(); await f.close(); }

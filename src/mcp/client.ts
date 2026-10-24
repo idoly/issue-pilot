@@ -20,7 +20,8 @@ export function createMcpFetch(configuration: McpConfiguration, signal: AbortSig
   return (input, init) => {
     const target = new URL(input instanceof Request ? input.url : String(input));
     if (target.protocol !== "https:" || target.origin !== endpoint.origin) throw new McpFailure("mcp_target_not_allowed");
-    return fetch(input, { ...init, redirect: "error", signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]) });
+    const requestSignal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
+    return fetch(input, { ...init, redirect: "error", signal: AbortSignal.any([signal, ...(requestSignal ? [requestSignal] : [])]) });
   };
 }
 

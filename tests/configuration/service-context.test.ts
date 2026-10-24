@@ -18,7 +18,7 @@ test("generated descriptions include exact capability parameters without secrets
   assert.match(context, /#### SLS\n\n\| \| \|/);
   assert.match(context, /<code>orders-api<\/code><br><code>gateway<\/code>/);
   assert.doesNotMatch(context, /用户.*&quot;&quot;/);
-  const displayed = deploymentContext({ key: "prod", name: "正式" }, configuration, [], configuration);
+  const displayed = deploymentContext({ key: "prod", name: "正式" }, configuration, []);
   assert.doesNotMatch(displayed, /private-dms-token|private-sls-id|private-sls-secret|Authorization|AccessKey/);
   assert.doesNotMatch(displayed, /private-redis-password|private-nacos-password/);
   const development = deploymentContext({ key: "dev", name: "开发" }, configuration, []);

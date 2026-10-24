@@ -38,6 +38,36 @@ test("uses a listener snapshot for each event publication", () => {
   assert.deepEqual(received, ["first", "second"]);
 });
 
+test("an old failed subscription cannot remove a replacement listener", () => {
+  const bus = new AgentEventBus();
+  const received: string[] = [];
+  const event: RunEvent = { id: "first", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } };
+  const unsubscribeFailed = bus.subscribe("issue-1", () => { throw new Error("listener_failed"); });
+  bus.publish(event);
+  const unsubscribeCurrent = bus.subscribe("issue-1", ({ id }) => { received.push(id); });
+  unsubscribeFailed();
+  unsubscribeFailed();
+  bus.publish({ ...event, id: "replacement" });
+  assert.deepEqual(received, ["replacement"]);
+  unsubscribeCurrent();
+  bus.publish({ ...event, id: "after-close" });
+  assert.deepEqual(received, ["replacement"]);
+});
+
+test("preserves subscriptions installed while the previous last listener is removed", () => {
+  const bus = new AgentEventBus();
+  const received: string[] = [];
+  const event: RunEvent = { id: "first", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } };
+  let unsubscribePrevious = () => {};
+  unsubscribePrevious = bus.subscribe("issue-1", () => {
+    unsubscribePrevious();
+    bus.subscribe("issue-1", ({ id }) => { received.push(id); });
+  });
+  bus.publish(event);
+  bus.publish({ ...event, id: "replacement" });
+  assert.deepEqual(received, ["replacement"]);
+});
+
 test("isolates listener and error-handler failures from other observers", () => {
   const errors: unknown[] = [];
   const bus = new AgentEventBus((error) => { errors.push(error); throw new Error("logger_failed"); });

@@ -16,6 +16,7 @@ export const issuePilotConfig = Object.freeze({
     port: 3000,
     logger: true,
     sseHeartbeatMs: 15_000,
+    sseRecentEventIds: 4_096,
   }),
   web: Object.freeze({
     host: "0.0.0.0",
@@ -23,7 +24,7 @@ export const issuePilotConfig = Object.freeze({
     agentStreamReconnectMs: 1_000,
     agentStreamStaleMs: 45_000,
     agentToolOutputCharacters: 40_000,
-    outputPreviewBytes: 20 * 1024 * 1024,
+    filePreviewBytes: 20 * 1024 * 1024,
     sourceAutoSaveDebounceMs: 500,
     sourceRefreshMs: 2_000,
     sourceBlameDebounceMs: 200,
@@ -86,7 +87,6 @@ export const issuePilotConfig = Object.freeze({
     }),
     capability: Object.freeze({
       resultBytes: 1024 * 1024,
-      timeoutMs: 15_000,
       connectionMs: 10_000,
       dingtalk: Object.freeze({ attachmentHosts: ["alidocs2.oss-cn-zhangjiakou.aliyuncs.com"] as readonly string[], tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512 }),
       mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),

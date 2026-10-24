@@ -6,7 +6,7 @@ const state = vi.hoisted(() => ({ list: vi.fn(), user: () => ({ subject: "alice"
 vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), listIssueWorkFiles: state.list, fetchIssueWorkFile: state.read, fetchAttachment: state.original }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueFiles } from "./IssueFiles";
-const issue = { id: "ISSUE-20261021-001", updatedAt: "2026-10-21T00:00:00Z", repositories: [{ name: "repository" }], attachments: [{ workingFileName: "uuid-image.png" }], outputs: [] } as unknown as IssueDetail;
+const issue = { id: "ISSUE-20261021-001", updatedAt: "2026-10-21T00:00:00Z", repositories: [{ name: "repository" }], attachments: [] } as unknown as IssueDetail;
 const file = (name: string, kind: IssueWorkFile["kind"] = "file"): IssueWorkFile => ({ name, path: name, kind, size: 1, updatedAt: issue.updatedAt });
 afterEach(() => { cleanup(); vi.resetAllMocks(); state.user = () => ({ subject: "alice", role: "developer" }); });
 it("lists working files and repository folders and provides real downloads", async () => {

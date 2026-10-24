@@ -6,7 +6,7 @@ import path from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SerialQueue } from "../serial.ts";
-import { isManagedIssueFile } from "../workspace/working-files.ts";
+import { isManagedIssueFile } from "../workspace/work-files.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 export interface IssueFilesystemPolicy { writeRoot: string; readRoots?: readonly string[]; networkDomains?: readonly string[]; gitAccess?: "write" | "read" }
@@ -98,7 +98,6 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
     return { argv: ["/bin/sh", "-c", text], cleanup };
   } catch (error) { try { await cleanup(); } catch (failure) { throw new AggregateError([error, failure], "issue_sandbox_prepare_cleanup_failed"); } throw error; }
 }
-export function issueJavaOptions(root: string, previous = ""): string { return `${previous} -Djava.io.tmpdir="${root.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`.trim(); }
 export function assertIssueLaunchEnvironment(environment: Readonly<Record<string, string>>): void {
   if (Object.keys(environment).some(name => name.startsWith("LD_") || ["GLIBC_TUNABLES", "BASH_ENV", "ENV"].includes(name))) throw new Error("unsafe_issue_launcher_environment");
 }

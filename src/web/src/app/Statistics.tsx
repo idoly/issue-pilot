@@ -50,7 +50,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   });
   const storedWorkspaces = createMemo(() => [...(workspaceStats()?.workspaces ?? [])].filter((workspace) => workspace.bytes > 0).sort((left, right) => right.bytes - left.bytes || left.issueKey.localeCompare(right.issueKey)));
   const automaticRelease = createMemo(() => storedWorkspaces().filter((workspace) => workspace.issueStatus === "resolved" && workspace.releasable));
-  const automaticReleaseBytes = createMemo(() => automaticRelease().reduce((total, workspace) => total + workspace.bytes, 0));
+  const candidateWorkspaceBytes = createMemo(() => automaticRelease().reduce((total, workspace) => total + workspace.bytes, 0));
   const capacityPercent = createMemo(() => {
     const stats = workspaceStats();
     if (!stats?.policy.highWaterBytes) return 0;
@@ -62,15 +62,28 @@ export function Statistics(props: { issues: IssueListItem[] }) {
     return hours % 24 === 0 ? `已解决保留 ${hours / 24} 天` : `已解决保留 ${hours} 小时`;
   };
   const releaseState = (workspace: WorkspaceStats["workspaces"][number]) => {
+    if (workspace.blockedReason === "workspace_not_development") return "只读工单，保留工作文件";
+    if (workspace.blockedReason === "workspace_released") return "代码已释放，保留工作文件";
+    if (workspace.blockedReason === "workspace_runtime_not_ready") return "代码已释放，运行视图待恢复";
+    if (workspace.blockedReason === "workspace_runtime_restore_failed") return "代码已释放，视图恢复失败";
     if (workspace.issueStatus !== "resolved") return "解决后纳入";
     if (workspace.releasable) return "等待策略回收";
     const labels: Record<string, string> = {
-      issue_already_running: "Agent 运行中", workspace_busy: "Agent 运行中", workspace_has_changes: "存在未提交改动",
+      issue_already_running: "Agent 运行中", workspace_busy: "Agent 运行中", workspace_has_changes: "含未提交或忽略文件",
       workspace_has_untracked_files: "存在未知文件", workspace_repository_missing: "仓库目录缺失",
-      development_repository_state_invalid: "仓库状态异常", workspace_path_does_not_match_repository: "仓库路径不一致",
+      development_repository_state_invalid: "仓库记录不完整或混合", workspace_path_does_not_match_repository: "仓库路径不一致",
+      workspace_missing: "工单目录缺失", workspace_path_already_exists: "仓库路径与释放记录不一致",
+      workspace_git_binding_invalid: "Git 元数据链接失效", workspace_git_unavailable: "Git 命令不可用",
+      workspace_git_inspection_failed: "Git 状态读取失败", workspace_inspection_failed: "无法读取工作区状态",
+      workspace_branch_does_not_match_issue_policy: "当前分支与工单记录不一致",
+      workspace_runtime_inspection_failed: "运行视图检查失败", invalid_issue_runtime_manifest: "运行视图记录格式错误",
+      issue_runtime_entry_missing: "运行视图引用缺失", issue_runtime_entry_changed: "运行视图引用已变化",
       repository_workspace_name_conflict: "仓库目录名冲突", workspace_path_outside_issue_root: "路径异常",
+      workspace_path_outside_workspaces_root: "仓库路径不在工作区目录",
     };
-    return workspace.blockedReason ? (labels[workspace.blockedReason] ?? "安全检查未通过") : "安全检查未通过";
+    const reason = workspace.blockedReason;
+    if (!reason) return "回收状态未知";
+    return labels[reason] ?? (/^[a-z][a-z0-9_]*$/.test(reason) ? `检查失败（${reason}）` : "状态检查失败，请查看服务日志");
   };
 
   return (
@@ -106,12 +119,13 @@ export function Statistics(props: { issues: IssueListItem[] }) {
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
           <div class="statistics-title"><h2 id="workspace-capacity-title">Workspace 存储</h2><span>{storedWorkspaces().length} 个占用空间</span></div>
           <Show when={!loading()} fallback={<div aria-busy="true"><Skeleton active paragraph={{ rows: 4 }} /></div>}><Show when={!loadError()} fallback={<div class="queue-error" role="alert">{loadError()}</div>}><Show when={workspaceStats()}>{(stats) => <>
-            <div class="workspace-compact-summary"><div class="workspace-current-usage"><span>当前占用</span><strong>{fileSize(stats().totalBytes)}</strong></div><div><span>容量上限</span><strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong></div><div class="workspace-reclaim"><span>待自动回收</span><strong>{fileSize(automaticReleaseBytes())}</strong></div></div>
+            <div class="workspace-compact-summary"><div class="workspace-current-usage"><span>工单目录占用</span><strong>{fileSize(stats().totalBytes)}</strong></div><div><span>回收触发线</span><strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong></div><div class="workspace-reclaim"><span title="包含保留的附件、对话、工作文件和私有 Git 历史，实际释放量取决于代码目录">回收候选占用</span><strong>{fileSize(candidateWorkspaceBytes())}</strong></div></div>
             <div class="workspace-capacity-control">
-              <Show when={stats().policy.highWaterBytes > 0}><div class="workspace-capacity-meter" aria-label={`Workspace 容量使用 ${Math.round(capacityPercent())}%`}><div><i style={{ width: `${capacityPercent()}%` }} /></div><span>{Math.round(capacityPercent())}%</span></div></Show>
+              <Show when={stats().policy.highWaterBytes > 0}><div class="workspace-capacity-meter" aria-label={`工单目录占用为回收触发线的 ${Math.round(capacityPercent())}%`}><div><i style={{ width: `${capacityPercent()}%` }} /></div><span>{Math.round(capacityPercent())}%</span></div></Show>
               <div class="workspace-policy">{stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}</div>
             </div>
-            <div class="workspace-compact-list compact-scroll"><div class="workspace-compact-head"><span>工单</span><span>状态</span><span>占用</span><span>自动回收</span></div><For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的开发 Workspace</div>}>{(workspace) => <div><strong>{workspace.issueKey}</strong><span>{statusLabel[workspace.issueStatus]}</span><span>{fileSize(workspace.bytes)}</span><small>{releaseState(workspace)}</small></div>}</For></div>
+            <div class="workspace-policy"><span>共享 Git 占用</span> <strong>{fileSize(stats().sharedGitBytes)}</strong> · 单独保留，不计入工单目录回收阈值</div>
+            <div class="workspace-compact-list compact-scroll"><div class="workspace-compact-head"><span>工单</span><span>状态</span><span>占用</span><span>自动回收</span></div><For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的工单</div>}>{(workspace) => <div><strong>{workspace.issueKey}</strong><span>{statusLabel[workspace.issueStatus]}</span><span>{fileSize(workspace.bytes)}</span><small title={workspace.blockedReason && /^[a-z][a-z0-9_]*$/.test(workspace.blockedReason) ? `${releaseState(workspace)} [${workspace.blockedReason}]` : releaseState(workspace)}>{releaseState(workspace)}</small></div>}</For></div>
           </>}</Show></Show></Show>
         </section>
       </div>

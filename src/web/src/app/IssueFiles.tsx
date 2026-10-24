@@ -17,7 +17,7 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
     return file ? originalAttachment(file) ?? { id: file.path, fileName: file.name, mediaType: workingFileMediaType(file.name) ?? "application/octet-stream", size: file.size, sha256: "" } : null;
   });
   const canPreview = (file: IssueWorkFile) => {
-    if (file.kind !== "file" || file.size > issuePilotConfig.web.outputPreviewBytes) return false;
+    if (file.kind !== "file" || file.size > issuePilotConfig.web.filePreviewBytes) return false;
     const original = originalAttachment(file);
     return original ? attachmentPreviewKind(original) !== "unsupported" : !file.managed && Boolean(workingFileMediaType(file.name));
   };

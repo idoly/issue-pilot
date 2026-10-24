@@ -1,7 +1,12 @@
-import { attachmentUrl, issueWorkFileUrl, outputUrl, type IssueDetail } from "../data/client";
+import { attachmentUrl, issueWorkFileUrl, type IssueDetail } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 
-export function resolveIssueFileLink(href: string, issue: Pick<IssueDetail, "id" | "outputs" | "attachments" | "workingDirectory" | "relatedIssues">): string | null | undefined {
+type IssueFileContext = Pick<IssueDetail, "id" | "workingDirectory"> & {
+  attachments: Array<Pick<IssueDetail["attachments"][number], "id" | "fileName" | "storedFileName">>;
+  relatedIssues?: Array<Pick<NonNullable<IssueDetail["relatedIssues"]>[number], "id">>;
+};
+
+export function resolveIssueFileLink(href: string, issue: IssueFileContext): string | null | undefined {
   if (href.startsWith("/api/") || href.startsWith("/?") || href === "/" || /^(?:mailto:|tel:|#)/i.test(href)) return undefined;
   if (/^(?:https?:|\/\/)/i.test(href)) {
     try {
@@ -17,7 +22,7 @@ export function resolveIssueFileLink(href: string, issue: Pick<IssueDetail, "id"
   if (selected.includes("\\") || selected.includes("\0") || selected.split("/").some(part => part === ".." || part.toLowerCase() === ".git")) return null;
   selected = selected.replace(/^file:\/\//i, "");
   let relatedKey: string | undefined;
-  let kind: "output" | "attachment" | "work" | "name" | "sandbox" = "name";
+  let kind: "attachment" | "work" | "name" | "sandbox" = "name";
   if (selected.startsWith("sandbox:/mnt/data/")) { selected = selected.slice("sandbox:/mnt/data/".length); kind = "sandbox"; }
   else if (/^[a-z][a-z0-9+.-]*:/i.test(selected)) return null;
   else if (issue.workingDirectory && selected.startsWith(`${issue.workingDirectory}/`)) {
@@ -32,34 +37,28 @@ export function resolveIssueFileLink(href: string, issue: Pick<IssueDetail, "id"
     }
     selected = match[3]!;
     if (match[1]!.toLowerCase() === "workspaces") kind = "work";
-    else if (selected.startsWith("outputs/")) { kind = "output"; selected = selected.slice(8); }
+    else if (selected.startsWith("outputs/")) { kind = "work"; selected = selected.slice(8); }
     else if (selected.startsWith("attachments/")) { kind = "attachment"; selected = selected.slice(12); }
     else if (selected.startsWith("work/")) { kind = "work"; selected = selected.slice(5); }
     else return null;
   } else {
     selected = selected.replace(/^\.\//, "");
-    if (selected.startsWith("outputs/")) { kind = "output"; selected = selected.slice(8); }
+    if (selected.startsWith("outputs/")) { kind = "work"; selected = selected.slice(8); }
     else if (selected.startsWith("attachments/")) { kind = "attachment"; selected = selected.slice(12); }
     else if (selected.startsWith("work/")) { kind = "work"; selected = selected.slice(5); }
   }
   if (!selected) return null;
   if (relatedKey) return kind === "work" ? issueWorkFileUrl(issue.id, `.related-${relatedKey.toLowerCase()}/${selected}`) : null;
   if (kind === "work" || kind === "name") {
-    const original = issue.attachments.filter(file => file.storedFileName === selected || kind === "name" && file.fileName === selected && file.workingFileName !== selected);
+    const original = issue.attachments.filter(file => file.storedFileName === selected || kind === "name" && file.fileName === selected);
     if (original.length === 1) return attachmentUrl(issue.id, original[0]!.id);
     return issueWorkFileUrl(issue.id, selected);
   }
-  if (kind !== "attachment") {
-    const output = issue.outputs.find(file => file.fileName === selected);
-    if (output) return outputUrl(issue.id, output.fileName);
-  }
-  if (kind !== "output") {
-    const matches = issue.attachments.filter(file => file.fileName === selected || file.workingFileName === selected);
-    if (matches.length === 1) return attachmentUrl(issue.id, matches[0]!.id);
-  }
-  return null;
+  const matches = issue.attachments.filter(file => file.fileName === selected || file.storedFileName === selected);
+  if (matches.length === 1) return attachmentUrl(issue.id, matches[0]!.id);
+  return kind === "sandbox" ? issueWorkFileUrl(issue.id, selected) : null;
 }
 
-export function IssueMarkdown(props: { source: string; issue: IssueDetail }) {
+export function IssueMarkdown(props: { source: string; issue: IssueFileContext }) {
   return <Markdown source={props.source} resolveLink={href => resolveIssueFileLink(href, props.issue)} />;
 }

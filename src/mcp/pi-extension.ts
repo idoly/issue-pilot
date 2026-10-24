@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentCodemodeMode } from "../domain/contracts.ts";
-import { generatedWorkFileSaver } from "../workspace/work-file-store.ts";
+import { generatedWorkFileSaver } from "../workspace/work-files.ts";
 import { createMcpTransport, type McpConfiguration, type McpTool } from "./client.ts";
 
 const limits = issuePilotConfig.limits.capability;

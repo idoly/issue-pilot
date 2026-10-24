@@ -30,7 +30,6 @@ export interface McpStdioConfiguration { command: string; args: string[]; env: R
 
 export const CAPABILITY_KEYS = ["dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
-export const CAPABILITY_TYPES = { dms: "mcp", sls: "cli" } as const;
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];

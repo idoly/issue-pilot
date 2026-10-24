@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { issueBashOperations, issueNativeTools } from "../../src/agent/native-tools.ts";
+import { issueNativeTools } from "../../src/agent/native-tools.ts";
 import { prepareIssueCommand, shellQuote } from "../../src/agent/issue-sandbox.ts";
 import { executeLocalCommand } from "../../src/process.ts";
 
@@ -63,13 +63,16 @@ test("SRT blocks direct and proxy access to host HTTP and visible Unix sockets t
   await new Promise<void>(resolve => http.listen(0, "127.0.0.1", resolve));
   const socketPath = path.join(own, "host.sock"); await new Promise<void>(resolve => unix.listen(socketPath, resolve));
   try {
-    const port = (http.address() as { port: number }).port, operations = issueBashOperations(own), output: Buffer[] = [], run = (command: string) => operations.exec(command, own, { onData: data => { output.push(data); } });
-    assert.notEqual((await run(`curl --fail --max-time 2 --noproxy '*' -X POST http://127.0.0.1:${port}`)).exitCode, 0);
-    output.length = 0;
-    assert.equal((await run(`curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' --noproxy '' --proxy "$HTTP_PROXY" -X POST http://127.0.0.1:${port}`)).exitCode, 0);
-    assert.equal(Buffer.concat(output).toString(), "403");
+    const port = (http.address() as { port: number }).port;
+    const bash = issueNativeTools({ writeRoot: own }).find(tool => tool.name === "bash")!;
+    const run = async (command: string) => {
+      const result = await bash.execute("boundary", { command }, undefined, undefined, {} as never);
+      return result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+    };
+    assert.match(await run(`curl --fail --max-time 2 --noproxy '*' -X POST http://127.0.0.1:${port}`), /exited with code [1-9]/);
+    assert.equal(await run(`curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' --noproxy '' --proxy "$HTTP_PROXY" -X POST http://127.0.0.1:${port}`), "403");
     const connect = `const s=require('node:net').connect(${JSON.stringify(socketPath)});s.on('error',()=>process.exit(17));`;
-    assert.notEqual((await run(`${shellQuote(process.execPath)} -e ${shellQuote(connect)}`)).exitCode, 0);
+    assert.match(await run(`${shellQuote(process.execPath)} -e ${shellQuote(connect)}`), /exited with code [1-9]/);
     assert.equal(requests, 0); assert.equal(await readFile(outside, "utf8"), "untouched");
   } finally { await Promise.all([new Promise<void>(resolve => http.close(() => resolve())), new Promise<void>(resolve => unix.close(() => resolve()))]); await rm(root, { recursive: true, force: true }); }
 });

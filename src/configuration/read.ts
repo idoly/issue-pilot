@@ -9,7 +9,7 @@ import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } 
 import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
 import { deploymentContext } from "./service-context.ts";
-import { projectDeploymentConfiguration, resolveDeploymentConfiguration } from "./credentials.ts";
+import { projectCapabilityConfiguration } from "./credentials.ts";
 
 const descriptionEnvironmentOrder = ["dev", "test", "prod"];
 
@@ -103,7 +103,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
           const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();
           if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
           return {
-            ...projectDeploymentConfiguration(deploymentConfig),
+            ...projectCapabilityConfiguration(deploymentConfig),
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
             capabilities: configuredCapabilities(deploymentConfig),
@@ -126,8 +126,7 @@ export function loadServiceConfigurationDescription(database: Database, key: str
     return { context: [service.description, ...deployments.toSorted((left, right) => descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === left.environmentId)?.key ?? "") - descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === right.environmentId)?.key ?? "")).map(deployment => {
       const environment = environmentRows.find(row => row.id === deployment.environmentId);
       if (!environment) throw new Error("deployment_environment_not_found");
-      const credentials = environment.kind === "dev" ? undefined : resolveDeploymentConfiguration(deployment.config);
-      return deploymentContext(environment, deployment.config, mcp, credentials, mcp);
+      return deploymentContext(environment, deployment.config, mcp, mcp);
     })].filter(Boolean).join("\n\n") };
   });
 }

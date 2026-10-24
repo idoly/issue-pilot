@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { IssueOutputStore } from "../../src/outputs/store.ts";
+import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import { test } from "node:test";
 
 import { DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
@@ -73,42 +73,48 @@ function fixtureSession(overrides: Partial<DmsMcpSession> = {}) {
   return { calls, closes: () => closes, connect, connections };
 }
 
-test("persists complete DMS results to an Issue output and only returns a file summary", async () => {
+test("persists complete DMS results to a work file and returns an export summary", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-"));
-  const store = new IssueOutputStore(root, "ISSUE-20261016-004");
+  const store = new IssueWorkFileStore(root, "ISSUE-20261016-004");
   const session = fixtureSession({ async listTools() { return [executeScriptTool]; } });
   try {
-    const result = await queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "batch-001.json" } }, configured, undefined, session.connect, store);
+    const result = await queryDms({ schema: "orders", script: "SELECT 1", export: { fileName: "batch-001.json" } }, configured, undefined, session.connect, store);
     const reply = JSON.stringify(result);
     assert.ok(reply.includes("batch-001.json"));
     assert.equal(reply.includes('\\"id\\"'), false);
-    const saved = JSON.parse((await store.read("batch-001.json")).toString("utf8"));
+    const summary = JSON.parse(result.content[0]!.text);
+    assert.deepEqual(summary.export, {
+      fileName: "batch-001.json", size: (await stat(path.join(store.directory, "batch-001.json"))).size,
+      format: "dms-mcp-json", downloadPath: store.downloadPath("batch-001.json"),
+    });
+    assert.equal("output" in summary, false);
+    const saved = JSON.parse((await readFile(path.join(store.directory, "batch-001.json"))).toString("utf8"));
     assert.deepEqual(saved.result.content, [{ type: "text", text: '[{"id":1}]' }]);
     assert.equal(saved.tool, "executeScript");
     assert.equal(session.closes(), 1);
     assert.equal(JSON.stringify(saved).includes(configured.authorization), false);
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "x.json" } }, configured, undefined, session.connect), /issue_output_not_available/);
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", export: { fileName: "x.json" } }, configured, undefined, session.connect), /issue_work_files_not_available/);
     const failure = fixtureSession({ async listTools() { return [executeScriptTool]; }, async callTool() { return { isError: true }; } });
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "batch-001.json" } }, configured, undefined, failure.connect, store), /dms_mcp_tool_failed/);
-    assert.deepEqual(JSON.parse((await store.read("batch-001.json")).toString("utf8")), saved);
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", export: { fileName: "batch-001.json" } }, configured, undefined, failure.connect, store), /dms_mcp_tool_failed/);
+    assert.deepEqual(JSON.parse((await readFile(path.join(store.directory, "batch-001.json"))).toString("utf8")), saved);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("preserves an earlier DMS output when closing the protocol session fails", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-close-"));
-  const store = new IssueOutputStore(root, "ISSUE-20261018-996"); let closes = 0;
+  const store = new IssueWorkFileStore(root, "ISSUE-20261018-996"); let closes = 0;
   const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; }, async close() { closes++; throw new Error("dms_close_failed"); } });
   try {
-    await store.write("result.json", '{"previous":true}');
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), /dms_mcp_operation_failed/);
-    assert.equal((await store.read("result.json")).toString(), '{"previous":true}');
+    await store.generate("result.json", async append => { await append('{"previous":true}'); });
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", export: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), /dms_mcp_operation_failed/);
+    assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), '{"previous":true}');
     assert.equal(closes, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 for (const output of [false, true]) for (const phase of ["discovery", "query", "close", "discovery-and-close", "query-and-close"] as const) test(`retains DMS ${phase} failures during ${output ? "export" : "query"}`, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-errors-"));
-  const store = new IssueOutputStore(root, "ISSUE-20261020-991");
+  const store = new IssueWorkFileStore(root, "ISSUE-20261020-991");
   const primary = new Error("dms_mcp_tool_failed"), cleanup = new Error("private fixture cleanup detail");
   let closes = 0, queries = 0;
   const fixture = fixtureSession({
@@ -117,8 +123,8 @@ for (const output of [false, true]) for (const phase of ["discovery", "query", "
     async close() { closes++; if (phase.includes("close")) throw cleanup; },
   });
   try {
-    await store.write("result.json", "old-delivery");
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { output: { fileName: "result.json" } } : {}) }, configured, undefined, fixture.connect, store), error => {
+    await store.generate("result.json", async append => { await append("old-delivery"); });
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { export: { fileName: "result.json" } } : {}) }, configured, undefined, fixture.connect, store), error => {
       assert(error instanceof DmsOperationError);
       const original = error.cause;
       assert.equal(error.diagnostics.phase, phase.startsWith("discovery") ? "discovery" : phase.startsWith("query") ? "execute" : "close");
@@ -133,13 +139,13 @@ for (const output of [false, true]) for (const phase of ["discovery", "query", "
     });
     assert.equal(closes, 1);
     assert.equal(queries, phase.startsWith("discovery") ? 0 : 1);
-    assert.equal((await store.read("result.json")).toString(), "old-delivery");
+    assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "old-delivery");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 for (const output of [false, true]) test(`retains DMS caller cancellation when ${output ? "export" : "query"} and close fail`, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-cancel-close-"));
-  const store = new IssueOutputStore(root, "ISSUE-20261020-992");
+  const store = new IssueWorkFileStore(root, "ISSUE-20261020-992");
   const controller = new AbortController(), reason = new Error("caller_cancelled");
   let closes = 0;
   const fixture = fixtureSession({
@@ -148,10 +154,10 @@ for (const output of [false, true]) test(`retains DMS caller cancellation when $
     async close() { closes++; throw new Error("private fixture cleanup detail"); },
   });
   try {
-    await store.write("result.json", "old-delivery");
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { output: { fileName: "result.json" } } : {}) }, configured, controller.signal, fixture.connect, store), error => error === reason);
+    await store.generate("result.json", async append => { await append("old-delivery"); });
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { export: { fileName: "result.json" } } : {}) }, configured, controller.signal, fixture.connect, store), error => error === reason);
     assert.equal(closes, 1);
-    assert.equal((await store.read("result.json")).toString(), "old-delivery");
+    assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "old-delivery");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -445,24 +451,51 @@ for (const phase of ["discovery", "execute"] as const) test(`measures a ${phase}
   assert.equal(fixture.closes(), 1);
 });
 
-test("distinguishes publication failure from SQL failure and preserves the previous delivery", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-publish-"));
-  const store = new IssueOutputStore(root, "ISSUE-20261021-997");
+test("distinguishes export failure from SQL failure and preserves the previous work file", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-"));
+  const store = new IssueWorkFileStore(root, "ISSUE-20261021-997");
   const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; } });
   try {
-    await store.write("result.json", "previous-delivery");
+    await store.generate("result.json", async append => { await append("previous-delivery"); });
     store.generate = async () => { throw new Error("private filesystem detail"); };
-    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", output: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), error => {
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", export: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), error => {
       assert(error instanceof DmsOperationError);
       assert.equal(error.message, "dms_mcp_operation_failed");
-      assert.equal(error.diagnostics.phase, "publish");
+      assert.equal(error.diagnostics.phase, "export");
       assert.equal(error.diagnostics.sqlDispatchAttempted, true);
       assert.doesNotMatch(JSON.stringify(error.diagnostics), /private/);
       return true;
     });
     assert.equal(fixture.calls.length, 1);
     assert.equal(fixture.closes(), 1);
-    assert.equal((await store.read("result.json")).toString(), "previous-delivery");
+    assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "previous-delivery");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an export destination conflict preserves evidence and closes DMS after one SQL dispatch", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-conflict-"));
+  const store = new IssueWorkFileStore(root, "ISSUE-20261021-996");
+  const fixture = fixtureSession({ async listTools() { return [executeScriptTool]; } });
+  try {
+    await store.generate("previous.json", async append => { await append("previous working content"); });
+    const destination = path.join(store.directory, "result.json");
+    await mkdir(destination);
+    await writeFile(path.join(destination, "evidence.txt"), "preserve unknown directory");
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1", export: { fileName: "result.json" } }, configured, undefined, fixture.connect, store), error => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_operation_failed");
+      assert.equal(error.diagnostics.phase, "export");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, true);
+      assert.ok(error.diagnostics.phaseElapsedMs.export! >= 0);
+      assert.ok(error.diagnostics.phaseElapsedMs.close! >= 0);
+      assert.doesNotMatch(JSON.stringify(error.diagnostics), /evidence|result\.json|issue-pilot-dms/);
+      return true;
+    });
+    assert.equal(fixture.calls.length, 1);
+    assert.equal(fixture.closes(), 1);
+    assert.equal(await readFile(path.join(destination, "evidence.txt"), "utf8"), "preserve unknown directory");
+    assert.equal((await readFile(path.join(store.directory, "previous.json"))).toString(), "previous working content");
+    assert.deepEqual((await readdir(store.directory)).sort(), ["previous.json", "result.json"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

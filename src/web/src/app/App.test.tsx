@@ -47,20 +47,8 @@ vi.mock("../data/client", async (importOriginal) => {
   return {
     ...actual,
     loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
-    loadManagedUsers: vi.fn(async () => structuredClone(managedUsers)),
-    createUser: vi.fn(async (input: { subject: string; name: string; email: string }) => {
-      const user = { ...input, role: "product", active: true, createdAt: now, updatedAt: now };
-      managedUsers.push(user);
-      return structuredClone(user);
-    }),
-    updateUser: vi.fn(async (subject: string, input: { name: string; email: string; active: boolean }) => {
-      const user = managedUsers.find((candidate) => candidate.subject === subject)!;
-      Object.assign(user, input, { updatedAt: now });
-      return structuredClone(user);
-    }),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
     loadPersonalCredentials: vi.fn(async () => ({ provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
-    updatePersonalCredentials: vi.fn(async () => ({ modelProviders: ["enterprise-ai"], gitSshConfigured: true })),
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
@@ -90,6 +78,7 @@ vi.mock("../data/client", async (importOriginal) => {
     resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({ instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1", instanceHost: `${input.schemaName}.db.example.test`, instancePort: "3306", databaseId: input.schemaName === "mdm" ? "456" : "123" })),
     loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
       totalBytes: 4 * 1024 ** 3 + 2048,
+      sharedGitBytes: 1024 ** 3,
       policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
       workspaces: [
         { issueKey: "ISSUE-20260810-041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null },
@@ -648,7 +637,7 @@ describe("issue pilot workspace", () => {
     expect(screen.getByText("20.0 GB")).toBeTruthy();
     expect(screen.getByText("解决后纳入")).toBeTruthy();
     expect(screen.getByText("仓库目录缺失")).toBeTruthy();
-    expect(screen.getByText("仓库状态异常")).toBeTruthy();
+    expect(screen.getByText("仓库记录不完整或混合")).toBeTruthy();
     expect(screen.getByText("仓库路径不一致")).toBeTruthy();
     expect(screen.getByText("仓库目录名冲突")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "团队" }));
@@ -904,6 +893,33 @@ describe("issue pilot workspace", () => {
     expect(vi.mocked(client.loadApplicationEndpoints).mock.calls.length).toBe(requests);
   });
 
+  test("preserves named SLS targets while editing the displayed project", async () => {
+    const client = await import("../data/client");
+    const configuration = structuredClone(await client.loadConfig());
+    const deployment = configuration.services[0]!.deployments[0]!;
+    const primary = { name: "primary", region: "cn-test", project: "srm-test", logstores: ["srm"] };
+    const secondary = { name: "gateway", region: "cn-other", project: "gateway-prod", logstores: ["requests"] };
+    deployment.sls = { ...deployment.sls!, targets: [primary, secondary] };
+    vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
+    vi.mocked(client.updateService).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await screen.findByRole("tablist", { name: "服务列表" });
+    fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    fireEvent.input(await within(dialog).findByLabelText("sls project 2"), { target: { value: "srm-updated" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "收起部署2" }));
+    await waitFor(() => expect(within(dialog).queryByLabelText("sls project 2")).toBeNull());
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    expect(await within(dialog).findByLabelText("sls project 2")).toHaveProperty("value", "srm-updated");
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.updateService).toHaveBeenCalled());
+    const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
+    expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated" }, secondary]);
+    expect(saved.deployments[1]?.sls?.credentialUpdate).toEqual({ mode: "preserve" });
+  });
+
   test("shows the upstream DMS rate limit while resolving a database", async () => {
     const client = await import("../data/client");
     const configuration = structuredClone(await client.loadConfig());
@@ -994,7 +1010,7 @@ describe("issue pilot workspace", () => {
     expect(within(credentials).getByText("SSH Key")).toBeTruthy();
     expect(within(credentials).getByText("SLS")).toBeTruthy();
     expect(within(credentials).getByText("DMS")).toBeTruthy();
-    expect(within(credentials).getByText("钉钉")).toBeTruthy();
+    expect(within(credentials).queryByText("钉钉")).toBeNull();
     expect(screen.queryByRole("region", { name: "用户列表" })).toBeNull();
     expect(screen.queryByRole("button", { name: "添加用户" })).toBeNull();
   });

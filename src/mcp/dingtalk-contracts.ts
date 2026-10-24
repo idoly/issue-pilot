@@ -13,7 +13,7 @@ export interface DingtalkIssueRecord {
 interface DingtalkUser { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
 export interface DingtalkSourceResponse {
   user: DingtalkUser; url: string; environment?: EnvironmentKind;
-  connection: { available: boolean; kind: "personal" | "shared"; name: string };
+  connection: { available: boolean; name: string };
 }
 export interface DingtalkImportInput {
   url: string; workMode: IssueWorkMode; serviceKey: string; priority: IssuePriority; startAgent: boolean;

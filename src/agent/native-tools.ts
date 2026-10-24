@@ -1,7 +1,7 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Compile } from "typebox/compile";
-import { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, type BashOperations, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { KeyedSerialQueue } from "../serial.ts";
 import { executeLocalCommand } from "../process.ts";
 import { assertIssueLaunchEnvironment, prepareIssueCommand, type IssueFilesystemPolicy } from "./issue-sandbox.ts";
@@ -33,20 +33,6 @@ function environment(extra: Record<string, string> = {}): Record<string, string>
     ...(extra.GIT_SSH_COMMAND ? { ISSUE_PILOT_PERSONAL_GIT_SSH: extra.GIT_SSH_COMMAND } : {}),
     ...(gitConfig.length ? { ISSUE_PILOT_GIT_CONFIG: JSON.stringify(gitConfig) } : {}),
   };
-}
-export function issueBashOperations(root: string, shell = "/bin/bash"): BashOperations {
-  return { exec: (command, cwd, options) => issueLocalCommands.run(root, async () => {
-    options.signal?.throwIfAborted();
-    const prepared = await prepareIssueCommand({ writeRoot: root }, [shell, "-c", command], cwd);
-    let failed = false, primary: unknown;
-    try {
-      const [executable, ...args] = prepared.argv;
-      const result = await executeLocalCommand(executable!, args, { cwd, environment: environment(), ...(options.signal ? { signal: options.signal } : {}), maxOutputBytes: null, onStdout: text => options.onData(Buffer.from(text)) });
-      options.signal?.throwIfAborted();
-      return { exitCode: result.code };
-    } catch (error) { failed = true; primary = error; throw error; }
-    finally { try { await prepared.cleanup(); } catch (error) { if (failed) throw new AggregateError([primary, error], "issue_tool_cleanup_failed"); throw error; } }
-  }) };
 }
 export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: () => Record<string, string> = () => ({})): ToolDefinition<any, any, any>[] {
   const root = policy.writeRoot;
@@ -88,5 +74,3 @@ export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: 
     }) };
   });
 }
-export const issueWriteTool = (root: string) => issueNativeTools({ writeRoot: root }).find(tool => tool.name === "write")!;
-export const issueEditTool = (root: string) => issueNativeTools({ writeRoot: root }).find(tool => tool.name === "edit")!;

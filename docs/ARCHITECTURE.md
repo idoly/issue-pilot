@@ -34,7 +34,7 @@ flowchart LR
 | AgentEngine | 每工单排队、活动计数、会话复用和失败清理 | [engine.ts](../src/agent/engine.ts) |
 | PiSessionRuntime | 绑定模型、工具、应用资源和会话 | [pi-session.ts](../src/agent/pi-session.ts) |
 | 工作区 | 准备代码集合，管理 worktree、释放和恢复 | [src/workspace](../src/workspace) |
-| 文件存储 | 附件事务、普通工作文件和旧下载兼容 | [attachment-store.ts](../src/http/attachment-store.ts)、[work-file-store.ts](../src/workspace/work-file-store.ts)、[store.ts](../src/outputs/store.ts) |
+| 文件存储 | 附件事务、普通工作文件和原子查询导出 | [attachment-store.ts](../src/http/attachment-store.ts)、[work-files.ts](../src/workspace/work-files.ts) |
 | 配置 | 凭证选择、配置更新与公开投影 | [src/configuration](../src/configuration) |
 
 路由协调这些 owner，不重新实现 Git、协议或文件存储。入站 MCP 复用 HTTP 业务入口。模型控制的本地文件工具、Bash 和 stdio MCP 经 SRT 执行；应用自身的 DMS/SLS 查询由业务 owner 绑定配置、注入凭据并验证只读操作。远程 MCP 使用远程服务自身权限。Codemode 使用 Pi 的脚本 Worker，应用没有每工单常驻 Worker 或容器。
@@ -83,7 +83,9 @@ sequenceDiagram
   SSE-->>UI: 缓冲事件、实时事件和心跳
 ```
 
-先订阅再读快照，避免读取期间丢事件；快照已有的独立 usage 条目按 Pi entry ID 去重。写入器按 FIFO 发送，每轮批量移除已发送帧，避免积压时逐帧移动数组；底层 `write()` 返回 false 时等待 `drain`，连接关闭后清理监听和待发帧。
+先订阅再读快照，避免读取期间丢事件；快照已有的独立 usage 条目按 Pi entry ID 去重。完整回放与缓冲重叠保留完整去重范围，完成激活后，临时事件只保留根配置 `http.sseRecentEventIds` 指定的近期 ID 窗口（默认 4096），不随流式 token 数持续增长；持久条目 ID 仍按连接生命周期去重。实时临时事件不提供无限期 ID 去重。
+
+写入器按 FIFO 发送，每轮批量移除已发送帧，避免积压时逐帧移动数组；底层 `write()` 返回 false 时等待 `drain`，连接关闭后清理监听和待发帧。事件序列化失败时也取消订阅并关闭连接，允许客户端重新连接，不留下仅发送心跳的假连接。近期 ID 窗口不等于网络背压的容量上限。
 
 前端按身份、工单和请求序号隔离异步结果，保留等待期间的新草稿。基座草稿、保存队列和失败信息归 `ApplicationResources` 持有，切页保留；基座异步结果同时校验 subject 和身份代次，从 A 切到 B 再回到 A 后，旧保存或刷新也不能覆盖当前草稿、恢复旧失败或重新排入重试。服务与 MCP 编辑器在身份/权限变化或关闭时清理敏感草稿，普通资料刷新不打断编辑。用户编辑器在身份或权限变化时关闭，并隔离旧请求的错误与忙碌状态；成功写入后继续刷新共享用户资料，卸载后不再加载本地用户列表。仓库草稿在同一身份和角色的资料刷新时保留，列表按身份和请求序号隔离迟到响应，卸载后请求失效。能力配置弹窗在卸载后不再关闭或更新后续弹窗；编辑行按服务和环境保持稳定，普通配置刷新不重建未保存的草稿。首页 Overview 单独拥有首页请求和轮询。附件预览关闭或换文件时取消下载，复制失败不隐藏已加载内容。
 
@@ -106,6 +108,7 @@ Markdown 与原始 HTML 链接统一经工单文件解析和 HTML 清洗。同�
 | 协调范围 | 保护什么 |
 | --- | --- |
 | 每工单 Agent 队列 | 同工单轮次串行，失败清理结束后再执行下一项 |
+| 每工单 Pi 会话访问队列 | 会话打开、排队输入写入、SDK 初始化和关闭串行，避免多个 SessionManager 同时写出分叉 |
 | Issue-set reservation | 预约一组空闲工单，防止配置或生命周期操作期间启动 Agent |
 | API configuration scope | 配置读快照和影响配置范围的写操作 |
 | lifecycle queue | 释放、重开、转换与迁移 |
@@ -119,6 +122,8 @@ Markdown 与原始 HTML 链接统一经工单文件解析和 HTML 清洗。同�
 配置读取：scope queue → SQLite read snapshot
 服务/工单范围写入：scope queue → Issue reservation
 释放/重开：lifecycle queue → inspection queue → Issue reservation
+Agent 轮次：Issue round queue → Pi session access queue
+流式发送：steer queue → Pi session access queue（需要转入普通回合或清理时）
 ```
 
 预约遇到活动工单会拒绝；不能用一个全局 mutex 替代这些协调范围。等待队列后需重新检查相关授权。应用外部命令执行器在创建进程前检查取消，没有 PID 时不发送终止信号。发生取消、超时、流错误或输出消费错误时，保留首个错误，等待 stdio 关闭及必要的进程组终止升级完成后才释放执行资源。工作文件按真实目标路径跨实例串行；附件清理等待所有暂存目录结束并聚合原操作与清理错误。失败任务先停止会话并清理资源，再回写状态，防止旧轮次覆盖新轮次。排队消息执行时也要确认捕获的会话仍有效。
@@ -129,6 +134,6 @@ Monaco 负责文本编辑和差异显示，不加载 VS Code 扩展宿主。变�
 
 默认启动顺序为：占有应用实例控制 Socket → 数据库迁移与中断状态恢复 → 私有配置文件校验与事务投影 → 检查未知目录和共享 checkout → 准备工单 runtime → 确认模型基座 → 维护与路由 → 监听 HTTP。竞争实例在数据库恢复与目录清理之前拒绝；控制 Socket 只用于实例互斥，不接受项目命令。单个 runtime 可以被报告为 blocked，`/health` 成功不代表全部工单资源或远程服务正常。
 
-队列在内存中，进程重启不会自动恢复未完成的模型调用；持久工单和会话支持后续重试或继续。关闭时先等待维护与 Agent 活动，再释放会话/MCP、模型运行时、SRT 代理、应用实例租约，最后关闭数据库，清理错误聚合报告。单工单会话停止和个人 Git 临时身份清理都会尝试执行；单一失败保留原错误，多重失败聚合报告，避免后一个清理异常覆盖前一个。应用租约的并发启动共享同一次初始化，关闭等待启动结束；重复关闭共享清理结果，再次启动等待前次关闭完成。Native 工具和代码集合 include/remove 共享每工单本地执行队列，并等待取消后的进程退出；不同工单可并行。重复的 SRT 命令清理调用共享同一次关闭结果，SRT 共享代理另有生命周期队列。
+消息返回 `202` 前先把原文和图片保存到已有 Pi JSONL，并保存会话绑定；写入失败不入队，不完整的 JSONL 保留并拒绝追加。队列在内存中，进程启动不自动恢复模型调用。用户主动继续时，应用只恢复带版本标记、原范围一致且未开始交付的输入；started 输入不重新注入，旧范围输入记录拒绝并保留原文。JSONL 交付规则由 [message-delivery.ts](../src/agent/message-delivery.ts) 统一管理，Engine 负责排队、当前身份、准备和执行协调；没有新增任务服务或 SQL 消息表。关闭时先等待维护与 Agent 活动，再释放会话/MCP、模型运行时、SRT 代理、应用实例租约，最后关闭数据库，清理错误聚合报告。单工单会话停止和个人 Git 临时身份清理都会尝试执行；单一失败保留原错误，多重失败聚合报告，避免后一个清理异常覆盖前一个。应用租约的并发启动共享同一次初始化，关闭等待启动结束；重复关闭共享清理结果，再次启动等待前次关闭完成。Native 工具和代码集合 include/remove 共享每工单本地执行队列，并等待取消后的进程退出；不同工单可并行。重复的 SRT 命令清理调用共享同一次关闭结果，SRT 共享代理另有生命周期队列。
 
 组装入口为 [api.ts](../src/http/api.ts)，部署和恢复步骤见[部署指南](DEPLOYMENT.md)与[运维手册](RUNBOOK.md)。

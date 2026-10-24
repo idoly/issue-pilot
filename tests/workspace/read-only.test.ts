@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
-import { issueRuntimeRoot, issueSessionRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -88,8 +88,8 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     ]);
     await database.db.insert(agentSessions).values([issue!, secondIssue!].map((entry) => ({
       issueId: entry.id,
-      sessionFile: path.join(issueSessionRoot(root, entry.key), "session.jsonl"),
-      workspacePath: issueRuntimeRoot(root, entry.key),
+      sessionFile: path.join(issueRoot(root, entry.key), "session.jsonl"),
+      workspacePath: issueRoot(root, entry.key),
     })));
 
     const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
@@ -120,10 +120,10 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     const [workspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     const [session] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(repository!.localPath, null);
-    const checkoutRoot = await git(["-C", path.join(issueRuntimeRoot(root, issue!.key), "remote"), "rev-parse", "--show-toplevel"]);
+    const checkoutRoot = await git(["-C", path.join(issueRoot(root, issue!.key), "remote"), "rev-parse", "--show-toplevel"]);
     assert.equal(path.relative(sharedCheckoutsRoot(root), checkoutRoot).startsWith(".."), false);
     assert.equal(workspace!.runtimeReady, true);
-    assert.equal(session!.workspacePath, issueWorkspaceRoot(root, issue!.key));
+    assert.equal(session!.workspacePath, issueRoot(root, issue!.key));
     const unchangedAt = new Date(2_000);
     await database.db.update(issueRepositories).set({ updatedAt: unchangedAt }).where(eq(issueRepositories.issueId, issue!.id));
     await database.db.update(issueWorkspaces).set({ updatedAt: unchangedAt }).where(eq(issueWorkspaces.issueId, issue!.id));

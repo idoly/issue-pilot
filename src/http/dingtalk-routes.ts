@@ -2,7 +2,6 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadDingtalkUserSettings, FileConfigurationError } from "../configuration/file-configuration.ts";
-import { dingtalkConnection } from "../configuration/mcp.ts";
 import { dingtalkIssueImports, issues, mcpServices } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { connectMcp, type McpConnector, type McpSession } from "../mcp/client.ts";
@@ -30,16 +29,16 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
     } finally { request.raw.removeListener("aborted", abort); reply.raw.removeListener("close", close); }
   };
   const settings = (request: FastifyRequest) => runScopeExclusive(async () => {
-    const user = await requireCurrentUser(database, request), personal = await loadDingtalkUserSettings(context.stateRoot, user.subject);
-    const name = personal.source?.mcp ?? "dingtalk";
+    const user = await requireCurrentUser(database, request), preferences = await loadDingtalkUserSettings(context.stateRoot, user.subject);
+    const name = preferences.source?.mcp ?? "dingtalk";
     const [server] = await database.db.select().from(mcpServices).where(and(eq(mcpServices.name, name), eq(mcpServices.enabled, true))).limit(1);
-    return { user, personal, name, server };
+    return { user, preferences, name, server };
   });
   app.get("/api/dingtalk/source", handle(async (request): Promise<DingtalkSourceResponse> => {
     const state = await settings(request);
     let url = "";
-    if (state.personal.source?.url) try { url = parseDingtalkTable(state.personal.source.url).url; } catch (error) { if (!(error instanceof DingtalkError)) throw error; }
-    return { user: serializePerson(state.user), url, ...(state.personal.source?.environment ? { environment: state.personal.source.environment } : {}), connection: { available: Boolean(state.server), kind: state.personal.personal ? "personal" : "shared", name: state.name } };
+    if (state.preferences.source?.url) try { url = parseDingtalkTable(state.preferences.source.url).url; } catch (error) { if (!(error instanceof DingtalkError)) throw error; }
+    return { user: serializePerson(state.user), url, ...(state.preferences.source?.environment ? { environment: state.preferences.source.environment } : {}), connection: { available: Boolean(state.server), name: state.name } };
   }));
   app.post("/api/dingtalk/import", handle(async (request, signal): Promise<DingtalkImportResponse> => {
     const input = record(request.body);
@@ -54,8 +53,8 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
     if (existing) return result("existing", existing.key);
     let session: McpSession | undefined;
     try {
-      try { session = await connect(dingtalkConnection(state.server, state.personal), signal); } catch { throw new DingtalkError("dingtalk_connection_failed"); }
-      const fields = await readDingtalkFields(session, table), columns = resolveDingtalkColumns(fields, state.personal.fields ?? {});
+      try { session = await connect(state.server, signal); } catch { throw new DingtalkError("dingtalk_connection_failed"); }
+      const fields = await readDingtalkFields(session, table), columns = resolveDingtalkColumns(fields, state.preferences.fields ?? {});
       if (!columns.title) throw new ApiError(400, "dingtalk_columns_required");
       const row = await readDingtalkRecord(session, table, columns), data = dingtalkIssueRecord(row, columns);
       const [manual] = await database.db.select({ key: issues.key }).from(issues).where(inArray(issues.title, [data.title, data.number].filter(Boolean))).limit(1);

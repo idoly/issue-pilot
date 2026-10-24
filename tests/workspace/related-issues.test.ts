@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, issueRelations, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
-import { issueRuntimeRoot, issueSessionRoot } from "../../src/workspace/state.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 const git = async (args: string[]) => (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
@@ -51,7 +51,7 @@ test("related Issues expose their complete current working directory and convers
     ]).returning();
     await database.db.insert(issueWorkspaces).values([{ issueId: development!.id }, { issueId: relatedProduction!.id }, { issueId: production!.id }]);
 
-    await mkdir(issueSessionRoot(root, relatedProduction!.key), { recursive: true });
+    await mkdir(issueRoot(root, relatedProduction!.key), { recursive: true });
     const projects = new IssueProjectManager(database.db, root);
     const preparedDevelopment = await projects.prepare(development!, "dev");
     const developmentRepository = preparedDevelopment.repositories[0]!.workspacePath;
@@ -60,7 +60,7 @@ test("related Issues expose their complete current working directory and convers
     await git(["-C", developmentRepository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "fix regression"]);
     await writeFile(path.join(developmentRepository, "README.md"), "uncommitted local experiment\n", "utf8");
 
-    const sessionRoot = issueSessionRoot(root, development!.key);
+    const sessionRoot = issueRoot(root, development!.key);
     const sessionFile = path.join(sessionRoot, ".session-related.jsonl");
     await mkdir(sessionRoot, { recursive: true });
     await writeFile(sessionFile, "{\"type\":\"custom\",\"customType\":\"issue-pilot-user\",\"data\":{\"message\":\"check the contract\"}}\n", { mode: 0o600 });
@@ -73,14 +73,14 @@ test("related Issues expose their complete current working directory and convers
 
     const preparedProduction = await projects.prepare(production!, "prod");
     assert.deepEqual(preparedProduction.relatedIssueKeys.sort(), [development!.key, relatedProduction!.key].sort());
-    const relatedRoot = path.join(issueRuntimeRoot(root, production!.key), `.related-${development!.key.toLowerCase()}`);
+    const relatedRoot = path.join(issueRoot(root, production!.key), `.related-${development!.key.toLowerCase()}`);
     assert.equal(await readFile(path.join(relatedRoot, "remote", "README.md"), "utf8"), "uncommitted local experiment\n");
     assert.match(await readFile(relatedRoot + ".jsonl", "utf8"), /check the contract/);
     const metadata = JSON.parse(await readFile(relatedRoot + ".json", "utf8")) as { key: string; repositories: Array<{ workingBranch: string; commit: string }> };
     assert.equal(metadata.key, development!.key);
     assert.match(metadata.repositories[0]!.workingBranch, /^hotfix-issue-20260918-101$/);
     assert.match(metadata.repositories[0]!.commit, /^[0-9a-f]{40}$/);
-    const metadataOnlyRoot = path.join(issueRuntimeRoot(root, production!.key), `.related-${relatedProduction!.key.toLowerCase()}`);
+    const metadataOnlyRoot = path.join(issueRoot(root, production!.key), `.related-${relatedProduction!.key.toLowerCase()}`);
     const metadataOnly = JSON.parse(await readFile(metadataOnlyRoot + ".json", "utf8")) as { key: string; repositories: unknown[]; conversationFile?: string; note: string };
     assert.equal(metadataOnly.key, relatedProduction!.key);
     assert.deepEqual(metadataOnly.repositories, []);

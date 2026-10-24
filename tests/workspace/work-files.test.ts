@@ -4,8 +4,11 @@ import { test } from "node:test";
 import { syncBuiltinESMExports } from "node:module";
 import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 import path from "node:path";
-import { generatedWorkFileSaver, IssueWorkFileStore } from "../../src/workspace/work-file-store.ts";
+import { generatedWorkFileSaver, IssueWorkFileStore, listIssueWorkFiles, openIssueWorkFile, prepareIssueWorkDirectory } from "../../src/workspace/work-files.ts";
+
+const key = "ISSUE-20261021-001";
 
 test("SDK output collisions preserve a temporary file owned by another operation", async context => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-sdk-output-collision-"));
@@ -55,7 +58,7 @@ test("separate store instances share destination serialization and queued cancel
     await assert.rejects(queued, error => error === reason);
     await observed;
     assert.equal(secondStarted, false);
-    assert.equal((await first.read("result.txt")).toString(), "first");
+    assert.equal((await readFile(path.join(first.directory, "result.txt"))).toString(), "first");
   } finally {
     release();
     await Promise.allSettled([writing, queued]);
@@ -66,23 +69,23 @@ test("separate store instances share destination serialization and queued cancel
 test("query results are ordinary working files with direct download links", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-")), store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
   try {
-    const file = await store.write("report.json", '{"rows":1}');
+    const file = await store.generate("report.json", async append => { await append('{"rows":1}'); });
     assert.equal(file.size, 10); assert.equal(path.relative(root, store.directory), "workspaces/issue-20261022-001");
     assert.equal(store.downloadPath("report.json"), "/api/issues/ISSUE-20261022-001/files/download?path=report.json");
-    assert.equal((await store.read("report.json")).toString(), '{"rows":1}');
+    assert.equal((await readFile(path.join(store.directory, "report.json"))).toString(), '{"rows":1}');
     assert.equal((await stat(path.join(store.directory, "report.json"))).mode & 0o777, 0o600);
-    await store.write("report.json", "updated"); assert.equal((await store.read("report.json")).toString(), "updated");
+    await store.generate("report.json", async append => { await append("updated"); }); assert.equal((await readFile(path.join(store.directory, "report.json"))).toString(), "updated");
     assert.deepEqual(await readdir(store.directory), ["report.json"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test("failed or cancelled generation retains the old file and removes temporary files", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-failure-")), store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
   try {
-    await store.write("report.json", "old");
+    await store.generate("report.json", async append => { await append("old"); });
     await assert.rejects(store.generate("report.json", async append => { await append("new partial"); throw new Error("producer failed"); }), /producer failed/);
     const controller = new AbortController(), reason = new Error("cancelled");
     await assert.rejects(store.generate("report.json", async append => { await append("new"); controller.abort(reason); }, controller.signal), error => error === reason);
-    assert.equal((await store.read("report.json")).toString(), "old"); assert.deepEqual(await readdir(store.directory), ["report.json"]);
+    assert.equal((await readFile(path.join(store.directory, "report.json"))).toString(), "old"); assert.deepEqual(await readdir(store.directory), ["report.json"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test("file-name and replacement validation precedes a producer and never follows destination links", async () => {
@@ -100,7 +103,7 @@ test("file-name and replacement validation precedes a producer and never follows
 test("a cleanup failure preserves the generation error and releases the queue for retry", async context => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-cleanup-")), store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
   try {
-    await store.write("report.json", "old");
+    await store.generate("report.json", async append => { await append("old"); });
     const original = new Error("generation failed"), cleanup = new Error("close failed"), openFile = fs.open;
     context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
       const handle = await openFile(...args), close = handle.close.bind(handle);
@@ -110,10 +113,10 @@ test("a cleanup failure preserves the generation error and releases the queue fo
     syncBuiltinESMExports();
     await assert.rejects(store.generate("report.json", async () => { throw original; }), error => error instanceof AggregateError && error.errors[0] === original && error.errors[1] === cleanup);
     context.mock.restoreAll(); syncBuiltinESMExports();
-    assert.equal((await store.read("report.json")).toString(), "old");
+    assert.equal((await readFile(path.join(store.directory, "report.json"))).toString(), "old");
     assert.deepEqual(await readdir(store.directory), ["report.json"]);
-    await store.write("report.json", "retried");
-    assert.equal((await store.read("report.json")).toString(), "retried");
+    await store.generate("report.json", async append => { await append("retried"); });
+    assert.equal((await readFile(path.join(store.directory, "report.json"))).toString(), "retried");
   } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await rm(root, { recursive: true, force: true }); }
 });
 test("same-name generation serializes and queued cancellation never starts its producer", async () => {
@@ -125,6 +128,49 @@ test("same-name generation serializes and queued cancellation never starts its p
     const controller = new AbortController(), reason = new Error("queued cancellation"); let calls = 0;
     const second = store.generate("result.json", async () => { calls++; }, controller.signal);
     controller.abort(reason); release(); await first; await assert.rejects(second, error => error === reason);
-    assert.equal(calls, 0); assert.equal((await store.read("result.json")).toString(), "first");
+    assert.equal(calls, 0); assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "first");
   } finally { release?.(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("Issue creation claims an empty working directory and preserves an unknown existing directory", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-claim-"));
+  try {
+    const target = issueRoot(root, key);
+    await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, "evidence.txt"), "preserve");
+    await assert.rejects(claimIssueRoot(root, key), /unmanaged_issue_state:workspaces/);
+    assert.equal(await readFile(path.join(target, "evidence.txt"), "utf8"), "preserve");
+    await assert.rejects(readFile(path.join(issueRoot(root, key), "anything")), { code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("lists and downloads working files without following paths outside the Issue or Git controls", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-working-files-"));
+  try {
+    const work = await prepareIssueWorkDirectory(root, key);
+    assert.equal(work, issueRoot(root, key));
+    await mkdir(path.join(work, "nested"));
+    await writeFile(path.join(work, "nested", "库存 #1.xlsx"), "workbook");
+    await writeFile(path.join(work, "nested", ".session-business.txt"), "ordinary nested content");
+    await writeFile(path.join(work, ".session-private.jsonl"), "private session");
+    await symlink(path.join(work, ".session-private.jsonl"), path.join(work, "session-alias"));
+    const nested = await openIssueWorkFile(root, key, "nested/.session-business.txt");
+    try { assert.equal((await nested.handle.readFile()).toString(), "ordinary nested content"); } finally { await nested.handle.close(); }
+    for (const selected of [".session-private.jsonl", "session-alias"]) await assert.rejects(openIssueWorkFile(root, key, selected), /managed_issue_file_private/);
+    await mkdir(path.join(work, ".git"));
+    await writeFile(path.join(work, ".git", "config"), "private git data");
+    await writeFile(path.join(root, "secret"), "private");
+    await symlink(path.join(root, "secret"), path.join(work, "escape"));
+    await symlink(path.join(work, ".git"), path.join(work, "git-alias"));
+    const listing = await listIssueWorkFiles(root, key);
+    assert.equal(listing.some(row => row.name === ".git"), false);
+    assert.equal(listing.find(row => row.name === "escape")?.kind, "link");
+    const file = await openIssueWorkFile(root, key, "nested/库存 #1.xlsx");
+    try { assert.equal((await file.handle.readFile()).toString(), "workbook"); }
+    finally { await file.handle.close(); }
+    for (const selected of ["../secret", "/etc/passwd", "escape", ".git/config", "git-alias/config"]) {
+      await assert.rejects(openIssueWorkFile(root, key, selected), /invalid_issue_file_path/);
+    }
+    await assert.rejects(openIssueWorkFile(root, key, "nested"), /issue_file_not_regular/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

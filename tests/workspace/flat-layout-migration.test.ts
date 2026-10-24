@@ -6,7 +6,6 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { applyFlatIssueLayout, planFlatIssueLayout, type FlatLayoutAttachment, type FlatLayoutSession } from "../../src/workspace/flat-layout-migration.ts";
 import { issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
-import { resolveIssueOutput } from "../../src/outputs/store.ts";
 const key = "ISSUE-20261022-001", issue = { id: "issue", key, repositoryNames: [] };
 async function fixture() {
   const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-flat-layout-")), old = legacyIssueRoot(state, key), root = issueRoot(state, key);
@@ -30,7 +29,8 @@ test("flat migration preserves edited working files, original attachments, sessi
       Object.assign(f.attachments[0]!, changes.attachments[0]); Object.assign(f.sessions[0]!, changes.sessions[0]);
     }, path.join(f.state, "control", "quarantine"));
     assert.equal(await readFile(path.join(f.root, "report.xlsx"), "utf8"), "working source");
-    assert.equal(await readFile(await resolveIssueOutput(f.state, key, "report.xlsx"), "utf8"), "delivered");
+    const preservedOutputs = JSON.parse(await readFile(path.join(f.root, ".legacy-output-links.json"), "utf8")).files;
+    assert.equal(await readFile(path.join(f.root, preservedOutputs["report.xlsx"]), "utf8"), "delivered");
     assert.equal(await readFile(path.join(f.root, "uuid-image.png"), "utf8"), "edited working copy");
     assert.equal(path.dirname(f.sessions[0]!.sessionFile), f.root); assert.equal(f.attachments[0]!.workingFileName, "uuid-image.png");
     await assert.rejects(stat(f.old), { code: "ENOENT" });
@@ -56,7 +56,8 @@ test("identical old deliveries reuse the working file without overwriting it", a
     const plan = await planFlatIssueLayout(f.state, [issue], f.attachments, f.sessions); assert.equal(plan.moves.filter(row => row.duplicate).length, 1);
     await applyFlatIssueLayout(plan, async () => {}, path.join(f.state, "control", "quarantine"));
     assert.equal((await stat(path.join(f.root, "report.xlsx"))).ino, before.ino);
-    assert.equal(await resolveIssueOutput(f.state, key, "report.xlsx"), path.join(f.root, "report.xlsx"));
+    const preservedOutputs = JSON.parse(await readFile(path.join(f.root, ".legacy-output-links.json"), "utf8")).files;
+    assert.equal(preservedOutputs["report.xlsx"], "report.xlsx");
   } finally { await f.cleanup(); }
 });
 test("unknown old files, invalid attachments and runtime content are preserved for inspection", async () => {

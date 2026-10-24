@@ -17,6 +17,29 @@ async function serviceInput(f: Awaited<ReturnType<typeof createApiFixture>>, key
   return { name: service.name, description: service.description, repositories: service.repositories, deployments: service.deployments.map((deployment: { environmentKey: string; repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>; capabilities: string[] }) => ({ environmentKey: deployment.environmentKey, repositoryBranches: deployment.repositoryBranches.map(row => ({ repositoryAlias: row.repositoryAlias, baseBranch: row.baseBranch })), capabilities: [], mcpServices: [] })) };
 }
 
+test("workspace tool schema mutations remain local to that tool instance", async () => {
+  const f = await createApiFixture();
+  const database = openDatabase(f.databaseFile);
+  let operation: object | undefined;
+  try {
+    await createService(f.app, "SchemaIsolation", ["dev", "test"]);
+    const visible = await createIssue(f.app, "schemaisolation", "dev");
+    const [issue] = await database.db.select().from(issues);
+    assert.ok(issue && issue.key === visible.id);
+    const first = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, "/unused");
+    operation = Reflect.get(Reflect.get(Reflect.get(first.parameters, "anyOf")[0], "properties"), "operation");
+    assert.ok(operation);
+    Reflect.set(operation, "const", "changed-by-extension");
+    const second = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, "/unused");
+    const result = await second.execute("list", { operation: "list" }, undefined, undefined, {} as never);
+    assert.match(JSON.stringify(result), /schemaisolation/);
+  } finally {
+    if (operation) Reflect.set(operation, "const", "list");
+    await database.close();
+    await f.cleanup();
+  }
+});
+
 test("service configuration and generated descriptions share one source without copying secrets", async () => {
   const f = await createApiFixture(); const db = openDatabase(f.databaseFile);
   try {
@@ -44,7 +67,7 @@ test("service configuration and generated descriptions share one source without 
     assert.equal((await f.app.inject({ method: "GET", url: "/api/resources" })).statusCode, 404);
     const dev = String((await db.client.execute("select id from environments where key='dev'")).rows[0]!.id);
     const prod = String((await db.client.execute("select id from environments where key='prod'")).rows[0]!.id);
-    const services = await listEnvironmentServices(db.db, dev, true);
+    const services = await listEnvironmentServices(db.db, dev);
     const [issue] = await db.db.insert(issues).values({ key: "ISSUE-20261017-901", title: "investigate", type: "defect_fix", serviceId: services.find(row => row.service.key === "entry" && row.environment.key === "dev")!.service.id, environmentId: dev, reporterSubject: issuePilotConfig.bootstrapUser.subject }).returning();
     await db.db.insert(issueWorkspaces).values({ issueId: issue!.id });
     const workspace = await createWorkspaceTool(db.db, issue!, "dev", {} as IssueProjectManager, "/unused");
@@ -59,7 +82,7 @@ test("service configuration and generated descriptions share one source without 
     assert.match(JSON.stringify(tools[0]!.parameters), /orders_test/);
     assert.match(JSON.stringify(tools[0]!.parameters), /"const":"prod"/);
     await assert.rejects(tools[0]!.execute("wrong-source", { environment: "dev", service: "other", capability: "dms", schema: "orders", script: "SELECT 1" }, undefined, undefined, {} as never), /invalid_service_query_input/);
-    const prodServices = await listEnvironmentServices(db.db, prod, true);
+    const prodServices = await listEnvironmentServices(db.db, prod);
     assert.ok(prodServices.every(row => row.environment.key === "prod"));
   } finally { await db.close(); await f.cleanup(); }
 });

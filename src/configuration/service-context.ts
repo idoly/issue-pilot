@@ -1,6 +1,6 @@
-import { type DeploymentConfig, type StoredDeploymentConfig } from "../domain/contracts.ts";
+import { type StoredDeploymentConfig } from "../domain/contracts.ts";
 import { publicMcpUrl } from "./mcp.ts";
-import { projectDeploymentConfiguration } from "./credentials.ts";
+import { projectCapabilityConfiguration } from "./credentials.ts";
 
 type Field = readonly [string, string | number | readonly string[] | undefined];
 
@@ -16,10 +16,10 @@ function section(title: string, fields: readonly Field[]): string {
 }
 
 /** Render public configuration once for both the UI and model context. */
-export function deploymentContext(environment: { key: string; name: string }, configuration: StoredDeploymentConfig, mcp: readonly { id: string; name: string; url: string; transport: string; enabled: boolean }[], _credentials?: DeploymentConfig, mcpCredentials: readonly { id: string; authorization: string }[] = []): string {
+export function deploymentContext(environment: { key: string; name: string }, configuration: StoredDeploymentConfig, mcp: readonly { id: string; name: string; url: string; transport: string; enabled: boolean }[], mcpCredentials: readonly { id: string; authorization: string }[] = []): string {
   const sections = [`### ${environment.name}环境`];
   if (environment.key === "dev") return [...sections, "仅配置代码分支；查询能力继承正式和测试环境，来源保持只读。"].join("\n\n");
-  const value = projectDeploymentConfiguration(configuration);
+  const value = projectCapabilityConfiguration(configuration);
   if (value.dms) value.dms.databases.forEach((database, index) => sections.push(section(value.dms!.databases.length > 1 ? `DMS · 数据库 ${index + 1}` : "DMS", [["实例", database.instanceAlias], ["Schema", database.schemaName], ["地址", `${database.instanceHost}:${database.instancePort}`], ["InstanceId", database.instanceId], ["DatabaseId", database.databaseId]])));
   if (value.sls) {
     const v = value.sls;

@@ -341,7 +341,15 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       discardImages(pendingImages); pasteEditor.reset(); setProcessing(true);
     } catch (cause) {
       if (submitGeneration !== issueGeneration) { discardImages(pendingImages); return; }
-      setEditorDraft(editorText); setImages(pendingImages); setError(cause instanceof Error && cause.message === "agent_message_too_long" ? `消息超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。` : cause instanceof Error && cause.message === "invalid_agent_message" ? "消息内容无效，请输入文字后重新发送。" : cause instanceof Error ? cause.message : "agent_message_failed");
+      let failureMessage = cause instanceof Error ? cause.message : "agent_message_failed";
+      if (failureMessage === "agent_message_too_long") failureMessage = `消息超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
+      else if (failureMessage === "invalid_agent_message") failureMessage = "消息内容无效，请输入文字后重新发送。";
+      else if (failureMessage === "agent_message_outcome_unknown") failureMessage = "会话已切换，无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。";
+      else if (failureMessage === "agent_session_file_incomplete") failureMessage = "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。";
+      else if (failureMessage === "agent_session_file_missing") failureMessage = "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。";
+      setEditorDraft(editorText);
+      setImages(pendingImages);
+      setError(failureMessage);
     } finally { if (submitGeneration === issueGeneration) setSending(false); }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {

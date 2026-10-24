@@ -196,7 +196,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "open",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const fetchRequest = vi.spyOn(globalThis, "fetch");
@@ -216,7 +216,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "open",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:clipboard-image");
@@ -241,12 +241,41 @@ describe("Agent conversation state", () => {
     view.unmount();
   });
 
+  for (const [code, status, warning] of [
+    ["agent_message_outcome_unknown", 409, "会话已切换，无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。"],
+    ["agent_session_file_incomplete", 500, "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。"],
+    ["agent_session_file_missing", 500, "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。"],
+  ] as const) it(`keeps the draft and pasted image after ${code}`, async () => {
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "open",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:uncertain-image");
+    const fetchRequest = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: code }), { status }));
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    try {
+      const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+      const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "uncertain.png", { type: "image/png" });
+      fireEvent.paste(editor, { clipboardData: { files: [image], getData: () => "" } });
+      await screen.findByAltText("uncertain.png");
+      fireEvent.input(editor, { target: { value: "check the uncertain operation" } });
+      await waitFor(() => expect(editor.value).toBe("check the uncertain operation"));
+      fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
+      expect(await screen.findByText(warning)).toBeTruthy();
+      expect(editor.value).toBe("check the uncertain operation");
+      expect(screen.getByAltText("uncertain.png")).toBeTruthy();
+      expect(fetchRequest).toHaveBeenCalledTimes(1);
+    } finally { view.unmount(); }
+  });
+
   it("updates auxiliary SDK usage without changing the main context or reconnecting", async () => {
     EventSourceMock.instances.length = 0;
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -274,7 +303,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
@@ -333,7 +362,7 @@ describe("Agent conversation state", () => {
     const initial = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "resolved",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
@@ -364,7 +393,7 @@ describe("Agent conversation state", () => {
     const initial = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "open",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "preparing", sourceAvailable: false },
     } satisfies IssueDetail;
     const prepared = { ...initial, status: "in_progress" as const, repositories: [{ name: "service", url: "git@example.test:team/service.git", baseBranch: "main", workingBranch: "feature-issue-20260810-001" }], workspace: { status: "running" as const, sourceAvailable: true } };
@@ -386,7 +415,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
@@ -406,7 +435,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "prod",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -443,7 +472,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "dev",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -497,7 +526,7 @@ describe("Agent conversation state", () => {
       const issue = {
         id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
         assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-        updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "prod",
+        updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -539,7 +568,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "prod",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     let rejectFirst!: (error: unknown) => void;
@@ -565,7 +594,7 @@ describe("Agent conversation state", () => {
     const issue = {
       id: "ISSUE-20260810-002", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
-      updatedAt: new Date().toISOString(), repositories: [], attachments: [], outputs: [], comments: [], environmentKey: "prod",
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "prod",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn<() => Promise<IssueDetail>>()

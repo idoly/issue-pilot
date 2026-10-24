@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
-import { isManagedIssueFile } from "../workspace/working-files.ts";
+import { isManagedIssueFile } from "../workspace/work-files.ts";
 
 const [name, root] = process.argv.slice(2);
 const send = (type: string, data: unknown) => process.stdout.write(JSON.stringify({ type, data }) + "\n");

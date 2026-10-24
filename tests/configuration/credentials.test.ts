@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CAPABILITY_CREDENTIALS } from "../../src/configuration/contracts.ts";
+import { CAPABILITY_CREDENTIAL_FIELDS } from "../../src/configuration/contracts.ts";
 import { projectCapabilityConfiguration, resolveConfiguredCapabilitySections, resolveDeploymentConfiguration } from "../../src/configuration/credentials.ts";
 import { CAPABILITY_KEYS, type CapabilityConfiguration, type CapabilityName, type StoredDeploymentConfig } from "../../src/domain/contracts.ts";
 const configuration: CapabilityConfiguration = {
@@ -16,7 +16,7 @@ test("projects and preserves active native credentials without exposing their va
   for (const key of CAPABILITY_KEYS) {
     const section = projected[key] as Record<string, unknown>;
     assert.equal(section.credentialConfigured, true);
-    for (const field of CAPABILITY_CREDENTIALS[key].fields) assert.equal(field in section, false);
+    for (const field of CAPABILITY_CREDENTIAL_FIELDS[key]) assert.equal(field in section, false);
     assert.deepEqual(resolveConfiguredCapabilitySections({ [key]: publicInput(key, { mode: "preserve" }) }, [key], configuration)[key], configuration[key]);
   }
   assert.doesNotMatch(JSON.stringify(projected), /sls-secret|dms-token|sls-key/);

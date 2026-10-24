@@ -47,6 +47,52 @@ test("manages a shared repository catalog and cascades config URLs without rewri
   } finally { await f.cleanup(); }
 });
 
+test("repository display-name changes do not reserve or stop active Issue sessions", async () => {
+  const f = await createApiFixture();
+  try {
+    const url = "git@git.example.test:team/metadata.git";
+    await createService(f.app, "Metadata", ["test"], [url]);
+    await createIssue(f.app, "metadata", "test");
+    const issueId = f.engine.enqueued.at(-1)!;
+    const rows = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json();
+    const response = await f.app.inject({ method: "PATCH", url: `/api/repositories/${rows[0].id}`, headers, payload: { name: "Readable repository name", url } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(f.engine.running.has(issueId), true);
+    assert.deepEqual(f.engine.closedSessions, []);
+    assert.equal((await f.app.inject({ method: "GET", url: "/api/repositories" })).json()[0].name, "Readable repository name");
+  } finally { await f.cleanup(); }
+});
+
+test("repository address changes reserve only entry and included services that use the repository", async () => {
+  const f = await createApiFixture();
+  try {
+    const original = "git@git.example.test:team/scoped.git";
+    await createService(f.app, "Scoped", ["test"], [original]);
+    await createService(f.app, "Unrelated", ["test"]);
+    await createIssue(f.app, "unrelated", "test");
+    const unrelatedIssueId = f.engine.enqueued.at(-1)!;
+    const catalog = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json() as Array<{ id: string; url: string }>;
+    const repository = catalog.find(row => row.url === original)!;
+    const next = "git@git.example.test:team/scoped-next.git";
+    const updated = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { name: "Scoped", url: next } });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.equal(f.engine.running.has(unrelatedIssueId), true);
+    assert.deepEqual(f.engine.closedSessions, []);
+    const database = openDatabase(f.databaseFile);
+    try {
+      const service = (await database.client.execute("SELECT id FROM services WHERE key='scoped'")).rows[0]!;
+      await database.client.execute({ sql: "INSERT INTO issue_service_scopes(issue_id,service_id,created_at) VALUES(?,?,1)", args: [unrelatedIssueId, String(service.id)] });
+    } finally { await database.close(); }
+    const final = "git@git.example.test:team/scoped-final.git";
+    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { name: "Scoped", url: final } });
+    assert.equal(blocked.statusCode, 409, blocked.body);
+    f.engine.running.clear();
+    const applied = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { name: "Scoped", url: final } });
+    assert.equal(applied.statusCode, 200, applied.body);
+    assert.deepEqual(f.engine.closedSessions, [unrelatedIssueId]);
+  } finally { await f.cleanup(); }
+});
+
 test("rejects embedded credentials, unsupported URLs, and nondeveloper repository mutations", async () => {
   const f = await createApiFixture();
   try {

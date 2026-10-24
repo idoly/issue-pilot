@@ -21,7 +21,7 @@ import { createIssueCodemodeExtension } from "./codemode-extension.ts";
 import { createIssueMcpExtension } from "../mcp/pi-extension.ts";
 import { assertIssueLaunchEnvironment, prepareIssueCommand, type PreparedIssueCommand } from "./issue-sandbox.ts";
 import { assertIssueHardlinks, issueNativeTools } from "./native-tools.ts";
-import { IssueOutputStore } from "../outputs/store.ts";
+import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "./model-runtime.ts";
 import { createCapabilityTools, type ServiceToolScope } from "./service-query-tool.ts";
 import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
@@ -47,7 +47,7 @@ export interface StartPiSessionOptions {
   serviceScopes?: ServiceToolScope[];
   workspaceTool?: ToolDefinition<any, any, any>;
   mcpConfigurations?: McpConfiguration[];
-  outputStore?: IssueOutputStore;
+  workFiles?: IssueWorkFileStore;
   systemPrompt: string;
   modelResponseIdleMs?: number;
   onEvent: (event: JsonAgentSessionEvent) => void;
@@ -155,8 +155,8 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
 }
 
 function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, settings: SettingsManager, model: AgentSession["model"]): ToolDefinition<any, any, any>[] {
-  const { context, deploymentConfig, workspaceRoot, outputStore, gitEnvironment, serviceScopes } = options;
-  const tools = createCapabilityTools(context, deploymentConfig, { outputStore, serviceScopes });
+  const { context, deploymentConfig, workspaceRoot, workFiles, gitEnvironment, serviceScopes } = options;
+  const tools = createCapabilityTools(context, deploymentConfig, { workFiles, serviceScopes });
   tools.unshift(...issueNativeTools({ writeRoot: workspaceRoot, gitAccess: options.gitAccess ?? (context.canModifyCode ? "write" : "read"), readRoots: [...(options.readRoots ?? []), ...(options.gitReadRoots ?? []), options.agentDirectory ?? getAgentDir()], networkDomains: options.runtime?.networkAllowedDomains ?? [] }, () => ({
     AI_AGENT: "pi", PI_CODING_AGENT: "true", GIT_OPTIONAL_LOCKS: "0",
     ISSUE_PILOT_IMAGE_AUTO_RESIZE: String(settings.getImageAutoResize()),
@@ -182,12 +182,16 @@ function assertSessionState(session: AgentSession, context: AgentSessionContext,
 }
 
 async function abortAndDispose(session: AgentSession): Promise<void> {
+  const failures: unknown[] = [];
   try {
     if (!session.isIdle) await session.abort();
-  } finally {
-    try { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
-    finally { session.dispose(); }
-  }
+  } catch (error) { failures.push(error); }
+  try { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
+  catch (error) { failures.push(error); }
+  try { session.dispose(); }
+  catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "pi_session_stop_failed");
 }
 
 export class PiSessionRuntime {
@@ -328,7 +332,10 @@ export class PiSessionRuntime {
         })(),
       };
     } catch (error) {
-      if (activeSession) await abortAndDispose(activeSession);
+      if (activeSession) {
+        try { await abortAndDispose(activeSession); }
+        catch (cleanupError) { throw new AggregateError([error, cleanupError], "pi_session_start_cleanup_failed"); }
+      }
       throw error;
     }
   }

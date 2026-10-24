@@ -6,11 +6,13 @@ import { createApiFixture, createIssue, createService } from "./fixture.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { issueRoot } from "../../src/workspace/state.ts";
 import { subjects, issues, issueAttachments } from "../../src/db/schema.ts";
 import { eq } from "drizzle-orm";
-import { IssueOutputStore } from "../../src/outputs/store.ts";
+import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 
 const text = (result: unknown): string => JSON.stringify(result);
 
@@ -24,9 +26,9 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const issue = await createIssue(f.app, "mcp-app", "test", "MCP inspection");
     f.engine.running.clear();
     const before = f.engine.enqueued.length;
-    const store = new IssueOutputStore(f.root, String(issue.id));
-    await store.write("result.csv", "id,value\n00123,complete\n");
-    await store.write("result.xlsx", "synthetic-private-workbook");
+    const store = new IssueWorkFileStore(f.root, String(issue.id));
+    await store.generate("result.csv", async append => { await append("id,value\n00123,complete\n"); });
+    await store.generate("result.xlsx", async append => { await append("synthetic-private-workbook"); });
     assert.equal((await f.app.inject({ method: "GET", url: `/api/issues/${issue.id}/files/download?path=result.xlsx` })).statusCode, 200);
     assert.equal(workbookDownloads, 1);
     workbookDownloads = 0;
@@ -44,6 +46,9 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.deepEqual(endpoint.tools, listed.tools);
     assert.doesNotMatch(endpointResponse.body, /authorization|accessKeySecret|credentialUpdate/);
     assert.equal(listed.tools.length, 11);
+    assert.equal(listed.tools.some(tool => tool.name === "output_read"), false);
+    assert.ok(listed.tools.some(tool => tool.name === "work_file_read"));
+    assert.equal((await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.csv" } })).isError, true);
     assert.ok(listed.tools.filter(tool => tool.name !== "issue_create" && tool.name !== "issue_message" && tool.name !== "dingtalk_import").every(tool => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint === false));
     const creation = listed.tools.find(tool => tool.name === "issue_create")!;
     assert.equal(creation.annotations?.readOnlyHint, false);
@@ -59,17 +64,17 @@ test("serves application reads over stateless Streamable HTTP without starting a
     const detail = await client.callTool({ name: "issue_get", arguments: { key: issue.id } });
     assert.ok(text(detail).includes("MCP inspection"));
     assert.equal(text(detail).includes(f.root), false);
-    const outputs = await client.callTool({ name: "work_files", arguments: { key: issue.id } });
-    assert.ok(text(outputs).includes("result.csv"));
-    const read = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.csv", offset: 1, limit: 1 } });
+    const files = await client.callTool({ name: "work_files", arguments: { key: issue.id } });
+    assert.ok(text(files).includes("result.csv"));
+    const read = await client.callTool({ name: "work_file_read", arguments: { key: issue.id, path: "result.csv", offset: 1, limit: 1 } });
     assert.ok(text(read).includes("00123,complete"));
-    const workbook = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "result.xlsx" } });
+    const workbook = await client.callTool({ name: "work_file_read", arguments: { key: issue.id, path: "result.xlsx" } });
     assert.equal(workbook.isError, undefined);
     const content = workbook.content as Array<{ type: string; text: string }>;
     assert.deepEqual(JSON.parse(content[0]!.text), { fileName: "result.xlsx", size: Buffer.byteLength("synthetic-private-workbook"), downloadPath: `/api/issues/${issue.id}/files/download?path=result.xlsx`, binary: true });
     assert.doesNotMatch(text(workbook), /synthetic-private-workbook/);
     assert.equal(workbookDownloads, 0);
-    const invalid = await client.callTool({ name: "output_read", arguments: { key: issue.id, fileName: "../issues.db" } });
+    const invalid = await client.callTool({ name: "work_file_read", arguments: { key: issue.id, path: "../issues.db" } });
     assert.equal(invalid.isError, true);
     const unknown = await client.callTool({ name: "issue_create", arguments: {} });
     assert.equal(unknown.isError, true);
@@ -89,6 +94,53 @@ test("serves application reads over stateless Streamable HTTP without starting a
     assert.equal(f.engine.enqueued.length, before);
     assert.equal((await f.app.inject({ method: "GET", url: "/mcp" })).statusCode, 405);
   } finally { await client.close(); await f.cleanup(); }
+});
+
+test("MCP reads listed nested work files while enforcing private-file and traversal checks", async () => {
+  const f = await createApiFixture();
+  const client = new Client({ name: "nested-file-fixture", version: "1" });
+  const outside = await mkdtemp(path.join(tmpdir(), "issue-pilot-mcp-nested-outside-"));
+  let detailReads = 0;
+  f.app.addHook("onRequest", async request => { if (/^\/api\/issues\/ISSUE-[0-9-]+$/.test(request.url)) detailReads++; });
+  try {
+    await createService(f.app, "Nested MCP", ["test"]);
+    const issue = await createIssue(f.app, "nested-mcp", "test", "Nested working files");
+    f.engine.running.clear();
+    const root = issueRoot(f.root, String(issue.id));
+    const directory = "reports/结果 #1";
+    const filePath = `${directory}/result.csv`;
+    await mkdir(path.join(root, directory), { recursive: true });
+    await writeFile(path.join(root, filePath), "id,value\n00123,nested\n");
+    await writeFile(path.join(root, directory, "result.xlsx"), "private workbook bytes");
+    await writeFile(path.join(root, ".session-private.jsonl"), "private session bytes");
+    await symlink(path.join(root, ".session-private.jsonl"), path.join(root, directory, "session-alias.csv"));
+    await mkdir(path.join(root, ".issue-git"));
+    await writeFile(path.join(root, ".issue-git", "private.csv"), "private Git bytes");
+    await writeFile(path.join(outside, "secret.csv"), "outside private bytes");
+    await symlink(outside, path.join(root, "escape"));
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`)) as Parameters<Client["connect"]>[0]);
+    detailReads = 0;
+    const listing = await client.callTool({ name: "work_files", arguments: { key: issue.id, path: directory } });
+    assert.equal(listing.isError, undefined);
+    assert.ok(text(listing).includes(filePath));
+    const result = await client.callTool({ name: "work_file_read", arguments: { key: issue.id, path: filePath, offset: 1, limit: 1 } });
+    assert.equal(result.isError, undefined, text(result));
+    const read = JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+    assert.deepEqual(read.items, ["00123,nested"]);
+    assert.equal(read.downloadPath, `/api/issues/${issue.id}/files/download?path=${encodeURIComponent(filePath)}`);
+    const binaryPath = `${directory}/result.xlsx`;
+    const binary = await client.callTool({ name: "work_file_read", arguments: { key: issue.id, path: binaryPath } });
+    assert.equal(binary.isError, undefined, text(binary));
+    assert.equal(JSON.parse((binary.content as Array<{ text: string }>)[0]!.text).binary, true);
+    assert.doesNotMatch(text(binary), /private workbook bytes/);
+    for (const fileName of ["../secret.csv", "reports/../secret.csv", `${directory}/session-alias.csv`, ".session-private.jsonl", ".issue-git/private.csv", "escape/secret.csv", `${directory}/missing.csv`]) {
+      const denied = await client.callTool({ name: "work_file_read", arguments: { key: issue.id, path: fileName } });
+      assert.equal(denied.isError, true, fileName);
+      assert.doesNotMatch(text(denied), /private session bytes|private Git bytes|outside private bytes/);
+    }
+    assert.equal(detailReads, 0);
+  } finally { await client.close(); await f.cleanup(); await rm(outside, { recursive: true, force: true }); }
 });
 
 test("MCP creates an Issue with text and binary attachments exceeding the former 1 MiB request limit", async () => {

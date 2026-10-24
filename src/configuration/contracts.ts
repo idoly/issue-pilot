@@ -1,12 +1,12 @@
 import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
 import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
 
-export const CAPABILITY_CREDENTIALS = {
-  dms: { fields: ["authorization"], required: true },
-  sls: { fields: ["accessKeyId", "accessKeySecret"], required: true },
+export const CAPABILITY_CREDENTIAL_FIELDS = {
+  dms: ["authorization"],
+  sls: ["accessKeyId", "accessKeySecret"],
 } as const;
 
-type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIALS)[Key]["fields"][number];
+type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIAL_FIELDS)[Key][number];
 export type CapabilityCredentialValues<Key extends CapabilityName> = Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
 export type CapabilityCredentialUpdate<Key extends CapabilityName> =
   | { mode: "preserve" }
@@ -36,9 +36,7 @@ export interface ConfigurationCatalog {
   services: ServiceCatalogItem[];
 }
 
-export type ServiceCapabilityConfiguration = ProjectedCapabilityConfiguration;
-
-interface ServiceDeployment extends ServiceCapabilityConfiguration {
+interface ServiceDeployment extends ProjectedCapabilityConfiguration {
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];
@@ -53,9 +51,8 @@ export interface ServiceConfiguration {
   repositories: Array<{ id: string; alias: string; url: string }>;
 }
 
-export interface DingtalkConnectionSettings { apiKey: string; url?: string }
 export interface DingtalkSourceSettings { mcp: string; url: string; assignee: string; intervalMinutes?: number; environment?: "dev" | "test" | "prod" }
-export interface DingtalkUserSettings { fields?: Partial<DingtalkColumns>; source?: DingtalkSourceSettings; personal?: DingtalkConnectionSettings; shared?: DingtalkConnectionSettings }
+export interface DingtalkUserSettings { fields?: Partial<DingtalkColumns>; source?: DingtalkSourceSettings }
 
 export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number; userSubjects?: string[]; mcpServiceNames?: string[] }
 

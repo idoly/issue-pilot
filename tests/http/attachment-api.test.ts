@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { openDatabase } from "../../src/db/client.ts";
-import { issueAttachmentRoot } from "../../src/workspace/state.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createService, issuePayload, json } from "./fixture.ts";
 
 function issueMultipart(boundary: string, issue: Record<string, unknown>, fileName: string, content: string): Buffer {
@@ -34,7 +34,7 @@ for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt"]) te
     const issue = await json(created);
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(response => response.json<{ attachments: Array<{ id: string; fileName: string }> }>());
     assert.equal(detail.attachments[0]!.fileName, fileName);
-    const root = issueAttachmentRoot(fixture.root, String(issue.id)), files = await readdir(root);
+    const root = issueRoot(fixture.root, String(issue.id)), files = await readdir(root);
     assert.equal(files.length, 1); assert.ok(Buffer.byteLength(files[0]!) <= 255); assert.equal(path.extname(files[0]!), ".txt"); assert.ok(!files[0]!.includes("\ufffd"));
     const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${detail.attachments[0]!.id}` });
     assert.equal(download.statusCode, 200, download.body); assert.equal(download.body, content);
@@ -65,7 +65,13 @@ test("creates initial attachments atomically and rolls back the claimed Issue ro
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string; fileName: string; sha256: string }> };
     assert.deepEqual(detail.attachments.map(({ fileName }) => fileName), ["initial.txt"]);
     assert.equal(detail.attachments[0]!.sha256, createHash("sha256").update("initial evidence").digest("hex"));
-    const files = await readdir(issueAttachmentRoot(fixture.root, String(issue.id)));
+    assert.equal("workingFileName" in detail.attachments[0]!, false);
+    const saved = openDatabase(fixture.databaseFile);
+    try {
+      const result = await saved.client.execute("SELECT working_file_name FROM issue_attachments");
+      assert.deepEqual(result.rows.map(row => row.working_file_name), [null]);
+    } finally { await saved.close(); }
+    const files = await readdir(issueRoot(fixture.root, String(issue.id)));
     assert.equal(files.length, 1);
   } finally {
     await fixture.cleanup();
@@ -106,7 +112,7 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
     const after = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { title: string; attachments: Array<{ fileName: string }> };
     assert.equal(after.title, "Updated");
     assert.deepEqual(after.attachments.map(({ fileName }) => fileName), ["replacement.txt"]);
-    const attachmentRoot = issueAttachmentRoot(fixture.root, String(issue.id));
+    const attachmentRoot = issueRoot(fixture.root, String(issue.id));
     const files = await readdir(attachmentRoot);
     assert.equal(files.length, 1);
     assert.equal(await readFile(path.join(attachmentRoot, files[0]!), "utf8"), "replacement evidence");
@@ -131,7 +137,7 @@ test("serves only verified attachment files and exposes no independent write rou
     assert.equal(download.headers["cache-control"], "private, no-store");
     assert.equal((await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/missing` })).statusCode, 404);
 
-    const root = issueAttachmentRoot(fixture.root, String(issue.id));
+    const root = issueRoot(fixture.root, String(issue.id));
     const file = path.join(root, (await readdir(root))[0]!);
     await chmod(file, 0o600);
     await writeFile(file, "evidencf", "utf8");

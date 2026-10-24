@@ -1,0 +1,186 @@
+diff --git a/node_modules/zod/v3/types.js b/node_modules/zod/v3/types.js
+--- a/node_modules/zod/v3/types.js
++++ b/node_modules/zod/v3/types.js
+@@ -1769,6 +1769,7 @@
+                     exact: true,
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return INVALID;
+                 status.dirty();
+             }
+         }
+@@ -1795,7 +1796,7 @@
+                     exact: false,
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         if (ctx.common.async) {
+@@ -2814,7 +2815,7 @@
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/node_modules/zod/v3/types.cjs b/node_modules/zod/v3/types.cjs
+--- a/node_modules/zod/v3/types.cjs
++++ b/node_modules/zod/v3/types.cjs
+@@ -1790,6 +1790,7 @@
+                     exact: true,
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return parseUtil_js_1.INVALID;
+                 status.dirty();
+             }
+         }
+@@ -1816,7 +1817,7 @@
+                     exact: false,
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
++                return parseUtil_js_1.INVALID;
+             }
+         }
+         if (ctx.common.async) {
+@@ -2843,7 +2844,7 @@
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return parseUtil_js_1.INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/node_modules/zod/v4/core/schemas.js b/node_modules/zod/v4/core/schemas.js
+--- a/node_modules/zod/v4/core/schemas.js
++++ b/node_modules/zod/v4/core/schemas.js
+@@ -613,6 +613,36 @@
+         return payload;
+     };
+ });
++// Backport the leading upper-bound gate from upstream a0ebf970; retain this version's run/check contract.
++function capCollectionSize(inst, size) {
++    const caps = [];
++    for (const check of inst._zod.def.checks ?? []) {
++        const def = check._zod.def;
++        if (!/_(length|size)$|_equals$/.test(def.check)) break;
++        const maximum = def.maximum ?? def.length ?? def.size;
++        if (maximum >= 0) caps.push([maximum, check]);
++    }
++    if (!caps.length) return;
++    // Classic and Mini initialize the root type again; install after their final initializer.
++    inst._zod.deferred ??= [];
++    inst._zod.deferred.push(() => {
++        const run = inst._zod.run;
++        inst._zod.run = (payload, ctx) => {
++            const count = size(payload.value);
++            if (!ctx?.skipChecks && ctx?.direction !== "backward") {
++                for (const [maximum, check] of caps) {
++                    if (count > maximum && (!check._zod.def.when || check._zod.def.when(payload))) {
++                        const start = payload.issues.length;
++                        check._zod.check(payload);
++                        if (payload.issues.length > start) payload.issues[start].continue = false;
++                        return payload;
++                    }
++                }
++            }
++            return run(payload, ctx);
++        };
++    });
++}
+ function handleArrayResult(result, final, index) {
+     if (result.issues.length) {
+         final.issues.push(...util.prefixIssues(index, result.issues));
+@@ -652,6 +682,7 @@
+         }
+         return payload; //handleArrayResultsAsync(parseResults, final);
+     };
++    capCollectionSize(inst, input => Array.isArray(input) ? input.length : -1);
+ });
+ function handleObjectResult(result, final, key) {
+     // if(isOptional)
+@@ -1273,6 +1304,7 @@
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capCollectionSize(inst, input => input instanceof Map ? input.size : -1);
+ });
+ function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
+     if (keyResult.issues.length) {
+@@ -1333,6 +1365,7 @@
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capCollectionSize(inst, input => input instanceof Set ? input.size : -1);
+ });
+ function handleSetResult(result, final) {
+     if (result.issues.length) {
+diff --git a/node_modules/zod/v4/core/schemas.cjs b/node_modules/zod/v4/core/schemas.cjs
+--- a/node_modules/zod/v4/core/schemas.cjs
++++ b/node_modules/zod/v4/core/schemas.cjs
+@@ -644,6 +644,36 @@
+         return payload;
+     };
+ });
++// Backport the leading upper-bound gate from upstream a0ebf970; retain this version's run/check contract.
++function capCollectionSize(inst, size) {
++    const caps = [];
++    for (const check of inst._zod.def.checks ?? []) {
++        const def = check._zod.def;
++        if (!/_(length|size)$|_equals$/.test(def.check)) break;
++        const maximum = def.maximum ?? def.length ?? def.size;
++        if (maximum >= 0) caps.push([maximum, check]);
++    }
++    if (!caps.length) return;
++    // Classic and Mini initialize the root type again; install after their final initializer.
++    inst._zod.deferred ??= [];
++    inst._zod.deferred.push(() => {
++        const run = inst._zod.run;
++        inst._zod.run = (payload, ctx) => {
++            const count = size(payload.value);
++            if (!ctx?.skipChecks && ctx?.direction !== "backward") {
++                for (const [maximum, check] of caps) {
++                    if (count > maximum && (!check._zod.def.when || check._zod.def.when(payload))) {
++                        const start = payload.issues.length;
++                        check._zod.check(payload);
++                        if (payload.issues.length > start) payload.issues[start].continue = false;
++                        return payload;
++                    }
++                }
++            }
++            return run(payload, ctx);
++        };
++    });
++}
+ function handleArrayResult(result, final, index) {
+     if (result.issues.length) {
+         final.issues.push(...util.prefixIssues(index, result.issues));
+@@ -683,6 +713,7 @@
+         }
+         return payload; //handleArrayResultsAsync(parseResults, final);
+     };
++    capCollectionSize(inst, input => Array.isArray(input) ? input.length : -1);
+ });
+ function handleObjectResult(result, final, key) {
+     // if(isOptional)
+@@ -1304,6 +1335,7 @@
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capCollectionSize(inst, input => input instanceof Map ? input.size : -1);
+ });
+ function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
+     if (keyResult.issues.length) {
+@@ -1364,6 +1396,7 @@
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capCollectionSize(inst, input => input instanceof Set ? input.size : -1);
+ });
+ function handleSetResult(result, final) {
+     if (result.issues.length) {

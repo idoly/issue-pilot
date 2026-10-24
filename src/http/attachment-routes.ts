@@ -3,7 +3,7 @@ import type { ReadStream } from "node:fs";
 import { and, eq } from "drizzle-orm";
 
 import { issueAttachments } from "../db/schema.ts";
-import { issueAttachmentRoot } from "../workspace/state.ts";
+import { issueRoot } from "../workspace/state.ts";
 import { openVerifiedAttachmentStream } from "./attachment-store.ts";
 import { ApiError } from "./input.ts";
 import { requireIssue, type ApiRouteContext } from "./route-context.ts";
@@ -27,7 +27,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     let stream: ReadStream | undefined;
     try {
       stream = await openVerifiedAttachmentStream(
-        issueAttachmentRoot(stateRoot, issue.key), attachment.objectKey,
+        issueRoot(stateRoot, issue.key), attachment.objectKey,
         attachment.size, attachment.sha256, controller.signal,
       );
       stream.once("close", cleanup);

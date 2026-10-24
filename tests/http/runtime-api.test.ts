@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ServerResponse } from "node:http";
+import { ServerResponse } from "node:http";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 
@@ -13,7 +13,7 @@ import { AgentEventBus, type RunEvent } from "../../src/agent/events.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { PiSessionRuntime, createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
-import { issueSessionRoot, issueWorkDirectory } from "../../src/workspace/state.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 import type { AgentFooterStats, AgentRuntimeConfiguration } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { createApiFixture, createIssue, createService, json, modelCatalog, TestAgentController, testAgent } from "./fixture.ts";
@@ -26,7 +26,7 @@ for (const withSession of [false, true]) test(`reports configured automatic comp
     const issueId = fixture.engine.enqueued[0]!, key = String(issue.id);
     fixture.engine.running.clear();
     if (withSession) {
-      const work = issueWorkDirectory(fixture.root, key), directory = issueSessionRoot(fixture.root, key);
+      const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
       await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
       const manager = await createPrivateSessionManager(work, directory);
       manager.appendMessage(fauxAssistantMessage("Synthetic completed answer."));
@@ -64,7 +64,7 @@ test("counts usage in the snapshot once and deduplicates live notifications by P
     await createService(fixture.app, "Usage");
     const issue = await createIssue(fixture.app, "usage"), issueId = fixture.engine.enqueued[0]!, key = String(issue.id);
     fixture.engine.running.clear();
-    const work = issueWorkDirectory(fixture.root, key), directory = issueSessionRoot(fixture.root, key);
+    const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
     await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
     const manager = await createPrivateSessionManager(work, directory);
     manager.appendMessage(fauxAssistantMessage("Synthetic completed answer."));
@@ -115,7 +115,7 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     await createService(fixture.app, "Snapshot race");
     const issue = await createIssue(fixture.app, "snapshot-race"), issueId = fixture.engine.enqueued[0]!, key = String(issue.id);
     fixture.engine.running.clear();
-    const work = issueWorkDirectory(fixture.root, key), directory = issueSessionRoot(fixture.root, key);
+    const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
     await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
     await writeFile(path.join(work, "evidence.txt"), "Synthetic tool result.");
     const manager = await createPrivateSessionManager(work, directory);
@@ -298,6 +298,135 @@ test("replays current non-durable Agent output before the stream snapshot", asyn
     assert.equal(payload.match(/id: partial-output\n/g)?.length, 1);
     assert.match(payload, /Still working/);
   } finally {
+    await fixture.cleanup();
+  }
+});
+
+async function readStreamUntil(reader: ReadableStreamDefaultReader<Uint8Array>, marker: string): Promise<string> {
+  const decoder = new TextDecoder();
+  let payload = "";
+  while (!payload.includes(marker)) {
+    const { done, value } = await reader.read();
+    assert.equal(done, false, "Agent stream ended before the expected marker");
+    payload += decoder.decode(value, { stream: true });
+  }
+  return payload;
+}
+
+test("keeps durable entry deduplication and recent transient duplicates after the live window rolls over", { timeout: 10_000 }, async (context) => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    await createService(fixture.app, "StreamWindow");
+    const issue = await createIssue(fixture.app, "streamwindow");
+    const issueId = fixture.engine.enqueued[0]!;
+    const work = issueRoot(fixture.root, String(issue.id));
+    await mkdir(work, { recursive: true });
+    const manager = await createPrivateSessionManager(work, work);
+    manager.appendMessage(fauxAssistantMessage("Historical durable answer."));
+    const historical = manager.getEntries().at(-1)!;
+    const database = openDatabase(fixture.databaseFile);
+    try { await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work }); }
+    finally { await database.close(); }
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
+    reader = response.body!.getReader();
+    let payload = await readStreamUntil(reader, "event: snapshot_ready\n");
+    const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: "2026-10-23T00:00:00.000Z", event });
+    manager.appendMessage(fauxAssistantMessage("New durable answer."));
+    const current = manager.getEntries().at(-1)!;
+    publish("new-durable", { type: "entry_appended", entry: current });
+    const update: RunEvent["event"] = { type: "message_update", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" } };
+    const count = issuePilotConfig.http.sseRecentEventIds * 2 + 17;
+    for (let index = 0; index < count; index++) publish(`live-${index}`, update);
+    publish(`live-${count - 1}`, update);
+    publish("historical-duplicate", { type: "entry_appended", entry: historical });
+    publish("current-duplicate", { type: "entry_appended", entry: current });
+    publish("window-finished", { type: "issue_status", status: "complete" });
+    payload += await readStreamUntil(reader, "id: window-finished\n");
+    assert.equal(payload.match(/id: new-durable\n/g)?.length, 1);
+    assert.doesNotMatch(payload, /id: historical-duplicate\n|id: current-duplicate\n/);
+    assert.equal(payload.split(`id: live-${count - 1}\n`).length - 1, 1);
+    assert.equal(payload.match(/id: live-\d+\n/g)?.length, count);
+  } finally {
+    await reader?.cancel();
+    reader?.releaseLock();
+    await fixture.cleanup();
+  }
+});
+
+test("deduplicates the entire buffered replay before applying the smaller live ID window", { timeout: 10_000 }, async (context) => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    await createService(fixture.app, "ReplayWindow");
+    const issue = await createIssue(fixture.app, "replaywindow");
+    const issueId = fixture.engine.enqueued[0]!;
+    const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: "2026-10-23T00:00:00.000Z", event });
+    const update: RunEvent["event"] = { type: "message_update", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "cached" } };
+    publish("replay-start", { type: "agent_start" });
+    publish("replay-edge", update);
+    let injected = false;
+    const write = ServerResponse.prototype.write;
+    const count = issuePilotConfig.http.sseRecentEventIds + 17;
+    context.mock.method(ServerResponse.prototype, "write", function (this: ServerResponse, chunk: unknown, ...args: unknown[]) {
+      const accepted = Reflect.apply(write, this, [chunk, ...args]);
+      if (!injected && typeof chunk === "string" && chunk.startsWith("id: replay-edge\n")) {
+        injected = true;
+        for (let index = 0; index < count; index++) publish(`buffer-${index}`, { ...update, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" } });
+        publish("replay-edge", update);
+      }
+      return accepted;
+    });
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
+    reader = response.body!.getReader();
+    let payload = await readStreamUntil(reader, "event: snapshot_ready\n");
+    publish("replay-window-finished", { type: "issue_status", status: "complete" });
+    payload += await readStreamUntil(reader, "id: replay-window-finished\n");
+    assert.equal(injected, true);
+    assert.equal(payload.match(/id: replay-edge\n/g)?.length, 1);
+    assert.equal(payload.match(/id: buffer-\d+\n/g)?.length, count);
+  } finally {
+    await reader?.cancel();
+    reader?.releaseLock();
+    context.mock.restoreAll();
+    await fixture.cleanup();
+  }
+});
+
+test("closes a live Agent stream when an event cannot be serialized and allows a fresh connection", { timeout: 5_000 }, async (context) => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await createService(fixture.app, "BrokenStream");
+    const issue = await createIssue(fixture.app, "brokenstream");
+    const issueId = fixture.engine.enqueued[0]!;
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
+    reader = response.body!.getReader();
+    await readStreamUntil(reader, "event: snapshot_ready\n");
+    const details: Record<string, unknown> = {};
+    details.self = details;
+    const closed = reader.read().then(result => result.done === true, () => true);
+    events.publish({ id: "circular-result", issueId, createdAt: "2026-10-23T00:00:00.000Z", event: { type: "tool_execution_end", toolCallId: "circular", toolName: "fixture", result: { content: [{ type: "text", text: "Synthetic result" }], details }, isError: false } });
+    const disconnected = await Promise.race([closed, new Promise<false>(resolve => { guard = setTimeout(() => resolve(false), 500); })]);
+    clearTimeout(guard);
+    assert.equal(disconnected, true, "a failed subscription must not leave a heartbeat-only connection open");
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+    reader = undefined;
+    const next = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
+    reader = next.body!.getReader();
+    assert.match(await readStreamUntil(reader, "event: snapshot_ready\n"), /event: snapshot_ready/);
+  } finally {
+    clearTimeout(guard);
+    await reader?.cancel().catch(() => undefined);
+    reader?.releaseLock();
     await fixture.cleanup();
   }
 });

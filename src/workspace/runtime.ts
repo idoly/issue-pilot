@@ -7,7 +7,7 @@ import type { Database } from "../db/client.ts";
 import { issueWorkspaces } from "../db/schema.ts";
 import { errorMessage } from "../domain/contracts.ts";
 import { repositoryStorePath } from "./git.ts";
-import { issueRuntimeRoot, issueWorkspaceRoot, sharedCheckoutsRoot } from "./state.ts";
+import { issueRoot, sharedCheckoutsRoot } from "./state.ts";
 
 export interface IssueRuntimeRepository { name: string; repositoryPath: string }
 export interface RelatedIssueRuntime { key: string; metadata: Record<string, unknown>; conversationPath?: string; workDirectory: string }
@@ -22,7 +22,7 @@ export async function prepareIssueRuntimeBatch<T extends { id: string; key: stri
 }
 function managedRepository(stateRoot: string, issueKey: string, repositoryPath: string, access: IssueRuntimeAccess): string {
   const resolved = path.resolve(repositoryPath);
-  if (access === "write") { if (path.dirname(resolved) !== issueWorkspaceRoot(stateRoot, issueKey)) throw new Error("repository_workspace_outside_issue_root"); return resolved; }
+  if (access === "write") { if (path.dirname(resolved) !== issueRoot(stateRoot, issueKey)) throw new Error("repository_workspace_outside_issue_root"); return resolved; }
   const relative = path.relative(sharedCheckoutsRoot(stateRoot), resolved);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("repository_checkout_outside_shared_root");
   return resolved;
@@ -53,7 +53,7 @@ async function loadRuntime(root: string): Promise<RuntimeEntry[]> {
 }
 /** Released code may retain only the application's recorded links to this repository's immutable cache. */
 export async function assertReleasedIssueRuntime(stateRoot: string, issueKey: string, repositories: Array<{ name: string; url: string }>): Promise<void> {
-  const root = issueRuntimeRoot(stateRoot, issueKey), metadata = await absent(root);
+  const root = issueRoot(stateRoot, issueKey), metadata = await absent(root);
   if (!metadata) return;
   if (!metadata.isDirectory() || await realpath(root) !== root) throw new Error("workspace_path_already_exists");
   const entries = await loadRuntime(root);
@@ -67,7 +67,7 @@ export async function assertReleasedIssueRuntime(stateRoot: string, issueKey: st
 }
 /** Generated links and metadata are flat files. Only entries owned by the previous manifest may be replaced. */
 export async function prepareIssueRuntime(stateRoot: string, issueKey: string, repositories: IssueRuntimeRepository[], access: IssueRuntimeAccess, relatedIssues: RelatedIssueRuntime[] = []): Promise<string> {
-  const root = issueRuntimeRoot(stateRoot, issueKey);
+  const root = issueRoot(stateRoot, issueKey);
   await mkdir(root, { recursive: true, mode: 0o700 });
   if (!(await lstat(root)).isDirectory() || await realpath(root) !== root) throw new Error("invalid_issue_runtime_root");
   await chmod(root, 0o700);
@@ -84,10 +84,10 @@ export async function prepareIssueRuntime(stateRoot: string, issueKey: string, r
     add(`.related-${key}.json`, "file", JSON.stringify(related.metadata, null, 2) + "\n");
     if (related.conversationPath) {
       const conversation = path.resolve(related.conversationPath);
-      if (path.dirname(conversation) !== issueWorkspaceRoot(stateRoot, related.key)) throw new Error("invalid_related_issue_session");
+      if (path.dirname(conversation) !== issueRoot(stateRoot, related.key)) throw new Error("invalid_related_issue_session");
       add(`.related-${key}.jsonl`, "link", conversation);
     }
-    const target = issueWorkspaceRoot(stateRoot, related.key);
+    const target = issueRoot(stateRoot, related.key);
     if (path.resolve(related.workDirectory) !== target) throw new Error("invalid_related_issue_directory");
     add(`.related-${key}`, "link", target);
   }

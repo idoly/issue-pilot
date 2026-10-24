@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import type { Model } from "@earendil-works/pi-ai";
-import { ModelRuntime, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { AgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
 import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
 import { hostMcpPid } from "../helpers/mcp-process.ts";
-import { IssueOutputStore } from "../../src/outputs/store.ts";
+import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import type { PiModelRuntime } from "../../src/agent/model-runtime.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
@@ -166,7 +166,7 @@ test("an export writer does not register a separate publication tool", async () 
       context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot: root,
-      outputStore: new IssueOutputStore(root, "ISSUE-20260929-001"),
+      workFiles: new IssueWorkFileStore(root, "ISSUE-20260929-001"),
       systemPrompt: "",
       onEvent: () => undefined,
     });
@@ -177,7 +177,7 @@ test("an export writer does not register a separate publication tool", async () 
   }
 });
 
-test("disposes an SDK session and stdio process even when abort fails during stop", async () => {
+for (const cleanupFails of [false, true]) test(`disposes an SDK session and stdio process when stop fails (cleanup=${cleanupFails})`, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
   const manager = await createPrivateSessionManager(root, root);
   const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
@@ -185,6 +185,7 @@ test("disposes an SDK session and stdio process even when abort fails during sto
     context: context({ writable: false }),
     deploymentConfig: {},
     workspaceRoot: root,
+    agentDirectory: root,
     mcpConfigurations: localMcp(root),
     systemPrompt: "",
     onEvent: () => undefined,
@@ -195,15 +196,62 @@ test("disposes an SDK session and stdio process even when abort fails during sto
   let disposed = false;
   const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
   const dispose = session.dispose.bind(session);
+  const abortError = new Error("abort_failed");
+  const shutdownError = new Error("shutdown_failed");
+  const disposeError = new Error("dispose_failed");
   Object.defineProperty(session, "isIdle", { configurable: true, get: () => false });
-  session.abort = async () => { throw new Error("abort_failed"); };
-  session.dispose = () => { disposed = true; dispose(); };
+  session.abort = async () => { throw abortError; };
+  if (cleanupFails) {
+    const emit = session.extensionRunner.emit.bind(session.extensionRunner);
+    session.extensionRunner.emit = async event => {
+      const result = await emit(event);
+      if (event.type === "session_shutdown") throw shutdownError;
+      return result;
+    };
+  }
+  session.dispose = () => { disposed = true; dispose(); if (cleanupFails) throw disposeError; };
   try {
-    await assert.rejects(managed.stop(), /abort_failed/);
+    await assert.rejects(managed.stop(), error => {
+      if (cleanupFails) {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.message, "pi_session_stop_failed");
+        assert.deepEqual(error.errors, [abortError, shutdownError, disposeError]);
+      } else assert.equal(error, abortError);
+      return true;
+    });
     assert.equal(disposed, true);
     assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
     await managed.stop();
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preserves startup and disposal failures while releasing the SDK session", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-start-cleanup-"));
+  const startupError = new Error("fixture_bind_failed");
+  const disposalError = new Error("fixture_disposal_failed");
+  let disposed = false;
+  t.mock.method(AgentSession.prototype, "bindExtensions", async function (this: AgentSession) {
+    const dispose = this.dispose.bind(this);
+    this.dispose = () => { dispose(); disposed = true; throw disposalError; };
+    throw startupError;
+  });
+  try {
+    await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+      manager: await createPrivateSessionManager(root, root),
+      context: context({ writable: false }),
+      deploymentConfig: {}, workspaceRoot: root, agentDirectory: root,
+      systemPrompt: "", onEvent: () => undefined,
+    }), error => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.message, "pi_session_start_cleanup_failed");
+      assert.deepEqual(error.errors, [startupError, disposalError]);
+      return true;
+    });
+    assert.equal(disposed, true);
+  } finally {
+    t.mock.restoreAll();
     await rm(root, { recursive: true, force: true });
   }
 });

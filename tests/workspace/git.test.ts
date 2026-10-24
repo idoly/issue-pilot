@@ -28,6 +28,53 @@ test("uses readable repository names and stable suffixes for basename collisions
   assert.equal(names.get(urls[2]!), "srm-admin-front");
 });
 
+test("worktree removal preserves ignored files until they are explicitly removed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-ignored-worktree-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, ".gitignore"), "local-report.txt\nscratch/\n");
+    await git(["-C", source, "add", ".gitignore"]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const prepared = await manager.prepare({ issueKey: "ISSUE-20261024-901", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    assert.ok(prepared.workingBranch);
+    const branch = prepared.workingBranch;
+    await writeFile(join(prepared.workspacePath, "local-report.txt"), "preserve ignored report");
+    await mkdir(join(prepared.workspacePath, "scratch"));
+    await writeFile(join(prepared.workspacePath, "scratch", "checkpoint.json"), '{"completed":42}');
+    assert.equal(await git(["-C", prepared.workspacePath, "status", "--porcelain"]), "");
+    await assert.rejects(manager.remove(remote, prepared.workspacePath, branch), /workspace_has_changes/);
+    assert.equal(await readFile(join(prepared.workspacePath, "local-report.txt"), "utf8"), "preserve ignored report");
+    assert.equal(await readFile(join(prepared.workspacePath, "scratch", "checkpoint.json"), "utf8"), '{"completed":42}');
+    await rm(join(prepared.workspacePath, "local-report.txt"));
+    await rm(join(prepared.workspacePath, "scratch"), { recursive: true });
+    await manager.remove(remote, prepared.workspacePath, branch);
+    await assert.rejects(access(prepared.workspacePath), { code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("reports an invalid Git pointer as a stable reason while preserving the checkout", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-pointer-inspection-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, "evidence.txt"), "preserve checkout");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const prepared = await manager.prepare({ issueKey: "ISSUE-20261024-971", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    assert.ok(prepared.workingBranch);
+    await writeFile(join(prepared.workspacePath, ".git"), `gitdir: ${join(root, "missing-metadata")}\n`);
+    for (const operation of [() => manager.assertClean(remote, prepared.workspacePath, prepared.workingBranch!), () => manager.remove(remote, prepared.workspacePath, prepared.workingBranch!)]) {
+      await assert.rejects(operation(), error => error instanceof Error && error.message === "workspace_git_binding_invalid" && error.cause instanceof Error);
+    }
+    assert.equal(await readFile(join(prepared.workspacePath, "evidence.txt"), "utf8"), "preserve checkout");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("preserves persisted issue repository workspace names", () => {
   const active = issueRepositoryWorkspaceNames([
     { url: "https://example.test/team/orders.git", localPath: "/state/workspaces/issue-20260805-001/orders", workspaceName: null },

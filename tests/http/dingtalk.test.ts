@@ -159,15 +159,19 @@ test("DingTalk reauthorizes work mode after the remote read", async () => {
   } finally { release?.(); await f.cleanup(); }
 });
 
-test("old table source defaults are omitted and personal connection failure never falls back", async () => {
+test("imports use the configured global DingTalk connection without personal credential overrides", async () => {
   const f = await fixture();
   try {
     await writeFile(path.join(f.root, "user.yaml"), stringify({ version: 2, shared: { dingtalk: { apiKey: "fixture-shared" } }, users: { [f.user.subject]: { dingtalk: { apiKey: "fixture-personal", source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table", assignee: "Ignored" } } } } }), { mode: 0o600 });
     const source = await f.app.inject({ method: "GET", url: "/api/dingtalk/source" });
-    assert.equal(source.json().url, ""); assert.equal(source.json().connection.kind, "personal"); assert.doesNotMatch(source.body, /fixture-personal|fixture-shared/);
+    assert.equal(source.json().url, ""); assert.equal("kind" in source.json().connection, false); assert.doesNotMatch(source.body, /fixture-personal|fixture-shared/);
     f.state.failConnection = true;
     const response = await f.submit(); assert.equal(response.json().error, "dingtalk_connection_failed"); assert.equal(f.state.configurations.length, 1);
-    assert.equal(new URL(f.state.configurations[0]!.url).searchParams.get("key"), "fixture-personal");
+    assert.equal(new URL(f.state.configurations[0]!.url).searchParams.get("key"), "fixture-shared");
+    assert.equal(f.state.configurations[0]!.authorization, "fixture-shared-header");
+    f.state.failConnection = false;
+    assert.equal((await f.submit()).json().status, "created");
+    assert.equal(new URL(f.state.configurations[1]!.url).searchParams.get("key"), "fixture-shared");
   } finally { await f.cleanup(); }
 });
 

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { downloadDingtalkAttachments } from "../../src/http/dingtalk-attachments.ts";
 import { removePendingAttachments } from "../../src/http/attachment-store.ts";
 
@@ -18,6 +20,33 @@ test("rejects untrusted download targets before network access", async () => {
     await assert.rejects(downloadDingtalkAttachments([{ ...file, url }], new AbortController().signal, async () => { assert.fail("must not fetch"); }), /dingtalk_attachment_host_not_allowed/);
   }
 });
+test("releases the response reader when the download stream fails", async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controller.error(new Error("fixture-private-download-details")); },
+  });
+  await assert.rejects(downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response(stream)), { message: "dingtalk_attachment_download_failed" });
+  assert.equal(stream.locked, false);
+});
+
+test("rejects cancellation after a response arrives and removes completed staging", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled after response");
+  const stagingRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-cancel-"));
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = stagingRoot;
+  try {
+    await assert.rejects(downloadDingtalkAttachments([file], controller.signal, async () => {
+      queueMicrotask(() => { controller.abort(reason); });
+      return new Response("data");
+    }), error => error === reason);
+    assert.deepEqual(await readdir(stagingRoot), []);
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+    await rm(stagingRoot, { recursive: true, force: true });
+  }
+});
+
 test("rejects truncated attachments and preserves cancellation", async () => {
   await assert.rejects(downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response("x")), /dingtalk_attachment_size_changed/);
   const controller = new AbortController(), reason = new Error("cancelled by caller"); controller.abort(reason);

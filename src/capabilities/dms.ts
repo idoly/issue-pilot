@@ -6,7 +6,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { capabilityTextResult } from "./contracts.ts";
 import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
-import { outputFileName, type IssueOutputStore } from "../outputs/store.ts";
+import { workFileName, type IssueWorkFileStore } from "../workspace/work-files.ts";
 import { validateReadOnlySql } from "./sql.ts";
 
 const limits = issuePilotConfig.limits.capability.dms;
@@ -48,7 +48,7 @@ async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, signal: 
     try { await close(); }
     catch (cleanupError) {
       signal.throwIfAborted();
-      // An export may have already awaited this same close failure before publication.
+      // An export may have already awaited this same close failure before replacing the working file.
       if (!failure || failure.error === cleanupError) throw cleanupError;
       const primary = failure.error;
       throw new AggregateError([primary, cleanupError], primary instanceof Error ? primary.message : "dms_mcp_operation_cleanup_failed");
@@ -76,7 +76,7 @@ class DmsHttpError extends Error {
   }
 }
 
-type DmsPhase = "connect" | "discovery" | "execute" | "publish" | "close";
+type DmsPhase = "connect" | "discovery" | "execute" | "export" | "close";
 export interface DmsDiagnostics {
   phase: DmsPhase;
   elapsedMs: number;
@@ -91,7 +91,7 @@ export class DmsOperationError extends Error {
     // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
     const code = cause instanceof Error ? cause.message : "";
     const safeCode = /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed)$/.test(code)
-      || ["invalid_dms_mcp_target", "invalid_output_file_name", "insecure_issue_output_root", "insecure_issue_output_file"].includes(code);
+      || code === "invalid_dms_mcp_target";
     super(safeCode ? code : "dms_mcp_operation_failed", { cause });
     this.diagnostics = diagnostics;
   }
@@ -101,7 +101,8 @@ function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (fa
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const target = new URL(input instanceof Request ? input.url : input.toString());
     if (target.protocol !== "https:" || target.origin !== origin) throw new Error("invalid_dms_mcp_target");
-    const requestSignal = init?.signal ? AbortSignal.any([init.signal, signal]) : signal;
+    const callerSignal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
+    const requestSignal = callerSignal ? AbortSignal.any([callerSignal, signal]) : signal;
     const response = await fetch(input, { ...init, redirect: "error", signal: requestSignal });
     if (response.status >= 400 && response.status <= 599) {
       const failure = { status: response.status, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers.get("retry-after")) : undefined };
@@ -286,12 +287,12 @@ export async function queryDms(
   configured: CapabilityConfig<"dms">,
   signal?: AbortSignal,
   connect: ConnectDmsMcp = connectDmsMcp,
-  outputStore?: IssueOutputStore,
+  workFiles?: IssueWorkFileStore,
 ) {
-  if (input.output) {
-    if (!outputStore) throw new Error("issue_output_not_available");
-    outputFileName(input.output.fileName);
-    if (!/\.json$/i.test(input.output.fileName)) throw new Error("dms_output_json_required");
+  if (input.export) {
+    if (!workFiles) throw new Error("issue_work_files_not_available");
+    workFileName(input.export.fileName);
+    if (!/\.json$/i.test(input.export.fileName)) throw new Error("dms_export_json_required");
   }
   const database = configured.databases.find(({ schemaName }) => schemaName === input.schema);
   if (!database) throw new Error("dms_database_not_authorized");
@@ -331,9 +332,9 @@ export async function queryDms(
         return response;
       });
       const text = JSON.stringify({ tool: tool.name, result }, null, 2);
-      if (input.output) {
-        const output = await phase("publish", () => outputStore!.generate(input.output!.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal));
-        return capabilityTextResult(JSON.stringify({ tool: tool.name, output: { fileName: output.fileName, size: output.size, format: "dms-mcp-json", downloadPath: outputStore!.downloadPath(output.fileName) } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: output.fileName });
+      if (input.export) {
+        const exported = await phase("export", () => workFiles!.generate(input.export!.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal));
+        return capabilityTextResult(JSON.stringify({ tool: tool.name, export: { fileName: exported.fileName, size: exported.size, format: "dms-mcp-json", downloadPath: workFiles!.downloadPath(exported.fileName) } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: exported.fileName });
       }
       return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
     });

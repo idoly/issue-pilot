@@ -13,7 +13,7 @@ import { environments, issueRepositories, issues, issueWorkspaces, serviceDeploy
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { repositoryStorePath } from "../../src/workspace/git.ts";
-import { issueWorkspaceRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 test("browses only registered Issue repository content", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-source-browser-"));
@@ -27,7 +27,7 @@ test("browses only registered Issue repository content", async () => {
     const [issue] = await database.db.insert(issues).values({
       key: "ISSUE-20260815-002", title: "Browse source", type: "defect_fix", serviceId: service!.id, environmentId: environment.id, reporterSubject: "source-tester",
     }).returning();
-    const repository = path.join(issueWorkspaceRoot(root, issue!.key), "application");
+    const repository = path.join(issueRoot(root, issue!.key), "application");
     await mkdir(path.join(repository, "src"), { recursive: true, mode: 0o700 });
     await writeFile(path.join(repository, "README.md"), "# Application\n", "utf8");
     await writeFile(path.join(repository, "src", "index.ts"), "export const ready = true;\n", "utf8");

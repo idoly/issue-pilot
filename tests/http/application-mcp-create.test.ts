@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Settings } from "typebox/system";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { AgentEventBus } from "../../src/agent/events.ts";
@@ -50,6 +51,39 @@ test("MCP creation delegates to the standard transaction, attributes the reporte
     assert.ok(JSON.stringify(closed).includes("resolved_issue_cannot_run_agent"));
     assert.equal(f.engine.enqueued.length, beforeInvalid);
   } finally { await client.close(); await f.cleanup(); }
+});
+
+test("MCP keeps strict input schemas even when another consumer enables corrective TypeBox parsing", async () => {
+  const f = await createApiFixture();
+  const client = new Client({ name: "strict-schema-fixture", version: "1" });
+  const settings = { ...Settings.Get() };
+  try {
+    await createService(f.app, "MCP Create", ["test"]);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(address + "/mcp")) as Parameters<Client["connect"]>[0]);
+    const created = await client.callTool({ name: "issue_create", arguments: payload("Strict input fixture") });
+    assert.ok(!created.isError, JSON.stringify(created));
+    const issue = parsed(created);
+    const queued = f.engine.enqueued.length;
+    const messages = f.engine.messages.length;
+    Settings.Set({ correctiveParse: true });
+    const invalid = [
+      { name: "issue_create", arguments: { ...payload("Wrong title type"), title: 7 } },
+      { name: "issue_create", arguments: { ...payload("Unknown start flag"), startAgent: false } },
+      { name: "issue_message", arguments: { key: issue.id, message: 7 } },
+      { name: "issue_conversation", arguments: { key: issue.id, limit: "1" } },
+    ];
+    for (const input of invalid) {
+      const result = await client.callTool(input);
+      assert.equal(result.isError, true, JSON.stringify({ input, result }));
+    }
+    assert.equal(f.engine.enqueued.length, queued);
+    assert.equal(f.engine.messages.length, messages);
+  } finally {
+    Settings.Set(settings);
+    await client.close();
+    await f.cleanup();
+  }
 });
 
 test("MCP creation preserves role restrictions on development and production-data work modes", async () => {

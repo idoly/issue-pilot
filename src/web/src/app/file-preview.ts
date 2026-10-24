@@ -1,4 +1,3 @@
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import type { IssueDetail } from "../data/client";
 
 export type AttachmentPreviewKind = "image" | "text" | "pdf" | "unsupported";
@@ -16,11 +15,5 @@ export function workingFileMediaType(fileName: string): string | undefined {
   if (images[extension]) return images[extension];
   if (extension === "pdf") return "application/pdf";
   if (["txt", "log", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "yaml", "yml", "properties", "sql", "js", "mjs", "cjs", "ts", "tsx", "jsx", "java", "kt", "py", "sh", "bash", "css", "html", "vue", "svelte", "c", "h", "cpp", "hpp", "go", "rs", "toml", "ini"].includes(extension) || /^(?:Dockerfile|Makefile|\.gitignore)$/i.test(fileName)) return "text/plain";
-  return undefined;
-}
-
-export function outputPreviewUnavailable(output: Pick<IssueDetail["outputs"][number], "fileName" | "size">): string | undefined {
-  if (!/\.(csv|json|jsonl|sql|txt|md|markdown|log|ya?ml|xml|tsv)$/i.test(output.fileName)) return "此格式暂不支持预览，请下载查看";
-  if (output.size > issuePilotConfig.web.outputPreviewBytes) return "文件过大，请下载查看完整内容";
   return undefined;
 }

@@ -1,8 +1,6 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { readSlsCli } from "./sls-cli.ts";
+import { readSlsCli, SLS_QUERY_ERRORS } from "./sls-cli.ts";
 import type { CommandExecutor } from "../process.ts";
-import { SLS_QUERY_ERRORS } from "./sls-errors.ts";
-export { SLS_QUERY_ERRORS };
 import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability.sls;

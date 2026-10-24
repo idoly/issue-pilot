@@ -4,7 +4,6 @@ export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mc
 import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
 import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
@@ -22,20 +21,8 @@ import type { UserRole } from "../../../domain/contracts";
 export { USER_ROLES, canCreateDevelopmentIssues, canUseIssueWorkMode } from "../../../domain/contracts";
 export interface Person { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
 export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; databaseId: string }
-export interface ManagedUser extends Person { active: boolean; createdAt: string; updatedAt: string }
-export interface ManagedUserInput { subject: string; name: string; email: string; role?: UserRole; isAdmin?: boolean }
-export interface ManagedUserUpdate { name?: string; email?: string; active?: boolean; role?: UserRole; isAdmin?: boolean }
-export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean; dingtalkConfigured?: boolean }
-export interface PersonalCredentialUpdate {
-  production?: {
-    dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" };
-    sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" };
-  };
-  model?: { provider?: string; mode: "replace"; apiKey: string } | { provider?: string; mode: "clear" };
-  git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
-}
+export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
-export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
 
 export interface IssueListItem {
   id: string;
@@ -81,9 +68,8 @@ export interface IssueDetail extends IssueListItem {
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
   workingDirectory?: string;
-  attachments: Array<{ id: string; fileName: string; workingFileName?: string; storedFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
+  attachments: Array<{ id: string; fileName: string; storedFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   collaboratingServices?: Array<{ key: string; name: string }>;
-  outputs: Array<{ fileName: string; size: number; updatedAt: string }>;
   relatedIssues?: IssueExecutionItem[];
   scopeTransitions?: IssueScopeTransitionHistoryItem[];
   ccRecipients?: Person[];
@@ -110,6 +96,7 @@ export interface IssueScopeTransitionPlan {
 
 export interface WorkspaceStats {
   totalBytes: number;
+  sharedGitBytes: number;
   policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
   workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
@@ -163,10 +150,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponent(key)}${suffix}`;
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
-const userPath = (subject: string) => `/api/users/${encodeURIComponent(subject)}`;
 
 export const loadUsers = () => request<Person[]>("/api/users");
-export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage");
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
@@ -306,8 +291,6 @@ export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endp
 export interface ManagedRepository { id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
 export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");
 
-export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
-export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(userPath(subject), "PATCH", input);
 export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) => request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
 export const updateService = (key: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", body: JSON.stringify(input) });
@@ -315,32 +298,6 @@ export const deleteService = (key: string) => request<void>(servicePath(key), { 
 
 export function attachmentUrl(key: string, attachmentId: string): string {
   return issuePath(key, `/attachments/${encodeURIComponent(attachmentId)}`);
-}
-
-export function outputUrl(key: string, fileName: string): string {
-  return issuePath(key, `/outputs/${encodeURIComponent(fileName)}`);
-}
-
-export async function fetchOutput(key: string, fileName: string, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(outputUrl(key, fileName), { ...(signal ? { signal } : {}) });
-  if (!response.ok) throw await requestError(response);
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  let bytes = 0;
-  const chunks: BlobPart[] = [];
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > issuePilotConfig.web.outputPreviewBytes) throw new Error("文件过大，请下载查看完整内容");
-      chunks.push(value);
-    }
-    return new TextDecoder("utf-8", { fatal: true }).decode(await new Blob(chunks).arrayBuffer());
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
 }
 
 export async function fetchAttachment(key: string, attachmentId: string, signal?: AbortSignal): Promise<Blob> {
