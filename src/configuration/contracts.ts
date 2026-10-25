@@ -53,8 +53,10 @@ export interface ServiceConfiguration {
   repositories: Array<{ id: string; alias: string; url: string }>;
 }
 
-export interface DingtalkSourceSettings { mcp: string; url: string; assignee: string; intervalMinutes?: number; environment?: "dev" | "test" | "prod" }
-export interface DingtalkUserSettings { fields?: Partial<DingtalkColumns>; source?: DingtalkSourceSettings }
+export interface DingtalkUserSettings {
+  fields?: Partial<DingtalkColumns>;
+  source?: { mcp: string; url: string; environment?: "dev" | "test" | "prod" };
+}
 
 export interface Configuration extends ConfigurationCatalog {
   agent: AgentConfiguration;

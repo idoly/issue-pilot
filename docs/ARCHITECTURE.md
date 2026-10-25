@@ -41,7 +41,7 @@ flowchart LR
 
 开发代码位于工单目录，索引、分支和新对象存于同一工单的 `.issue-git/<url-hash>`。公共 Git 基线只读复用，其他工单和共享库不获得模型写权限。详情见[Git 与工作区](STORAGE.md#git-与工作区)。
 
-日常人员、个人凭证、仓库、服务和查询目标由配置页维护，SQLite 是唯一业务配置来源。私有 YAML／JSON 仅供显式离线导入／导出；启动不读取这些文件覆盖页面保存。钉钉来源／字段偏好在 user_preferences、application_settings，MySQL 连接由部署 owner 原子维护对应的全局 MCP 条目。
+日常人员、个人凭证、仓库、服务和查询目标由配置页维护，SQLite 是唯一业务配置来源。旧 user／service 文件配置的加载、导入、导出与转换链路已移除；历史文件不覆盖页面保存，不创建新的文件配置权威源。标准 MCP JSON API 与 Pi 自身资源配置仍由各自 owner 管理。钉钉来源／字段偏好在 user_preferences、application_settings，MySQL 连接由部署 owner 原子维护对应的全局 MCP 条目。
 
 ## 工单流程
 

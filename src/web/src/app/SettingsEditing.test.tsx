@@ -151,3 +151,14 @@ test("user management translates the actual admin authorization error and preser
   expect((await within(dialog).findByRole("alert")).textContent).toContain("此操作需要管理权限");
   expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "New member");
 });
+
+test("personnel email errors stay local and retain the entered name", async () => {
+  render(() => <UserManagement />); await screen.findByText("Alice");
+  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); const dialog = await screen.findByRole("dialog");
+  await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New member" } });
+  await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "invalid-email" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("请填写有效的邮箱地址");
+  expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "New member");
+  expect(state.createUser).not.toHaveBeenCalled();
+});

@@ -116,7 +116,7 @@ started 只表示可能已经开始交付，不表示完成。即使进程恰好
 
 SRT 使用 Linux user/PID/mount/network namespace 和 seccomp。宿主文件系统只读，当前工单根目录可持久写入；关联工单只读，应用数据库与私有配置区域隐藏，既有管理文件及 Git 指针另设只读。虚拟 `/tmp`、`/dev` 和代理引导资源属于隔离设施；实际工具的 TMPDIR、Node/Maven 缓存和 Java 临时路径落在工单根目录。启动检查跨目录硬链接；写入再次检查路径、链接和管理文件。
 
-执行默认关闭 Unix socket 与嵌套 namespace，经 HTTP 代理转发网络；proxychains 为不读取代理变量的 TCP 客户端提供同一出口。域名基础列表位于根配置 `runtime.agent.networkAllowedDomains`，私有目标通过 `service.yaml` 的全局 `agent.runtime.networkAllowedDomains` 追加；部署需显式加入实际包源、Git 与 stdio MCP 所需的业务目标。宿主地址、应用 API 与开发 Web 端口拒绝访问。危险 loader 环境覆盖拒绝执行，沙箱依赖使用应用解析出的绝对路径；依赖缺失或隔离能力不满足时失败，不降级裸执行或弱隔离。
+执行默认关闭 Unix socket 与嵌套 namespace，经 HTTP 代理转发网络；proxychains 为不读取代理变量的 TCP 客户端提供同一出口。域名基础列表位于根配置 `runtime.agent.networkAllowedDomains`，私有目标通过数据库全局 Agent 的 `runtime.networkAllowedDomains` 追加；部署需显式加入实际包源、Git 与 stdio MCP 所需的业务目标。宿主地址、应用 API 与开发 Web 端口拒绝访问。危险 loader 环境覆盖拒绝执行，沙箱依赖使用应用解析出的绝对路径；依赖缺失或隔离能力不满足时失败，不降级裸执行或弱隔离。
 
 当前开发工单使用根目录内的私有 Git store，索引、分支和新对象可写；公共 Git 库、其他工单、Git 配置/hooks/alternates 和绑定信息保持只读。个人 SSH 只对 Native 工具开放当前会话的临时身份目录，私钥为 `0600`，复制 Operator 的 known_hosts 并启用严格主机校验；不开放整个 HOME `.ssh`、其他用户身份或 stdio MCP 的凭据权限。身份缺失或主机不受信时失败，不回退到其他身份。Native 启动时将个人 SSH 选项与 SRT 的 SSH 代理选项组合，并在 SRT 的 Git 安全配置之后追加个人凭据隔离项，保留安全目录设置及空 credential helper/header；不覆盖或绕开代理出口。
 

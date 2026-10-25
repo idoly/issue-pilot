@@ -43,7 +43,7 @@ install -d -m 0700 "$issue_backup_root"
 rsync -a --exclude=/control/project-tools.sock -- "$issue_state_root/" "$issue_backup_root/state/"
 ```
 
-同时保存匹配的代码、根配置、私有 YAML/MCP 文件和用户全局 Pi 配置。若使用 link-dest 节省空间，仅允许备份之间共享硬链接，不能把可写 live 文件链接成备份；不能对共享 inode 原地覆盖或统一 chmod。复制后检查完整性、模式和可恢复性。
+同时保存匹配的代码、根运行配置、SQLite 配置数据和用户全局 Pi 配置。旧私有文件若仍存在，按历史材料随一致状态保留，不再作为业务配置导入。若使用 link-dest 节省空间，仅允许备份之间共享硬链接，不能把可写 live 文件链接成备份；不能对共享 inode 原地覆盖或统一 chmod。复制后检查完整性、模式和可恢复性。
 
 ## 减少停服时间
 
@@ -121,39 +121,13 @@ Podman 镜像、容器写层和 volume 分开处理，空闲不等于没有数�
 
 旧恢复点中包含独有历史修复现场时，先独立归档原始文件、必要 Git 基线／索引和恢复说明，逐项校验后再退役大快照。清理记录和小型恢复证据可继续保留，不能把所有带时间戳的目录都当作完整状态恢复点。WSL 内部释放空间不保证 Windows 上 VHDX 文件立即缩小，离线压缩应另安排维护窗口。
 
-## 页面配置切换与显式导入
+## 配置管理与恢复
 
-新版本以 SQLite 为业务配置唯一来源。旧 YAML／JSON 即使仍在 state root，也不会被启动读取。首次从文件模式切换必须在发布前完成以下步骤，不能只安装代码后直接启动：
+业务配置只从 SQLite 读取，日常通过配置页与对应 API 维护。不再提供 user.yaml／service.yaml 的导入、导出、格式转换或跨账号凭证补齐脚本，也不自动读取 state root 的 mcp.json。标准 MCP JSON 导入 API 继续由 MCP owner 管理。
 
-1. 在线阶段先检查文件和 DB 的服务／仓库／凭证组对应关系，在独立副本演练 0063 与导入。核对旧开发分支声明与正式分支差异：新任务基线改为正式分支，已有工单 refs、index、commit 和 local_path 不改写。
-2. 按前述维护窗口排空并停止 API／Web，建立匹配的一致恢复点，保留原配置文件及 Git 状态。
-3. 用新版本显式导入。命令占有实例租约、只执行 schema migration 和配置事务，不运行 Agent 中断恢复或自动回收；API 仍运行时拒绝。
+发布前核对数据库中的人员、凭证组、服务部署、钉钉来源／字段偏好和全局 MCP；缺失配置应通过当前业务入口处理，不把旧文件放回目录来期待启动投影。历史恢复点的操作记录描述当时的版本，不能在当前代码上执行其中已退役的配置脚本。
 
-```bash
-node --experimental-strip-types scripts/import-configuration.ts --state-root /path/to/.issue-pilot --apply
-```
-
-4. 核对 user_preferences 的来源／字段偏好、application_settings 的并发及模板、服务部署目标和生成 MySQL MCP。输入文件不修改，配置导入失败回滚，schema 升级按常规迁移规则保留。部署所属 MCP 由 service_deployments 外键管理，不用通用 MCP API 覆盖它。
-5. 启动新版本，验证页面保存后重启仍保留；旧文件只作为恢复材料。校验 DB integrity／FK、各身份凭证状态和工单原分支／路径，正常配置 GET 不包含秘密。
-
-导入失败先保留现场，不用反复启动来补做导入。切回旧版本需要匹配的完整状态恢复，不能只换代码或 DB 单文件。
-
-## 配置文件准备
-
-用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，导出全部已登记账号各自的凭证和数据库中的来源偏好，输出 v2 YAML。服务和目标以数据库为准；旧用户及钉钉来源仅在显式 reference 转换中处理，运行时不读取这些文件。共享部署凭证有多个不同组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。MCP 连接按数据库记录及启停状态导出，不使用名称子串过滤。输出目录必须在真实 state root 之外，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
-
-```bash
-node --experimental-strip-types scripts/prepare-configuration.ts \
-  --state-root /path/to/application/.issue-pilot \
-  --output /path/to/private-config-review \
-  --subject user@example.com \
-  --reference-service /path/to/reference/config.yaml \
-  --reference-mcp /path/to/reference/mcp.json
-```
-
-默认只导出数据库事实；`--reference-user`、`--reference-service` 和 `--reference-mcp` 仅在显式历史转换时读取对应输入，不用于日常覆盖当前配置。普通数据库导出不需要 `--subject`；它仅在迁移旧 `service.yaml.sources.dingtalk` 时指定归属账号，有来源却未指定 owner 时仍拒绝。显式指定的 reference 文件不存在时报错，不静默忽略。脚本默认保留缺失项；用户明确授权复用某个账号的凭证时，可增加 `--fill-missing-from user@example.com`，只补其他账号缺失项，不替换已有完整凭证，也不复制来源或人员筛选。检查暂存文件中每个账号的归属后，再按发布流程安装；运行时失败不会改用另一账号。
-
-审核导出或转换资料的目标、模型和认证归属，不把内容粘贴进日志。需要应用时按上文停服、一致备份和显式导入执行，不再依赖文件放入目录后重启自动投影。旧工作目录布局仍使用下面独立的文件迁移流程。
+配置与工单、Git、附件、会话共用同一一致恢复单位。恢复须按前述停服、保留新工作、匹配代码／状态及检查流程执行，不单独恢复数据库某几张表，也不根据旧文件猜测历史身份和分支。旧文件仍属未知私有材料，不作为普通测试夹具或批量清理目标。
 
 ## 工单工作目录迁移
 

@@ -19,7 +19,7 @@ flowchart LR
 
 [Containerfile](../Containerfile) 使用 Node 构建网页、移除 dev 依赖，复制 Git 与 Java/Maven 产物，再安装 Python 库，以 UID/GID 1000 启动。Node 固定到主版本 26，Python 跟随 Debian bookworm，库版本见 [package-lock.json](../package-lock.json) 和 [requirements.txt](../requirements.txt)。Git 2.56.0 采用官方 `NO_RUST` 构建选项，aliyun CLI 固定为 3.5.2；开发机的软件版本应独立核对，构建镜像不会升级宿主机。基础镜像没有固定摘要，不能声称逐字节可复现。
 
-`npm ci` 会校验并应用 Pi 1.4.0 输出回调和 node-forge 1.4.0 验签回补；Git 是安装脚本的必要工具，版本或补丁不匹配即安装失败。私有配置在 state root 中独立部署，不复制进镜像。详见[依赖补丁](../patches/README.md)。
+`npm ci` 会校验并应用 Pi 1.4.0 输出回调和 node-forge 1.4.0 验签回补；Git 是安装脚本的必要工具，版本或补丁不匹配即安装失败。业务数据库与私有状态独立持久化，不复制进镜像。详见[依赖补丁](../patches/README.md)。
 
 ## 首次本地运行
 
@@ -35,7 +35,7 @@ node --experimental-strip-types src/http/production.ts
 
 默认端口 3000。前端开发另运行 `npm run dev:web`，默认 4173，代理本机 API。修改 TS 文件不会自动重载后端，Vite HMR 不能代替发布。
 
-默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。日常配置通过页面写入 SQLite。若从现有文件初始化，在停服并建立恢复点后显式运行 `scripts/import-configuration.ts --state-root ROOT --apply`；启动不会自动读取文件或覆盖页面修改。已有状态必须先准备配置和工作目录迁移方案，不能直接搬动 Git worktree。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
+默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。日常配置通过页面和对应 API 写入 SQLite，不再提供 user／service 文件配置的初始化、导入、导出或转换。历史私有文件不参与启动，也不补齐缺失配置。已有状态必须先准备匹配的数据库备份和工作目录迁移方案，不能直接搬动 Git worktree。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
 
 已有工作站的 user systemd unit 为 `issue-pilot-api.service` 和 `issue-pilot-web.service`，由宿主管理，仓库不提供通用安装脚本。日常 4173 入口使用 `vite preview --config src/web/vite.config.ts --strictPort` 提供已构建页面，API／MCP 仍代理到 3000；修改前端后先构建再切换。`npm run dev:web` 仅在需要 HMR 的开发中使用，不作为日常入口，避免向浏览器传输整个开发模块图。操作前核对 WorkingDirectory、ExecStart 和 PID：
 
@@ -62,7 +62,7 @@ podman push registry.example.com/issue-pilot:<version>
 | `/etc/issue-pilot`，只读 hostPath | `/home/node` | Operator Pi、SSH、工具配置 |
 | tmp emptyDir | `/tmp` | 临时文件 |
 
-Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入数据库全局 Agent runtime.networkAllowedDomains（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。SSH Git 目标应包含对应 22 端口；“host is not on the allow list”属于本地工具网络策略，不等于 Git 权限验证失败。离线导入需按运维流程停止写入并备份；导入后按匹配版本重启。
+Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入数据库全局 Agent runtime.networkAllowedDomains（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。SSH Git 目标应包含对应 22 端口；“host is not on the allow list”属于本地工具网络策略，不等于 Git 权限验证失败。数据库业务配置变更沿用对应 owner 的权限、预约和事务；发布与恢复按运维流程停止写入并备份，不根据旧文件重新投影。
 
 准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。已有数据转容器时，还须保持数据库和 Git 中的绝对路径可在容器内解析；挂载到另一目录不会自动重写历史 worktree 注册，必须先演练明确的路径方案。全局 Pi 资源位于 Operator HOME 中的 `~/.pi/agent`，随 HOME 配置挂载；不再为应用单独挂载 `.pi` 资源目录。
 

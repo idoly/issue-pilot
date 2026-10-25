@@ -171,6 +171,7 @@ export function App(props: { initialView?: AppView } = {}) {
   return (
       <ApplicationResourcesProvider>
       <div class="app-shell">
+        <a class="skip-link" href="#app-content" onClick={event => { event.preventDefault(); document.getElementById("app-content")?.focus({ preventScroll: true }); }}>跳到主要内容</a>
         <header class="app-header">
           <div class="brand"><span>IP</span><strong>issue-pilot</strong></div>
           <div class="header-context">
@@ -188,7 +189,7 @@ export function App(props: { initialView?: AppView } = {}) {
           </div>
           <CurrentUserIdentity mayChange={() => { if (!mayNavigate()) return false; setSourceExpanded(false); setSourceDirty(false); return true; }} />
         </header>
-        <div class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${sourceDetailsOpen() ? "" : " details-hidden"}` : ""}`} style={{ "--source-navigation-user-width": sourceSizes().navigation === undefined ? undefined : `${sourceSizes().navigation}px`, "--source-details-user-width": sourceSizes().details === undefined ? undefined : `${sourceSizes().details}px`, "--source-agent-user-height": sourceSizes().agent === undefined ? undefined : `${sourceSizes().agent}px` }}>
+        <div id="app-content" tabindex={-1} class={`app-content${sourceExpanded() && view() === "issues" ? ` source-expanded${sourceDetailsOpen() ? "" : " details-hidden"}` : ""}`} style={{ "--source-navigation-user-width": sourceSizes().navigation === undefined ? undefined : `${sourceSizes().navigation}px`, "--source-details-user-width": sourceSizes().details === undefined ? undefined : `${sourceSizes().details}px`, "--source-agent-user-height": sourceSizes().agent === undefined ? undefined : `${sourceSizes().agent}px` }}>
           <Switch>
             <Match when={view() === "dashboard"}><ResourceBackedOverview onSelectIssue={(issueKey) => { setKeepExternalSelection(true); setDashboardTarget(issueKey); setSelectedId(issueKey); setView("issues"); }} /></Match>
             <Match when={view() === "issues"}>

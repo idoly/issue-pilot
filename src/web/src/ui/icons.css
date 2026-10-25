@@ -3,7 +3,6 @@
   flex-shrink: 0;
   width: 1em;
   height: 1em;
-  font-family: codicon;
   font-style: normal;
   font-weight: normal;
   line-height: 1;
@@ -14,4 +13,5 @@
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
 }
-.ui-icon::before { content: attr(data-icon); }
+.ui-codicon { font-family: codicon; }
+.ui-codicon::before { content: attr(data-icon); }

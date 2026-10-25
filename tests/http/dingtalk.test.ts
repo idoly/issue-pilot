@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { readdir, writeFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { eq } from "drizzle-orm";
-import { stringify } from "yaml";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { applicationSettings, userPreferences, dingtalkIssueImports, issues, mcpServices, subjects } from "../../src/db/schema.ts";
 import type { McpConfiguration, McpConnector } from "../../src/mcp/client.ts";
@@ -160,12 +159,12 @@ test("DingTalk reauthorizes work mode after the remote read", async () => {
   } finally { release?.(); await f.cleanup(); }
 });
 
-test("imports use the configured global DingTalk connection without personal credential overrides", async () => {
+test("imports use the selected global DingTalk connection without falling back to another service", async () => {
   const f = await fixture();
   try {
-    await writeFile(path.join(f.root, "user.yaml"), stringify({ version: 2, shared: { dingtalk: { apiKey: "fixture-shared" } }, users: { [f.user.subject]: { dingtalk: { apiKey: "fixture-personal", source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table", assignee: "Ignored" } } } } }), { mode: 0o600 });
+    await f.database.db.insert(mcpServices).values({ name: "other-dingtalk", transport: "streamable_http", url: "https://other.example.test/mcp?key=other-fixture", enabled: true });
     const source = await f.app.inject({ method: "GET", url: "/api/dingtalk/source" });
-    assert.equal(source.json().url, ""); assert.equal("kind" in source.json().connection, false); assert.doesNotMatch(source.body, /fixture-personal|fixture-shared/);
+    assert.equal(source.json().url, ""); assert.equal("kind" in source.json().connection, false); assert.doesNotMatch(source.body, /other-fixture|fixture-shared/);
     f.state.failConnection = true;
     const response = await f.submit(); assert.equal(response.json().error, "dingtalk_connection_failed"); assert.equal(f.state.configurations.length, 1);
     assert.equal(new URL(f.state.configurations[0]!.url).searchParams.get("key"), "fixture-shared");

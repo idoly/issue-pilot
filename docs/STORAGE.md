@@ -64,9 +64,6 @@ erDiagram
 ├── issue-pilot.config.ts
 ├── .venv/                              # 安装生成的 Python 环境
 └── .issue-pilot/
-    ├── service.yaml                    # 离线导入／导出资料，不在启动读取
-    ├── user.yaml                       # 离线私有资料，0600，不是运行权威源
-    ├── mcp.json                        # 可选：MCP 连接与 MySQL 启动模板
     ├── issues.db                       # SQLite 主文件，0600
     ├── issues.db-wal / issues.db-shm     # 运行中的数据库文件组
     ├── git/repositories/<url-hash>/     # 全局 bare store，由应用维护
@@ -101,7 +98,7 @@ erDiagram
 
 关联目录指向关联工单的实际文件，包括未提交代码、附件、对话和工作文件。`.related-<key>.json` 是准备时快照；会话链接指向当时数据库绑定的 JSONL，源工单更换会话文件后需要重新准备引用。复用开发会话的继续轮次不会自动刷新这些元信息，也没有自动关联摘要。模型本地操作在 SRT 中执行，关联工单只读；完整信任边界见[执行边界](AGENT.md#执行边界)。
 
-Skills、Prompts、Extensions、模型定义与全局指令统一从 Operator HOME 的全局 Pi 配置读取；应用不再另外设置资源目录。日常业务配置保存在 SQLite；启动不加载旧 YAML／JSON。显式离线导入保留事务与实例租约，历史身份、工作区路径和退役资料保持原样。user_preferences 保存个人钉钉来源／字段偏好，application_settings 保存并发上限、共享字段映射及 MySQL stdio 模板。subjects／repositories／services／user_credentials 的 revision 用于页面保存冲突检测。MySQL 目标属于部署 config，mcp_services.deployment_id 标记相应生成连接并以外键级联删除，普通 API 不输出秘密。配置的单一来源和启用方式见[配置与协议](CONFIGURATION.md)。
+Skills、Prompts、Extensions、模型定义与全局指令统一从 Operator HOME 的全局 Pi 配置读取；应用不再另外设置资源目录。业务配置只保存在 SQLite；不加载、导入、导出或转换旧 user／service 配置文件。历史文件、身份、工作区路径和退役资料保持原样。user_preferences 保存个人钉钉来源／字段偏好，application_settings 保存并发上限、共享字段映射及 MySQL stdio 模板。subjects／repositories／services／user_credentials 的 revision 用于页面保存冲突检测。MySQL 目标属于部署 config，mcp_services.deployment_id 标记相应生成连接并以外键级联删除，普通 API 不输出秘密。配置的单一来源和启用方式见[配置与协议](CONFIGURATION.md)。
 
 ## 文件写入与发布
 
@@ -183,7 +180,7 @@ SQLite 使用本地 libSQL 客户端，启动启用 WAL 和外键，数据库文
 | 持久 | DB/WAL/SHM、JSONL、原始附件、工作文件、离线迁移索引、本地 Git refs/objects | 使用匹配的完整恢复点 |
 | 有条件持久 | 活动开发 worktree | 满足释放条件前保留未提交、staged、untracked 和 ignored 内容 |
 | 生成 | runtime 元数据、网络临时配置、实例控制 socket、受管 checkout、工单内包缓存 | 确认归属和状态正常后由 owner 处理 |
-| 配置 | 根配置、私有 YAML/MCP 文件、全局 Pi 配置与 Operator 工具配置 | 与目标版本一起部署和备份 |
+| 配置 | 根运行配置、SQLite 业务配置、全局 Pi 配置与 Operator 工具配置 | 与目标版本一起部署和备份 |
 | 安装产物 | node_modules、`.venv`、编译后网页 | 根据匹配版本重新生成 |
 
 “生成”不代表异常时可以直接删除。未知目录、变化的 checkout 和隔离文件可能是恢复证据。凭证的普通 GET 隐藏投影也不等于存储加密，数据库、JSONL、成果和备份均需按敏感数据管理。

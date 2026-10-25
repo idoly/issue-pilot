@@ -1,0 +1,394 @@
+{
+  "data": "independent synthetic Issues, identities, credentials and read-only Git repository; no production screenshots",
+  "skillSources": [
+    {
+      "name": "landing-page-design",
+      "url": "https://github.com/elayadesign/ai-design-skills/blob/main/skills/landing-page-design/SKILL.md",
+      "sha256": "3aae79f3d33ea293491fe6251f9fee56ee0cbb7aa66d41b3f29cfc662e4bbdd6"
+    },
+    {
+      "name": "redesign-existing-projects",
+      "url": "https://github.com/elayadesign/redesign-skill/blob/main/skills/redesign-existing-projects/SKILL.md",
+      "sha256": "8ed4b9f5301edec67e87138322fe627fe0b1172aca4d73db8c23ed3ff1379b0d"
+    }
+  ],
+  "capture": [
+    {
+      "mode": "before",
+      "width": 1440,
+      "pageErrors": [],
+      "dialogOverflow": false,
+      "overflow": false,
+      "firstPageEditorFonts": 1,
+      "firstPageTransferBytes": 293757,
+      "firstPageResources": 7,
+      "firstPageFontBytes": 153528,
+      "bodyFont": "\"Noto Sans SC\", \"Microsoft YaHei UI\", \"PingFang SC\", system-ui, sans-serif",
+      "buttonFont": "13px",
+      "reducedMotion": true
+    },
+    {
+      "mode": "before",
+      "width": 390,
+      "pageErrors": [],
+      "dialogOverflow": false,
+      "overflow": false,
+      "firstPageEditorFonts": 1,
+      "firstPageTransferBytes": 293757,
+      "firstPageResources": 7,
+      "firstPageFontBytes": 153528,
+      "bodyFont": "\"Noto Sans SC\", \"Microsoft YaHei UI\", \"PingFang SC\", system-ui, sans-serif",
+      "buttonFont": "13px",
+      "reducedMotion": true
+    },
+    {
+      "mode": "after",
+      "width": 1440,
+      "pageErrors": [],
+      "dialogOverflow": false,
+      "overflow": false,
+      "firstPageEditorFonts": 0,
+      "firstPageTransferBytes": 284160,
+      "firstPageResources": 8,
+      "firstPageFontBytes": 141956,
+      "bodyFont": "Geist, \"Noto Sans SC\", \"Microsoft YaHei UI\", \"PingFang SC\", system-ui, sans-serif",
+      "buttonFont": "14px",
+      "reducedMotion": true
+    },
+    {
+      "mode": "after",
+      "width": 390,
+      "pageErrors": [],
+      "dialogOverflow": false,
+      "overflow": false,
+      "firstPageEditorFonts": 0,
+      "firstPageTransferBytes": 284160,
+      "firstPageResources": 8,
+      "firstPageFontBytes": 141956,
+      "bodyFont": "Geist, \"Noto Sans SC\", \"Microsoft YaHei UI\", \"PingFang SC\", system-ui, sans-serif",
+      "buttonFont": "14px",
+      "reducedMotion": true
+    }
+  ],
+  "behavior": [
+    {
+      "width": 1440,
+      "localFontsLoaded": true,
+      "keyboardSkipPreservesUrl": true,
+      "decorativeSvgNotFocusable": true,
+      "mobileAdminVisible": true,
+      "touchTargets": true,
+      "reducedMotion": true,
+      "errorScrollRespectsReducedMotion": true,
+      "loadingSkeleton": true,
+      "inlineEmailNoRequest": true,
+      "credentialBlankPreserved": true,
+      "credentialErrorDraftRetained": true,
+      "serviceErrorTranslated": true,
+      "serviceSaveAndInheritance": true,
+      "newTargetFocusAndScroll": true,
+      "slsTargetsPreserved": true,
+      "publicSecretsHidden": true,
+      "endpoints": true,
+      "dynamicViewport": true,
+      "realMonaco": true,
+      "editorToolbarFits": true,
+      "pageErrors": 0,
+      "noOverflow": true
+    },
+    {
+      "width": 390,
+      "localFontsLoaded": true,
+      "keyboardSkipPreservesUrl": true,
+      "decorativeSvgNotFocusable": true,
+      "mobileAdminVisible": true,
+      "touchTargets": true,
+      "reducedMotion": true,
+      "errorScrollRespectsReducedMotion": true,
+      "loadingSkeleton": true,
+      "inlineEmailNoRequest": true,
+      "credentialBlankPreserved": true,
+      "credentialErrorDraftRetained": true,
+      "serviceErrorTranslated": true,
+      "serviceSaveAndInheritance": true,
+      "newTargetFocusAndScroll": true,
+      "slsTargetsPreserved": true,
+      "publicSecretsHidden": true,
+      "endpoints": true,
+      "dynamicViewport": true,
+      "realMonaco": true,
+      "editorToolbarFits": true,
+      "pageErrors": 0,
+      "noOverflow": true
+    }
+  ],
+  "images": [
+    {
+      "name": "after-code-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 152678
+    },
+    {
+      "name": "after-code-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 60095
+    },
+    {
+      "name": "after-credential-1440.png",
+      "width": 460,
+      "height": 312,
+      "bytes": 12765
+    },
+    {
+      "name": "after-credential-390.png",
+      "width": 374,
+      "height": 320,
+      "bytes": 12411
+    },
+    {
+      "name": "after-editor-1440.png",
+      "width": 780,
+      "height": 904,
+      "bytes": 49019
+    },
+    {
+      "name": "after-editor-390.png",
+      "width": 374,
+      "height": 968,
+      "bytes": 46143
+    },
+    {
+      "name": "after-endpoints-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 68782
+    },
+    {
+      "name": "after-endpoints-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 53982
+    },
+    {
+      "name": "after-issue-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 191179
+    },
+    {
+      "name": "after-issue-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 70647
+    },
+    {
+      "name": "after-members-390.png",
+      "width": 358,
+      "height": 659,
+      "bytes": 28444
+    },
+    {
+      "name": "after-overview-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 110803
+    },
+    {
+      "name": "after-overview-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 68745
+    },
+    {
+      "name": "after-repositories-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 45463
+    },
+    {
+      "name": "after-repositories-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 34872
+    },
+    {
+      "name": "after-services-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 84831
+    },
+    {
+      "name": "after-services-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 69199
+    },
+    {
+      "name": "after-users-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 64068
+    },
+    {
+      "name": "after-users-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 46219
+    },
+    {
+      "name": "before-code-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 143682
+    },
+    {
+      "name": "before-code-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 59817
+    },
+    {
+      "name": "before-credential-1440.png",
+      "width": 460,
+      "height": 249,
+      "bytes": 9670
+    },
+    {
+      "name": "before-credential-390.png",
+      "width": 374,
+      "height": 237,
+      "bytes": 9459
+    },
+    {
+      "name": "before-editor-1440.png",
+      "width": 780,
+      "height": 720,
+      "bytes": 41882
+    },
+    {
+      "name": "before-editor-390.png",
+      "width": 374,
+      "height": 720,
+      "bytes": 39326
+    },
+    {
+      "name": "before-endpoints-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 68068
+    },
+    {
+      "name": "before-endpoints-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 55689
+    },
+    {
+      "name": "before-issue-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 182059
+    },
+    {
+      "name": "before-issue-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 76071
+    },
+    {
+      "name": "before-members-390.png",
+      "width": 358,
+      "height": 458,
+      "bytes": 23048
+    },
+    {
+      "name": "before-overview-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 97136
+    },
+    {
+      "name": "before-overview-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 57725
+    },
+    {
+      "name": "before-repositories-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 40905
+    },
+    {
+      "name": "before-repositories-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 35095
+    },
+    {
+      "name": "before-services-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 82487
+    },
+    {
+      "name": "before-services-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 64914
+    },
+    {
+      "name": "before-users-1440.png",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 58076
+    },
+    {
+      "name": "before-users-390.png",
+      "width": 390,
+      "height": 1000,
+      "bytes": 47527
+    }
+  ],
+  "comparisonMethod": "same Vite preview version/options and same isolated API; 1440/390 x 1000; screenshots use prefers-reduced-motion; local fonts awaited",
+  "currentChecks": {
+    "typecheck": "passed",
+    "web": {
+      "files": 27,
+      "tests": 223,
+      "passed": 223
+    },
+    "httpBoundaries": {
+      "tests": 22,
+      "passed": 22
+    },
+    "build": "passed",
+    "faviconFontsAndLicenseServedThroughFastifyPolicy": true,
+    "offlineGallery": {
+      "viewports": 2,
+      "pages": 9,
+      "modes": 3,
+      "imagesResolve": true,
+      "pageErrors": 0
+    }
+  },
+  "priorCleanInstallChecks": {
+    "scope": "file configuration retirement retained in this worktree; backend code unchanged by visual pass",
+    "backend": {
+      "tests": 523,
+      "passed": 522,
+      "skipped": 1
+    },
+    "unrelatedDependencyVersionsChanged": false
+  },
+  "deployment": "not deployed; current source worktree only",
+  "cleanup": {
+    "fixtureServersStopped": 3,
+    "fixtureDatabaseAndRepositoryRemoved": true,
+    "baselineAndBuildCopiesRemoved": true,
+    "browserContainersAutoRemoved": true,
+    "productionStateChanged": false
+  }
+}

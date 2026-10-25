@@ -16,7 +16,9 @@ const iconRoot = path.join(materialRoot, "icons");
 const iconFiles = readdirSync(iconRoot).filter(name => name.endsWith(".svg"));
 const iconNames = new Set(iconFiles);
 const iconPrefix = `assets/editor-icons-${materialVersion}/`;
-const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The application and editor share the unchanged font distributed in monaco-editor ${monacoVersion}, from https://github.com/microsoft/vscode-codicons.\n${readFileSync(path.resolve("src/web/src/ui/codicons.LICENSE"), "utf8")}\n\nMonaco Editor © Microsoft Corporation — https://github.com/microsoft/monaco-editor\n${readFileSync(path.join(monacoRoot, "LICENSE"), "utf8")}\n${readFileSync(path.join(monacoRoot, "ThirdPartyNotices.txt"), "utf8")}`;
+const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The code browser uses the unchanged font distributed in monaco-editor ${monacoVersion}, from https://github.com/microsoft/vscode-codicons.\n${readFileSync(path.resolve("src/web/src/ui/codicons.LICENSE"), "utf8")}\n\nMonaco Editor © Microsoft Corporation — https://github.com/microsoft/monaco-editor\n${readFileSync(path.join(monacoRoot, "LICENSE"), "utf8")}\n${readFileSync(path.join(monacoRoot, "ThirdPartyNotices.txt"), "utf8")}`;
+
+const interfaceLicenses = `Geist and Geist Mono — https://github.com/vercel/geist-font\n${readFileSync(path.resolve("src/web/src/ui/assets/Geist-OFL.txt"), "utf8")}\n\nPhosphor Icons — https://github.com/phosphor-icons/core\n${readFileSync(path.resolve("src/web/src/ui/assets/Phosphor-LICENSE.txt"), "utf8")}`;
 
 function editorIconAssets(): Plugin {
   return {
@@ -33,6 +35,7 @@ function editorIconAssets(): Plugin {
     },
     generateBundle() {
       this.emitFile({ type: "asset", fileName: "assets/editor-icon-licenses.txt", source: iconLicenses });
+      this.emitFile({ type: "asset", fileName: "assets/interface-licenses.txt", source: interfaceLicenses });
       for (const name of iconFiles) this.emitFile({ type: "asset", fileName: iconPrefix + name, source: readFileSync(path.join(iconRoot, name)) });
     },
   };

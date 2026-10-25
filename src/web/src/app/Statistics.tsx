@@ -99,7 +99,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   return (
     <section class="statistics-workspace insight-workspace" aria-label="运营洞察">
       <header class="statistics-header insight-header">
-        <div><span>补充视图</span><h2>运营洞察</h2><small>完整统计收纳在固定高度视图中</small></div>
+        <div><h2>运营洞察</h2></div>
         <Select aria-label="统计周期" value={period()} onChange={(value) => { if (value) setPeriod(value); }} options={[{ value: "7d", label: "最近 7 天" }, { value: "30d", label: "最近 30 天" }, { value: "90d", label: "最近 90 天" }]} />
       </header>
       <nav class="insight-tabs" role="tablist" aria-label="统计分类">

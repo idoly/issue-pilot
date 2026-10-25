@@ -30,6 +30,12 @@ function serviceSaveErrorMessage(error: unknown): string {
     dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
     dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
     dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
+    invalid_mysql_host: "请填写 MySQL 主机",
+    invalid_mysql_username: "请填写 MySQL 用户名",
+    invalid_mysql_password: "请填写 MySQL 密码",
+    invalid_mysql_database: "请填写 MySQL 数据库",
+    invalid_mysql_target: "MySQL 主机或端口无效",
+    duplicate_mysql_target: "同一环境的 MySQL 目标不能重复",
     invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
     credential_required: "该能力必须配置凭据",
     credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
@@ -139,7 +145,7 @@ function DmsDatabaseEditorRow(props: {
     },
   );
   onCleanup(() => { if (resolveTimer) clearTimeout(resolveTimer); resolveGeneration += 1; });
-  return <div class="dms-database-row"><label><span class="required-field">alias</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label><label><span class="required-field">schema</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label><Button class="icon-button" type="text" shape="circle" icon={<Trash2 size={13} />} title={`删除 DMS 数据库 ${props.databaseIndex}`} aria-label={`删除 DMS 数据库 ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete} /><Show when={loading()}><small class="dms-scope-hint">正在解析实例和数据库...</small></Show><Show when={database().databaseId}><small class="dms-scope-hint">已解析 · <code>InstanceId {database().instanceId}</code> · <code>DatabaseId {database().databaseId}</code> · <code>{database().instanceHost}:{database().instancePort}</code></small></Show><Show when={resolveError()}>{(message) => <div class="form-error" role="alert">{message()}</div>}</Show></div>;
+  return <div class="dms-database-row"><label><span class="required-field">alias</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label><label><span class="required-field">schema</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label><Button class="icon-button" type="text" shape="circle" icon={<Trash2 size={13} />} title={`删除 DMS 数据库 ${props.databaseIndex}`} aria-label={`删除 DMS 数据库 ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete} /><Show when={loading()}><small class="dms-scope-hint">正在解析实例和数据库...</small></Show><Show when={database().databaseId}><small class="dms-scope-hint">数据库范围已确认</small></Show><Show when={resolveError()}>{(message) => <div class="form-error" role="alert">{message()}</div>}</Show></div>;
 }
 
 function ServiceDeploymentEditorRow(props: {
@@ -364,7 +370,8 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   let serviceErrorElement: HTMLDivElement | undefined;
   const showServiceSaveError = (message: string) => {
     setConfigurationError(message);
-    window.requestAnimationFrame(() => serviceErrorElement?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    window.requestAnimationFrame(() => serviceErrorElement?.scrollIntoView?.({ block: "nearest", behavior }));
   };
   const saveService = async () => {
     if (saving() || mysqlLoading() || !canConfigure()) return;

@@ -79,14 +79,14 @@ test("SRT blocks direct and proxy access to host HTTP and visible Unix sockets t
 test("the same native entry reads related files, blocks shared credentials and cannot write related files", async () => {
   const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-related-boundary-")), own = path.join(state, "workspaces", "issue-20261022-001"), related = path.join(state, "workspaces", "issue-20261022-002");
   await mkdir(own, { recursive: true }); await mkdir(related, { recursive: true });
-  await writeFile(path.join(related, "report.txt"), "related evidence"); await writeFile(path.join(state, "user.yaml"), "fixture-private-credential");
+  await writeFile(path.join(related, "report.txt"), "related evidence"); await writeFile(path.join(state, "private-settings.json"), "fixture-private-credential");
   await symlink(related, path.join(own, ".related-issue-20261022-002"));
   try {
     const tools = issueNativeTools({ writeRoot: own, readRoots: [related] });
     const invoke = (name: string, input: unknown) => tools.find(tool => tool.name === name)!.execute("boundary", input as never, undefined, undefined, {} as never);
     const read = await invoke("read", { path: ".related-issue-20261022-002/report.txt" });
     assert.match(JSON.stringify(read), /related evidence/);
-    await assert.rejects(invoke("read", { path: path.join(state, "user.yaml") }));
+    await assert.rejects(invoke("read", { path: path.join(state, "private-settings.json") }));
     const result = await invoke("bash", { command: `printf forbidden > ${shellQuote(path.join(related, "report.txt"))}` });
     assert.match(JSON.stringify(result), /exited with code|denied|Read-only|not found/i);
     assert.equal(await readFile(path.join(related, "report.txt"), "utf8"), "related evidence");

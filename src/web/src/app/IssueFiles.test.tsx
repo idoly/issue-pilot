@@ -21,8 +21,9 @@ it("lists working files and repository folders and provides real downloads", asy
   const folder = screen.getByRole("button", { name: "打开目录 folder" }).closest(".issue-attachment-row")!;
   const repository = screen.getByRole("button", { name: "打开目录 repository" }).closest(".issue-attachment-row")!;
   const normal = link.closest(".issue-attachment-row")!;
-  expect(folder.querySelector(".ui-icon")?.getAttribute("data-icon")).not.toBe(normal.querySelector(".ui-icon")?.getAttribute("data-icon"));
-  expect(repository.querySelector(".ui-icon")?.getAttribute("data-icon")).not.toBe(folder.querySelector(".ui-icon")?.getAttribute("data-icon"));
+  const icons = [folder, repository, normal].map(row => row.querySelector("svg.ui-icon"));
+  expect(icons.every(Boolean)).toBe(true);
+  expect(new Set(icons.map(icon => icon!.innerHTML)).size).toBe(3);
   expect(screen.queryByRole("link", { name: "下载工作文件 escape" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "打开目录 repository" }));
   await screen.findByText("source.java");

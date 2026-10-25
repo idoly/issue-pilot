@@ -1,0 +1,250 @@
+{
+  "files": [
+    {
+      "repository": "vercel/geist-font",
+      "path": "fonts/Geist/webfonts/Geist[wght].woff2",
+      "gitBlob": "71dab8bedba3bfef5dccd7875ed05cac44c7345d",
+      "sha256": "2ffebe993e969069a9789d15164b7715d42491b5835516c5e3b935d5f81b05f1",
+      "bytes": 69760
+    },
+    {
+      "repository": "vercel/geist-font",
+      "path": "fonts/GeistMono/webfonts/GeistMono[wght].woff2",
+      "gitBlob": "0e746fc18223dfcb107a85502a0abe1b1a02d51a",
+      "sha256": "afaacc4c5fbba89d2ebf7a02dc4070208540874592a5504d57175782fe893101",
+      "bytes": 71596
+    },
+    {
+      "repository": "vercel/geist-font",
+      "path": "OFL.txt",
+      "gitBlob": "04e95fc550855eb44416b9db1f6722f5cb7342db",
+      "sha256": "c683bfbcc7e087f5d37a54ef628f10387c451a83ddc459b151403a164ac46c90",
+      "bytes": 4383
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "LICENSE",
+      "gitBlob": "78c9810819776e135d314adc0ff26eda7bec8b38",
+      "sha256": "b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2",
+      "bytes": 1071
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/arrow-down.svg",
+      "gitBlob": "0e7629b6de2322580e8a3712e217b2160aaf9029",
+      "sha256": "cc6416ae83e20660f14b11f5525c6d05ee679c3f26cee41b696cb37aa905d4f5",
+      "bytes": 239
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/check-circle.svg",
+      "gitBlob": "eb406097b3c2ccd3551fafbb01b9c07572b1e9f0",
+      "sha256": "e02a080c3d1a758de5c5fd41abd913dec4cffbc70fe1e9637dbf7ce35f377055",
+      "bytes": 339
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/caret-down.svg",
+      "gitBlob": "c6e84e840434f8d913527e9bf72aeeffc1261d7f",
+      "sha256": "53f0cf2d0b144ac3cb07e353e0cd0853ffb3ed432d741460ce288edfcb0924b1",
+      "bytes": 214
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/caret-right.svg",
+      "gitBlob": "d73dd5d9de441ed68d05ce97f3a714e9f3f69323",
+      "sha256": "e6dec01e074807965b7f3146b976a9b5e82c31d9c2c88aeb52e77cc2ab16c1d7",
+      "bytes": 219
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/code.svg",
+      "gitBlob": "3efc4c4f2c08a282b4d83c5dde2ef7a67ad11ce8",
+      "sha256": "882462ff89cc7b864cb2af1a3a2660bd796f01bdac35b6d4cff7c131fb74e3dc",
+      "bytes": 451
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/copy.svg",
+      "gitBlob": "8f3dd2ec9f2716aa4049da502f410d2c46f93789",
+      "sha256": "5a892fc6a72866e60c67db2088a87653cf44b57b1a5d183b36e950cdc5dd66b3",
+      "bytes": 279
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/download-simple.svg",
+      "gitBlob": "631dcdeb56d50b30fcc9f4df393dd49d5edbd9e8",
+      "sha256": "c48678aa09b44ba4974954690ee6cc846379c448a7214f8c802604c2a1562014",
+      "bytes": 317
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/eye.svg",
+      "gitBlob": "f6f8230f4a8807ce24a66ff09bcd44325c303e1d",
+      "sha256": "91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe",
+      "bytes": 701
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/file.svg",
+      "gitBlob": "f2e762932b2b4659f1228605c4b6f32318001cf6",
+      "sha256": "eb2dcc530fb0727a1718dfdc55a466479bb5ad7c8f0e45f1993541093c747e06",
+      "bytes": 296
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/folder-simple.svg",
+      "gitBlob": "36acab2467b617b29422b864d4dfe80efda2cab7",
+      "sha256": "64d0a5a5a35582fc369e5723b6f4095cfa581402d070108ff328befdd29b06d7",
+      "bytes": 304
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/git-branch.svg",
+      "gitBlob": "4b442e263cde2f9a4da18f29c45cada6d9b555d1",
+      "sha256": "3aaa3ec833418cdce445f8e1f901ab4021a9de02264610563e51e7109511b816",
+      "bytes": 411
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/buildings.svg",
+      "gitBlob": "37926003feadd77afc2e970a3554c63b3556ece8",
+      "sha256": "76f3325b87588fc6786953e8b964d5b7cae58983b3dc1399f7b7a672a6c1b553",
+      "bytes": 455
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/book-open.svg",
+      "gitBlob": "2909321dc830018ab3e026b0b7304862e143796e",
+      "sha256": "b38cdb3a15dcf00cfa4811e318b021e25c6a87b47acbb11888e16d107a5642da",
+      "bytes": 396
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/chat-text.svg",
+      "gitBlob": "aba6204348924edd936cec415992d41d0b7dfc27",
+      "sha256": "efdb68b49cb030dcc6d04abf6f4e9368a0a9e7870d0145e62badcc99e58ca288",
+      "bytes": 448
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/arrows-out-simple.svg",
+      "gitBlob": "359b13fb451ee16945fb58e8a4a3690d172e9fb9",
+      "sha256": "df766bb615bf2ec178d2fa0e095684b4da0ecc6eba1f228ffba00139f16a4611",
+      "bytes": 335
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/rows.svg",
+      "gitBlob": "63556c548c0199a63a626f10000c8dcc1be0a172",
+      "sha256": "746ea88f9c58e378af7d4ce442d7e79f2d994e26aa72889d6d2d81c08c8edecc",
+      "bytes": 329
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/columns.svg",
+      "gitBlob": "d49fadf9b7ca829de210bb2c7ec162902a8412a6",
+      "sha256": "8b4196e037ffb15d68f031b437fa081c6c1907e17ca58225bdf6e3bd6c4e1ecd",
+      "bytes": 322
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/paperclip.svg",
+      "gitBlob": "a4f76685b77233d8268ecd5461c00d5a112798c3",
+      "sha256": "b60210f558fb4693a083ed563af191709a7cafcbc8fb0d1d083db9ef9c2412ac",
+      "bytes": 397
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/pencil-simple.svg",
+      "gitBlob": "2641b0cc9685f400a5117ae7d9c4e6ef169c7344",
+      "sha256": "999530da442f44d8cf0054364373d16150f3e082c2ac294a4988a9c3a4295c28",
+      "bytes": 348
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/push-pin.svg",
+      "gitBlob": "26dd7b80c9d4b6265ac9d14aa1a36a7092fe28be",
+      "sha256": "64c2dc8e17ac0dc1107990c1843654804f7960c35c49acdb5df5c45286910de1",
+      "bytes": 608
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/plus.svg",
+      "gitBlob": "25ad5e32286bc1e69fcd7b462a5dff378d25a509",
+      "sha256": "d688feb9dd2e41c1721d6906a05a2a42e18cd774762fe706d72b2bdfd91cddc4",
+      "bytes": 212
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/arrows-clockwise.svg",
+      "gitBlob": "aaae1464d6c4d1d973376cff2ccae5aba003f9a3",
+      "sha256": "2e80fbc9c5c37553934c9ebbd6324bf7fabe9a4b4d7c2445d99edfce55cc22df",
+      "bytes": 503
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/magnifying-glass.svg",
+      "gitBlob": "2bdda58966a780a706bc622d719172899e822307",
+      "sha256": "f9fa2561978a9a3291e8ae0ebfcb651104f5069fade8f84871627bca68889cde",
+      "bytes": 243
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/trash.svg",
+      "gitBlob": "9f963931ad750f213310e861dc5c9adff0f9989a",
+      "sha256": "e6a830c0409f9e101e3695c981eef98427d39fd01f502b9cbd6900930b01f19c",
+      "bytes": 391
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/x.svg",
+      "gitBlob": "2ee41d11cce14289f3b444174694acee017a4f9a",
+      "sha256": "7397b15e1fa66eaf6ff9b59fe91d483cb5c3bcf75b2fe052097ab6f0593b513a",
+      "bytes": 284
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/magnifying-glass-plus.svg",
+      "gitBlob": "73f0bd5458147ef73fdc211e5e7bfd560c103c3b",
+      "sha256": "c61e00fdb994983b59cab26905a7ed45342d7319115d29f50050e26d1f210cb1",
+      "bytes": 376
+    },
+    {
+      "repository": "phosphor-icons/core",
+      "path": "assets/regular/magnifying-glass-minus.svg",
+      "gitBlob": "780fb35d1abe333946b387d81cc8103ee46ff1e6",
+      "sha256": "a8478832f12a7a5a231e1ffb1b987fe45f9e1508570b98046e7ff51db7eb1043",
+      "bytes": 326
+    }
+  ],
+  "icons": {
+    "ArrowDown": "arrow-down",
+    "CheckCircle2": "check-circle",
+    "ChevronDown": "caret-down",
+    "ChevronRight": "caret-right",
+    "Code2": "code",
+    "Copy": "copy",
+    "Download": "download-simple",
+    "Eye": "eye",
+    "File": "file",
+    "Folder": "folder-simple",
+    "GitBranch": "git-branch",
+    "Organization": "buildings",
+    "Repo": "book-open",
+    "MessageSquare": "chat-text",
+    "Maximize2": "arrows-out-simple",
+    "PanelBottom": "rows",
+    "PanelRight": "columns",
+    "Paperclip": "paperclip",
+    "Pencil": "pencil-simple",
+    "Pin": "push-pin",
+    "Plus": "plus",
+    "RefreshCw": "arrows-clockwise",
+    "Search": "magnifying-glass",
+    "Trash2": "trash",
+    "X": "x",
+    "ZoomIn": "magnifying-glass-plus",
+    "ZoomOut": "magnifying-glass-minus"
+  }
+}

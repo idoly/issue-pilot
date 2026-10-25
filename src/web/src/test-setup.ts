@@ -31,6 +31,15 @@ export class EventSourceMock extends EventTarget {
   }
 }
 
+Object.defineProperty(window, "matchMedia", {
+  configurable: true,
+  value(query: string): MediaQueryList {
+    return Object.assign(new EventTarget(), {
+      media: query, matches: false, onchange: null,
+      addListener() {}, removeListener() {},
+    }) as MediaQueryList;
+  },
+});
 Object.defineProperty(globalThis, "ResizeObserver", { value: ResizeObserverMock, configurable: true });
 Object.defineProperty(globalThis, "EventSource", { value: EventSourceMock, configurable: true });
 Object.defineProperty(HTMLElement.prototype, "scrollTo", { value() {}, configurable: true });

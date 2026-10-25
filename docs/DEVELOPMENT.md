@@ -104,7 +104,7 @@ node --expose-gc --experimental-strip-types docs/experiments/sse-event-id-memory
 | 默认值、路径、预算、保留 | issue-pilot.config.ts、src/config.ts |
 | 角色、处理方式、状态 | src/domain/contracts.ts |
 | schema、启动迁移、升级历史 | src/db/schema.ts、bootstrap.ts、drizzle/ |
-| 用户、凭证、配置投影 | src/configuration、http/route-context.ts；离线格式转换：scripts/configuration-conversion.ts |
+| 用户、凭证、配置投影 | src/configuration、http/route-context.ts；业务配置唯一来源为 SQLite |
 | 工单及附件事务 | http/issue-routes.ts、attachment-store.ts |
 | Agent 排队、会话、模型、资源 | src/agent、configuration/pi-runtime.ts |
 | 工具输入与外部协议 | capabilities/registry.ts、src/capabilities、src/mcp |
@@ -137,7 +137,7 @@ Solid 2 使用 `createEffect(compute, callback)`，callback 只返回清理函�
 
 工单描述与对话共用带工单上下文的 Markdown 链接解析。Markdown 和原始 HTML 锚点都在最终清洗前解析为授权下载路径，保留 DOMPurify 清洗。覆盖历史路径、当前文件、显式关联文件、未关联工单拒绝、路径遍历拒绝、标题唯一提示及窄屏单行滚动；不能只用截图替代导航和身份行为测试。
 
-Monaco 使用公开 editor/model API，组件负责释放资源。修改时保留 SHA-256、CRLF、自动保存、撤销、只读与冲突语义。图标与字体配置由 `ui/icons.tsx`、`EditorIcons.tsx` 和 Vite 构建维护。
+Monaco 使用公开 editor/model API，组件负责释放资源。修改时保留 SHA-256、CRLF、自动保存、撤销、只读与冲突语义。图标与字体配置由 `ui/icons.tsx`、`ui/Codicon.tsx`、`EditorIcons.tsx` 和 Vite 构建维护。普通操作图标使用 Phosphor Regular SVG，代码浏览器单独按需加载 Codicon 字体；文件格式图标沿用 Material Icon Theme。Geist／Geist Mono 以本地 WOFF2 和 CJK 系统字体回退提供，font-display 为 swap，许可证随 assets/interface-licenses.txt 交付。更新资源时同步 ui/assets/provenance.json 和上游许可证。共享控件维护字号、焦点和减少动效状态；移动业务表单的主要按钮保持至少 44px 高，代码编辑器保留其密集工具栏几何。
 
 网页状态与交互由 Vitest/jsdom 验证，文件下载与服务协议由隔离 HTTP fixture 验证。项目没有 Playwright 生产依赖或默认浏览器 MCP；需要真实浏览器验证时使用 Operator 提供的外置工具或临时浏览器镜像，并记录工具版本、页面尺寸、请求范围和结果。不要在生产数据上写测试工单；截图使用独立演示数据，不采集真实工单、凭证或私有配置。
 

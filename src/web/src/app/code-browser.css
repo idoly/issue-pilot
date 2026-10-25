@@ -8,11 +8,12 @@
 .source-browser-title strong { font: 12px var(--app-font); color: #e6edf3; }
 .source-browser-title small { overflow: hidden; color: #8b949e; font: 10px var(--mono-font); text-overflow: ellipsis; white-space: nowrap; }
 .source-view-switcher { display: flex; gap: 2px; }
-.source-browser .ui-button { border-color: #30363d; background: #161b22; color: #c9d1d9; font-family: inherit; }
+.source-browser .ui-button { min-height: 0; height: 32px; padding: 4px 8px; border-color: #30363d; background: #161b22; color: #c9d1d9; font: 12px/16px var(--app-font); }
+.source-browser .ui-button-circle { width: 32px; min-width: 32px; }
 .source-browser .ui-button[data-variant="text"] { border-color: transparent; background: transparent; box-shadow: none; }
 .source-browser .ui-button[aria-pressed="true"] { background: #30363d; color: #fff; }
 .source-browser .ui-button[data-variant="solid"] { border-color: #238636; background: #238636; color: #fff; }
-.source-browser .ui-input-affix-wrapper, .source-browser .ui-input { border-color: #30363d; background: #0d1117; color: #e6edf3; }
+.source-browser .ui-input-affix-wrapper, .source-browser .ui-input { min-height: 0; border-color: #30363d; background: #0d1117; color: #e6edf3; }
 .source-body { display: grid; min-height: 0; flex: 1; margin-right: var(--source-details-width, 0px); grid-template-columns: var(--source-navigation-width, 300px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--source-agent-height, 0px); }
 .source-navigation { container: source-navigation / inline-size; position: relative; display: flex; grid-row: 1 / span 2; min-width: 0; min-height: 0; flex-direction: column; overflow: auto; box-shadow: inset -1px 0 #30363d; background: #010409; }
 .source-navigation-title { display: flex; height: 35px; flex: 0 0 35px; align-items: center; justify-content: space-between; overflow: hidden; padding: 0 8px 0 20px; font-size: 11px; white-space: nowrap; }
@@ -133,7 +134,7 @@
 .source-history-commit.active .source-history-file::before { background: #21262d; }
 .source-history-file-graph { position: absolute; top: 0; left: 0; color: #59a4f9; pointer-events: none; }
 .source-history-file > button:first-child > .editor-file-icon { margin-right: 6px; }
-.source-revision-title { font-style: italic; font-synthesis: style; }
+.source-revision-title { font-style: normal; font-weight: 600; }
 .source-diff-summary { display: flex; height: 22px; align-items: center; gap: 8px; font-size: 11px; opacity: 0; pointer-events: none; }
 .source-editor:hover .source-diff-summary, .source-diff-summary:focus-within { opacity: 1; pointer-events: auto; }
 .source-diff-summary > div { display: flex; gap: 2px; }

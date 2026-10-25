@@ -8,11 +8,6 @@
       "type": "sse",
       "url": "https://dms.example.com/sse",
       "enabled": true
-    },
-    "mysql": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@benborla29/mcp-server-mysql@2.0.9"]
     }
   }
 }

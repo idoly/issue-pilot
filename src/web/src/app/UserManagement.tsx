@@ -44,6 +44,7 @@ export function UserManagement() {
   const save = async () => {
     if (saving() || !canEdit(editing() ?? undefined)) return;
     if (!name().trim() || !email().trim()) { setSaveError("请填写姓名和邮箱"); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email().trim())) { setSaveError("请填写有效的邮箱地址"); return; }
     const owner = generation, target = editing();
     const input = { name: name().trim(), email: email().trim(), role: role(), ...(currentUser()?.isAdmin ? { isAdmin: admin() } : {}) };
     setSaving(true); setSaveError("");

@@ -964,7 +964,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
     const token = await within(dialog).findByLabelText("dms Token 2");
     fireEvent.input(token, { target: { value: "Bearer replacement" } });
-    await waitFor(() => expect(within(dialog).getByText("DatabaseId 42")).toBeTruthy());
+    await waitFor(() => expect(within(dialog).getByText("数据库范围已确认")).toBeTruthy());
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
@@ -1022,6 +1022,17 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(categories).getByRole("tab", { name: "仓库" }));
     fireEvent.click(await screen.findByRole("button", { name: "SRM" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "SRM" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  test("skip navigation focuses the workspace without changing the current URL", async () => {
+    render(() => <App initialView="configuration" />);
+    const link = await screen.findByRole("link", { name: "跳到主要内容" });
+    const content = document.getElementById("app-content");
+    const location = window.location.href;
+    fireEvent.click(link);
+    await waitFor(() => expect(document.activeElement).toBe(content));
+    expect(window.location.href).toBe(location);
+    expect(screen.getByRole("tablist", { name: "配置分类" })).toBeTruthy();
   });
 
   test("loads only visited settings categories and retains personnel filters across navigation", async () => {

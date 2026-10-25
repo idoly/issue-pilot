@@ -22,7 +22,7 @@ test("page configuration persists across restart and old files never overwrite i
     await writeFile(path.join(f.root, "user.yaml"), 'private-key: "invalid\n', { mode: 0o600 });
     const connection = openDatabase(f.databaseFile);
     try {
-      await connection.db.insert(userPreferences).values({ subject: issuePilotConfig.bootstrapUser.subject, dingtalk: { fields: { title: "序号" }, source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=row", assignee: "Owner" } } });
+      await connection.db.insert(userPreferences).values({ subject: issuePilotConfig.bootstrapUser.subject, dingtalk: { fields: { title: "序号" }, source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=row", environment: "test" } } });
       await connection.db.insert(applicationSettings).values({ id: 1, maxConcurrentIssues: 2, dingtalkFields: { description: "描述" } });
     } finally { await connection.close(); }
     await f.stop();
@@ -31,7 +31,7 @@ test("page configuration persists across restart and old files never overwrite i
     const config = (await restarted.inject({ method: "GET", url: "/api/config" })).json();
     assert.equal(config.services[0].name, "Page"); assert.equal("fileManaged" in config, false);
     const connectionAfter = openDatabase(f.databaseFile);
-    try { const preferences = await loadDingtalkUserSettings(connectionAfter.db, issuePilotConfig.bootstrapUser.subject); assert.equal(preferences.source?.assignee, "Owner"); assert.deepEqual(preferences.fields, { description: "描述", title: "序号" }); }
+    try { const preferences = await loadDingtalkUserSettings(connectionAfter.db, issuePilotConfig.bootstrapUser.subject); assert.equal(preferences.source?.environment, "test"); assert.deepEqual(preferences.fields, { description: "描述", title: "序号" }); }
     finally { await connectionAfter.close(); }
     assert.equal(await readFile(path.join(f.root, "user.yaml"), "utf8"), 'private-key: "invalid\n');
     const credentials = await restarted.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { model: { mode: "replace", provider: "enterprise-ai", apiKey: "page-owned-key" } } });
