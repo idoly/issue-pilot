@@ -192,5 +192,104 @@
     },
     "typecheck": "passed",
     "build": "passed"
+  },
+  "deployment": {
+    "implementationCommit": "e70a608fd1247eceb9d0efc8d83bc369bca6a100",
+    "livePerformance": {
+      "samples": [
+        {
+          "kind": "resample",
+          "ms": 4603.02,
+          "issues": 334
+        },
+        {
+          "kind": "cached",
+          "ms": 4.23,
+          "issues": 334
+        },
+        {
+          "kind": "cached",
+          "ms": 1.58,
+          "issues": 334
+        },
+        {
+          "kind": "cached",
+          "ms": 1.58,
+          "issues": 334
+        },
+        {
+          "kind": "cached",
+          "ms": 1.0,
+          "issues": 334
+        },
+        {
+          "kind": "cached",
+          "ms": 0.91,
+          "issues": 334
+        }
+      ],
+      "cachedMedianMs": 1.58,
+      "snapshotStable": true,
+      "businessWrite": false
+    },
+    "repeatedResamples": [
+      {
+        "ms": 2441.75,
+        "issues": 334
+      },
+      {
+        "ms": 2022.33,
+        "issues": 334
+      },
+      {
+        "ms": 1988.56,
+        "issues": 334
+      }
+    ],
+    "repeatedResampleMedianMs": 2022.33,
+    "browser": [
+      {
+        "width": 1440,
+        "homepageStorageRequests": 0,
+        "firstResourceRequests": 1,
+        "cachedApiMs": [
+          4,
+          4,
+          4
+        ],
+        "snapshotStable": true,
+        "explicitRefreshResamples": true,
+        "measurementValuesPreserved": true,
+        "issues": 334,
+        "pageErrors": 0,
+        "noOverflow": true
+      },
+      {
+        "width": 390,
+        "homepageStorageRequests": 0,
+        "firstResourceRequests": 1,
+        "cachedApiMs": [
+          2,
+          3,
+          2
+        ],
+        "snapshotStable": true,
+        "explicitRefreshResamples": true,
+        "measurementValuesPreserved": true,
+        "issues": 334,
+        "pageErrors": 0,
+        "noOverflow": true
+      }
+    ],
+    "allBusinessTablesAndGitFactsUnchanged": true,
+    "auditVulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 3,
+      "critical": 0,
+      "total": 3
+    },
+    "pythonCheck": "passed"
   }
 }
