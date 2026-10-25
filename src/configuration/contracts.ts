@@ -37,12 +37,14 @@ export interface ConfigurationCatalog {
 }
 
 interface ServiceDeployment extends ProjectedCapabilityConfiguration {
+  mysql?: Array<Omit<NonNullable<CapabilityConfiguration["mysql"]>[number], "password"> & { passwordConfigured: boolean }>;
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];
 }
 
 export interface ServiceConfiguration {
+  revision?: number;
   key: string;
   name: string;
   description: string;
@@ -54,20 +56,19 @@ export interface ServiceConfiguration {
 export interface DingtalkSourceSettings { mcp: string; url: string; assignee: string; intervalMinutes?: number; environment?: "dev" | "test" | "prod" }
 export interface DingtalkUserSettings { fields?: Partial<DingtalkColumns>; source?: DingtalkSourceSettings }
 
-export interface FileConfigurationState { services: boolean; mcp: boolean; userSubject?: string; maxConcurrentIssues?: number; userSubjects?: string[]; mcpServiceNames?: string[] }
-
 export interface Configuration extends ConfigurationCatalog {
-  fileManaged?: FileConfigurationState;
   agent: AgentConfiguration;
   agentModels: AgentModelOption[];
   services: ServiceConfiguration[];
 }
 
 export interface ServiceConfigurationInput {
+  expectedRevision?: number;
   name: string;
   description: string;
   repositories: Array<{ id?: string; alias: string; url: string }>;
   deployments: Array<CapabilityConfigurationInput & {
+    mysql?: CapabilityConfiguration["mysql"];
     environmentKey: string;
     repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
     capabilities: CapabilityName[];

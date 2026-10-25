@@ -6,12 +6,11 @@ import { ApiError, record } from "./input.ts";
 import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({ id: row.id, name: row.name, url: publicMcpUrl(row.url), transport: row.transport, enabled: row.enabled, credentialConfigured: row.transport === "stdio" ? Boolean(row.stdio) : Boolean(row.authorization || new URL(row.url).search) });
-export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive" | "fileConfiguration">) {
+export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">) {
   const { app, database, engine, runScopeExclusive } = context;
-  const current = (row: McpRow) => !context.fileConfiguration?.mcp || context.fileConfiguration.mcpServiceNames?.includes(row.name) === true;
   const requireService = async (id: string) => {
     const [row] = await database.db.select().from(mcpServices).where(eq(mcpServices.id, id)).limit(1);
-    if (!row || !current(row)) throw new ApiError(404, "mcp_service_not_found");
+    if (!row) throw new ApiError(404, "mcp_service_not_found");
     return row;
   };
   const mutate = async <T>(operation: () => Promise<T>) => {
@@ -31,7 +30,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
   };
   app.get("/api/mcp-services", async (_request, reply) => {
     reply.header("Cache-Control", "private, no-store");
-    return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).filter(current).map(project));
+    return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).map(project));
   });
   app.get<{ Params: { id: string } }>("/api/mcp-services/:id/configuration", { logLevel: "silent" }, async (request, reply) => {
     reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
@@ -65,6 +64,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const current = await requireService(request.params.id);
+      if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service");
       const input = "mcpServers" in record(request.body) ? parseMcpImport(request.body, current)[0]! : parseMcpConfiguration(request.body, current);
       if (Object.entries(input).every(([key, value]) => key === "stdio" ? JSON.stringify(current.stdio) === JSON.stringify(value) : current[key as keyof typeof input] === value)) return project(current);
       return mutate(async () => { const [row] = await database.db.update(mcpServices).set({ ...input, updatedAt: new Date() }).where(eq(mcpServices.id, current.id)).returning(); return project(row!); });
@@ -72,7 +72,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
   });
   app.delete<{ Params: { id: string } }>("/api/mcp-services/:id", async (request, reply) => {
     await requireDeveloper(database, request);
-    await runScopeExclusive(async () => { await requireDeveloper(database, request); const current = await requireService(request.params.id); await mutate(() => database.db.delete(mcpServices).where(eq(mcpServices.id, current.id))); });
+    await runScopeExclusive(async () => { await requireDeveloper(database, request); const current = await requireService(request.params.id); if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service"); await mutate(() => database.db.delete(mcpServices).where(eq(mcpServices.id, current.id))); });
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string } }>("/api/mcp-services/:id/test", { logLevel: "silent" }, async (request, reply) => {

@@ -22,12 +22,13 @@ for (const outcome of ["success", "failure"] as const) it(`ignores a previous id
   expect(screen.queryByText("Stale repository")).toBeNull();
   expect(screen.queryByText("old_identity_load_failed")).toBeNull();
 });
-it("shows two read-only columns and preserves the full address in its title", async () => {
+it("shows repository usage and developer controls while retaining the full address", async () => {
   state.user = () => alice;
   render(() => <RepositoryManagement />);
   const panel = screen.getByRole("region", { name: "仓库管理" });
   const address = await within(panel).findByText(repository.url);
   expect(address.getAttribute("title")).toBe(repository.url);
-  expect(panel.querySelectorAll(".repository-catalog-head > span")).toHaveLength(2);
-  expect(within(panel).queryByRole("button")).toBeNull();
+  expect([...panel.querySelectorAll("th")].map(node => node.textContent)).toEqual(["名称", "地址", "使用服务", ""]);
+  expect(within(panel).getByRole("button", { name: "登记仓库" })).toBeTruthy();
+  expect(within(panel).getByRole("button", { name: "编辑" })).toBeTruthy();
 });

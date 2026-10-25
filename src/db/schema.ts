@@ -1,3 +1,5 @@
+import type { DingtalkUserSettings } from "../configuration/contracts.ts";
+import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
 import { randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
@@ -14,12 +16,14 @@ const timestamps = {
 };
 
 export const subjects = sqliteTable("subjects", {
+  revision: integer("revision").notNull().default(0),
   isAdmin: integer("is_admin", { mode: "boolean" }).notNull().default(false),
   role: text("role", { enum: USER_ROLES }).notNull().default("product"),
   subject: text("subject").primaryKey(), displayName: text("display_name"), email: text("email"), active: integer("active", { mode: "boolean" }).notNull().default(true), ...timestamps,
 }, (table) => [index("subjects_active_name_idx").on(table.active, table.displayName), check("subjects_role_valid", sql`${table.role} in ('product', 'test', 'developer')`)]);
 
 export const userCredentials = sqliteTable("user_credentials", {
+  revision: integer("revision").notNull().default(0),
   subject: text("subject").primaryKey().references(() => subjects.subject, { onDelete: "cascade" }),
   modelApiKeys: json<Record<string, string>>("model_api_keys").notNull().default({}),
   productionDmsUrl: text("production_dms_url").notNull().default(""),
@@ -30,15 +34,29 @@ export const userCredentials = sqliteTable("user_credentials", {
   updatedAt: date("updated_at").notNull().$defaultFn(() => new Date()),
 });
 
+export const userPreferences = sqliteTable("user_preferences", {
+  subject: text("subject").primaryKey().references(() => subjects.subject, { onDelete: "cascade" }),
+  dingtalk: json<DingtalkUserSettings>("dingtalk").notNull().default({}),
+});
+
+export const applicationSettings = sqliteTable("application_settings", {
+  id: integer("id").primaryKey(),
+  maxConcurrentIssues: integer("max_concurrent_issues"),
+  dingtalkFields: json<Partial<DingtalkColumns>>("dingtalk_fields").notNull().default({}),
+  mysqlStdio: json<McpStdioConfiguration>("mysql_stdio"),
+}, table => [check("application_settings_singleton", sql`${table.id} = 1`)]);
+
 export const environments = sqliteTable("environments", {
   id: id(), key: text("key").notNull(), name: text("name").notNull(), kind: text("kind", { enum: ENVIRONMENT_KINDS }).notNull(), ...timestamps,
 }, (table) => [uniqueIndex("environments_key_unique").on(table.key)]);
 
 export const services = sqliteTable("services", {
+  revision: integer("revision").notNull().default(0),
   id: id(), key: text("key").notNull(), name: text("name").notNull(), description: text("description").notNull().default(""), ...timestamps,
 }, (table) => [uniqueIndex("services_key_unique").on(table.key)]);
 
 export const mcpServices = sqliteTable("mcp_services", {
+  deploymentId: text("deployment_id").references(() => serviceDeployments.id, { onDelete: "cascade" }),
   id: id(), name: text("name").notNull(), url: text("url").notNull(),
   transport: text("transport", { enum: MCP_TRANSPORTS }).notNull(),
   stdio: json<McpStdioConfiguration>("stdio"),
@@ -69,6 +87,7 @@ export const serviceDeployments = sqliteTable("service_deployments", {
 }, (table) => [uniqueIndex("service_deployment_unique").on(table.serviceId, table.environmentId)]);
 
 export const repositories = sqliteTable("repositories", {
+  revision: integer("revision").notNull().default(0),
   id: id(), name: text("name").notNull(), url: text("url").notNull(), ...timestamps,
 }, (table) => [uniqueIndex("repositories_url_unique").on(table.url)]);
 

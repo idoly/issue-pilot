@@ -1,13 +1,4 @@
 import { DINGTALK_COLUMNS, type DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
-import type { FileConfigurationState } from "./contracts.ts";
-
-export function managesFileUser(state: FileConfigurationState | undefined, subject: string): boolean {
-  return state?.userSubjects?.includes(subject) === true;
-}
-export function publicFileState(state: FileConfigurationState | undefined, subject: string): FileConfigurationState {
-  const { userSubject: _subject, userSubjects: _subjects, ...flags } = state ?? { services: false, mcp: false };
-  return { ...flags, ...(managesFileUser(state, subject) ? { userSubject: subject } : {}) };
-}
 
 export class FileConfigurationError extends Error {}
 const invalid = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };

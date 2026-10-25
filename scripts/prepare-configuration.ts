@@ -15,8 +15,8 @@ async function existingYaml(file: string) {
   return fileRecord(document.toJS());
 }
 
-const { values } = parseArgs({ options: { "state-root": { type: "string" }, output: { type: "string" }, subject: { type: "string" }, "fill-missing-from": { type: "string" }, "reference-service": { type: "string" }, "reference-mcp": { type: "string" } } });
-if (!values.output || !values.subject) throw new Error("usage: prepare-configuration.ts --output STAGING_DIRECTORY --subject SUBJECT [--state-root ROOT] [--fill-missing-from SUBJECT] [--reference-service FILE] [--reference-mcp FILE]");
+const { values } = parseArgs({ options: { "state-root": { type: "string" }, output: { type: "string" }, subject: { type: "string" }, "fill-missing-from": { type: "string" }, "reference-user": { type: "string" }, "reference-service": { type: "string" }, "reference-mcp": { type: "string" } } });
+if (!values.output || !values.subject) throw new Error("usage: prepare-configuration.ts --output STAGING_DIRECTORY --subject SUBJECT [--state-root ROOT] [--fill-missing-from SUBJECT] [--reference-user FILE] [--reference-service FILE] [--reference-mcp FILE]");
 const root = path.resolve(values["state-root"] ?? applicationConfig.stateRoot), output = path.resolve(values.output);
 if (root === output) throw new Error("configuration_output_must_be_staging");
 const database = new DatabaseSync(path.join(root, applicationConfig.state.databaseFile), { readOnly: true });
@@ -25,20 +25,22 @@ database.exec("BEGIN");
 try {
   const owner = database.prepare("SELECT * FROM subjects WHERE subject=? AND active=1").get(values.subject);
   if (!owner) throw new Error("configuration_user_not_active");
-  const existingUser = await existingYaml(path.join(root, "user.yaml"));
+  const existingUser = values["reference-user"] ? await existingYaml(values["reference-user"]) : undefined;
   const layout = convertUserFile(existingUser);
-  for (const row of database.prepare("SELECT s.subject AS account,c.* FROM subjects s LEFT JOIN user_credentials c ON c.subject=s.subject ORDER BY s.subject").all()) {
+  for (const row of database.prepare("SELECT s.subject AS account,c.*,p.dingtalk AS dingtalk_preferences FROM subjects s LEFT JOIN user_credentials c ON c.subject=s.subject LEFT JOIN user_preferences p ON p.subject=s.subject ORDER BY s.subject").all()) {
     const subject = String(row.account);
-    if (layout.users[subject]) continue;
+    const previous = layout.users[subject] ?? {};
     if (Boolean(row.production_sls_access_key_id) !== Boolean(row.production_sls_access_key_secret) || Boolean(row.production_dms_url) !== Boolean(row.production_dms_authorization)) throw new Error("incomplete_personal_credentials_require_review");
-    layout.users[subject] = {
+    layout.users[subject] = row.subject ? {
       apiKeys: JSON.parse(String(row.model_api_keys ?? "{}")),
       ssh: row.git_private_key ? { privateKey: row.git_private_key } : {},
       sls: row.production_sls_access_key_id ? { accessKeyId: row.production_sls_access_key_id, accessKeySecret: row.production_sls_access_key_secret } : {},
       dms: row.production_dms_url ? { url: row.production_dms_url, authorization: row.production_dms_authorization } : {},
-      dingtalk: {},
-    };
+      dingtalk: row.dingtalk_preferences ? JSON.parse(String(row.dingtalk_preferences)) : {},
+    } : { ...previous, ...(row.dingtalk_preferences ? { dingtalk: JSON.parse(String(row.dingtalk_preferences)) } : {}) };
   }
+  const settings = database.prepare("SELECT * FROM application_settings WHERE id=1").get();
+  if (settings?.dingtalk_fields) layout.shared.dingtalk = { ...fileRecord(layout.shared.dingtalk ?? {}), fields: JSON.parse(String(settings.dingtalk_fields)) };
   const agent = database.prepare("SELECT * FROM global_agent_configuration WHERE id=1").get();
   if (!agent) throw new Error("global_agent_configuration_missing");
   const repositoryRows = database.prepare("SELECT * FROM repositories ORDER BY name,url").all();
@@ -70,7 +72,8 @@ try {
         const targets = sls.targets ?? [{ name: String(deployment.environment_key), region: sls.region, project: sls.project, logstores: sls.logstores }];
         scope.sls = simpleTargets("sls", targets.map((target: { name: string; region: string; project: string; logstores: string[] }) => ({ name: target.name, value: { region: target.region, project: target.project, logstores: target.logstores } })), String(deployment.environment_key));
       }
-      if (configuration.db) scope.mysql = configuration.db.databases.map((target: { url: string; username: string; password: string }) => {
+      if (configuration.mysql?.length) scope.mysql = configuration.mysql;
+      else if (configuration.db) scope.mysql = configuration.db.databases.map((target: { url: string; username: string; password: string }) => {
         const url = new URL(target.url);
         return { host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port || 3306), database: decodeURIComponent(url.pathname.slice(1)), username: target.username, password: target.password };
       });
@@ -86,15 +89,15 @@ try {
   }
   const dms = layout.shared.dms === undefined ? undefined : fileRecord(layout.shared.dms);
   const user: Record<string, unknown> = { version: 2, shared: layout.shared, users: layout.users };
-  const service: Record<string, unknown> = { version: 2, issuesDirectory: "workspaces", agent: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinking_level, codemode: agent.codemode, runtime: JSON.parse(String(agent.runtime ?? "{}")) }, automation: { maxConcurrentIssues: 3 }, repositories: definitions, services: serviceDefinitions };
-  const referenceService = await existingYaml(values["reference-service"] ?? path.join(root, "service.yaml"));
+  const service: Record<string, unknown> = { version: 2, issuesDirectory: "workspaces", agent: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinking_level, codemode: agent.codemode, runtime: JSON.parse(String(agent.runtime ?? "{}")) }, automation: { maxConcurrentIssues: settings?.max_concurrent_issues ?? applicationConfig.runtime.agent.maxConcurrentIssues }, repositories: definitions, services: serviceDefinitions };
+  const referenceService = values["reference-service"] ? await existingYaml(values["reference-service"]) : undefined;
   if (referenceService) {
     if (referenceService.sources) service.sources = referenceService.sources;
     const automation = referenceService.automation === undefined ? {} : fileRecord(referenceService.automation);
     if (automation.maxConcurrentIssues) service.automation = { maxConcurrentIssues: automation.maxConcurrentIssues };
   }
   const mcp: { mcpServers: Record<string, Record<string, unknown>> } = { mcpServers: {} };
-  for (const row of database.prepare("SELECT * FROM mcp_services ORDER BY name").all()) {
+  for (const row of database.prepare("SELECT * FROM mcp_services WHERE deployment_id IS NULL ORDER BY name").all()) {
     const launch = row.transport === "stdio" ? JSON.parse(String(row.stdio)) : undefined;
     if (String(row.name).toLowerCase().includes("playwright") || Array.isArray(launch?.args) && launch.args.some((arg: unknown) => typeof arg === "string" && arg.includes("@playwright/mcp"))) continue;
     mcp.mcpServers[String(row.name)] = row.transport === "stdio" ? { ...JSON.parse(String(row.stdio)), type: "stdio", enabled: Boolean(row.enabled) } : { type: row.transport === "sse" ? "sse" : "streamable-http", url: row.url, ...(row.authorization ? { headers: { Authorization: row.authorization } } : {}), enabled: Boolean(row.enabled) };
@@ -103,6 +106,7 @@ try {
     const reference = JSON.parse(await readFile(values["reference-mcp"], "utf8"));
     for (const name of ["mysql", "dms", "dingtalk"]) if (reference?.mcpServers?.[name]) mcp.mcpServers[name] = reference.mcpServers[name];
   }
+  if (settings?.mysql_stdio) mcp.mcpServers.mysql = { ...JSON.parse(String(settings.mysql_stdio)), type: "stdio" };
   if (!mcp.mcpServers.mysql) mcp.mcpServers.mysql = { type: "stdio", command: "npx", args: ["-y", "@benborla29/mcp-server-mysql@2.0.9"] };
   else if (Array.isArray(mcp.mcpServers.mysql.args)) mcp.mcpServers.mysql.args = mcp.mcpServers.mysql.args.map((value: unknown) => value === "@benborla29/mcp-server-mysql" ? "@benborla29/mcp-server-mysql@2.0.9" : value);
   if (mcp.mcpServers.dms && dms) { mcp.mcpServers.dms.url = dms.url; delete mcp.mcpServers.dms.headers; }

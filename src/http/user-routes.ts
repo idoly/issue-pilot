@@ -5,7 +5,7 @@ import { subjects, issues, userCredentials } from "../db/schema.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
 import { USER_ROLES } from "../domain/contracts.ts";
-import { ApiError, choice, record, text } from "./input.ts";
+import { ApiError, checkRevision, choice, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 function userSubject(value: unknown): string {
@@ -37,6 +37,7 @@ function userAdmin(value: unknown): boolean {
 function serializeManagedUser(user: typeof subjects.$inferSelect) {
   return {
     ...serializePerson(user),
+    revision: user.revision,
     active: user.active,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
@@ -58,7 +59,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const user = await requireCurrentUser(database, request);
     reply.header("Cache-Control", "private, no-store");
     const [credentials] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, user.subject)).limit(1);
-    const status = credentialStatus(credentials);
+    const status = { ...credentialStatus(credentials), revision: credentials?.revision ?? 0 };
     return user.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
   });
 
@@ -66,10 +67,11 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const subject = await ensureCurrentSubject(database, request);
     const input = record(request.body);
     if (input.model || input.git) await requireDeveloper(database, request);
-    if (Object.keys(input).some((key) => !["model", "git", "production"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
+    if (Object.keys(input).some((key) => !["model", "git", "production", "expectedRevision"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
     const result = await changeUser(subject, () => input.model || input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async (closeSessions) => {
       const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
-      const values = { modelApiKeys: { ...existing?.modelApiKeys }, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
+      checkRevision(input.expectedRevision, existing?.revision ?? 0);
+      const values = { revision: (existing?.revision ?? 0) + 1, modelApiKeys: { ...existing?.modelApiKeys }, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
       if (input.model) {
         const model = record(input.model);
         const provider = model.provider === undefined ? (await loadGlobalAgentConfiguration(database.db)).provider : text(model.provider, "model_provider", 200);
@@ -107,7 +109,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       await closeSessions();
       const [saved] = await database.db.insert(userCredentials).values({ subject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } }).returning();
       const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-      const status = credentialStatus(saved);
+      const status = { ...credentialStatus(saved), revision: saved?.revision ?? 0 };
       return user?.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
     }).catch((error) => {
       if (error instanceof ApiError) throw error;
@@ -172,6 +174,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       return database.db.transaction(async (transaction) => {
         const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
         if (!existing) throw new ApiError(404, "user_not_found");
+        checkRevision(input.expectedRevision, existing.revision);
         const active = update.active ?? existing.active;
         const nextRole = update.role ?? existing.role;
         const isAdmin = update.isAdmin ?? existing.isAdmin;
@@ -192,7 +195,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
           const managers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
           if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
         }
-        const [updated] = await transaction.update(subjects).set({ ...update, updatedAt: new Date() }).where(eq(subjects.subject, subject)).returning();
+        const [updated] = await transaction.update(subjects).set({ ...update, revision: existing.revision + 1, updatedAt: new Date() }).where(eq(subjects.subject, subject)).returning();
         return serializeManagedUser(updated!);
       });
     });

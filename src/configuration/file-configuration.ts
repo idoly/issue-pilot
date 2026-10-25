@@ -4,15 +4,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { parseDocument } from "yaml";
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { environments, globalAgentConfiguration, mcpServices, repositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../db/schema.ts";
+import { applicationSettings, userPreferences, environments, globalAgentConfiguration, mcpServices, repositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../db/schema.ts";
 import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS, type CapabilityConfiguration } from "../domain/contracts.ts";
 import { parseCapabilityConfiguration, parseDmsConnectionConfiguration, parseSlsConnectionConfiguration } from "../capabilities/registry.ts";
+import { parseMysqlTargets } from "./mysql.ts";
 import { parseAgentRuntime } from "./pi-runtime.ts";
 import { parseMcpImport } from "./mcp.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "../http/service-configuration.ts";
 
-import type { DingtalkSourceSettings, DingtalkUserSettings, FileConfigurationState } from "./contracts.ts";
-export type { FileConfigurationState } from "./contracts.ts";
+interface ConfigurationImportResult { services: boolean; mcp: boolean; maxConcurrentIssues?: number; userSubjects?: string[]; mcpServiceNames?: string[] }
 import { FileConfigurationError, queryTargets, repositoryAddress, fileRecord as record, userFileLayout, dingtalkFieldConfiguration, validateDingtalkSource } from "./file-layout.ts";
 export { FileConfigurationError } from "./file-layout.ts";
 const fail = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };
@@ -53,23 +53,13 @@ function credentialInput(config: CapabilityConfiguration): Record<string, unknow
   };
 }
 
-export async function loadDingtalkUserSettings(stateRoot: string, subject: string): Promise<DingtalkUserSettings> {
-  const layout = userFileLayout(await readConfiguration(stateRoot, "user.yaml"));
-  const own = optionalRecord(layout.users[subject]?.dingtalk), shared = optionalRecord(layout.shared.dingtalk);
-  validateDingtalkSource(own.source);
-  const source = own.source === undefined ? undefined : structuredClone(own.source) as DingtalkSourceSettings;
-  if (source) { source.mcp = text(source.mcp); source.url = text(source.url); source.assignee = text(source.assignee); }
-  const fields = { ...dingtalkFieldConfiguration(shared.fields), ...dingtalkFieldConfiguration(own.fields) };
-  return { fields, ...(source ? { source } : {}) };
-}
-
-/** Files are authoritative; SQLite retains the validated projection and historical identities. Runs before Agent startup. */
-export async function applyFileConfiguration(database: Database, stateRoot: string): Promise<FileConfigurationState> {
+/** Explicit offline import. Normal application startup never reads these files. */
+export async function applyFileConfiguration(database: Database, stateRoot: string): Promise<ConfigurationImportResult> {
   const [serviceFile, userFile, mcpFile] = await Promise.all([readConfiguration(stateRoot, "service.yaml"), readConfiguration(stateRoot, "user.yaml"), readConfiguration(stateRoot, "mcp.json")]);
   if (serviceFile && serviceFile.version !== 2) return fail();
   if (serviceFile?.sources !== undefined) throw new FileConfigurationError("sources_belong_in_user_file");
   const userLayout = userFileLayout(userFile);
-  const status: FileConfigurationState = { services: Boolean(serviceFile), mcp: Boolean(mcpFile) };
+  const status: ConfigurationImportResult = { services: Boolean(serviceFile), mcp: Boolean(mcpFile) };
   if (!serviceFile && !userFile && !mcpFile) return status;
   try {
     const dms = optionalRecord(userLayout.shared.dms), sls = optionalRecord(userLayout.shared.sls), dingtalk = optionalRecord(userLayout.shared.dingtalk);
@@ -90,7 +80,8 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
     const slsConnection = Object.keys(sls).length ? parseSlsConnectionConfiguration(sls) : undefined;
     const mysqlTemplate = mcpEntries.mysql;
     if (mysqlTemplate) delete mcpEntries.mysql;
-    const generatedMysql: Record<string, unknown> = {};
+    const mysqlStdio = mysqlTemplate ? parseMcpImport({ mcpServers: { mysql: mysqlTemplate } })[0]?.stdio : undefined;
+    if (mysqlTemplate && !mysqlStdio) return fail();
     const serviceDefinitions = optionalRecord(serviceFile?.services);
     const repositoryDefinitions = optionalRecord(serviceFile?.repositories);
     const agent = optionalRecord(serviceFile?.agent);
@@ -103,6 +94,13 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
     // A changed Git worktree root needs its own explicit filesystem/Git migration.
     if (serviceFile?.issuesDirectory !== undefined && !["workspaces", "./workspaces"].includes(text(serviceFile.issuesDirectory))) throw new FileConfigurationError("file_configuration_work_directory_requires_migration");
     await database.transaction(async transaction => {
+      const [settings] = await transaction.select().from(applicationSettings).limit(1);
+      const settingsValues = {
+        maxConcurrentIssues: status.maxConcurrentIssues ?? settings?.maxConcurrentIssues ?? null,
+        dingtalkFields: userFile ? dingtalkFieldConfiguration(dingtalk.fields) : settings?.dingtalkFields ?? {},
+        mysqlStdio: mysqlStdio ?? settings?.mysqlStdio ?? null,
+      };
+      await transaction.insert(applicationSettings).values({ id: 1, ...settingsValues }).onConflictDoUpdate({ target: applicationSettings.id, set: settingsValues });
       const managedUsers: string[] = [];
       for (const [userSubject, personal] of Object.entries(userLayout.users)) {
         const [owner] = await transaction.select().from(subjects).where(eq(subjects.subject, userSubject));
@@ -112,13 +110,21 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
         const ssh = optionalRecord(personal.ssh), personalDms = optionalRecord(personal.dms), personalSls = optionalRecord(personal.sls);
         dingtalkFieldConfiguration(optionalRecord(personal.dingtalk).fields);
         validateDingtalkSource(optionalRecord(personal.dingtalk).source);
+        const preference = optionalRecord(personal.dingtalk);
+        await transaction.insert(userPreferences).values({ subject: userSubject, dingtalk: {
+          fields: dingtalkFieldConfiguration(preference.fields),
+          ...(preference.source ? { source: preference.source as unknown as import("./contracts.ts").DingtalkSourceSettings } : {}),
+        } }).onConflictDoUpdate({ target: userPreferences.subject, set: { dingtalk: {
+          fields: dingtalkFieldConfiguration(preference.fields),
+          ...(preference.source ? { source: preference.source as unknown as import("./contracts.ts").DingtalkSourceSettings } : {}),
+        } } });
         const privateKey = ssh.privateKey === undefined ? "" : secret(ssh.privateKey);
         if (privateKey && !/^-----BEGIN (?:OPENSSH|RSA|EC|PRIVATE|ENCRYPTED)/.test(privateKey)) return fail();
         const ownDms = Object.keys(personalDms).length ? parseDmsConnectionConfiguration(personalDms) : undefined;
         const ownSls = Object.keys(personalSls).length ? parseSlsConnectionConfiguration(personalSls) : undefined;
         const values = { modelApiKeys: apiKeys, gitPrivateKey: privateKey ? privateKey.trimEnd() + "\n" : "", productionDmsUrl: ownDms?.url ?? "", productionDmsAuthorization: ownDms?.authorization ?? "", productionSlsAccessKeyId: ownSls?.accessKeyId ?? "", productionSlsAccessKeySecret: ownSls?.accessKeySecret ?? "" };
         const [existing] = await transaction.select().from(userCredentials).where(eq(userCredentials.subject, userSubject));
-        if (!existing || !Object.entries(values).every(([key, value]) => same(existing[key as keyof typeof values], value))) await transaction.insert(userCredentials).values({ subject: userSubject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } });
+        if (!existing || !Object.entries(values).every(([key, value]) => same(existing[key as keyof typeof values], value))) await transaction.insert(userCredentials).values({ subject: userSubject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, revision: (existing?.revision ?? 0) + 1, updatedAt: new Date() } });
       }
       if (userFile) status.userSubjects = managedUsers;
       if (Object.keys(agent).length) {
@@ -183,22 +189,8 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
             if (!targets.length) return fail();
             configuration.sls = parseCapabilityConfiguration("sls", { ...slsConnection, ...targets[0], ...(targets.length > 1 ? { targets } : {}) });
           }
-          if (scope.mysql !== undefined) {
-            if (!mysqlTemplate || !Array.isArray(scope.mysql)) return fail();
-            for (const value of scope.mysql) {
-              const mysql = record(value), database = text(mysql.database);
-              if (Object.keys(mysql).some(key => !["host", "port", "username", "password", "database"].includes(key))) return fail();
-              const template = record(structuredClone(mysqlTemplate));
-              const host = text(mysql.host), rawPort = mysql.port ?? 3306;
-              const port = typeof rawPort === "number" || typeof rawPort === "string" ? Number(rawPort) : NaN;
-              if (!Number.isInteger(port) || port < 1 || port > 65535 || database.length > 255) return fail();
-              const displayName = `mysql-${key}-${environmentKey}-${database}`;
-              const name = displayName.length <= 100 ? displayName : `${displayName.slice(0, 72)}-${createHash("sha256").update(displayName).digest("hex").slice(0, 16)}`;
-              if (generatedMysql[name]) return fail();
-              generatedMysql[name] = { ...template, type: "stdio", env: { ...optionalRecord(template.env), MYSQL_HOST: host, MYSQL_PORT: String(port), MYSQL_USER: text(mysql.username), MYSQL_PASS: secret(mysql.password), MYSQL_DB: database, ALLOW_INSERT_OPERATION: "false", ALLOW_UPDATE_OPERATION: "false", ALLOW_DELETE_OPERATION: "false" } };
-            }
-          }
-          deployments.push({ environmentKey, repositoryBranches: Object.entries(branches).map(([repositoryAlias, branch]) => ({ repositoryAlias, baseBranch: text(branch) })), capabilities: Object.keys(configuration), ...credentialInput(configuration) });
+          if (scope.mysql !== undefined) configuration.mysql = parseMysqlTargets(scope.mysql);
+          deployments.push({ environmentKey, repositoryBranches: environmentKey === "dev" ? [] : Object.entries(branches).map(([repositoryAlias, branch]) => ({ repositoryAlias, baseBranch: text(branch) })), capabilities: Object.keys(configuration).filter(key => key !== "mysql"), ...(configuration.mysql ? { mysql: configuration.mysql } : {}), ...credentialInput(configuration) });
         }
         const input = { name: text(definition.name ?? key), description: typeof definition.description === "string" ? definition.description : "", repositories: aliases.map(alias => {
           const url = repositoryAddress(repositoryDefinitions[alias]);
@@ -210,7 +202,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
         await applyServiceConfiguration({ executor: transaction, serviceId, prepared, ...(!existingService || existingService.name !== input.name || existingService.description !== input.description ? { serviceUpdate: { name: input.name, description: input.description } } : {}) });
       }
       if (mcpFile) {
-        const entries = { ...mcpEntries, ...generatedMysql };
+        const entries = mcpEntries;
         const inputs = Object.keys(entries).length ? parseMcpImport({ mcpServers: entries }) : [];
         status.mcpServiceNames = inputs.map(input => input.name);
         const previous = await transaction.select().from(mcpServices);
@@ -218,7 +210,7 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
           const old = previous.find(row => row.name === input.name);
           if (!old || !Object.entries(input).every(([key, value]) => same(old[key as keyof typeof input], value))) await transaction.insert(mcpServices).values({ id: old?.id ?? createHash("sha256").update(input.name).digest("hex").slice(0, 24), ...input }).onConflictDoUpdate({ target: mcpServices.name, set: { ...input, updatedAt: new Date() } });
         }
-        for (const old of previous) if (old.enabled && !inputs.some(input => input.name === old.name)) await transaction.update(mcpServices).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpServices.id, old.id));
+        for (const old of previous) if (!old.deploymentId && old.enabled && !inputs.some(input => input.name === old.name)) await transaction.update(mcpServices).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpServices.id, old.id));
       }
     });
     return status;

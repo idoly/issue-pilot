@@ -31,6 +31,7 @@ test("the offline CLI upgrades a previous database and moves durable files, then
     const journal = JSON.parse(await readFile(path.resolve("drizzle/meta/_journal.json"), "utf8"));
     const before = new DatabaseSync(fixture.databaseFile);
     try {
+      before.exec("DROP TABLE user_preferences; DROP TABLE application_settings; ALTER TABLE mcp_services DROP COLUMN deployment_id; ALTER TABLE subjects DROP COLUMN revision; ALTER TABLE services DROP COLUMN revision; ALTER TABLE repositories DROP COLUMN revision; ALTER TABLE user_credentials DROP COLUMN revision;");
       before.exec("PRAGMA foreign_keys=ON; DROP TRIGGER issues_retired_type_insert; DROP TRIGGER issues_retired_type_update; DROP TRIGGER scope_transitions_retired_mode_insert; DROP TRIGGER scope_transitions_retired_mode_update; ALTER TABLE issue_attachments DROP COLUMN working_file_name;");
       before.prepare("DELETE FROM __drizzle_migrations WHERE created_at >= ?").run(journal.entries.find((entry: { tag: string }) => entry.tag === "0061_flat_issue_attachment_names").when);
       const issue = before.prepare("SELECT id,reporter_subject FROM issues WHERE key=?").get(key)!;

@@ -22,6 +22,7 @@ test("manages active users in SQLite without rewriting historical identities", a
     } });
     assert.equal(created.statusCode, 201, created.body);
     assert.deepEqual(await json(created), {
+      revision: 0,
       subject: "operator@example.test",
       name: "Operator",
       email: "operator@example.test",
@@ -51,6 +52,7 @@ test("manages active users in SQLite without rewriting historical identities", a
     } });
     assert.equal(disabled.statusCode, 200, disabled.body);
     assert.deepEqual(await json(disabled), {
+      revision: 1,
       subject: "operator@example.test",
       name: "Operations",
       email: "operations@example.test",

@@ -2,20 +2,20 @@
 
 应用数据继续保存在安装项目下的 `.issue-pilot/`。程序、npm 依赖和 Python 环境位于应用目录，不放入业务数据目录。工单文件与 Git 的布局见[存储设计](STORAGE.md)，升级与恢复见[运维手册](RUNBOOK.md)。
 
-## 配置文件
+## 配置来源与离线格式
 
 | 位置 | 内容 |
 | --- | --- |
-| `.issue-pilot/service.yaml` | 全局 Agent 选择、并发、仓库、服务环境、分支及查询目标 |
-| `.issue-pilot/user.yaml` | 所有已登记账号的凭证、各账号的钉钉来源，以及显式共享的服务凭证 |
-| `.issue-pilot/mcp.json` | MCP 地址、协议和本地程序启动方式；MySQL 使用 stdio 模板 |
+| `.issue-pilot/service.yaml` | 离线导入／导出：Agent、并发、仓库、服务环境及查询目标 |
+| `.issue-pilot/user.yaml` | 离线导入／导出：个人凭证、偏好及共享连接组 |
+| `.issue-pilot/mcp.json` | 离线导入／导出：全局 MCP 和 MySQL 启动模板 |
 | Pi 全局目录 | `models.json`、Operator 认证、settings、Skills、Prompts、Extensions、全局指令 |
-| SQLite | 工单与执行状态、配置的校验投影、既有用户和历史执行事实 |
+| SQLite | 人员、凭证、仓库、服务、环境目标、偏好与运行状态的唯一业务来源 |
 | `issue-pilot.config.ts` | 程序路径、默认值、预算和维护策略 |
 
 根配置中的 `http.sseRecentEventIds` 默认 4096，必须为正整数，控制单条 SSE 连接实时阶段保留的近期临时事件 ID 数量。完整回放及缓冲重叠先完成去重，再切换到这个窗口；持久条目 ID 在连接期间继续保留去重。该预算不限制消息内容、历史回放条数或网络背压队列，修改后随应用重启生效。
 
-没有文件时继续使用既有数据库配置，便于逐步迁移。存在相应文件时，启动阶段在 Agent 和维护任务运行之前校验、事务应用配置，数据库作为运行投影与历史存储；页面返回 `fileManaged` 标记并禁止维护第二份配置。文件变更重启生效；钉钉导入在请求时读取全局连接及当前账号的来源、字段映射。省略旧服务或仓库不自动删除其历史记录；MCP 文件中省略的旧连接会停用并从普通列表、连接测试和编辑入口隐藏，私有历史记录保留。不要直接修改数据库来绕过文件配置。
+人员、仓库、服务、个人凭证在页面保存后直接持久化到 SQLite，重启不被旧文件覆盖。旧文件即使仍位于 state root，也不会在正常启动或钉钉请求中读取。首次切换必须先按运维手册备份，停服后显式运行 `scripts/import-configuration.ts --state-root ROOT --apply`，将现有偏好及服务目标导入；导入与 API 共用实例租约，不允许在线执行，失败回滚且原文件不改写。导入时省略的旧服务／仓库不自动删除；普通手工 MCP 条目可停用，部署生成的 MySQL 连接由服务 owner 管理。
 
 三个文件都必须是私有 regular file，权限 `0600`，父目录 `0700`。支持 `${ENV_VAR}`，变量不存在时报稳定错误；不运行 `!command` 或 shell 展开。解析失败不返回 YAML 原文、SQL 参数或认证信息。完整示例见 [service.yaml](../examples/service.yaml)、[user.yaml](../examples/user.yaml)、[mcp.json](../examples/mcp.json)。
 
@@ -65,9 +65,9 @@ services:
           logstores: [application]
 ```
 
-`agent.runtime.networkAllowedDomains` 为模型本地工具和 stdio MCP 追加出口，按域名或 `host:port` 限定。SSH 使用的 22 端口与 HTTPS 的 443 端口应分别配置；代码仓库地址本身不会自动放通网络。规则在启动时投影，文件变更需重启应用重新应用，并重建工单会话；不能覆盖宿主地址和应用控制端口的拒绝规则。它不改变 DMS/SLS 业务查询的服务、环境及目标校验。
+`agent.runtime.networkAllowedDomains` 为模型本地工具和 stdio MCP 追加出口，按域名或 `host:port` 限定。SSH 使用的 22 端口与 HTTPS 的 443 端口应分别配置；代码仓库地址本身不会自动放通网络。规则从全局 Agent 数据库配置读取，修改沿用配置预约及会话重建流程；不能覆盖宿主地址和应用控制端口的拒绝规则。它不改变 DMS/SLS 业务查询的服务、环境及目标校验。
 
-仓库在顶层保存别名和地址，环境保存分支。新工单采用当前基线，既有开发分支和工作区不自动切换。当前目录升级保留 `issuesDirectory: workspaces`，相对 `.issue-pilot` 解析；更换已有 Git worktree 的根路径需要单独的显式迁移，不能只改配置。
+页面中仓库登记一次地址和显示名，服务选择仓库，正式／测试环境配置分支。开发代码基线只读继承同服务正式分支，不接受独立覆盖，缺少正式部署时明确拒绝。离线格式中的开发分支仅属旧资料，导入不会用它覆盖正式继承规则。新工单采用当前基线，既有开发分支和工作区不自动切换。当前目录升级保留 `issuesDirectory: workspaces`，相对 `.issue-pilot` 解析；更换已有 Git worktree 的根路径需要单独的显式迁移，不能只改配置。
 
 单个 DMS/SLS 目标直接填写字段，多个目标用数组；SLS 多目标显式填写各自的 `name`。例如：
 
@@ -90,7 +90,7 @@ sls:
 
 DMS 已有准确数据库绑定在目标相同时复用，新的 alias/schema 在首次查询前严格解析。SLS 多目标查询必须同时选择 `target` 和该目标的 `logstore`。开发工单仍显式选择 prod/test 证据；开发配置中的 DMS/SLS 声明必须已存在于正式或测试部署，不能暗中创建不同的查询来源。MySQL 可在各环境配置多个连接。
 
-`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉”手动读取，不启动定时同步器。旧版服务与单用户配置仅由 `scripts/prepare-configuration.ts` 显式离线转换，转换实现位于 `scripts/configuration-conversion.ts`；正常启动只接受数值 `version: 2`，不自动采纳旧格式、对象包装仓库地址或旧查询目标字典。配置版本不符时拒绝启动并保留原文件，不改写或自动迁移。个人 DMS 配置必须独立提供 URL 与 Authorization。
+`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉”手动读取，不启动定时同步器。旧版服务与单用户配置仅由 `scripts/prepare-configuration.ts` 显式离线转换，转换实现位于 `scripts/configuration-conversion.ts`；显式导入只接受数值 `version: 2`；旧格式先经准备命令转换。版本不符时导入拒绝并保留原文件，不影响正常数据库启动。个人 DMS 配置必须独立提供 URL 与 Authorization。
 
 ### user.yaml
 
@@ -127,15 +127,15 @@ users:
 
 `users` 以已有账号的 `subject` 为键，可保留停用账号的配置，但不会启用账号或授予角色、管理权限。每个列出的账号按文件完整投影，未列出的账号仍保留数据库配置。API Key 按 Pi provider 名称关联；SSH 私钥可以用 YAML 块字符串直接保存。个人 DMS 的 `url/authorization`、SLS 的两个 Key 分别组成完整组，不拼接不同身份。
 
-`shared` 提供部署查询与全局 MCP 连接的凭证。个人 DMS/SLS 组仍各自完整覆盖部署组。钉钉导入只使用选定的全局 MCP 连接。`shared.dingtalk.apiKey` 在启动投影时写入全局连接，用户不再配置钉钉 API Key 或连接地址，也没有个人身份覆盖、凭证补齐或失败回退分支。用户凭证页仅展示模型、SSH、DMS、SLS。默认来源链接只读取当前账号的声明，未声明单条记录来源时在弹窗填写。钉钉记录不再按人员或状态过滤。
+`shared` 提供部署查询与全局 MCP 连接的凭证。个人 DMS/SLS 组仍各自完整覆盖部署组。钉钉导入只使用选定的全局 MCP 连接。`shared.dingtalk.apiKey` 在显式导入时写入全局连接，用户不再配置钉钉 API Key 或连接地址，也没有个人身份覆盖、凭证补齐或失败回退分支。用户凭证页仅展示模型、SSH、DMS、SLS。默认来源链接只读取当前账号的声明，未声明单条记录来源时在弹窗填写。钉钉记录不再按人员或状态过滤。
 
-准备脚本导出数据库中全部账号并保留已有文件配置，但不再输出个人钉钉 API Key／连接地址。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
+准备脚本从数据库导出账号、凭证与钉钉偏好，不默认读取旧配置文件，也不输出个人钉钉 API Key／连接地址；仅显式 `--reference-user`／`--reference-service` 用于历史资料转换。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
 
 ### 钉钉导入
 
 顶部“钉钉”打开“导入”弹窗，只接受 `/notable/record?dentryUuid=BASE&rowId=RECORD&sheetId=TABLE` 单条记录链接。选择入口服务、处理方式、优先级后直接点击“导入工单”，不预览、不扫表、不分页，不按人员、模块或状态筛选。当前连接身份仍负责读取权限，创建的工单归当前应用用户。页面导入成功后立即启动 Agent，不显示当前用户信息和启动选项；重复导入只返回已有工单，不重复启动。成功后显示工单链接，弹窗保留，链接输入清空，方便继续导入。
 
-字段映射在 `user.yaml` 配置，不提供页面选择器或调用参数覆盖。支持精确字段名或 ID；找不到或重名时明确报错。个人 `users.<subject>.dingtalk.fields` 按项覆盖共享映射。标题直接使用“序号”原值，不拼接其他标题。可以设置空字符串跳过可选字段。
+字段映射保存在数据库偏好中，不提供临时调用参数覆盖。旧格式可通过离线 user.yaml 显式导入。支持精确字段名或 ID；找不到或重名时明确报错。个人 user_preferences.dingtalk.fields 按项覆盖 application_settings.dingtalk_fields。标题直接使用“序号”原值，不拼接其他标题。可以设置空字符串跳过可选字段。
 
 ```yaml
 shared:
@@ -160,13 +160,13 @@ MCP 端点提供 `dingtalk_import`，与页面复用同一接口和配置。参�
 
 ## 内建能力与工具
 
-配置页不再提供独立的“能力”和“基座”分类。用户页只展示当前账号的 API Key、SSH Key、SLS 和 DMS 凭证状态，不展示密钥正文或人员管理；仓库页只展示名称与地址，不提供维护操作和引用服务列。顶层 repositories 和 services 仍同属 service.yaml，仓库可独立登记，不要求绑定服务。DMS/SLS 的查询目标继续在服务详情展示，MySQL 和钉钉通过 MCP 提供；同一种能力可以有多个服务环境连接，不将连接实例数量当作能力种类数量。
+配置页顺序为用户、仓库、服务、端点。用户页提供四组个人凭证和人员管理；凭证弹窗直接填写，留空保留，清除显式执行，不回显秘密。仓库页登记／编辑地址与显示名、查看使用服务并可跳转；未使用仓库可删除。服务保留顶部 Tab、代码分支矩阵和描述，开发基线只读继承正式分支；MySQL、DMS、SLS 仍按环境维护。MySQL 密码只在开发者选定服务的私有详情／编辑读取，普通配置 GET 只返回 passwordConfigured。页面编辑携带整数 revision，过期返回 configuration_changed 并保留输入，可显式重新加载。API 仍允许省略 expectedRevision 的现有调用；需要冲突保护的客户端应始终携带它。
 
 原生 `service_query` 只提供 DMS 和 SLS，显式选择 service/environment。Nacos、Redis、RabbitMQ、Elasticsearch 和原生 MySQL 已移除。旧部署 JSON 仅作为私有恢复证据保留，不投影、不执行；新增迁移移除旧开关，历史迁移保持不变。
 
 ### MySQL MCP
 
-`mcp.json` 的 `mysql` 项是 stdio 启动模板，连接参数只在 `service.yaml` 中填写。应用按服务、环境、数据库展开连接，注入 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB`；固定关闭 INSERT/UPDATE/DELETE 开关。密码保留有效空白，不进入 argv。示例固定 `@benborla29/mcp-server-mysql@2.0.9`。模板本身不作为无连接参数的服务器启动。
+MySQL 目标保存在 service_deployments.config.mysql，保存与关联全局 MCP 条目同一事务完成。默认启动模板固定 `@benborla29/mcp-server-mysql@2.0.9`，显式导入可保存已有 stdio 模板到 application_settings。应用按部署、host、port、database 标识连接，注入 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB`；固定关闭 INSERT/UPDATE/DELETE 开关。密码保留有效空白，不进入 argv。示例固定 `@benborla29/mcp-server-mysql@2.0.9`。模板本身不作为无参数服务器启动。生成条目带 deployment_id，不允许经通用 MCP 接口修改或删除；服务移除目标时按归属删除。由于工具全局可见，连接声明变化预约全部现有工单，避免旧 Pi 会话继续持有过期连接。
 
 Pi 在同一工单会话中复用对应 MCP 连接。MySQL 的 SQL 能力、结果格式和读取限制由所选 MCP 服务及数据库账号负责；不再提供原生 `db` 查询、导出接口或其事务保证。需要交付时在工单工作目录处理 MCP 返回结果，直接保存普通文件并使用工作文件下载链接。
 
@@ -192,7 +192,7 @@ SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 ali
 
 ## Agent 基座与资源
 
-Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，`service.yaml` 的 `agent.runtime.settings` 可显式覆盖运行参数；`agent.runtime.networkAllowedDomains` 为本地工具和 stdio MCP 追加按域名或 `host:port` 限定的出口，使用 SRT 的域名规则校验，不能覆盖宿主控制地址与端口的拒绝规则。省略运行设置时清除旧数据库设置覆盖并采用全局 Pi settings；省略网络追加项时清除旧数据库网络覆盖，采用根配置的基础域名列表。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
+Skills、Prompts、Extensions、SYSTEM/APPEND_SYSTEM 与全局指令通过 Pi 标准 ResourceLoader 从 `getAgentDir()` 加载，默认 `~/.pi/agent`，尊重 Pi 自己的目录配置。全局 settings 是基线，全局 Agent 配置的 runtime.settings 可显式覆盖运行参数；`agent.runtime.networkAllowedDomains` 为本地工具和 stdio MCP 追加按域名或 `host:port` 限定的出口，使用 SRT 的域名规则校验，不能覆盖宿主控制地址与端口的拒绝规则。省略运行设置时清除旧数据库设置覆盖并采用全局 Pi settings；省略网络追加项时清除旧数据库网络覆盖，采用根配置的基础域名列表。配置准备脚本会把原有运行偏好一并导出以便审核。应用不再绑定源码 `.pi` 目录，不另建应用资源目录，也不加载工单中生成的 `.pi` 扩展。用户扩展不能覆盖应用保护的工具名称。
 
 资源检查 GET 仅发现扩展路径，不执行用户扩展。实际会话创建时加载资源，正常触发扩展启动和关闭。模型接口定义继续由全局 Pi `models.json` 管理。改变资源后重建会话或重启应用。
 

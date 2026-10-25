@@ -8,12 +8,9 @@ import { applicationConfig } from "../config.ts";
 import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import { AgentEventBus } from "../agent/events.ts";
-import { managesFileUser } from "../configuration/file-layout.ts";
-import { requireCurrentUser } from "./route-context.ts";
-import { applyFileConfiguration } from "../configuration/file-configuration.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import type { DatabaseConnection } from "../db/client.ts";
-import { issues } from "../db/schema.ts";
+import { applicationSettings, issues } from "../db/schema.ts";
 import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../agent/model-runtime.ts";
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
@@ -95,7 +92,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const databaseStartedAt = performance.now();
     const database = await openApplicationDatabase(databaseFile);
     connection = database;
-    const fileConfiguration = await applyFileConfiguration(database.db, stateRoot);
+    const [settings] = await database.db.select().from(applicationSettings).limit(1);
     app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
     const pruneStartedAt = performance.now();
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
@@ -117,7 +114,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await ensureGlobalAgentConfiguration(database.db, modelCatalog);
     await app.register(multipart, { limits: { fileSize: Infinity, files: Infinity, fields: Infinity, parts: Infinity, fieldSize: Infinity } });
     const events = options.events ?? new AgentEventBus((error) => app.log.error(errorDiagnostic(error)));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(errorDiagnostic(error)), sharedModelRuntime(), fileConfiguration.maxConcurrentIssues);
+    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(errorDiagnostic(error)), sharedModelRuntime(), settings?.maxConcurrentIssues ?? undefined);
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -156,19 +153,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
 
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);
     const scopeTransitions = new IssueScopeTransitionManager(database.db, engine, workspaces);
-    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive, fileConfiguration };
-    app.addHook("preHandler", async request => {
-      if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
-      const url = request.url.split("?")[0]!;
-      const serviceMutation = /^\/api\/(?:services|repositories)(?:\/|$)/.test(url) || url === "/api/config/agent";
-      const mcpTest = request.method === "POST" && /^\/api\/mcp-services\/[^/]+\/test$/.test(url);
-      const mcpMutation = /^\/api\/mcp-services(?:\/|$)/.test(url) && !mcpTest;
-      if (fileConfiguration.services && serviceMutation || fileConfiguration.mcp && mcpMutation) throw new ApiError(409, "configuration_managed_by_files");
-      if (url === "/api/me/credentials" && fileConfiguration.userSubjects?.length) {
-        const user = await requireCurrentUser(database, request);
-        if (managesFileUser(fileConfiguration, user.subject)) throw new ApiError(409, "credentials_managed_by_user_file");
-      }
-    });
+    const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive };
     app.get("/health", async () => ({ ok: true }));
     registerUserRoutes(routeContext);
     registerRepositoryRoutes(routeContext);

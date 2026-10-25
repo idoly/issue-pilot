@@ -35,7 +35,7 @@ node --experimental-strip-types src/http/production.ts
 
 默认端口 3000。前端开发另运行 `npm run dev:web`，默认 4173，代理本机 API。修改 TS 文件不会自动重载后端，Vite HMR 不能代替发布。
 
-默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。可将示例配置以 `0600` 权限放入其中的 `service.yaml`、`user.yaml` 和 `mcp.json`；文件管理的配置在页面只读，重启时校验并事务更新运行投影。已有状态必须先准备配置和工作目录迁移方案，不能直接搬动 Git worktree。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
+默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。日常配置通过页面写入 SQLite。若从现有文件初始化，在停服并建立恢复点后显式运行 `scripts/import-configuration.ts --state-root ROOT --apply`；启动不会自动读取文件或覆盖页面修改。已有状态必须先准备配置和工作目录迁移方案，不能直接搬动 Git worktree。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
 
 已有工作站的 user systemd unit 为 `issue-pilot-api.service` 和 `issue-pilot-web.service`，由宿主管理，仓库不提供通用安装脚本。操作前核对 WorkingDirectory、ExecStart 和 PID：
 
@@ -62,7 +62,7 @@ podman push registry.example.com/issue-pilot:<version>
 | `/etc/issue-pilot`，只读 hostPath | `/home/node` | Operator Pi、SSH、工具配置 |
 | tmp emptyDir | `/tmp` | 临时文件 |
 
-Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入 `service.yaml` 的全局 `agent.runtime.networkAllowedDomains`（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。SSH Git 目标应包含对应 22 端口；“host is not on the allow list”属于本地工具网络策略，不等于 Git 权限验证失败。文件配置变更需按运维流程重启应用重新投影。
+Node/Maven 缓存分别属于工单根目录 `.npm-cache` 和 `.maven-cache`，Java 与工具 TMPDIR 同属工单根目录。npm/mvn 直接执行，应用按工单协调本地工具，不提供命令 broker 或包装器。Operator 包源配置沿用正常 npm/Maven 读取方式；所需私有目标加入数据库全局 Agent runtime.networkAllowedDomains（域名或 `host:port`），并验证实际私有仓库与 stdio MCP 连接。SSH Git 目标应包含对应 22 端口；“host is not on the allow list”属于本地工具网络策略，不等于 Git 权限验证失败。离线导入需按运维流程停止写入并备份；导入后按匹配版本重启。
 
 准备目录、owner/mode、容量及带 `issue-pilot/state=true` 标签的节点。已有数据转容器时，还须保持数据库和 Git 中的绝对路径可在容器内解析；挂载到另一目录不会自动重写历史 worktree 注册，必须先演练明确的路径方案。全局 Pi 资源位于 Operator HOME 中的 `~/.pi/agent`，随 HOME 配置挂载；不再为应用单独挂载 `.pi` 资源目录。
 

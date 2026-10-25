@@ -72,7 +72,10 @@ export interface AgentFooterStats {
   autoCompact: boolean;
 }
 
+export interface MysqlTarget { host: string; port: number; username: string; password: string; database: string }
+
 export interface CapabilityConfiguration {
+  mysql?: MysqlTarget[];
   dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[]; targets?: Array<{ name: string; region: string; project: string; logstores: string[] }> };
 }

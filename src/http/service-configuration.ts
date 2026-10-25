@@ -1,4 +1,5 @@
-import { or, eq, inArray } from "drizzle-orm";
+import { parseMysqlTargets, saveMysqlConnections } from "../configuration/mysql.ts";
+import { or, eq, inArray, sql } from "drizzle-orm";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { resolveConfiguredCapabilitySections } from "../configuration/credentials.ts";
 import type { Database } from "../db/client.ts";
@@ -17,11 +18,15 @@ function parseServiceDeployment(deployment: Record<string, unknown>, repositoryA
   if (strings(deployment.mcpServices ?? [], "mcp_services").length) throw new ApiError(400, "mcp_services_are_global");
   if (environmentKey === "dev" && capabilities.length) throw new ApiError(400, "development_capabilities_inherited");
   if (environmentKey === "dev" && existing && Object.keys(existing).some(key => key !== "archivedDevelopment")) throw new ApiError(409, "development_configuration_layout_invalid");
-  const repositoryBranches = Array.isArray(deployment.repositoryBranches) ? deployment.repositoryBranches.map(record).map(branch => ({ repositoryAlias: text(branch.repositoryAlias, "repository_alias", 100), baseBranch: text(branch.baseBranch, "base_branch", 255) })) : [];
-  if (repositoryBranches.length !== repositoryAliases.size || new Set(repositoryBranches.map(branch => branch.repositoryAlias)).size !== repositoryBranches.length || repositoryBranches.some(branch => !repositoryAliases.has(branch.repositoryAlias))) throw new ApiError(400, "invalid_deployment_repository_branches");
+  if (environmentKey === "dev" && Array.isArray(deployment.repositoryBranches) && deployment.repositoryBranches.length) throw new ApiError(400, "development_branches_inherited");
+  const repositoryBranches = environmentKey === "dev" ? [] : Array.isArray(deployment.repositoryBranches) ? deployment.repositoryBranches.map(record).map(branch => ({ repositoryAlias: text(branch.repositoryAlias, "repository_alias", 100), baseBranch: text(branch.baseBranch, "base_branch", 255) })) : [];
+  if (environmentKey !== "dev" && (repositoryBranches.length !== repositoryAliases.size || new Set(repositoryBranches.map(branch => branch.repositoryAlias)).size !== repositoryBranches.length || repositoryBranches.some(branch => !repositoryAliases.has(branch.repositoryAlias)))) throw new ApiError(400, "invalid_deployment_repository_branches");
   let config: StoredDeploymentConfig;
   try {
     config = resolveConfiguredCapabilitySections(deployment, capabilities, existing);
+    const mysql = parseMysqlTargets(deployment.mysql);
+    if (environmentKey === "dev" && mysql.length) throw new ApiError(400, "development_capabilities_inherited");
+    if (mysql.length) config.mysql = mysql;
     if (environmentKey === "dev" && existing?.archivedDevelopment !== undefined) config.archivedDevelopment = existing.archivedDevelopment;
   } catch (error) {
     if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
@@ -38,6 +43,7 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
   const aliases = new Set(repositories.map(repository => repository.alias));
   const deployments = Array.isArray(input.deployments) ? input.deployments.map(record).map(deployment => parseServiceDeployment(deployment, aliases, existing.get(String(deployment.environmentKey)))) : [];
   if (new Set(deployments.map(deployment => deployment.environmentKey)).size !== deployments.length) throw new ApiError(400, "duplicate_deployment_environment");
+  if (deployments.some(deployment => deployment.environmentKey === "dev") && !deployments.some(deployment => deployment.environmentKey === "prod")) throw new ApiError(400, "development_production_deployment_required");
   return { repositories, deployments };
 }
 
@@ -76,24 +82,25 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
 }
 
 async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: string, environmentId: string, existing: typeof serviceDeployments.$inferSelect | undefined, input: ReturnType<typeof parseServiceDeployment>, repositories: Map<string, { id: string }>) {
-  const retired = Object.fromEntries(Object.entries(existing?.config ?? {}).filter(([key]) => !CAPABILITY_KEYS.includes(key as CapabilityName)));
+  const retired = Object.fromEntries(Object.entries(existing?.config ?? {}).filter(([key]) => key !== "mysql" && !CAPABILITY_KEYS.includes(key as CapabilityName)));
   const values = { config: { ...retired, ...input.config }, updatedAt: new Date() };
   if (existing && JSON.stringify(existing.config) === JSON.stringify(values.config)) {
     const branches = await executor.select().from(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, existing.id));
-    if (branches.length === input.repositoryBranches.length && input.repositoryBranches.every(branch => branches.some(current => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))) return existing;
+    if (branches.length === input.repositoryBranches.length && input.repositoryBranches.every(branch => branches.some(current => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))) { await saveMysqlConnections(executor, existing.id, input.config.mysql ?? []); return { deployment: existing, changed: false }; }
   }
   const [saved] = existing
     ? await executor.update(serviceDeployments).set(values).where(eq(serviceDeployments.id, existing.id)).returning()
     : await executor.insert(serviceDeployments).values({ serviceId, environmentId, ...values }).returning();
   if (!saved) throw new Error("deployment_save_failed");
   await executor.delete(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, saved.id));
-  await executor.insert(serviceDeploymentRepositories).values(input.repositoryBranches.map(branch => ({ deploymentId: saved.id, repositoryId: repositories.get(branch.repositoryAlias)!.id, baseBranch: branch.baseBranch })));
-  return saved;
+  if (input.repositoryBranches.length) await executor.insert(serviceDeploymentRepositories).values(input.repositoryBranches.map(branch => ({ deploymentId: saved.id, repositoryId: repositories.get(branch.repositoryAlias)!.id, baseBranch: branch.baseBranch })));
+  await saveMysqlConnections(executor, saved.id, input.config.mysql ?? []);
+  return { deployment: saved, changed: true };
 }
 
 export async function applyServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; prepared: PreparedServiceConfiguration; serviceUpdate?: { name: string; description: string } }): Promise<void> {
   const { executor, serviceId, prepared, serviceUpdate } = options;
-  if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, updatedAt: new Date() }).where(eq(services.id, serviceId));
+  if (serviceUpdate) await executor.update(services).set({ ...serviceUpdate, revision: sql`${services.revision} + 1`, updatedAt: new Date() }).where(eq(services.id, serviceId));
   const existingById = new Map(prepared.existingRepositories.map(repository => [repository.id, repository]));
   const unchanged = new Set(prepared.parsed.repositories.filter(repository => {
     const existing = repository.id ? existingById.get(repository.id) : undefined;
@@ -115,10 +122,16 @@ export async function applyServiceConfiguration(options: { executor: DatabaseExe
     savedRepositoryByAlias.set(repository.alias, saved);
   }
   const retainedDeployments = new Set<string>();
+  let configurationChanged = rebuild;
   for (const input of prepared.parsed.deployments) {
     const environmentId = prepared.environmentsByKey.get(input.environmentKey)!.id;
     const saved = await applyServiceDeployment(executor, serviceId, environmentId, prepared.existingDeployments.find(deployment => deployment.environmentId === environmentId), input, savedRepositoryByAlias);
-    retainedDeployments.add(saved.id);
+    retainedDeployments.add(saved.deployment.id);
+    configurationChanged ||= saved.changed;
   }
-  for (const deployment of prepared.existingDeployments) if (!retainedDeployments.has(deployment.id)) await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
+  for (const deployment of prepared.existingDeployments) if (!retainedDeployments.has(deployment.id)) {
+    await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
+    configurationChanged = true;
+  }
+  if (configurationChanged && !serviceUpdate) await executor.update(services).set({ revision: sql`${services.revision} + 1`, updatedAt: new Date() }).where(eq(services.id, serviceId));
 }

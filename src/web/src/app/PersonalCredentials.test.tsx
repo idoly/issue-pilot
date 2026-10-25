@@ -19,7 +19,7 @@ test("shows exactly four personal credential groups without revealing secret val
   expect(within(region).getAllByText("已配置")).toHaveLength(4);
   expect(within(region).queryByText("钉钉")).toBeNull();
   expect(within(region).queryByRole("textbox")).toBeNull();
-  expect(within(region).queryByRole("button")).toBeNull();
+  expect(within(region).getAllByRole("button", { name: "更新凭证" })).toHaveLength(4);
   expect(screen.queryByRole("region", { name: "用户列表" })).toBeNull();
 });
 

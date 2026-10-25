@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { eq } from "drizzle-orm";
 import { stringify } from "yaml";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { dingtalkIssueImports, issues, mcpServices, subjects } from "../../src/db/schema.ts";
+import { applicationSettings, userPreferences, dingtalkIssueImports, issues, mcpServices, subjects } from "../../src/db/schema.ts";
 import type { McpConfiguration, McpConnector } from "../../src/mcp/client.ts";
 import type { DingtalkRecord } from "../../src/mcp/dingtalk-contracts.ts";
 import { createApiFixture, createService } from "./fixture.ts";
@@ -97,12 +97,13 @@ test("table links and client field mappings are rejected; all personnel and stat
   } finally { await f.cleanup(); }
 });
 
-test("field mappings come from shared and personal user.yaml configuration and support exact names and IDs", async () => {
+test("field mappings come from shared and personal database settings and support exact names and IDs", async () => {
   const f = await fixture();
   try {
     f.state.fields = [...fields, { fieldId: "custom-title", fieldName: "自定义标题", type: "text" }, { fieldId: "runtime-status", fieldName: "研发任务状态", type: "text" }];
     f.state.row.cells["custom-title"] = "Configured title"; f.state.row.cells["runtime-status"] = { value: ["A待安排"] };
-    await writeFile(path.join(f.root, "user.yaml"), stringify({ version: 2, shared: { dingtalk: { fields: { title: "自定义标题", attachments: "" } } }, users: { [f.user.subject]: { dingtalk: { fields: { number: "" } } } } }), { mode: 0o600 });
+    await f.database.db.insert(applicationSettings).values({ id: 1, dingtalkFields: { title: "自定义标题", attachments: "" } });
+    await f.database.db.insert(userPreferences).values({ subject: f.user.subject, dingtalk: { fields: { number: "" } } });
     const response = await f.submit(); assert.equal(response.statusCode, 200, response.body);
     assert.equal((await f.database.db.select().from(issues))[0]!.title, "Configured title");
     const query = f.state.calls.find(call => call.name === "query_records")!;

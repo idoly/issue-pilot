@@ -23,7 +23,7 @@ test("adds stdio without changing HTTP MCP records or deployment references", as
     const before = (await database.client.execute("SELECT * FROM mcp_services")).rows[0]!;
     await migrate(database.db, { migrationsFolder: path.resolve("drizzle") });
     const after = (await database.client.execute("SELECT * FROM mcp_services")).rows[0]!;
-    const { stdio, ...retained } = after; assert.equal(stdio, null); assert.deepEqual(retained, before);
+    const { stdio, deployment_id, ...retained } = after; assert.equal(stdio, null); assert.equal(deployment_id, null); assert.deepEqual(retained, before);
     assert.deepEqual(JSON.parse(String((await database.client.execute("SELECT config FROM service_deployments")).rows[0]!.config)).mcpServices, ["mcp-1"]);
     await database.client.execute({ sql: "INSERT INTO mcp_services (id,name,url,transport,stdio,created_at,updated_at) VALUES ('stdio-1','Local','','stdio',?,1,1)", args: [JSON.stringify({ command: "node", args: [], env: {} })] });
     await assert.rejects(database.client.execute("UPDATE mcp_services SET transport='invalid'"), /CHECK constraint/);

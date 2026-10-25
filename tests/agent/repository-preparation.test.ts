@@ -58,7 +58,9 @@ test("atomically switches development repository sets across preparation and fin
     const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
     await registerTestRepositories(database.db, remotes);
     const repositories = await database.db.insert(serviceRepositories).values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url }))).returning();
-    const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: {} }).returning();
+    const [production] = await database.db.select().from(environments).where(eq(environments.kind, "prod"));
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: {} });
+    const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: production!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values(repositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
     const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-103", title: "Remove repositories", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
@@ -279,30 +281,30 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const devRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));
     const devRepository = devRepositories.find((repository) => repository.url === remotes[0])!;
     assert.deepEqual(devRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)), [
-      { url: remotes[0], baseBranch: "develop" },
-      { url: remotes[1], baseBranch: "prod" },
+      { url: remotes[0], baseBranch: "prod" },
+      { url: remotes[1], baseBranch: "develop" },
     ]);
     const [devWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, devIssue!.id));
-    assert.equal(devRepository!.baseBranch, "develop");
+    assert.equal(devRepository!.baseBranch, "prod");
     assert.equal(devRepository!.workingBranch, `hotfix-${devIssue!.key.toLowerCase()}`);
     assert.equal(devRepository!.localPath?.startsWith(issueRoot(stateRoot, devIssue!.key)), true);
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.runtimeReady, true);
     assert.equal(starts[2]!.context.canModifyCode, true);
 
-    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "prod" }).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployments[1]!.id),
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "develop" }).where(and(
+      eq(serviceDeploymentRepositories.deploymentId, deployments[0]!.id),
       eq(serviceDeploymentRepositories.repositoryId, repositories[0]!.id),
     ));
-    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "develop" }).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployments[1]!.id),
+    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "prod" }).where(and(
+      eq(serviceDeploymentRepositories.deploymentId, deployments[0]!.id),
       eq(serviceDeploymentRepositories.repositoryId, repositories[1]!.id),
     ));
     await internal.run(devIssue!.id);
     const repeatedDevRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));
     assert.deepEqual(repeatedDevRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)), [
-      { url: remotes[0], baseBranch: "develop" },
-      { url: remotes[1], baseBranch: "prod" },
+      { url: remotes[0], baseBranch: "prod" },
+      { url: remotes[1], baseBranch: "develop" },
     ]);
 
     for (const start of starts) {

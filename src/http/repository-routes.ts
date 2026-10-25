@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, or } from "drizzle-orm";
 import { repositories, serviceRepositories, services, issues, issueServiceScopes } from "../db/schema.ts";
-import { ApiError, record, text } from "./input.ts";
+import { ApiError, checkRevision, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 function repositoryInput(body: unknown) {
@@ -44,9 +44,10 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
       await requireDeveloper(database, request);
       const [existing] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
       if (!existing) throw new ApiError(404, "repository_not_found");
+      checkRevision(record(request.body).expectedRevision, existing.revision);
       if (existing.name === input.name && existing.url === input.url) return { ok: true };
       if (existing.url === input.url) {
-        await database.db.update(repositories).set({ name: input.name, updatedAt: new Date() }).where(eq(repositories.id, existing.id));
+        await database.db.update(repositories).set({ name: input.name, revision: existing.revision + 1, updatedAt: new Date() }).where(eq(repositories.id, existing.id));
         return { ok: true };
       }
       const bindings = await database.db.select({ serviceId: serviceRepositories.serviceId }).from(serviceRepositories).where(eq(serviceRepositories.url, existing.url));
@@ -59,7 +60,7 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
         for (const { id } of affected) await reservation.closeSession(id);
         await database.db.transaction(async (tx) => {
           const now = new Date();
-          await tx.update(repositories).set({ ...input, updatedAt: now }).where(eq(repositories.id, existing.id));
+          await tx.update(repositories).set({ ...input, revision: existing.revision + 1, updatedAt: now }).where(eq(repositories.id, existing.id));
           if (serviceIds.length) {
             await tx.update(services).set({ updatedAt: now }).where(inArray(services.id, serviceIds));
             await tx.update(serviceRepositories).set({ updatedAt: now }).where(and(inArray(serviceRepositories.serviceId, serviceIds), eq(serviceRepositories.url, input.url)));

@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { loadDingtalkUserSettings, FileConfigurationError } from "../configuration/file-configuration.ts";
+import { loadDingtalkUserSettings } from "../configuration/user-preferences.ts";
 import { dingtalkIssueImports, issues, mcpServices } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { connectMcp, type McpConnector, type McpSession } from "../mcp/client.ts";
@@ -24,12 +24,11 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
     catch (error) {
       if (signal.aborted) throw new ApiError(408, "dingtalk_request_cancelled_or_timed_out");
       if (error instanceof DingtalkError) throw new ApiError(error.statusCode, error.message);
-      if (error instanceof FileConfigurationError) throw new ApiError(400, "dingtalk_configuration_invalid");
       throw error;
     } finally { request.raw.removeListener("aborted", abort); reply.raw.removeListener("close", close); }
   };
   const settings = (request: FastifyRequest) => runScopeExclusive(async () => {
-    const user = await requireCurrentUser(database, request), preferences = await loadDingtalkUserSettings(context.stateRoot, user.subject);
+    const user = await requireCurrentUser(database, request), preferences = await loadDingtalkUserSettings(database.db, user.subject);
     const name = preferences.source?.mcp ?? "dingtalk";
     const [server] = await database.db.select().from(mcpServices).where(and(eq(mcpServices.name, name), eq(mcpServices.enabled, true))).limit(1);
     return { user, preferences, name, server };

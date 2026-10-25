@@ -46,6 +46,7 @@ vi.mock("../data/client", async (importOriginal) => {
   };
   return {
     ...actual,
+    loadManagedUsers: vi.fn(async () => structuredClone(managedUsers.map(user => ({ ...user, revision: 0 })))),
     loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
     loadPersonalCredentials: vi.fn(async () => ({ provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
@@ -738,7 +739,7 @@ describe("issue pilot workspace", () => {
     expect(within(panel).queryByRole("button", { name: "管理仓库" })).toBeNull();
   });
 
-  test("keeps development editing to code branches and uses the existing service description editor", async () => {
+  test("derives the readonly development baseline from production and retains the description editor", async () => {
     render(() => <App initialView="configuration" />);
     expect(screen.queryByRole("tab", { name: "环境" })).toBeNull();
     fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
@@ -752,10 +753,15 @@ describe("issue pilot workspace", () => {
     const description = within(dialog).getByLabelText("项目描述");
     fireEvent.input(description, { target: { value: "开发时查询正式订单，测试时查询测试日志。" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "展开部署1" }));
-    expect(await within(dialog).findByLabelText("部署 1 仓库 orders 分支")).toHaveProperty("value", "develop");
+    expect((await within(dialog).findByLabelText("orders 开发基线")).textContent).toBe("main");
+    expect(within(dialog).queryByLabelText("部署 1 仓库 orders 分支")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署3" }));
+    fireEvent.input(await within(dialog).findByLabelText("部署 3 仓库 orders 分支"), { target: { value: "release/current" } });
+    await waitFor(() => expect(within(dialog).getByLabelText("orders 开发基线").textContent).toBe("release/current"));
     expect(within(dialog).queryByLabelText("redis host 2")).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: "dms" })).toBeNull();
-    expect(within(dialog).getByLabelText("部署 1 能力").textContent).toContain("继承正式/测试能力");
+    const developmentRow = within(dialog).getByLabelText("部署 1 能力").closest(".service-deployment-row") as HTMLElement;
+    expect(within(developmentRow).queryByRole("button", { name: "dms" })).toBeNull();
+    expect(within(dialog).getByLabelText("部署 1 能力").textContent).toContain("查询继承正式/测试");
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   });
 
@@ -986,22 +992,38 @@ describe("issue pilot workspace", () => {
       const panel = await screen.findByRole("region", { name: "仓库管理" });
       await within(panel).findByText("git@example.test:team/sub/z.git");
       expect(panel.querySelector(".repository-catalog-group")).toBeNull();
-      expect([...panel.querySelectorAll(".repository-catalog-row > code")].map(row => row.textContent)).toEqual(["git@example.test:team/a.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/sub/z.git"]);
+      expect([...panel.querySelectorAll(".settings-table tbody tr td:nth-child(2) code")].map(row => row.textContent)).toEqual(["git@example.test:team/a.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/sub/z.git"]);
     } finally { loadRepositories.mockImplementation(original); }
   });
 
-  test("shows repository names and addresses without maintenance controls", async () => {
+  test("shows repository names, addresses, usage and developer maintenance controls", async () => {
     render(() => <App initialView="configuration" />);
     fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));
     const panel = await screen.findByRole("region", { name: "仓库管理" });
     await within(panel).findByText("git@example.com:team/srm.git");
-    expect(within(panel).queryByRole("button")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "登记仓库" })).toBeTruthy();
+    expect(within(panel).getAllByRole("button", { name: "编辑" }).length).toBeGreaterThan(0);
     expect(within(panel).queryByText("引用服务")).toBeNull();
     expect(within(panel).queryByText("操作")).toBeNull();
     expect(within(panel).queryByText(/修改后重启生效/)).toBeNull();
   });
 
-  test("shows only personal credential groups on the users tab", async () => {
+  test("repository usage can select the same service again after a manual service Tab change", async () => {
+    render(() => <App initialView="configuration" />);
+    const categories = await screen.findByRole("tablist", { name: "配置分类" });
+    fireEvent.click(within(categories).getByRole("tab", { name: "仓库" }));
+    const repositories = await screen.findByRole("region", { name: "仓库管理" });
+    fireEvent.click(await within(repositories).findByRole("button", { name: "SRM" }));
+    const services = await screen.findByRole("tablist", { name: "服务列表" });
+    await waitFor(() => expect(within(services).getByRole("tab", { name: "SRM" }).getAttribute("aria-selected")).toBe("true"));
+    fireEvent.click(within(services).getByRole("tab", { name: "Orders" }));
+    await waitFor(() => expect(within(services).getByRole("tab", { name: "Orders" }).getAttribute("aria-selected")).toBe("true"));
+    fireEvent.click(within(categories).getByRole("tab", { name: "仓库" }));
+    fireEvent.click(await screen.findByRole("button", { name: "SRM" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "SRM" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  test("shows four personal credentials followed by personnel management", async () => {
     render(() => <App initialView="configuration" />);
     const tabs = await screen.findByRole("tablist", { name: "配置分类" });
     expect(within(tabs).getAllByRole("tab").map(tab => tab.textContent)).toEqual(["用户", "仓库", "服务", "端点"]);
@@ -1011,7 +1033,7 @@ describe("issue pilot workspace", () => {
     expect(within(credentials).getByText("SLS")).toBeTruthy();
     expect(within(credentials).getByText("DMS")).toBeTruthy();
     expect(within(credentials).queryByText("钉钉")).toBeNull();
-    expect(screen.queryByRole("region", { name: "用户列表" })).toBeNull();
+    expect(screen.getByRole("region", { name: "人员管理" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "添加用户" })).toBeNull();
   });
 

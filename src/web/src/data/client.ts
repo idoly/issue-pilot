@@ -21,8 +21,21 @@ import type { UserRole } from "../../../domain/contracts";
 export { USER_ROLES, canCreateDevelopmentIssues, canUseIssueWorkMode } from "../../../domain/contracts";
 export interface Person { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
 export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; databaseId: string }
-export interface PersonalCredentialStatus { provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
+export interface ManagedUser extends Person { revision: number; active: boolean; createdAt: string; updatedAt: string }
+export interface ManagedUserInput { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
+export interface ManagedUserUpdate { name?: string; email?: string; active?: boolean; role?: UserRole; isAdmin?: boolean; expectedRevision?: number }
+export interface PersonalCredentialUpdate {
+  expectedRevision?: number;
+  model?: { mode: "replace"; provider?: string; apiKey: string } | { mode: "clear"; provider?: string };
+  git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
+  production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
+}
+export interface PersonalCredentialStatus { revision?: number; provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
+export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
+export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage");
+export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
+export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(`/api/users/${encodeURIComponent(subject)}`, "PATCH", input);
 
 export interface IssueListItem {
   id: string;
@@ -288,7 +301,12 @@ export interface ApplicationEndpoint {
 export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endpoints: ApplicationEndpoint[] }>("/api/endpoints", signal ? { signal } : undefined);
 
 
-export interface ManagedRepository { id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
+export const registerRepository = (input: { name: string; url: string }) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
+export const updateRepository = (id: string, input: { name: string; url: string; expectedRevision?: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
+export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const loadServiceMysqlTargets = (key: string) => request<{ revision: number; deployments: Array<{ environmentKey: string; mysql: import("../../../domain/contracts").MysqlTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/mysql-targets`);
+
+export interface ManagedRepository { revision?: number; id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
 export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");
 
 export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) => request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);

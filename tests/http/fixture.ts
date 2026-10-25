@@ -115,9 +115,9 @@ export function servicePayload(name: string, environments: EnvironmentKind[] = [
     name,
     description: `${name} service`,
     repositories,
-    deployments: environments.map((environmentKey) => ({
+    deployments: [...new Set([...environments, ...(environments.includes("dev") ? ["prod" as const] : [])])].map((environmentKey) => ({
       environmentKey,
-      repositoryBranches: repositories.map(({ alias }, index) => ({ repositoryAlias: alias, baseBranch: index === 0 ? (environmentKey === "dev" ? "develop" : "main") : "shared-main" })),
+      repositoryBranches: environmentKey === "dev" ? [] : repositories.map(({ alias }, index) => ({ repositoryAlias: alias, baseBranch: index === 0 ? "main" : "shared-main" })),
       capabilities: [],
     })),
   };

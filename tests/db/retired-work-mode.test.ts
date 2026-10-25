@@ -11,7 +11,7 @@ test("retired production data Issues and both history directions become investig
   const database = openDatabase(path.join(root, "issues.db"));
   try {
     const journal = JSON.parse(await readFile(path.join(source, "meta", "_journal.json"), "utf8"));
-    journal.entries = journal.entries.filter((entry: { tag: string }) => entry.tag !== "0062_retire_production_data");
+    journal.entries = journal.entries.slice(0, journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0062_retire_production_data"));
     await mkdir(path.join(migrations, "meta"), { recursive: true });
     await writeFile(path.join(migrations, "meta", "_journal.json"), JSON.stringify(journal));
     await Promise.all(journal.entries.map((entry: { tag: string }) => copyFile(path.join(source, entry.tag + ".sql"), path.join(migrations, entry.tag + ".sql"))));

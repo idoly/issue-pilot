@@ -52,7 +52,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
       if (input.operation === "describe") {
         const target = available.find(row => row.service.key === input.service && row.environment.key === input.environment);
         if (!target) throw new Error("service_not_available_in_environment");
-        const mcp = await database.select({ id: mcpServices.id, name: mcpServices.name, url: mcpServices.url, transport: mcpServices.transport, enabled: mcpServices.enabled }).from(mcpServices);
+        const mcp = await database.select({ id: mcpServices.id, name: mcpServices.name, url: mcpServices.url, transport: mcpServices.transport, enabled: mcpServices.enabled, deploymentId: mcpServices.deploymentId }).from(mcpServices);
         const definition = await loadDeploymentRepositories(database, { serviceId: target.service.id, environmentId: target.environment.id });
         const names = new Map((await database.select().from(repositoryCatalog)).map(row => [row.url, row.name]));
         const repositories = definition.repositories.map(row => ({ name: names.get(row.repository.url) ?? row.repository.alias, url: row.repository.url, branch: row.baseBranch }));

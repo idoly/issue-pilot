@@ -61,7 +61,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
     database.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
     database.select().from(serviceRepositories).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
     database.select().from(serviceDeploymentRepositories),
-    database.select({ id: schema.mcpServices.id, name: schema.mcpServices.name, url: schema.mcpServices.url, transport: schema.mcpServices.transport, enabled: schema.mcpServices.enabled }).from(schema.mcpServices),
+    database.select({ id: schema.mcpServices.id, name: schema.mcpServices.name, url: schema.mcpServices.url, transport: schema.mcpServices.transport, enabled: schema.mcpServices.enabled, deploymentId: schema.mcpServices.deploymentId }).from(schema.mcpServices),
   ]);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
   const environmentById = new Map(environmentRows.map(environment => [environment.id, environment]));
@@ -92,6 +92,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
       const deployments = deploymentsByServiceId.get(service.id) ?? [];
       const repositories = repositoriesByServiceId.get(service.id) ?? [];
       return {
+        revision: service.revision,
         key: service.key,
         name: service.name,
         description: service.description,
@@ -100,10 +101,13 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
           const deploymentConfig = deployment.config;
           const environmentKey = environmentKeyById.get(deployment.environmentId);
           if (!environmentKey) throw new Error("deployment_environment_not_found");
-          const branchByRepositoryId = branchesByDeploymentId.get(deployment.id) ?? new Map<string, string>();
+          const branchDeployment = environmentKey === "dev" ? deployments.find(row => environmentKeyById.get(row.environmentId) === "prod") : deployment;
+          if (!branchDeployment) throw new Error("development_production_deployment_required");
+          const branchByRepositoryId = branchesByDeploymentId.get(branchDeployment.id) ?? new Map<string, string>();
           if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
           return {
             ...projectCapabilityConfiguration(deploymentConfig),
+            ...(deploymentConfig.mysql ? { mysql: deploymentConfig.mysql.map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })) } : {}),
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
             capabilities: configuredCapabilities(deploymentConfig),
@@ -126,7 +130,7 @@ export function loadServiceConfigurationDescription(database: Database, key: str
     return { context: [service.description, ...deployments.toSorted((left, right) => descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === left.environmentId)?.key ?? "") - descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === right.environmentId)?.key ?? "")).map(deployment => {
       const environment = environmentRows.find(row => row.id === deployment.environmentId);
       if (!environment) throw new Error("deployment_environment_not_found");
-      return deploymentContext(environment, deployment.config, mcp, mcp);
+      return deploymentContext(environment, deployment.config, mcp, mcp, true);
     })].filter(Boolean).join("\n\n") };
   });
 }

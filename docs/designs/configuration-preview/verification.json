@@ -1,0 +1,214 @@
+{
+  "artifact": "configuration-prototype.html",
+  "categoryOrder": [
+    "用户",
+    "仓库",
+    "服务",
+    "端点"
+  ],
+  "layout": "reference screenshot style: centered pale-green segmented service tabs with white selected item; fixed actions; independent code-branch card; development baseline read-only from production",
+  "tool": "Playwright 1.62.1",
+  "image": "mcr.microsoft.com/playwright:v1.62.1-noble",
+  "network": "none",
+  "data": "synthetic browser-session data; no production API or database access",
+  "cases": [
+    {
+      "width": 1440,
+      "inactiveFilterAligned": true,
+      "seededInactiveMember": true,
+      "inactiveShowHide": true,
+      "memberCreateEditDisableEnable": true,
+      "credentialSimple": true,
+      "identityCredentialsIsolated": true,
+      "personalSecretNotStored": true,
+      "endpointIdentityUpdates": true,
+      "noDailyYamlUi": true,
+      "targetCreateEditRemove": true,
+      "targetCancelRollsBack": true,
+      "targetRefreshPersists": true,
+      "serviceDelete": true,
+      "historyDeleteBlocked": true,
+      "repositoryDeleteAfterUnlink": true,
+      "noPageErrors": true,
+      "noOverflow": true
+    },
+    {
+      "width": 390,
+      "inactiveFilterAligned": true,
+      "seededInactiveMember": true,
+      "inactiveShowHide": true,
+      "memberCreateEditDisableEnable": true,
+      "credentialSimple": true,
+      "identityCredentialsIsolated": true,
+      "personalSecretNotStored": true,
+      "endpointIdentityUpdates": true,
+      "noDailyYamlUi": true,
+      "targetCreateEditRemove": true,
+      "targetCancelRollsBack": true,
+      "targetRefreshPersists": true,
+      "serviceDelete": true,
+      "historyDeleteBlocked": true,
+      "repositoryDeleteAfterUnlink": true,
+      "noPageErrors": true,
+      "noOverflow": true
+    }
+  ],
+  "additionalChecks": [
+    "saved personal DMS URL remains visible to its owner",
+    "test user cannot edit service configuration"
+  ],
+  "limits": [
+    "prototype only, no backend implementation",
+    "history references and role rules simulated by demo data",
+    "no remote connection tests or concurrent client updates",
+    "clipboard write uses a content-recording stub",
+    "personal secret bodies not persisted; service MySQL password is explicitly visible demo data"
+  ],
+  "scrollRegression": {
+    "before": "adding DMS reset scroll from 639px to 0px",
+    "afterCases": [
+      {
+        "width": 1440,
+        "kind": "dms",
+        "addPreservesScroll": true,
+        "newInputVisibleAndFocused": true,
+        "removePreservesScroll": true,
+        "otherDraftsPreserved": true,
+        "cancelPreservesSavedData": true
+      },
+      {
+        "width": 1440,
+        "kind": "mysql",
+        "addPreservesScroll": true,
+        "newInputVisibleAndFocused": true,
+        "removePreservesScroll": true,
+        "otherDraftsPreserved": true,
+        "cancelPreservesSavedData": true
+      },
+      {
+        "width": 1440,
+        "kind": "sls",
+        "addPreservesScroll": true,
+        "newInputVisibleAndFocused": true,
+        "removePreservesScroll": true,
+        "otherDraftsPreserved": true,
+        "cancelPreservesSavedData": true
+      },
+      {
+        "width": 390,
+        "kind": "dms",
+        "addPreservesScroll": true,
+        "newInputVisibleAndFocused": true,
+        "removePreservesScroll": true,
+        "otherDraftsPreserved": true,
+        "cancelPreservesSavedData": true
+      },
+      {
+        "width": 390,
+        "kind": "mysql",
+        "addPreservesScroll": true,
+        "newInputVisibleAndFocused": true,
+        "removePreservesScroll": true,
+        "otherDraftsPreserved": true,
+        "cancelPreservesSavedData": true
+      },
+      {
+        "width": 390,
+        "kind": "sls",
+        "addPreservesScroll": true,
+        "newInputVisibleAndFocused": true,
+        "removePreservesScroll": true,
+        "otherDraftsPreserved": true,
+        "cancelPreservesSavedData": true
+      }
+    ]
+  },
+  "developmentProductionInheritance": [
+    {
+      "width": 1440,
+      "existingDevelopmentUsesProduction": true,
+      "developmentNotEditable": true,
+      "formalChangesUpdateImmediately": true,
+      "emptyFormalShowsPending": true,
+      "newRepositoryUsesFormalDefault": true,
+      "cancelPreservesFormal": true,
+      "saveAndReloadInherit": true,
+      "newServiceInheritsProduction": true,
+      "noIndependentDevelopmentBranchValues": true,
+      "noDevelopmentQueryTargets": true,
+      "targetAddRemoveKeepsScrollAndDraft": true,
+      "noPageErrors": true,
+      "noOverflow": true
+    },
+    {
+      "width": 390,
+      "existingDevelopmentUsesProduction": true,
+      "developmentNotEditable": true,
+      "formalChangesUpdateImmediately": true,
+      "emptyFormalShowsPending": true,
+      "newRepositoryUsesFormalDefault": true,
+      "cancelPreservesFormal": true,
+      "saveAndReloadInherit": true,
+      "newServiceInheritsProduction": true,
+      "noIndependentDevelopmentBranchValues": true,
+      "noDevelopmentQueryTargets": true,
+      "targetAddRemoveKeepsScrollAndDraft": true,
+      "noPageErrors": true,
+      "noOverflow": true
+    }
+  ],
+  "referenceStyle": [
+    {
+      "width": 1440,
+      "referenceStyle": true,
+      "centeredOnDesktop": true,
+      "whiteSelectedTab": true,
+      "separateBranchCard": true,
+      "actionsDoNotOverlap": true,
+      "longTabsScrollable": true
+    },
+    {
+      "width": 390,
+      "referenceStyle": true,
+      "centeredOnDesktop": true,
+      "whiteSelectedTab": true,
+      "separateBranchCard": true,
+      "actionsDoNotOverlap": true,
+      "longTabsScrollable": true
+    }
+  ],
+  "copyCleanup": [
+    {
+      "width": 1440,
+      "repeatedCopyRemoved": true,
+      "essentialLabelsAndErrorsRetained": true,
+      "inactiveFilter": true,
+      "credentialBlankAndReplace": true,
+      "personalSecretNotStored": true,
+      "repositoryRegistration": true,
+      "serviceAndProductionInheritance": true,
+      "targetAddRemoveScrollAndDraft": true,
+      "cancelAndSave": true,
+      "endpointCopyAndIdentity": true,
+      "toolsAccessible": true,
+      "noOverflow": true,
+      "noPageErrors": true
+    },
+    {
+      "width": 390,
+      "repeatedCopyRemoved": true,
+      "essentialLabelsAndErrorsRetained": true,
+      "inactiveFilter": true,
+      "credentialBlankAndReplace": true,
+      "personalSecretNotStored": true,
+      "repositoryRegistration": true,
+      "serviceAndProductionInheritance": true,
+      "targetAddRemoveScrollAndDraft": true,
+      "cancelAndSave": true,
+      "endpointCopyAndIdentity": true,
+      "toolsAccessible": true,
+      "noOverflow": true,
+      "noPageErrors": true
+    }
+  ]
+}

@@ -1,4 +1,3 @@
-import { publicFileState } from "../configuration/file-layout.ts";
 import { resolveDmsScope } from "../capabilities/dms.ts";
 import { parseDmsConnectionConfiguration, CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
@@ -8,8 +7,8 @@ import { AgentRuntimeConfigurationError, inspectAgentResources, parseAgentRuntim
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
 import { environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
-import { ApiError, choice, optionalText, record, text } from "./input.ts";
-import { ensureCurrentSubject, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { ApiError, checkRevision, choice, optionalText, record, text } from "./input.ts";
+import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
@@ -27,12 +26,29 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
 
   // Any Issue in these environments may query this service, even if its entry
   // service differs. Config updates therefore invalidate all such sessions.
-  const affectedIssues = async (serviceId: string, environmentKeys: string[] = []) => {
+  const affectedIssues = async (serviceId: string, environmentKeys: string[] = [], globalMcp?: boolean) => {
     const deployments = await database.db.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId));
+    if (globalMcp ?? deployments.some(row => row.config.mysql?.length)) return database.db.select({ id: issues.id }).from(issues);
     const added = environmentKeys.length ? await database.db.select().from(environments).where(inArray(environments.key, environmentKeys)) : [];
     const ids = [...new Set([...deployments.map((row) => row.environmentId), ...added.map((row) => row.id), ...(await database.db.select({ id: environments.id }).from(environments).where(eq(environments.kind, "dev"))).map(row => row.id)])];
     return ids.length ? database.db.select({ id: issues.id }).from(issues).where(inArray(issues.environmentId, ids)) : [];
   };
+  const mysqlChanged = (prepared: Awaited<ReturnType<typeof prepareServiceConfiguration>>) => {
+    const incoming = prepared.parsed.deployments;
+    return incoming.some(row => JSON.stringify(row.config.mysql ?? []) !== JSON.stringify(prepared.existingDeployments.find(old => old.environmentId === prepared.environmentsByKey.get(row.environmentKey)?.id)?.config.mysql ?? []))
+      || prepared.existingDeployments.some(old => old.config.mysql?.length && !incoming.some(row => prepared.environmentsByKey.get(row.environmentKey)?.id === old.environmentId));
+  };
+  app.get<{ Params: { key: string } }>("/api/services/:key/mysql-targets", { logLevel: "silent" }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
+    return runScopeExclusive(async () => {
+      await requireDeveloper(database, request);
+      const service = await findServiceByKey(request.params.key);
+      if (!service) throw new ApiError(404, "service_not_found");
+      const deployments = await database.db.select({ environmentKey: environments.key, config: serviceDeployments.config }).from(serviceDeployments)
+        .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId)).where(eq(serviceDeployments.serviceId, service.id));
+      return { revision: service.revision, deployments: deployments.map(row => ({ environmentKey: row.environmentKey, mysql: row.config.mysql ?? [] })) };
+    });
+  });
   app.get<{ Params: { key: string } }>("/api/services/:key/configuration-description", { logLevel: "silent" }, async (request, reply) => {
     reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
     return runScopeExclusive(async () => {
@@ -68,7 +84,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     }
   });
   app.get("/api/catalog", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); return runScopeExclusive(() => loadConfigurationCatalog(database.db)); });
-  app.get("/api/config", async (request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(async () => ({ ...await loadConfiguration(database.db, modelCatalog), fileManaged: publicFileState(context.fileConfiguration, await ensureCurrentSubject(database, request)) })); });
+  app.get("/api/config", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog)); });
   app.put("/api/config/agent", async (request) => runScopeExclusive(async () => {
     await requireDeveloper(database, request);
     const input = record(request.body);
@@ -103,7 +119,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       const serviceId = randomUUID();
       const [existing, prepared] = await Promise.all([database.db.select({ key: services.key }).from(services), prepareServiceConfiguration({ executor: database.db, serviceId, input })]);
       const key = uniqueServiceKey(name, new Set(existing.map((row) => row.key)));
-      const affected = await affectedIssues(serviceId, prepared.parsed.deployments.map(row => row.environmentKey));
+      const affected = await affectedIssues(serviceId, prepared.parsed.deployments.map(row => row.environmentKey), mysqlChanged(prepared));
       try {
         return await runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
           for (const row of affected) await reservation.closeSession(row.id);
@@ -117,12 +133,12 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     await requireDeveloper(database, request);
     const service = await findServiceByKey(request.params.key); if (!service) throw new ApiError(404, "service_not_found");
     const input = record(request.body);
-    const nextEnvironmentKeys = Array.isArray(input.deployments) ? input.deployments.map((row) => String(record(row).environmentKey)) : [];
-    const affected = await affectedIssues(service.id, nextEnvironmentKeys);
+    checkRevision(input.expectedRevision, service.revision);
+    const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input });
+    const affected = await affectedIssues(service.id, prepared.parsed.deployments.map(row => row.environmentKey), mysqlChanged(prepared));
     try {
       return await runIssueExclusive(engine, affected.map((row) => row.id), async (reservation) => {
         const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
-        const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input });
         for (const row of affected) await reservation.closeSession(row.id);
         await database.db.transaction((transaction) => applyServiceConfiguration({ executor: transaction, serviceId: service.id, prepared, serviceUpdate })); return { ok: true };
       });

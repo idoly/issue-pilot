@@ -1,0 +1,67 @@
+{
+  "backend": {
+    "tests": 533,
+    "passed": 532,
+    "skipped": 1,
+    "failed": 0
+  },
+  "frontend": {
+    "files": 26,
+    "passed": 208,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "build": "passed",
+  "browser": [
+    {
+      "width": 1440,
+      "memberCreateDisableEnable": true,
+      "personalCredentialSaved": true,
+      "repositoryRegistered": true,
+      "usageNavigates": true,
+      "developmentReadonly": true,
+      "productionBaselineLinked": true,
+      "mysqlPrivateTargetsLoaded": true,
+      "mysqlTargetsSaved": true,
+      "slsTargetsPreserved": true,
+      "targetAddRemoveDrafts": true,
+      "newTargetFocus": true,
+      "scrollPreserved": true,
+      "publicProjectionSafe": true,
+      "refreshPersists": true,
+      "endpoints": true,
+      "noOverflow": true,
+      "pageErrors": 0
+    },
+    {
+      "width": 390,
+      "memberCreateDisableEnable": true,
+      "personalCredentialSaved": true,
+      "repositoryRegistered": true,
+      "usageNavigates": true,
+      "developmentReadonly": true,
+      "productionBaselineLinked": true,
+      "mysqlPrivateTargetsLoaded": true,
+      "mysqlTargetsSaved": true,
+      "slsTargetsPreserved": true,
+      "targetAddRemoveDrafts": true,
+      "newTargetFocus": true,
+      "scrollPreserved": true,
+      "publicProjectionSafe": true,
+      "refreshPersists": true,
+      "endpoints": true,
+      "noOverflow": true,
+      "pageErrors": 0
+    }
+  ],
+  "data": "independent synthetic fixture; no production state",
+  "audit": {
+    "high": 3,
+    "packages": [
+      "@anthropic-ai/sandbox-runtime",
+      "node-forge",
+      "zod"
+    ],
+    "change": "existing advisories and pinned backports; dependencies unchanged"
+  }
+}

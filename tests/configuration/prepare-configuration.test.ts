@@ -24,7 +24,7 @@ test("offline preparation converts legacy users and sources into usable v2 files
     const service = stringify({ version: 1, sources: { dingtalk: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/i/nodes/base?sheetId=table", assignee: "Fixture" } } });
     await writeFile(path.join(source, "user.yaml"), user, { mode: 0o600 });
     await writeFile(path.join(source, "service.yaml"), service, { mode: 0o600 });
-    const args = ["--experimental-strip-types", "scripts/prepare-configuration.ts", "--state-root", source, "--output", output, "--subject", issuePilotConfig.bootstrapUser.subject];
+    const args = ["--experimental-strip-types", "scripts/prepare-configuration.ts", "--state-root", source, "--output", output, "--subject", issuePilotConfig.bootstrapUser.subject, "--reference-user", path.join(source, "user.yaml"), "--reference-service", path.join(source, "service.yaml")];
     const prepared = await execute(process.execPath, args);
     assert.doesNotMatch(prepared.stdout + prepared.stderr, /private-fixture-key|private-gateway-key/);
     const generatedUser = parse(await readFile(path.join(output, "user.yaml"), "utf8"));

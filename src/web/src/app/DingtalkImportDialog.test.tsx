@@ -46,7 +46,7 @@ test("shows a useful import failure and keeps the entered link for retry", async
   await open(); fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });
   vi.mocked(importDingtalkRecords).mockRejectedValueOnce(new Error("dingtalk_fields_changed"));
   await waitFor(() => expect(screen.getByRole("button", { name: "导入工单" })).toHaveProperty("disabled", false)); fireEvent.click(screen.getByRole("button", { name: "导入工单" }));
-  expect((await screen.findByRole("alert")).textContent).toContain("dingtalk.fields");
+  expect((await screen.findByRole("alert")).textContent).toContain("个人或共享字段映射");
   expect(screen.getByRole("textbox", { name: "钉钉记录链接" })).toHaveProperty("value", url);
 });
 test("identity changes abort the old import and ignore its late result", async () => {

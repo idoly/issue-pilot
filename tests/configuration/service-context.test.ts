@@ -12,8 +12,9 @@ test("generated descriptions include exact capability parameters without secrets
     mcpServices: ["docs"], archivedDevelopment: { password: "private-archive" },
   };
   const context = deploymentContext({ key: "prod", name: "正式" }, configuration, [{ id: "docs", name: "Docs", url: "https://docs.example.test/mcp?key=private-query-token", transport: "streamable_http", enabled: true }]);
-  for (const value of ["prod-instance", "orders", "DatabaseId", "42", "orders-api", "gateway", "Docs"]) assert.ok(context.includes(value), value);
+  for (const value of ["prod-instance", "orders", "alias", "schema", "orders-api", "gateway", "Docs"]) assert.ok(context.includes(value), value);
   assert.doesNotMatch(context, /private-redis-password|private-nacos-password|private-archive|private-dms-token|private-sls-id|private-sls-secret|访问配置|代码基准分支/);
+  assert.doesNotMatch(context, /DatabaseId|InstanceId|db.example.test/);
   assert.doesNotMatch(context, /prod-namespace|PROD_GROUP|redis.prod.internal|private-query-token/);
   assert.match(context, /#### SLS\n\n\| \| \|/);
   assert.match(context, /<code>orders-api<\/code><br><code>gateway<\/code>/);

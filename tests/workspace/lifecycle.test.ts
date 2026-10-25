@@ -771,7 +771,9 @@ test("converts a ready test analysis to a development defect while preserving Is
     await registerTestRepositories(database.db, [remote]);
     const [serviceRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "conversion", url: remote }).returning();
     const [testDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: testEnvironment.id, config: {} }).returning();
-    const [devDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: devEnvironment.id, config: {} }).returning();
+    const [productionEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod"));
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: devEnvironment.id, config: {} });
+    const [devDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: productionEnvironment!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
       { deploymentId: testDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
       { deploymentId: devDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
@@ -903,9 +905,14 @@ test("migrates ready development scopes while preserving retained changes and ro
       { serviceId: targetService!.id, alias: "retained-target", url: retainedRemote },
       { serviceId: targetService!.id, alias: "added", url: addedRemote },
     ]).returning();
-    const [sourceDeployment, targetDeployment] = await database.db.insert(serviceDeployments).values([
+    const [productionEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod"));
+    await database.db.insert(serviceDeployments).values([
       { serviceId: sourceService!.id, environmentId: devEnvironment!.id, config: {} },
       { serviceId: targetService!.id, environmentId: devEnvironment!.id, config: {} },
+    ]);
+    const [sourceDeployment, targetDeployment] = await database.db.insert(serviceDeployments).values([
+      { serviceId: sourceService!.id, environmentId: productionEnvironment!.id, config: {} },
+      { serviceId: targetService!.id, environmentId: productionEnvironment!.id, config: {} },
     ]).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
       ...sourceRepositories.map((repository) => ({ deploymentId: sourceDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),

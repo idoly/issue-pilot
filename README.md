@@ -43,8 +43,8 @@ flowchart LR
 issue-pilot/
 ├── node_modules/、.venv/          # 安装产物
 └── .issue-pilot/
-    ├── service.yaml              # 服务、环境、仓库、Agent 配置
-    ├── user.yaml                 # 用户凭据与来源配置
+    ├── service.yaml              # 离线导入／导出资料，启动不读取
+    ├── user.yaml                 # 离线私有资料，启动不读取
     ├── mcp.json                  # 外部 MCP 配置
     ├── issues.db{,-wal,-shm}      # 业务事实及运行绑定
     ├── git/repositories/         # 共享 Git 基线与保留分支
