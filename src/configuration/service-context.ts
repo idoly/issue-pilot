@@ -27,7 +27,7 @@ export function deploymentContext(environment: { key: string; name: string }, co
     if (v.targets) for (const target of v.targets) sections.push(section(`SLS · ${target.name}`, [["region", target.region], ["project", target.project], ["logstores", target.logstores]]));
     else sections.push(section("SLS", [["region", v.region], ["project", v.project], ["logstores", v.logstores]]));
   }
-  for (const row of mcp.filter(row => row.enabled && !row.deploymentId)) sections.push(section("MCP（全局）", [["名称", row.name], ["地址", publicMcpUrl(row.url)], ["协议", row.transport === "stdio" ? "stdio（本地进程）" : row.transport === "streamable_http" ? "Streamable HTTP" : "SSE"], ["状态", row.enabled ? "开启" : "关闭"], ["Authorization", mcpCredentials.find(secret => secret.id === row.id)?.authorization]]));
+  for (const row of mcp.filter(row => row.enabled && !row.deploymentId)) sections.push(section("MCP（全局）", [["名称", row.name], ["地址", publicMcpUrl(row.url)], ["协议", row.transport === "stdio" ? "stdio（本地进程）" : row.transport === "streamable_http" ? "Streamable HTTP" : "SSE"], ["Authorization", mcpCredentials.find(secret => secret.id === row.id)?.authorization]]));
   if (sections.length === 1) sections.push("未配置外部查询能力。");
   return sections.join("\n\n");
 }

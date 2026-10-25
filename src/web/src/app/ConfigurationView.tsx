@@ -307,7 +307,9 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       .catch((cause) => { if (generation === repositoryGeneration) setRepositoryError(errorMessage(cause)); })
       .finally(() => { if (generation === repositoryGeneration) setRepositoryLoading(false); });
   };
-  createEffect(() => configuration().services, () => loadRepositoryChoices());
+  createEffect(() => configurationLoaded() ? configuration().services : undefined, services => {
+    if (services) loadRepositoryChoices();
+  });
   onCleanup(() => { repositoryGeneration += 1; });
   const openNewService = () => {
     editorGeneration++;
@@ -338,9 +340,6 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const serviceValidationError = () => {
     if (!serviceName().trim()) return "请填写服务名称";
     if (!serviceRepositories().length) return "请至少选择一个关联仓库";
-    if (new Set(serviceRepositories().map((repository) => repository.url.trim())).size !== serviceRepositories().length) return "仓库地址不能重复";
-    if (serviceDeployments.some((deployment) => !deployment.environmentKey || deployment.environmentKey !== "dev" && (deployment.repositoryBranches.length !== serviceRepositories().length || deployment.repositoryBranches.some((branch) => !branch.baseBranch.trim())))) return "请填写所有部署环境和仓库分支";
-    if (new Set(serviceDeployments.map((deployment) => deployment.environmentKey)).size !== serviceDeployments.length) return "同一环境只能配置一个部署";
     return serviceDeployments.map(deploymentValidationError).find(Boolean) ?? "";
   };
   const repositoryName = (repository: ServiceRepositoryDraft) => repositoryChoices().find((choice) => choice.url === repository.url)?.name ?? "仓库";

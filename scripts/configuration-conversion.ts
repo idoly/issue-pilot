@@ -1,30 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import { FileConfigurationError, fileRecord, queryTargets, repositoryAddress, userFileLayout, type FileQueryTarget, type UserFileLayout } from "../src/configuration/file-layout.ts";
+import { FileConfigurationError, fileRecord, userFileLayout, type FileQueryTarget, type UserFileLayout } from "../src/configuration/file-layout.ts";
 
 const invalid = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };
-
-/** Legacy formats are converted only by the explicit offline preparation command. */
-export function convertServiceFile(input: Record<string, unknown>): Record<string, unknown> {
-  const version = Number(input.version ?? 1);
-  if (![1, 2, 3].includes(version)) return invalid();
-  const result = structuredClone(input);
-  result.version = 2;
-  result.repositories = Object.fromEntries(Object.entries(fileRecord(input.repositories ?? {})).map(([alias, value]) => {
-    if (version !== 2 && Object.keys(fileRecord(value)).some(key => key !== "url")) throw new FileConfigurationError("repository_metadata_requires_review");
-    return [alias, repositoryAddress(version === 2 ? value : fileRecord(value).url)];
-  }));
-  for (const raw of Object.values(fileRecord(result.services ?? {}))) {
-    for (const [environment, value] of Object.entries(fileRecord(fileRecord(raw).environments))) {
-      const scope = fileRecord(value);
-      for (const kind of ["dms", "sls"] as const) if (scope[kind] !== undefined) {
-        const targets = version === 2 ? queryTargets(kind, scope[kind], environment)
-          : Object.entries(fileRecord(scope[kind])).map(([name, value]) => ({ name, value: fileRecord(value) }));
-        scope[kind] = simpleTargets(kind, targets, environment);
-      }
-    }
-  }
-  return result;
-}
 
 export function simpleTargets(kind: "dms" | "sls", targets: FileQueryTarget[], singleName = "default"): unknown {
   if (!targets.length) return invalid();
@@ -54,12 +31,12 @@ export function convertUserFile(input: Record<string, unknown> | undefined): Use
   return layout;
 }
 
-export function moveDingtalkSource(service: Record<string, unknown>, users: Record<string, Record<string, unknown>>, subject: string): void {
+export function moveDingtalkSource(service: Record<string, unknown>, users: Record<string, Record<string, unknown>>, subject?: string): void {
   if (service.sources === undefined) return;
   const sources = fileRecord(service.sources);
   if (Object.keys(sources).some(name => name !== "dingtalk")) throw new FileConfigurationError("source_migration_requires_review");
   if (sources.dingtalk !== undefined) {
-    const user = users[subject];
+    const user = subject ? users[subject] : undefined;
     if (!user) throw new FileConfigurationError("source_owner_required");
     const dingtalk = fileRecord(user.dingtalk ?? {}), source = fileRecord(sources.dingtalk);
     if (dingtalk.source !== undefined && !isDeepStrictEqual(dingtalk.source, source)) throw new FileConfigurationError("conflicting_dingtalk_sources");

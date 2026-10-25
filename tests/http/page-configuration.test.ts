@@ -99,6 +99,8 @@ test("MySQL targets save atomically with deployment-owned global MCP connections
     } finally { await connection.close(); }
     const clear = await f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: { ...input, expectedRevision: selected.json().revision } });
     assert.equal(clear.statusCode, 200, clear.body);
+    const repeated = await f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: input });
+    assert.equal(repeated.statusCode, 200, repeated.body);
     const check = openDatabase(f.databaseFile); try { assert.deepEqual(await check.db.select().from(mcpServices), []); } finally { await check.close(); }
   } finally { await f.cleanup(); }
 });
@@ -153,5 +155,28 @@ test("saving current deployment settings preserves opaque archived development d
       assert.deepEqual(current!.config, { archivedDevelopment: archive });
       assert.doesNotMatch((await f.app.inject({ method: "GET", url: "/api/config" })).body, /retained historical evidence/);
     } finally { await database.close(); }
+  } finally { await f.cleanup(); }
+});
+
+test("service API retains structural validation after removing redundant UI checks", async () => {
+  const f = await createApiFixture();
+  try {
+    const input = servicePayload("Boundary", ["test"]);
+    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Boundary", url: input.repositories[0]!.url } })).statusCode, 201);
+    const repository = input.repositories[0]!;
+    const deployment = input.deployments[0]!;
+    const cases = [
+      [{ ...input, repositories: [] }, "repository_required"],
+      [{ ...input, repositories: [repository, { ...repository, url: "git@example.test:other.git" }] }, "duplicate_repository_alias"],
+      [{ ...input, repositories: [repository, { ...repository, alias: "second" }] }, "duplicate_repository"],
+      [{ ...input, deployments: [deployment, deployment] }, "duplicate_deployment_environment"],
+      [{ ...input, deployments: [{ ...deployment, repositoryBranches: [] }] }, "invalid_deployment_repository_branches"],
+    ] as const;
+    for (const [payload, error] of cases) {
+      const response = await f.app.inject({ method: "POST", url: "/api/services", headers, payload });
+      assert.equal(response.statusCode, 400, response.body); assert.equal(response.json().error, error);
+    }
+    assert.deepEqual((await f.app.inject({ method: "GET", url: "/api/config" })).json().services, []);
+    assert.deepEqual(f.engine.closedSessions, []);
   } finally { await f.cleanup(); }
 });

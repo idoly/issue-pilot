@@ -645,7 +645,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "个人处理情况" })).toBeTruthy());
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "SRM" })).toBeTruthy());
     const servicePanel = document.querySelector(".service-panel") as HTMLElement;
     expect(screen.queryByRole("button", { name: /拖动排序/ })).toBeNull();
@@ -714,7 +714,7 @@ describe("issue pilot workspace", () => {
 
   test("multi-selects service repositories without aliases and synchronizes environment branches", async () => {
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     const panel = await waitFor(() => document.querySelector(".service-panel") as HTMLElement);
     fireEvent.click(await waitFor(() => within(panel).getByRole("button", { name: "添加" })));
     const dialog = await screen.findByRole("dialog", { name: "添加服务" });
@@ -742,7 +742,7 @@ describe("issue pilot workspace", () => {
   test("derives the readonly development baseline from production and retains the description editor", async () => {
     render(() => <App initialView="configuration" />);
     expect(screen.queryByRole("tab", { name: "环境" })).toBeNull();
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Orders" }));
     const panel = document.querySelector(".service-panel") as HTMLElement;
     await waitFor(() => expect(within(panel).getByRole("tab", { name: "Orders" }).getAttribute("aria-selected")).toBe("true"));
@@ -767,7 +767,7 @@ describe("issue pilot workspace", () => {
 
   test("clears service credential drafts when the selected identity changes", async () => {
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     const panel = document.querySelector(".service-panel") as HTMLElement;
     fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
     const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
@@ -790,7 +790,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.updateService).mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = outcome === "success" ? resolve : () => reject(new Error("old_service_save_failed")); }));
     render(() => <App initialView="configuration" />);
     try {
-      fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+      await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
       const panel = document.querySelector(".service-panel") as HTMLElement;
       fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
       const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
@@ -819,7 +819,7 @@ describe("issue pilot workspace", () => {
     const loadDescription = vi.mocked(client.loadServiceConfigurationDescription).getMockImplementation()!;
     vi.mocked(client.loadServiceConfigurationDescription).mockResolvedValue({ context: "### 测试环境\n\n#### MySQL\n\n| 配置项 | 值 |\n| --- | --- |\n| 密码 | <code>synthetic-private-password</code> |" });
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await screen.findByText("synthetic-private-password");
     expect(document.querySelector(".service-description table")).toBeTruthy();
     const selector = screen.getByLabelText("当前用户");
@@ -909,7 +909,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
     vi.mocked(client.updateService).mockClear();
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await screen.findByRole("tablist", { name: "服务列表" });
     fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
     const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
@@ -935,7 +935,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
     vi.mocked(client.resolveDmsScope).mockRejectedValueOnce(new Error("dms_mcp_http_429"));
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await screen.findByRole("tablist", { name: "服务列表" });
     fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
     const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
@@ -955,7 +955,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.updateService).mockClear();
     vi.mocked(client.resolveDmsScope).mockClear();
     render(() => <App initialView="configuration" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     const panel = await screen.findByRole("tablist", { name: "服务列表" });
     await waitFor(() => expect(within(panel).getByRole("tab", { name: "SRM" })).toBeTruthy());
     fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
@@ -1023,6 +1023,34 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "SRM" }).getAttribute("aria-selected")).toBe("true"));
   });
 
+  test("loads only visited settings categories and retains personnel filters across navigation", async () => {
+    const client = await import("../data/client");
+    for (const mock of [client.loadConfig, client.loadRepositories, client.loadApplicationEndpoints, client.loadServiceConfigurationDescription, client.loadManagedUsers]) vi.mocked(mock).mockClear();
+    render(() => <App initialView="configuration" />);
+    const credentials = await screen.findByRole("region", { name: "我的凭证" });
+    await within(credentials).findByText("API Key");
+    const members = await screen.findByRole("region", { name: "人员管理" });
+    await within(members).findByText("严欣");
+    expect(client.loadConfig).not.toHaveBeenCalled(); expect(client.loadRepositories).not.toHaveBeenCalled();
+    expect(client.loadApplicationEndpoints).not.toHaveBeenCalled(); expect(client.loadServiceConfigurationDescription).not.toHaveBeenCalled();
+    const search = within(members).getByLabelText("搜索人员");
+    await fireEvent.input(search, { target: { value: "严欣" } });
+    fireEvent.click(screen.getByRole("tab", { name: "仓库" }));
+    await screen.findByRole("button", { name: "登记仓库" });
+    await waitFor(() => expect(client.loadRepositories).toHaveBeenCalledTimes(1));
+    expect(client.loadConfig).not.toHaveBeenCalled(); expect(client.loadApplicationEndpoints).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "用户" }));
+    expect(screen.getByLabelText("搜索人员")).toBe(search); expect(search).toHaveProperty("value", "严欣");
+    expect(client.loadManagedUsers).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("tab", { name: "端点" }));
+    await screen.findByLabelText("MCP 客户端配置");
+    expect(client.loadApplicationEndpoints).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("tab", { name: "服务" }));
+    await screen.findByRole("tab", { name: "SRM" });
+    expect(client.loadConfig).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(client.loadRepositories).toHaveBeenCalledTimes(2));
+  });
+
   test("shows four personal credentials followed by personnel management", async () => {
     render(() => <App initialView="configuration" />);
     const tabs = await screen.findByRole("tablist", { name: "配置分类" });
@@ -1045,11 +1073,12 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
 
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     const alert = await waitFor(() => screen.getByRole("alert"));
     expect(alert.textContent).toContain("configuration_unavailable");
     fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(client.loadConfig).toHaveBeenCalledTimes(2));
-    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "SRM" })).toBeTruthy());
     view.unmount();
   });

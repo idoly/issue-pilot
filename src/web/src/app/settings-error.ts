@@ -12,7 +12,7 @@ export function settingsError(error: unknown): string {
     last_active_developer: "至少保留一位在用的开发人员。",
     last_active_user: "至少保留一位在用人员。",
     developer_role_required: "此操作需要开发角色。",
-    admin_required: "此操作需要管理权限。",
+    admin_role_required: "此操作需要管理权限。",
     resource_in_use: "配置仍被使用，不能删除。",
   };
   return messages[code] ?? code;

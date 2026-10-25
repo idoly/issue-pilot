@@ -37,7 +37,7 @@ node --experimental-strip-types src/http/production.ts
 
 默认 state 位于安装目录 `.issue-pilot`，没有 state/database 环境变量覆盖。日常配置通过页面写入 SQLite。若从现有文件初始化，在停服并建立恢复点后显式运行 `scripts/import-configuration.ts --state-root ROOT --apply`；启动不会自动读取文件或覆盖页面修改。已有状态必须先准备配置和工作目录迁移方案，不能直接搬动 Git worktree。隔离运行需要独立项目及根配置，不能启动第二个 API 指向真实 state。
 
-已有工作站的 user systemd unit 为 `issue-pilot-api.service` 和 `issue-pilot-web.service`，由宿主管理，仓库不提供通用安装脚本。操作前核对 WorkingDirectory、ExecStart 和 PID：
+已有工作站的 user systemd unit 为 `issue-pilot-api.service` 和 `issue-pilot-web.service`，由宿主管理，仓库不提供通用安装脚本。日常 4173 入口使用 `vite preview --config src/web/vite.config.ts --strictPort` 提供已构建页面，API／MCP 仍代理到 3000；修改前端后先构建再切换。`npm run dev:web` 仅在需要 HMR 的开发中使用，不作为日常入口，避免向浏览器传输整个开发模块图。操作前核对 WorkingDirectory、ExecStart 和 PID：
 
 ```bash
 systemctl --user show issue-pilot-api.service issue-pilot-web.service --property=MainPID,ExecStart,WorkingDirectory --no-pager

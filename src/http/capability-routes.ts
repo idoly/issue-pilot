@@ -28,9 +28,7 @@ export function registerCapabilityRoutes(context: ApiRouteContext) {
       try {
         return await runIssueExclusive(engine, affected.map((row) => row.id), async (reservation) => {
           for (const row of affected) await reservation.closeSession(row.id);
-          await database.db.transaction(async (transaction) => {
-            await transaction.update(capabilitySwitches).set({ enabled, updatedAt: new Date() }).where(eq(capabilitySwitches.key, key));
-          });
+          await database.db.update(capabilitySwitches).set({ enabled, updatedAt: new Date() }).where(eq(capabilitySwitches.key, key));
           return { key, enabled };
         });
       } catch (error) {

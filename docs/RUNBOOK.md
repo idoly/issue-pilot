@@ -30,7 +30,7 @@ systemctl --user stop --no-block issue-pilot-web.service issue-pilot-api.service
 systemctl --user is-active issue-pilot-api.service issue-pilot-web.service
 # 等待完全退出、完成备份及独立验证后：
 systemctl --user start issue-pilot-api.service
-# /health 正常后启动开发 Web 服务：
+# /health 正常后启动提供构建页面的 Web 服务：
 systemctl --user start issue-pilot-web.service
 ```
 
@@ -140,7 +140,7 @@ node --experimental-strip-types scripts/import-configuration.ts --state-root /pa
 
 ## 配置文件准备
 
-用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，导出全部已登记账号各自的凭证和数据库中的来源偏好，输出 v2 YAML。旧格式仅在显式 reference 转换中处理；运行时不读取这些文件。共享部署凭证有多个不同组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。已退役的 Playwright MCP 不进入草稿。输出目录必须与真实 state root 不同，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
+用新版本的脚本从当前数据库只读快照生成私有配置草稿。它保留现有服务 key、仓库与分支绑定，导出全部已登记账号各自的凭证和数据库中的来源偏好，输出 v2 YAML。服务和目标以数据库为准；旧用户及钉钉来源仅在显式 reference 转换中处理，运行时不读取这些文件。共享部署凭证有多个不同组时要求 owner 检查，不猜测选用哪一组。参考文件用于来源声明和 MCP 入口，不覆盖现有业务身份。MCP 连接按数据库记录及启停状态导出，不使用名称子串过滤。输出目录必须在真实 state root 之外，脚本拒绝覆盖已有文件，生成文件权限为 `0600`：
 
 ```bash
 node --experimental-strip-types scripts/prepare-configuration.ts \
@@ -151,7 +151,7 @@ node --experimental-strip-types scripts/prepare-configuration.ts \
   --reference-mcp /path/to/reference/mcp.json
 ```
 
-默认只导出数据库事实；`--reference-user`、`--reference-service` 和 `--reference-mcp` 仅在显式历史转换时读取对应输入，不用于日常覆盖当前配置。`--subject` 指定旧 `service.yaml.sources.dingtalk` 的迁移归属。脚本默认保留缺失项；用户明确授权复用某个账号的凭证时，可增加 `--fill-missing-from user@example.com`，只补其他账号缺失项，不替换已有完整凭证，也不复制来源或人员筛选。检查暂存文件中每个账号的归属后，再按发布流程安装；运行时失败不会改用另一账号。
+默认只导出数据库事实；`--reference-user`、`--reference-service` 和 `--reference-mcp` 仅在显式历史转换时读取对应输入，不用于日常覆盖当前配置。普通数据库导出不需要 `--subject`；它仅在迁移旧 `service.yaml.sources.dingtalk` 时指定归属账号，有来源却未指定 owner 时仍拒绝。显式指定的 reference 文件不存在时报错，不静默忽略。脚本默认保留缺失项；用户明确授权复用某个账号的凭证时，可增加 `--fill-missing-from user@example.com`，只补其他账号缺失项，不替换已有完整凭证，也不复制来源或人员筛选。检查暂存文件中每个账号的归属后，再按发布流程安装；运行时失败不会改用另一账号。
 
 审核导出或转换资料的目标、模型和认证归属，不把内容粘贴进日志。需要应用时按上文停服、一致备份和显式导入执行，不再依赖文件放入目录后重启自动投影。旧工作目录布局仍使用下面独立的文件迁移流程。
 

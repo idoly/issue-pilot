@@ -38,6 +38,11 @@ function editorIconAssets(): Plugin {
   };
 }
 
+const apiProxy = {
+  "/mcp": { target: `http://127.0.0.1:${issuePilotConfig.http.port}` },
+  "/api": { target: `http://127.0.0.1:${issuePilotConfig.http.port}`, ws: true },
+};
+
 export default defineConfig({
   root: import.meta.dirname,
   cacheDir: "../../node_modules/.vite/issue-pilot-web",
@@ -47,11 +52,9 @@ export default defineConfig({
     host: issuePilotConfig.web.host,
     port: issuePilotConfig.web.port,
     watch: { awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 20 } },
-    proxy: {
-      "/mcp": { target: `http://127.0.0.1:${issuePilotConfig.http.port}` },
-      "/api": { target: `http://127.0.0.1:${issuePilotConfig.http.port}`, ws: true },
-    },
+    proxy: apiProxy,
   },
+  preview: { host: issuePilotConfig.web.host, port: issuePilotConfig.web.port, proxy: apiProxy },
   test: { setupFiles: ["./src/test-setup.ts"] },
   build: { target: "es2022", rollupOptions: { input: path.join(import.meta.dirname, "index.html") } },
 });

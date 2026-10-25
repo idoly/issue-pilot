@@ -31,7 +31,7 @@ function parseServiceDeployment(deployment: Record<string, unknown>, repositoryA
     if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
     throw error;
   }
-  return { environmentKey, repositoryBranches, capabilities, config };
+  return { environmentKey, repositoryBranches, config };
 }
 
 function parseServiceConfigurationInput(input: Record<string, unknown>, existing: Map<string, StoredDeploymentConfig>) {

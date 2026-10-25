@@ -32,7 +32,13 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
   createEffect(() => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}`, (identity, previous) => { if (identity === previous) return; generation++; close(); setRemove(null); setSaving(false); setRows([]); if (identity.split(":")[0]) void load(); else setLoading(false); });
   onCleanup(() => { generation++; });
   const edit = (repository?: ManagedRepository) => { if (!canEdit()) return; setEditing(repository ?? null); setName(repository?.name ?? ""); setUrl(repository?.url ?? ""); setSaveError(""); setOpen(true); };
-  const refresh = async (owner: number) => { if (owner === generation) await Promise.all([load(), refreshConfiguration(), refreshCatalog()]); };
+  const refresh = async (owner: number) => {
+    if (owner !== generation) return;
+    const results = await Promise.allSettled([load(), refreshConfiguration(), refreshCatalog()]);
+    if (owner !== generation) return;
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") setError(settingsError(failure.reason));
+  };
   const save = async () => {
     if (saving() || !canEdit()) return;
     if (!url().trim()) { setSaveError("请填写仓库地址"); return; }
@@ -56,7 +62,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
   };
   return <section class="user-management-card repository-management" aria-label="仓库管理">
     <header class="user-management-header"><strong>仓库</strong><Show when={canEdit()}><Button size="small" type="primary" disabled={saving()} onClick={() => edit()}>登记仓库</Button></Show></header>
-    <Show when={error()}><div class="user-management-error" role="alert">{error()}<Button size="small" onClick={() => { void load(); }}>重试</Button></div></Show>
+    <Show when={error()}><div class="user-management-error" role="alert">{error()}<Button size="small" onClick={() => { void refresh(generation); }}>重试</Button></div></Show>
     <Show when={!loading()} fallback={<div class="user-management-loading"><Skeleton active paragraph={{ rows: 6 }} /></div>}><Show when={!error()}><div class="settings-table-scroll"><table class="settings-table"><thead><tr><th>名称</th><th>地址</th><th>使用服务</th><th></th></tr></thead><tbody><For each={sortedRows()} fallback={<tr><td colspan={4}>暂无仓库</td></tr>}>{row => <tr><td><strong>{row.name}</strong></td><td><code title={row.url}>{row.url}</code></td><td><For each={row.services} fallback="—">{service => <button class="settings-service-link" type="button" onClick={() => props.onSelectService?.(service.key)}>{service.name}</button>}</For></td><td><Show when={canEdit()}><div class="settings-row-actions"><Button type="text" size="small" disabled={saving()} onClick={() => edit(row)}>编辑</Button><Show when={!row.services.length}><Button type="text" danger size="small" disabled={saving()} onClick={() => setRemove(row)}>删除</Button></Show></div></Show></td></tr>}</For></tbody></table></div></Show></Show>
     <Modal width={540} open={open()} title={editing() ? "编辑仓库" : "登记仓库"} okText="保存" cancelText="取消" confirmLoading={saving()} onCancel={close} onOk={() => { void save(); }}><div class="settings-form"><Show when={saveError()}><div class="user-management-error" role="alert">{saveError()}<Show when={conflict()}><Button size="small" onClick={() => { close(); void load(); }}>重新加载</Button></Show></div></Show><label><span>仓库地址</span><Input aria-label="仓库地址" value={url()} onInput={event => setUrl(event.currentTarget.value)} /></label><label><span>显示名称</span><Input aria-label="仓库显示名称" value={name()} placeholder="默认使用仓库名" onInput={event => setName(event.currentTarget.value)} /></label><Show when={editing()?.services.length}><p class="muted">使用服务：{editing()?.services.map(service => service.name).join("、")}</p></Show></div></Modal>
     <Modal open={remove() !== null} title="删除仓库" okText="删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onCancel={() => setRemove(null)} onOk={() => { void confirmRemove(); }}><p>删除“{remove()?.name}”？</p><Show when={error()}><div class="user-management-error" role="alert">{error()}</div></Show></Modal>

@@ -90,7 +90,7 @@ sls:
 
 DMS 已有准确数据库绑定在目标相同时复用，新的 alias/schema 在首次查询前严格解析。SLS 多目标查询必须同时选择 `target` 和该目标的 `logstore`。开发工单仍显式选择 prod/test 证据；开发配置中的 DMS/SLS 声明必须已存在于正式或测试部署，不能暗中创建不同的查询来源。MySQL 可在各环境配置多个连接。
 
-`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉”手动读取，不启动定时同步器。旧版服务与单用户配置仅由 `scripts/prepare-configuration.ts` 显式离线转换，转换实现位于 `scripts/configuration-conversion.ts`；显式导入只接受数值 `version: 2`；旧格式先经准备命令转换。版本不符时导入拒绝并保留原文件，不影响正常数据库启动。个人 DMS 配置必须独立提供 URL 与 Authorization。
+`maxConcurrentIssues` 限制同时执行的工单轮次；排队任务仍计入该工单活动，阻止冲突预约。每工单顺序和失败清理不变，关闭等待队列完成。每个用户的来源声明放在 `users.<subject>.dingtalk.source`；`service.yaml` v2 不接受 `sources`。`intervalMinutes` 仅保留轮询偏好，当前功能通过顶部“钉钉”手动读取，不启动定时同步器。服务和目标始终从当前数据库导出；旧单用户文件与钉钉来源仅由 `scripts/prepare-configuration.ts` 显式离线转换，转换实现位于 `scripts/configuration-conversion.ts`；显式导入只接受数值 `version: 2`，不从退役 db 字段自动生成当前 MySQL 目标。版本不符时导入拒绝并保留原文件，不影响正常数据库启动。个人 DMS 配置必须独立提供 URL 与 Authorization。
 
 ### user.yaml
 
@@ -129,7 +129,7 @@ users:
 
 `shared` 提供部署查询与全局 MCP 连接的凭证。个人 DMS/SLS 组仍各自完整覆盖部署组。钉钉导入只使用选定的全局 MCP 连接。`shared.dingtalk.apiKey` 在显式导入时写入全局连接，用户不再配置钉钉 API Key 或连接地址，也没有个人身份覆盖、凭证补齐或失败回退分支。用户凭证页仅展示模型、SSH、DMS、SLS。默认来源链接只读取当前账号的声明，未声明单条记录来源时在弹窗填写。钉钉记录不再按人员或状态过滤。
 
-准备脚本从数据库导出账号、凭证与钉钉偏好，不默认读取旧配置文件，也不输出个人钉钉 API Key／连接地址；仅显式 `--reference-user`／`--reference-service` 用于历史资料转换。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
+准备脚本从数据库导出账号、凭证与钉钉偏好，普通导出无需指定账号，不默认读取旧配置文件，也不输出个人钉钉 API Key／连接地址。显式 reference 文件必须存在；用户参考资料缺少的 DMS／SLS 共享组分别从唯一的数据库组补足，多个组仍要求 owner 处理。服务参考资料只迁移钉钉来源，不覆盖数据库并发设置或服务目标。MySQL 模板参数与 MCP 名称原样导出，不按名称过滤服务或改写包版本。只有显式传入 `--fill-missing-from SUBJECT` 时，才把指定账号现有凭证复制到其他账号缺失的项；保留其他账号已有值，模型 Key 按 provider 补齐，DMS/SLS 按完整组补齐，不复制该账号的表格来源或人员筛选。结果写入私有暂存目录供验证，不修改线上文件或数据库。运行时仍按工单 owner 的配置读取凭证，没有跨账号自动回退。
 
 ### 钉钉导入
 
@@ -160,7 +160,7 @@ MCP 端点提供 `dingtalk_import`，与页面复用同一接口和配置。参�
 
 ## 内建能力与工具
 
-配置页顺序为用户、仓库、服务、端点。用户页提供四组个人凭证和人员管理；凭证弹窗直接填写，留空保留，清除显式执行，不回显秘密。仓库页登记／编辑地址与显示名、查看使用服务并可跳转；未使用仓库可删除。服务保留顶部 Tab、代码分支矩阵和描述，开发基线只读继承正式分支；MySQL、DMS、SLS 仍按环境维护。MySQL 密码只在开发者选定服务的私有详情／编辑读取，普通配置 GET 只返回 passwordConfigured。服务、仓库和个人凭证状态响应始终携带整数 revision，前端类型不再接受缺失版本的旧响应。页面编辑使用对应版本，过期返回 configuration_changed，保留输入并在编辑弹窗提供重新加载。仓库 URL 的级联变更同时推进所有关联服务的 revision，避免旧服务草稿恢复旧地址；仅修改仓库显示名不推进服务版本，也不扩大工单预约。API 仍允许省略 expectedRevision 的现有调用；需要冲突保护的客户端应始终携带它。
+配置页顺序为用户、仓库、服务、端点。分类首次访问时才挂载和读取；已访问分类保留实例和筛选，默认用户页不预加载服务配置、仓库、端点或私有服务说明。用户页提供四组个人凭证和人员管理；凭证弹窗直接填写，留空保留，清除显式执行，不回显秘密。仓库页登记／编辑地址与显示名、查看使用服务并可跳转；未使用仓库可删除。服务保留顶部 Tab、代码分支矩阵和描述，开发基线只读继承正式分支；MySQL、DMS、SLS 仍按环境维护。MySQL 密码只在开发者选定服务的私有详情／编辑读取，普通配置 GET 只返回 passwordConfigured。服务、仓库和个人凭证状态响应始终携带整数 revision，前端类型不再接受缺失版本的旧响应。页面编辑使用对应版本，过期返回 configuration_changed，保留输入并在编辑弹窗提供重新加载。仓库 URL 的级联变更同时推进所有关联服务的 revision，避免旧服务草稿恢复旧地址；仅修改仓库显示名不推进服务版本，也不扩大工单预约。API 仍允许省略 expectedRevision 的现有调用；需要冲突保护的客户端应始终携带它。
 
 原生 `service_query` 只提供 DMS 和 SLS，显式选择 service/environment。Nacos、Redis、RabbitMQ、Elasticsearch 和原生 MySQL 已移除。旧部署 JSON 仅作为私有恢复证据保留，不投影、不执行；新增迁移移除旧开关，历史迁移保持不变。
 

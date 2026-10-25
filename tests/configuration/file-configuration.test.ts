@@ -42,7 +42,7 @@ test("files project services, named SLS targets, user credentials and exact MySQ
   try {
     await files(root);
     const status = await applyFileConfiguration(database.db, root);
-    assert.deepEqual(status, { services: true, mcp: true, maxConcurrentIssues: 2, userSubjects: [issuePilotConfig.bootstrapUser.subject], mcpServiceNames: ["dms", "dingtalk"] });
+    assert.deepEqual(status, { services: true, mcp: true, maxConcurrentIssues: 2, userSubjects: [issuePilotConfig.bootstrapUser.subject] });
     const [owner] = await database.db.select().from(userCredentials);
     assert.equal(owner!.modelApiKeys[testAgent.provider], "private-model-key");
     assert.equal(owner!.productionSlsAccessKeySecret, "private-sls-secret");

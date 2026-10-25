@@ -12,7 +12,7 @@ import { parseAgentRuntime } from "./pi-runtime.ts";
 import { parseMcpImport } from "./mcp.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "../http/service-configuration.ts";
 
-interface ConfigurationImportResult { services: boolean; mcp: boolean; maxConcurrentIssues?: number; userSubjects?: string[]; mcpServiceNames?: string[] }
+interface ConfigurationImportResult { services: boolean; mcp: boolean; maxConcurrentIssues?: number; userSubjects?: string[] }
 import { FileConfigurationError, queryTargets, repositoryAddress, fileRecord as record, userFileLayout, dingtalkFieldConfiguration, validateDingtalkSource } from "./file-layout.ts";
 export { FileConfigurationError } from "./file-layout.ts";
 const fail = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };
@@ -204,7 +204,6 @@ export async function applyFileConfiguration(database: Database, stateRoot: stri
       if (mcpFile) {
         const entries = mcpEntries;
         const inputs = Object.keys(entries).length ? parseMcpImport({ mcpServers: entries }) : [];
-        status.mcpServiceNames = inputs.map(input => input.name);
         const previous = await transaction.select().from(mcpServices);
         for (const input of inputs) {
           const old = previous.find(row => row.name === input.name);

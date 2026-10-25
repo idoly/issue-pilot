@@ -112,3 +112,42 @@ test("repository usage navigates to its service and linked repositories cannot b
   fireEvent.click(screen.getByRole("button", { name: "Orders" })); expect(select).toHaveBeenCalledWith("orders");
   expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
 });
+
+for (const failedRead of ["configuration", "catalog"] as const) test(`repository retry restores shared ${failedRead} after a successful write without repeating it`, async () => {
+  const shared = failedRead === "configuration" ? state.refreshConfiguration : state.refreshCatalog;
+  shared.mockRejectedValueOnce(new Error("shared_refresh_failed"));
+  render(() => <RepositoryManagement />); await screen.findByText("Repository");
+  fireEvent.click(screen.getByRole("button", { name: "登记仓库" })); const dialog = await screen.findByRole("dialog");
+  await fireEvent.input(within(dialog).getByLabelText("仓库地址"), { target: { value: "git@example.test:team/retry.git" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const error = await screen.findByRole("alert"); expect(error.textContent).toContain("shared_refresh_failed");
+  fireEvent.click(within(error).getByRole("button", { name: "重试" }));
+  await waitFor(() => expect(shared).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull()); expect(state.register).toHaveBeenCalledTimes(1);
+});
+
+test("personnel retry refreshes shared identities after a successful write without creating another user", async () => {
+  state.refreshPeople.mockRejectedValueOnce(new Error("people_refresh_failed"));
+  render(() => <UserManagement />); await screen.findByText("Alice");
+  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); const dialog = await screen.findByRole("dialog");
+  await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New member" } });
+  await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "new@example.test" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const error = await screen.findByRole("alert"); expect(error.textContent).toContain("people_refresh_failed");
+  fireEvent.click(within(error).getByRole("button", { name: "重试" }));
+  await waitFor(() => expect(state.refreshPeople).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull()); expect(state.createUser).toHaveBeenCalledTimes(1);
+});
+
+test("user management translates the actual admin authorization error and preserves its draft", async () => {
+  state.createUser.mockRejectedValueOnce(new Error("admin_role_required"));
+  render(() => <UserManagement />); await screen.findByText("Alice");
+  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); const dialog = await screen.findByRole("dialog");
+  await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New member" } });
+  await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "new@example.test" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("此操作需要管理权限");
+  expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "New member");
+});

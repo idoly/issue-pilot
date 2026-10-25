@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { applicationSettings, mcpServices } from "../db/schema.ts";
-import type { MysqlTarget } from "../domain/contracts.ts";
+import type { McpStdioConfiguration, MysqlTarget } from "../domain/contracts.ts";
 import { ApiError, record, text } from "../http/input.ts";
 
 type Writer = Pick<Database, "select" | "insert" | "update" | "delete">;
+
+export const DEFAULT_MYSQL_STDIO: McpStdioConfiguration = { command: "npx", args: ["-y", "@benborla29/mcp-server-mysql@2.0.9"], env: {} };
 
 export function parseMysqlTargets(value: unknown): MysqlTarget[] {
   if (value === undefined) return [];
@@ -15,17 +17,20 @@ export function parseMysqlTargets(value: unknown): MysqlTarget[] {
     const host = text(input.host, "mysql_host", 255);
     const port = input.port ?? 3306;
     if (/\s|[/\\\0]/.test(host) || !Number.isInteger(port) || Number(port) < 1 || Number(port) > 65535) throw new ApiError(400, "invalid_mysql_target");
-    return { host, port: Number(port), username: text(input.username, "mysql_username", 255),
-      password: typeof input.password === "string" && input.password.length && !input.password.includes("\0") ? input.password : (() => { throw new ApiError(400, "invalid_mysql_password"); })(),
-      database: text(input.database, "mysql_database", 255),
-    };
+    const password = input.password;
+    if (typeof password !== "string" || !password.length || password.includes("\0")) throw new ApiError(400, "invalid_mysql_password");
+    return { host, port: Number(port), username: text(input.username, "mysql_username", 255), password, database: text(input.database, "mysql_database", 255) };
   });
 }
 
 /** Generated MySQL MCP entries belong to their deployment, with literal private environment credentials. */
 export async function saveMysqlConnections(writer: Writer, deploymentId: string, targets: MysqlTarget[]): Promise<void> {
+  if (!targets.length) {
+    await writer.delete(mcpServices).where(eq(mcpServices.deploymentId, deploymentId));
+    return;
+  }
   const [settings] = await writer.select().from(applicationSettings).limit(1);
-  const template = settings?.mysqlStdio ?? { command: "npx", args: ["-y", "@benborla29/mcp-server-mysql@2.0.9"], env: {} };
+  const template = settings?.mysqlStdio ?? DEFAULT_MYSQL_STDIO;
   const previous = await writer.select().from(mcpServices).where(eq(mcpServices.deploymentId, deploymentId));
   const retained = new Set<string>();
   for (const target of targets) {

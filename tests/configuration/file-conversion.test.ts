@@ -1,14 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { convertServiceFile, convertUserFile, moveDingtalkSource, fillMissingUserCredentials } from "../../scripts/configuration-conversion.ts";
-
-test("offline conversion preserves old service targets and repeated conversion", () => {
-  const duplicateSchemas = [{ alias: "FIRST", schema: "orders" }, { alias: "SECOND", schema: "orders" }];
-  const converted = convertServiceFile({ version: 1, repositories: { app: { url: "git@example.test:app.git" } }, services: { orders: { environments: { prod: { dms: { orders: duplicateSchemas[0] }, sls: { prod: { region: "cn-test", project: "logs", logstores: ["app"] } } } } } } });
-  assert.deepEqual(converted, { version: 2, repositories: { app: "git@example.test:app.git" }, services: { orders: { environments: { prod: { dms: duplicateSchemas[0], sls: { region: "cn-test", project: "logs", logstores: ["app"] } } } } } });
-  assert.deepEqual(convertServiceFile(converted), converted);
-  assert.throws(() => convertServiceFile({ repositories: { app: { url: "address", unexpected: "preserve" } } }), /repository_metadata_requires_review/);
-});
+import { convertUserFile, moveDingtalkSource, fillMissingUserCredentials } from "../../scripts/configuration-conversion.ts";
 
 test("legacy shared connections remain explicit while personal sources move to their named owner", () => {
   const layout = convertUserFile({ version: 1, user: { subject: "alice" }, apiKeys: { provider: "fixture-key" }, dingtalk: { apiKey: "fixture-gateway-key" } });
