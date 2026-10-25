@@ -72,3 +72,20 @@ test("a stale save retains its draft and shows reload inside the edit dialog", a
   await within(dialog).findByRole("alert"); expect(within(dialog).getByLabelText("服务名称")).toHaveProperty("value", "Retained draft");
   expect(within(dialog).getByRole("button", { name: "重新加载" })).toBeTruthy();
 });
+
+for (const failed of ["configuration", "catalog"] as const) test(`a successful service save reports ${failed} refresh failure without offering to resubmit`, async () => {
+  const refresh = failed === "configuration" ? state.refresh : state.catalog;
+  refresh.mockRejectedValueOnce(new Error("refresh_unavailable"));
+  render(() => <ConfigurationView />);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const error = await screen.findByRole("alert");
+  expect(error.textContent).toContain("已保存"); expect(error.textContent).toContain("refresh_unavailable");
+  expect(state.save).toHaveBeenCalledTimes(1);
+  fireEvent.click(within(error).getByRole("button", { name: "重新加载" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(state.save).toHaveBeenCalledTimes(1);
+});

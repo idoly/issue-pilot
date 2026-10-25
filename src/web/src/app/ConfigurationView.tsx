@@ -252,7 +252,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       await Promise.all([refreshConfiguration(), refreshCatalog()]);
       if (owner === editorGeneration) setConfigurationError("");
     } catch (error) {
-      if (owner === editorGeneration) setConfigurationError(errorMessage(error));
+      if (owner === editorGeneration) setConfigurationError(`变更已保存，刷新配置失败：${errorMessage(error)}`);
     }
   };
   createEffect(
@@ -382,8 +382,9 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
       else await createService(definition);
-      await refresh(owner);
-      if (owner === editorGeneration) closeServiceEditor();
+      if (owner !== editorGeneration) return;
+      closeServiceEditor();
+      await refresh(editorGeneration);
     } catch (error) {
       if (owner === editorGeneration) { setSaveConflict(error instanceof Error && error.message === "configuration_changed"); showServiceSaveError(serviceSaveErrorMessage(error)); }
     } finally { if (owner === editorGeneration) setSaving(false); }
@@ -406,6 +407,9 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       <Show when={!configurationLoaded()}><section class="queue-loading configuration-loading"><Show when={resourceError()} fallback={<Skeleton active paragraph={{ rows: 10 }} />}><div class="workspace-error" role="alert"><span>{resourceError()}</span><Button onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show></section></Show>
       <section class="service-panel" hidden={!configurationLoaded()}>
         <div class="service-tabs"><div class="service-tabs-inner"><div class="service-tab-list" role="tablist" aria-label="服务列表"><For each={configuration().services}>{(service) => <button type="button" role="tab" aria-selected={selectedServiceKey() === service.key ? "true" : "false"} class={selectedServiceKey() === service.key ? "selected" : ""} onClick={() => { setSelectedServiceKey(service.key); props.onSelectService?.(service.key); }}>{service.name}</button>}</For></div><div class="service-tab-actions"><Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>添加</Button><Show when={selectedService()}>{(service) => <Button type="primary" icon={<Pencil size={14} />} disabled={!canConfigure()} onClick={() => openServiceEditor(service())}>编辑</Button>}</Show></div></div></div>
+        <Show when={configurationError() && !serviceOpen() && !deleteTarget()}>
+          <div class="workspace-error" role="alert">{configurationError()}<Button size="small" onClick={() => { void refresh(editorGeneration); }}>重新加载</Button></div>
+        </Show>
         <Show when={resourceError()}><div class="workspace-error" role="alert">{resourceError()}</div></Show>
         <Show when={selectedService()} fallback={<div class="empty-band">暂无服务</div>}>{(service) => (<>
           <Show when={descriptionError()}><div class="workspace-error" role="alert">{descriptionError()}<Button size="small" onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show>
