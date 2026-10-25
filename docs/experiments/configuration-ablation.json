@@ -257,5 +257,62 @@
     },
     "typecheck": "passed",
     "build": "passed"
+  },
+  "deployment": {
+    "implementationCommit": "403b6bb735af812cd5c587cf7c5beb6de65d5fa1",
+    "webEntry": "4173 built preview",
+    "afterTrials": [
+      {
+        "port": 4173,
+        "appReadyMs": 797,
+        "configurationReadyMs": 495,
+        "resourceCount": 9,
+        "transferredBytes": 141998,
+        "pageErrors": 0
+      },
+      {
+        "port": 3000,
+        "appReadyMs": 2120,
+        "configurationReadyMs": 511,
+        "resourceCount": 9,
+        "transferredBytes": 472357,
+        "pageErrors": 0
+      }
+    ],
+    "readOnlyAcceptance": [
+      {
+        "width": 1440,
+        "unvisitedDataNotLoaded": true,
+        "sharedPeopleRetry": true,
+        "sharedConfigurationRetry": true,
+        "filterPreserved": true,
+        "serviceEditorReadable": true,
+        "endpoints": true,
+        "builtAssetsOnly": true,
+        "businessWrites": 0,
+        "pageErrors": 0,
+        "noOverflow": true
+      },
+      {
+        "width": 390,
+        "unvisitedDataNotLoaded": true,
+        "sharedPeopleRetry": true,
+        "sharedConfigurationRetry": true,
+        "filterPreserved": true,
+        "serviceEditorReadable": true,
+        "endpoints": true,
+        "builtAssetsOnly": true,
+        "businessWrites": 0,
+        "pageErrors": 0,
+        "noOverflow": true
+      }
+    ],
+    "sseProxy": {
+      "sseProxyStatus": 200,
+      "sseContentTypePreserved": true,
+      "firstByteRead": true,
+      "businessWrite": false
+    },
+    "allBusinessTablesUnchanged": true
   }
 }
