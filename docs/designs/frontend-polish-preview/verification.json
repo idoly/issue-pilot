@@ -383,12 +383,81 @@
     },
     "unrelatedDependencyVersionsChanged": false
   },
-  "deployment": "not deployed; current source worktree only",
+  "deployment": {
+    "date": "2026-10-26",
+    "implementationCommit": "2a14f75f600dc98ae4b0ef372a0346fde1dfabc1",
+    "beforeSourceCommit": "414ecfbe0ad5fd70a1f168e5dc16ad4502026a6a",
+    "scope": "frontend polish plus retirement of user/service file configuration and earlier work-only migration entry",
+    "backend": {
+      "tests": 523,
+      "passed": 522,
+      "skipped": 1
+    },
+    "web": {
+      "files": 27,
+      "passed": 223
+    },
+    "freshInstall": true,
+    "liveAcceptance": [
+      {
+        "width": 1440,
+        "localFonts": true,
+        "noEditorFontOnRegularPage": true,
+        "skipNavigation": true,
+        "credentialsBlankAndCancelable": true,
+        "lazyCategories": true,
+        "filterPreserved": true,
+        "mobileTargets": true,
+        "serviceEditorReadable": true,
+        "modalFooterVisible": true,
+        "endpoints": true,
+        "favicon": true,
+        "licenses": true,
+        "businessWrites": 0,
+        "pageErrors": 0,
+        "noOverflow": true
+      },
+      {
+        "width": 390,
+        "localFonts": true,
+        "noEditorFontOnRegularPage": true,
+        "skipNavigation": true,
+        "credentialsBlankAndCancelable": true,
+        "lazyCategories": true,
+        "filterPreserved": true,
+        "mobileTargets": true,
+        "serviceEditorReadable": true,
+        "modalFooterVisible": true,
+        "endpoints": true,
+        "favicon": true,
+        "licenses": true,
+        "businessWrites": 0,
+        "pageErrors": 0,
+        "noOverflow": true
+      }
+    ],
+    "allBusinessTablesAndGitFactsUnchanged": true,
+    "businessWrites": 0,
+    "recoveryPoint": "20261025T225219Z-frontend-db-only-8ih6gmhc",
+    "fullRecoveryPointsRetained": 2,
+    "schemaMigrationsAdded": 0,
+    "configurationImportRun": false,
+    "unrelatedDependencyVersionsChanged": false,
+    "privateOldFilesPreserved": true,
+    "topLevelYamlRemoved": true,
+    "sdkYamlRetained": true,
+    "completeMigrationHashesMatched": 64,
+    "auditExistingHighPackageEntries": 3,
+    "pythonDependenciesCheck": "passed",
+    "staticAssetsAndSseProxy": "passed",
+    "note": "Visual screenshots remain synthetic, captured before deployment; deployed acceptance is reported separately."
+  },
   "cleanup": {
     "fixtureServersStopped": 3,
     "fixtureDatabaseAndRepositoryRemoved": true,
     "baselineAndBuildCopiesRemoved": true,
     "browserContainersAutoRemoved": true,
     "productionStateChanged": false
-  }
+  },
+  "deploymentStatus": "deployed"
 }
