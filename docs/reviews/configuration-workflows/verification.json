@@ -63,5 +63,45 @@
       "zod"
     ],
     "change": "existing advisories and pinned backports; dependencies unchanged"
+  },
+  "deployment": {
+    "date": "2026-10-25",
+    "implementationCommit": "8fd145ef71c9de41390fc5ceb3d10f61047cb933",
+    "migrations": 64,
+    "preferencesImported": 13,
+    "mysqlConnectionsOwned": 2,
+    "developmentBranchRowsRemoved": 23,
+    "attachmentsPreserved": 343,
+    "sessionsPreserved": 334,
+    "worktreesPreserved": 149,
+    "temporaryRepositoriesRemaining": 0,
+    "browser": [
+      {
+        "width": 1440,
+        "categoryOrder": true,
+        "credentialsBlankAndCancelable": true,
+        "repositoryCreateEditRefreshDelete": true,
+        "developmentInheritance": true,
+        "privateMysqlReadable": true,
+        "publicProjectionSafe": true,
+        "endpoints": true,
+        "noOverflow": true,
+        "pageErrors": 0
+      },
+      {
+        "width": 390,
+        "categoryOrder": true,
+        "credentialsBlankAndCancelable": true,
+        "repositoryCreateEditRefreshDelete": true,
+        "developmentInheritance": true,
+        "privateMysqlReadable": true,
+        "publicProjectionSafe": true,
+        "endpoints": true,
+        "noOverflow": true,
+        "pageErrors": 0
+      }
+    ],
+    "fullRecoveryPointsRetained": 2,
+    "stagingCleaned": true
   }
 }
