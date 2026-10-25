@@ -14,7 +14,6 @@ import { applyServiceConfiguration, prepareServiceConfiguration } from "../http/
 
 interface ConfigurationImportResult { services: boolean; mcp: boolean; maxConcurrentIssues?: number; userSubjects?: string[] }
 import { FileConfigurationError, queryTargets, repositoryAddress, fileRecord as record, userFileLayout, dingtalkFieldConfiguration, validateDingtalkSource } from "./file-layout.ts";
-export { FileConfigurationError } from "./file-layout.ts";
 const fail = (): never => { throw new FileConfigurationError("invalid_file_configuration"); };
 function text(value: unknown): string { if (typeof value !== "string" || !value.trim() || value.includes("\0")) return fail(); return value.trim(); }
 function secret(value: unknown): string { text(value); return value as string; }

@@ -20,10 +20,11 @@ test("the offline CLI upgrades a previous database and moves durable files, then
     await assert.rejects(execute(process.execPath, [...args, "--apply"]), error => error instanceof Error && "stderr" in error && /flat_layout_control_socket_in_use/.test(String(error.stderr)));
     await fixture.stop();
     const key = String(created.id), old = legacyIssueRoot(fixture.root, key), root = issueRoot(fixture.root, key);
-    for (const name of ["agent", "attachments", "outputs", "runtime/bin"]) await mkdir(path.join(old, name), { recursive: true, mode: 0o700 });
+    for (const name of ["agent", "attachments", "outputs", "runtime/bin", "work"]) await mkdir(path.join(old, name), { recursive: true, mode: 0o700 });
     const session = path.join(old, "agent", "original.jsonl"), original = path.join(old, "attachments", "upload.txt");
     const conversation = JSON.stringify({ type: "session", id: "preserved-session", cwd: root }) + "\n";
     await writeFile(session, conversation, { mode: 0o600 }); await writeFile(original, "original", { mode: 0o400 });
+    await writeFile(path.join(old, "work", "checkpoint.json"), "{\"preserved\":true}", { mode: 0o600 });
     await writeFile(path.join(root, "upload.txt"), "edited working copy");
     await writeFile(path.join(root, "report.csv"), "working source"); await writeFile(path.join(old, "outputs", "report.csv"), "delivery");
     const wrapper = "#!/bin/sh\nset -eu\nruntime_bin=legacy\n# preserve this exact historical file\n";
@@ -41,6 +42,7 @@ test("the offline CLI upgrades a previous database and moves durable files, then
     } finally { before.close(); }
     await execute(process.execPath, args);
     assert.equal(await readFile(original, "utf8"), "original");
+    assert.equal(await readFile(path.join(old, "work", "checkpoint.json"), "utf8"), "{\"preserved\":true}");
     await execute(process.execPath, [...args, "--apply"]);
     const after = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     try {
@@ -54,6 +56,8 @@ test("the offline CLI upgrades a previous database and moves durable files, then
       assert.equal(after.prepare("PRAGMA integrity_check").get()!.integrity_check, "ok");
       assert.deepEqual(after.prepare("PRAGMA foreign_key_check").all(), []);
     } finally { after.close(); }
+    assert.equal((await stat(path.join(root, "checkpoint.json"))).mode & 0o777, 0o600);
+    assert.equal(await readFile(path.join(root, "checkpoint.json"), "utf8"), "{\"preserved\":true}");
     assert.equal(await readFile(path.join(root, "report.csv"), "utf8"), "working source");
     const preservedOutputs = JSON.parse(await readFile(path.join(root, ".legacy-output-links.json"), "utf8")).files;
     assert.equal(await readFile(path.join(root, preservedOutputs["report.csv"]), "utf8"), "delivery");

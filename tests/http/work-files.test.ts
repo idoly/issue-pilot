@@ -1,35 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
-import { legacyIssueRoot, issueRoot } from "../../src/workspace/state.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
-
-test("offline migration refuses a live API, preserves a plan-only run and supports repeated application", async () => {
-  const fixture = await createApiFixture();
-  const run = promisify(execFile);
-  try {
-    await createService(fixture.app, "Migration", ["test"]);
-    const issue = await createIssue(fixture.app, "migration", "test", "Legacy work");
-    fixture.engine.running.clear();
-    const key = String(issue.id), oldRoot = path.join(legacyIssueRoot(fixture.root, key), "work");
-    await mkdir(oldRoot, { recursive: true });
-    await writeFile(path.join(oldRoot, "checkpoint.json"), "{}");
-    const args = ["--experimental-strip-types", "scripts/migrate-issue-work.ts", "--state-root", fixture.root];
-    const plan = await run(process.execPath, args);
-    assert.equal(JSON.parse(plan.stdout.trim()).entries, 1);
-    await assert.rejects(run(process.execPath, [...args, "--apply"]), error => error instanceof Error && /EADDRINUSE/.test(String((error as { stderr?: string }).stderr)));
-    assert.equal(await readFile(path.join(oldRoot, "checkpoint.json"), "utf8"), "{}");
-    await fixture.stop();
-    await run(process.execPath, [...args, "--apply"]);
-    assert.equal(await readFile(path.join(issueRoot(fixture.root, key), "checkpoint.json"), "utf8"), "{}");
-    const repeated = await run(process.execPath, [...args, "--apply"]);
-    assert.equal(JSON.parse(repeated.stdout.trim().split("\n")[0]!).entries, 0);
-  } finally { await fixture.cleanup(); }
-});
 
 test("serves current work files with exact names and traversal checks", async () => {
   const fixture = await createApiFixture();
