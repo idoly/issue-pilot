@@ -407,10 +407,11 @@ test("clean inspection handles non-ASCII branch headers and still rejects detach
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
     const prepared = await manager.prepare({ issueKey: "ISSUE-20261025-992", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
-    const branch = "修复/完整分支";
-    await git(["-C", prepared.workspacePath, "branch", "-m", branch]);
-    await manager.assertClean(remote, prepared.workspacePath, branch);
+    for (const branch of ["修复/完整分支", "(detached)"]) {
+      await git(["-C", prepared.workspacePath, "branch", "-m", branch]);
+      await manager.assertClean(remote, prepared.workspacePath, branch);
+    }
     await git(["-C", prepared.workspacePath, "checkout", "--detach", "HEAD"]);
-    await assert.rejects(manager.assertClean(remote, prepared.workspacePath, branch), /workspace_branch_does_not_match_issue_policy/);
+    await assert.rejects(manager.assertClean(remote, prepared.workspacePath, "(detached)"), /workspace_branch_does_not_match_issue_policy/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

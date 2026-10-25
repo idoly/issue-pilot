@@ -213,8 +213,12 @@ export class WorktreeManager {
     const status = await inspect(["--no-optional-locks", "-C", resolvedWorkspace, "status", "--porcelain=v2", "--branch", "--ignored=matching"]);
     const lines = status.split("\n").filter(Boolean);
     if (expectedBranch !== undefined) {
-      const branch = lines.find(line => line.startsWith("# branch.head "))?.slice("# branch.head ".length);
-      if (branch === "(detached)" || branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
+      const head = lines.find(line => line.startsWith("# branch.head "))?.slice("# branch.head ".length);
+      // A historical branch can literally be named like porcelain's detached marker.
+      const branch = head === "(detached)" && expectedBranch === head
+        ? (await inspect(["-C", resolvedWorkspace, "branch", "--show-current"])).trim()
+        : head;
+      if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
     }
     if (lines.some(line => !line.startsWith("# "))) throw new Error("workspace_has_changes");
   }
