@@ -30,7 +30,7 @@ export interface PersonalCredentialUpdate {
   git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
   production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
 }
-export interface PersonalCredentialStatus { revision?: number; provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
+export interface PersonalCredentialStatus { revision: number; provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
 export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
 export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage");
@@ -306,7 +306,7 @@ export const updateRepository = (id: string, input: { name: string; url: string;
 export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const loadServiceMysqlTargets = (key: string) => request<{ revision: number; deployments: Array<{ environmentKey: string; mysql: import("../../../domain/contracts").MysqlTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/mysql-targets`);
 
-export interface ManagedRepository { revision?: number; id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
+export interface ManagedRepository { revision: number; id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
 export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");
 
 export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) => request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);

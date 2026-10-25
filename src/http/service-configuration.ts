@@ -27,7 +27,6 @@ function parseServiceDeployment(deployment: Record<string, unknown>, repositoryA
     const mysql = parseMysqlTargets(deployment.mysql);
     if (environmentKey === "dev" && mysql.length) throw new ApiError(400, "development_capabilities_inherited");
     if (mysql.length) config.mysql = mysql;
-    if (environmentKey === "dev" && existing?.archivedDevelopment !== undefined) config.archivedDevelopment = existing.archivedDevelopment;
   } catch (error) {
     if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
     throw error;

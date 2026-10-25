@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../../src/db/client.ts";
 import { createApiFixture, createIssue, createService, servicePayload } from "./fixture.ts";
+import type { Configuration, ServiceConfigurationInput } from "../../src/configuration/contracts.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
@@ -17,6 +18,7 @@ test("manages a shared repository catalog and cascades config URLs without rewri
     const rows = JSON.parse(list.body);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].services.length, 2);
+    const revisions = (await f.app.inject({ method: "GET", url: "/api/config" })).json().services.map((service: { revision: number }) => service.revision);
     const id = rows[0].id;
     const issue = await createIssue(f.app, "alpha", "test");
     const issueId = f.engine.enqueued.at(-1)!;
@@ -32,6 +34,7 @@ test("manages a shared repository catalog and cascades config URLs without rewri
     assert.equal(update.statusCode, 200, update.body);
     const config = JSON.parse((await f.app.inject({ method: "GET", url: "/api/config" })).body);
     assert.deepEqual(config.services.map((service: { repositories: Array<{ url: string }> }) => service.repositories[0]!.url), [next, next]);
+    assert.deepEqual(config.services.map((service: { revision: number }) => service.revision), revisions.map((revision: number) => revision + 1));
     const detail = JSON.parse((await f.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).body);
     assert.equal(detail.repositories[0].url, url);
     const db = openDatabase(f.databaseFile);
@@ -55,11 +58,13 @@ test("repository display-name changes do not reserve or stop active Issue sessio
     await createIssue(f.app, "metadata", "test");
     const issueId = f.engine.enqueued.at(-1)!;
     const rows = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json();
+    const revision = (await f.app.inject({ method: "GET", url: "/api/config" })).json().services[0].revision;
     const response = await f.app.inject({ method: "PATCH", url: `/api/repositories/${rows[0].id}`, headers, payload: { name: "Readable repository name", url } });
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(f.engine.running.has(issueId), true);
     assert.deepEqual(f.engine.closedSessions, []);
     assert.equal((await f.app.inject({ method: "GET", url: "/api/repositories" })).json()[0].name, "Readable repository name");
+    assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).json().services[0].revision, revision);
   } finally { await f.cleanup(); }
 });
 
@@ -103,5 +108,22 @@ test("rejects embedded credentials, unsupported URLs, and nondeveloper repositor
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });
     const response = await f.app.inject({ method: "POST", url: "/api/repositories", headers: { "x-issue-pilot-subject": "product" }, payload: { name: "No", url: "git@git.example.test:no.git" } });
     assert.equal(response.statusCode, 403);
+  } finally { await f.cleanup(); }
+});
+
+test("catalog URL changes invalidate service drafts even when the original URL is registered again", async () => {
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Revision", ["test"]);
+    const prior = (await f.app.inject({ method: "GET", url: "/api/config" })).json<Configuration>().services[0]!;
+    const repository = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json()[0];
+    const nextUrl = "git@example.test:team/new-location.git";
+    assert.equal((await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { expectedRevision: repository.revision, name: repository.name, url: nextUrl } })).statusCode, 200);
+    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Original upstream", url: repository.url } })).statusCode, 201);
+    const oldDraft: ServiceConfigurationInput = { name: prior.name, description: prior.description, expectedRevision: prior.revision, repositories: prior.repositories, deployments: prior.deployments.map(row => ({ environmentKey: row.environmentKey, capabilities: [], repositoryBranches: row.repositoryBranches.map(branch => ({ repositoryAlias: branch.repositoryAlias, baseBranch: branch.baseBranch })) })) };
+    const stale = await f.app.inject({ method: "PATCH", url: "/api/services/revision", headers, payload: oldDraft });
+    assert.equal(stale.statusCode, 409, stale.body); assert.equal(stale.json().error, "configuration_changed");
+    const current = (await f.app.inject({ method: "GET", url: "/api/config" })).json<Configuration>().services[0]!;
+    assert.equal(current.repositories[0]!.url, nextUrl); assert.equal(current.revision, prior.revision + 1);
   } finally { await f.cleanup(); }
 });

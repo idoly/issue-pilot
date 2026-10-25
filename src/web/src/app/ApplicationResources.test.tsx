@@ -26,7 +26,7 @@ const configuration = (name: string): Config => ({
   agent: { provider: "provider", model: "model", thinkingLevel: "medium", codemode: "on", runtime: {} },
   agentModels: [],
   environments: [],
-  services: [{ key: "orders", name, description: "", repositories: [], deployments: [] }],
+  services: [{ revision: 0, key: "orders", name, description: "", repositories: [], deployments: [] }],
 });
 
 describe("application configuration resources", () => {

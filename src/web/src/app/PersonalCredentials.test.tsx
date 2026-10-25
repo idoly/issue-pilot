@@ -11,7 +11,7 @@ afterEach(() => { cleanup(); vi.resetAllMocks(); });
 
 test("shows exactly four personal credential groups without revealing secret values or account management", async () => {
   state.user = () => ({ subject: "alice", name: "Alice", role: "developer" });
-  state.load.mockResolvedValue({ modelProviders: ["fixture"], gitSshConfigured: true, productionDmsConfigured: true, productionSlsConfigured: true });
+  state.load.mockResolvedValue({ revision: 0, modelProviders: ["fixture"], gitSshConfigured: true, productionDmsConfigured: true, productionSlsConfigured: true });
   render(() => <PersonalCredentials />);
   const region = screen.getByRole("region", { name: "我的凭证" });
   await within(region).findByText("API Key");
@@ -26,12 +26,12 @@ test("shows exactly four personal credential groups without revealing secret val
 test("ignores a credential response belonging to the previously selected user", async () => {
   const [user, setUser] = createSignal({ subject: "alice", name: "Alice" }, { ownedWrite: true }); state.user = user;
   let finish!: (value: PersonalCredentialStatus) => void;
-  state.load.mockImplementationOnce(() => new Promise<PersonalCredentialStatus>(resolve => { finish = resolve; })).mockResolvedValue({ modelProviders: [], gitSshConfigured: false });
+  state.load.mockImplementationOnce(() => new Promise<PersonalCredentialStatus>(resolve => { finish = resolve; })).mockResolvedValue({ revision: 0, modelProviders: [], gitSshConfigured: false });
   render(() => <PersonalCredentials />);
   await waitFor(() => expect(state.load).toHaveBeenCalledOnce());
   setUser({ subject: "bob", name: "Bob" });
   await screen.findByText("API Key");
-  finish({ modelProviders: ["fixture"], gitSshConfigured: true });
+  finish({ revision: 0, modelProviders: ["fixture"], gitSshConfigured: true });
   await waitFor(() => expect(screen.getAllByText("未配置")).toHaveLength(4));
 });
 

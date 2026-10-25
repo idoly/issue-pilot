@@ -31,7 +31,7 @@ export function PersonalCredentials() {
   onCleanup(() => { generation++; });
   const open = (group: Group) => { close(); providerDraft = provider() ?? ""; setUrl(group === "dms" ? status()?.productionDmsUrl ?? "" : ""); setSelected(group); };
   const save = async (clear = false) => {
-    const group = selected(); if (!group || saving()) return;
+    const group = selected(), credentials = status(); if (!group || !credentials || saving()) return;
     const owner = generation;
     const supplied = Boolean(secret() || accessKeyId());
     if (!clear && !supplied) {
@@ -39,7 +39,7 @@ export function PersonalCredentials() {
       setSaveError(group === "dms" && configured(group) ? "更换地址时请填写 Authorization" : "请填写凭证"); return;
     }
     if (!clear && (!secret().trim() || group === "sls" && !accessKeyId().trim() || group === "dms" && !url().trim())) { setSaveError("请填写完整凭证"); return; }
-    const input: PersonalCredentialUpdate = { expectedRevision: status()?.revision };
+    const input: PersonalCredentialUpdate = { expectedRevision: credentials.revision };
     if (group === "model") input.model = clear ? { mode: "clear", provider: providerDraft } : { mode: "replace", provider: providerDraft, apiKey: secret() };
     if (group === "git") input.git = clear ? { mode: "clear" } : { mode: "replace", type: "ssh", privateKey: secret() };
     if (group === "dms") input.production = { dms: clear ? { mode: "clear" } : { mode: "replace", url: url().trim(), authorization: secret() } };

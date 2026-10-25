@@ -44,7 +44,7 @@ interface ServiceDeployment extends ProjectedCapabilityConfiguration {
 }
 
 export interface ServiceConfiguration {
-  revision?: number;
+  revision: number;
   key: string;
   name: string;
   description: string;

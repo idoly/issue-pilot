@@ -32,11 +32,11 @@ vi.mock("../data/client", async (importOriginal) => {
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{
-      key: "srm", name: "SRM", description: "供应商关系管理服务。", context: "供应商关系管理服务。\n\n### 测试环境\n\n代码基准分支：develop\n\nSLS（sls）：srm-test",
+      revision: 0, key: "srm", name: "SRM", description: "供应商关系管理服务。", context: "供应商关系管理服务。\n\n### 测试环境\n\n代码基准分支：develop\n\nSLS（sls）：srm-test",
       deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["sls"], sls: { region: "cn-test", project: "srm-test", logstores: ["srm"], credentialConfigured: true } }],
       repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
     }, {
-      key: "orders", name: "Orders", description: "订单服务。",
+      revision: 0, key: "orders", name: "Orders", description: "订单服务。",
       deployments: [
         { environmentKey: "prod", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "main" }], capabilities: [] },
         { environmentKey: "dev", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "develop" }], capabilities: [] },
@@ -49,15 +49,15 @@ vi.mock("../data/client", async (importOriginal) => {
     loadManagedUsers: vi.fn(async () => structuredClone(managedUsers.map(user => ({ ...user, revision: 0 })))),
     loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
-    loadPersonalCredentials: vi.fn(async () => ({ provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
+    loadPersonalCredentials: vi.fn(async () => ({ revision: 0, provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
     })),
     loadApplicationEndpoints: vi.fn(async () => ({ endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: true, tools: [{ name: "issue_get", description: "Read Issue details", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { key: { type: "string", description: "Issue key" } }, required: ["key"] } }] }] })),
     loadRepositories: vi.fn(async () => [
-      ...configuration.services.flatMap((service) => service.repositories.map((repository) => ({ id: repository.id, name: repository.alias, url: repository.url, createdAt: now, updatedAt: now, services: [{ key: service.key, name: service.name }] }))),
-      { id: "updated-repository", name: "Updated repository", url: "git@example.test:team/updated.git", createdAt: now, updatedAt: now, services: [] },
+      ...configuration.services.flatMap((service) => service.repositories.map((repository) => ({ id: repository.id, revision: 0, name: repository.alias, url: repository.url, createdAt: now, updatedAt: now, services: [{ key: service.key, name: service.name }] }))),
+      { id: "updated-repository", revision: 0, name: "Updated repository", url: "git@example.test:team/updated.git", createdAt: now, updatedAt: now, services: [] },
     ]),
     loadServiceConfigurationDescription: vi.fn(async (key: string) => ({ context: configuration.services.find(service => service.key === key)?.context ?? configuration.services.find(service => service.key === key)?.description ?? "" })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
@@ -985,7 +985,7 @@ describe("issue pilot workspace", () => {
     const now = new Date().toISOString();
     const urls = ["git@example.test:team/sub/z.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/a.git"];
     const loadRepositories = vi.mocked(client.loadRepositories), original = loadRepositories.getMockImplementation()!;
-    loadRepositories.mockResolvedValue(urls.map((url, index) => ({ id: `repo-${index}`, name: `Repository ${3 - index}`, url, createdAt: now, updatedAt: now, services: [] })));
+    loadRepositories.mockResolvedValue(urls.map((url, index) => ({ id: `repo-${index}`, revision: 0, name: `Repository ${3 - index}`, url, createdAt: now, updatedAt: now, services: [] })));
     try {
       render(() => <App initialView="configuration" />);
       fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));

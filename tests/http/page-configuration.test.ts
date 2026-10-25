@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { applicationSettings, mcpServices, serviceDeploymentRepositories, services, userPreferences } from "../../src/db/schema.ts";
+import { applicationSettings, mcpServices, serviceDeploymentRepositories, serviceDeployments, services, userPreferences } from "../../src/db/schema.ts";
 import { loadDeploymentRepositories } from "../../src/workspace/deployment.ts";
 import { loadDingtalkUserSettings } from "../../src/configuration/user-preferences.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -134,5 +134,24 @@ test("stale configuration revisions refuse repository and credential replacement
     assert.equal(stale.statusCode, 409); assert.equal(stale.json().error, "configuration_changed");
     const read = await f.app.inject({ method: "GET", url: "/api/me/credentials", headers });
     assert.equal(read.json().revision, 1); assert.doesNotMatch(read.body, /private-key/);
+  } finally { await f.cleanup(); }
+});
+
+test("saving current deployment settings preserves opaque archived development data", async () => {
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Archive", ["prod", "dev"]);
+    const archive = { formerBranch: "develop", note: "retained historical evidence" };
+    const database = openDatabase(f.databaseFile);
+    try {
+      const row = (await database.client.execute("SELECT d.id FROM service_deployments d JOIN services s ON s.id=d.service_id JOIN environments e ON e.id=d.environment_id WHERE s.key='archive' AND e.kind='dev'")).rows[0]!;
+      await database.db.update(serviceDeployments).set({ config: { archivedDevelopment: archive } }).where(eq(serviceDeployments.id, String(row.id)));
+      const input = servicePayload("Archive", ["prod", "dev"]);
+      const saved = await f.app.inject({ method: "PATCH", url: "/api/services/archive", headers, payload: input });
+      assert.equal(saved.statusCode, 200, saved.body);
+      const [current] = await database.db.select().from(serviceDeployments).where(eq(serviceDeployments.id, String(row.id)));
+      assert.deepEqual(current!.config, { archivedDevelopment: archive });
+      assert.doesNotMatch((await f.app.inject({ method: "GET", url: "/api/config" })).body, /retained historical evidence/);
+    } finally { await database.close(); }
   } finally { await f.cleanup(); }
 });
