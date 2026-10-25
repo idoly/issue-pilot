@@ -48,6 +48,7 @@ interface MeasuredWorkspaceRelease extends WorkspaceReleaseResult {
 }
 
 type WorkspaceStatistics = {
+  sampledAt: string;
   totalBytes: number;
   sharedGitBytes: number;
   policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
@@ -94,6 +95,7 @@ export class WorkspaceLifecycleManager {
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
   private statsPromise: Promise<WorkspaceStatistics> | undefined;
+  private statisticsCache: { bytesCache: object; value: WorkspaceStatistics } | undefined;
   private workspaceBytesCache: { expiresAt: number; values: Map<string, number>; sharedGitBytes?: number } | undefined;
   private readonly workspaceBytesCacheMs: number;
   private stopping = false;
@@ -146,21 +148,31 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  async stats(): Promise<WorkspaceStatistics> {
+  async stats(refresh = false): Promise<WorkspaceStatistics> {
     if (this.stopping) throw new Error("workspace_lifecycle_closing");
     if (this.statsPromise) return this.statsPromise;
+    const bytesCache = this.workspaceBytesCache;
+    if (!refresh && bytesCache && bytesCache.expiresAt > Date.now() && this.statisticsCache?.bytesCache === bytesCache) return this.statisticsCache.value;
     const request = this.exclusive(async () => {
       const issueRows = await this.issueRows();
-      const cached = this.workspaceBytesCache && this.workspaceBytesCache.expiresAt > Date.now() ? this.workspaceBytesCache : undefined;
+      const repositories = await this.database.select().from(issueRepositories);
+      const repositoriesByIssue = new Map<string, IssueRepository[]>();
+      for (const repository of repositories) {
+        const group = repositoriesByIssue.get(repository.issueId) ?? [];
+        group.push(repository);
+        repositoriesByIssue.set(repository.issueId, group);
+      }
+      const cached = !refresh && this.workspaceBytesCache && this.workspaceBytesCache.expiresAt > Date.now() ? this.workspaceBytesCache : undefined;
       const measuredBytes = cached?.values;
       const inspections = await pMap(
         issueRows,
-        (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, undefined, measuredBytes?.get(issueRow.issue.id))),
+        (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id))),
         { concurrency: this.policy.taskConcurrency, stopOnError: false },
       );
       const sharedGitBytes = cached?.sharedGitBytes ?? await directoryBytes(gitRoot(this.stateRoot));
       this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: new Map(inspections.map((workspace) => [workspace.issueId, workspace.bytes])), sharedGitBytes };
-      return {
+      const value: WorkspaceStatistics = {
+        sampledAt: new Date().toISOString(),
         totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
         sharedGitBytes,
         policy: {
@@ -171,6 +183,8 @@ export class WorkspaceLifecycleManager {
         },
         workspaces: inspections,
       };
+      this.statisticsCache = { bytesCache: this.workspaceBytesCache, value };
+      return value;
     });
     this.statsPromise = request;
     try { return await request; }
@@ -178,7 +192,6 @@ export class WorkspaceLifecycleManager {
   }
 
   async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {
-    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => {
@@ -193,7 +206,6 @@ export class WorkspaceLifecycleManager {
   }
 
   async reopenIssue(issueId: string): Promise<Issue> {
-    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation),
@@ -205,7 +217,6 @@ export class WorkspaceLifecycleManager {
   }
 
   async convertIssueToDevelopment(issueId: string, expectedIssueUpdatedAt?: string, recordTransition?: TransitionAudit): Promise<Issue> {
-    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation, expectedIssueUpdatedAt, recordTransition),
@@ -217,7 +228,6 @@ export class WorkspaceLifecycleManager {
   }
 
   async migrateDevelopmentIssueScope(issueId: string, target: { serviceId: string; environmentId: string }, expectedIssueUpdatedAt: string, recordTransition?: TransitionAudit): Promise<Issue> {
-    this.workspaceBytesCache = undefined;
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.migrateDevelopmentScopeLocked(await this.issueRow(issueId), target, expectedIssueUpdatedAt, reservation, recordTransition),
@@ -232,6 +242,7 @@ export class WorkspaceLifecycleManager {
 
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }>; failures: Array<{ issueKey: string; error: unknown }> }> {
     return this.exclusive(async () => {
+      this.workspaceBytesCache = undefined;
       const issueRows = await this.issueRows();
       const measuredWorkspaces = await pMap(
         issueRows,
@@ -606,9 +617,11 @@ export class WorkspaceLifecycleManager {
     operation: (reservation: AgentReservation) => Promise<T>,
     rethrow: (error: unknown) => never,
   ): Promise<T> {
+    this.workspaceBytesCache = undefined;
     return this.exclusive(() => this.issueQueue.run(issueId, async () => {
       try { return await this.engine.runExclusive([issueId], operation); }
       catch (error) { return rethrow(error); }
+      finally { this.workspaceBytesCache = undefined; }
     }));
   }
 

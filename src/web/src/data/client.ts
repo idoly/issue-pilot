@@ -108,6 +108,7 @@ export interface IssueScopeTransitionPlan {
 }
 
 export interface WorkspaceStats {
+  sampledAt: string;
   totalBytes: number;
   sharedGitBytes: number;
   policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
@@ -196,7 +197,7 @@ export async function fetchIssueWorkFile(key: string, path: string, signal?: Abo
   if (!response.ok) throw await requestError(response);
   return response.blob();
 }
-export const loadWorkspaceStats = (signal?: AbortSignal) => request<WorkspaceStats>("/api/workspaces/stats", signal ? { signal } : undefined);
+export const loadWorkspaceStats = (signal?: AbortSignal, refresh = false) => request<WorkspaceStats>(`/api/workspaces/stats${refresh ? "?refresh=true" : ""}`, signal ? { signal } : undefined);
 
 type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite" | "Offset";
 

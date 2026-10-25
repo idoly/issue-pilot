@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@solidjs/testing-library';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@solidjs/testing-library';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { loadWorkspaceStats, type WorkspaceStats } from '../data/client';
@@ -16,6 +16,7 @@ afterEach(() => {
 
 test('distinguishes retained files from reclaim candidates and actual safety failures', async () => {
   const stats: WorkspaceStats = {
+    sampledAt: "2026-10-25T08:00:00.000Z",
     sharedGitBytes: 3 * 1024,
     totalBytes: 17 * 1024,
     policy: {
@@ -81,4 +82,28 @@ test('distinguishes retained files from reclaim candidates and actual safety fai
   expect(within(screen.getByText('工单目录占用').parentElement!).getByText('17 KB')).toBeTruthy();
   expect(within(screen.getByText('共享 Git 占用').parentElement!).getByText('3.0 KB')).toBeTruthy();
   expect(screen.getByText('回收触发线')).toBeTruthy();
+});
+
+test('storage loads only on its first visit and explicit refresh bypasses the server snapshot', async () => {
+  const stats: WorkspaceStats = { sampledAt: '2026-10-25T08:00:00.000Z', totalBytes: 0, sharedGitBytes: 0, policy: { retentionHours: 168, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 15 }, workspaces: [] };
+  vi.mocked(loadWorkspaceStats).mockResolvedValue(stats);
+  render(() => <Statistics issues={[]} />);
+  expect(loadWorkspaceStats).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('tab', { name: '资源' }));
+  await screen.findByText('当前没有占用空间的工单');
+  expect(loadWorkspaceStats).toHaveBeenCalledTimes(1); expect(vi.mocked(loadWorkspaceStats).mock.calls[0]![1]).toBe(false);
+  fireEvent.click(screen.getByRole('tab', { name: '团队' })); fireEvent.click(screen.getByRole('tab', { name: '资源' }));
+  expect(loadWorkspaceStats).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(screen.getByRole('button', { name: '刷新统计' })).toHaveProperty('disabled', false));
+  fireEvent.click(screen.getByRole('button', { name: '刷新统计' }));
+  await waitFor(() => expect(loadWorkspaceStats).toHaveBeenCalledTimes(2)); expect(vi.mocked(loadWorkspaceStats).mock.calls[1]![1]).toBe(true);
+});
+
+test('storage failures can be retried without visiting another page', async () => {
+  vi.mocked(loadWorkspaceStats).mockRejectedValueOnce(new Error('stats_unavailable')).mockResolvedValue({ sampledAt: '2026-10-25T08:00:00.000Z', totalBytes: 0, sharedGitBytes: 0, policy: { retentionHours: null, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 0 }, workspaces: [] });
+  render(() => <Statistics issues={[]} />); fireEvent.click(screen.getByRole('tab', { name: '资源' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('stats_unavailable');
+  await waitFor(() => expect(screen.getByRole('button', { name: '刷新统计' })).toHaveProperty('disabled', false));
+  fireEvent.click(screen.getByRole('button', { name: '刷新统计' }));
+  await screen.findByText('当前没有占用空间的工单'); expect(screen.queryByRole('alert')).toBeNull();
 });

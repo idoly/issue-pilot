@@ -209,12 +209,14 @@ export class WorktreeManager {
         throw new Error(reason, { cause: error });
       }
     };
+    // Read branch and dirtiness in one Git snapshot rather than spawning twice.
+    const status = await inspect(["--no-optional-locks", "-C", resolvedWorkspace, "status", "--porcelain=v2", "--branch", "--ignored=matching"]);
+    const lines = status.split("\n").filter(Boolean);
     if (expectedBranch !== undefined) {
-      const branch = (await inspect(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
-      if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
+      const branch = lines.find(line => line.startsWith("# branch.head "))?.slice("# branch.head ".length);
+      if (branch === "(detached)" || branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
     }
-    const dirty = (await inspect(["-C", resolvedWorkspace, "status", "--porcelain", "--ignored=matching"])).trim();
-    if (dirty) throw new Error("workspace_has_changes");
+    if (lines.some(line => !line.startsWith("# "))) throw new Error("workspace_has_changes");
   }
 
   private validatedWorkspacePath(workspacePath: string): string {

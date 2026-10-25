@@ -1,5 +1,5 @@
-import { Select, Skeleton } from "../ui";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { Button, Select, Skeleton } from "../ui";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { fileSize, statusLabel, typeLabel } from "./model";
@@ -13,12 +13,22 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [view, setView] = createSignal<InsightView>("distribution", { ownedWrite: true });
   const [period, setPeriod] = createSignal<StatisticsPeriod>("30d", { ownedWrite: true });
-  const controller = new AbortController();
-
-  void loadWorkspaceStats(controller.signal).then(setWorkspaceStats).catch((reason) => {
-    if (!controller.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
-  }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
-  onCleanup(() => controller.abort());
+  let controller: AbortController | undefined;
+  let requested = false;
+  const refresh = (force = false) => {
+    controller?.abort();
+    const request = new AbortController(); controller = request;
+    setLoading(true); setLoadError("");
+    void loadWorkspaceStats(request.signal, force).then(value => {
+      if (!request.signal.aborted) setWorkspaceStats(value);
+    }).catch(reason => {
+      if (!request.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
+    }).finally(() => { if (!request.signal.aborted) setLoading(false); });
+  };
+  createEffect(() => view() === "resources", active => {
+    if (active && !requested) { requested = true; refresh(); }
+  });
+  onCleanup(() => controller?.abort());
 
   const periodDays = createMemo(() => Number.parseInt(period(), 10));
   const filteredIssues = createMemo(() => {
@@ -117,8 +127,9 @@ export function Statistics(props: { issues: IssueListItem[] }) {
       </div>
       <div class="insight-panel" role="tabpanel" hidden={view() !== "resources"}>
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
-          <div class="statistics-title"><h2 id="workspace-capacity-title">Workspace 存储</h2><span>{storedWorkspaces().length} 个占用空间</span></div>
-          <Show when={!loading()} fallback={<div aria-busy="true"><Skeleton active paragraph={{ rows: 4 }} /></div>}><Show when={!loadError()} fallback={<div class="queue-error" role="alert">{loadError()}</div>}><Show when={workspaceStats()}>{(stats) => <>
+          <div class="statistics-title"><h2 id="workspace-capacity-title">Workspace 存储</h2><span>{storedWorkspaces().length} 个占用空间</span><Button size="small" disabled={loading()} onClick={() => refresh(true)}>刷新统计</Button></div>
+          <Show when={workspaceStats()}>{stats => <div class="workspace-policy">采样于 {new Date(stats().sampledAt).toLocaleTimeString()} · 释放时重新检查</div>}</Show>
+          <Show when={!loading() || workspaceStats() !== null} fallback={<div aria-busy="true"><Skeleton active paragraph={{ rows: 4 }} /></div>}><Show when={!loadError()} fallback={<div class="queue-error" role="alert">{loadError()}</div>}><Show when={workspaceStats()}>{(stats) => <>
             <div class="workspace-compact-summary"><div class="workspace-current-usage"><span>工单目录占用</span><strong>{fileSize(stats().totalBytes)}</strong></div><div><span>回收触发线</span><strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong></div><div class="workspace-reclaim"><span title="包含保留的附件、对话、工作文件和私有 Git 历史，实际释放量取决于代码目录">回收候选占用</span><strong>{fileSize(candidateWorkspaceBytes())}</strong></div></div>
             <div class="workspace-capacity-control">
               <Show when={stats().policy.highWaterBytes > 0}><div class="workspace-capacity-meter" aria-label={`工单目录占用为回收触发线的 ${Math.round(capacityPercent())}%`}><div><i style={{ width: `${capacityPercent()}%` }} /></div><span>{Math.round(capacityPercent())}%</span></div></Show>

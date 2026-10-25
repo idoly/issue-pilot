@@ -395,3 +395,22 @@ test("shares immutable latest baselines for read-only environments and creates p
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("clean inspection handles non-ASCII branch headers and still rejects detached HEAD", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-status-snapshot-"));
+  try {
+    const source = join(root, "source"), remote = join(root, "remote.git");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, "README.md"), "fixture\n");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "seed"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const prepared = await manager.prepare({ issueKey: "ISSUE-20261025-992", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    const branch = "修复/完整分支";
+    await git(["-C", prepared.workspacePath, "branch", "-m", branch]);
+    await manager.assertClean(remote, prepared.workspacePath, branch);
+    await git(["-C", prepared.workspacePath, "checkout", "--detach", "HEAD"]);
+    await assert.rejects(manager.assertClean(remote, prepared.workspacePath, branch), /workspace_branch_does_not_match_issue_policy/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

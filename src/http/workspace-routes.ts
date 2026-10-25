@@ -70,8 +70,9 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     } catch (error) { return workFileError(error); }
   });
 
-  app.get("/api/workspaces/stats", async () => {
-    const stats = await workspaces.stats();
+  app.get<{ Querystring: { refresh?: string } }>("/api/workspaces/stats", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const stats = await workspaces.stats(request.query.refresh === "true");
     return { ...stats, workspaces: stats.workspaces.map(serializeInspection) };
   });
 

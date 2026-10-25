@@ -78,6 +78,7 @@ vi.mock("../data/client", async (importOriginal) => {
     updateIssueRelatedIssues: vi.fn(async (_id: string, _relatedIssueKeys: string[]) => undefined),
     resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({ instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1", instanceHost: `${input.schemaName}.db.example.test`, instancePort: "3306", databaseId: input.schemaName === "mdm" ? "456" : "123" })),
     loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
+      sampledAt: now,
       totalBytes: 4 * 1024 ** 3 + 2048,
       sharedGitBytes: 1024 ** 3,
       policy: { retentionHours: 168, highWaterBytes: 20 * 1024 ** 3, targetBytes: 16 * 1024 ** 3, maintenanceIntervalMinutes: 15 },
@@ -634,7 +635,7 @@ describe("issue pilot workspace", () => {
     expect(screen.getByText("周期解决").parentElement?.textContent).toContain("0");
     fireEvent.click(screen.getByRole("tab", { name: "资源" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Workspace 存储" })).toBeTruthy());
-    expect(screen.getByText("每 15 分钟自动检查 · 已解决保留 7 天")).toBeTruthy();
+    expect(await screen.findByText("每 15 分钟自动检查 · 已解决保留 7 天")).toBeTruthy();
     expect(screen.getByText("20.0 GB")).toBeTruthy();
     expect(screen.getByText("解决后纳入")).toBeTruthy();
     expect(screen.getByText("仓库目录缺失")).toBeTruthy();

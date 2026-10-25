@@ -273,8 +273,8 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   assert.equal(stopped, true);
 });
 
-test("shares one active Workspace statistics scan across concurrent callers", async () => {
-  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
+test("shares one statistics scan, caches completed results and refreshes on request or expiry", async context => {
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,
     highWaterBytes: 0,
     targetBytes: 0,
@@ -311,13 +311,20 @@ test("shares one active Workspace statistics scan across concurrent callers", as
   assert.deepEqual(secondResult, firstResult);
   assert.equal(inspections, 1);
 
-  await manager.stats();
+  const cached = await manager.stats();
+  assert.equal(inspections, 1);
+  assert.equal(cached.sampledAt, firstResult.sampledAt);
+  await manager.stats(true);
   assert.equal(inspections, 2);
-  assert.deepEqual(knownMeasurements, [undefined, 0]);
+  assert.deepEqual(knownMeasurements, [undefined, undefined]);
+  context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  context.mock.timers.tick(5_001);
+  await manager.stats();
+  assert.equal(inspections, 3);
 });
 
 test("bounds concurrent Workspace inspections while preserving Issue order", async () => {
-  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, {
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,
     highWaterBytes: 0,
     targetBytes: 0,
@@ -1035,4 +1042,42 @@ test("migrates ready development scopes while preserving retained changes and ro
     await database.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("cached storage eligibility cannot release a subsequently changed checkout", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-stats-release-safety-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+    const [service] = await database.db.insert(services).values({ key: "stats-safety", name: "Stats safety" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261025-991", title: "Stats safety", type: "defect_fix", status: "resolved", resolvedAt: new Date(0), reporterSubject: issuePilotConfig.bootstrapUser.subject, serviceId: service!.id, environmentId: environment!.id }).returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+    const remote = await createRemote(root, "cache-safety");
+    const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
+    const manager = new WorkspaceLifecycleManager(database.db, root, { ...engine, running: new Set(), closed: [] } as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
+    const initial = await manager.stats(); assert.equal(initial.workspaces[0]!.releasable, true);
+    await writeFile(path.join(prepared.workspacePath, "README.md"), "new working changes\n");
+    assert.equal((await manager.stats()).sampledAt, initial.sampledAt);
+    assert.equal((await manager.stats()).workspaces[0]!.releasable, true);
+    await assert.rejects(manager.releaseIssue(issue!.id), /workspace_has_changes/);
+    assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "new working changes\n");
+    assert.equal((await manager.stats()).workspaces[0]!.blockedReason, "workspace_has_changes");
+    const forced = await manager.stats(true); assert.equal(forced.workspaces[0]!.releasable, false);
+  } finally { await database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a release queued behind an in-flight scan invalidates the scan result when it completes", async () => {
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
+  const row = { issue: { id: "queued-release", key: "ISSUE-20261025-993" }, workspace: null };
+  const internals = manager as unknown as { issueRows(): Promise<typeof row[]>; issueRow(): Promise<typeof row>; inspectLocked(): Promise<WorkspaceInspection>; releaseLocked(): Promise<{ issueKey: string; releasedBytes: number; remainingBytes: number; alreadyReleased: boolean }> };
+  internals.issueRows = async () => [row]; internals.issueRow = async () => row;
+  let start!: () => void, finish!: () => void, scans = 0, released = false;
+  const started = new Promise<void>(resolve => { start = resolve; }), gate = new Promise<void>(resolve => { finish = resolve; });
+  internals.inspectLocked = async () => { scans++; if (scans === 1) { start(); await gate; } return { issueId: row.issue.id, issueKey: row.issue.key, issueStatus: "resolved", workspaceStatus: released ? "stopped" : "ready", resolvedAt: new Date(0).toISOString(), bytes: 0, releasable: !released, blockedReason: released ? "workspace_released" : null }; };
+  internals.releaseLocked = async () => { released = true; return { issueKey: row.issue.key, releasedBytes: 0, remainingBytes: 0, alreadyReleased: false }; };
+  const statistics = manager.stats(); await started;
+  const release = manager.releaseIssue(row.issue.id); finish(); await statistics; await release;
+  const current = await manager.stats(); assert.equal(scans, 2); assert.equal(current.workspaces[0]!.blockedReason, "workspace_released");
 });
