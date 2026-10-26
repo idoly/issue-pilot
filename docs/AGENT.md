@@ -1,129 +1,98 @@
 # Agent 与能力
 
-模型决定下一步做什么，pi-coding-agent 管理模型会话与工具管线，Issue Pilot 提供业务规则、凭证和持久化。全局只有一份 provider/model、思考级别和 Codemode 配置，服务部署没有模型覆盖。
+[文档导航](README.md) · [系统架构](ARCHITECTURE.md) · [配置与协议](CONFIGURATION.md)
+
+模型选择下一步任务，Pi 管理模型会话和工具管线，应用维护身份、业务范围、持久数据和执行边界。provider／model、thinking 与 Codemode 为全局设置。
 
 ## 模型如何使用工具
 
-```mermaid
-flowchart TB
-  Config[全局模型配置 + 工单上下文] --> Pi[Pi 会话]
-  Pi <--> Model[模型服务]
-  Model --> Call[工具名与参数]
-  Call --> Pipeline[Pi 工具管线]
-  Pipeline --> Native[原生文件与 Bash 工具]
-  Pipeline --> Business[workspace / service_query]
-  Pipeline --> MCP[全局外部 MCP]
-  Native --> SRT[SRT 本地执行边界]
-  Business --> Owners[业务校验与资源 owner]
-  MCP -->|本地 stdio| SRT
-  MCP -->|HTTPS| Servers[外部工具服务]
-  SRT --> Runtime[Node / Python / Git]
-  Runtime --> Result[结果与文件]
-  Owners --> Result
-  Servers --> Result
-  Result --> Pi
-```
+1. 模型读取任务和工单上下文，选择工具并生成参数。
+2. Pi 工具管线与应用 owner 校验后，调用本地或远程能力。
+3. 结果进入对话或工作文件，模型继续判断或结束本轮。
 
-提示词说明任务和路径，不能代替执行时校验。工具是否存在、参数和目标是否合法、使用谁的凭证，由当前上下文与执行入口决定。
+| 工具 | 执行路径与范围 |
+| --- | --- |
+| read／write／edit／bash／grep／find／ls | SDK 原生能力经 SRT 短期执行进程，cwd 为当前工单根目录 |
+| `workspace` | owner 维护服务说明、代码 list／include／remove，保持工单代码环境 |
+| `service_query` | 配置和权限允许时使用 DMS／SLS 原生只读查询 |
+| `mcp__<id>__<tool>` 与 resources | Pi 管理服务部署所属连接，按入口／已包含服务与来源环境筛选 |
 
-| 工具 | 提供什么 | 何时可用 |
-| --- | --- | --- |
-| read/bash/edit/write/grep/find/ls | 普通文件操作、脚本与命令执行 | 全部工单，cwd 为持久工单工作目录 `workspaces/<key>` |
-| workspace | list/describe/include/remove，服务说明与代码集合 | 全部工单 |
-| service_query | 已配置的原生只读证据查询 | 当前上下文有可用原生能力时 |
-| `mcp__<id>__<tool>` 与 resources | 已启用外部服务的工具与资源 | 全局向所有工单开放 |
-
-入口：[context.ts](../src/agent/context.ts)、[engine.ts](../src/agent/engine.ts)、[pi-session.ts](../src/agent/pi-session.ts)、[prompts.ts](../src/agent/prompts.ts)。
+提示词不代替执行校验。输入、范围、凭证和路径由 owner 检查，工具存在也不代表模型可以任意操作。入口见 [engine.ts](../src/agent/engine.ts)、[pi-session.ts](../src/agent/pi-session.ts) 和 [prompts.ts](../src/agent/prompts.ts)。
 
 ## 原生证据查询
 
-```mermaid
-flowchart LR
-  Input[环境 / 服务 / 能力 / 操作] --> Schema[输入 schema 校验]
-  Schema --> Hook[扩展钩子]
-  Hook --> Execute[execute 再校验]
-  Execute --> Scope[目标与只读检查]
-  Scope --> Auth[服务端注入凭证]
-  Auth --> Query[协议调用]
-  Query --> Result[完整结果 / 导出 / 明确失败]
-```
+1. 输入经 schema 校验、扩展钩子和 execute 再校验。
+2. owner 检查服务、环境、目标与只读规则，注入对应凭证。
+3. 协议调用遵守取消、时间和结果预算。
+4. 返回完整证据、下载文件或稳定错误。
 
-SLS 日志和 DMS 查询行属于业务证据。用户明确要求查找业务系统的登录 token、session token 或业务 Authorization 时，可在已配置的服务、环境和查询权限内返回所请求的值，并附来源及时间；该请求本身即为授权，不重复要求确认。连接配置中的 SLS AccessKey、DMS 连接 Authorization、MCP 凭据、模型密钥和 SSH 私钥继续隐藏。查询结果中的业务值不扩大后续访问范围。
+Pi 的初始校验位于可变参数钩子之前，应用保留 execute 再校验；外部 MCP 发送前按发现的 schema 校验。正式／测试调查选择本环境来源，开发查询显式选 prod／test。连接配置由服务端提供，不由模型传入。
 
-可用能力由全局开关与允许的服务/环境部署共同决定。正式/测试工单只能选择本环境来源，开发工单可以显式查询 prod/test。数据库、schema、logstore 等目标在调用时检查，不由模型提交连接凭证。
+### DMS
 
-Pi 的初始校验发生在可修改参数的钩子之前，因此应用工具保留 execute 入口校验；外部 MCP 也在发送前按已发现 schema 验证参数。
+DMS 在连接前校验只读 SQL，使用原生 SSE。一次操作预算 120 秒、首次握手 12 秒、最多两次握手；429 按有效 Retry-After 最多等待 5 秒后重试一次握手，401／403 不重试，发送过的 SQL 不自动重放。
 
-DMS 不静默截断完整结果。查询和范围解析的会话都只关闭一次；多重失败保留操作与关闭错误，调用方取消保留原原因，导出关闭失败时保留旧交付。SQL 在连接前校验，握手限流最多退避重试一次；SQL 发送后不自动重放。SLS 通过 `aliyun sls GetLogsV2` CLI 查询，使用短期私有配置注入凭证，保留完整性检查、分页、预算和取消，不再创建证据 Worker。MySQL 走用户配置的外部 MCP，原生适配器及其事务/导出接口已移除。具体目标、操作和预算见[配置与协议](CONFIGURATION.md#内建能力与工具)及[根配置](../issue-pilot.config.ts)。
+工具错误返回稳定 error 与脱敏 diagnostics，阶段包括 connect／discovery／execute／export／close，以及总耗时、阶段耗时、sqlDispatchAttempted 和可用的 retryAfterSeconds。阶段时间可重叠，发送尝试不能证明服务端已执行；错误 JSON 不含 URL、SQL 或认证。取消保留原原因，关闭失败与操作失败分别保留。
+
+完整导出使用普通工作文件，协议收尾成功后才原子替换旧文件。导出失败不重查 SQL，关闭失败保留旧交付。Agent 指引要求 DMS 批次串行且保留间隔：同批主动重查一次仍失败则拆分／暂停；连续两次恢复探测失败或单轮累计五次调用失败时保存断点并停止，成功探测不清零累计失败数。这是模型工作指引，不是服务端限流器。
+
+### SLS 与 MySQL
+
+SLS 调用固定 `aliyun sls GetLogsV2`，0600 临时配置注入选定凭证，禁用 CLI 自动重试并使用 HTTPS；结束或取消时删除配置，不改变宿主默认 profile。只接受 meta.progress=Complete；SQL 分析按 LIMIT／ORDER BY 返回一页，普通查询按 offset 分页。后页失败即整次失败，未知 CLI 错误隐藏，已知 code 转稳定诊断。超时／取消终止进程组并清理凭证，CLI 缺失报 `sls_cli_not_available`。
+
+MySQL 由部署 MCP 与数据库账号提供能力，配置与归属见[MySQL MCP](CONFIGURATION.md#mysql-mcp)。SLS／DMS 查询到的业务 token 与用于连接系统的配置密钥遵循不同展示规则，见[凭证与 owner](CONFIGURATION.md#凭证与-owner)。
 
 ## MCP 与 Codemode
 
-| 接入 | 调用方向 | 规则 |
-| --- | --- | --- |
-| 入站 `/mcp` | 外部 AI → Issue Pilot | 复用工单 HTTP 入口的身份与业务检查 |
-| 全局外部 MCP | 工单 Agent → 外部服务 | 启用工具向所有工单开放，只读提示不是授权 |
-| 原生 DMS MCP | DMS 适配 → DMS 服务 | 指定数据库与受校验的只读操作 |
+入站 `/mcp` 是外部客户端调用应用的接口；服务部署 MCP 是 Agent 的外部能力；DMS 原生连接由适配器管理。钉钉导入连接仅供应用读取单条记录。
 
-Pi 拥有外部 MCP 的发现、命名、动态注册、连接复用、重连与关闭。应用保留数据库配置权、传输限制、凭证、预算和发送前校验，不另维护一套工具发现框架。配置格式与传输细节见[全局外部 MCP](CONFIGURATION.md#全局外部-mcp)。
+Pi 负责外部 MCP 发现、命名、注册、连接复用和关闭。应用维护数据库配置权、传输约束、输入／结果预算及取消。会话过期时报告本次失败，下一次显式调用重新连接，不重放原操作。
 
-Codemode 让模型用脚本编排现有工具，仍走同一工具管线：
+| Codemode | 模型工具声明与使用方式 |
+| --- | --- |
+| off | 直接调用原生、应用和外部 MCP 工具 |
+| on | 原生／应用工具与 Codemode 并存，按需 searchTools／describeTool |
+| only | SDK 隐藏其他模型工具声明，主要经 Codemode 发现与编排 |
 
-| 模式 | 模型工具声明 | MCP 使用方式 |
-| --- | --- | --- |
-| off | 原生、应用及直接曝光的 MCP 工具 | 直接调用 |
-| on | 原生、应用直接工具，以及 Codemode | searchTools/describeTool 按需发现 |
-| only | SDK 隐藏其他模型工具声明，主要通过 Codemode | 同样按需发现和调用 |
-
-on/only 不预先把全部 MCP schema 放入上下文。Codemode 脚本使用进程级、可取消的 FIFO 执行资源队列，一次执行一个脚本，为 SDK 的第二个 Worker 槽位保留退出缓冲；默认最多等待 120 秒、排队 32 个，预算归根配置 `limits.codemode`。等待超时或取消的脚本不执行，不自动重放；脚本内部独立工具调用仍可并行。`service_query`、`workspace` 返回结构化结果；独立的非 DMS 读取可并行，DMS 批次串行并保留间隔。依赖结果或发布同一文件时顺序执行，只返回模型需要的字段。查询导出返回 `downloadPath`，最终回复应使用它生成文件下载链接，不把服务器路径、`file://` 或 `sandbox:` 地址作为下载入口。
+on／only 不预载所有 MCP schema。脚本使用进程级可取消 FIFO，一次执行一个，为 SDK 第二个 Worker 槽位留退出缓冲；默认等待最多 120 秒、队列 32 个，由 `limits.codemode` 管理。等待超时或取消的脚本不执行、不重放；脚本内部独立读取可并行，DMS 仍按批次串行。Codemode 仅编排工具，没有直接文件或网络能力。
 
 ## 文件处理与会话
 
-模型通过普通脚本处理文件，应用不提供格式专用执行器。上传附件只保留工单目录中的 `.attachment-*` 只读原件，准备与继续处理时不生成可编辑副本；直接读取原件，需要修改时显式另存普通工作文件，不能修改原件权限或内容。Bash PATH 包含应用 `.venv`，直接使用系统 npm/mvn，Node 可使用应用已安装的包；当前 Git 身份随调用环境注入。项目命令包装器和命令 broker 已移除。
+Agent 用普通命令和已安装库处理文件。原始 `.attachment-*` 只读，准备阶段校验但不复制；需要编辑时另存工作文件。Bash PATH 包含应用 `.venv`，直接使用 npm／Maven，Node 可使用已安装包。Python/openpyxl 支持 xlsx 读写及公式保留，不计算公式；xls 不在支持范围内，网页不解析 Excel。
 
-Python/openpyxl 用于读取、创建和修改 `.xlsx`，支持写入及保留公式，不计算公式结果。原生图片读取同时传递 Pi 的自动缩放设置和当前模型的图片尺寸限制，避免受限执行进程丢失模型配置。旧 `.xls` 不在支持范围内，网页不解析或预览 Excel，文件列表仅提供下载；超出预览大小限制的成果同样不显示预览入口。附件和成果弹窗统一使用下载与关闭操作，只有加载失败时提供重试。发布和文件事务见[数据存储设计](STORAGE.md#文件写入与发布)。
+图片读取传递 Pi 自动缩放设置和模型尺寸限制。SDK 图片、长输出及 MCP 二进制资源通过固定版本补丁的保存回调进入工单根目录，补丁见[说明](../patches/README.md)。报告使用工作文件 downloadPath，文件事务见[存储设计](STORAGE.md#文件写入与发布)。
 
-每工单 Pi JSONL 保存消息和分支，恢复时读取 active branch，不从历史消息恢复额外工具权限。只读仓库会话轮次结束后关闭，下一轮准备当前快照并恢复对话；开发空闲会话可以复用。模型响应超时只计等待模型输出，工具执行期间暂停。
-
-Pi 标准 ResourceLoader 从用户全局目录加载 Skills、Prompts、受信扩展和附加指令，应用不再绑定自己的 `.pi` 资源目录；SDK 负责命令展开、嵌套调用和会话格式。资源路径和 settings 见[Agent 基座与资源](CONFIGURATION.md#agent-基座与资源)。凭证归属统一见[凭证与 owner](CONFIGURATION.md#凭证与-owner)。
+Pi JSONL 保存消息、工具结果与分支，恢复读取 active branch。只读仓库轮次结束后关闭会话，下一轮重新准备快照并恢复对话；开发空闲会话可复用。模型响应超时只累计等待输出的时间，工具执行期间暂停。资源加载和设置覆盖见[Agent 基座与资源](CONFIGURATION.md#agent-基座与资源)。
 
 ## 消息接收与中断
 
-流式补充消息在等待同工单发送队列后重新检查会话。尚未交给 Pi 的消息若遇原会话结束或切换，会转入普通回合队列，保留文字和图片。已经交给 Pi、返回时旧会话却被清理替换的消息不自动重放，也不追加到旧会话；API 返回 `409 agent_message_outcome_unknown`，页面保留草稿和图片，提示先核对对话与结果再决定是否重发。
+消息在等待同工单队列后重新检查会话。文字和图片写入现有 Pi JSONL，绑定保存后才返回 HTTP 202；准备仓库、凭证或 SDK 初始化尚未成功也先保存输入。202 表示已接收，执行队列仍在内存，启动不会自动开始模型工作。
 
-消息接口仅在文字、图片写入现有 Pi JSONL 且会话绑定已保存后返回 HTTP `202`。尚未开始的回合不会等到模型初始化或仓库准备成功才保存输入；进程重启后可以从对话找回原文和图片。会话打开、排队输入写入、SDK 初始化和关闭按工单串行，流式发送在身份复核后复用已打开的 SessionManager；没有另建 SQL 消息表或独立任务存储，执行调度仍使用现有内存队列。
+| 持久记录 | 含义与恢复 |
+| --- | --- |
+| `issue-pilot-user` | 可见用户输入，附交付版本和原服务／环境 ID |
+| `issue-pilot-user-delivery: started` | 可能已交付，不保证执行完成；不自动重新注入 |
+| `issue-pilot-user-delivery: rejected` | 原范围不再合法，保留原文并拒绝恢复 |
+| 无明确排队元信息的消息 | 不推断为待办 |
 
-`202` 不代表模型已经执行或完成。执行队列仍在内存中，进程启动不会自动开始模型工作。新版排队消息在现有 `issue-pilot-user` 条目中附带版本 1 的交付元信息和原服务／环境 ID；调用 Pi 前，先追加 `issue-pilot-user-delivery` 的 started 记录。用户主动重试或继续发送时，只恢复明确排队且没有 started／rejected 记录的输入，按接收顺序逐条交付并保留图片；不重复追加可见用户条目。未带这些元信息的历史消息不会被收编为待办，流式 steer 消息仍按现有接受语义处理。
+用户主动重试／继续时，按顺序恢复明确排队且无 started／rejected 的输入，保留图片且不重复追加显示条目。恢复使用当前合法 owner 和模型配置，元信息不保存密钥；未知或损坏记录报错。
 
-started 只表示可能已经开始交付，不表示完成。即使进程恰好在记录 started 后、真正调用模型前退出，也不自动重新注入该输入；用户应核对对话和工作结果。准备或凭证阶段失败且尚未记录 started 的输入仍可在后续主动重试时恢复。应用没有跨进程自动任务调度、客户端提交幂等 ID 或统一终态回执，也不承诺外部副作用恰好执行一次。
+未交给 Pi 的流式消息遇会话结束／切换时可转普通回合。已交给 Pi 而旧会话被替换时返回 `409 agent_message_outcome_unknown`，不重放、不写回旧会话，页面保留草稿。应用没有客户端提交幂等 ID、跨进程自动调度或外部副作用恰好一次保证。
 
-恢复会重新使用当前合法的 owner 凭证和全局模型配置，不在交付元信息中保存凭证。已排队输入若属于旧服务／环境，记录 rejected 并停止本次恢复，原文仍保留；页面提示核对处理范围，再重试或按当前范围重新发送。损坏或未知版本的交付元信息报错，不推测或自动修复。
-
-消息写入失败时不入队；如果发现 JSONL 文件缺失或末尾不完整，分别返回 `agent_session_file_missing` 或 `agent_session_file_incomplete`，保留原绑定和现有文件，页面保留文字和图片草稿并提示管理员检查。应用不另建会话替换已有绑定，也不截断、修补或绕过不完整的会话文件。
-
-关闭会等待已有活动、排队工作和预约结束，再清理会话与运行资源。Pi 会话的 abort、shutdown 和 dispose 按顺序尝试；多个失败一起保留，启动失败与清理失败也分别保留。
+写入失败不入队。JSONL 缺失／末尾不完整分别返回 `agent_session_file_missing`／`agent_session_file_incomplete`，保留原文件、绑定和草稿，不截断、改绑或新建替代会话。关闭等待活动、排队工作和预约排空，依次尝试 abort／shutdown／dispose，聚合启动与清理错误。
 
 ## 关联工单与信息时效
 
-关联是有方向的只读证据引用，适用于调查和开发工单。当前目录中的 `.related-<key>` 指向源工单的真实工作目录，包含可读取的代码、附件、对话及工作文件；Agent 根据当前任务选择相关片段，不应默认把整份关联对话导入上下文。关联不改变当前工单的 owner、凭据或查询权限。
-
-`.related-<key>.json` 在准备工作区时生成，属于当时的元信息快照；可用 `.jsonl` 链接也绑定当时的会话文件。调查会话下一轮会重新准备，复用的开发会话继续轮次则不会刷新这些元信息。源工单改动不自动触发当前工单重新分析，不能承诺每次读取快照都拿到最新状态。使用重要依据时应核对实际文件、对话及代码版本，并在当前回答中注明来源和读取时点。
-
-当前没有关联预览弹窗、单独的关联只读查询工具、自动摘要文件或后台结论同步。三类结构化摘要不是已有存储字段；模型的任务判断保存在当前工单自己的 Pi 对话和普通工作文件中。
+`.related-<key>` 是源工单真实目录的只读引用，包含代码、附件、工作文件和会话；关联不改变当前 owner 或查询权限。`.related-<key>.json` 及可用的 jsonl 引用在准备时生成，复用开发会话不会自动刷新。源工单变化不触发后台重新分析；使用重要依据时核对文件、对话、代码版本和读取时点。当前没有自动摘要或结论同步。
 
 ## 执行边界
 
-应用保持单进程管理业务和 Pi 会话，不启动每工单常驻 Worker 或容器。模型控制的本地 read/write/edit/Bash/grep/find/ls 经统一 SRT 入口执行，复用 SDK 原生工具；工具调用使用短期受限进程。本地 stdio MCP 在相同边界内运行，连接和重连仍由 Pi 管理。
+模型本地工具和 stdio MCP 使用 SRT，Linux user／PID／mount／network namespace 与 seccomp 共同约束。宿主文件系统只读，当前工单根可持久写入，关联工单只读，数据库与私有配置隐藏。管理文件及 Git 指针额外只读；启动检查跨目录硬链接，写入重新检查路径和管理文件。TMPDIR、Node／Maven 与 Java 缓存落在工单内。
 
-SRT 使用 Linux user/PID/mount/network namespace 和 seccomp。宿主文件系统只读，当前工单根目录可持久写入；关联工单只读，应用数据库与私有配置区域隐藏，既有管理文件及 Git 指针另设只读。虚拟 `/tmp`、`/dev` 和代理引导资源属于隔离设施；实际工具的 TMPDIR、Node/Maven 缓存和 Java 临时路径落在工单根目录。启动检查跨目录硬链接；写入再次检查路径、链接和管理文件。
+网络经 HTTP 代理，proxychains 为不读代理变量的 TCP 客户端提供同一出口；Unix socket 与嵌套 namespace 默认关闭，宿主控制地址及 API／Web 端口拒绝访问。域名基础列表与数据库追加项见[服务和查询目标](CONFIGURATION.md#服务和查询目标)。危险 loader 环境覆盖拒绝执行；依赖或隔离能力不足时失败。
 
-执行默认关闭 Unix socket 与嵌套 namespace，经 HTTP 代理转发网络；proxychains 为不读取代理变量的 TCP 客户端提供同一出口。域名基础列表位于根配置 `runtime.agent.networkAllowedDomains`，私有目标通过数据库全局 Agent 的 `runtime.networkAllowedDomains` 追加；部署需显式加入实际包源、Git 与 stdio MCP 所需的业务目标。宿主地址、应用 API 与开发 Web 端口拒绝访问。危险 loader 环境覆盖拒绝执行，沙箱依赖使用应用解析出的绝对路径；依赖缺失或隔离能力不满足时失败，不降级裸执行或弱隔离。
+工单私有 Git store 的索引、工作分支和新对象可写；共享对象、Git config／hooks／alternates 和绑定指针只读。个人 SSH 仅向 native 工具开放当前临时身份目录，私钥 0600，复制 Operator known_hosts 并严格校验；stdio MCP 不获得这份身份。SSH 代理与个人凭据隔离设置组合，保留安全目录及空 credential helper／header。
 
-当前开发工单使用根目录内的私有 Git store，索引、分支和新对象可写；公共 Git 库、其他工单、Git 配置/hooks/alternates 和绑定信息保持只读。个人 SSH 只对 Native 工具开放当前会话的临时身份目录，私钥为 `0600`，复制 Operator 的 known_hosts 并启用严格主机校验；不开放整个 HOME `.ssh`、其他用户身份或 stdio MCP 的凭据权限。身份缺失或主机不受信时失败，不回退到其他身份。Native 启动时将个人 SSH 选项与 SRT 的 SSH 代理选项组合，并在 SRT 的 Git 安全配置之后追加个人凭据隔离项，保留安全目录设置及空 credential helper/header；不覆盖或绕开代理出口。
+本地执行与 workspace include／remove 按工单串行，包含等待、取消、退出与准备；SRT 的共享代理生命周期队列不替代业务锁。重复关闭共享清理 Promise，等待临时文件和代理使用权释放，清理失败不覆盖原失败。实例控制 socket 只负责单实例与离线迁移互斥。
 
-本地工具及 `workspace include/remove` 按工单串行，包含等待、取消、进程退出和工作区准备，避免执行中改变 Git 保护路径；不同工单不共享执行队列。SRT 只在初始化及关闭共享代理时使用资源生命周期队列，不替代配置、Agent、Git 或工单预约。项目命令不经 socket RPC，应用独占 state 的控制 socket 仅用于实例与离线迁移互斥，沿用旧路径以阻止旧版本并发启动。
-
-重复关闭同一个命令共享清理 Promise，等待文件、网络列表及 SRT 代理使用权全部释放后才完成；清理错误与原始执行错误分别保留。
-
-Pi SDK 与 Operator 安装的扩展属于可信应用代码；工单目录中的扩展不加载。Codemode 只编排工具，没有直接文件或网络能力。SDK 的图片、长输出和 MCP 二进制资源通过保存回调直接进入工单根目录；回调来自版本固定的 SDK 补丁，安装时校验应用，不修改全局 TMPDIR。补丁说明见 [patches/README.md](../patches/README.md)。
-
-远程 MCP 服务具有自己的执行权限，SRT 不替远程服务实施数据库只读或业务授权。内建证据查询、Source API 和应用存储 owner 继续承担各自的目标、身份、Git 绑定与事务检查。
+Pi SDK、Operator 扩展和应用存储 owner 属于可信代码；工单扩展不加载。远程 MCP 拥有自己的执行权限，本地 SRT 不替其实施数据库只读或业务授权，Source API 与原生查询继续独立检查各自范围。

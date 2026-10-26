@@ -1,0 +1,99 @@
+{
+  "generatedAt": "2026-10-26T04:57:10.307730+00:00",
+  "sourceCommit": "20e51a266d5ab5ea58c2285bd17ea664a1e988e1",
+  "webSourceTree": "3f767fa3967cae119423edb760cbb9efaf4d982b",
+  "sourceUnchangedDuringCapture": true,
+  "tool": "Playwright 1.62.1 / Chromium in mcr.microsoft.com/playwright:v1.62.1-noble",
+  "viewports": [
+    {
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "width": 390,
+      "height": 1000
+    }
+  ],
+  "syntheticOnly": true,
+  "captureMethod": "isolated current-source Fastify application with demo SQLite, Pi JSONL and local read-only Git repository; full-page or dialog-only JPEG",
+  "productionMutations": 0,
+  "checks": [
+    {
+      "width": 1440,
+      "syntheticOnly": true,
+      "currentAbilitySelection": true,
+      "noGlobalMcpDescription": true,
+      "plainBranchHeaders": true,
+      "realReadOnlyCodeEditor": true,
+      "pageErrors": 0,
+      "noOverflow": true
+    },
+    {
+      "width": 390,
+      "syntheticOnly": true,
+      "currentAbilitySelection": true,
+      "noGlobalMcpDescription": true,
+      "plainBranchHeaders": true,
+      "realReadOnlyCodeEditor": true,
+      "pageErrors": 0,
+      "noOverflow": true
+    }
+  ],
+  "images": [
+    {
+      "file": "code-browser.jpg",
+      "bytes": 127080,
+      "sha256": "91ae92e2a5191685fa2772b2f6b4064620945a86b0e7d1878dd59d2030fce24d"
+    },
+    {
+      "file": "configuration-mobile.jpg",
+      "bytes": 39443,
+      "sha256": "99828d6ae0c0f1f3ea91ed68c488a487ef6a5e0de143c134f939c7124be2267a"
+    },
+    {
+      "file": "configuration.jpg",
+      "bytes": 68554,
+      "sha256": "850c6443295d852799a7f62883fd3653b12bf163f357d08560472bbd1597cbcd"
+    },
+    {
+      "file": "mcp-endpoint.jpg",
+      "bytes": 68778,
+      "sha256": "541a43ed6d24a4e78e0acc340743b812a6cb6b7f8c51720aa66a4db9e4c1474a"
+    },
+    {
+      "file": "new-issue.jpg",
+      "bytes": 41552,
+      "sha256": "6edd7b78b2b382a7c8144cd7cbacaab7247314dd43b6c90bb4f243a57bac5f46"
+    },
+    {
+      "file": "overview.jpg",
+      "bytes": 94949,
+      "sha256": "6ee1b18ab97c6cf6a8fe8732adad74a8acea1169fba7b898f2a80803616ec2ae"
+    },
+    {
+      "file": "service-editor-mobile.jpg",
+      "bytes": 43312,
+      "sha256": "746e6d28acaa6f2666b6879d27b30a89e1d57c079618bdd9fada3d912a583d7d"
+    },
+    {
+      "file": "service-editor.jpg",
+      "bytes": 54252,
+      "sha256": "221b3327529e1cf4fae9e0c287c789497f2f296aa75906d86e966a289223cdd2"
+    },
+    {
+      "file": "service.jpg",
+      "bytes": 79152,
+      "sha256": "12fcb1e3a5a454debb523e866f8038514990922e9b34a5a29d9fcb24bc544aaf"
+    },
+    {
+      "file": "workspace-mobile.jpg",
+      "bytes": 56116,
+      "sha256": "28ab2816071a3c7a3a3e60b81efa5763ba38821f1809310a1c98fb53488d2583"
+    },
+    {
+      "file": "workspace.jpg",
+      "bytes": 153297,
+      "sha256": "13aabadf61b56cd84c78b5ce1bdcd4173d835d6721edd92d14ef4ee3d88f7ffe"
+    }
+  ]
+}
