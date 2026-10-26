@@ -304,6 +304,7 @@ export class PiSessionRuntime {
       assertSessionState(session, context, options.manager.getSessionId(), expectedTools);
       await session.bindExtensions({});
       let rejectIdle: ((error: Error) => void) | undefined;
+      let modelResponseFailed = false;
       const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? issuePilotConfig.runtime.agent.modelResponseIdleMs, () => {
         const error = new Error("model_response_idle_timeout");
         rejectIdle?.(error);
@@ -311,6 +312,8 @@ export class PiSessionRuntime {
       });
       const unsubscribe = session.subscribe((event) => {
         const wireEvent = toWireEvent(event);
+        if (wireEvent.type === "message_end" && wireEvent.message.role === "assistant") modelResponseFailed = wireEvent.message.stopReason === "error";
+        else if (wireEvent.type === "agent_settled" && wireEvent.aborted) modelResponseFailed = false;
         watchdog.observe(wireEvent);
         options.onEvent(wireEvent);
       });
@@ -320,11 +323,15 @@ export class PiSessionRuntime {
         get streaming() { return session.isStreaming; },
         setGitIdentity: (identity) => { identityEnvironment = gitIdentityEnvironment(identity); },
         prompt: async (message, images = [], command) => {
+          modelResponseFailed = false;
           if (command) await session.sendCustomMessage({ customType: "issue-context", content: message, display: false }, { triggerTurn: false });
           const idle = new Promise<never>((_resolve, reject) => { rejectIdle = reject; });
           watchdog.start();
-          try { await Promise.race([session.prompt(command ?? message, images.length ? { images } : undefined), idle]); }
-          finally { rejectIdle = undefined; watchdog.stop(); }
+          try {
+            await Promise.race([session.prompt(command ?? message, images.length ? { images } : undefined), idle]);
+            // Pi resolves after its retry policy settles, including terminal model errors.
+            if (modelResponseFailed) throw new Error("model_response_failed");
+          } finally { rejectIdle = undefined; watchdog.stop(); }
         },
         stop: () => stopped ? Promise.resolve() : stop ??= (async () => {
           try { watchdog.stop(); unsubscribe(); await abortAndDispose(session); }

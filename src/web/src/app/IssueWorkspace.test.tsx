@@ -53,6 +53,14 @@ it("explains why queued intent from an earlier scope was not replayed", () => {
   expect(screen.getByRole("button", { name: "重试处理" })).toBeTruthy();
 });
 
+it("offers an explicit retry after a failed model response", () => {
+  const failed: IssueDetail = { ...issue, status: "open", workspace: { ...issue.workspace, status: "failed", retryable: true, lastError: "model_response_failed" } };
+  render(() => <IssueWorkspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  expect(screen.getByRole("alert").textContent).toBe("模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。");
+  expect(screen.getByRole("button", { name: "重试处理" })).toBeTruthy();
+  expect(screen.queryByText("确认解决")).toBeNull();
+});
+
 it("shows related Issue handler, status, service and environment with a navigable card", async () => {
   const open = vi.fn();
   const related = { ...issue, id: "ISSUE-20261017-002", assignee: "处理人甲", assigneeSubject: "handler", workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null };

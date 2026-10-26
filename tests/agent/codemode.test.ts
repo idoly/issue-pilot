@@ -36,6 +36,57 @@ function evidenceTool(url: string) {
 }
 const call = (code: string, id = "script") => fauxAssistantMessage(fauxToolCall("codemode", { code }, { id }), { stopReason: "toolUse" });
 
+for (const retryEnabled of [false, true]) test(`rejects a final model stream failure without running partial tools (retry ${retryEnabled})`, async () => {
+  const f = await fixture("off", { runtime: { settings: { retry: { enabled: retryEnabled, maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 } } } });
+  let managed;
+  try {
+    const interrupted = () => fauxAssistantMessage(fauxToolCall("write", { path: "partial.txt", content: "must not run" }), { stopReason: "error", errorMessage: "terminated: private upstream detail" });
+    f.faux.setResponses([interrupted(), ...(retryEnabled ? [interrupted()] : [])]);
+    managed = await f.runtime.start(f.options);
+    await assert.rejects(managed.prompt("Write the requested file."), { message: "model_response_failed" });
+    assert.equal(f.faux.state.callCount, retryEnabled ? 2 : 1);
+    assert.equal(f.events.filter(event => event.type === "tool_execution_start").length, 0);
+    await assert.rejects(readFile(path.join(f.root, "partial.txt")), { code: "ENOENT" });
+    assert.ok(f.options.manager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "error"));
+    f.faux.appendResponses([fauxAssistantMessage("Continued after the interruption.")]);
+    await managed.prompt("Continue after checking the saved results.");
+    assert.equal(managed.session.getLastAssistantText(), "Continued after the interruption.");
+  } finally { await managed?.stop(); await f.close(); }
+});
+
+test("lets Pi recover a model stream without repeating completed tools", async () => {
+  const f = await fixture("off", { runtime: { settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 } } } });
+  let managed;
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("write", { path: "completed.txt", content: "saved once" }, { id: "completed" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("write", { path: "partial.txt", content: "must not run" }), { stopReason: "error", errorMessage: "terminated" }),
+      context => {
+        assert.equal(context.messages.filter(message => message.role === "toolResult" && message.toolCallId === "completed").length, 1);
+        return fauxAssistantMessage("Recovered without replaying the completed write.");
+      },
+    ]);
+    managed = await f.runtime.start(f.options);
+    await managed.prompt("Save the requested evidence.");
+    assert.equal(f.faux.state.callCount, 3);
+    assert.equal(f.events.filter(event => event.type === "tool_execution_start").length, 1);
+    assert.equal(await readFile(path.join(f.root, "completed.txt"), "utf8"), "saved once");
+    await assert.rejects(readFile(path.join(f.root, "partial.txt")), { code: "ENOENT" });
+    assert.equal(managed.session.getLastAssistantText(), "Recovered without replaying the completed write.");
+  } finally { await managed?.stop(); await f.close(); }
+});
+
+test("reports non-retryable model failures without exposing upstream details", async () => {
+  const f = await fixture("off", { runtime: { settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } } } });
+  let managed;
+  try {
+    f.faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 unauthorized: private upstream detail" })]);
+    managed = await f.runtime.start(f.options);
+    await assert.rejects(managed.prompt("Read the evidence."), { message: "model_response_failed" });
+    assert.equal(f.faux.state.callCount, 1);
+  } finally { await managed?.stop(); await f.close(); }
+});
+
 test("queues Codemode scripts across three sessions instead of exceeding SDK workers", { timeout: 15_000 }, async () => {
   let active = 0, peak = 0, requests = 0;
   const timers = new Set<ReturnType<typeof setTimeout>>();

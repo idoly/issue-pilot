@@ -15,6 +15,11 @@ import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typ
 
 type IssueAttachment = IssueDetail["attachments"][number];
 
+const workspaceErrorMessages: Record<string, string> = {
+  agent_message_scope_changed: "历史排队消息的处理范围已变更，已停止恢复。请核对历史输入后重试，或按当前范围重新发送。",
+  model_response_failed: "模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。",
+};
+
 function IssueFileRow(props: { fileName: string; label?: string; thumbnail?: string | undefined; detail: string; href: string; icon: JSX.Element; onPreview: (() => void) | undefined }) {
   const [thumbnailFailed, setThumbnailFailed] = createSignal(false, { ownedWrite: true });
   return <div class={`issue-attachment-row${props.thumbnail ? " has-thumbnail" : ""}`} title={props.fileName}>
@@ -275,7 +280,7 @@ export function IssueWorkspace(props: { issue: IssueDetail; elementRef?: (elemen
 
       <Show when={retryError()}><div class="workspace-error" role="alert">{retryError()}</div></Show>
       <Show when={statusError()}><div class="workspace-error" role="alert">{statusError()}</div></Show>
-      <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{props.issue.workspace.lastError === "agent_message_scope_changed" ? "历史排队消息的处理范围已变更，已停止恢复。请核对历史输入后重试，或按当前范围重新发送。" : props.issue.workspace.lastError}</div></Show>
+      <Show when={props.issue.workspace.lastError}><div class="workspace-error" role="alert">{workspaceErrorMessages[props.issue.workspace.lastError ?? ""] ?? props.issue.workspace.lastError}</div></Show>
       <section class="attachment-band issue-attachments" aria-labelledby="attachments-title">
         <div class="band-title"><Paperclip size={16} /><h2 id="attachments-title">附件</h2><span>{props.issue.attachments.length}</span></div>
         <div class="issue-attachment-list">
