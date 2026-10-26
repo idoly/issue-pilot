@@ -14,21 +14,37 @@ Kubernetes 部署改查实际 namespace 的 deployment、pod、service、探针�
 
 通过 Issue 列表检查 `agentRunning`，同时考虑 API 配置、生命周期和预约操作。`GET /api/me` 可核对所选活跃身份；`GET /api/workspaces/stats` 包含深检，可能耗时。诊断只记录计数、耗时、稳定错误、Issue key 或 ref/commit，不输出配置 body、认证头和完整敏感结果。
 
-## 备份、发布与重启
+## 按风险发布与重启
 
-1. 记录当前 commit、未提交源码、根配置、依赖版本和 supervisor/镜像信息，确认目标版本的检查通过。
-2. 确认 Agent 和预约操作已完成，进入维护窗口并阻止新请求。本地可先停止 Web 入口，再优雅停止 API；保留足够时间 drain，不在退出前复制状态。
-3. 确认 API PID 和子进程已退出，在 state root 之外建立 `0700` 一致备份，保留 DB 文件组、工单根目录、共享和私有 Git stores、worktrees、owner/mode 和未知证据。
-4. 在独立项目/数据库副本检查 integrity/FK/不变量，使用目标版本演练迁移；比较已应用 migration hash，不修改历史 SQL/journal。
-5. 安装或切换到已验证版本，再启动实际服务。不要把旧 backup/worktree 副本直接当可启动工作区，其 Git metadata 可能仍指向原绝对路径。
-6. 等待健康，比较数据库、持久文件、Git、权限、SSE 与页面。失败先保留现场，再按恢复流程处理。
+发布先区分是否改变持久状态，不再对每次普通代码发布重复创建完整状态快照。
 
-本地停止与启动示例，需在上述流程的对应阶段执行：
+| 发布类型 | 发布前保留与检查 |
+| --- | --- |
+| 仅前端、代码修正；无 schema／数据迁移／文件或 Git 布局变更 | 在独立目录完成检查和构建，保留当前 commit、依赖锁文件、被替换的构建／运行产物与 supervisor 配置；确认已有恢复点可用。不因重启本身新建完整状态快照 |
+| 业务配置删除、数据修复等少量数据库变更 | 通过业务 owner/API 操作，按变更保留私有原始行或小型 SQLite 检查点，记录范围和验证；涉及跨媒体或无法局部回退时升级为完整一致备份 |
+| 新 schema／业务数据迁移、持久文件／Git 布局迁移或高风险不可逆操作 | 停止所有写入，建立匹配源码的完整一致恢复点，独立副本演练后再操作 |
+
+普通代码发布：
+
+1. 核对 commit、源码状态、依赖／构建和 supervisor；检查没有新迁移或持久布局变更，记录本次无需完整备份的依据。
+2. 等待 Agent 和预约空闲，停止入口并优雅停止 API，确认旧进程退出。
+3. 激活已验证代码和匹配产物，启动实际服务；不要在线混合安装依赖或启动第二个 API 指向真实 state。
+4. 验收健康、页面、必要的 SQLite／文件／Git 不变量；没有持久契约变化时可回退到匹配的旧代码和产物。若发现非预期数据变化，保留现场并改走状态恢复流程。
+
+需要完整一致备份的操作：
+
+1. 排空并停止所有状态写入者，在 state root 之外建立 0700 副本，保留 DB 文件组、工单目录、共享／私有 Git、文件模式和未知证据。
+2. 独立副本检查 integrity／FK／不变量和已发布 migration hash，演练目标操作。
+3. 执行操作后核对持久事实；匹配代码、状态和验收全部成功后再按最近两份策略轮换完整恢复点。
+
+配置或数据变更不是普通代码回退。只恢复源码／DB 单文件不能恢复跨媒体事务；新写入和失败现场必须保留。仅需原地重启且没有部署内容变更时，也不因重启创建新快照。
+
+本地停止与启动示例，按上面的风险分级选择流程：
 
 ```bash
 systemctl --user stop --no-block issue-pilot-web.service issue-pilot-api.service
 systemctl --user is-active issue-pilot-api.service issue-pilot-web.service
-# 等待完全退出、完成备份及独立验证后：
+# 等待完全退出，并完成本次风险所需的保留及检查后：
 systemctl --user start issue-pilot-api.service
 # /health 正常后启动提供构建页面的 Web 服务：
 systemctl --user start issue-pilot-web.service
