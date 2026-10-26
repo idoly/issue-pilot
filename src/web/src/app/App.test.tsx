@@ -665,7 +665,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "展开部署2" }));
     await waitFor(() => expect(within(serviceDialog).getByRole("button", { name: "收起部署2" }).getAttribute("aria-expanded")).toBe("true"));
     expect(screen.getByLabelText("部署 2 环境").textContent).toContain("测试");
-    expect(screen.getByLabelText("部署 2 能力").textContent).toContain("sls");
+    expect(screen.getByLabelText("部署 2 能力").textContent).toContain("SLS");
     expect(screen.queryByLabelText("仓库别名 1")).toBeNull();
     const repositoryInput = screen.getByLabelText("关联仓库");
     fireEvent.click(repositoryInput);
@@ -682,7 +682,7 @@ describe("issue pilot workspace", () => {
       expect(screen.getByLabelText("部署 2 仓库 Updated repository 分支")).toBe(branchInput);
       expect(branchInput.value).toBe(value);
     }
-    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["dms", "mysql"]);
+    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["SLS · 移除", "DMS", "MySQL"]);
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
     expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "sls"]);
     const projectInput = screen.getByLabelText("sls project 2");

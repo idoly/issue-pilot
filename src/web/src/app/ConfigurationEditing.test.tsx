@@ -100,11 +100,13 @@ test("MySQL is an optional service ability and can be added and removed like the
   await fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
   const environment = within(dialog).getByLabelText("部署 2 环境").closest(".service-deployment-row")!;
   expect(within(environment as HTMLElement).queryByRole("button", { name: "添加 MySQL" })).toBeNull();
-  expect(within(environment as HTMLElement).getByRole("button", { name: /^dms$/ })).toBeTruthy();
-  await fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: /^mysql$/ }));
-  fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: "添加 MySQL" }));
-  await within(environment as HTMLElement).findByLabelText("mysql test 1 host");
+  expect(within(environment as HTMLElement).getByRole("button", { name: "添加 DMS 能力" })).toBeTruthy();
+  await fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: "添加 MySQL 能力" }));
+  const host = await within(environment as HTMLElement).findByLabelText("mysql test 1 host");
+  await fireEvent.input(host, { target: { value: "retained-draft.example.test" } });
   await fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: "移除 mysql 能力" }));
   expect(within(environment as HTMLElement).queryByLabelText("mysql test 1 host")).toBeNull();
-  expect(within(environment as HTMLElement).getByRole("button", { name: /^mysql$/ })).toBeTruthy();
+  expect(within(environment as HTMLElement).getByRole("button", { name: "添加 MySQL 能力" })).toBeTruthy();
+  await fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: "添加 MySQL 能力" }));
+  expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 host")).toHaveProperty("value", "retained-draft.example.test");
 });

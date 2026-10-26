@@ -7,7 +7,10 @@
 .settings-list-toolbar > .ui-input-affix-wrapper { width: min(320px, 100%); }
 .settings-list-toolbar label, .settings-checkbox { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: #65706c; font: 12px/16px var(--app-font); }
 .settings-list-toolbar input[type="checkbox"], .settings-checkbox input { width: 16px; height: 16px; margin: 0; flex: 0 0 16px; accent-color: #176b5b; }
-.settings-table-scroll { overflow-x: auto; }
+.settings-table-scroll { overflow-x: auto; scrollbar-gutter: stable; }
+.settings-view, .ui-modal-body { scrollbar-gutter: stable; scrollbar-width: auto; }
+.settings-view::-webkit-scrollbar, .ui-modal-body::-webkit-scrollbar { width: 10px; }
+.service-repositories { overflow-x: auto; scrollbar-width: auto; }
 .settings-table { width: 100%; border-collapse: collapse; text-align: left; }
 .settings-table th { font-weight: 500; color: #65706c; background: #f8faf8; }
 .settings-table th, .settings-table td { padding: 16px 24px; border-bottom: 1px solid #e8ede9; font-size: 14px; line-height: 20px; }
