@@ -174,7 +174,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const dev = environmentRows.find((environment) => environment.kind === "dev")!;
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
     await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
-    const [globalMcp] = await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
+    await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
     await database.db.insert(mcpServices).values({ name: "Disabled tools", url: "https://disabled.example.test/mcp", transport: "streamable_http", enabled: false });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     await registerTestRepositories(database.db, remotes);
@@ -186,6 +186,8 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { serviceId: service!.id, environmentId: prod.id, config: { mcpServices: ["obsolete-binding"] } },
       { serviceId: service!.id, environmentId: dev.id, config: {} },
     ]).returning();
+    const [ownedMcp] = await database.db.insert(mcpServices).values({ name: "Orders tools", url: "https://orders-tools.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id }).returning();
+    await database.db.insert(mcpServices).values({ name: "dingtalk", url: "https://imports.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id });
     await database.db.insert(serviceDeploymentRepositories).values([
       { deploymentId: deployments[0]!.id, repositoryId: repositories[0]!.id, baseBranch: "prod" },
       { deploymentId: deployments[0]!.id, repositoryId: repositories[1]!.id, baseBranch: "develop" },
@@ -308,7 +310,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     ]);
 
     for (const start of starts) {
-      assert.deepEqual(start.mcpConfigurations?.map(row => row.id), [globalMcp!.id]);
+      assert.deepEqual(start.mcpConfigurations?.map(row => row.id), [ownedMcp!.id]);
     }
     const startsBeforeCorruption = starts.length;
     const corrupted = path.join(prodRoot, originals[0]!.name);

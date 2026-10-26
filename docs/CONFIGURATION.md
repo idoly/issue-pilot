@@ -10,7 +10,7 @@
 | SQLite repositories／services／service_repositories | 仓库登记、服务及关联关系 |
 | SQLite service_deployments／service_deployment_repositories | 正式／测试分支与 MySQL、DMS、SLS 目标；开发基线继承正式 |
 | SQLite global_agent_configuration／application_settings | 全局 Agent 与运行偏好、并发上限、已有 MySQL stdio 模板 |
-| SQLite mcp_services | 全局外部 MCP 连接；部署生成的 MySQL 连接带 deployment_id |
+| SQLite mcp_services | MCP 连接；服务工具按 deployment_id 归属，钉钉连接仅供导入 |
 | SQLite user_preferences／application_settings | 个人钉钉来源／字段偏好和共享字段映射 |
 | Pi 全局目录 | models.json、Operator 认证、settings、Skills、Prompts、Extensions、全局指令 |
 | issue-pilot.config.ts | 应用路径、启动默认值、预算和维护策略 |
@@ -49,13 +49,15 @@ application_settings.maxConcurrentIssues 限制并发工单轮次；排队仍计
 
 ## 内建能力与工具
 
+DMS／SLS 按实际部署配置展示和查询，没有针对测试／正式名称的额外禁用规则。没有目标就不展示该能力。MySQL 在编辑器中与 DMS／SLS 一样由“添加能力”选择，未选中不显示目标编辑器；执行仍由 MCP 负责。
+
 配置页顺序为用户、仓库、服务、端点。分类首次访问时才挂载和读取；已访问分类保留实例和筛选，默认用户页不预加载服务配置、仓库、端点或私有服务说明。用户页提供四组个人凭证和人员管理；凭证弹窗直接填写，留空保留，清除显式执行，不回显秘密。仓库页登记／编辑地址与显示名、查看使用服务并可跳转；未使用仓库可删除。服务保留顶部 Tab、代码分支矩阵和描述，开发基线只读继承正式分支；MySQL、DMS、SLS 仍按环境维护。MySQL 密码只在开发者选定服务的私有详情／编辑读取，普通配置 GET 只返回 passwordConfigured。服务、仓库和个人凭证状态响应始终携带整数 revision，前端类型不再接受缺失版本的旧响应。页面编辑使用对应版本，过期返回 configuration_changed，保留输入并在编辑弹窗提供重新加载。仓库 URL 的级联变更同时推进所有关联服务的 revision，避免旧服务草稿恢复旧地址；仅修改仓库显示名不推进服务版本，也不扩大工单预约。API 仍允许省略 expectedRevision 的现有调用；需要冲突保护的客户端应始终携带它。
 
 原生 `service_query` 只提供 DMS 和 SLS，显式选择 service/environment。Nacos、Redis、RabbitMQ、Elasticsearch 和原生 MySQL 已移除。旧部署 JSON 仅作为私有恢复证据保留，不投影、不执行；新增迁移移除旧开关，历史迁移保持不变。
 
 ### MySQL MCP
 
-MySQL 目标保存在 service_deployments.config.mysql，保存与关联全局 MCP 条目同一事务完成。默认启动模板固定 `@benborla29/mcp-server-mysql@2.0.9`；数据库 application_settings 中已有的私有 stdio 模板继续按其字面配置使用。应用按部署、host、port、database 标识连接，注入 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB`；固定关闭 INSERT/UPDATE/DELETE 开关。密码保留有效空白，不进入 argv。示例固定 `@benborla29/mcp-server-mysql@2.0.9`。模板本身不作为无参数服务器启动。生成条目带 deployment_id，不允许经通用 MCP 接口修改或删除；服务移除目标时按归属删除。由于工具全局可见，连接声明变化预约全部现有工单，避免旧 Pi 会话继续持有过期连接。
+MySQL 目标保存在 service_deployments.config.mysql，保存与关联 MCP 条目同一事务完成。默认启动模板固定 `@benborla29/mcp-server-mysql@2.0.9`；数据库 application_settings 中已有的私有 stdio 模板继续按其字面配置使用。应用按部署、host、port、database 标识连接，注入 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB`；固定关闭 INSERT/UPDATE/DELETE 开关。密码保留有效空白，不进入 argv。示例固定 `@benborla29/mcp-server-mysql@2.0.9`。模板本身不作为无参数服务器启动。生成条目带 deployment_id，不允许经通用 MCP 接口修改或删除；服务移除目标时按归属删除。连接加载按入口／包含服务的部署范围选择。现有连接变更仍沿用保守的全部工单预约，以关闭旧版本会话，不在本次同时改动并发边界。
 
 Pi 在同一工单会话中复用对应 MCP 连接。MySQL 的 SQL 能力、结果格式和读取限制由所选 MCP 服务及数据库账号负责；不再提供原生 `db` 查询、导出接口或其事务保证。需要交付时在工单工作目录处理 MCP 返回结果，直接保存普通文件并使用工作文件下载链接。
 
@@ -73,9 +75,9 @@ SLS 通过固定的 `aliyun sls GetLogsV2` 命令查询，运行环境需要 ali
 
 保留明确时间范围、Trace ID、目标校验和分页预算。只有 meta.progress=Complete 才接受结果；SQL 分析按 SQL LIMIT/ORDER BY 返回一页，普通查询按 offset 分页。晚一页失败时整次调用失败，不返回前面页面作为完整结果。未知 CLI 错误统一隐藏，已知 Code/StatusCode 转为稳定诊断。CLI 缺失报 `sls_cli_not_available`；超时或取消终止进程组并完成凭证清理。
 
-### 全局外部 MCP
+### 服务 MCP 与钉钉导入连接
 
-支持 HTTPS Streamable HTTP、SSE 和本地 stdio，开启的外部工具对所有工单可用。只读提示是描述，不是授权。SDK 负责协议传输，Pi 的公开 `createMcpExtension` 负责发现、工具注册、资源、连接生命周期与关闭。应用不再直接依赖 `@earendil-works/pi-mcp`；Pi SDK 内部仍可能传递依赖它。
+支持 HTTPS Streamable HTTP、SSE 和本地 stdio。服务说明只展示当前部署的连接；Agent 只加载入口／已包含服务在可用来源环境中的部署所属连接。无 deployment_id 的历史全局条目不自动给所有工单使用；不根据名称猜测其服务归属。默认 dingtalk 及 user_preferences.source.mcp 指定的连接仅用于应用导入，任何服务工具加载都排除它们。只读提示是描述，不是授权。SDK 负责协议传输，Pi 的公开 `createMcpExtension` 负责发现、工具注册、资源、连接生命周期与关闭。应用不再直接依赖 `@earendil-works/pi-mcp`；Pi SDK 内部仍可能传递依赖它。
 
 保留 HTTPS 同源、禁止重定向、私有 stdio 环境、取消、输入 schema 与结果预算。MCP URL 可以包含钉钉所需的查询认证，但普通列表和模型服务说明隐藏查询部分。会话过期时报告本次失败并关闭连接，下一次显式调用重新连接，不自动重放本次操作。外部 MCP 不再预设 Playwright 或浏览器工具。
 

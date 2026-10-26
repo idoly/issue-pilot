@@ -11,8 +11,9 @@ import { loadEnabledCapabilities } from "../configuration/capability-switches.ts
 import { applyProductionCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { resolveDeploymentConfiguration } from "../configuration/credentials.ts";
-import { listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
+import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
 import { createWorkspaceTool } from "./workspace-tool.ts";
 import { openVerifiedAttachmentFile } from "../http/attachment-store.ts";
 import { IssueWorkFileStore } from "../workspace/work-files.ts";
@@ -334,7 +335,8 @@ export class AgentEngine implements AgentController {
     const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyProductionCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key, owner.credentials) }));
     const deploymentConfig = serviceScopes.find(scope => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
     const mcpRows = await this.database.select().from(mcpServices);
-    const mcpConfigurations = mcpRows.filter(connection => connection.enabled);
+    const includedServiceIds = new Set(await issueServiceIds(this.database, issue));
+    const mcpConfigurations = serviceMcpConnections(mcpRows, environmentServices.filter(row => includedServiceIds.has(row.service.id)).map(row => row.deployment.id), await dingtalkMcpNames(this.database));
     const context = createAgentSessionContext({
       issueKey: issue.key,
       issueType: issue.type,

@@ -18,7 +18,7 @@ describe("service description", () => {
     expect(screen.getByRole("heading", { name: "代码分支" })).toBeTruthy();
     expect(screen.getByLabelText("仓库与环境分支")).toBeTruthy();
     expect(screen.getByText("订单服务仓库")).toBeTruthy();
-    expect([...view.container.querySelectorAll(".repository-column-heading")].map(node => node.textContent)).toEqual(["仓库", "开发继承正式", "测试", "正式"]);
+    expect([...view.container.querySelectorAll(".repository-column-heading")].map(node => node.textContent)).toEqual(["仓库", "开发", "测试", "正式"]);
     expect([...view.container.querySelectorAll(".service-repository-branch")].map(node => node.textContent)).toEqual(["develop", "release/test", "release/prod"]);
     expect(view.container.querySelector(".service-repository-name")?.getAttribute("title")).toBe("git@example.test:orders.git");
     for (const redundant of ["个关联仓库", "仓库名称和地址由仓库配置统一维护", "部署引用", "个环境", "代码基准分支"]) expect(view.container.textContent).not.toContain(redundant);

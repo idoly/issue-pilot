@@ -43,7 +43,7 @@ test("manages MCP configs without returning credentials and reserves all running
   } finally { await f.cleanup(); }
 });
 
-test("MCP availability is global and historical deployment bindings do not block deletion", async () => {
+test("unowned MCP entries and historical bindings do not leak into service descriptions or block deletion", async () => {
   const f = await createApiFixture(), database = openDatabase(f.databaseFile);
   try {
     await createService(f.app, "Global", ["test"]);
@@ -55,7 +55,7 @@ test("MCP availability is global and historical deployment bindings do not block
     const config = (await f.app.inject({ method: "GET", url: "/api/config" })).json();
     const projected = config.services.find((row: { key: string }) => row.key === "global");
     assert.equal("mcpServices" in projected.deployments[0], false);
-    assert.match(projected.context, /MCP（全局）/);
+    assert.doesNotMatch(projected.context, /MCP|mcp\.example\.test/);
     const bind = await f.app.inject({ method: "PATCH", url: "/api/services/global", headers, payload: { name: projected.name, description: projected.description, repositories: projected.repositories, deployments: projected.deployments.map((row: object) => ({ ...row, mcpServices: [id] })) } });
     assert.equal(bind.statusCode, 400, bind.body);
     assert.equal(bind.json().error, "mcp_services_are_global");

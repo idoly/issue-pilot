@@ -89,3 +89,22 @@ for (const failed of ["configuration", "catalog"] as const) test(`a successful s
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(state.save).toHaveBeenCalledTimes(1);
 });
+
+test("MySQL is an optional service ability and can be added and removed like the others", async () => {
+  const value = configuration();
+  for (const deployment of value.services[0]!.deployments) delete deployment.mysql;
+  state.replaceConfiguration(value);
+  render(() => <ConfigurationView />);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  const dialog = await screen.findByRole("dialog");
+  await fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+  const environment = within(dialog).getByLabelText("部署 2 环境").closest(".service-deployment-row")!;
+  expect(within(environment as HTMLElement).queryByRole("button", { name: "添加 MySQL" })).toBeNull();
+  expect(within(environment as HTMLElement).getByRole("button", { name: /^dms$/ })).toBeTruthy();
+  await fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: /^mysql$/ }));
+  fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: "添加 MySQL" }));
+  await within(environment as HTMLElement).findByLabelText("mysql test 1 host");
+  await fireEvent.click(within(environment as HTMLElement).getByRole("button", { name: "移除 mysql 能力" }));
+  expect(within(environment as HTMLElement).queryByLabelText("mysql test 1 host")).toBeNull();
+  expect(within(environment as HTMLElement).getByRole("button", { name: /^mysql$/ })).toBeTruthy();
+});
