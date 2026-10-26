@@ -170,7 +170,6 @@ function ServiceDeploymentEditorRow(props: {
   let mysqlDraft = initialDeployment.mysql ?? [];
   const abilityNames = { dms: "DMS", sls: "SLS", mysql: "MySQL" };
   const selectedAbilities = () => [...selectedCapabilities(), ...(mysqlEnabled() ? ["mysql" as const] : [])];
-  const availableCapabilities = () => [...CAPABILITY_KEYS.filter(key => !selectedCapabilities().includes(key)), ...(!mysqlEnabled() ? ["mysql" as const] : [])];
   let currentDmsDraft = { url: initialDeployment.dms?.url ?? issuePilotConfig.defaults.dms.sseUrl, authorization: "", credentialConfigured: initialDeployment.dms?.credentialConfigured ?? false, databases: initialDeployment.dms?.databases?.map(database => ({ ...database })) ?? [newDmsDatabaseDraft()] };
   const [dmsDraft, setDmsDraft] = createSignal(currentDmsDraft, { ownedWrite: true });
   const initialSlsTarget = initialDeployment.sls?.targets?.[0] ?? initialDeployment.sls;
@@ -238,9 +237,8 @@ function ServiceDeploymentEditorRow(props: {
       <Button class="icon-button deployment-toggle" type="text" shape="circle" icon={<ChevronRight size={15} />} title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((current) => !current)} />
       <Show when={expanded()}>
       <Show when={!codeOnly}>
-        <div class="deployment-capabilities" aria-label={`${props.environmentName}能力选择`}>
-          <Show when={selectedAbilities().length}><div class="deployment-ability-group"><span>已添加</span><div class="deployment-capability-options"><For each={selectedAbilities()}>{key => <Button size="small" type="text" aria-label={`移除 ${key} 能力`} onClick={() => removeCapability(key)}>{abilityNames[key]} · 移除</Button>}</For></div></div></Show>
-          <Show when={availableCapabilities().length}><div class="deployment-ability-group"><span>可添加</span><div class="deployment-capability-options"><For each={availableCapabilities()}>{key => <Button size="small" icon={<Plus size={14} />} aria-label={`添加 ${abilityNames[key]} 能力`} onClick={() => addCapability(key)}>{abilityNames[key]}</Button>}</For></div></div></Show>
+        <div class="deployment-capabilities" role="group" aria-label={`${props.environmentName}能力选择`}>
+          <For each={["mysql", ...CAPABILITY_KEYS] as const}>{key => <label class="deployment-ability-choice"><input type="checkbox" checked={selectedAbilities().includes(key)} onChange={event => event.currentTarget.checked ? addCapability(key) : removeCapability(key)} /><span>{abilityNames[key]}</span></label>}</For>
         </div>
       </Show>
       <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Show when={codeOnly} fallback={<Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} />}><code class="inherited-branch" aria-label={`${props.repositoryName(repository)} 开发基线`}>{props.productionBranches().find(branch => branch.repositoryKey === repository.key)?.baseBranch.trim() || "待配置正式分支"}</code></Show></label>}</For></div>

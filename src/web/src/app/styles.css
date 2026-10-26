@@ -722,10 +722,10 @@ button, input, textarea { font: inherit; }
 .service-deployment-row > .deployment-toggle .ui-icon { transition: transform var(--motion-ui); transform: rotate(90deg); }
 .service-deployment-row.collapsed > .deployment-toggle .ui-icon { transform: rotate(0); }
 .service-deployment-row .ui-select { width: 100%; }
-.deployment-capabilities { grid-column: 1 / -1; align-self: stretch; gap: 12px; padding-block: 8px; }
-.deployment-ability-group { display: flex; min-width: 0; align-items: center; gap: 12px; }
-.deployment-ability-group > span { flex: 0 0 48px; color: #65706c; }
-.deployment-capability-options { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+.deployment-capabilities { display: flex; grid-column: 1 / -1; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding-block: 8px; }
+.deployment-ability-choice { display: inline-flex; min-height: 40px; align-items: center; gap: 8px; cursor: pointer; }
+.deployment-ability-choice input { width: 16px; height: 16px; margin: 0; accent-color: #176b5b; }
+.deployment-ability-choice:focus-within { outline: 2px solid #176b5b; outline-offset: 4px; border-radius: 4px; }
 .deployment-capability-settings, .deployment-repositories { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 8px 10px 10px; border: 1px solid #dfe6e2; border-radius: 6px; background: #fafcfb; }
 .deployment-capability-settings label, .deployment-repositories label { display: grid; min-width: 0; gap: 8px; color: #65706c; font-size: 12px; line-height: 16px; }
 .required-field::after { content: " *"; color: #c43832; font-weight: 700; }
@@ -796,7 +796,6 @@ button, input, textarea { font: inherit; }
   .service-detail { width: calc(100% - 24px); margin: 14px auto 28px; }
   .service-deployment-row { grid-template-columns: 64px minmax(0, 1fr) 44px; grid-template-areas: "environment summary toggle"; align-items: center; }
   .service-deployment-row > .ui-button { justify-self: end; }
-  .deployment-capability-options { flex-wrap: wrap; }
   .deployment-capability-settings, .deployment-repositories { grid-template-columns: minmax(0, 1fr); }
   .service-form-section-header { align-items: flex-end; }
   .issue-queue { height: clamp(270px, 42dvh, 380px); border-right: 0; border-bottom: 1px solid #d8ddda; }

@@ -682,7 +682,8 @@ describe("issue pilot workspace", () => {
       expect(screen.getByLabelText("部署 2 仓库 Updated repository 分支")).toBe(branchInput);
       expect(branchInput.value).toBe(value);
     }
-    expect([...serviceDialog.querySelectorAll(".deployment-capability-options button")].map((item) => item.textContent)).toEqual(["SLS · 移除", "DMS", "MySQL"]);
+    expect(within(serviceDialog).getAllByRole("checkbox").map(item => item.parentElement?.textContent)).toEqual(["MySQL", "DMS", "SLS"]);
+    expect(within(serviceDialog).getByRole("checkbox", { name: "SLS" })).toHaveProperty("checked", true);
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
     expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "sls"]);
     const projectInput = screen.getByLabelText("sls project 2");
