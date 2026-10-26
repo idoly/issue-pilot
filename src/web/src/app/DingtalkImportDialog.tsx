@@ -74,6 +74,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       setResults(values => [...values.filter(row => row.issueKey !== response.issueKey), response]);
       setUrl("");
       if (response.status === "created") props.onCreated();
+      if (props.onOpenIssue(response.issueKey)) props.onClose();
     } catch (error) { if (current(task.owner)) setError(message(error)); }
     finally { if (current(task.owner)) setBusy(""); }
   };
