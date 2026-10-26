@@ -109,4 +109,13 @@ test("MySQL is an optional service ability and can be added and removed like the
   expect(within(environment as HTMLElement).getByRole("checkbox", { name: "MySQL" })).toBeTruthy();
   await fireEvent.click(within(environment as HTMLElement).getByRole("checkbox", { name: "MySQL" }));
   expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 host")).toHaveProperty("value", "retained-draft.example.test");
+  const summary = within(dialog).getByLabelText("部署 2 能力");
+  expect(within(summary).getAllByRole("checkbox")).toHaveLength(3);
+  expect(summary.querySelector(".capability-labels")).toBeNull();
+  await fireEvent.click(within(dialog).getByRole("button", { name: "收起部署2" }));
+  expect(within(summary).queryByRole("checkbox")).toBeNull();
+  expect(summary.querySelector("code")?.textContent).toBe("MySQL");
+  await fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+  expect(within(summary).getByRole("checkbox", { name: "MySQL" })).toHaveProperty("checked", true);
+  expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 host")).toHaveProperty("value", "retained-draft.example.test");
 });

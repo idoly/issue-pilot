@@ -722,7 +722,7 @@ button, input, textarea { font: inherit; }
 .service-deployment-row > .deployment-toggle .ui-icon { transition: transform var(--motion-ui); transform: rotate(90deg); }
 .service-deployment-row.collapsed > .deployment-toggle .ui-icon { transform: rotate(0); }
 .service-deployment-row .ui-select { width: 100%; }
-.deployment-capabilities { display: flex; grid-column: 1 / -1; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding-block: 8px; }
+.deployment-capabilities { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .deployment-ability-choice { display: inline-flex; min-height: 40px; align-items: center; gap: 8px; cursor: pointer; }
 .deployment-ability-choice input { width: 16px; height: 16px; margin: 0; accent-color: #176b5b; }
 .deployment-ability-choice:focus-within { outline: 2px solid #176b5b; outline-offset: 4px; border-radius: 4px; }

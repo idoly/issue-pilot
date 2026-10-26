@@ -233,14 +233,17 @@ function ServiceDeploymentEditorRow(props: {
   return (
     <div class={`service-deployment-row${expanded() ? "" : " collapsed"}`}>
       <div class="deployment-environment" aria-label={`部署 ${props.index + 1} 环境`}><strong>{props.environmentName}</strong></div>
-      <div class="deployment-summary" aria-label={`部署 ${props.index + 1} 能力`}><div class="capability-labels"><Show when={codeOnly}><small>分支继承正式 · 查询继承正式/测试</small></Show><For each={codeOnly ? [] : selectedAbilities()}>{key => <code>{abilityNames[key]}</code>}</For></div></div>
+      <div class="deployment-summary" aria-label={`部署 ${props.index + 1} 能力`}>
+        <Show when={!codeOnly} fallback={<small>分支继承正式 · 查询继承正式/测试</small>}>
+          <Show when={expanded()} fallback={<div class="capability-labels"><For each={selectedAbilities()}>{key => <code>{abilityNames[key]}</code>}</For></div>}>
+            <div class="deployment-capabilities" role="group" aria-label={`${props.environmentName}能力选择`}>
+              <For each={["mysql", ...CAPABILITY_KEYS] as const}>{key => <label class="deployment-ability-choice"><input type="checkbox" checked={selectedAbilities().includes(key)} onChange={event => event.currentTarget.checked ? addCapability(key) : removeCapability(key)} /><span>{abilityNames[key]}</span></label>}</For>
+            </div>
+          </Show>
+        </Show>
+      </div>
       <Button class="icon-button deployment-toggle" type="text" shape="circle" icon={<ChevronRight size={15} />} title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((current) => !current)} />
       <Show when={expanded()}>
-      <Show when={!codeOnly}>
-        <div class="deployment-capabilities" role="group" aria-label={`${props.environmentName}能力选择`}>
-          <For each={["mysql", ...CAPABILITY_KEYS] as const}>{key => <label class="deployment-ability-choice"><input type="checkbox" checked={selectedAbilities().includes(key)} onChange={event => event.currentTarget.checked ? addCapability(key) : removeCapability(key)} /><span>{abilityNames[key]}</span></label>}</For>
-        </div>
-      </Show>
       <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Show when={codeOnly} fallback={<Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} />}><code class="inherited-branch" aria-label={`${props.repositoryName(repository)} 开发基线`}>{props.productionBranches().find(branch => branch.repositoryKey === repository.key)?.baseBranch.trim() || "待配置正式分支"}</code></Show></label>}</For></div>
       <Show when={!codeOnly && mysqlEnabled()}><MysqlTargetsEditor value={currentDeployment.mysql ?? []} environment={initialDeployment.environmentKey} onChange={mysql => { mysqlDraft = mysql; update({ mysql }); }} /></Show>
       <For each={codeOnly ? [] : CAPABILITY_KEYS.filter(key => selectedCapabilities().includes(key))}>{key => <Switch>
