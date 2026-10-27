@@ -146,7 +146,7 @@ function DmsDatabaseEditorRow(props: {
   );
   onCleanup(() => { if (resolveTimer) clearTimeout(resolveTimer); resolveGeneration += 1; });
   return <div class="settings-target-row">
-    <div class="settings-targets-head"><span>目标 {props.databaseIndex}</span><Button size="small" type="text" danger aria-label={`移除 DMS ${props.deploymentIndex} ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete}>移除</Button></div>
+    <div class="settings-target-actions"><Button size="small" type="text" danger aria-label={`移除 DMS ${props.deploymentIndex} ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete}>移除</Button></div>
     <div class="settings-target-fields">
       <label><span class="required-field">实例别名（alias）</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label>
       <label><span class="required-field">数据库（schema）</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label>
