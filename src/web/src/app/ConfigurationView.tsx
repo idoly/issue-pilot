@@ -7,7 +7,6 @@ import { ChevronRight, Pencil, Plus, Trash2 } from "../ui/icons";
 import { loadServiceMysqlTargets, loadRepositories, loadServiceConfigurationDescription, type ServiceInput, type ManagedRepository, createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
 import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 import { MysqlTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
-import { mysqlTargetFromUrl, mysqlTargetUrl } from "./mysql-url";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
 
@@ -31,7 +30,7 @@ function serviceSaveErrorMessage(error: unknown): string {
     dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
     dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
     dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
-    invalid_mysql_url: "请填写 mysql://用户名:密码@主机:端口/数据库；特殊字符需 URL 编码，不支持查询参数",
+    invalid_mysql_host: "请填写 MySQL 主机",
     invalid_mysql_username: "请填写 MySQL 用户名",
     invalid_mysql_password: "请填写 MySQL 密码",
     invalid_mysql_database: "请填写 MySQL 数据库",
@@ -63,7 +62,7 @@ interface ServiceRepositoryDraft {
 
 type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
   environmentKey: string;
-  mysql?: string[];
+  mysql?: import("../../../domain/contracts").MysqlTarget[];
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
 };
 
@@ -75,13 +74,13 @@ function serviceDeploymentDraft(deployment: Service["deployments"][number]): Ser
     environmentKey: deployment.environmentKey,
     repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
     ...(deployment.dms ? { dms: { ...deployment.dms, authorization: "", databases: deployment.dms.databases.map(database => ({ ...database })) } } : {}),
-    ...(deployment.mysql ? { mysql: deployment.mysql.map(({ passwordConfigured: _configured, ...target }) => mysqlTargetUrl({ ...target, password: "" })) } : {}),
+    ...(deployment.mysql ? { mysql: deployment.mysql.map(({ passwordConfigured: _configured, ...target }) => ({ ...target, password: "" })) } : {}),
     ...(deployment.sls ? { sls: { ...deployment.sls, accessKeyId: "", accessKeySecret: "", logstores: [...deployment.sls.logstores] } } : {}),
   };
 }
 
 function serializeServiceDeployment(deployment: ServiceDeploymentDraft, repositories: ServiceRepositoryDraft[]): ServiceInput["deployments"][number] {
-  return { environmentKey: deployment.environmentKey, capabilities: [...deployment.capabilities], repositoryBranches: deployment.environmentKey === "dev" ? [] : deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...(deployment.mysql?.length ? { mysql: deployment.mysql.map(mysqlTargetFromUrl) } : {}), ...serializeCapabilityDraft(deployment) };
+  return { environmentKey: deployment.environmentKey, capabilities: [...deployment.capabilities], repositoryBranches: deployment.environmentKey === "dev" ? [] : deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...(deployment.mysql?.length ? { mysql: deployment.mysql } : {}), ...serializeCapabilityDraft(deployment) };
 }
 
 function deploymentValidationError(deployment: ServiceDeploymentDraft): string {
@@ -226,7 +225,7 @@ function ServiceDeploymentEditorRow(props: {
   const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
   const addCapability = (key: CapabilityName | "mysql") => {
     if (key === "mysql") {
-      if (!mysqlDraft.length) mysqlDraft = [""];
+      if (!mysqlDraft.length) mysqlDraft = [{ host: "", port: 3306, username: "", password: "", database: "" }];
       update({ mysql: mysqlDraft }); setMysqlEnabled(true); return;
     }
     if (selectedCapabilities().includes(key)) return;
@@ -391,7 +390,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       void loadServiceMysqlTargets(service.key).then(value => {
         if (owner !== editorGeneration) return;
         if (value.revision !== service.revision) throw new Error("configuration_changed");
-        const loaded = environmentDrafts(service).map(deployment => ({ ...deployment, mysql: value.deployments.find(row => row.environmentKey === deployment.environmentKey)?.mysql.map(mysqlTargetUrl) ?? [] }));
+        const loaded = environmentDrafts(service).map(deployment => ({ ...deployment, mysql: value.deployments.find(row => row.environmentKey === deployment.environmentKey)?.mysql ?? [] }));
         setServiceDeployments(() => loaded);
         setMysqlLoading(false);
       }).catch(error => { if (owner === editorGeneration) setConfigurationError(serviceSaveErrorMessage(error)); });
