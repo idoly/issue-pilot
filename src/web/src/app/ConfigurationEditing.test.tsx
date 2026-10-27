@@ -90,6 +90,34 @@ for (const failed of ["configuration", "catalog"] as const) test(`a successful s
   expect(state.save).toHaveBeenCalledTimes(1);
 });
 
+test("edits existing MySQL credentials as a URL and saves the original connection contract", async () => {
+  render(() => <ConfigurationView />);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => expect(state.mysql).toHaveBeenCalled());
+  fireEvent.click(await within(dialog).findByRole("button", { name: "展开部署3" }));
+  const input = await within(dialog).findByLabelText("mysql prod 1 URL");
+  expect(input).toHaveProperty("value", "mysql://reader:fixture-old-secret@db.example.test:3306/orders");
+  await fireEvent.input(input, { target: { value: "mysql://reader:p%40ss%20@db.example.test/archive" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
+  expect(state.save.mock.calls[0]![1].deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").mysql).toEqual([{ ...mysql, password: "p@ss ", database: "archive" }]);
+});
+
+test("invalid MySQL URLs keep the draft without submitting", async () => {
+  render(() => <ConfigurationView />);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => expect(state.mysql).toHaveBeenCalled());
+  fireEvent.click(await within(dialog).findByRole("button", { name: "展开部署3" }));
+  const input = await within(dialog).findByLabelText("mysql prod 1 URL");
+  await fireEvent.input(input, { target: { value: "mysql://reader:pass@db/orders?ssl=true" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("不支持查询参数");
+  expect(state.save).not.toHaveBeenCalled();
+  expect(input).toHaveProperty("value", "mysql://reader:pass@db/orders?ssl=true");
+});
+
 test("MySQL is an optional service ability and can be added and removed like the others", async () => {
   const value = configuration();
   for (const deployment of value.services[0]!.deployments) delete deployment.mysql;
@@ -102,13 +130,13 @@ test("MySQL is an optional service ability and can be added and removed like the
   expect(within(environment as HTMLElement).queryByRole("button", { name: "添加 MySQL" })).toBeNull();
   expect(within(environment as HTMLElement).getByRole("checkbox", { name: "DMS" })).toBeTruthy();
   await fireEvent.click(within(environment as HTMLElement).getByRole("checkbox", { name: "MySQL" }));
-  const host = await within(environment as HTMLElement).findByLabelText("mysql test 1 host");
-  await fireEvent.input(host, { target: { value: "retained-draft.example.test" } });
+  const host = await within(environment as HTMLElement).findByLabelText("mysql test 1 URL");
+  await fireEvent.input(host, { target: { value: "mysql://reader:pass@retained-draft.example.test/orders" } });
   await fireEvent.click(within(environment as HTMLElement).getByRole("checkbox", { name: "MySQL" }));
-  expect(within(environment as HTMLElement).queryByLabelText("mysql test 1 host")).toBeNull();
+  expect(within(environment as HTMLElement).queryByLabelText("mysql test 1 URL")).toBeNull();
   expect(within(environment as HTMLElement).getByRole("checkbox", { name: "MySQL" })).toBeTruthy();
   await fireEvent.click(within(environment as HTMLElement).getByRole("checkbox", { name: "MySQL" }));
-  expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 host")).toHaveProperty("value", "retained-draft.example.test");
+  expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 URL")).toHaveProperty("value", "mysql://reader:pass@retained-draft.example.test/orders");
   const summary = within(dialog).getByLabelText("部署 2 能力");
   expect(within(summary).getAllByRole("checkbox")).toHaveLength(3);
   expect(summary.querySelector(".capability-labels")).toBeNull();
@@ -117,5 +145,5 @@ test("MySQL is an optional service ability and can be added and removed like the
   expect(summary.querySelector("code")?.textContent).toBe("MySQL");
   await fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
   expect(within(summary).getByRole("checkbox", { name: "MySQL" })).toHaveProperty("checked", true);
-  expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 host")).toHaveProperty("value", "retained-draft.example.test");
+  expect(await within(environment as HTMLElement).findByLabelText("mysql test 1 URL")).toHaveProperty("value", "mysql://reader:pass@retained-draft.example.test/orders");
 });

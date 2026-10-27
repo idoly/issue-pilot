@@ -32,7 +32,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 | 能力 | 配置 |
 | --- | --- |
-| MySQL | 按环境维护 host、port、username、password、database |
+| MySQL | 连接 URL：`mysql://用户名:密码@主机:端口/数据库`，端口默认 3306，特殊字符使用 URL 编码 |
 | DMS | alias／schema，首次按当前连接严格解析绑定 |
 | SLS | region、project、logstores，可维护多个命名目标 |
 
@@ -46,7 +46,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 ### MySQL MCP
 
-目标存于 `service_deployments.config.mysql`，与生成 MCP 同一事务更新。默认 stdio 模板为 `@benborla29/mcp-server-mysql@2.0.9`，自定义模板按数据库字面值使用。按部署、host、port、database 标识连接，凭证通过 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB` 注入环境，关闭 INSERT／UPDATE／DELETE 开关，保留密码有效空白。
+页面使用连接 URL 编辑，保存时解析为 host、port、username、password、database；不支持 URL 查询参数。目标存于 `service_deployments.config.mysql`，与生成 MCP 同一事务更新。默认 stdio 模板为 `@benborla29/mcp-server-mysql@2.0.9`，自定义模板按数据库字面值使用。按部署、host、port、database 标识连接，凭证通过 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB` 注入环境，关闭 INSERT／UPDATE／DELETE 开关，保留密码有效空白。
 
 生成连接带 deployment_id，通用 MCP API 不可改删；目标删除按归属处理。连接变更使用全部工单预约关闭旧会话，加载时按服务范围选择。SQL 与结果能力由 MCP 和数据库账号共同决定。
 
