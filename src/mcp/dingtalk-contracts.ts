@@ -16,7 +16,7 @@ export interface DingtalkSourceResponse {
   connection: { available: boolean; name: string };
 }
 export interface DingtalkImportInput {
-  url: string; workMode: IssueWorkMode; serviceKey: string; priority: IssuePriority; startAgent: boolean;
+  url: string; workMode: IssueWorkMode; serviceKey: string; priority: IssuePriority; startAgent: boolean; assigneeSubject?: string | null;
 }
 export interface DingtalkImportResponse {
   user: DingtalkUser; status: "created" | "existing"; issueKey: string;

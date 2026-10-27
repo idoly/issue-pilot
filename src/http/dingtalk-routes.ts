@@ -41,11 +41,12 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
   }));
   app.post("/api/dingtalk/import", handle(async (request, signal): Promise<DingtalkImportResponse> => {
     const input = record(request.body);
-    if (Object.keys(input).some(key => !["url", "serviceKey", "workMode", "priority", "startAgent"].includes(key))) throw new ApiError(400, "invalid_dingtalk_import");
+    if (Object.keys(input).some(key => !["url", "serviceKey", "workMode", "priority", "startAgent", "assigneeSubject"].includes(key))) throw new ApiError(400, "invalid_dingtalk_import");
     const table = parseDingtalkTable(text(input.url, "dingtalk_url", 4096)), workMode = choice(input.workMode, "work_mode", ISSUE_WORK_MODES), priority = choice(input.priority, "priority", ISSUE_PRIORITIES), serviceKey = text(input.serviceKey, "service_key", 100);
     await authorizeWorkMode(database, request, workMode);
     if (input.startAgent !== undefined && typeof input.startAgent !== "boolean") throw new ApiError(400, "invalid_start_agent");
     const state = await settings(request);
+    const assigneeSubject = input.assigneeSubject === undefined ? state.user.subject : input.assigneeSubject === null ? null : text(input.assigneeSubject, "assignee_subject", 255);
     if (!state.server) throw new ApiError(400, "dingtalk_mcp_not_configured");
     const result = (status: "existing" | "created", issueKey: string): DingtalkImportResponse => ({ user: serializePerson(state.user), status, issueKey });
     const [existing] = await database.db.select({ key: issues.key }).from(dingtalkIssueImports).innerJoin(issues, eq(issues.id, dingtalkIssueImports.issueId)).where(and(eq(dingtalkIssueImports.baseId, table.baseId), eq(dingtalkIssueImports.tableId, table.tableId), eq(dingtalkIssueImports.recordId, table.recordId))).limit(1);
@@ -62,7 +63,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       if (!data.creatable) throw new ApiError(400, "dingtalk_record_invalid");
       signal.throwIfAborted();
       const pending = await downloadDingtalkAttachments(dingtalkAttachments(row, columns.attachments), signal);
-      const created = await createIssue({ title: data.title, description: `${data.description}\n\n钉钉来源：${table.url}`, priority, workMode, serviceKey, assigneeSubject: state.user.subject, ccSubjects: [] }, request, pending, { dingtalk: { baseId: table.baseId, tableId: table.tableId, recordId: table.recordId, sourceUrl: table.url }, startAgent: input.startAgent === true, signal });
+      const created = await createIssue({ title: data.title, description: `${data.description}\n\n钉钉来源：${table.url}`, priority, workMode, serviceKey, assigneeSubject, ccSubjects: [] }, request, pending, { dingtalk: { baseId: table.baseId, tableId: table.tableId, recordId: table.recordId, sourceUrl: table.url }, startAgent: input.startAgent === true, signal });
       return result(created.created ? "created" : "existing", created.issue.id);
     } finally { if (session) try { await session.close(); } catch { app.log.warn("dingtalk_connection_close_failed"); } }
   }));

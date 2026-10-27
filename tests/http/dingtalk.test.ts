@@ -70,6 +70,74 @@ test("MCP dingtalk_import dispatches the same single-record workflow and duplica
   } finally { await client.close(); await f.cleanup(); }
 });
 
+test("MCP imports select an active handler while preserving caller identity and duplicate assignment", async () => {
+  const f = await fixture(), client = new Client({ name: "dingtalk-assignee-fixture", version: "1" });
+  try {
+    await f.database.db.insert(subjects).values({ subject: "handler", displayName: "Handler", role: "developer" });
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`), { requestInit: { headers: { "X-Issue-Pilot-Subject": f.user.subject } } }) as Parameters<Client["connect"]>[0]);
+    const listed = await client.listTools();
+    const schema = listed.tools.find(tool => tool.name === "dingtalk_import")!.inputSchema;
+    assert.ok(schema.properties?.assigneeSubject);
+    for (const assigneeSubject of ["handler", f.user.subject]) {
+      const response = await client.callTool({ name: "dingtalk_import", arguments: { ...f.payload, assigneeSubject, startAgent: true } });
+      assert.equal(response.isError, undefined, JSON.stringify(response));
+      const result = JSON.parse((response.content as Array<{ text: string }>)[0]!.text);
+      assert.equal(result.status, assigneeSubject === "handler" ? "created" : "existing");
+      assert.equal(result.user.subject, f.user.subject);
+    }
+    const [issue] = await f.database.db.select().from(issues);
+    assert.equal(issue!.assigneeSubject, "handler");
+    assert.equal(issue!.reporterSubject, f.user.subject);
+    const [binding] = await f.database.db.select().from(dingtalkIssueImports);
+    assert.equal(binding!.importedBy, f.user.subject);
+    assert.equal(f.engine.enqueued.length, 1);
+  } finally { await client.close(); await f.cleanup(); }
+});
+
+test("DingTalk imports validate the requested handler with the Issue creation rules", async () => {
+  const f = await fixture();
+  try {
+    await f.database.db.insert(subjects).values([
+      { subject: "inactive-handler", displayName: "Inactive", role: "developer", active: false },
+      { subject: "test-handler", displayName: "Tester", role: "test" },
+    ]);
+    for (const assigneeSubject of ["missing-handler", "inactive-handler"]) {
+      const result = await f.submit({ assigneeSubject });
+      assert.equal(result.statusCode, 400, result.body);
+      assert.equal(result.json().error, "invalid_subject");
+    }
+    const wrongRole = await f.submit({ workMode: "development_fix", assigneeSubject: "test-handler" });
+    assert.equal(wrongRole.statusCode, 400, wrongRole.body);
+    assert.equal(wrongRole.json().error, "issue_developer_owner_required");
+    for (const assigneeSubject of [42, "", {}, []]) {
+      const result = await f.submit({ assigneeSubject });
+      assert.equal(result.statusCode, 400, result.body);
+    }
+    assert.equal((await f.database.db.select().from(issues)).length, 0);
+    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 0);
+    assert.equal(f.engine.enqueued.length, 0);
+    const unassigned = await f.submit({ assigneeSubject: null });
+    assert.equal(unassigned.statusCode, 200, unassigned.body);
+    const [issue] = await f.database.db.select().from(issues);
+    assert.equal(issue!.assigneeSubject, null);
+    assert.equal(issue!.reporterSubject, f.user.subject);
+  } finally { await f.cleanup(); }
+});
+
+test("handler changes during DingTalk reads are checked again before Issue creation", async () => {
+  const f = await fixture();
+  try {
+    await f.database.db.insert(subjects).values({ subject: "handler", role: "developer" });
+    f.state.beforeRecords = async () => { await f.database.db.update(subjects).set({ active: false }).where(eq(subjects.subject, "handler")); };
+    const result = await f.submit({ assigneeSubject: "handler" });
+    assert.equal(result.statusCode, 400, result.body);
+    assert.equal(result.json().error, "invalid_subject");
+    assert.equal((await f.database.db.select().from(issues)).length, 0);
+    assert.equal((await f.database.db.select().from(dingtalkIssueImports)).length, 0);
+  } finally { await f.cleanup(); }
+});
+
 test("concurrent and repeated record imports return the existing Issue without replaying Agent startup", async () => {
   const f = await fixture();
   try {

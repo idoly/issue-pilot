@@ -62,7 +62,7 @@ Pi 管理发现、注册、资源、连接与关闭。应用保留字面私有�
 
 个人 `user_preferences.dingtalk.fields` 按项覆盖共享 `application_settings.dingtalk_fields`，支持精确名称或 ID，缺失／重名报错，空字符串可跳过可选字段；参数不能临时覆盖映射。默认标题取“序号”原值。
 
-新工单指派给当前调用用户，重复来源返回原工单、不改派或重复启动。页面新导入启动 Agent；MCP 默认不启动。附件只从允许的 HTTPS 存储主机下载，不跟随重定向、不转发 MCP 凭证，工单与附件保存成功才返回。关闭或切换身份取消未完成请求，已提交工单保持有效。
+新工单默认指派给当前调用用户，可用 assigneeSubject 指定活跃处理人，null 表示未分配；开发工单的实际 owner 必须为开发者。重复来源返回原工单、不改派或重复启动。页面新导入启动 Agent；MCP 默认不启动。附件只从允许的 HTTPS 存储主机下载，不跟随重定向、不转发 MCP 凭证，工单与附件保存成功才返回。关闭或切换身份取消未完成请求，已提交工单保持有效。
 
 ## Agent 基座与资源
 
@@ -87,7 +87,7 @@ Pi settings 为基线，数据库 runtime.settings 显式覆盖，省略则清�
 
 同源 `/mcp` 使用无状态 Streamable HTTP，复用 HTTP 身份。客户端配置从“配置 → 端点”复制，`users_list` 核对账号，`services_list` 发现可用范围。
 
-`issue_create` 创建后自动入队，assigneeSubject 省略时未分配。`dingtalk_import` 指派当前用户，可选 priority 默认 p2、startAgent 默认 false，返回 status 和 issueKey。创建与发消息为异步受理，响应不明先查询确认。
+`issue_create` 创建后自动入队，assigneeSubject 省略时未分配。`dingtalk_import` 的 assigneeSubject 省略时为当前用户、null 为未分配，也可填 users_list 返回的 subject；priority 默认 p2、startAgent 默认 false，返回 status 和 issueKey。创建与发消息为异步受理，响应不明先查询确认。
 
 附件使用 fileName、可选 mediaType（默认 application/octet-stream）和标准 Base64 contentBase64，无 data 前缀。工单、附件一起保存后才入队，应用不设附件总大小／数量业务上限，传输与内存容量由部署控制。
 
