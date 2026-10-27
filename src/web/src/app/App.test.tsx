@@ -685,7 +685,7 @@ describe("issue pilot workspace", () => {
     expect(within(serviceDialog).getAllByRole("checkbox").map(item => item.parentElement?.textContent)).toEqual(["MySQL", "DMS", "SLS"]);
     expect(within(serviceDialog).getByRole("checkbox", { name: "SLS" })).toHaveProperty("checked", true);
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
-    expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "sls"]);
+    expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "SLS"]);
     const projectInput = screen.getByLabelText("sls project 2");
     fireEvent.input(projectInput, { target: { value: "srm-updated" } });
     fireEvent.click(within(serviceDialog).getByRole("button", { name: "收起部署2" }));
@@ -926,6 +926,48 @@ describe("issue pilot workspace", () => {
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
     expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated" }, secondary]);
     expect(saved.deployments[1]?.sls?.credentialUpdate).toEqual({ mode: "preserve" });
+  });
+
+  test("edits DMS and SLS targets consistently while preserving credentials and resolved bindings", async () => {
+    const client = await import("../data/client");
+    const configuration = structuredClone(await client.loadConfig());
+    const deployment = configuration.services[0]!.deployments[0]!;
+    const database = { instanceAlias: "SRM", schemaName: "srm", instanceId: "i1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" };
+    const target = { name: "primary", region: "cn-test", project: "srm-test", logstores: ["srm"] };
+    deployment.capabilities.push("dms");
+    deployment.dms = { url: "https://dms.example.test/sse", credentialConfigured: true, databases: [database, { ...database, instanceAlias: "OTHER", schemaName: "other", databaseId: "43" }] };
+    deployment.sls = { ...deployment.sls!, targets: [target, { ...target, name: "gateway", project: "gateway-test" }] };
+    vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
+    vi.mocked(client.updateService).mockClear();
+    vi.mocked(client.resolveDmsScope).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await screen.findByRole("tablist", { name: "服务列表" });
+    fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    for (const capability of ["DMS", "SLS"]) {
+      const group = await within(dialog).findByRole("group", { name: `${capability} 配置` });
+      expect(within(group).getByRole("region", { name: `${capability} 连接凭证` })).toBeTruthy();
+      const targets = within(group).getByRole("region", { name: `${capability} 查询目标` });
+      expect(within(targets).getByRole("button", { name: `添加 ${capability} 目标` }).textContent).toBe("添加目标");
+      fireEvent.click(within(targets).getByRole("button", { name: `移除 ${capability} 2 2` }));
+      await waitFor(() => expect(within(targets).getByRole("button", { name: `移除 ${capability} 2 1` })).toHaveProperty("disabled", true));
+    }
+    expect(within(dialog).getByLabelText("sls AccessKey Secret 2")).toHaveProperty("placeholder", "已配置，留空保留");
+    fireEvent.click(within(dialog).getByRole("button", { name: "收起部署2" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "展开部署2" }));
+    expect(await within(dialog).findByLabelText("dms database 2-1")).toHaveProperty("value", "srm");
+    expect(within(dialog).queryByLabelText("dms database 2-2")).toBeNull();
+    expect(within(dialog).queryByLabelText("sls name 2-2")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.updateService).toHaveBeenCalledOnce());
+    const saved = vi.mocked(client.updateService).mock.calls[0]![1].deployments[1]!;
+    expect(saved.dms?.databases).toEqual([database]);
+    expect(saved.dms?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(saved.sls?.targets).toEqual([target]);
+    expect(saved.sls?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(client.resolveDmsScope).not.toHaveBeenCalled();
   });
 
   test("shows the upstream DMS rate limit while resolving a database", async () => {

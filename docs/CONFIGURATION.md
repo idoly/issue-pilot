@@ -36,7 +36,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 | DMS | alias／schema，首次按当前连接严格解析绑定 |
 | SLS | region、project、logstores，可维护多个命名目标 |
 
-环境收起显示能力标签，展开原位显示 MySQL／DMS／SLS 复选框；切换保留草稿，保存才提交。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
+环境收起显示能力标签，展开原位显示 MySQL／DMS／SLS 复选框；切换保留草稿，保存才提交。DMS 与 SLS 都按连接凭证、查询目标编辑，DMS 目标显示数据库解析状态。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
 
 状态响应带整数 revision，页面保存携带版本，冲突返回 `configuration_changed` 并保留输入。API 允许省略 `expectedRevision`，需要冲突保护时应始终提供。仓库 URL 级联更新推进关联服务 revision，显示名变更只更新仓库。相关 Agent／预约活动阻止冲突写入。
 

@@ -145,7 +145,16 @@ function DmsDatabaseEditorRow(props: {
     },
   );
   onCleanup(() => { if (resolveTimer) clearTimeout(resolveTimer); resolveGeneration += 1; });
-  return <div class="dms-database-row"><label><span class="required-field">alias</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label><label><span class="required-field">schema</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label><Button class="icon-button" type="text" shape="circle" icon={<Trash2 size={13} />} title={`删除 DMS 数据库 ${props.databaseIndex}`} aria-label={`删除 DMS 数据库 ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete} /><Show when={loading()}><small class="dms-scope-hint">正在解析实例和数据库...</small></Show><Show when={database().databaseId}><small class="dms-scope-hint">数据库范围已确认</small></Show><Show when={resolveError()}>{(message) => <div class="form-error" role="alert">{message()}</div>}</Show></div>;
+  return <div class="settings-target-row">
+    <div class="settings-targets-head"><span>目标 {props.databaseIndex}</span><Button size="small" type="text" danger aria-label={`移除 DMS ${props.deploymentIndex} ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete}>移除</Button></div>
+    <div class="settings-target-fields">
+      <label><span class="required-field">实例别名（alias）</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label>
+      <label><span class="required-field">数据库（schema）</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label>
+      <Show when={loading()}><small class="settings-target-feedback">正在解析实例和数据库...</small></Show>
+      <Show when={database().databaseId}><small class="settings-target-feedback">数据库范围已确认</small></Show>
+      <Show when={resolveError()}>{(message) => <div class="form-error" role="alert">{message()}</div>}</Show>
+    </div>
+  </div>;
 }
 
 function ServiceDeploymentEditorRow(props: {
@@ -204,7 +213,7 @@ function ServiceDeploymentEditorRow(props: {
     updateDms({ databases: [...dmsDraft().databases, newDmsDatabaseDraft()] });
     requestAnimationFrame(() => {
       if (!dmsTargets?.isConnected) return;
-      const input = dmsTargets.querySelector<HTMLInputElement>(".dms-database-row:last-child input");
+      const input = dmsTargets.querySelector<HTMLInputElement>(".settings-target-row:last-child input");
       input?.focus({ preventScroll: true }); input?.scrollIntoView?.({ block: "nearest" });
     });
   };
@@ -247,8 +256,35 @@ function ServiceDeploymentEditorRow(props: {
       <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Show when={codeOnly} fallback={<Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} />}><code class="inherited-branch" aria-label={`${props.repositoryName(repository)} 开发基线`}>{props.productionBranches().find(branch => branch.repositoryKey === repository.key)?.baseBranch.trim() || "待配置正式分支"}</code></Show></label>}</For></div>
       <Show when={!codeOnly && mysqlEnabled()}><MysqlTargetsEditor value={currentDeployment.mysql ?? []} environment={initialDeployment.environmentKey} onChange={mysql => { mysqlDraft = mysql; update({ mysql }); }} /></Show>
       <For each={codeOnly ? [] : CAPABILITY_KEYS.filter(key => selectedCapabilities().includes(key))}>{key => <Switch>
-        <Match when={key === "dms"}><div class="deployment-capability-settings dms-capability-settings"><div class="capability-settings-head"><code>dms</code></div><label><span class="required-field">地址</span><Input aria-label={`dms 地址 ${props.index + 1}`} value={dmsDraft().url} onInput={event => updateDms({ url: event.currentTarget.value })} /></label><label><span class="required-field">Token</span><PasswordInput aria-label={`dms Token ${props.index + 1}`} value={dmsDraft().authorization} placeholder={dmsDraft().credentialConfigured ? "已配置，留空保留" : "Bearer token"} onInput={event => updateDms({ authorization: event.currentTarget.value })} /></label><div class="dms-database-editor"><div class="dms-database-editor-head"><div><strong>数据库范围</strong><span>Agent 直接选择已授权 schema，每个 alias/schema 由后台解析</span></div><Button icon={<Plus size={13} />} disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>添加 DMS 数据库</Button></div><div ref={value => { dmsTargets = value; }} class="dms-database-list"><For each={dmsDraft().databases}>{(database, databaseIndex) => <DmsDatabaseEditorRow deploymentIndex={props.index + 1} databaseIndex={databaseIndex() + 1} database={database} connection={() => ({ url: dmsDraft().url, authorization: dmsDraft().authorization, environmentKey: initialDeployment.environmentKey, ...(props.serviceKey ? { serviceKey: props.serviceKey } : {}) })} only={dmsDraft().databases.length === 1} onChange={(next) => updateDmsDatabase(database, next)} onDelete={() => removeDmsDatabase(database)} />}</For></div></div></div></Match>
-        <Match when={key === "sls"}><div class="deployment-capability-settings"><div class="capability-settings-head"><code>sls</code></div><label><span class="required-field">AccessKey ID</span><PasswordInput aria-label={`sls AccessKey ID ${props.index + 1}`} value={slsDraft().accessKeyId} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeyId: event.currentTarget.value })} /></label><label><span class="required-field">AccessKey Secret</span><PasswordInput aria-label={`sls AccessKey Secret ${props.index + 1}`} value={slsDraft().accessKeySecret} onInput={event => updateSls({ accessKeySecret: event.currentTarget.value })} /></label><SlsTargetsEditor deploymentIndex={props.index + 1} value={slsDraft().targets ?? [{ name: initialDeployment.environmentKey, region: slsDraft().region, project: slsDraft().project, logstores: slsDraft().logstores.split(",").map(value => value.trim()).filter(Boolean) }]} onChange={targets => updateSls({ targets: targets.length === 1 && !initialDeployment.sls?.targets && targets[0]?.name === initialDeployment.environmentKey ? undefined : targets, region: targets[0]?.region ?? "", project: targets[0]?.project ?? "", logstores: targets[0]?.logstores.join(", ") ?? "" })} /></div></Match>
+        <Match when={key === "dms"}>
+          <div class="deployment-capability-settings" role="group" aria-label="DMS 配置">
+            <div class="capability-settings-head"><code>DMS</code></div>
+            <section class="capability-connection" aria-label="DMS 连接凭证">
+              <div class="settings-targets-head"><span>连接凭证</span></div>
+              <div class="settings-target-fields">
+                <label><span class="required-field">连接地址</span><Input aria-label={`dms 地址 ${props.index + 1}`} value={dmsDraft().url} onInput={event => updateDms({ url: event.currentTarget.value })} /></label>
+                <label><span class="required-field">Token</span><PasswordInput aria-label={`dms Token ${props.index + 1}`} value={dmsDraft().authorization} placeholder={dmsDraft().credentialConfigured ? "已配置，留空保留" : "Bearer token"} onInput={event => updateDms({ authorization: event.currentTarget.value })} /></label>
+              </div>
+            </section>
+            <section class="settings-targets" aria-label="DMS 查询目标">
+              <div class="settings-targets-head"><span>查询目标</span><Button size="small" aria-label="添加 DMS 目标" disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>添加目标</Button></div>
+              <div ref={value => { dmsTargets = value; }}><For each={dmsDraft().databases}>{(database, databaseIndex) => <DmsDatabaseEditorRow deploymentIndex={props.index + 1} databaseIndex={databaseIndex() + 1} database={database} connection={() => ({ url: dmsDraft().url, authorization: dmsDraft().authorization, environmentKey: initialDeployment.environmentKey, ...(props.serviceKey ? { serviceKey: props.serviceKey } : {}) })} only={dmsDraft().databases.length === 1} onChange={(next) => updateDmsDatabase(database, next)} onDelete={() => removeDmsDatabase(database)} />}</For></div>
+            </section>
+          </div>
+        </Match>
+        <Match when={key === "sls"}>
+          <div class="deployment-capability-settings" role="group" aria-label="SLS 配置">
+            <div class="capability-settings-head"><code>SLS</code></div>
+            <section class="capability-connection" aria-label="SLS 连接凭证">
+              <div class="settings-targets-head"><span>连接凭证</span></div>
+              <div class="settings-target-fields">
+                <label><span class="required-field">AccessKey ID</span><PasswordInput aria-label={`sls AccessKey ID ${props.index + 1}`} value={slsDraft().accessKeyId} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeyId: event.currentTarget.value })} /></label>
+                <label><span class="required-field">AccessKey Secret</span><PasswordInput aria-label={`sls AccessKey Secret ${props.index + 1}`} value={slsDraft().accessKeySecret} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeySecret: event.currentTarget.value })} /></label>
+              </div>
+            </section>
+            <SlsTargetsEditor deploymentIndex={props.index + 1} value={slsDraft().targets ?? [{ name: initialDeployment.environmentKey, region: slsDraft().region, project: slsDraft().project, logstores: slsDraft().logstores.split(",").map(value => value.trim()).filter(Boolean) }]} onChange={targets => updateSls({ targets: targets.length === 1 && !initialDeployment.sls?.targets && targets[0]?.name === initialDeployment.environmentKey ? undefined : targets, region: targets[0]?.region ?? "", project: targets[0]?.project ?? "", logstores: targets[0]?.logstores.join(", ") ?? "" })} />
+          </div>
+        </Match>
       </Switch>}</For></Show>
     </div>
   );
