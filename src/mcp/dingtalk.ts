@@ -99,21 +99,41 @@ function cellTexts(value: unknown, depth = 0): string[] {
 }
 export function dingtalkCellTexts(record: DingtalkRecord, field: string | undefined): string[] { return field ? cellTexts(record.cells[field]).map(value => value.trim()).filter(Boolean) : []; }
 export interface DingtalkAttachment { id: string; fileName: string; size: number; url: string }
-export function dingtalkAttachments(record: DingtalkRecord, field: string | undefined): DingtalkAttachment[] {
+interface DingtalkAttachmentLink { fileName: string; url: string }
+function decodeDingtalkAttachments(record: DingtalkRecord, field: string | undefined): { files: DingtalkAttachment[]; links: DingtalkAttachmentLink[] } {
   const value = field ? record.cells[field] : undefined;
-  if (value === null || value === undefined) return [];
+  const files: DingtalkAttachment[] = [], links: DingtalkAttachmentLink[] = [];
+  if (value === null || value === undefined) return { files, links };
   if (!Array.isArray(value)) throw new DingtalkError("invalid_dingtalk_attachments");
-  return value.map(value => {
-    const file = object(value);
+  for (const item of value) {
+    const file = object(item);
+    if (file.isLink === true || file.type === "link") {
+      if (typeof file.filename !== "string" || !file.filename.trim() || /[\u0000-\u001f\u007f]/.test(file.filename) || typeof file.url !== "string" || /[\u0000-\u001f\u007f]/.test(file.url)) throw new DingtalkError("invalid_dingtalk_attachments");
+      let url: URL;
+      try { url = new URL(file.url); } catch { throw new DingtalkError("invalid_dingtalk_attachments"); }
+      if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) throw new DingtalkError("invalid_dingtalk_attachments");
+      links.push({ fileName: file.filename.trim(), url: url.href.replaceAll("<", "%3C").replaceAll(">", "%3E") });
+      continue;
+    }
     if (typeof file.resourceId !== "string" || typeof file.filename !== "string" || !file.filename.trim() || /[/\\\u0000-\u001f\u007f]/.test(file.filename) || [".", ".."].includes(file.filename) || !Number.isSafeInteger(file.size) || Number(file.size) < 0 || typeof file.url !== "string") throw new DingtalkError("invalid_dingtalk_attachments");
-    return { id: file.resourceId, fileName: file.filename, size: Number(file.size), url: file.url };
-  });
+    files.push({ id: file.resourceId, fileName: file.filename, size: Number(file.size), url: file.url });
+  }
+  return { files, links };
+}
+export function dingtalkAttachments(record: DingtalkRecord, field: string | undefined): DingtalkAttachment[] {
+  return decodeDingtalkAttachments(record, field).files;
 }
 
 export function dingtalkIssueRecord(record: DingtalkRecord, columns: DingtalkColumns): DingtalkIssueRecord {
   const value = (key: keyof DingtalkColumns) => dingtalkCellTexts(record, columns[key]).join("\n");
-  const number = value("number"), title = value("title"), description = value("description");
+  const number = value("number"), title = value("title");
+  const decoded = decodeDingtalkAttachments(record, columns.attachments);
+  const linkLines = decoded.links.map(link => {
+    const label = link.fileName.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replace(/[\\[\]]/g, "\\$&");
+    return `- [${label}](<${link.url}>)`;
+  });
+  const description = [value("description"), ...(linkLines.length ? [`### 附件链接\n\n${linkLines.join("\n")}`] : [])].filter(Boolean).join("\n\n");
   const reason = !title ? "记录标题为空" : title.length > 300 ? "标题超过 300 字符" : description.length > limits.descriptionCharacters ? "描述超过导入上限，请调整描述字段" : undefined;
-  const attachments = dingtalkAttachments(record, columns.attachments).map(({ id, fileName, size }) => ({ id, fileName, size }));
+  const attachments = decoded.files.map(({ id, fileName, size }) => ({ id, fileName, size }));
   return { recordId: record.recordId, ...(attachments.length ? { attachments } : {}), title: title.slice(0, 300), description: description.slice(0, limits.descriptionCharacters), number: number.slice(0, limits.labelCharacters), creatable: !reason, ...(reason ? { reason } : {}) };
 }

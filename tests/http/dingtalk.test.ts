@@ -188,6 +188,26 @@ test("existing manual Issues are detected by exact title or external number", as
   } finally { await f.cleanup(); }
 });
 
+test("mixed linked and binary attachments preserve the link and download only files", async t => {
+  const f = await fixture();
+  const calls: string[] = [];
+  const download = t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => { calls.push(String(url)); return new Response("data"); });
+  try {
+    const url = "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/image.png";
+    f.state.row.cells.attachments = [
+      { isLink: true, type: "link", filename: "设计文档", url: "https://docs.example.test/design" },
+      { resourceId: "image-1", filename: "one.png", size: 4, url },
+      { resourceId: "image-2", filename: "two.png", size: 4, url },
+    ];
+    const result = await f.submit(); assert.equal(result.statusCode, 200, result.body);
+    const detail = (await f.app.inject({ method: "GET", url: `/api/issues/${result.json().issueKey}` })).json();
+    assert.equal(detail.attachments.length, 2); assert.match(detail.description, /\[设计文档\]\(<https:\/\/docs\.example\.test\/design>\)/);
+    assert.deepEqual(calls, [url, url]);
+    for (const file of detail.attachments) assert.equal((await f.app.inject({ method: "GET", url: `/api/issues/${result.json().issueKey}/attachments/${file.id}` })).body, "data");
+    const repeated = await f.submit(); assert.equal(repeated.json().status, "existing"); assert.equal(calls.length, 2);
+  } finally { download.mock.restore(); await f.cleanup(); }
+});
+
 test("record attachments are downloaded and saved atomically; failure leaves an explicit retry possible", async t => {
   const f = await fixture();
   const download = t.mock.method(globalThis, "fetch", async () => new Response("bad", { status: 403 }));
