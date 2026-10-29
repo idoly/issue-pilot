@@ -2,7 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import type { CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
+import type { CapabilityConfiguration, CapabilityName, SlsScope } from "../domain/contracts.ts";
 
 const limits = issuePilotConfig.limits.capability;
 const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -38,6 +38,26 @@ export function parseSlsConnectionConfiguration(value: unknown): Pick<Capability
   const input = inputRecord(value);
   return { accessKeyId: requiredText(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "sls_access_key_secret") };
 }
+
+export function parseSlsScopeConfiguration(value: unknown): SlsScope {
+  const input = inputRecord(value);
+  const region = requiredText(input.region, "sls_region", 63);
+  const project = requiredText(input.project, "sls_project", 63);
+  const logstores = [...new Set(stringList(input.logstores, "sls_logstores").map(entry => requiredText(entry, "sls_logstore", 63)))];
+  if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some(entry => entry !== "*" && !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
+  const targets = input.targets === undefined ? undefined : (Array.isArray(input.targets) ? input.targets : fail("invalid_sls_scope")).map(value => {
+    const target = inputRecord(value);
+    const name = requiredText(target.name, "sls_target", 100);
+    const targetRegion = requiredText(target.region, "sls_region", 63);
+    const targetProject = requiredText(target.project, "sls_project", 63);
+    const targetLogstores = [...new Set(stringList(target.logstores, "sls_logstores").map(entry => requiredText(entry, "sls_logstore", 63)))];
+    if (!SLS_REGION.test(targetRegion) || !SLS_PROJECT.test(targetProject) || !targetLogstores.length || targetLogstores.some(store => store !== "*" && !SLS_LOGSTORE.test(store))) fail("invalid_sls_scope");
+    return { name, region: targetRegion, project: targetProject, logstores: targetLogstores };
+  });
+  if (targets && (!targets.length || new Set(targets.map(target => target.name)).size !== targets.length)) fail("invalid_sls_scope");
+  return { region, project, logstores, ...(targets ? { targets } : {}) };
+}
+
 const slsQueryProperties = {
   from: Type.Optional(Type.Integer({ minimum: 0 })), to: Type.Optional(Type.Integer({ minimum: 1 })),
   query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars, description: "Log filter or SQL analysis. SQL uses its LIMIT/ORDER BY for pagination; incomplete results fail explicitly." })),
@@ -82,21 +102,7 @@ const definitions = {
     key: "sls", inputSchema: capabilityInputSchemas.sls,
     parseConfiguration(value) {
       const input = inputRecord(value);
-      const region = requiredText(input.region, "sls_region", 63);
-      const project = requiredText(input.project, "sls_project", 63);
-      const logstores = [...new Set(stringList(input.logstores, "sls_logstores").map(entry => requiredText(entry, "sls_logstore", 63)))];
-      if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some(entry => entry !== "*" && !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
-      const targets = input.targets === undefined ? undefined : (Array.isArray(input.targets) ? input.targets : fail("invalid_sls_scope")).map(value => {
-        const target = inputRecord(value);
-        const name = requiredText(target.name, "sls_target", 100);
-        const targetRegion = requiredText(target.region, "sls_region", 63);
-        const targetProject = requiredText(target.project, "sls_project", 63);
-        const targetLogstores = [...new Set(stringList(target.logstores, "sls_logstores").map(entry => requiredText(entry, "sls_logstore", 63)))];
-        if (!SLS_REGION.test(targetRegion) || !SLS_PROJECT.test(targetProject) || !targetLogstores.length || targetLogstores.some(store => store !== "*" && !SLS_LOGSTORE.test(store))) fail("invalid_sls_scope");
-        return { name, region: targetRegion, project: targetProject, logstores: targetLogstores };
-      });
-      if (targets && (!targets.length || new Set(targets.map(target => target.name)).size !== targets.length)) fail("invalid_sls_scope");
-      return { ...parseSlsConnectionConfiguration(input), region, project, logstores, ...(targets ? { targets } : {}) };
+      return { ...parseSlsConnectionConfiguration(input), ...parseSlsScopeConfiguration(input) };
     },
   },
 } satisfies { [Key in CapabilityName]: CapabilityDefinition<Key> };

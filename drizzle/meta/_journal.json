@@ -449,6 +449,13 @@
       "when": 1792796400000,
       "tag": "0063_page_configuration",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "6",
+      "when": 1793241368046,
+      "tag": "0064_shared_sls_credentials",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 import { CAPABILITY_KEYS, type CapabilityName } from "../../../domain/contracts";
 import { CAPABILITY_CREDENTIAL_FIELDS, type CapabilityConfigurationInput, type CapabilityCredentialUpdate, type CapabilityCredentialValues, type ProjectedCapabilitySection } from "../../../configuration/contracts";
 
-type CapabilityCredentialDraft<Key extends CapabilityName> = ProjectedCapabilitySection<Key> & CapabilityCredentialValues<Key>;
+type CapabilityCredentialDraft<Key extends CapabilityName> = ProjectedCapabilitySection<Key> & (Key extends "sls" ? {} : CapabilityCredentialValues<Key>);
 type CapabilityDraftConfiguration = { [Key in CapabilityName]?: CapabilityCredentialDraft<Key> };
 
 export type DeploymentCapabilityDraft = CapabilityDraftConfiguration & {
@@ -30,7 +30,7 @@ const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
     })),
     credentialUpdate: credentialUpdate("dms", draft),
   }),
-  sls: (draft) => ({ region: draft.region.trim(), project: draft.project.trim(), logstores: [...draft.logstores], ...(draft.targets ? { targets: draft.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}), credentialUpdate: credentialUpdate("sls", draft) }),
+  sls: (draft) => ({ region: draft.region.trim(), project: draft.project.trim(), logstores: [...draft.logstores], ...(draft.targets ? { targets: draft.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) }),
 };
 
 export function serializeCapabilityDraft(draft: DeploymentCapabilityDraft): CapabilityConfigurationInput {

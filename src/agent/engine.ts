@@ -8,7 +8,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
-import { applyProductionCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
+import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
@@ -27,6 +27,7 @@ import { issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import {
   agentSessions,
+  applicationSettings,
   issueAttachments,
   mcpServices,
   environments,
@@ -332,7 +333,8 @@ export class AgentEngine implements AgentController {
     }
     const environmentServices = await listEnvironmentServices(this.database, issue.environmentId);
     const queryServices = environmentServices.filter(row => row.environment.kind !== "dev");
-    const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyProductionCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key, owner.credentials) }));
+    const [shared] = await this.database.select({ sls: applicationSettings.sharedSlsCredentials }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
+    const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyIssueCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key, owner.credentials, shared?.sls) }));
     const deploymentConfig = serviceScopes.find(scope => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
     const mcpRows = await this.database.select().from(mcpServices);
     const includedServiceIds = new Set(await issueServiceIds(this.database, issue));

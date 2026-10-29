@@ -33,7 +33,7 @@ Agent 对话不另建 SQL 消息表。人工评论属于 `issue_comments`，与 
 
 `issues.id` 是内部 UUID；业务编号为 `ISSUE-YYYYMMDD-NNN...`，按配置时区生成，HTTP 工单 DTO 的 id 使用业务编号，磁盘目录用小写编号。工单范围必须匹配有效 Deployment，resolved 与非空 resolved_at 等价。字段与触发器以 schema 和 migration SQL 为准。
 
-用户、个人凭证、仓库和服务带 revision。配置关系在 owner 事务中更新，服务仓库绑定变化保留其 ID 与创建时间；全局 Agent、开关和偏好分别保存在对应业务表。
+用户、个人凭证、仓库和服务带 revision；共享 SLS 凭据及独立版本保存在 application_settings，部署仅保存 SLS 查询范围。配置关系在 owner 事务中更新，服务仓库绑定变化保留其 ID 与创建时间；全局 Agent、开关和偏好分别保存在对应业务表。
 
 ## 目录布局
 

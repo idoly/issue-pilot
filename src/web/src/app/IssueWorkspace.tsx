@@ -17,6 +17,8 @@ type IssueAttachment = IssueDetail["attachments"][number];
 
 const workspaceErrorMessages: Record<string, string> = {
   agent_message_scope_changed: "历史排队消息的处理范围已变更，已停止恢复。请核对历史输入后重试，或按当前范围重新发送。",
+  sls_credentials_not_configured: "尚未配置 SLS 凭据，请在用户配置中设置个人或共享 SLS 凭据后重试。",
+  personal_sls_credentials_incomplete: "个人 SLS 凭据不完整，请重新设置完整凭据后重试。",
   model_response_failed: "模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。",
 };
 

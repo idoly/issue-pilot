@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import type { DeploymentConfig } from "../domain/contracts.ts";
+import type { DeploymentConfig, StoredDeploymentConfig, SlsCredentials } from "../domain/contracts.ts";
 import { issues, subjects, userCredentials } from "../db/schema.ts";
 
 export async function loadIssueCredentialOwner(database: Database, issueId: string) {
@@ -13,13 +13,19 @@ export async function loadIssueCredentialOwner(database: Database, issueId: stri
   return { user, credentials };
 }
 
-export function applyProductionCredentials(configuration: DeploymentConfig, environment: string, credentials?: typeof userCredentials.$inferSelect): DeploymentConfig {
-  if (environment !== "prod" || !credentials) return configuration;
-  return {
-    ...configuration,
-    ...(configuration.dms && credentials.productionDmsAuthorization ? { dms: { ...configuration.dms, url: credentials.productionDmsUrl, authorization: credentials.productionDmsAuthorization } } : {}),
-    ...(configuration.sls && credentials.productionSlsAccessKeyId && credentials.productionSlsAccessKeySecret ? { sls: { ...configuration.sls, accessKeyId: credentials.productionSlsAccessKeyId, accessKeySecret: credentials.productionSlsAccessKeySecret } } : {}),
-  };
+export function applyIssueCredentials(configuration: Pick<StoredDeploymentConfig, "dms" | "sls">, environment: string, credentials?: typeof userCredentials.$inferSelect, sharedSls?: SlsCredentials | null): DeploymentConfig {
+  const result: DeploymentConfig = {};
+  if (configuration.dms) result.dms = environment === "prod" && credentials?.productionDmsAuthorization
+    ? { ...configuration.dms, url: credentials.productionDmsUrl, authorization: credentials.productionDmsAuthorization }
+    : configuration.dms;
+  if (configuration.sls) {
+    const personalId = credentials?.productionSlsAccessKeyId, personalSecret = credentials?.productionSlsAccessKeySecret;
+    if (Boolean(personalId) !== Boolean(personalSecret)) throw new Error("personal_sls_credentials_incomplete");
+    const selected = personalId && personalSecret ? { accessKeyId: personalId, accessKeySecret: personalSecret } : sharedSls;
+    if (!selected?.accessKeyId || !selected.accessKeySecret) throw new Error("sls_credentials_not_configured");
+    result.sls = { ...configuration.sls, ...selected };
+  }
+  return result;
 }
 export function credentialStatus(credentials?: typeof userCredentials.$inferSelect) {
   return {

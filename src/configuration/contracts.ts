@@ -12,10 +12,12 @@ export type CapabilityCredentialUpdate<Key extends CapabilityName> =
   | { mode: "preserve" }
   | { mode: "replace"; values: CapabilityCredentialValues<Key> }
   | { mode: "clear" };
-export type ProjectedCapabilitySection<Key extends CapabilityName> = Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialConfigured: boolean };
+type ProjectedCapabilityValue<Key extends CapabilityName> = Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>>;
+export type ProjectedCapabilitySection<Key extends CapabilityName> = ProjectedCapabilityValue<Key> & (Key extends "dms" ? { credentialConfigured: boolean } : { credentialConfigured?: boolean });
 export type ProjectedCapabilityConfiguration = { [Key in CapabilityName]?: ProjectedCapabilitySection<Key> };
 export type CapabilityConfigurationInput = {
-  [Key in CapabilityName]?: Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>> & { credentialUpdate: CapabilityCredentialUpdate<Key> };
+  dms?: ProjectedCapabilityValue<"dms"> & { credentialUpdate: CapabilityCredentialUpdate<"dms"> };
+  sls?: ProjectedCapabilityValue<"sls"> & { credentialUpdate?: { mode: "preserve" } };
 };
 
 export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;

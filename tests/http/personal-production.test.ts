@@ -4,7 +4,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { createApiFixture } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { userCredentials } from "../../src/db/schema.ts";
-import { applyProductionCredentials } from "../../src/configuration/user-credentials.ts";
+import { applyIssueCredentials } from "../../src/configuration/user-credentials.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
 
 test("personal production credentials are private and override each configured production capability independently", async () => {
@@ -17,14 +17,17 @@ test("personal production credentials are private and override each configured p
     assert.equal(JSON.parse(saved.body).productionDmsUrl, "https://personal.example.test/sse");
     const [credentials] = await db.db.select().from(userCredentials);
     const config: DeploymentConfig = { dms: { url: "https://service.example.test/sse", authorization: "Bearer service-token", databases: [] }, sls: { accessKeyId: "service-id", accessKeySecret: "service-secret", region: "cn-hangzhou", project: "orders", logstores: ["application"] } };
-    assert.equal(applyProductionCredentials(config, "test", credentials), config);
-    assert.equal(applyProductionCredentials(config, "prod"), config);
-    const personal = applyProductionCredentials(config, "prod", credentials);
+    const shared = { accessKeyId: "service-id", accessKeySecret: "service-secret" };
+    const testEnvironment = applyIssueCredentials(config, "test", credentials, shared);
+    assert.equal(testEnvironment.dms, config.dms);
+    assert.equal(testEnvironment.sls!.accessKeySecret, "personal-secret");
+    assert.deepEqual(applyIssueCredentials(config, "prod", undefined, shared), config);
+    const personal = applyIssueCredentials(config, "prod", credentials);
     assert.equal(personal.dms!.authorization, "Bearer personal-token"); assert.equal(personal.sls!.accessKeySecret, "personal-secret");
     assert.equal(personal.sls!.project, "orders"); assert.equal(config.dms!.authorization, "Bearer service-token");
     assert.equal((await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { production: { dms: { mode: "clear" } } } })).statusCode, 200);
     const [cleared] = await db.db.select().from(userCredentials);
-    const mixed = applyProductionCredentials(config, "prod", cleared);
+    const mixed = applyIssueCredentials(config, "prod", cleared);
     assert.equal(mixed.dms!.authorization, "Bearer service-token"); assert.equal(mixed.sls!.accessKeySecret, "personal-secret");
     const invalid = await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { production: { dms: { mode: "replace", url: "http://unsafe.example.test", authorization: "Bearer token" } } } });
     assert.equal(invalid.statusCode, 400);

@@ -76,7 +76,7 @@ function serviceDeploymentDraft(deployment: Service["deployments"][number]): Ser
     repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
     ...(deployment.dms ? { dms: { ...deployment.dms, authorization: "", databases: deployment.dms.databases.map(database => ({ ...database })) } } : {}),
     ...(dbhub ? { dbhub: dbhub.map(({ passwordConfigured: _configured, ...target }) => ({ ...target, password: "" })) } : {}),
-    ...(deployment.sls ? { sls: { ...deployment.sls, accessKeyId: "", accessKeySecret: "", logstores: [...deployment.sls.logstores] } } : {}),
+    ...(deployment.sls ? { sls: { region: deployment.sls.region, project: deployment.sls.project, logstores: [...deployment.sls.logstores], ...(deployment.sls.targets ? { targets: deployment.sls.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) } } : {}),
   };
 }
 
@@ -183,7 +183,7 @@ function ServiceDeploymentEditorRow(props: {
   let currentDmsDraft = { url: initialDeployment.dms?.url ?? issuePilotConfig.defaults.dms.sseUrl, authorization: "", credentialConfigured: initialDeployment.dms?.credentialConfigured ?? false, databases: initialDeployment.dms?.databases?.map(database => ({ ...database })) ?? [newDmsDatabaseDraft()] };
   const [dmsDraft, setDmsDraft] = createSignal(currentDmsDraft, { ownedWrite: true });
   const initialSlsTarget = initialDeployment.sls?.targets?.[0] ?? initialDeployment.sls;
-  const [slsDraft, setSlsDraft] = createSignal({ accessKeyId: "", accessKeySecret: "", credentialConfigured: initialDeployment.sls?.credentialConfigured ?? false, region: initialSlsTarget?.region ?? "", project: initialSlsTarget?.project ?? "", logstores: initialSlsTarget?.logstores.join(", ") ?? "",...(initialDeployment.sls?.targets ? { targets: initialDeployment.sls.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) }, { ownedWrite: true });
+  const [slsDraft, setSlsDraft] = createSignal({ region: initialSlsTarget?.region ?? "", project: initialSlsTarget?.project ?? "", logstores: initialSlsTarget?.logstores.join(", ") ?? "",...(initialDeployment.sls?.targets ? { targets: initialDeployment.sls.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) }, { ownedWrite: true });
   const dms = (value = dmsDraft()) => ({ ...value, databases: value.databases.map((database) => ({ instanceAlias: database.instanceAlias.trim(), schemaName: database.schemaName.trim(), instanceId: database.instanceId.trim(), instanceHost: database.instanceHost.trim(), instancePort: database.instancePort.trim(), databaseId: database.databaseId.trim() })) });
   const sls = (value = slsDraft()) => {
     const fields = { region: value.region.trim(), project: value.project.trim(), logstores: value.logstores.split(",").map(item => item.trim()).filter(Boolean) };
@@ -276,13 +276,7 @@ function ServiceDeploymentEditorRow(props: {
         <Match when={key === "sls"}>
           <div class="deployment-capability-settings" role="group" aria-label="SLS 配置">
             <div class="capability-settings-head"><code>SLS</code></div>
-            <section class="capability-connection" aria-label="SLS 连接凭证">
-              <div class="settings-targets-head"><span>连接凭证</span></div>
-              <div class="settings-target-fields">
-                <label><span class="required-field">AccessKey ID</span><PasswordInput aria-label={`sls AccessKey ID ${props.index + 1}`} value={slsDraft().accessKeyId} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeyId: event.currentTarget.value })} /></label>
-                <label><span class="required-field">AccessKey Secret</span><PasswordInput aria-label={`sls AccessKey Secret ${props.index + 1}`} value={slsDraft().accessKeySecret} placeholder={slsDraft().credentialConfigured ? "已配置，留空保留" : ""} onInput={event => updateSls({ accessKeySecret: event.currentTarget.value })} /></label>
-              </div>
-            </section>
+            <p class="settings-target-feedback">使用个人 SLS 凭据，未配置时使用共享凭据。</p>
             <SlsTargetsEditor deploymentIndex={props.index + 1} value={slsDraft().targets ?? [{ name: initialDeployment.environmentKey, region: slsDraft().region, project: slsDraft().project, logstores: slsDraft().logstores.split(",").map(value => value.trim()).filter(Boolean) }]} onChange={targets => updateSls({ targets: targets.length === 1 && !initialDeployment.sls?.targets && targets[0]?.name === initialDeployment.environmentKey ? undefined : targets, region: targets[0]?.region ?? "", project: targets[0]?.project ?? "", logstores: targets[0]?.logstores.join(", ") ?? "" })} />
           </div>
         </Match>

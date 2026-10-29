@@ -113,13 +113,13 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
   }
 });
 
-test("redacts DMS/SLS credentials and enforces preserve, replace and required-credential updates", async () => {
+test("redacts DMS credentials and stores SLS scope without service credentials", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
     const current = (await fixture.app.inject({ method: "GET", url: "/api/config" })).json();
     const repository = current.services[0].repositories[0];
-    const sls = { region: "cn-test", project: "alpha-test", logstores: ["application"], credentialUpdate: { mode: "replace", values: { accessKeyId: "sls-key", accessKeySecret: "sls-secret" } } };
+    const sls = { region: "cn-test", project: "alpha-test", logstores: ["application"] };
     const dms = { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ALPHA", schemaName: "alpha" }], credentialUpdate: { mode: "replace", values: { authorization: "Bearer dms-token" } } };
     const payload = { name: "Alpha configured", description: "active capabilities", repositories: [{ ...repository, alias: "alpha-api" }], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }], capabilities: ["dms", "sls"], dms, sls }] };
     const updated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
@@ -128,20 +128,20 @@ test("redacts DMS/SLS credentials and enforces preserve, replace and required-cr
     const deployment = response.json().services[0].deployments[0];
     assert.deepEqual(deployment.capabilities, ["dms", "sls"]);
     assert.equal(deployment.dms.credentialConfigured, true);
-    assert.equal(deployment.sls.credentialConfigured, true);
+    assert.equal(deployment.sls.credentialConfigured, undefined);
     assert.doesNotMatch(response.body, /dms-token|sls-key|sls-secret/);
     const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], dms: { ...dms, credentialUpdate: { mode: "preserve" } }, sls: { ...sls, credentialUpdate: { mode: "preserve" } } }] } });
     assert.equal(preserved.statusCode, 200, preserved.body);
     const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     try {
       const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string);
-      assert.equal(stored.sls.accessKeySecret, "sls-secret");
+      assert.equal(stored.sls.accessKeySecret, undefined);
       assert.equal(stored.dms.authorization, "Bearer dms-token");
     } finally { sqlite.close(); }
     for (const [section, expected] of [
-      [{ ...sls, credentialUpdate: { mode: "clear" } }, "credential_required"],
+      [{ ...sls, credentialUpdate: { mode: "clear" } }, "service_sls_credentials_not_allowed"],
       [{ ...sls, accessKeySecret: "forbidden", credentialUpdate: { mode: "preserve" } }, "credential_fields_not_allowed"],
-      [{ ...sls, credentialUpdate: { mode: "replace", values: { accessKeyId: "key" } } }, "invalid_credential_replacement"],
+      [{ ...sls, credentialUpdate: { mode: "replace", values: { accessKeyId: "key" } } }, "service_sls_credentials_not_allowed"],
     ] as const) {
       const invalid = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], capabilities: ["sls"], sls: section }] } });
       assert.equal(invalid.statusCode, 400);
@@ -202,7 +202,7 @@ test("does not log configuration credentials when a database write fails", async
     for (const password of ["fixture-private-password", "issue_deployment_required"]) {
       logs.length = 0;
       const response = await fixture.app.inject({ method: "PATCH", url: "/api/services/logging", payload: {
-        name: "Logging", description: "", repositories: [repository], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: repository.alias, baseBranch: "main" }], capabilities: ["sls"], sls: { region: "cn-test", project: "orders-test", logstores: ["application"], credentialUpdate: { mode: "replace", values: { accessKeyId: "fixture-key", accessKeySecret: password } } } }],
+        name: "Logging", description: "", repositories: [repository], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: repository.alias, baseBranch: "main" }], capabilities: ["dms"], dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "LOGGING", schemaName: "logging" }], credentialUpdate: { mode: "replace", values: { authorization: `Bearer ${password}` } } } }],
       } });
       assert.equal(response.statusCode, 500, "credential values must not be interpreted as database errors");
       assert.ok(logs.length > 0);

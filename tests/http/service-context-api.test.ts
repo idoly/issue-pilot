@@ -5,6 +5,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import { createWorkspaceTool } from "../../src/agent/workspace-tool.ts";
 import type { IssueProjectManager } from "../../src/workspace/project.ts";
 import { issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { applyIssueCredentials } from "../../src/configuration/user-credentials.ts";
 import { resolveDeploymentConfiguration } from "../../src/configuration/credentials.ts";
 import { listEnvironmentServices } from "../../src/workspace/issue-services.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
@@ -75,7 +76,7 @@ test("service configuration and generated descriptions share one source without 
     assert.match(JSON.stringify(notes.content), /orders_test/);
     assert.ok(!JSON.stringify(notes).includes("fixture-private-token"));
     await assert.rejects(workspace.execute("include", { operation: "include", service: "other" }, undefined, undefined, {} as never));
-    const scopes = services.filter(row => row.environment.kind !== "dev").map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: resolveDeploymentConfiguration(row.deployment.config) }));
+    const scopes = services.filter(row => row.environment.kind !== "dev").map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyIssueCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key) }));
     const tools = createCapabilityTools({ serviceKey: "entry", environmentKey: "dev", capabilities: ["dms"] }, {}, { serviceScopes: scopes });
     assert.deepEqual(tools.map(tool => tool.name), ["service_query"]);
     assert.ok(!JSON.stringify(tools[0]!.parameters).includes("fixture-private-token"));

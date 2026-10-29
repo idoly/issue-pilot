@@ -22,9 +22,13 @@ SQLite 是业务配置唯一来源，页面和 API 由 owner 读写。配置页�
 
 owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 developer；developer owner 使用本人模型和 Git 身份，缺失或失败直接报告。
 
-个人凭证分 API Key／SSH Key／DMS／SLS 四组，空白保留已有值，单独清除才删除。DMS 的 URL／Authorization、SLS 的两个 Key 各自构成完整组；个人正式组独立、完整覆盖部署组，缺少该组才使用部署配置，不能创建不存在的目标。服务密钥更新通过 `credentialUpdate` 明确 preserve／replace。
+个人凭证分 API Key／SSH Key／DMS／SLS 四组，空白保留已有值，单独清除才删除。DMS 的 URL／Authorization 构成完整组，个人正式组覆盖部署组，缺少时使用部署配置。SLS 在正式和测试环境都优先使用工单 owner 的完整个人组，未配置才使用共享组；个人组不完整或选定凭据失败时不换身份。凭据不能创建不存在的目标。
 
 普通 GET 隐藏配置密钥；开发者选定服务的私有接口可返回约定的 DBHub／MCP 编辑值，native DMS Authorization 和 SLS Key 保持隐藏。配置密钥不进入提示词、工具输入、argv 或普通日志。用户明确请求的业务 token 可作为授权查询结果返回，附来源与时间，不扩大访问范围。
+
+## 共享 SLS 凭据
+
+开发者在“配置 → 用户 → 共享 SLS 凭据”集中设置或清除密钥，留空保存保留原值；接口只返回配置状态和 revision。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。共享组保存在 `application_settings.shared_sls_credentials`，由 `shared_sls_revision` 检测并发修改。
 
 ## 服务和查询目标
 
@@ -36,7 +40,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 | DMS | alias／schema，首次按当前连接严格解析绑定 |
 | SLS | region、project、logstores；`*` 允许该 Project 下任意日志库，查询仍指定一个具体名称 |
 
-环境收起显示能力标签，展开原位显示 DBHub／DMS／SLS 复选框；切换保留草稿，保存才提交。DMS 与 SLS 都按连接凭证、查询目标编辑，DMS 目标显示数据库解析状态。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
+环境收起显示能力标签，展开原位显示 DBHub／DMS／SLS 复选框；切换保留草稿，保存才提交。DMS 维护连接凭证和查询目标，SLS 只维护查询目标，DMS 目标显示数据库解析状态。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
 
 状态响应带整数 revision，页面保存携带版本，冲突返回 `configuration_changed` 并保留输入。API 允许省略 `expectedRevision`，需要冲突保护时应始终提供。仓库 URL 级联更新推进关联服务 revision，显示名变更只更新仓库。相关 Agent／预约活动阻止冲突写入。
 

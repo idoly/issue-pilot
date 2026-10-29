@@ -30,6 +30,10 @@ export interface PersonalCredentialUpdate {
   git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
   production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
 }
+export interface SharedSlsCredentialStatus { configured: boolean; revision: number }
+export type SharedSlsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" });
+export const loadSharedSlsCredentials = () => request<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials");
+export const updateSharedSlsCredentials = (input: SharedSlsCredentialUpdate) => jsonRequest<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials", "PUT", input);
 export interface PersonalCredentialStatus { revision: number; provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
 export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);

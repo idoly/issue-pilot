@@ -49,6 +49,7 @@ vi.mock("../data/client", async (importOriginal) => {
     loadManagedUsers: vi.fn(async () => structuredClone(managedUsers.map(user => ({ ...user, revision: 0 })))),
     loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
+    loadSharedSlsCredentials: vi.fn(async () => ({ configured: true, revision: 0 })),
     loadPersonalCredentials: vi.fn(async () => ({ revision: 0, provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
@@ -703,7 +704,7 @@ describe("issue pilot workspace", () => {
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
     expect(savedService?.repositories[0]).toEqual({ alias: "repository-updated-repository", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[1]?.repositoryBranches).toEqual([{ repositoryAlias: "repository-updated-repository", baseBranch: "release/test" }]);
-    expect(savedService?.deployments[1]?.sls).toEqual({ region: "cn-test", project: "srm-updated", logstores: ["srm"], credentialUpdate: { mode: "preserve" } });
+    expect(savedService?.deployments[1]?.sls).toEqual({ region: "cn-test", project: "srm-updated", logstores: ["srm"] });
     expect(savedService?.deployments[1]?.dms).toBeUndefined();
     expect(JSON.stringify(savedService)).not.toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
@@ -774,7 +775,8 @@ describe("issue pilot workspace", () => {
     fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
     const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
     fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
-    const password = await within(dialog).findByLabelText("sls AccessKey Secret 2");
+    await fireEvent.click(await within(dialog).findByRole("checkbox", { name: "DMS" }));
+    const password = await within(dialog).findByLabelText("dms Token 2");
     fireEvent.input(password, { target: { value: "old-identity-private-draft" } });
     fireEvent.click(screen.getByLabelText("当前用户"));
     fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
@@ -783,7 +785,8 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "编辑" }));
     const currentDialog = await screen.findByRole("dialog", { name: "编辑服务" });
     fireEvent.click(within(currentDialog).getByRole("button", { name: "展开部署2" }));
-    expect(await within(currentDialog).findByLabelText("sls AccessKey Secret 2")).toHaveProperty("value", "");
+    await fireEvent.click(await within(currentDialog).findByRole("checkbox", { name: "DMS" }));
+    expect(await within(currentDialog).findByLabelText("dms Token 2")).toHaveProperty("value", "");
   });
 
   for (const outcome of ["success", "failure"] as const) test(`ignores an old identity's service-save ${outcome} after a new editor opens`, async () => {
@@ -929,7 +932,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
     expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated", logstores: ["*"] }, secondary]);
-    expect(saved.deployments[1]?.sls?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(saved.deployments[1]?.sls?.credentialUpdate).toBeUndefined();
   });
 
   test("edits DMS and SLS targets consistently while preserving credentials and resolved bindings", async () => {
@@ -952,13 +955,14 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
     for (const capability of ["DMS", "SLS"]) {
       const group = await within(dialog).findByRole("group", { name: `${capability} 配置` });
-      expect(within(group).getByRole("region", { name: `${capability} 连接凭证` })).toBeTruthy();
+      if (capability === "DMS") expect(within(group).getByRole("region", { name: "DMS 连接凭证" })).toBeTruthy();
+      else expect(within(group).queryByRole("region", { name: "SLS 连接凭证" })).toBeNull();
       const targets = within(group).getByRole("region", { name: `${capability} 查询目标` });
       expect(within(targets).getByRole("button", { name: `添加 ${capability} 目标` }).textContent).toBe("添加目标");
       fireEvent.click(within(targets).getByRole("button", { name: `移除 ${capability} 2 2` }));
       await waitFor(() => expect(within(targets).getByRole("button", { name: `移除 ${capability} 2 1` })).toHaveProperty("disabled", true));
     }
-    expect(within(dialog).getByLabelText("sls AccessKey Secret 2")).toHaveProperty("placeholder", "已配置，留空保留");
+    expect(within(dialog).queryByLabelText("sls AccessKey Secret 2")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "收起部署2" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "展开部署2" }));
     expect(await within(dialog).findByLabelText("dms database 2-1")).toHaveProperty("value", "srm");
@@ -970,7 +974,7 @@ describe("issue pilot workspace", () => {
     expect(saved.dms?.databases).toEqual([database]);
     expect(saved.dms?.credentialUpdate).toEqual({ mode: "preserve" });
     expect(saved.sls?.targets).toEqual([target]);
-    expect(saved.sls?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(saved.sls?.credentialUpdate).toBeUndefined();
     expect(client.resolveDmsScope).not.toHaveBeenCalled();
   });
 
