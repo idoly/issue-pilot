@@ -24,7 +24,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 个人凭证分 API Key／SSH Key／DMS／SLS 四组，空白保留已有值，单独清除才删除。DMS 的 URL／Authorization、SLS 的两个 Key 各自构成完整组；个人正式组独立、完整覆盖部署组，缺少该组才使用部署配置，不能创建不存在的目标。服务密钥更新通过 `credentialUpdate` 明确 preserve／replace。
 
-普通 GET 隐藏配置密钥；开发者选定服务的私有接口可返回约定的 MySQL／MCP 编辑值，native DMS Authorization 和 SLS Key 保持隐藏。配置密钥不进入提示词、工具输入、argv 或普通日志。用户明确请求的业务 token 可作为授权查询结果返回，附来源与时间，不扩大访问范围。
+普通 GET 隐藏配置密钥；开发者选定服务的私有接口可返回约定的 DBHub／MCP 编辑值，native DMS Authorization 和 SLS Key 保持隐藏。配置密钥不进入提示词、工具输入、argv 或普通日志。用户明确请求的业务 token 可作为授权查询结果返回，附来源与时间，不扩大访问范围。
 
 ## 服务和查询目标
 
@@ -32,11 +32,11 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 | 能力 | 配置 |
 | --- | --- |
-| MySQL | 按环境维护 host、port、username、password、database |
+| DBHub | 选择数据库类型，维护 host、port、username、password、database |
 | DMS | alias／schema，首次按当前连接严格解析绑定 |
 | SLS | region、project、logstores，可维护多个命名目标 |
 
-环境收起显示能力标签，展开原位显示 MySQL／DMS／SLS 复选框；切换保留草稿，保存才提交。DMS 与 SLS 都按连接凭证、查询目标编辑，DMS 目标显示数据库解析状态。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
+环境收起显示能力标签，展开原位显示 DBHub／DMS／SLS 复选框；切换保留草稿，保存才提交。DMS 与 SLS 都按连接凭证、查询目标编辑，DMS 目标显示数据库解析状态。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
 
 状态响应带整数 revision，页面保存携带版本，冲突返回 `configuration_changed` 并保留输入。API 允许省略 `expectedRevision`，需要冲突保护时应始终提供。仓库 URL 级联更新推进关联服务 revision，显示名变更只更新仓库。相关 Agent／预约活动阻止冲突写入。
 
@@ -44,11 +44,13 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 `service_query` 提供 DMS 和 SLS。DMS 使用受校验的只读 SQL 与 SSE；SLS 调用 `aliyun sls GetLogsV2`。目标和凭证由服务端选择，完整性、预算、取消与重试规则统一见[原生证据查询](AGENT.md#原生证据查询)。
 
-### MySQL MCP
+### DBHub
 
-目标存于 `service_deployments.config.mysql`，与生成 MCP 同一事务更新。默认 stdio 模板为 `@benborla29/mcp-server-mysql@2.0.9`，自定义模板按数据库字面值使用。按部署、host、port、database 标识连接，凭证通过 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASS`、`MYSQL_DB` 注入环境，关闭 INSERT／UPDATE／DELETE 开关，保留密码有效空白。
+数据库能力使用固定版本 `@bytebase/dbhub@1.5.0` 的 stdio MCP，页面支持 PostgreSQL、MySQL、MariaDB、SQL Server、Oracle。DBHub 原生另支持 SQLite，本页配置远程数据库；Oracle 的 database 字段填写服务名。
 
-生成连接带 deployment_id，通用 MCP API 不可改删；目标删除按归属处理。连接变更使用全部工单预约关闭旧会话，加载时按服务范围选择。SQL 与结果能力由 MCP 和数据库账号共同决定。
+目标属于 `service_deployments.config.dbhub`，连接与配置在同一事务保存，按部署、类型、host、port、database 标识。页面保留分字段输入；旧 MySQL 字段可读取为 MySQL 类型，保存时使用 DBHub。生成连接归部署所有，通用 MCP API 不可改删，移除目标按归属删除。
+
+DSN 经 URL 编码后只注入 `DBHUB_DSN` 环境，不进入 argv。`scripts/dbhub.toml` 只引用环境变量，设置 execute_sql 只读、最多 1000 行、连接 10 秒、查询 30 秒；数据库账号还应具有实际只读权限。Pi 管理工具发现与进程生命周期，连接变更沿用全部工单预约关闭旧会话。
 
 ### 服务 MCP 与钉钉导入连接
 

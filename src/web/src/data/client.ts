@@ -305,7 +305,7 @@ export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endp
 export const registerRepository = (input: { name: string; url: string }) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
 export const updateRepository = (id: string, input: { name: string; url: string; expectedRevision?: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
 export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const loadServiceMysqlTargets = (key: string) => request<{ revision: number; deployments: Array<{ environmentKey: string; mysql: import("../../../domain/contracts").MysqlTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/mysql-targets`);
+export const loadServiceDbHubTargets = (key: string) => request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
 
 export interface ManagedRepository { revision: number; id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
 export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");

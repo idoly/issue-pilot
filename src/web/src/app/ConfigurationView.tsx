@@ -4,9 +4,9 @@ import { createEffect, createMemo, createSignal, createStore, For, Match, onClea
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { ChevronRight, Pencil, Plus, Trash2 } from "../ui/icons";
-import { loadServiceMysqlTargets, loadRepositories, loadServiceConfigurationDescription, type ServiceInput, type ManagedRepository, createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
+import { loadServiceDbHubTargets, loadRepositories, loadServiceConfigurationDescription, type ServiceInput, type ManagedRepository, createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
 import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
-import { MysqlTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
+import { DbHubTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
 
@@ -30,12 +30,12 @@ function serviceSaveErrorMessage(error: unknown): string {
     dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
     dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
     dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
-    invalid_mysql_host: "请填写 MySQL 主机",
-    invalid_mysql_username: "请填写 MySQL 用户名",
-    invalid_mysql_password: "请填写 MySQL 密码",
-    invalid_mysql_database: "请填写 MySQL 数据库",
-    invalid_mysql_target: "MySQL 主机或端口无效",
-    duplicate_mysql_target: "同一环境的 MySQL 目标不能重复",
+    invalid_dbhub_host: "请填写 DBHub 主机",
+    invalid_dbhub_username: "请填写 DBHub 用户名",
+    invalid_dbhub_password: "请填写 DBHub 密码",
+    invalid_dbhub_database: "请填写 DBHub 数据库",
+    invalid_dbhub_target: "DBHub 主机或端口无效",
+    duplicate_dbhub_target: "同一环境的 DBHub 目标不能重复",
     invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
     credential_required: "该能力必须配置凭据",
     credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
@@ -62,7 +62,7 @@ interface ServiceRepositoryDraft {
 
 type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
   environmentKey: string;
-  mysql?: import("../../../domain/contracts").MysqlTarget[];
+  dbhub?: import("../../../domain/contracts").DbHubTarget[];
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
 };
 
@@ -70,17 +70,18 @@ type DmsDatabaseDraft = NonNullable<ServiceDeploymentDraft["dms"]>["databases"][
 const newDmsDatabaseDraft = (): DmsDatabaseDraft => ({ instanceAlias: "", schemaName: "", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" });
 
 function serviceDeploymentDraft(deployment: Service["deployments"][number]): ServiceDeploymentDraft {
+  const dbhub = deployment.dbhub ?? deployment.mysql?.map(target => ({ ...target, type: "mysql" as const }));
   return {
     environmentKey: deployment.environmentKey,
     repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
     ...(deployment.dms ? { dms: { ...deployment.dms, authorization: "", databases: deployment.dms.databases.map(database => ({ ...database })) } } : {}),
-    ...(deployment.mysql ? { mysql: deployment.mysql.map(({ passwordConfigured: _configured, ...target }) => ({ ...target, password: "" })) } : {}),
+    ...(dbhub ? { dbhub: dbhub.map(({ passwordConfigured: _configured, ...target }) => ({ ...target, password: "" })) } : {}),
     ...(deployment.sls ? { sls: { ...deployment.sls, accessKeyId: "", accessKeySecret: "", logstores: [...deployment.sls.logstores] } } : {}),
   };
 }
 
 function serializeServiceDeployment(deployment: ServiceDeploymentDraft, repositories: ServiceRepositoryDraft[]): ServiceInput["deployments"][number] {
-  return { environmentKey: deployment.environmentKey, capabilities: [...deployment.capabilities], repositoryBranches: deployment.environmentKey === "dev" ? [] : deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...(deployment.mysql?.length ? { mysql: deployment.mysql } : {}), ...serializeCapabilityDraft(deployment) };
+  return { environmentKey: deployment.environmentKey, capabilities: [...deployment.capabilities], repositoryBranches: deployment.environmentKey === "dev" ? [] : deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...(deployment.dbhub?.length ? { dbhub: deployment.dbhub } : {}), ...serializeCapabilityDraft(deployment) };
 }
 
 function deploymentValidationError(deployment: ServiceDeploymentDraft): string {
@@ -175,10 +176,10 @@ function ServiceDeploymentEditorRow(props: {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
   const [repositoryBranches, setRepositoryBranches] = createSignal(initialDeployment.repositoryBranches, { ownedWrite: true });
   const [selectedCapabilities, setSelectedCapabilities] = createSignal<CapabilityName[]>([...initialDeployment.capabilities], { ownedWrite: true });
-  const [mysqlEnabled, setMysqlEnabled] = createSignal(Boolean(initialDeployment.mysql?.length), { ownedWrite: true });
-  let mysqlDraft = initialDeployment.mysql ?? [];
-  const abilityNames = { dms: "DMS", sls: "SLS", mysql: "MySQL" };
-  const selectedAbilities = () => [...selectedCapabilities(), ...(mysqlEnabled() ? ["mysql" as const] : [])];
+  const [dbhubEnabled, setDbHubEnabled] = createSignal(Boolean(initialDeployment.dbhub?.length), { ownedWrite: true });
+  let dbhubDraft = initialDeployment.dbhub ?? [];
+  const abilityNames = { dms: "DMS", sls: "SLS", dbhub: "DBHub" };
+  const selectedAbilities = () => [...selectedCapabilities(), ...(dbhubEnabled() ? ["dbhub" as const] : [])];
   let currentDmsDraft = { url: initialDeployment.dms?.url ?? issuePilotConfig.defaults.dms.sseUrl, authorization: "", credentialConfigured: initialDeployment.dms?.credentialConfigured ?? false, databases: initialDeployment.dms?.databases?.map(database => ({ ...database })) ?? [newDmsDatabaseDraft()] };
   const [dmsDraft, setDmsDraft] = createSignal(currentDmsDraft, { ownedWrite: true });
   const initialSlsTarget = initialDeployment.sls?.targets?.[0] ?? initialDeployment.sls;
@@ -223,18 +224,18 @@ function ServiceDeploymentEditorRow(props: {
   };
   const removeDmsDatabase = (database: DmsDatabaseDraft) => updateDms({ databases: dmsDraft().databases.filter((candidate) => candidate !== database) });
   const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
-  const addCapability = (key: CapabilityName | "mysql") => {
-    if (key === "mysql") {
-      if (!mysqlDraft.length) mysqlDraft = [{ host: "", port: 3306, username: "", password: "", database: "" }];
-      update({ mysql: mysqlDraft }); setMysqlEnabled(true); return;
+  const addCapability = (key: CapabilityName | "dbhub") => {
+    if (key === "dbhub") {
+      if (!dbhubDraft.length) dbhubDraft = [{ type: "postgres", host: "", port: 5432, username: "", password: "", database: "" }];
+      update({ dbhub: dbhubDraft }); setDbHubEnabled(true); return;
     }
     if (selectedCapabilities().includes(key)) return;
     const capabilities = [...selectedCapabilities(), key];
     setSelectedCapabilities(capabilities);
     update({ capabilities, ...(key === "dms" ? { dms: dms() } : {}), ...(key === "sls" ? { sls: sls() } : {}) });
   };
-  const removeCapability = (key: CapabilityName | "mysql") => {
-    if (key === "mysql") { setMysqlEnabled(false); update({ mysql: [] }); return; }
+  const removeCapability = (key: CapabilityName | "dbhub") => {
+    if (key === "dbhub") { setDbHubEnabled(false); update({ dbhub: [] }); return; }
     const capabilities = selectedCapabilities().filter((capability) => capability !== key);
     setSelectedCapabilities(capabilities);
     update({ capabilities });
@@ -246,7 +247,7 @@ function ServiceDeploymentEditorRow(props: {
         <Show when={!codeOnly} fallback={<small>分支继承正式 · 查询继承正式/测试</small>}>
           <Show when={expanded()} fallback={<div class="capability-labels"><For each={selectedAbilities()}>{key => <code>{abilityNames[key]}</code>}</For></div>}>
             <div class="deployment-capabilities" role="group" aria-label={`${props.environmentName}能力选择`}>
-              <For each={["mysql", ...CAPABILITY_KEYS] as const}>{key => <label class="deployment-ability-choice"><input type="checkbox" checked={selectedAbilities().includes(key)} onChange={event => event.currentTarget.checked ? addCapability(key) : removeCapability(key)} /><span>{abilityNames[key]}</span></label>}</For>
+              <For each={["dbhub", ...CAPABILITY_KEYS] as const}>{key => <label class="deployment-ability-choice"><input type="checkbox" checked={selectedAbilities().includes(key)} onChange={event => event.currentTarget.checked ? addCapability(key) : removeCapability(key)} /><span>{abilityNames[key]}</span></label>}</For>
             </div>
           </Show>
         </Show>
@@ -254,7 +255,7 @@ function ServiceDeploymentEditorRow(props: {
       <Button class="icon-button deployment-toggle" type="text" shape="circle" icon={<ChevronRight size={15} />} title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((current) => !current)} />
       <Show when={expanded()}>
       <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Show when={codeOnly} fallback={<Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} />}><code class="inherited-branch" aria-label={`${props.repositoryName(repository)} 开发基线`}>{props.productionBranches().find(branch => branch.repositoryKey === repository.key)?.baseBranch.trim() || "待配置正式分支"}</code></Show></label>}</For></div>
-      <Show when={!codeOnly && mysqlEnabled()}><MysqlTargetsEditor value={currentDeployment.mysql ?? []} environment={initialDeployment.environmentKey} onChange={mysql => { mysqlDraft = mysql; update({ mysql }); }} /></Show>
+      <Show when={!codeOnly && dbhubEnabled()}><DbHubTargetsEditor value={currentDeployment.dbhub ?? []} environment={initialDeployment.environmentKey} onChange={dbhub => { dbhubDraft = dbhub; update({ dbhub }); }} /></Show>
       <For each={codeOnly ? [] : CAPABILITY_KEYS.filter(key => selectedCapabilities().includes(key))}>{key => <Switch>
         <Match when={key === "dms"}>
           <div class="deployment-capability-settings" role="group" aria-label="DMS 配置">
@@ -294,7 +295,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const { currentUser, configuration, configurationLoaded, refreshCatalog, refreshConfiguration, configurationError: resourceError } = useApplicationResources();
   const canConfigure = () => currentUser()?.role === "developer";
   let editorGeneration = 0, serviceRevisionDraft: number | undefined;
-  const [mysqlLoading, setMysqlLoading] = createSignal(false, { ownedWrite: true });
+  const [dbhubLoading, setDbHubLoading] = createSignal(false, { ownedWrite: true });
   const [saveConflict, setSaveConflict] = createSignal(false, { ownedWrite: true });
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
   const [serviceName, setServiceName] = createSignal("", { ownedWrite: true });
@@ -341,7 +342,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     return existing ? serviceDeploymentDraft(existing) : { environmentKey, capabilities: [], repositoryBranches: service?.repositories.map(repository => ({ repositoryKey: repository.id, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })) ?? [] };
   });
   const resetServiceForm = () => {
-    serviceRevisionDraft = undefined; setMysqlLoading(false); setSaveConflict(false);
+    serviceRevisionDraft = undefined; setDbHubLoading(false); setSaveConflict(false);
     setServiceName(""); setDescription(""); setServiceRepositories([]); setServiceDeployments(() => environmentDrafts()); setEditingServiceKey(null);
   };
   const closeServiceEditor = () => {
@@ -378,21 +379,21 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const openServiceEditor = (service: Service) => {
     loadRepositoryChoices();
     const owner = ++editorGeneration;
-    serviceRevisionDraft = service.revision; setMysqlLoading(false); setSaveConflict(false);
+    serviceRevisionDraft = service.revision; setDbHubLoading(false); setSaveConflict(false);
     setEditingServiceKey(service.key);
     setServiceName(service.name); setDescription(service.description);
     setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, key: repository.id, alias: repository.alias, url: repository.url })));
     const deployments = environmentDrafts(service);
     setServiceDeployments(() => deployments);
     setConfigurationError(""); setServiceOpen(true);
-    if (service.deployments.some(deployment => deployment.mysql?.length)) {
-      setMysqlLoading(true);
-      void loadServiceMysqlTargets(service.key).then(value => {
+    if (service.deployments.some(deployment => deployment.dbhub?.length || deployment.mysql?.length)) {
+      setDbHubLoading(true);
+      void loadServiceDbHubTargets(service.key).then(value => {
         if (owner !== editorGeneration) return;
         if (value.revision !== service.revision) throw new Error("configuration_changed");
-        const loaded = environmentDrafts(service).map(deployment => ({ ...deployment, mysql: value.deployments.find(row => row.environmentKey === deployment.environmentKey)?.mysql ?? [] }));
+        const loaded = environmentDrafts(service).map(deployment => ({ ...deployment, dbhub: value.deployments.find(row => row.environmentKey === deployment.environmentKey)?.dbhub ?? [] }));
         setServiceDeployments(() => loaded);
-        setMysqlLoading(false);
+        setDbHubLoading(false);
       }).catch(error => { if (owner === editorGeneration) setConfigurationError(serviceSaveErrorMessage(error)); });
     }
   };
@@ -427,7 +428,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     window.requestAnimationFrame(() => serviceErrorElement?.scrollIntoView?.({ block: "nearest", behavior }));
   };
   const saveService = async () => {
-    if (saving() || mysqlLoading() || !canConfigure()) return;
+    if (saving() || dbhubLoading() || !canConfigure()) return;
     const owner = editorGeneration;
     const validationError = serviceValidationError();
     if (validationError) { showServiceSaveError(validationError); return; }
@@ -475,19 +476,19 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
           <ServiceOverview service={service()} configurationDescription={visibleConfigurationDescription()} repositories={repositoryChoices()} environments={configuration().environments} />
         </>)}</Show>
       </section>
-      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} okButtonProps={{ disabled: mysqlLoading() || repositoryLoading() || Boolean(repositoryError()) }} onOk={() => { void saveService(); }} onCancel={closeServiceEditor}>
+      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} okButtonProps={{ disabled: dbhubLoading() || repositoryLoading() || Boolean(repositoryError()) }} onOk={() => { void saveService(); }} onCancel={closeServiceEditor}>
         <div class="service-form">
           <Show when={configurationError()}>
             <div ref={element => { serviceErrorElement = element; }} class="create-error" role="alert">
               {configurationError()}
-              <Show when={saveConflict() || mysqlLoading()}>
+              <Show when={saveConflict() || dbhubLoading()}>
                 <Button size="small" onClick={() => { closeServiceEditor(); void refreshConfiguration().catch(() => undefined); }}>重新加载</Button>
               </Show>
             </div>
           </Show>
           <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
           <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">关联仓库</strong><span>可多选，仓库名称和地址统一在仓库配置中维护</span></div><span class="service-repository-count">已选 {serviceRepositories().length} 个</span></div><Show when={repositoryError()}><div class="workspace-error" role="alert">仓库加载失败：{repositoryError()}<Button size="small" onClick={loadRepositoryChoices}>重试</Button></div></Show><Select mode="multiple" aria-label="关联仓库" placeholder="选择已登记仓库（可多选）" loading={repositoryLoading()} value={serviceRepositories().map((repository) => repository.url)} options={repositoryOptions()} showSearch={{ filterOption: (query, option) => `${option.label} ${option.url}`.toLowerCase().includes(query.trim().toLowerCase()) }} optionRender={(option) => <span class="service-repository-option"><strong>{option.label}</strong><code>{option.url}</code></span>} onChange={selectRepositories} maxTagCount={4} listHeight={360} notFoundContent="暂无可选仓库，请先在仓库配置中添加" /><Show when={!repositoryLoading() && !repositoryError() && !repositoryChoices().length}><p class="service-form-empty">暂无已登记仓库，请先在“配置 → 仓库”中添加。</p></Show></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>开发基线继承正式分支；查询来源保持正式／测试</span></div></div><div class="service-deployment-editor"><Show when={!mysqlLoading()} fallback={<Skeleton active paragraph={{ rows: 3 }} />}><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow serviceKey={editingServiceKey()} index={index()} deployment={deployment} productionBranches={() => serviceDeployments.find(row => row.environmentKey === "prod")?.repositoryBranches ?? []} repositories={serviceRepositories} repositoryName={repositoryName} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} />}</For></Show></div></div>
+          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>开发基线继承正式分支；查询来源保持正式／测试</span></div></div><div class="service-deployment-editor"><Show when={!dbhubLoading()} fallback={<Skeleton active paragraph={{ rows: 3 }} />}><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow serviceKey={editingServiceKey()} index={index()} deployment={deployment} productionBranches={() => serviceDeployments.find(row => row.environmentKey === "prod")?.repositoryBranches ?? []} repositories={serviceRepositories} repositoryName={repositoryName} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} />}</For></Show></div></div>
           <label class="service-form-field"><span>服务描述（Markdown）</span><TextArea aria-label="项目描述" placeholder="记录业务知识、排查步骤和查询范例；分支和公开能力参数会自动附加到展示及 AI 读取的描述中。" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
           <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { const target = { kind: "service" as const, key: editingServiceKey()!, name: serviceName() }; closeServiceEditor(); setDeleteTarget(target); }}>删除服务</Button></div></Show>
         </div>

@@ -85,8 +85,8 @@ test("MySQL targets save atomically with deployment-owned global MCP connections
     try {
       const rows = await connection.db.select().from(mcpServices);
       assert.equal(rows.length, 1); assert.ok(rows[0]!.deploymentId);
-      assert.equal(rows[0]!.stdio!.env.MYSQL_PASS, password);
-      assert.equal(rows[0]!.stdio!.env.ALLOW_DELETE_OPERATION, "false");
+      assert.equal(decodeURIComponent(new URL(rows[0]!.stdio!.env.DBHUB_DSN!).password), password);
+      assert.match(rows[0]!.stdio!.args[0]!, /@bytebase\/dbhub\/dist\/index\.js$/);
       assert.doesNotMatch(JSON.stringify(rows[0]!.stdio!.args), /private mysql/);
       await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });
       assert.equal((await f.app.inject({ method: "GET", url: "/api/services/mysql/mysql-targets", headers: { "x-issue-pilot-subject": "product" } })).statusCode, 403);

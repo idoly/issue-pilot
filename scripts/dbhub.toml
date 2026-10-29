@@ -1,0 +1,19 @@
+[[sources]]
+id = "database"
+dsn = "${DBHUB_DSN}"
+connection_timeout = 10
+query_timeout = 30
+
+[[tools]]
+name = "search_objects"
+source = "database"
+
+[[tools]]
+name = "execute_sql"
+source = "database"
+readonly = true
+max_rows = 1000
+
+[[tools]]
+name = "explain_sql"
+source = "database"

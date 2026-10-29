@@ -73,9 +73,19 @@ export interface AgentFooterStats {
 }
 
 export interface MysqlTarget { host: string; port: number; username: string; password: string; database: string }
+export const DBHUB_DATABASES = [
+  { value: "postgres", label: "PostgreSQL", port: 5432 },
+  { value: "mysql", label: "MySQL", port: 3306 },
+  { value: "mariadb", label: "MariaDB", port: 3306 },
+  { value: "sqlserver", label: "SQL Server", port: 1433 },
+  { value: "oracle", label: "Oracle", port: 1521 },
+] as const;
+export type DbHubDatabaseType = typeof DBHUB_DATABASES[number]["value"];
+export interface DbHubTarget extends MysqlTarget { type: DbHubDatabaseType }
 
 export interface CapabilityConfiguration {
   mysql?: MysqlTarget[];
+  dbhub?: DbHubTarget[];
   dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
   sls?: { accessKeyId: string; accessKeySecret: string; region: string; project: string; logstores: string[]; targets?: Array<{ name: string; region: string; project: string; logstores: string[] }> };
 }

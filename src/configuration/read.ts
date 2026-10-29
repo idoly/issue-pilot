@@ -109,6 +109,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
           if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
           return {
             ...projectCapabilityConfiguration(deploymentConfig),
+            ...(deploymentConfig.dbhub ? { dbhub: deploymentConfig.dbhub.map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })) } : {}),
             ...(deploymentConfig.mysql ? { mysql: deploymentConfig.mysql.map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })) } : {}),
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),

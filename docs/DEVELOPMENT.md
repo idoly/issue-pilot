@@ -17,6 +17,8 @@
 | Python | 应用 `.venv`，openpyxl 3.1.5、et_xmlfile 2.0.0 |
 | 容器 Git／aliyun CLI | 2.56.0／3.5.2 |
 
+DBHub 使用固定版本 stdio 工具，静态只读配置位于 `scripts/dbhub.toml`，服务目标与生成连接归 `configuration/dbhub.ts` 管理。
+
 准确 npm 版本以 [package.json](../package.json) 和 [package-lock.json](../package-lock.json) 为准，Python 以 [requirements.txt](../requirements.txt) 为准。Pi、node-forge 和 Zod 回补由[依赖补丁](../patches/README.md)统一说明，不能跳过 postinstall。
 
 ## 修改入口

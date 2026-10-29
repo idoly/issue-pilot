@@ -1,6 +1,6 @@
 import { createSignal, For, untrack } from "solid-js";
-import { Button, Input } from "../ui";
-import type { MysqlTarget } from "../../../domain/contracts";
+import { Button, Input, Select } from "../ui";
+import { DBHUB_DATABASES, type DbHubTarget } from "../../../domain/contracts";
 
 type SlsTarget = { name: string; region: string; project: string; logstores: string[] };
 
@@ -12,11 +12,11 @@ function focusNewTarget(root: HTMLElement | undefined) {
   });
 }
 
-export function MysqlTargetsEditor(props: { value: MysqlTarget[]; environment: string; onChange(value: MysqlTarget[]): void }) {
+export function DbHubTargetsEditor(props: { value: DbHubTarget[]; environment: string; onChange(value: DbHubTarget[]): void }) {
   let root: HTMLElement | undefined;
   const [targets, setTargets] = createSignal(untrack(() => props.value.map(value => ({ ...value }))), { ownedWrite: true });
-  const emit = (next: MysqlTarget[]) => { setTargets(next); props.onChange(next.map(value => ({ ...value }))); };
-  return <section ref={value => { root = value; }} class="settings-targets"><div class="settings-targets-head"><code>mysql</code><Button size="small" onClick={() => { emit([...targets(), { host: "", port: 3306, username: "", password: "", database: "" }]); focusNewTarget(root); }}>添加 MySQL</Button></div><For each={targets()}>{(target, index) => <div class="settings-target-row"><div class="settings-target-actions"><Button type="text" danger size="small" aria-label={`移除 MySQL ${props.environment} ${index() + 1}`} onClick={() => emit(targets().filter(value => value !== target))}>移除</Button></div><div class="settings-target-fields"><For each={["host", "port", "username", "password", "database"] as const}>{key => <label><span>{key}</span><Input aria-label={`mysql ${props.environment} ${index() + 1} ${key}`} type={key === "port" ? "number" : "text"} value={target[key]} onInput={event => { Object.assign(target, { [key]: key === "port" ? Number(event.currentTarget.value) : event.currentTarget.value }); emit([...targets()]); }} /></label>}</For></div></div>}</For></section>;
+  const emit = (next: DbHubTarget[]) => { setTargets(next); props.onChange(next.map(value => ({ ...value }))); };
+  return <section ref={value => { root = value; }} class="settings-targets"><div class="settings-targets-head"><code>DBHub</code><Button size="small" onClick={() => { emit([...targets(), { type: "postgres", host: "", port: 5432, username: "", password: "", database: "" }]); focusNewTarget(root); }}>添加 DBHub</Button></div><p class="settings-target-feedback">支持 PostgreSQL、MySQL、MariaDB、SQL Server、Oracle；DBHub 另支持 SQLite，本页配置远程数据库。</p><For each={targets()}>{(target, index) => <div class="settings-target-row"><div class="settings-target-actions"><Button type="text" danger size="small" aria-label={`移除 DBHub ${props.environment} ${index() + 1}`} onClick={() => emit(targets().filter(value => value !== target))}>移除</Button></div><div class="settings-target-fields"><label><span>数据库类型</span><Select aria-label={`dbhub ${props.environment} ${index() + 1} type`} value={target.type} options={DBHUB_DATABASES.map(database => ({ value: database.value, label: database.label }))} onChange={value => { const database = DBHUB_DATABASES.find(database => database.value === value); if (!database) return; emit(targets().map(value => value === target ? { ...target, type: database.value, port: database.port } : value)); }} /></label><For each={["host", "port", "username", "password", "database"] as const}>{key => <label><span>{key}</span><Input aria-label={`dbhub ${props.environment} ${index() + 1} ${key}`} type={key === "port" ? "number" : "text"} value={target[key]} onInput={event => { Object.assign(target, { [key]: key === "port" ? Number(event.currentTarget.value) : event.currentTarget.value }); emit([...targets()]); }} /></label>}</For></div></div>}</For></section>;
 }
 
 export function SlsTargetsEditor(props: { value: SlsTarget[]; deploymentIndex: number; onChange(value: SlsTarget[]): void }) {

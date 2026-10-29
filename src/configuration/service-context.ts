@@ -19,6 +19,7 @@ function section(title: string, fields: readonly Field[]): string {
 export function deploymentContext(environment: { key: string; name: string }, configuration: StoredDeploymentConfig, mcp: readonly { id: string; name: string; url: string; transport: string; enabled: boolean; deploymentId?: string | null }[], mcpCredentials: readonly { id: string; authorization: string }[] = [], includePrivateMysql = false): string {
   const sections = [`### ${environment.name}环境`];
   if (environment.key === "dev") return [...sections, "代码基线继承正式分支，不单独设置；查询能力继承正式和测试环境，来源保持只读。"].join("\n\n");
+  if (configuration.dbhub) for (const target of configuration.dbhub) sections.push(section("DBHub", [["数据库类型", target.type], ["host", target.host], ["port", target.port], ["username", target.username], ...(includePrivateMysql ? [["password", target.password] as Field] : []), ["database", target.database]]));
   if (configuration.mysql) for (const target of configuration.mysql) sections.push(section("MySQL", [["host", target.host], ["port", target.port], ["username", target.username], ...(includePrivateMysql ? [["password", target.password] as Field] : []), ["database", target.database]]));
   const value = projectCapabilityConfiguration(configuration);
   if (value.dms) value.dms.databases.forEach((database, index) => sections.push(section(value.dms!.databases.length > 1 ? `DMS · 数据库 ${index + 1}` : "DMS", [["alias", database.instanceAlias], ["schema", database.schemaName]])));
@@ -27,7 +28,7 @@ export function deploymentContext(environment: { key: string; name: string }, co
     if (v.targets) for (const target of v.targets) sections.push(section(`SLS · ${target.name}`, [["region", target.region], ["project", target.project], ["logstores", target.logstores]]));
     else sections.push(section("SLS", [["region", v.region], ["project", v.project], ["logstores", v.logstores]]));
   }
-  for (const row of mcp.filter(row => row.enabled && !row.id.startsWith("mysql-"))) sections.push(section("MCP", [["名称", row.name], ["地址", publicMcpUrl(row.url)], ["协议", row.transport === "stdio" ? "stdio（本地进程）" : row.transport === "streamable_http" ? "Streamable HTTP" : "SSE"], ["Authorization", mcpCredentials.find(secret => secret.id === row.id)?.authorization]]));
+  for (const row of mcp.filter(row => row.enabled && !row.id.startsWith("mysql-") && !row.id.startsWith("dbhub-"))) sections.push(section("MCP", [["名称", row.name], ["地址", publicMcpUrl(row.url)], ["协议", row.transport === "stdio" ? "stdio（本地进程）" : row.transport === "streamable_http" ? "Streamable HTTP" : "SSE"], ["Authorization", mcpCredentials.find(secret => secret.id === row.id)?.authorization]]));
   if (sections.length === 1) sections.push("未配置外部查询能力。");
   return sections.join("\n\n");
 }

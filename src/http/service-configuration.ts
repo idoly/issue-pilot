@@ -1,4 +1,5 @@
-import { parseMysqlTargets, saveMysqlConnections } from "../configuration/mysql.ts";
+import { parseDbHubTargets, saveDbHubConnections, deploymentDbHubTargets } from "../configuration/dbhub.ts";
+import { parseMysqlTargets } from "../configuration/mysql.ts";
 import { or, eq, inArray, sql } from "drizzle-orm";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { resolveConfiguredCapabilitySections } from "../configuration/credentials.ts";
@@ -24,9 +25,12 @@ function parseServiceDeployment(deployment: Record<string, unknown>, repositoryA
   let config: StoredDeploymentConfig;
   try {
     config = resolveConfiguredCapabilitySections(deployment, capabilities, existing);
+    if (deployment.dbhub !== undefined && deployment.mysql !== undefined) throw new ApiError(400, "conflicting_database_targets");
+    const dbhub = parseDbHubTargets(deployment.dbhub);
     const mysql = parseMysqlTargets(deployment.mysql);
-    if (environmentKey === "dev" && mysql.length) throw new ApiError(400, "development_capabilities_inherited");
+    if (environmentKey === "dev" && (mysql.length || dbhub.length)) throw new ApiError(400, "development_capabilities_inherited");
     if (mysql.length) config.mysql = mysql;
+    if (dbhub.length) config.dbhub = dbhub;
   } catch (error) {
     if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
     throw error;
@@ -81,11 +85,11 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
 }
 
 async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: string, environmentId: string, existing: typeof serviceDeployments.$inferSelect | undefined, input: ReturnType<typeof parseServiceDeployment>, repositories: Map<string, { id: string }>) {
-  const retired = Object.fromEntries(Object.entries(existing?.config ?? {}).filter(([key]) => key !== "mysql" && !CAPABILITY_KEYS.includes(key as CapabilityName)));
+  const retired = Object.fromEntries(Object.entries(existing?.config ?? {}).filter(([key]) => key !== "mysql" && key !== "dbhub" && !CAPABILITY_KEYS.includes(key as CapabilityName)));
   const values = { config: { ...retired, ...input.config }, updatedAt: new Date() };
   if (existing && JSON.stringify(existing.config) === JSON.stringify(values.config)) {
     const branches = await executor.select().from(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, existing.id));
-    if (branches.length === input.repositoryBranches.length && input.repositoryBranches.every(branch => branches.some(current => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))) { await saveMysqlConnections(executor, existing.id, input.config.mysql ?? []); return { deployment: existing, changed: false }; }
+    if (branches.length === input.repositoryBranches.length && input.repositoryBranches.every(branch => branches.some(current => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))) { await saveDbHubConnections(executor, existing.id, deploymentDbHubTargets(input.config)); return { deployment: existing, changed: false }; }
   }
   const [saved] = existing
     ? await executor.update(serviceDeployments).set(values).where(eq(serviceDeployments.id, existing.id)).returning()
@@ -93,7 +97,7 @@ async function applyServiceDeployment(executor: DatabaseExecutor, serviceId: str
   if (!saved) throw new Error("deployment_save_failed");
   await executor.delete(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, saved.id));
   if (input.repositoryBranches.length) await executor.insert(serviceDeploymentRepositories).values(input.repositoryBranches.map(branch => ({ deploymentId: saved.id, repositoryId: repositories.get(branch.repositoryAlias)!.id, baseBranch: branch.baseBranch })));
-  await saveMysqlConnections(executor, saved.id, input.config.mysql ?? []);
+  await saveDbHubConnections(executor, saved.id, deploymentDbHubTargets(input.config));
   return { deployment: saved, changed: true };
 }
 

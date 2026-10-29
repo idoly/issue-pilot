@@ -37,6 +37,7 @@ export interface ConfigurationCatalog {
 }
 
 interface ServiceDeployment extends ProjectedCapabilityConfiguration {
+  dbhub?: Array<Omit<NonNullable<CapabilityConfiguration["dbhub"]>[number], "password"> & { passwordConfigured: boolean }>;
   mysql?: Array<Omit<NonNullable<CapabilityConfiguration["mysql"]>[number], "password"> & { passwordConfigured: boolean }>;
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
@@ -70,6 +71,7 @@ export interface ServiceConfigurationInput {
   description: string;
   repositories: Array<{ id?: string; alias: string; url: string }>;
   deployments: Array<CapabilityConfigurationInput & {
+    dbhub?: CapabilityConfiguration["dbhub"];
     mysql?: CapabilityConfiguration["mysql"];
     environmentKey: string;
     repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;

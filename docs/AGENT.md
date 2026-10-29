@@ -36,11 +36,11 @@ DMS 在连接前校验只读 SQL，使用原生 SSE。一次操作预算 120 秒
 
 完整导出使用普通工作文件，协议收尾成功后才原子替换旧文件。导出失败不重查 SQL，关闭失败保留旧交付。Agent 指引要求 DMS 批次串行且保留间隔：同批主动重查一次仍失败则拆分／暂停；连续两次恢复探测失败或单轮累计五次调用失败时保存断点并停止，成功探测不清零累计失败数。这是模型工作指引，不是服务端限流器。
 
-### SLS 与 MySQL
+### SLS 与 DBHub
 
 SLS 调用固定 `aliyun sls GetLogsV2`，0600 临时配置注入选定凭证，禁用 CLI 自动重试并使用 HTTPS；结束或取消时删除配置，不改变宿主默认 profile。只接受 meta.progress=Complete；SQL 分析按 LIMIT／ORDER BY 返回一页，普通查询按 offset 分页。后页失败即整次失败，未知 CLI 错误隐藏，已知 code 转稳定诊断。超时／取消终止进程组并清理凭证，CLI 缺失报 `sls_cli_not_available`。
 
-MySQL 由部署 MCP 与数据库账号提供能力，配置与归属见[MySQL MCP](CONFIGURATION.md#mysql-mcp)。SLS／DMS 查询到的业务 token 与用于连接系统的配置密钥遵循不同展示规则，见[凭证与 owner](CONFIGURATION.md#凭证与-owner)。
+DBHub 由部署 MCP 与数据库账号提供只读查询，支持的数据库、配置和归属见[DBHub](CONFIGURATION.md#dbhub)。SLS／DMS 查询到的业务 token 与用于连接系统的配置密钥遵循不同展示规则，见[凭证与 owner](CONFIGURATION.md#凭证与-owner)。
 
 ## MCP 与 Codemode
 
