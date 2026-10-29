@@ -107,6 +107,6 @@ Monaco 组件负责释放 editor／model，保留 SHA-256 冲突、CRLF、自动
 
 图标使用 Phosphor SVG，编辑器 Codicon 按需加载，文件图标沿用 Material Icon Theme。Geist 字体、来源与许可证在 ui/assets 维护；更新同步 provenance 和许可证，保留焦点、减少动效及手机触控尺寸。
 
-真实浏览器采用 Operator 工具或临时镜像，记录工具版本、尺寸和结果；使用独立演示数据。截图位于 [images](images/README.md)，源码树、文件 hash 和验证来源写入 manifest。workspace.jpg 还供图片读取测试使用，替换时运行 `tests/agent/codemode.test.ts`。
+真实浏览器采用 Operator 工具或临时镜像，记录工具版本、尺寸和结果；使用独立演示数据。弹窗不因点击遮罩关闭，通过关闭、取消或 Esc 退出；保存期间保留关闭限制。截图位于 [images](images/README.md)，源码树、文件 hash 和验证来源写入 manifest。workspace.jpg 还供图片读取测试使用，替换时运行 `tests/agent/codemode.test.ts`。
 
 文档检查链接、锚点、页面阅读效果与代码契约；流程使用简短文字步骤。纯文档变更按此范围验证，完成后清理临时页面、服务和构建，只保留有用结果。

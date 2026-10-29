@@ -61,6 +61,26 @@ describe("local UI controls", () => {
     view.unmount();
   });
 
+  it("keeps a dialog and its draft when clicking or dragging onto the backdrop", async () => {
+    const [open, setOpen] = createSignal(true, { ownedWrite: true });
+    const cancel = vi.fn(() => setOpen(false));
+    render(() => <Modal open={open()} title="编辑" onOk={() => {}} onCancel={cancel}><Input aria-label="草稿" /></Modal>);
+    const input = screen.getByLabelText("草稿");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    await fireEvent.input(input, { target: { value: "未保存内容" } });
+    const mask = screen.getByRole("dialog").parentElement!;
+    fireEvent.click(mask);
+    fireEvent.mouseDown(input);
+    fireEvent.mouseUp(mask);
+    fireEvent.click(mask);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("草稿")).toHaveProperty("value", "未保存内容");
+    expect(document.body.style.overflow).toBe("hidden");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("traps dialog focus and restores parent and opener focus across nested dialogs", async () => {
     const [open, setOpen] = createSignal(false, { ownedWrite: true });
     const [nested, setNested] = createSignal(false, { ownedWrite: true });

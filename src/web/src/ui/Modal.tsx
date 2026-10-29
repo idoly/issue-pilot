@@ -60,7 +60,7 @@ function ModalContent(props: ModalProps) {
       if (wasTop && returnFocus?.isConnected) returnFocus.focus();
     }
   });
-  return <Portal><div class="ui-modal-mask" style={{ "z-index": layer }} onClick={(event) => { if (event.target === event.currentTarget && modalStack.at(-1) === panel) cancel(); }}>
+  return <Portal><div class="ui-modal-mask" style={{ "z-index": layer }}>
     <div ref={panel} class="ui-modal-container" role="dialog" aria-modal="true" aria-labelledby={id} tabindex={-1} style={{ width: `${props.width ?? 560}px` }}>
       <header class="ui-modal-header"><h2 id={id}>{props.title}</h2><Button type="text" shape="circle" icon={<X size={18} />} aria-label="关闭弹窗" disabled={props.confirmLoading || props.cancelButtonProps?.disabled} onClick={cancel} /></header>
       <div class="ui-modal-body">{props.children}</div>
