@@ -901,7 +901,7 @@ describe("issue pilot workspace", () => {
     expect(vi.mocked(client.loadApplicationEndpoints).mock.calls.length).toBe(requests);
   });
 
-  test("preserves named SLS targets while editing the displayed project", async () => {
+  test("edits wildcard logstores without showing or changing internal SLS target names", async () => {
     const client = await import("../data/client");
     const configuration = structuredClone(await client.loadConfig());
     const deployment = configuration.services[0]!.deployments[0]!;
@@ -916,7 +916,11 @@ describe("issue pilot workspace", () => {
     fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
     const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
     fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
-    fireEvent.input(await within(dialog).findByLabelText("sls project 2"), { target: { value: "srm-updated" } });
+    const project = await within(dialog).findByLabelText("sls project 2");
+    expect(within(dialog).queryByText("目标名称")).toBeNull();
+    expect(within(dialog).queryByLabelText("sls name 2-1")).toBeNull();
+    await fireEvent.input(project, { target: { value: "srm-updated" } });
+    await fireEvent.input(within(dialog).getByLabelText("sls logstore 2"), { target: { value: "*" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "收起部署2" }));
     await waitFor(() => expect(within(dialog).queryByLabelText("sls project 2")).toBeNull());
     fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
@@ -924,7 +928,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
-    expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated" }, secondary]);
+    expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated", logstores: ["*"] }, secondary]);
     expect(saved.deployments[1]?.sls?.credentialUpdate).toEqual({ mode: "preserve" });
   });
 

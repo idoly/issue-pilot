@@ -7,7 +7,7 @@ import type { CapabilityConfiguration, CapabilityName } from "../domain/contract
 const limits = issuePilotConfig.limits.capability;
 const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
-const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
+export const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 export type CapabilityConfig<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]>;
 type CapabilityDefinition<Key extends CapabilityName> = { key: Key; inputSchema: TSchema; parseConfiguration(value: unknown): CapabilityConfig<Key> };
 export class CapabilityConfigurationError extends Error {}
@@ -85,14 +85,14 @@ const definitions = {
       const region = requiredText(input.region, "sls_region", 63);
       const project = requiredText(input.project, "sls_project", 63);
       const logstores = [...new Set(stringList(input.logstores, "sls_logstores").map(entry => requiredText(entry, "sls_logstore", 63)))];
-      if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some(entry => !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
+      if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some(entry => entry !== "*" && !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
       const targets = input.targets === undefined ? undefined : (Array.isArray(input.targets) ? input.targets : fail("invalid_sls_scope")).map(value => {
         const target = inputRecord(value);
         const name = requiredText(target.name, "sls_target", 100);
         const targetRegion = requiredText(target.region, "sls_region", 63);
         const targetProject = requiredText(target.project, "sls_project", 63);
-        const targetLogstores = [...new Set(stringList(target.logstores, "sls_logstores"))];
-        if (!SLS_REGION.test(targetRegion) || !SLS_PROJECT.test(targetProject) || !targetLogstores.length || targetLogstores.some(store => !SLS_LOGSTORE.test(store))) fail("invalid_sls_scope");
+        const targetLogstores = [...new Set(stringList(target.logstores, "sls_logstores").map(entry => requiredText(entry, "sls_logstore", 63)))];
+        if (!SLS_REGION.test(targetRegion) || !SLS_PROJECT.test(targetProject) || !targetLogstores.length || targetLogstores.some(store => store !== "*" && !SLS_LOGSTORE.test(store))) fail("invalid_sls_scope");
         return { name, region: targetRegion, project: targetProject, logstores: targetLogstores };
       });
       if (targets && (!targets.length || new Set(targets.map(target => target.name)).size !== targets.length)) fail("invalid_sls_scope");
@@ -104,9 +104,12 @@ export const capabilityDefinitions: { [Key in CapabilityName]: CapabilityDefinit
 export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>, options: { exportEnabled?: boolean } = {}): TSchema {
   if (key === "sls") {
     const configured = configuration as CapabilityConfig<"sls">;
+    const logstoreSchema = (stores: string[]) => stores.includes("*")
+      ? Type.String({ maxLength: 63, pattern: SLS_LOGSTORE.source, description: "Any exact logstore name in this configured project. Specify one logstore, never *." })
+      : StringEnum(stores, { description: "Exact logstore configured for the selected deployment." });
     const schema = configured.targets
-      ? Type.Union(configured.targets.map(target => Type.Object({ target: Type.Literal(target.name), logstore: StringEnum(target.logstores), ...slsQueryProperties }, { additionalProperties: false })))
-      : Type.Object({ logstore: StringEnum(configured.logstores, { description: "Exact logstore configured for the selected deployment." }), ...slsQueryProperties }, { additionalProperties: false });
+      ? Type.Union(configured.targets.map(target => Type.Object({ target: Type.Literal(target.name), logstore: logstoreSchema(target.logstores), ...slsQueryProperties }, { additionalProperties: false })))
+      : Type.Object({ logstore: logstoreSchema(configured.logstores), ...slsQueryProperties }, { additionalProperties: false });
     return Value.Clone(schema);
   }
   const fields = Value.Clone(capabilityInputSchemas.dms.properties);

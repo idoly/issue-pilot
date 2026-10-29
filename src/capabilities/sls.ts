@@ -1,7 +1,7 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readSlsCli, SLS_QUERY_ERRORS } from "./sls-cli.ts";
 import type { CommandExecutor } from "../process.ts";
-import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
+import { SLS_LOGSTORE, type CapabilityConfig, type CapabilityInputs } from "./registry.ts";
 
 const limits = issuePilotConfig.limits.capability.sls;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,7 +27,7 @@ export function prepareSlsQuery(input: CapabilityInputs["sls"], configured: Capa
   if (traceId && input.query?.trim()) throw new Error("invalid_sls_query");
   const query = traceId || input.query?.trim() || "*";
   if (query.includes("\0")) throw new Error("invalid_sls_query");
-  if (!configured.logstores.includes(input.logstore)) throw new Error("sls_logstore_not_granted");
+  if (!SLS_LOGSTORE.test(input.logstore) || (!configured.logstores.includes("*") && !configured.logstores.includes(input.logstore))) throw new Error("sls_logstore_not_granted");
   return { from, to, query, logstore: input.logstore, trace: Boolean(traceId), ...(input.target ? { target: input.target } : {}) };
 }
 export type SlsQuery = ReturnType<typeof prepareSlsQuery>;

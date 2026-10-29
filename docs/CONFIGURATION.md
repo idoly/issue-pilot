@@ -34,7 +34,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 | --- | --- |
 | DBHub | 选择数据库类型，维护 host、port、username、password、database |
 | DMS | alias／schema，首次按当前连接严格解析绑定 |
-| SLS | region、project、logstores，可维护多个命名目标 |
+| SLS | region、project、logstores；`*` 允许该 Project 下任意日志库，查询仍指定一个具体名称 |
 
 环境收起显示能力标签，展开原位显示 DBHub／DMS／SLS 复选框；切换保留草稿，保存才提交。DMS 与 SLS 都按连接凭证、查询目标编辑，DMS 目标显示数据库解析状态。能力按真实目标配置展示，不按环境名称额外禁用。开发查询显式选择 prod／test，代码增删仍属开发环境。
 

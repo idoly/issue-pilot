@@ -3,7 +3,8 @@ import { readFile, stat, access } from "node:fs/promises";
 import { test } from "node:test";
 import type { CommandExecutor } from "../../src/process.ts";
 import { prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
-import { capabilityDefinitions } from "../../src/capabilities/registry.ts";
+import { capabilityDefinitions, capabilityToolInputSchema, parseCapabilityConfiguration } from "../../src/capabilities/registry.ts";
+import { Compile } from "typebox/compile";
 
 const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
 const base = { logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600 };
@@ -44,6 +45,40 @@ test("aliyun sls paginates complete results and keeps credentials out of argv, r
   assert.equal(output.query.possiblyIncomplete, false);
   assert.doesNotMatch(JSON.stringify(result), /fixture-key|fixture-secret/);
   await assert.rejects(access(f.calls[0]!.configPath), { code: "ENOENT" });
+});
+
+test("a configured wildcard grants exact logstores within the selected project only", async () => {
+  const config = parseCapabilityConfiguration("sls", { ...configured, logstores: [" * "] });
+  const schema = Compile(capabilityToolInputSchema("sls", config));
+  assert.equal(schema.Check({ ...base, logstore: "new_logstore" }), true);
+  for (const logstore of ["*", "prefix*", "../other", "", "bad/store"]) {
+    assert.equal(schema.Check({ ...base, logstore }), false);
+    assert.throws(() => prepareSlsQuery({ ...base, logstore }, config), /sls_logstore_not_granted/);
+  }
+  const f = fixture([page([{ message: "selected project" }])]);
+  const result = await readSlsLogs({ ...base, logstore: "new_logstore" }, config, undefined, f.executor);
+  assert.equal(f.calls[0]!.args[f.calls[0]!.args.indexOf("--project") + 1], configured.project);
+  assert.equal(f.calls[0]!.args[f.calls[0]!.args.indexOf("--logstore") + 1], "new_logstore");
+  assert.equal(JSON.parse(result.content[0]!.text).query.logstore, "new_logstore");
+  assert.equal(f.calls.length, 1);
+  for (const store of ["prefix*", "?", "bad/store"]) assert.throws(() => parseCapabilityConfiguration("sls", { ...configured, logstores: [store] }));
+});
+
+test("target wildcard schemas and execution keep independent logstore permissions", async () => {
+  const config = parseCapabilityConfiguration("sls", { ...configured, targets: [
+    { name: "any", region: "cn-other", project: "other-project", logstores: ["*"] },
+    { name: "restricted", region: configured.region, project: configured.project, logstores: ["application_log"] },
+  ] });
+  const schema = Compile(capabilityToolInputSchema("sls", config));
+  assert.equal(schema.Check({ ...base, target: "any", logstore: "new_store" }), true);
+  assert.equal(schema.Check({ ...base, target: "restricted", logstore: "new_store" }), false);
+  assert.equal(schema.Check({ ...base, target: "any", logstore: "*" }), false);
+  const f = fixture([page([])]);
+  await readSlsLogs({ ...base, target: "any", logstore: "new_store" }, config, undefined, f.executor);
+  assert.equal(f.calls[0]!.args[f.calls[0]!.args.indexOf("--project") + 1], "other-project");
+  await assert.rejects(readSlsLogs({ ...base, target: "restricted", logstore: "new_store" }, config, undefined, f.executor), /sls_logstore_not_granted/);
+  await assert.rejects(readSlsLogs({ ...base, target: "unknown", logstore: "new_store" }, config, undefined, f.executor), /sls_target_not_granted/);
+  assert.equal(f.calls.length, 1);
 });
 
 test("named SLS targets retain exact project and logstore selection", async () => {
