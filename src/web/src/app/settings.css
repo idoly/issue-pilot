@@ -35,6 +35,8 @@
 .settings-targets-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #65706c; font: 12px/16px var(--app-font); }
 .settings-targets-head code { color: #526d5c; }
 .settings-target-row { padding: 12px; border: 1px solid #e1e8e2; border-radius: 8px; margin-top: 12px; background: #fff; }
+.issue-session-controls { margin-top: 12px; }
+.agent-panel.session-history { display: block; max-height: 55vh; overflow: auto; margin-top: 12px; padding: 12px; }
 .settings-target-actions { display: flex; justify-content: flex-end; }
 .settings-target-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
 .settings-target-fields label > span { font: 12px/16px var(--app-font); }

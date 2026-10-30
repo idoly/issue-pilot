@@ -64,7 +64,7 @@ function AssistantBlock(props: { issue: IssueDetail; block: Extract<Conversation
   return <Show when={props.block.type === "thinking"} fallback={content()}><div class="agent-thinking">{content()}</div></Show>;
 }
 
-function ConversationItem(props: { issue: IssueDetail; entry: ConversationEntry }) {
+export function ConversationItem(props: { issue: IssueDetail; entry: ConversationEntry }) {
   return <Switch>
     <Match when={props.entry.kind === "user"}>{() => { const entry = props.entry as Extract<ConversationEntry, { kind: "user" }>; return <div class="agent-message user"><IssueMarkdown issue={props.issue} source={entry.text} /><For each={entry.images ?? []}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="用户粘贴的图片" />}</For></div>; }}</Match>
     <Match when={props.entry.kind === "assistant"}>{() => {

@@ -12,6 +12,22 @@ class ClosingErrorEventSource extends EventTarget {
 }
 
 describe("AgentStreamController", () => {
+  it("reconnects on a session reset and discards events from the previous stream", async () => {
+    const sources: ClosingErrorEventSource[] = [], onEvent = vi.fn();
+    const controller = new AgentStreamController(id => `/api/issues/${id}/agent-stream`, 1000, 45000,
+      { onConnection() {}, onError() {}, onSnapshot() {}, onEvent },
+      url => { const source = new ClosingErrorEventSource(url); sources.push(source); return source as unknown as EventSource; });
+    try {
+      controller.connect("ISSUE-20261030-001");
+      sources[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "reset", event: { type: "session_reset" } }) }));
+      await Promise.resolve();
+      expect(sources).toHaveLength(2);
+      expect(sources[0]!.closeCalls).toBe(1);
+      sources[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "old", event: { type: "issue_user", message: "old context" } }) }));
+      expect(onEvent).not.toHaveBeenCalled();
+    } finally { controller.dispose(); }
+  });
+
   it("invalidates the previous stream before closing it", async () => {
     vi.useFakeTimers();
     try {

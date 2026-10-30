@@ -6,11 +6,12 @@ import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
+import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
 import { agentSessions, issues } from "../db/schema.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
-import { requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -49,9 +50,46 @@ async function readAgentMessage(request: FastifyRequest): Promise<{ message: str
 }
 
 export function registerAgentRoutes(context: ApiRouteContext): void {
-  const { app, database, engine, events, modelCatalog } = context;
+  const { app, database, engine, events, modelCatalog, runScopeExclusive, stateRoot } = context;
   const recentEventLimit = issuePilotConfig.http.sseRecentEventIds;
   if (!Number.isSafeInteger(recentEventLimit) || recentEventLimit < 1) throw new Error("invalid_sse_event_id_budget");
+
+  app.get<{ Params: { key: string } }>("/api/issues/:key/sessions", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    await requireCurrentUser(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    return runScopeExclusive(async () => (await issueSessionHistory(database.db, stateRoot, issue)).map(({ file: _file, ...entry }) => entry));
+  });
+
+  app.get<{ Params: { key: string; sessionId: string }; Querystring: { offset?: string } }>("/api/issues/:key/sessions/:sessionId", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    await requireCurrentUser(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    const manager = await runScopeExclusive(() => readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId));
+    // A readonly transcript uses the same private-entry projection as the live conversation.
+    const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new ApiError(400, "invalid_offset");
+    const transcript = sessionTranscript(manager, issue.id), page = transcript.slice(offset, offset + 50);
+    return { events: page, nextOffset: offset + page.length < transcript.length ? offset + page.length : null };
+  });
+
+  app.post<{ Params: { key: string } }>("/api/issues/:key/reset-session", async (request, reply) => {
+    await requireDeveloper(database, request);
+    const input = record(request.body), expectedSessionId = text(input.expectedSessionId, "session_id", 255);
+    const issue = await requireIssue(database, request.params.key);
+    const result = await runScopeExclusive(() => runIssueExclusive(engine, [issue.id], async reservation => {
+      const actor = await requireDeveloper(database, request);
+      const current = await requireIssue(database, issue.key);
+      if (current.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
+      const history = await issueSessionHistory(database.db, stateRoot, current);
+      if (history[0]?.sessionId !== expectedSessionId) throw new ApiError(409, "agent_session_changed");
+      await reservation.closeSession(issue.id);
+      const reset = await resetIssueSession(database.db, stateRoot, current, actor, expectedSessionId);
+      events.publish({ id: crypto.randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
+      return reset;
+    }));
+    return reply.send(result);
+  });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);

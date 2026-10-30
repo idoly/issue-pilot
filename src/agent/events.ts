@@ -2,6 +2,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 
 type AgentWireEvent = JsonAgentSessionEvent
+  | { type: "session_reset" }
   | { type: "issue_user"; message: string; images?: ImageContent[] }
   | { type: "issue_status"; status: "complete" | "error" };
 
@@ -78,7 +79,7 @@ export class AgentEventBus {
 
   private updateReplay(envelope: RunEvent): void {
     const event = envelope.event;
-    if (event.type === "issue_status") {
+    if (event.type === "issue_status" || event.type === "session_reset") {
       this.replay.delete(envelope.issueId);
       return;
     }

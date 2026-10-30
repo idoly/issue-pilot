@@ -346,6 +346,10 @@ export function updateIssue(key: string, input: IssueMetadataInput, removedAttac
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueExecutionItem>(issuePath(key, "/status"), "PATCH", { status });
 export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }) => jsonRequest<IssueScopeTransitionPlan>(issuePath(key, "/scope-transition/plan"), "POST", target);
 export const applyIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, plan: Pick<IssueScopeTransitionPlan, "expectedIssueUpdatedAt" | "planHash">) => jsonRequest<{ issueKey: string }>(issuePath(key, "/scope-transition/apply"), "POST", { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
+export interface IssueSessionSummary { sessionId: string; createdAt: string; current: boolean }
+export const listIssueSessions = (key: string, signal?: AbortSignal) => request<IssueSessionSummary[]>(issuePath(key, "/sessions"), { ...(signal ? { signal } : {}) });
+export const readIssueSession = (key: string, sessionId: string, offset = 0, signal?: AbortSignal) => request<{ events: import("../../../agent/events").RunEvent[]; nextOffset: number | null }>(issuePath(key, `/sessions/${encodeURIComponent(sessionId)}?offset=${offset}`), { ...(signal ? { signal } : {}) });
+export const resetIssueSession = (key: string, expectedSessionId: string) => jsonRequest<{ sessionId: string }>(issuePath(key, "/reset-session"), "POST", { expectedSessionId });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export function sendAgentMessage(key: string, message: string, images: File[] = []): Promise<void> {
   if (!images.length) return jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });

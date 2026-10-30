@@ -102,6 +102,10 @@ export class AgentStreamController {
         const parsed = JSON.parse(event.data) as Partial<RunEvent>;
         if (!parsed.event || typeof parsed.event.type !== "string") throw new Error("agent_event_protocol_error");
         const envelope = parsed as RunEvent;
+        if (envelope.event.type === "session_reset") {
+          queueMicrotask(() => { if (this.isCurrent(generation)) this.connect(issueId); });
+          return;
+        }
         if (!replayComplete) {
           replayEntries = applyAgentEvent(replayEntries, envelope);
           const nextActivity = activityForEvent(envelope.event);
