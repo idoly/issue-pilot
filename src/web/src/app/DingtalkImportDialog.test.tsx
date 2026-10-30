@@ -28,12 +28,13 @@ for (const status of ["created", "existing"] as const) test(`closes the import d
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByLabelText("钉钉标题字段")).toBeNull();
   fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });
-  vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, status, issueKey: "ISSUE-20261022-001" });
+  vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, status, issueKey: "ISSUE-20261022-001", ...(status === "existing" ? { assignee: { ...user, subject: "bob", name: "Bob" } } : {}) });
   await waitFor(() => expect(screen.getByRole("button", { name: "导入工单" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "导入工单" }));
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "导入" })).toBeNull());
+  if (status === "created") await waitFor(() => expect(screen.queryByRole("dialog", { name: "导入" })).toBeNull());
+  else { await screen.findByText(/当前处理人：Bob/); expect(screen.getByRole("dialog", { name: "导入" })).toBeTruthy(); }
   expect(importDingtalkRecords).toHaveBeenCalledWith({ url, serviceKey: "orders", workMode: "production_analysis", priority: "p2", startAgent: true }, expect.any(AbortSignal));
-  expect(opened).toHaveBeenCalledExactlyOnceWith("ISSUE-20261022-001");
+  expect(opened).toHaveBeenCalledTimes(status === "created" ? 1 : 0);
   expect(created).toHaveBeenCalledTimes(status === "created" ? 1 : 0);
 });
 test("keeps the imported Issue available when navigation is declined", async () => {

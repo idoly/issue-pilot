@@ -73,8 +73,10 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
       setResults(values => [...values.filter(row => row.issueKey !== response.issueKey), response]);
       setUrl("");
-      if (response.status === "created") props.onCreated();
-      if (props.onOpenIssue(response.issueKey)) props.onClose();
+      if (response.status === "created") {
+        props.onCreated();
+        if (props.onOpenIssue(response.issueKey)) props.onClose();
+      }
     } catch (error) { if (current(task.owner)) setError(message(error)); }
     finally { if (current(task.owner)) setBusy(""); }
   };
@@ -83,7 +85,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       <label><span>钉钉记录链接</span><Input aria-label="钉钉记录链接" value={url()} disabled={Boolean(busy())} placeholder="https://alidocs.dingtalk.com/notable/record?dentryUuid=…&rowId=…&sheetId=…" onInput={event => { setUrl(event.currentTarget.value); setError(""); }} /></label>
       <div class="dingtalk-fields"><label><span>入口服务</span><Select aria-label="导入工单服务" value={service()} disabled={Boolean(busy())} options={services().map(service => ({ value: service.key, label: service.name }))} onChange={setService} /></label><label><span>处理方式</span><Select aria-label="导入工单处理方式" value={workMode()} disabled={Boolean(busy())} options={modes()} onChange={setWorkMode} /></label><label><span>优先级</span><Select aria-label="导入工单优先级" value={priority()} disabled={Boolean(busy())} options={priorityOptions} onChange={setPriority} /></label></div>
       <p class="dingtalk-note">直接导入这一条记录及其附件，不按人员或状态过滤，已有工单不会重复创建。</p>
-      <For each={results()}>{row => <p role="status">{row.status === "created" ? "已创建" : "工单已存在"}：<Button type="text" onClick={() => { if (props.onOpenIssue(row.issueKey)) props.onClose(); }}>{row.issueKey}</Button></p>}</For>
+      <For each={results()}>{row => <p role="status">{row.status === "created" ? "已创建" : `工单已存在${row.assignee ? `，当前处理人：${row.assignee.name || row.assignee.subject}` : "，当前未分配"}`}：<Button type="text" onClick={() => { if (props.onOpenIssue(row.issueKey)) props.onClose(); }}>{row.issueKey}</Button></p>}</For>
       <Show when={error()}><p role="alert" class="form-error">{error()}</p></Show>
     </div>
   </Modal>;
