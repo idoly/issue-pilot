@@ -28,7 +28,7 @@ const message = (error: unknown) => error instanceof Error ? errors[error.messag
 export function DingtalkImportButton(props: { onCreated: () => void; onOpenIssue: (key: string) => boolean }) {
   const { currentUser } = useApplicationResources();
   const [open, setOpen] = createSignal(false, { ownedWrite: true });
-  createEffect(() => currentUser()?.subject, () => { setOpen(false); });
+  createEffect(() => currentUser()?.subject, (subject, previous) => { if (previous !== undefined && subject !== previous) setOpen(false); });
   return <><Button class="dingtalk-nav-button" disabled={!currentUser()} onClick={() => setOpen(true)}>钉钉</Button><Show when={open() && currentUser()}>{user => <DingtalkImportDialog user={user()} onClose={() => setOpen(false)} onCreated={props.onCreated} onOpenIssue={props.onOpenIssue} />}</Show></>;
 }
 
