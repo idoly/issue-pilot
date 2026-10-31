@@ -24,7 +24,7 @@ function parseServiceDeployment(deployment: Record<string, unknown>, repositoryA
   if (environmentKey !== "dev" && (repositoryBranches.length !== repositoryAliases.size || new Set(repositoryBranches.map(branch => branch.repositoryAlias)).size !== repositoryBranches.length || repositoryBranches.some(branch => !repositoryAliases.has(branch.repositoryAlias)))) throw new ApiError(400, "invalid_deployment_repository_branches");
   let config: StoredDeploymentConfig;
   try {
-    config = resolveConfiguredCapabilitySections(deployment, capabilities, existing);
+    config = resolveConfiguredCapabilitySections(deployment, capabilities);
     if (deployment.dbhub !== undefined && deployment.mysql !== undefined) throw new ApiError(400, "conflicting_database_targets");
     const dbhub = parseDbHubTargets(deployment.dbhub);
     const mysql = parseMysqlTargets(deployment.mysql);

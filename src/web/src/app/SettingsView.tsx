@@ -4,7 +4,7 @@ import { useApplicationResources } from "./ApplicationResources";
 import { EndpointConfiguration } from "./EndpointConfiguration";
 import { RepositoryManagement } from "./RepositoryManagement";
 import { PersonalCredentials } from "./PersonalCredentials";
-import { SharedSlsCredentials } from "./SharedSlsCredentials";
+import { SharedCredentials } from "./SharedCredentials";
 import { UserManagement } from "./UserManagement";
 
 type SettingsPanel = "users" | "services" | "repositories" | "endpoints";
@@ -28,7 +28,7 @@ export function SettingsView() {
   });
   return <main class="settings-view">
     <nav class="settings-tabs" role="tablist" aria-label="配置分类"><For each={settingsPanels}>{panel => <button type="button" role="tab" aria-selected={selectedPanel() === panel.key ? "true" : "false"} class={selectedPanel() === panel.key ? "selected" : ""} onClick={() => selectPanel(panel.key)}>{panel.label}</button>}</For></nav>
-    <Show when={visitedPanels().includes("users")}><div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "users"}><PersonalCredentials /><SharedSlsCredentials /><UserManagement /></div></Show>
+    <Show when={visitedPanels().includes("users")}><div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "users"}><PersonalCredentials /><SharedCredentials capability="dms" /><SharedCredentials capability="sls" /><UserManagement /></div></Show>
     <Show when={visitedPanels().includes("endpoints")}><div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "endpoints"}><EndpointConfiguration /></div></Show>
     <Show when={visitedPanels().includes("repositories")}><div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "repositories"}><RepositoryManagement onSelectService={key => { setServiceKey(key); selectPanel("services"); }} /></div></Show>
     <Show when={visitedPanels().includes("services")}><div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "services"}><ConfigurationView selectedServiceKey={serviceKey()} onSelectService={key => setServiceKey(key)} /></div></Show>

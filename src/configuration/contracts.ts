@@ -1,23 +1,16 @@
 import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
-import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName } from "../domain/contracts.ts";
+import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName, DmsScope, SlsScope } from "../domain/contracts.ts";
 
 export const CAPABILITY_CREDENTIAL_FIELDS = {
-  dms: ["authorization"],
+  dms: ["url", "authorization"],
   sls: ["accessKeyId", "accessKeySecret"],
 } as const;
 
-type CapabilityCredentialField<Key extends CapabilityName> = (typeof CAPABILITY_CREDENTIAL_FIELDS)[Key][number];
-export type CapabilityCredentialValues<Key extends CapabilityName> = Pick<NonNullable<CapabilityConfiguration[Key]>, Extract<CapabilityCredentialField<Key>, keyof NonNullable<CapabilityConfiguration[Key]>>>;
-export type CapabilityCredentialUpdate<Key extends CapabilityName> =
-  | { mode: "preserve" }
-  | { mode: "replace"; values: CapabilityCredentialValues<Key> }
-  | { mode: "clear" };
-type ProjectedCapabilityValue<Key extends CapabilityName> = Omit<NonNullable<CapabilityConfiguration[Key]>, CapabilityCredentialField<Key>>;
-export type ProjectedCapabilitySection<Key extends CapabilityName> = ProjectedCapabilityValue<Key> & (Key extends "dms" ? { credentialConfigured: boolean } : { credentialConfigured?: boolean });
-export type ProjectedCapabilityConfiguration = { [Key in CapabilityName]?: ProjectedCapabilitySection<Key> };
+type CapabilityScopes = { dms: DmsScope; sls: SlsScope };
+export type ProjectedCapabilitySection<Key extends CapabilityName> = CapabilityScopes[Key];
+export type ProjectedCapabilityConfiguration = Partial<CapabilityScopes>;
 export type CapabilityConfigurationInput = {
-  dms?: ProjectedCapabilityValue<"dms"> & { credentialUpdate: CapabilityCredentialUpdate<"dms"> };
-  sls?: ProjectedCapabilityValue<"sls"> & { credentialUpdate?: { mode: "preserve" } };
+  [Key in CapabilityName]?: CapabilityScopes[Key] & { credentialUpdate?: { mode: "preserve" } };
 };
 
 export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;

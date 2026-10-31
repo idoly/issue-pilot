@@ -47,6 +47,8 @@ TypeScript 参考 [Google TypeScript Style Guide](https://google.github.io/style
 
 第三方 MCP／SRT 自有 schema 沿用官方 SDK，包括其 Zod 与域名规则。路由协调 owner，SQLite、Git、附件和命令授权各自维护；并发顺序见[系统架构](ARCHITECTURE.md#并发与失败清理)。
 
+DMS／SLS 共享凭据使用同一个 Web 表单和路由流程，差异仅为字段、解析器和存储列；查询目标由各自 scope 解析器校验。凭据选择与环境参数解耦，使用命名的个人／共享组。不要为已无运行调用者的旧整组配置解析入口保留分发层。输入校验与排队后重新授权、可变工具钩子后的执行检查属于不同边界，不能作为重复校验合并。
+
 ## 验证
 
 代码变更先运行所属行为测试，再完成适用的检查：
@@ -102,6 +104,8 @@ CI 在 main 提交和 PR 触发，使用 GitHub Ubuntu runner。私有包源、�
 ## Web 与浏览器
 
 Solid 2 使用 `createEffect(compute, callback)`，回调只返回清理函数或 undefined；有意仅读取初始值时用 untrack。ApplicationResources 持有共享资源与草稿，切换身份取消旧身份工作，迟到响应不能覆盖当前身份。Markdown 与 HTML 链接先解析到授权文件路径，再 DOMPurify 清洗。
+
+历史会话列表仅包含已归档会话，打开后自动读取第一条，切换选择时重新读取。加载、空内容和读取失败在弹窗内明确展示；有对话内容时才渲染深色滚动区域，关闭或切换身份取消未完成读取。
 
 Monaco 组件负责释放 editor／model，保留 SHA-256 冲突、CRLF、自动保存、撤销、只读和导航语义。链接使用真实工单 URL，浏览器前进／后退及未保存代码拦截由行为测试验证。文件列表按需预览，加载失败可重试，超预算或不支持格式保留下载。
 

@@ -101,7 +101,7 @@ GIT_OPTIONAL_LOCKS=0 git -C <repository-path> status --porcelain --untracked-fil
 | JSONL 缺失／不完整 | 保留文件与绑定，查磁盘、I/O 和写入者，在独立副本核查 |
 | message scope／state／outcome_unknown | 核对范围、交付记录及实际结果，按[投递规则](AGENT.md#消息接收与中断)继续 |
 | 模型超时／Codemode 队列满 | 查 provider、网络及未退出脚本／工具，保留对话 |
-| 网络允许列表／SSH 拒绝 | 核对精确域名端口、known_hosts 与个人身份 |
+| 网络允许列表／SSH 拒绝 | 核对精确域名端口、known_hosts 与个人身份；代理 DNS 返回 `198.18.0.0/15` 且 SSH 在握手前关闭时，先对照可信 DNS 的实际地址，用原主机名与既有 known_hosts 校验连接。修复该主机的代理 DNS 规则或本地域名解析，不更换凭据、关闭主机校验或回退旧 ref。WSL 自动生成的 hosts 可能在重启后被覆盖。 |
 | Python／aliyun CLI 缺失 | 核对 venv、PATH 和实际启动产物 |
 | DMS／SLS 拒绝、限流、不完整 | 核对所选凭证、目标、时间、权限和预算，遵守[工具重试语义](AGENT.md#原生证据查询) |
 | 钉钉 DataNotReady | 核对失败工具和计算／关联字段；读取与外部指派是不同路径 |

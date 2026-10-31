@@ -14,7 +14,9 @@ test("resolves DMS scope with a saved server-side token without returning it to 
     await createService(fixture.app, "Saved DMS", ["prod"]);
     const configuration = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/config" })).body);
     const service = configuration.services.find((row: { key: string }) => row.key === "saved-dms");
-    const saved = await fixture.app.inject({ method: "PATCH", url: "/api/services/saved-dms", payload: { name: service.name, description: service.description, repositories: service.repositories, deployments: service.deployments.map((deployment: { environmentKey: string; repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }> }) => ({ environmentKey: deployment.environmentKey, repositoryBranches: deployment.repositoryBranches.map(({ repositoryAlias, baseBranch }) => ({ repositoryAlias, baseBranch })), capabilities: ["dms"], dms: { url: "https://dms.example.test/sse", credentialUpdate: { mode: "replace", values: { authorization: token } }, databases: [{ instanceAlias: "ORDERS", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] } })) } });
+    const shared = await fixture.app.inject({ method: "PUT", url: "/api/config/shared-dms-credentials", payload: { mode: "replace", expectedRevision: 0, url: "https://dms.example.test/sse", authorization: token } });
+    assert.equal(shared.statusCode, 200, shared.body);
+    const saved = await fixture.app.inject({ method: "PATCH", url: "/api/services/saved-dms", payload: { name: service.name, description: service.description, repositories: service.repositories, deployments: service.deployments.map((deployment: { environmentKey: string; repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }> }) => ({ environmentKey: deployment.environmentKey, repositoryBranches: deployment.repositoryBranches.map(({ repositoryAlias, baseBranch }) => ({ repositoryAlias, baseBranch })), capabilities: ["dms"], dms: { databases: [{ instanceAlias: "ORDERS", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] } })) } });
     assert.equal(saved.statusCode, 200, saved.body);
     globalThis.fetch = async (_input, init) => {
       seenHeaders.push(new Headers(init?.headers).get("authorization"));
@@ -25,7 +27,7 @@ test("resolves DMS scope with a saved server-side token without returning it to 
       if (request.method === "tools/call") send(request.id, { content: [{ type: "text", text: JSON.stringify(request.params.name === "listInstances" ? { InstanceAlias: "ORDERS", InstanceId: 456, Host: "db.example.test", Port: 3306, InstanceType: "mysql", EnvType: "product" } : { DatabaseId: 123, InstanceId: 456, SchemaName: "orders" }) }] });
       return new Response(null, { status: 202 });
     };
-    const response = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", payload: { url: "https://dms.example.test/sse", serviceKey: "saved-dms", environmentKey: "prod", instanceAlias: "ORDERS", schemaName: "orders" } });
+    const response = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", payload: { instanceAlias: "ORDERS", schemaName: "orders" } });
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(JSON.parse(response.body).databaseId, "123");
     assert.ok(seenHeaders.length >= 4);

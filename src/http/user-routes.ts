@@ -3,8 +3,9 @@ import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { subjects, issues, userCredentials, applicationSettings } from "../db/schema.ts";
 import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { CAPABILITY_CREDENTIAL_FIELDS } from "../configuration/contracts.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
-import { USER_ROLES, type SlsCredentials } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, USER_ROLES } from "../domain/contracts.ts";
 import { ApiError, checkRevision, choice, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
@@ -55,42 +56,51 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     }));
   });
 
-  app.get("/api/config/shared-sls-credentials", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    return runScopeExclusive(async () => {
-      await requireDeveloper(database, request);
-      const [row] = await database.db.select({ credentials: applicationSettings.sharedSlsCredentials, revision: applicationSettings.sharedSlsRevision }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
-      return { configured: Boolean(row?.credentials?.accessKeyId && row.credentials.accessKeySecret), revision: row?.revision ?? 0 };
-    });
-  });
-
-  app.put("/api/config/shared-sls-credentials", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    await requireDeveloper(database, request);
-    const input = record(request.body);
-    if (Object.keys(input).some(key => !["mode", "accessKeyId", "accessKeySecret", "expectedRevision"].includes(key))) throw new ApiError(400, "invalid_shared_sls_credentials");
-    let credentials: SlsCredentials | null;
-    if (input.mode === "clear") {
-      if (input.accessKeyId !== undefined || input.accessKeySecret !== undefined) throw new ApiError(400, "invalid_shared_sls_credentials");
-      credentials = null;
-    } else if (input.mode === "replace") {
-      try { credentials = parseSlsConnectionConfiguration(input); }
-      catch (error) { if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message); throw error; }
-    } else throw new ApiError(400, "invalid_credential_update");
-    return runScopeExclusive(async () => {
-      await requireDeveloper(database, request);
-      const affected = await database.db.select({ id: issues.id }).from(issues);
-      return runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
+  for (const kind of CAPABILITY_KEYS) {
+    const url = `/api/config/shared-${kind}-credentials`;
+    const fields = CAPABILITY_CREDENTIAL_FIELDS[kind] as readonly string[];
+    const revisionColumn = kind === "dms" ? applicationSettings.sharedDmsRevision : applicationSettings.sharedSlsRevision;
+    app.get(url, { logLevel: "silent" }, async (request, reply) => {
+      reply.header("Cache-Control", "private, no-store");
+      return runScopeExclusive(async () => {
         await requireDeveloper(database, request);
-        const [existing] = await database.db.select({ revision: applicationSettings.sharedSlsRevision }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
-        checkRevision(input.expectedRevision, existing?.revision ?? 0);
-        for (const row of affected) await reservation.closeSession(row.id);
-        const revision = (existing?.revision ?? 0) + 1;
-        await database.db.transaction(transaction => transaction.insert(applicationSettings).values({ id: 1, sharedSlsCredentials: credentials, sharedSlsRevision: revision }).onConflictDoUpdate({ target: applicationSettings.id, set: { sharedSlsCredentials: credentials, sharedSlsRevision: revision } }));
-        return { configured: Boolean(credentials), revision };
+        const [row] = await database.db.select({ dms: applicationSettings.sharedDmsCredentials, sls: applicationSettings.sharedSlsCredentials, revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
+        const revision = row?.revision ?? 0;
+        return kind === "dms"
+          ? { configured: Boolean(row?.dms?.url && row.dms.authorization), url: row?.dms?.url ?? "", revision }
+          : { configured: Boolean(row?.sls?.accessKeyId && row.sls.accessKeySecret), revision };
       });
     });
-  });
+    app.put(url, { logLevel: "silent" }, async (request, reply) => {
+      reply.header("Cache-Control", "private, no-store");
+      await requireDeveloper(database, request);
+      const input = record(request.body);
+      if (Object.keys(input).some(key => !["mode", "expectedRevision", ...fields].includes(key)) || input.mode === "clear" && fields.some(field => input[field] !== undefined)) throw new ApiError(400, `invalid_shared_${kind}_credentials`);
+      if (input.mode !== "clear" && input.mode !== "replace") throw new ApiError(400, "invalid_credential_update");
+      let update: Pick<typeof applicationSettings.$inferInsert, "sharedDmsCredentials" | "sharedSlsCredentials">;
+      try {
+        update = kind === "dms"
+          ? { sharedDmsCredentials: input.mode === "clear" ? null : parseDmsConnectionConfiguration(input) }
+          : { sharedSlsCredentials: input.mode === "clear" ? null : parseSlsConnectionConfiguration(input) };
+      } catch (error) { if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message); throw error; }
+      return runScopeExclusive(async () => {
+        await requireDeveloper(database, request);
+        const affected = await database.db.select({ id: issues.id }).from(issues);
+        return runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
+          await requireDeveloper(database, request);
+          const [existing] = await database.db.select({ revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
+          checkRevision(input.expectedRevision, existing?.revision ?? 0);
+          for (const row of affected) await reservation.closeSession(row.id);
+          const revision = (existing?.revision ?? 0) + 1;
+          const values = { ...update, ...(kind === "dms" ? { sharedDmsRevision: revision } : { sharedSlsRevision: revision }) };
+          await database.db.transaction(transaction => transaction.insert(applicationSettings).values({ id: 1, ...values }).onConflictDoUpdate({ target: applicationSettings.id, set: values }));
+          return kind === "dms"
+            ? { configured: Boolean(update.sharedDmsCredentials), url: update.sharedDmsCredentials?.url ?? "", revision }
+            : { configured: Boolean(update.sharedSlsCredentials), revision };
+        });
+      });
+    });
+  }
 
   app.get("/api/me/credentials", async (request, reply) => {
     const user = await requireCurrentUser(database, request);

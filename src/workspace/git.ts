@@ -125,7 +125,7 @@ export function repositoryStorePath(stateRoot: string, url: string): string {
   return resolve(repositoriesRoot(stateRoot), repositoryHash(url, 20));
 }
 
-export function issueRepositoryStorePath(stateRoot: string, issueKey: string, url: string): string {
+function issueRepositoryStorePath(stateRoot: string, issueKey: string, url: string): string {
   return resolve(issueRoot(stateRoot, normalizeIssueKey(issueKey)), ".issue-git", repositoryHash(url, 20));
 }
 

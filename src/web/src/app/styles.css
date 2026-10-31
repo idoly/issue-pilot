@@ -566,7 +566,7 @@ button, input, textarea { font: inherit; }
 .user-management-header > div > span { color: #65706c; font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
 .user-management-loading { width: 100%; padding: 22px; }
 .user-management-error { margin: 14px 18px 0; padding: 9px 12px; border: 1px solid #efb5b0; border-radius: 5px; background: #fff2f0; color: #a52d28; font-size: 12px; }
-.personal-credentials, .shared-sls-credentials { margin-bottom: 24px; }
+.personal-credentials, .shared-credentials { margin-bottom: 24px; }
 .user-form { display: grid; gap: 14px; }
 .user-form label { display: grid; gap: 6px; color: #56615c; font-size: 12px; }
 .user-form .form-error { padding: 8px 10px; border: 1px solid #efb5b0; border-radius: 5px; background: #fff2f0; color: #a52d28; font-size: 12px; }

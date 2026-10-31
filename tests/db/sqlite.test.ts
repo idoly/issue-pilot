@@ -18,7 +18,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
   const migrations = join(root, "migrations");
   const migrationSource = resolve("drizzle");
   const journal = JSON.parse(await readFile(join(migrationSource, "meta", "_journal.json"), "utf8")) as { entries: Array<{ tag: string }>; [key: string]: unknown };
-  assert.deepEqual(journal.entries.slice(31).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets", "0045_user_roles_credentials", "0046_user_git_ssh_only", "0047_repository_catalog", "0048_capability_switches", "0049_mcp_services", "0050_resource_catalog", "0051_issue_service_scopes", "0052_deployment_capabilities", "0053_inline_capability_credentials", "0054_personal_production_credentials", "0055_mcp_stdio", "0056_agent_codemode", "0057_agent_runtime", "0058_management_role", "0059_retire_native_adapters", "0060_dingtalk_issue_imports", "0061_flat_issue_attachment_names", "0062_retire_production_data", "0063_page_configuration", "0064_shared_sls_credentials"]);
+  assert.deepEqual(journal.entries.slice(31).map(({ tag }) => tag), ["0031_remove_unused_issue_metadata", "0032_remove_redundant_pi_session_id", "0033_repository_deployment_branches", "0034_issue_repository_workspace_names", "0035_issue_deployment_scope", "0036_issue_status_resolution", "0037_managed_users", "0038_global_agent_configuration", "0039_dms_database_targets", "0040_dms_schema_selector", "0041_related_issues", "0042_issue_pins", "0043_issue_scope_transitions", "0044_db_database_targets", "0045_user_roles_credentials", "0046_user_git_ssh_only", "0047_repository_catalog", "0048_capability_switches", "0049_mcp_services", "0050_resource_catalog", "0051_issue_service_scopes", "0052_deployment_capabilities", "0053_inline_capability_credentials", "0054_personal_production_credentials", "0055_mcp_stdio", "0056_agent_codemode", "0057_agent_runtime", "0058_management_role", "0059_retire_native_adapters", "0060_dingtalk_issue_imports", "0061_flat_issue_attachment_names", "0062_retire_production_data", "0063_page_configuration", "0064_shared_sls_credentials", "0065_shared_dms_credentials"]);
   const previousJournal = { ...journal, entries: journal.entries.slice(0, journal.entries.findIndex(({ tag }) => tag === "0031_remove_unused_issue_metadata")) };
   await mkdir(join(migrations, "meta"), { recursive: true });
   await Promise.all([
@@ -104,8 +104,10 @@ test("migrates each configured DMS database into the explicit target collection"
     await migrate(db, { migrationsFolder: migrationSource });
     const [row] = (await client.execute("select config from service_deployments where id = 'deployment'")).rows;
     const stored = JSON.parse(String(row!.config));
-    assert.equal(stored.dms.authorization, previousDms.authorization);
-    assert.equal(stored.dms.url, previousDms.url);
+    assert.equal(stored.dms.authorization, undefined);
+    assert.equal(stored.dms.url, undefined);
+    const shared = (await client.execute("SELECT shared_dms_credentials FROM application_settings WHERE id=1")).rows[0]!;
+    assert.deepEqual(JSON.parse(String(shared.shared_dms_credentials)), { url: previousDms.url, authorization: previousDms.authorization });
     assert.ok(!("connectionId" in stored.dms));
     const target = stored.dms.databases[0];
     assert.deepEqual(target, { instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" });

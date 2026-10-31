@@ -6,7 +6,7 @@ import { createWorkspaceTool } from "../../src/agent/workspace-tool.ts";
 import type { IssueProjectManager } from "../../src/workspace/project.ts";
 import { issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { applyIssueCredentials } from "../../src/configuration/user-credentials.ts";
-import { resolveDeploymentConfiguration } from "../../src/configuration/credentials.ts";
+import { projectCapabilityConfiguration } from "../../src/configuration/credentials.ts";
 import { listEnvironmentServices } from "../../src/workspace/issue-services.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
@@ -46,8 +46,11 @@ test("service configuration and generated descriptions share one source without 
   try {
     await createService(f.app, "Entry", ["prod", "test", "dev"]); await createService(f.app, "Other", ["prod", "test"]);
     assert.equal((await f.app.inject({ method: "GET", url: "/api/resource-connections", headers })).statusCode, 404);
+    const shared = { url: "https://dms.example.test/sse", authorization: "Bearer fixture-private-token" };
+    const savedCredentials = await f.app.inject({ method: "PUT", url: "/api/config/shared-dms-credentials", headers, payload: { mode: "replace", expectedRevision: 0, ...shared } });
+    assert.equal(savedCredentials.statusCode, 200, savedCredentials.body);
     const input = await serviceInput(f);
-    const update = await f.app.inject({ method: "PATCH", url: "/api/services/other", headers, payload: { ...input, description: "按 order_no 关联网关日志。", deployments: input.deployments.map((deployment: { environmentKey: string }) => ({ ...deployment, capabilities: ["dms"], dms: { url: "https://dms.example.test/sse", credentialUpdate: { mode: "replace", values: { authorization: "Bearer fixture-private-token" } }, databases: [{ ...target, schemaName: deployment.environmentKey === "test" ? "orders_test" : "orders" }] } })) } });
+    const update = await f.app.inject({ method: "PATCH", url: "/api/services/other", headers, payload: { ...input, description: "按 order_no 关联网关日志。", deployments: input.deployments.map((deployment: { environmentKey: string }) => ({ ...deployment, capabilities: ["dms"], dms: { databases: [{ ...target, schemaName: deployment.environmentKey === "test" ? "orders_test" : "orders" }] } })) } });
     assert.equal(update.statusCode, 200, update.body);
     const displayed = await f.app.inject({ method: "GET", url: "/api/services/other/configuration-description", headers });
     assert.equal(displayed.statusCode, 200, displayed.body);
@@ -64,7 +67,7 @@ test("service configuration and generated descriptions share one source without 
     const other = JSON.parse(config.body).services.find((row: { key: string }) => row.key === "other");
     assert.equal(other.description, "按 order_no 关联网关日志。");
     assert.match(other.context, /orders_test/); assert.doesNotMatch(other.context, /Shared DMS|代码基准分支|访问配置/);
-    assert.deepEqual(other.deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dms, { url: "https://dms.example.test/sse", credentialConfigured: true, databases: [target] });
+    assert.deepEqual(other.deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dms, { databases: [target] });
     assert.equal((await f.app.inject({ method: "GET", url: "/api/resources" })).statusCode, 404);
     const dev = String((await db.client.execute("select id from environments where key='dev'")).rows[0]!.id);
     const prod = String((await db.client.execute("select id from environments where key='prod'")).rows[0]!.id);
@@ -76,7 +79,7 @@ test("service configuration and generated descriptions share one source without 
     assert.match(JSON.stringify(notes.content), /orders_test/);
     assert.ok(!JSON.stringify(notes).includes("fixture-private-token"));
     await assert.rejects(workspace.execute("include", { operation: "include", service: "other" }, undefined, undefined, {} as never));
-    const scopes = services.filter(row => row.environment.kind !== "dev").map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyIssueCredentials(resolveDeploymentConfiguration(row.deployment.config), row.environment.key) }));
+    const scopes = services.filter(row => row.environment.kind !== "dev").map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyIssueCredentials(projectCapabilityConfiguration(row.deployment.config), undefined, { dms: shared }) }));
     const tools = createCapabilityTools({ serviceKey: "entry", environmentKey: "dev", capabilities: ["dms"] }, {}, { serviceScopes: scopes });
     assert.deepEqual(tools.map(tool => tool.name), ["service_query"]);
     assert.ok(!JSON.stringify(tools[0]!.parameters).includes("fixture-private-token"));

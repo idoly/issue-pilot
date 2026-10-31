@@ -83,13 +83,15 @@ export const DBHUB_DATABASES = [
 export type DbHubDatabaseType = typeof DBHUB_DATABASES[number]["value"];
 export interface DbHubTarget extends MysqlTarget { type: DbHubDatabaseType }
 
+export interface DmsCredentials { url: string; authorization: string }
+export interface DmsScope { databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> }
 export interface SlsCredentials { accessKeyId: string; accessKeySecret: string }
 export interface SlsScope { region: string; project: string; logstores: string[]; targets?: Array<{ name: string; region: string; project: string; logstores: string[] }> }
 
 export interface CapabilityConfiguration {
   mysql?: MysqlTarget[];
   dbhub?: DbHubTarget[];
-  dms?: { url: string; authorization: string; databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> };
+  dms?: DmsScope & DmsCredentials;
   sls?: SlsScope & SlsCredentials;
 }
 
@@ -103,7 +105,7 @@ interface RetiredCapabilityConfiguration {
 }
 
 export type DeploymentConfig = CapabilityConfiguration;
-export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "sls"> & { sls?: SlsScope & Partial<SlsCredentials> } & RetiredCapabilityConfiguration & {
+export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "dms" | "sls"> & { dms?: DmsScope & Partial<DmsCredentials>; sls?: SlsScope & Partial<SlsCredentials> } & RetiredCapabilityConfiguration & {
   /** Private pre-upgrade development settings; never projected or executed. */
   archivedDevelopment?: unknown;
   /** Historical deployment bindings; MCP availability is now global. */

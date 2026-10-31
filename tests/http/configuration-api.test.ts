@@ -14,9 +14,10 @@ test("DMS scope errors preserve upstream HTTP status without private response de
   let upstreamStatus = 429;
   globalThis.fetch = async () => new Response("private-dms-token private-upstream-detail", { status: upstreamStatus, headers: { "retry-after": "120" } });
   try {
+    await fixture.app.inject({ method: "PUT", url: "/api/config/shared-dms-credentials", payload: { mode: "replace", expectedRevision: 0, url: "https://dms.example.test/sse", authorization: "Bearer private-dms-token" } });
     for (const status of [429, 403, 503]) {
       upstreamStatus = status;
-      const response = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: { url: "https://dms.example.test/sse", authorization: "Bearer private-dms-token", environmentKey: "prod", instanceAlias: "ORDERS-PROD", schemaName: "orders" } });
+      const response = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: { instanceAlias: "ORDERS-PROD", schemaName: "orders" } });
       assert.equal(response.statusCode, 502, response.body);
       assert.equal((await json(response)).error, `dms_mcp_http_${status}`);
       assert.doesNotMatch(response.body, /private-dms-token|private-upstream-detail/);
@@ -69,7 +70,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "missing-user" } })).statusCode, 400);
     const invalidConnection = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", payload: { url: "http://dms.example.test/sse", authorization: "Bearer token", instanceAlias: "ORDERS", schemaName: "orders" } });
     assert.equal(invalidConnection.statusCode, 400);
-    assert.equal((await json(invalidConnection)).error, "invalid_dms_url");
+    assert.equal((await json(invalidConnection)).error, "invalid_dms_scope_request");
 
     await createService(fixture.app, "Alpha", ["test"], ["https://example.test/alpha.git", "https://example.test/alpha-shared.git"]);
     const concurrentReads = await Promise.all([
@@ -113,21 +114,21 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
   }
 });
 
-test("redacts DMS credentials and stores SLS scope without service credentials", async () => {
+test("stores only DMS and SLS scopes without service credentials", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
     const current = (await fixture.app.inject({ method: "GET", url: "/api/config" })).json();
     const repository = current.services[0].repositories[0];
     const sls = { region: "cn-test", project: "alpha-test", logstores: ["application"] };
-    const dms = { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "ALPHA", schemaName: "alpha" }], credentialUpdate: { mode: "replace", values: { authorization: "Bearer dms-token" } } };
+    const dms = { databases: [{ instanceAlias: "ALPHA", schemaName: "alpha" }] };
     const payload = { name: "Alpha configured", description: "active capabilities", repositories: [{ ...repository, alias: "alpha-api" }], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: "alpha-api", baseBranch: "main" }], capabilities: ["dms", "sls"], dms, sls }] };
     const updated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
     assert.equal(updated.statusCode, 200, updated.body);
     const response = await fixture.app.inject({ method: "GET", url: "/api/config" });
     const deployment = response.json().services[0].deployments[0];
     assert.deepEqual(deployment.capabilities, ["dms", "sls"]);
-    assert.equal(deployment.dms.credentialConfigured, true);
+    assert.equal(deployment.dms.credentialConfigured, undefined);
     assert.equal(deployment.sls.credentialConfigured, undefined);
     assert.doesNotMatch(response.body, /dms-token|sls-key|sls-secret/);
     const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], dms: { ...dms, credentialUpdate: { mode: "preserve" } }, sls: { ...sls, credentialUpdate: { mode: "preserve" } } }] } });
@@ -136,7 +137,8 @@ test("redacts DMS credentials and stores SLS scope without service credentials",
     try {
       const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string);
       assert.equal(stored.sls.accessKeySecret, undefined);
-      assert.equal(stored.dms.authorization, "Bearer dms-token");
+      assert.equal(stored.dms.authorization, undefined);
+      assert.equal(stored.dms.url, undefined);
     } finally { sqlite.close(); }
     for (const [section, expected] of [
       [{ ...sls, credentialUpdate: { mode: "clear" } }, "service_sls_credentials_not_allowed"],
@@ -191,19 +193,14 @@ test("keeps repository order when changing only one binding", async () => {
 test("does not log configuration credentials when a database write fails", async () => {
   const fixture = await createApiFixture();
   try {
-    await createService(fixture.app, "Logging", ["test"]);
-    const configuration = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/config" })).body);
-    const repository = configuration.services[0].repositories[0];
     const sqlite = new DatabaseSync(fixture.databaseFile);
-    sqlite.exec("CREATE TRIGGER reject_deployment_update BEFORE UPDATE ON service_deployments BEGIN SELECT RAISE(ABORT, 'fixture_write_failed'); END");
+    sqlite.exec("CREATE TRIGGER reject_shared_credentials BEFORE INSERT ON application_settings BEGIN SELECT RAISE(ABORT, 'fixture_write_failed'); END");
     sqlite.close();
     const logs: string[] = [];
     fixture.app.log.error = (error: unknown) => { logs.push(inspect(error)); };
     for (const password of ["fixture-private-password", "issue_deployment_required"]) {
       logs.length = 0;
-      const response = await fixture.app.inject({ method: "PATCH", url: "/api/services/logging", payload: {
-        name: "Logging", description: "", repositories: [repository], deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryAlias: repository.alias, baseBranch: "main" }], capabilities: ["dms"], dms: { url: "https://dms.example.test/sse", databases: [{ instanceAlias: "LOGGING", schemaName: "logging" }], credentialUpdate: { mode: "replace", values: { authorization: `Bearer ${password}` } } } }],
-      } });
+      const response = await fixture.app.inject({ method: "PUT", url: "/api/config/shared-dms-credentials", payload: { mode: "replace", expectedRevision: 0, url: "https://dms.example.test/sse", authorization: `Bearer ${password}` } });
       assert.equal(response.statusCode, 500, "credential values must not be interpreted as database errors");
       assert.ok(logs.length > 0);
       assert.equal((response.body + logs.join("\n")).includes(password), false);

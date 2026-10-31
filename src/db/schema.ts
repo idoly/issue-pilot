@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { type AgentRuntimeConfiguration, type SlsCredentials, AGENT_CODEMODE_MODES, MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
+import { type AgentRuntimeConfiguration, type DmsCredentials, type SlsCredentials, AGENT_CODEMODE_MODES, MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -43,6 +43,8 @@ export const applicationSettings = sqliteTable("application_settings", {
   id: integer("id").primaryKey(),
   maxConcurrentIssues: integer("max_concurrent_issues"),
   dingtalkFields: json<Partial<DingtalkColumns>>("dingtalk_fields").notNull().default({}),
+  sharedDmsCredentials: json<DmsCredentials>("shared_dms_credentials"),
+  sharedDmsRevision: integer("shared_dms_revision").notNull().default(0),
   sharedSlsCredentials: json<SlsCredentials>("shared_sls_credentials"),
   sharedSlsRevision: integer("shared_sls_revision").notNull().default(0),
   mysqlStdio: json<McpStdioConfiguration>("mysql_stdio"),

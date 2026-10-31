@@ -7,7 +7,7 @@ import type { Database } from "../db/client.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { publicMcpUrl } from "../configuration/mcp.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
-import { resolveDeploymentConfiguration } from "../configuration/credentials.ts";
+import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, mcpServices, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
@@ -59,7 +59,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         const names = new Map((await database.select().from(repositoryCatalog)).map(row => [row.url, row.name]));
         const repositories = definition.repositories.map(row => ({ name: names.get(row.repository.url) ?? row.repository.alias, url: row.repository.url, branch: row.baseBranch }));
         const context = deploymentContext(target.environment, target.deployment.config, mcp);
-        return structuredJsonResult(capabilityTextResult(JSON.stringify({ service: target.service.key, name: target.service.name, environment: target.environment.key, repositories, description: [target.service.description, context].filter(Boolean).join("\n\n"), capabilities: configuredCapabilities(target.environment.kind === "dev" ? {} : resolveDeploymentConfiguration(target.deployment.config)), mcp: mcp.filter(row => row.enabled).map(row => ({ ...row, url: publicMcpUrl(row.url) })) }), { operation: "describe" }));
+        return structuredJsonResult(capabilityTextResult(JSON.stringify({ service: target.service.key, name: target.service.name, environment: target.environment.key, repositories, description: [target.service.description, context].filter(Boolean).join("\n\n"), capabilities: configuredCapabilities(target.environment.kind === "dev" ? {} : projectCapabilityConfiguration(target.deployment.config)), mcp: mcp.filter(row => row.enabled).map(row => ({ ...row, url: publicMcpUrl(row.url) })) }), { operation: "describe" }));
       }
       return issueLocalCommands.run(runtimeRoot, async () => {
         signal?.throwIfAborted();

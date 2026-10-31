@@ -1,12 +1,13 @@
 import { deploymentDbHubTargets } from "../configuration/dbhub.ts";
 import { resolveDmsScope } from "../capabilities/dms.ts";
-import { parseDmsConnectionConfiguration, CapabilityConfigurationError } from "../capabilities/registry.ts";
+import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { saveGlobalAgentConfiguration, validateGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentRuntimeConfigurationError, inspectAgentResources, parseAgentRuntime } from "../configuration/pi-runtime.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
-import { environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
+import { selectDmsCredentials } from "../configuration/user-credentials.ts";
+import { applicationSettings, userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
 import { ApiError, checkRevision, choice, optionalText, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
@@ -82,12 +83,12 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const input = record(request.body);
     try {
       const connection = await runScopeExclusive(async () => {
-        await requireDeveloper(database, request);
-        if (input.authorization) return parseDmsConnectionConfiguration(input);
-        const [saved] = await database.db.select({ config: serviceDeployments.config }).from(serviceDeployments).innerJoin(services, eq(services.id, serviceDeployments.serviceId)).innerJoin(environments, eq(environments.id, serviceDeployments.environmentId)).where(and(eq(services.key, text(input.serviceKey, "service_key", 100)), eq(environments.key, text(input.environmentKey, "environment_key", 100)))).limit(1);
-        if (!saved?.config.dms) throw new ApiError(400, "credential_not_configured");
-        if (input.url !== saved.config.dms.url) throw new ApiError(400, "dms_credentials_target_changed");
-        return saved.config.dms;
+        const actor = await requireDeveloper(database, request);
+        if (Object.keys(input).some(key => !["instanceAlias", "schemaName"].includes(key))) throw new ApiError(400, "invalid_dms_scope_request");
+        const [personal] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, actor)).limit(1);
+        const [shared] = await database.db.select({ credentials: applicationSettings.sharedDmsCredentials }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
+        try { return selectDmsCredentials(personal, shared?.credentials); }
+        catch (error) { throw new ApiError(400, error instanceof Error ? error.message : "dms_credentials_not_configured"); }
       });
       return await resolveDmsScope(connection, text(input.instanceAlias, "dms_instance_alias", 255), text(input.schemaName, "dms_schema_name", 255));
     } catch (error) {

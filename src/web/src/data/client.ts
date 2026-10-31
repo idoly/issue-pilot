@@ -30,6 +30,10 @@ export interface PersonalCredentialUpdate {
   git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
   production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
 }
+export interface SharedDmsCredentialStatus { configured: boolean; revision: number; url: string }
+export type SharedDmsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; url: string; authorization: string } | { mode: "clear" });
+export const loadSharedDmsCredentials = () => request<SharedDmsCredentialStatus>("/api/config/shared-dms-credentials");
+export const updateSharedDmsCredentials = (input: SharedDmsCredentialUpdate) => jsonRequest<SharedDmsCredentialStatus>("/api/config/shared-dms-credentials", "PUT", input);
 export interface SharedSlsCredentialStatus { configured: boolean; revision: number }
 export type SharedSlsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" });
 export const loadSharedSlsCredentials = () => request<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials");
@@ -296,7 +300,7 @@ function appendFiles(form: FormData, files: File[]): void {
   for (const file of files) form.append("files", file, file.name);
 }
 
-export const resolveDmsScope = (input: { url: string; authorization?: string; serviceKey?: string; environmentKey: string; instanceAlias: string; schemaName: string }) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input);
+export const resolveDmsScope = (input: { instanceAlias: string; schemaName: string }) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input);
 
 
 export interface ApplicationEndpoint {

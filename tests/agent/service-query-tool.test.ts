@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Compile } from "typebox/compile";
-import { capabilityDefinitions, capabilityToolInputSchema } from "../../src/capabilities/registry.ts";
+import { capabilityInputSchemas, capabilityToolInputSchema } from "../../src/capabilities/registry.ts";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
@@ -25,7 +25,7 @@ test("mutating one DMS tool schema does not change base rules or a later tool in
     const second = Compile(capabilityToolInputSchema("dms", config.dms!, { exportEnabled: true }));
     assert.equal(second.Check({ schema: "orders", script: "" }), false);
     assert.equal(second.Check({ schema: "orders", script: "SELECT 1", logic: false, export: { fileName: "evidence.json" } }), true);
-    const base = Compile(capabilityDefinitions.dms.inputSchema);
+    const base = Compile(capabilityInputSchemas.dms);
     assert.equal(base.Check({ schema: "orders", script: "" }), false);
     assert.equal(base.Check({ schema: "orders", script: "SELECT 1", export: { fileName: "evidence.json" } }), true);
     assert.equal(base.Check({ schema: "orders", script: "SELECT 1", output: { fileName: "evidence.json" } }), false);

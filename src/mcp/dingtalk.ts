@@ -11,7 +11,7 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DingtalkError("invalid_dingtalk_response");
   return value as Record<string, unknown>;
 }
-export function dingtalkId(value: unknown): string {
+function dingtalkId(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,255}$/.test(value)) throw new DingtalkError("invalid_dingtalk_id", 400);
   return value;
 }
@@ -97,7 +97,7 @@ function cellTexts(value: unknown, depth = 0): string[] {
   }
   return [];
 }
-export function dingtalkCellTexts(record: DingtalkRecord, field: string | undefined): string[] { return field ? cellTexts(record.cells[field]).map(value => value.trim()).filter(Boolean) : []; }
+function dingtalkCellTexts(record: DingtalkRecord, field: string | undefined): string[] { return field ? cellTexts(record.cells[field]).map(value => value.trim()).filter(Boolean) : []; }
 export interface DingtalkAttachment { id: string; fileName: string; size: number; url: string }
 interface DingtalkAttachmentLink { fileName: string; url: string }
 function decodeDingtalkAttachments(record: DingtalkRecord, field: string | undefined): { files: DingtalkAttachment[]; links: DingtalkAttachmentLink[] } {

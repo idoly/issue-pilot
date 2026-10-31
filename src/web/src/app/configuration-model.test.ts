@@ -3,14 +3,14 @@ import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 const draft: DeploymentCapabilityDraft = {
   capabilities: [...CAPABILITY_KEYS],
-  dms: { url: "https://dms.example.test/sse", authorization: "", credentialConfigured: true, databases: [{ instanceAlias: " ORDERS-PROD ", schemaName: " orders ", instanceId: " instance-1 ", instanceHost: " db.example.test ", instancePort: " 3306 ", databaseId: " 123 " }] },
+  dms: { databases: [{ instanceAlias: " ORDERS-PROD ", schemaName: " orders ", instanceId: " instance-1 ", instanceHost: " db.example.test ", instancePort: " 3306 ", databaseId: " 123 " }] },
   sls: { region: " cn-test ", project: " orders-test ", logstores: ["application"] },
 };
 describe("capability deployment serialization", () => {
-  it("preserves DMS credentials and serializes SLS scope without credentials", () => {
+  it("serializes DMS and SLS scope without credentials", () => {
     const serialized = serializeCapabilityDraft(draft);
     expect(Object.keys(serialized)).toEqual(["dms", "sls"]);
-    expect(serialized.dms?.credentialUpdate).toEqual({ mode: "preserve" });
+    expect(serialized.dms?.credentialUpdate).toBeUndefined();
     expect(serialized.sls).toEqual({ region: "cn-test", project: "orders-test", logstores: ["application"] });
     expect(serialized.dms?.databases[0]?.instanceAlias).toBe("ORDERS-PROD");
     expect(JSON.stringify(serialized)).not.toMatch(/accessKeyId|accessKeySecret|authorization|password/);
@@ -23,10 +23,9 @@ describe("capability deployment serialization", () => {
     ];
     expect(serializeCapabilityDraft(value).sls?.targets).toEqual(value.sls!.targets);
   });
-  it("serializes complete replacements and omits unselected capabilities", () => {
+  it("omits connection changes and unselected capabilities", () => {
     const value = structuredClone(draft);
-    value.dms!.authorization = "Bearer new-token";
-    expect(serializeCapabilityDraft(value).dms?.credentialUpdate).toEqual({ mode: "replace", values: { authorization: "Bearer new-token" } });
+    expect(serializeCapabilityDraft(value).dms?.credentialUpdate).toBeUndefined();
     expect(serializeCapabilityDraft(value).sls?.credentialUpdate).toBeUndefined();
     expect(Object.keys(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] }))).toEqual(["dms"]);
   });

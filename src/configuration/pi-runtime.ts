@@ -21,7 +21,7 @@ function exactSchema(schema: SettingsSchema): TSchema {
 }
 const settingProperties = Object.fromEntries(AGENT_PI_SETTING_KEYS.map(key => [key, Type.Optional(exactSchema(nativeSchema.properties[key]!))]));
 settingProperties.codemode = Type.Optional(Type.Object({ inlineBudget: Type.Optional(Type.Number({ minimum: 0 })) }, { additionalProperties: false }));
-export const agentPiSettingsSchema = Type.Object(settingProperties, { additionalProperties: false });
+const agentPiSettingsSchema = Type.Object(settingProperties, { additionalProperties: false });
 const runtimeSchema = Type.Object({ settings: Type.Optional(agentPiSettingsSchema), networkAllowedDomains: Type.Optional(Type.Array(Type.String())) }, { additionalProperties: false });
 export class AgentRuntimeConfigurationError extends Error {}
 export function parseAgentRuntime(value: unknown): AgentRuntimeConfiguration {

@@ -35,8 +35,15 @@
 .settings-targets-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #65706c; font: 12px/16px var(--app-font); }
 .settings-targets-head code { color: #526d5c; }
 .settings-target-row { padding: 12px; border: 1px solid #e1e8e2; border-radius: 8px; margin-top: 12px; background: #fff; }
+.edit-issue-reset-hint { grid-column: 1 / -1; margin: 4px 0 0; padding-top: 12px; border-top: 1px solid #e5eae6; color: #65706c; font: 12px/1.6 var(--app-font); }
 .issue-session-controls { margin-top: 12px; }
-.agent-panel.session-history { display: block; max-height: 55vh; overflow: auto; margin-top: 12px; padding: 12px; }
+.session-history-content { display: grid; min-width: 0; gap: 16px; }
+.session-history-description { margin: 0; color: #65706c; font: 14px/1.6 var(--app-font); }
+.session-history-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.session-history-toolbar > .ui-select { min-width: 0; flex: 1 1 240px; }
+.session-history-toolbar > .ui-button { flex: none; }
+.session-history-state { display: grid; min-height: 120px; place-items: center; padding: 24px; border: 1px solid #e1e8e2; border-radius: 8px; background: #f7f9f8; color: #65706c; text-align: center; }
+.agent-panel.session-history { display: block; max-height: 55dvh; overflow: auto; padding: 0 12px 16px; border: 1px solid #30363d; border-radius: 8px; background: #0d1117; }
 .settings-target-actions { display: flex; justify-content: flex-end; }
 .settings-target-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
 .settings-target-fields label > span { font: 12px/16px var(--app-font); }

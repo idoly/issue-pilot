@@ -60,15 +60,13 @@ test("SLS chooses complete personal credentials before shared credentials in bot
   try {
     await db.db.insert(userCredentials).values({ subject: issuePilotConfig.bootstrapUser.subject, productionSlsAccessKeyId: "personal-id", productionSlsAccessKeySecret: "personal-secret" });
     const [personal] = await db.db.select().from(userCredentials); assert.ok(personal);
-    for (const environment of ["prod", "test"]) {
-      const original = { sls: { ...scope, ...shared } };
-      const selected = applyIssueCredentials(original, environment, personal, shared);
-      assert.equal(selected.sls!.accessKeyId, "personal-id"); assert.equal(selected.sls!.accessKeySecret, "personal-secret");
-      assert.deepEqual(selected.sls!.logstores, ["*"]); assert.equal(original.sls.accessKeyId, shared.accessKeyId);
-      assert.deepEqual(applyIssueCredentials({ sls: scope }, environment, undefined, shared).sls, { ...scope, ...shared });
-      assert.throws(() => applyIssueCredentials(original, environment), /sls_credentials_not_configured/);
-      assert.throws(() => applyIssueCredentials(original, environment, { ...personal, productionSlsAccessKeySecret: "" }, shared), /personal_sls_credentials_incomplete/);
-      assert.equal(applyIssueCredentials({}, environment, personal, shared).sls, undefined);
-    }
+    const original = { sls: { ...scope, ...shared } };
+    const selected = applyIssueCredentials(original, personal, { sls: shared });
+    assert.equal(selected.sls!.accessKeyId, "personal-id"); assert.equal(selected.sls!.accessKeySecret, "personal-secret");
+    assert.deepEqual(selected.sls!.logstores, ["*"]); assert.equal(original.sls.accessKeyId, shared.accessKeyId);
+    assert.deepEqual(applyIssueCredentials({ sls: scope }, undefined, { sls: shared }).sls, { ...scope, ...shared });
+    assert.throws(() => applyIssueCredentials(original), /sls_credentials_not_configured/);
+    assert.throws(() => applyIssueCredentials(original, { ...personal, productionSlsAccessKeySecret: "" }, { sls: shared }), /personal_sls_credentials_incomplete/);
+    assert.equal(applyIssueCredentials({}, personal, { sls: shared }).sls, undefined);
   } finally { await db.close(); await f.cleanup(); }
 });

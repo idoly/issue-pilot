@@ -20,7 +20,7 @@ async function executable(name: string): Promise<string> {
   throw new Error("issue_sandbox_unavailable");
 }
 let users = 0;
-export async function acquireIssueSandbox(): Promise<() => Promise<void>> {
+async function acquireIssueSandbox(): Promise<() => Promise<void>> {
   await lifecycle.run(async () => {
     if (!users) {
       if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) throw new Error("issue_sandbox_unavailable");
