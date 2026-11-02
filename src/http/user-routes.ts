@@ -2,11 +2,10 @@ import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration, Capab
 import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { subjects, issues, userCredentials, applicationSettings } from "../db/schema.ts";
-import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { CAPABILITY_CREDENTIAL_FIELDS } from "../configuration/contracts.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
-import { CAPABILITY_KEYS, USER_ROLES } from "../domain/contracts.ts";
-import { ApiError, checkRevision, choice, record, text } from "./input.ts";
+import { CAPABILITY_KEYS, USER_ROLES, type AgentModelSelection } from "../domain/contracts.ts";
+import { agentModelSelection, ApiError, checkRevision, choice, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 function userSubject(value: unknown): string {
@@ -45,8 +44,12 @@ function serializeManagedUser(user: typeof subjects.$inferSelect) {
   };
 }
 
-export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">): void {
-  const { app, database, engine, runScopeExclusive } = context;
+export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "modelCatalog" | "runScopeExclusive">): void {
+  const { app, database, engine, modelCatalog, runScopeExclusive } = context;
+  const personalStatus = (role: string | undefined, credentials?: typeof userCredentials.$inferSelect) => {
+    const status = { ...credentialStatus(credentials), revision: credentials?.revision ?? 0 };
+    return role === "developer" ? status : { ...status, model: null, gitSshConfigured: false };
+  };
 
   const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) => runScopeExclusive(async () => {
     await authorize();
@@ -63,7 +66,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     app.get(url, { logLevel: "silent" }, async (request, reply) => {
       reply.header("Cache-Control", "private, no-store");
       return runScopeExclusive(async () => {
-        await requireDeveloper(database, request);
+        await requireAdmin(database, request);
         const [row] = await database.db.select({ dms: applicationSettings.sharedDmsCredentials, sls: applicationSettings.sharedSlsCredentials, revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
         const revision = row?.revision ?? 0;
         return kind === "dms"
@@ -73,7 +76,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     });
     app.put(url, { logLevel: "silent" }, async (request, reply) => {
       reply.header("Cache-Control", "private, no-store");
-      await requireDeveloper(database, request);
+      await requireAdmin(database, request);
       const input = record(request.body);
       if (Object.keys(input).some(key => !["mode", "expectedRevision", ...fields].includes(key)) || input.mode === "clear" && fields.some(field => input[field] !== undefined)) throw new ApiError(400, `invalid_shared_${kind}_credentials`);
       if (input.mode !== "clear" && input.mode !== "replace") throw new ApiError(400, "invalid_credential_update");
@@ -84,10 +87,10 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
           : { sharedSlsCredentials: input.mode === "clear" ? null : parseSlsConnectionConfiguration(input) };
       } catch (error) { if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message); throw error; }
       return runScopeExclusive(async () => {
-        await requireDeveloper(database, request);
+        await requireAdmin(database, request);
         const affected = await database.db.select({ id: issues.id }).from(issues);
         return runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
-          await requireDeveloper(database, request);
+          await requireAdmin(database, request);
           const [existing] = await database.db.select({ revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
           checkRevision(input.expectedRevision, existing?.revision ?? 0);
           for (const row of affected) await reservation.closeSession(row.id);
@@ -106,8 +109,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const user = await requireCurrentUser(database, request);
     reply.header("Cache-Control", "private, no-store");
     const [credentials] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, user.subject)).limit(1);
-    const status = { ...credentialStatus(credentials), revision: credentials?.revision ?? 0 };
-    return user.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
+    return personalStatus(user.role, credentials);
   });
 
   app.put("/api/me/credentials", { logLevel: "silent" }, async (request, reply) => {
@@ -115,17 +117,25 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const input = record(request.body);
     if (input.model || input.git) await requireDeveloper(database, request);
     if (Object.keys(input).some((key) => !["model", "git", "production", "expectedRevision"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
+    let modelUpdate: { selection: AgentModelSelection; apiKey?: string } | null | undefined;
+    if (input.model) {
+      const model = record(input.model);
+      if (model.mode === "clear" && Object.keys(model).length === 1) modelUpdate = null;
+      else if (model.mode === "replace" && Object.keys(model).every(key => ["mode", "provider", "model", "thinkingLevel", "codemode", "apiKey"].includes(key))) {
+        modelUpdate = { selection: agentModelSelection(model, await modelCatalog.list()) };
+        if (model.apiKey !== undefined) modelUpdate.apiKey = text(model.apiKey, "model_api_key", 10_000);
+      } else throw new ApiError(400, "invalid_credential_update");
+    }
     const result = await changeUser(subject, () => input.model || input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async (closeSessions) => {
       const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
       checkRevision(input.expectedRevision, existing?.revision ?? 0);
-      const values = { revision: (existing?.revision ?? 0) + 1, modelApiKeys: { ...existing?.modelApiKeys }, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
-      if (input.model) {
-        const model = record(input.model);
-        const provider = model.provider === undefined ? (await loadGlobalAgentConfiguration(database.db)).provider : text(model.provider, "model_provider", 200);
-        if (!/^[a-zA-Z0-9._-]+$/.test(provider)) throw new ApiError(400, "invalid_model_provider");
-        if (model.mode === "replace") values.modelApiKeys[provider] = text(model.apiKey, "model_api_key", 10_000);
-        else if (model.mode === "clear") delete values.modelApiKeys[provider];
-        else throw new ApiError(400, "invalid_credential_update");
+      const values = { revision: (existing?.revision ?? 0) + 1, modelCredentials: existing?.modelCredentials ?? null, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
+      if (modelUpdate === null) values.modelCredentials = null;
+      else if (modelUpdate) {
+        // A preserved key stays bound to its provider; a new group or provider requires a new key.
+        const apiKey = modelUpdate.apiKey ?? (values.modelCredentials?.provider === modelUpdate.selection.provider ? values.modelCredentials.apiKey : undefined);
+        if (!apiKey) throw new ApiError(400, "agent_api_key_required");
+        values.modelCredentials = { ...modelUpdate.selection, apiKey };
       }
       if (input.git) {
         const git = record(input.git);
@@ -156,8 +166,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       await closeSessions();
       const [saved] = await database.db.insert(userCredentials).values({ subject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } }).returning();
       const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-      const status = { ...credentialStatus(saved), revision: saved?.revision ?? 0 };
-      return user?.role === "developer" ? { ...status, provider: (await loadGlobalAgentConfiguration(database.db)).provider } : { ...status, modelProviders: [], gitSshConfigured: false };
+      return personalStatus(user?.role, saved);
     }).catch((error) => {
       if (error instanceof ApiError) throw error;
       throw new ApiError(500, "user_credentials_save_failed");

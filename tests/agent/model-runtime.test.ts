@@ -24,7 +24,9 @@ function model(provider: string, id: string): Model<"openai-responses"> {
   };
 }
 
-test("shares one offline Pi catalog refresh across concurrent listings", async () => {
+test("shares one offline Pi catalog refresh and lists every model of the Operator models.json providers", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "issue-pilot-catalog-"));
+  await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { "a-provider": {}, "z-provider": {} } }));
   const refreshes: unknown[] = [];
   const runtime = {
     async refresh(options: unknown) {
@@ -32,12 +34,13 @@ test("shares one offline Pi catalog refresh across concurrent listings", async (
       await new Promise((resolve) => setTimeout(resolve, 5));
       return { aborted: false, errors: new Map() };
     },
-    getAvailableSnapshot() {
-      return [model("z-provider", "second"), model("a-provider", "first")];
+    // Availability depends on host authentication, which no longer selects candidates.
+    getModels() {
+      return [model("z-provider", "second"), model("built-in", "unlisted"), model("a-provider", "first")];
     },
   } as unknown as ModelRuntime;
   const sharedRuntime: PiModelRuntime = { async load() { return runtime; }, async close() {} };
-  const catalog = new PiAgentModelCatalog(sharedRuntime);
+  const catalog = new PiAgentModelCatalog(sharedRuntime, agentDir);
 
   const [first, second] = await Promise.all([catalog.list(), catalog.list()]);
 
@@ -51,6 +54,7 @@ test("shares one offline Pi catalog refresh across concurrent listings", async (
 
   await catalog.list();
   assert.deepEqual(refreshes, [{ allowNetwork: false }, { allowNetwork: false }]);
+  await rm(agentDir, { recursive: true, force: true });
 });
 
 test("refreshes models without writing to the read-only Pi configuration", async () => {
@@ -92,7 +96,7 @@ test("refreshes models without writing to the read-only Pi configuration", async
     const refreshed = await first.refresh({ allowNetwork: false });
 
     assert.equal(refreshed.errors.size, 0);
-    assert.deepEqual(first.getAvailableSnapshot().map(({ provider, id }) => ({ provider, id })), [
+    assert.deepEqual(first.getModels("test-provider").map(({ provider, id }) => ({ provider, id })), [
       { provider: "test-provider", id: "test-model" },
     ]);
     assert.deepEqual((await readdir(agentDir)).sort(), ["auth.json", "models-store.json", "models.json"]);

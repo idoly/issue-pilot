@@ -1,3 +1,6 @@
+import { validateAgentModelSelection } from "../configuration/agent.ts";
+import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS, type AgentModelDefinition, type AgentModelSelection } from "../domain/contracts.ts";
+
 export class ApiError extends Error {
   readonly statusCode: number;
 
@@ -38,4 +41,12 @@ export function choice<const Values extends readonly string[]>(value: unknown, n
   const selected = text(value, name, 100);
   if (!values.includes(selected)) throw new ApiError(400, `invalid_${name}`);
   return selected as Values[number];
+}
+
+// Shared and personal model groups accept only provider/model/thinking combinations offered by the model catalog.
+export function agentModelSelection(input: Record<string, unknown>, models: AgentModelDefinition[]): AgentModelSelection {
+  const selection = { provider: text(input.provider, "agent_provider", 200), model: text(input.model, "agent_model", 500), thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS), codemode: choice(input.codemode, "agent_codemode", AGENT_CODEMODE_MODES) };
+  try { validateAgentModelSelection(selection, models); }
+  catch (error) { if (error instanceof Error && ["agent_model_not_available", "agent_thinking_level_not_supported"].includes(error.message)) throw new ApiError(400, error.message); throw error; }
+  return selection;
 }

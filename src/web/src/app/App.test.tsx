@@ -28,7 +28,7 @@ vi.mock("../data/client", async (importOriginal) => {
     { subject: "second-user", name: "刘宜展", email: "lyz@example.test", role: "developer", active: true, createdAt: now, updatedAt: now },
   ];
   const configuration = {
-    agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {} },
+    agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false },
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{
@@ -51,7 +51,7 @@ vi.mock("../data/client", async (importOriginal) => {
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
     loadSharedDmsCredentials: vi.fn(async () => ({ configured: true, revision: 0, url: "https://dms.example.test/sse" })),
     loadSharedSlsCredentials: vi.fn(async () => ({ configured: true, revision: 0 })),
-    loadPersonalCredentials: vi.fn(async () => ({ revision: 0, provider: "enterprise-ai", modelProviders: [], gitSshConfigured: false })),
+    loadPersonalCredentials: vi.fn(async () => ({ revision: 0, model: null, gitSshConfigured: false })),
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),

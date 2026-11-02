@@ -11,7 +11,7 @@ import { ConfigurationView } from "./ConfigurationView";
 const mysql = { host: "db.example.test", port: 3306, username: "reader", password: "fixture-old-secret", database: "orders" };
 function configuration(): Config {
   return {
-    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {} }, agentModels: [],
+    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false }, agentModels: [],
     environments: [{ key: "dev", name: "开发" }, { key: "test", name: "测试" }, { key: "prod", name: "正式" }],
     services: [{ key: "orders", name: "Orders", description: "", context: "", revision: 1, repositories: [{ id: "repo", alias: "app", url: "git@example.test:team/app.git" }], deployments: ["dev", "test", "prod"].map(environmentKey => ({ environmentKey, capabilities: [], repositoryBranches: [{ repositoryId: "repo", repositoryAlias: "app", baseBranch: "main" }], ...(environmentKey === "prod" ? { mysql: [{ host: mysql.host, port: mysql.port, username: mysql.username, database: mysql.database, passwordConfigured: true }] } : {}) })) }],
   };

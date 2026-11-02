@@ -5,6 +5,7 @@ import { structuredJsonResult } from "../capabilities/contracts.ts";
 import { DmsOperationError, queryDms } from "../capabilities/dms.ts";
 import { capabilityToolInputSchema, type CapabilityInputs } from "../capabilities/registry.ts";
 import { readSlsLogs } from "../capabilities/sls.ts";
+import { objectToolParameters } from "./tool-schema.ts";
 import type { IssueWorkFileStore } from "../workspace/work-files.ts";
 import type { AgentSessionContext } from "./context.ts";
 import type { CapabilityName, DeploymentConfig } from "../domain/contracts.ts";
@@ -23,7 +24,7 @@ export function createCapabilityTools(context: Pick<AgentSessionContext, "servic
     for (const variant of variants) schemas.push(Type.Object({ environment: Type.Literal(scope.environmentKey), service: Type.Literal(scope.serviceKey, { description: scope.serviceName }), capability: Type.Literal(capability), ...(variant as unknown as { properties: Record<string, TSchema> }).properties }, { additionalProperties: false }));
   }
   if (!schemas.length) return [];
-  const schema = schemas.length === 1 ? schemas[0]! : Type.Union(schemas);
+  const schema = objectToolParameters(schemas.length === 1 ? schemas[0]! : Type.Union(schemas));
   const validateInput = Compile(schema);
   return [defineTool({
     name: "service_query", label: "Query service evidence", parameters: schema, outputSchema: Type.Unknown(),

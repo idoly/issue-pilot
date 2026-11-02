@@ -8,7 +8,7 @@ import { ApiError } from "../../src/http/input.ts";
 import { registerUserRoutes } from "../../src/http/user-routes.ts";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { createApiFixture, createService, issuePayload, json } from "./fixture.ts";
+import { createApiFixture, createService, issuePayload, json, modelCatalog } from "./fixture.ts";
 
 const bootstrapHeaders = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 
@@ -137,7 +137,7 @@ test("rejects a user change when the actor loses the developer role while queued
   let entered!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const waiting = new Promise<void>((resolve) => { entered = resolve; });
-  registerUserRoutes({ app, database, engine: fixture.engine, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
+  registerUserRoutes({ app, database, engine: fixture.engine, modelCatalog, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
   app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });

@@ -18,8 +18,8 @@ test("adds an empty runtime configuration without changing the global model or c
     await db.client.execute("INSERT INTO global_agent_configuration (id,provider,model,thinking_level,codemode,created_at,updated_at) VALUES (1,'existing-provider','existing-model','high','only',11,22)");
     const original = (await db.client.execute("SELECT * FROM global_agent_configuration")).rows[0]!;
     await migrate(db.db, { migrationsFolder: path.resolve("drizzle") });
-    const { runtime, ...retained } = (await db.client.execute("SELECT * FROM global_agent_configuration")).rows[0]!;
-    assert.deepEqual(JSON.parse(String(runtime)), {}); assert.deepEqual(retained, original);
+    const { runtime, api_key: apiKey, ...retained } = (await db.client.execute("SELECT * FROM global_agent_configuration")).rows[0]!;
+    assert.deepEqual(JSON.parse(String(runtime)), {}); assert.equal(apiKey, ""); assert.deepEqual(retained, original);
     assert.equal((await db.client.execute("PRAGMA integrity_check")).rows[0]!.integrity_check, "ok"); assert.equal((await db.client.execute("PRAGMA foreign_key_check")).rows.length, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });

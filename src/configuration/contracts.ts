@@ -55,7 +55,7 @@ export interface DingtalkUserSettings {
 }
 
 export interface Configuration extends ConfigurationCatalog {
-  agent: AgentConfiguration;
+  agent: AgentConfiguration & { apiKeyConfigured: boolean };
   agentModels: AgentModelOption[];
   services: ServiceConfiguration[];
 }

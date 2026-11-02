@@ -115,7 +115,7 @@ test("keeps admissions and executed rounds on the same branch during session sta
   const prompts: string[] = [];
   try {
     await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, "admit-owner"));
-    await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {} });
+    await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {}, apiKey: "fixture-key" });
     const work = issueRoot(root, issue.key);
     const project: PreparedIssueProject = { deployment, runtimeRoot: work, workspaceRoot: work, repositories: [], relatedIssueKeys: [], runtimeReady: true };
     t.mock.method(internal.projectManager, "prepare", async () => project);

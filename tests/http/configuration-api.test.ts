@@ -99,7 +99,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     };
     assert.deepEqual(config.environments.map(({ key }) => key).sort(), ["dev", "prod", "test"]);
     assert.equal(config.environments.some((environment) => "id" in environment || "kind" in environment), false);
-    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {} });
+    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false });
     assert.deepEqual(Object.keys(config.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     const service = config.services[0]!;
     assert.equal(service.key, "alpha");
@@ -290,7 +290,7 @@ test("updates the single global model only after every affected Issue is idle", 
     assert.equal(updated.statusCode, 200, updated.body);
     assert.ok(fixture.engine.closedSessions.includes(issueId));
     const config = await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body)) as { agent: unknown };
-    assert.deepEqual(config.agent, testAgent);
+    assert.deepEqual(config.agent, { ...testAgent, apiKeyConfigured: false });
   } finally {
     await fixture.cleanup();
   }

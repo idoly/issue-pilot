@@ -50,7 +50,7 @@ export const issuePilotConfig = Object.freeze({
   }),
   runtime: Object.freeze({
     agent: Object.freeze({
-      modelResponseIdleMs: 5 * 60 * 1000, maxConcurrentIssues: 3,
+      modelResponseIdleMs: 5 * 60 * 1000, maxConcurrentIssues: 10,
       networkAllowedDomains: Object.freeze(["registry.npmjs.org", "registry.npmmirror.com", "repo.maven.apache.org", "repo1.maven.org", "github.com", "*.githubusercontent.com"]),
     }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),

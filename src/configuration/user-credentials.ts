@@ -34,8 +34,9 @@ export function applyIssueCredentials(configuration: Pick<StoredDeploymentConfig
   return result;
 }
 export function credentialStatus(credentials?: typeof userCredentials.$inferSelect) {
+  const model = credentials?.modelCredentials;
   return {
-    modelProviders: Object.keys(credentials?.modelApiKeys ?? {}).sort(),
+    model: model ? { provider: model.provider, model: model.model, thinkingLevel: model.thinkingLevel, codemode: model.codemode } : null,
     gitSshConfigured: Boolean(credentials?.gitPrivateKey),
     ...(credentials?.productionDmsAuthorization ? { productionDmsConfigured: true, productionDmsUrl: credentials.productionDmsUrl } : {}),
     ...(credentials?.productionSlsAccessKeyId && credentials.productionSlsAccessKeySecret ? { productionSlsConfigured: true } : {}),

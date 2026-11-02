@@ -29,7 +29,7 @@ async function fixture(t: TestContext, blockFirst = false) {
   const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261023-931", title: "Recovery fixture", type: "smart_analysis", serviceId: service.id, environmentId: environment.id, reporterSubject: "recovery-owner" }).returning();
   assert.ok(deployment && issue);
   await database.db.insert(issueWorkspaces).values({ issueId: issue.id });
-  await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {} });
+  await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {}, apiKey: "fixture-key" });
   await claimIssueRoot(root, issue.key);
   const work = issueRoot(root, issue.key);
   const manager = await createPrivateSessionManager(work, work);

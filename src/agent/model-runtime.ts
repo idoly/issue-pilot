@@ -26,7 +26,22 @@ async function copyPrivateFile(source: string, destination: string): Promise<voi
   }
 }
 
-export function createPiModelRuntime(agentDir = getAgentDir(), personal?: { provider: string; apiKey: string }): PiModelRuntime {
+async function readOperatorModels(agentDir: string): Promise<{ providers?: Record<string, unknown> } | undefined> {
+  try {
+    return JSON.parse(await readFile(join(agentDir, "models.json"), "utf8"), (key, value) => {
+      // Operator headers may contain arbitrary authentication, including custom token names.
+      if (key === "apiKey" || key === "headers" || /^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(key)) return undefined;
+      return value;
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+// Without a credential the runtime only lists models and reads the Operator models.json directly.
+// Request runtimes receive the SQLite-selected key; Operator auth.json and models.json credentials never reach them.
+export function createPiModelRuntime(agentDir = getAgentDir(), credential?: { provider: string; apiKey: string }): PiModelRuntime {
   let privateDirectory: string | undefined;
   let runtime: Promise<ModelRuntime> | undefined;
   let closing: Promise<void> | undefined;
@@ -42,23 +57,12 @@ export function createPiModelRuntime(agentDir = getAgentDir(), personal?: { prov
       privateDirectory = directory;
       try {
         await chmod(directory, 0o700);
-        await Promise.all([
-          ...(personal ? [] : [copyPrivateFile(join(agentDir, "auth.json"), join(directory, "auth.json"))]),
-          copyPrivateFile(join(agentDir, "models-store.json"), join(directory, "models-store.json")),
-        ]);
+        await copyPrivateFile(join(agentDir, "models-store.json"), join(directory, "models-store.json"));
         let modelsPath = join(agentDir, "models.json");
-        if (personal) {
-          try {
-            const models = JSON.parse(await readFile(modelsPath, "utf8"), (key, value) => {
-              // Operator headers may contain arbitrary authentication, including custom token names.
-              if (key === "apiKey" || key === "headers" || /^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(key)) return undefined;
-              return value;
-            });
-            modelsPath = join(directory, "models.json");
-            await writeFile(modelsPath, JSON.stringify(models), { mode: 0o600 });
-          } catch (error) {
-            if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-          }
+        if (credential) {
+          const models = await readOperatorModels(agentDir);
+          modelsPath = join(directory, "models.json");
+          if (models) await writeFile(modelsPath, JSON.stringify(models), { mode: 0o600 });
         }
         const modelRuntime = await ModelRuntime.create({
           authPath: join(directory, "auth.json"),
@@ -67,7 +71,7 @@ export function createPiModelRuntime(agentDir = getAgentDir(), personal?: { prov
           allowModelNetwork: false,
           refreshOnCreate: false,
         });
-        if (personal) await modelRuntime.setRuntimeApiKey(personal.provider, personal.apiKey);
+        if (credential) await modelRuntime.setRuntimeApiKey(credential.provider, credential.apiKey);
         return modelRuntime;
       } catch (error) {
         await cleanup().catch(() => undefined);
@@ -93,11 +97,13 @@ export function createPiModelRuntime(agentDir = getAgentDir(), personal?: { prov
 export class PiAgentModelCatalog implements AgentModelCatalog {
   private readonly runtime: PiModelRuntime;
   private readonly ownsRuntime: boolean;
+  private readonly agentDir: string;
   private listing: Promise<AgentModelDefinition[]> | undefined;
 
-  constructor(runtime?: PiModelRuntime) {
-    this.runtime = runtime ?? createPiModelRuntime();
+  constructor(runtime?: PiModelRuntime, agentDir = getAgentDir()) {
+    this.runtime = runtime ?? createPiModelRuntime(agentDir);
     this.ownsRuntime = runtime === undefined;
+    this.agentDir = agentDir;
   }
 
   async close(): Promise<void> {
@@ -117,7 +123,10 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
   private async load(): Promise<AgentModelDefinition[]> {
     const runtime = await this.runtime.load();
     await runtime.refresh({ allowNetwork: false });
-    return runtime.getAvailableSnapshot()
+    // Candidates are the Operator models.json providers; SQLite keys make them usable, so host authentication is not a filter.
+    const providers = new Set(Object.keys((await readOperatorModels(this.agentDir))?.providers ?? {}));
+    return runtime.getModels()
+      .filter((model) => providers.has(model.provider))
       .map((model) => ({
         provider: model.provider,
         id: model.id,

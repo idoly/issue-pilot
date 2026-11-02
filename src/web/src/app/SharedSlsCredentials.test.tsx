@@ -1,11 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-const state = vi.hoisted(() => ({ user: () => ({ subject: "alice", role: "developer" }), load: vi.fn(), save: vi.fn() }));
+const state = vi.hoisted(() => ({ user: () => ({ subject: "alice", role: "developer", isAdmin: true }), load: vi.fn(), save: vi.fn() }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), loadSharedSlsCredentials: state.load, updateSharedSlsCredentials: state.save }));
 import { SharedCredentials } from "./SharedCredentials";
-beforeEach(() => { vi.resetAllMocks(); state.user = () => ({ subject: "alice", role: "developer" }); state.load.mockResolvedValue({ configured: true, revision: 5 }); });
+beforeEach(() => { vi.resetAllMocks(); state.user = () => ({ subject: "alice", role: "developer", isAdmin: true }); state.load.mockResolvedValue({ configured: true, revision: 5 }); });
 afterEach(cleanup);
 
 test("shared SLS only exposes status and supports blank-preserve, complete replacement and clear", async () => {
@@ -47,7 +47,7 @@ test("shared credential conflicts retain input and provide an explicit reload", 
 });
 
 for (const failed of [false, true]) test(`identity changes clear shared secret drafts and ignore late ${failed ? "failure" : "success"}`, async () => {
-  const [user, setUser] = createSignal({ subject: "alice", role: "developer" }, { ownedWrite: true }); state.user = user;
+  const [user, setUser] = createSignal({ subject: "alice", role: "developer", isAdmin: true }, { ownedWrite: true }); state.user = user;
   let finish!: () => void;
   state.save.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = failed ? () => reject(new Error("old_save_failed")) : () => resolve({ configured: true, revision: 6 }); }));
   render(() => <SharedCredentials capability="sls" />);
@@ -55,7 +55,7 @@ for (const failed of [false, true]) test(`identity changes clear shared secret d
   await fireEvent.input(within(dialog).getByLabelText("共享 SLS AccessKey ID"), { target: { value: "old-id" } });
   await fireEvent.input(within(dialog).getByLabelText("共享 SLS AccessKey Secret"), { target: { value: "old-secret" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" })); await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
-  state.load.mockResolvedValueOnce({ configured: false, revision: 8 }); setUser({ subject: "bob", role: "developer" });
+  state.load.mockResolvedValueOnce({ configured: false, revision: 8 }); setUser({ subject: "bob", role: "developer", isAdmin: true });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); await screen.findByRole("button", { name: "设置凭据" });
   finish(); await Promise.resolve();
   fireEvent.click(screen.getByRole("button", { name: "设置凭据" })); dialog = await screen.findByRole("dialog");
@@ -63,7 +63,7 @@ for (const failed of [false, true]) test(`identity changes clear shared secret d
   expect(within(dialog).queryByRole("alert")).toBeNull();
 });
 
-test("non-developers do not mount shared credential controls or read their status", () => {
-  state.user = () => ({ subject: "viewer", role: "product" }); render(() => <SharedCredentials capability="sls" />);
+test("non-admins do not mount shared credential controls or read their status", () => {
+  state.user = () => ({ subject: "viewer", role: "product", isAdmin: false }); render(() => <SharedCredentials capability="sls" />);
   expect(screen.queryByRole("region", { name: "共享 SLS 凭据" })).toBeNull(); expect(state.load).not.toHaveBeenCalled();
 });

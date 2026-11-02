@@ -4,12 +4,12 @@ export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mc
 import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
 import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
+import { AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentModelSelection, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
-export type { AgentConfiguration, CapabilityName } from "../../../domain/contracts";
+export { AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
+export type { AgentConfiguration, AgentModelSelection, CapabilityName } from "../../../domain/contracts";
 export type { AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
@@ -26,7 +26,7 @@ export interface ManagedUserInput { subject: string; name: string; email: string
 export interface ManagedUserUpdate { name?: string; email?: string; active?: boolean; role?: UserRole; isAdmin?: boolean; expectedRevision?: number }
 export interface PersonalCredentialUpdate {
   expectedRevision?: number;
-  model?: { mode: "replace"; provider?: string; apiKey: string } | { mode: "clear"; provider?: string };
+  model?: ({ mode: "replace"; apiKey?: string } & AgentModelSelection) | { mode: "clear" };
   git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
   production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
 }
@@ -38,9 +38,11 @@ export interface SharedSlsCredentialStatus { configured: boolean; revision: numb
 export type SharedSlsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" });
 export const loadSharedSlsCredentials = () => request<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials");
 export const updateSharedSlsCredentials = (input: SharedSlsCredentialUpdate) => jsonRequest<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials", "PUT", input);
-export interface PersonalCredentialStatus { revision: number; provider?: string; modelProviders: string[]; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
+export interface PersonalCredentialStatus { revision: number; model: AgentModelSelection | null; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
 export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
+export type AgentConfigurationUpdate = AgentConfiguration & { apiKey?: { mode: "replace"; value: string } | { mode: "clear" } };
+export const updateAgentConfiguration = (input: AgentConfigurationUpdate) => jsonRequest<{ ok: true }>("/api/config/agent", "PUT", input);
 export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage");
 export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
 export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(`/api/users/${encodeURIComponent(subject)}`, "PATCH", input);

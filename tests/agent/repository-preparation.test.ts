@@ -54,7 +54,7 @@ test("atomically switches development repository sets across preparation and fin
     }));
     const [dev] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
-    await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
+    await database.db.insert(userCredentials).values({ subject: "tester", modelCredentials: { provider: "test-provider", model: "test-model", thinkingLevel: "medium", codemode: "on", apiKey: "fixture-key" } });
     const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
     await registerTestRepositories(database.db, remotes);
     const repositories = await database.db.insert(serviceRepositories).values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url }))).returning();
@@ -173,7 +173,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const prod = environmentRows.find((environment) => environment.kind === "prod")!;
     const dev = environmentRows.find((environment) => environment.kind === "dev")!;
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
-    await database.db.insert(userCredentials).values({ subject: "tester", modelApiKeys: { "test-provider": "fixture-key" } });
+    await database.db.insert(userCredentials).values({ subject: "tester", modelCredentials: { provider: "test-provider", model: "test-model", thinkingLevel: "medium", codemode: "on", apiKey: "fixture-key" } });
     await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
     await database.db.insert(mcpServices).values({ name: "Disabled tools", url: "https://disabled.example.test/mcp", transport: "streamable_http", enabled: false });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();

@@ -60,6 +60,19 @@ test("exposes only selected DMS/SLS targets without credentials", () => {
   assert.deepEqual((schemas[0]!.properties.schema as { enum: string[] }).enum, ["orders"]);
   assert.deepEqual((schemas[1]!.properties.logstore as { enum: string[] }).enum, ["application", "gateway"]);
 });
+test("multi-target tool parameters keep an object root so strict OpenAI-compatible providers accept them", () => {
+  for (const [scopeContext, scopeConfig, union] of [[context, config, true], [{ ...context, capabilities: ["dms"] as AgentSessionContext["capabilities"] }, config, false]] as const) {
+    const [tool] = createCapabilityTools(scopeContext, scopeConfig);
+    const parameters = tool!.parameters as unknown as { type?: string; anyOf?: unknown[] };
+    // DeepSeek rejects a bare anyOf root as `schema must be a JSON Schema of type: "object", got type: null`.
+    assert.equal(parameters.type, "object");
+    assert.equal(Array.isArray(parameters.anyOf), union);
+    const validate = Compile(tool!.parameters);
+    assert.equal(validate.Check({ environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), true);
+    assert.equal(validate.Check({ environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", databaseId: "other" }), false);
+    assert.equal(validate.Check({ environment: "prod", service: "orders", capability: "unknown" }), false);
+  }
+});
 test("rejects retired adapters and undeclared targets before invoking external systems", async () => {
   const [tool] = createCapabilityTools(context, config);
   for (const input of [

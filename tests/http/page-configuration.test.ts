@@ -34,7 +34,7 @@ test("page configuration persists across restart and old files never overwrite i
     try { const preferences = await loadDingtalkUserSettings(connectionAfter.db, issuePilotConfig.bootstrapUser.subject); assert.equal(preferences.source?.environment, "test"); assert.deepEqual(preferences.fields, { description: "描述", title: "序号" }); }
     finally { await connectionAfter.close(); }
     assert.equal(await readFile(path.join(f.root, "user.yaml"), "utf8"), 'private-key: "invalid\n');
-    const credentials = await restarted.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { model: { mode: "replace", provider: "enterprise-ai", apiKey: "page-owned-key" } } });
+    const credentials = await restarted.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { model: { mode: "replace", provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high", codemode: "off", apiKey: "page-owned-key" } } });
     assert.equal(credentials.statusCode, 200, credentials.body);
     assert.doesNotMatch(credentials.body, /page-owned-key/);
   } finally { await restarted?.close(); await f.cleanup(); }
@@ -130,9 +130,9 @@ test("stale configuration revisions refuse repository and credential replacement
     const id = saved.json().id;
     assert.equal((await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { name: "Two", url: "git@example.test:team/repo.git", expectedRevision: 0 } })).statusCode, 200);
     assert.equal((await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { name: "Old", url: "git@example.test:team/repo.git", expectedRevision: 0 } })).statusCode, 409);
-    const first = await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { expectedRevision: 0, model: { mode: "replace", apiKey: "first-private-key" } } });
+    const first = await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { expectedRevision: 0, model: { mode: "replace", provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high", codemode: "off", apiKey: "first-private-key" } } });
     assert.equal(first.statusCode, 200, first.body);
-    const stale = await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { expectedRevision: 0, model: { mode: "replace", apiKey: "stale-private-key" } } });
+    const stale = await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { expectedRevision: 0, model: { mode: "replace", provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high", codemode: "off", apiKey: "stale-private-key" } } });
     assert.equal(stale.statusCode, 409); assert.equal(stale.json().error, "configuration_changed");
     const read = await f.app.inject({ method: "GET", url: "/api/me/credentials", headers });
     assert.equal(read.json().revision, 1); assert.doesNotMatch(read.body, /private-key/);

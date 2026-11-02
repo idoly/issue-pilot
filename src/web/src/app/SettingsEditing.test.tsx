@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ManagedUser, Person, PersonalCredentialStatus } from "../data/client";
 
 const state = vi.hoisted(() => ({ user: undefined as unknown, users: vi.fn(), createUser: vi.fn(), updateUser: vi.fn(), credentials: vi.fn(), saveCredentials: vi.fn(), repositories: vi.fn(), register: vi.fn(), updateRepository: vi.fn(), removeRepository: vi.fn(), refreshPeople: vi.fn(), refreshConfiguration: vi.fn(), refreshCatalog: vi.fn() }));
-vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user, configuration: () => ({ agent: { provider: "fixture" } }), refreshPeople: state.refreshPeople, refreshConfiguration: state.refreshConfiguration, refreshCatalog: state.refreshCatalog }) }));
+vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user, configurationLoaded: () => true, configuration: () => ({ agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "on" }, agentModels: [{ provider: "fixture", id: "model", thinkingLevels: ["medium"] }, { provider: "deepseek", id: "deepseek-flash", thinkingLevels: ["medium"] }] }), refreshPeople: state.refreshPeople, refreshConfiguration: state.refreshConfiguration, refreshCatalog: state.refreshCatalog }) }));
 vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), loadManagedUsers: state.users, createUser: state.createUser, updateUser: state.updateUser, loadPersonalCredentials: state.credentials, updatePersonalCredentials: state.saveCredentials, loadRepositories: state.repositories, registerRepository: state.register, updateRepository: state.updateRepository, deleteRepository: state.removeRepository }));
 import { PersonalCredentials } from "./PersonalCredentials";
 import { UserManagement } from "./UserManagement";
@@ -12,7 +12,7 @@ import { RepositoryManagement } from "./RepositoryManagement";
 
 const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer", isAdmin: true };
 const users: ManagedUser[] = [{ ...alice, revision: 2, active: true, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }, { ...alice, subject: "inactive", name: "Inactive", email: "inactive@example.test", revision: 0, active: false, isAdmin: false, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }];
-const status: PersonalCredentialStatus = { modelProviders: ["fixture"], gitSshConfigured: true, productionDmsConfigured: false, productionSlsConfigured: false, revision: 3 };
+const status: PersonalCredentialStatus = { model: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" }, gitSshConfigured: true, productionDmsConfigured: false, productionSlsConfigured: false, revision: 3 };
 beforeEach(() => {
   state.user = () => alice;
   state.users.mockResolvedValue(structuredClone(users)); state.createUser.mockResolvedValue(users[0]); state.updateUser.mockResolvedValue(users[0]);
@@ -66,18 +66,58 @@ for (const outcome of ["success", "failure"] as const) test(`old identity person
 
 test("credential popup opens directly, preserves blanks and reports stale writes without discarding the new value", async () => {
   state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
-  render(() => <PersonalCredentials />); await screen.findByText("API Key");
-  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
+  render(() => <PersonalCredentials />); await screen.findByText("SSH Key");
+  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!);
   let dialog = await screen.findByRole("dialog");
   expect(within(dialog).queryByRole("button", { name: "替换" })).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); expect(state.saveCredentials).not.toHaveBeenCalled();
-  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!); dialog = await screen.findByRole("dialog");
-  await fireEvent.input(within(dialog).getByLabelText("新凭证"), { target: { value: "replacement-private-key" } });
+  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!); dialog = await screen.findByRole("dialog");
+  const privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nreplacement\n-----END OPENSSH PRIVATE KEY-----";
+  await fireEvent.input(within(dialog).getByLabelText("SSH 私钥"), { target: { value: privateKey } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("配置已被更新");
-  expect(within(dialog).getByLabelText("新凭证")).toHaveProperty("value", "replacement-private-key");
-  expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "replace", provider: "fixture", apiKey: "replacement-private-key" } });
+  expect(within(dialog).getByLabelText("SSH 私钥")).toHaveProperty("value", privateKey);
+  expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, git: { mode: "replace", type: "ssh", privateKey } });
+});
+
+test("personal API key reuses the model dialog, starts from the stored group and preserves its key", async () => {
+  state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
+  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
+  const dialog = await screen.findByRole("dialog", { name: "更新个人 API Key" });
+  expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("off");
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("配置已被更新");
+  expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "replace", provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" } });
+  expect(screen.getByRole("dialog")).toBe(dialog);
+});
+
+test("a new personal group starts from the shared model and switching providers requires a key", async () => {
+  state.credentials.mockResolvedValue({ ...status, model: null });
+  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  fireEvent.click(screen.getAllByRole("button", { name: "设置凭证" })[0]!);
+  const dialog = await screen.findByRole("dialog", { name: "设置个人 API Key" });
+  expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("on");
+  expect(within(dialog).queryByRole("button", { name: "清除凭据" })).toBeNull();
+  fireEvent.click(within(dialog).getByLabelText("Provider"));
+  fireEvent.click(await screen.findByRole("option", { name: "deepseek" }));
+  await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("请填写 API Key");
+  expect(state.saveCredentials).not.toHaveBeenCalled();
+  await fireEvent.input(within(dialog).getByLabelText("API Key"), { target: { value: "deepseek-key" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "replace", provider: "deepseek", model: "deepseek-flash", thinkingLevel: "medium", codemode: "on", apiKey: "deepseek-key" } }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("clearing removes the whole personal model group", async () => {
+  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "清除凭据" }));
+  await waitFor(() => expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "clear" } }));
 });
 
 test("identity changes clear secret drafts and late credential success cannot mutate the next identity", async () => {
@@ -85,8 +125,8 @@ test("identity changes clear secret drafts and late credential success cannot mu
   let finish!: () => void;
   state.saveCredentials.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ...status, productionDmsConfigured: true }); }));
   render(() => <PersonalCredentials />); await screen.findByText("API Key");
-  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
-  await fireEvent.input(await screen.findByLabelText("新凭证"), { target: { value: "old-secret" } });
+  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!);
+  await fireEvent.input(await screen.findByLabelText("SSH 私钥"), { target: { value: "old-secret" } });
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(finish).toBeTypeOf("function")); setUser({ ...alice, subject: "bob", name: "Bob" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); await screen.findByText("API Key");

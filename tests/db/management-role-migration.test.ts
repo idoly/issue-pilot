@@ -25,7 +25,10 @@ test("grants global management only to the specified user without changing busin
     const users = (await db.client.execute("SELECT subject,role,is_admin,created_at,updated_at FROM subjects ORDER BY subject")).rows;
     assert.equal(users[0]!.role, "developer"); assert.equal(users[0]!.is_admin, 0); assert.equal(users[0]!.updated_at, 22);
     assert.equal(users[1]!.role, "developer"); assert.equal(users[1]!.is_admin, 1); assert.equal(users[1]!.created_at, 11);
-    assert.deepEqual((await db.client.execute("SELECT * FROM user_credentials ORDER BY subject")).rows.map(({ revision: _revision, ...row }) => row), credentials);
+    const migrated = (await db.client.execute("SELECT * FROM user_credentials ORDER BY subject")).rows;
+    // Later migrations add an empty personal model group without a global model to derive it from.
+    assert.ok(migrated.every(row => row.model_credentials === null));
+    assert.deepEqual(migrated.map(({ revision: _revision, model_credentials: _model, ...row }) => row), credentials);
     await assert.rejects(db.client.execute("UPDATE subjects SET role='admin'"), /CHECK constraint/);
     await migrate(db.db, { migrationsFolder: path.resolve("drizzle") });
     assert.deepEqual((await db.client.execute("SELECT subject,role,is_admin,created_at,updated_at FROM subjects ORDER BY subject")).rows, users);

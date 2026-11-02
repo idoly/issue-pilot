@@ -53,6 +53,13 @@ export interface AgentConfiguration {
   thinkingLevel: AgentThinkingLevel;
 }
 
+export type AgentModelSelection = Pick<AgentConfiguration, "provider" | "model" | "thinkingLevel" | "codemode">;
+
+/** A complete personal model group; developers who own one use it instead of the shared model and key. */
+export interface PersonalModelCredentials extends AgentModelSelection {
+  apiKey: string;
+}
+
 export interface AgentModelDefinition {
   provider: string;
   id: string;

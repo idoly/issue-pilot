@@ -28,6 +28,8 @@ test("workspace tool schema mutations remain local to that tool instance", async
     const [issue] = await database.db.select().from(issues);
     assert.ok(issue && issue.key === visible.id);
     const first = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, "/unused");
+    // OpenAI-compatible providers reject a bare union root, so the workspace tool keeps an object root.
+    assert.equal(Reflect.get(first.parameters, "type"), "object");
     operation = Reflect.get(Reflect.get(Reflect.get(first.parameters, "anyOf")[0], "properties"), "operation");
     assert.ok(operation);
     Reflect.set(operation, "const", "changed-by-extension");

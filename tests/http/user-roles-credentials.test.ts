@@ -2,7 +2,7 @@ import type { InjectOptions } from "fastify";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { createApiFixture, createService, issuePayload } from "./fixture.ts";
+import { createApiFixture, createService, issuePayload, modelCatalog } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import Fastify from "fastify";
 import { eq } from "drizzle-orm";
@@ -12,6 +12,8 @@ import { registerUserRoutes } from "../../src/http/user-routes.ts";
 import { requireCurrentUser, requireDeveloper } from "../../src/http/route-context.ts";
 
 const owner = issuePilotConfig.bootstrapUser.subject;
+
+const personalModel = { mode: "replace", provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high", codemode: "off" } as const;
 
 test("only developers can create development Issues and plan development conversions", async () => {
   const f = await createApiFixture();
@@ -47,31 +49,36 @@ test("personal credentials are private, independently updated and never returned
     await inject({ method: "POST", url: "/api/users", payload: { subject: second, name: "Second", email: second, role: "developer", isAdmin: true } });
     const https = await inject({ method: "PUT", url: "/api/me/credentials", payload: { git: { mode: "replace", type: "https", username: "no", token: "no" } } });
     assert.equal(https.statusCode, 400);
-    const first = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { provider: "fixture", mode: "replace", apiKey: "first-secret" }, git: { mode: "replace", type: "ssh", privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture-private-key\n-----END OPENSSH PRIVATE KEY-----" } } });
+    const first = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, apiKey: "first-secret" }, git: { mode: "replace", type: "ssh", privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture-private-key\n-----END OPENSSH PRIVATE KEY-----" } } });
     assert.equal(first.statusCode, 200, first.body);
-    const saveSecond = await inject({ method: "PUT", url: "/api/me/credentials", headers: { "x-issue-pilot-subject": second }, payload: { model: { provider: "fixture", mode: "replace", apiKey: "second-secret" } } });
+    const saveSecond = await inject({ method: "PUT", url: "/api/me/credentials", headers: { "x-issue-pilot-subject": second }, payload: { model: { ...personalModel, apiKey: "second-secret" } } });
     assert.equal(saveSecond.statusCode, 200, saveSecond.body);
     for (const url of ["/api/me/credentials", "/api/users", "/api/users/manage", "/api/me", "/api/catalog", "/api/config"]) {
       const response = await inject({ method: "GET", url });
       assert.equal(response.statusCode, 200, response.body);
       assert.equal(response.body.includes("first-secret") || response.body.includes("second-secret") || response.body.includes("fixture-private-key"), false);
     }
-    const automatic = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { mode: "replace", apiKey: "global-provider-secret" } } });
-    assert.equal(automatic.statusCode, 200, automatic.body);
-    assert.equal(JSON.parse(automatic.body).provider, "enterprise-ai");
-    assert.ok(JSON.parse(automatic.body).modelProviders.includes("enterprise-ai"));
-    const cleared = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { provider: "fixture", mode: "clear" } } });
-    assert.deepEqual(JSON.parse(cleared.body).modelProviders, ["enterprise-ai"]);
+    // The same provider preserves the stored key while the model settings change.
+    const preserved = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, thinkingLevel: "medium" } } });
+    assert.equal(preserved.statusCode, 200, preserved.body);
+    assert.deepEqual(JSON.parse(preserved.body).model, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "off" });
+    assert.doesNotMatch(preserved.body, /first-secret/);
+    const unavailable = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, model: "missing-model", apiKey: "x" } } });
+    assert.equal(unavailable.statusCode, 400); assert.equal(JSON.parse(unavailable.body).error, "agent_model_not_available");
+    const cleared = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { mode: "clear" } } });
+    assert.equal(JSON.parse(cleared.body).model, null);
+    const keyless = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: personalModel } });
+    assert.equal(keyless.statusCode, 400); assert.equal(JSON.parse(keyless.body).error, "agent_api_key_required");
     const unchanged = await inject({ method: "GET", url: "/api/me/credentials", headers: { "x-issue-pilot-subject": second } });
-    assert.deepEqual(JSON.parse(unchanged.body).modelProviders, ["fixture"]);
+    assert.equal(JSON.parse(unchanged.body).model.provider, "enterprise-ai");
     const noElevate = await inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, payload: { name: "Owner", email: owner, active: true, role: "product" } });
     // Another administrator remains, so explicitly changing the owner's role is allowed.
     assert.equal(noElevate.statusCode, 200, noElevate.body);
     const productionOnly = await inject({ method: "GET", url: "/api/me/credentials" });
     assert.equal(productionOnly.statusCode, 200);
-    assert.deepEqual(JSON.parse(productionOnly.body).modelProviders, []);
+    assert.equal(JSON.parse(productionOnly.body).model, null);
     assert.equal(JSON.parse(productionOnly.body).gitSshConfigured, false);
-    assert.equal((await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { mode: "replace", apiKey: "forbidden" } } })).statusCode, 403);
+    assert.equal((await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, apiKey: "forbidden" } } })).statusCode, 403);
   } finally { await f.cleanup(); }
 });
 
@@ -90,14 +97,16 @@ test("rejects invalid credential groups before closing sessions or changing stor
   const headers = { "x-issue-pilot-subject": owner };
   const update = (payload: unknown) => f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: payload as Record<string, unknown> });
   try {
-    assert.equal((await update({ model: { provider: "fixture", mode: "replace", apiKey: "original-key" } })).statusCode, 200);
+    assert.equal((await update({ model: { ...personalModel, apiKey: "original-key" } })).statusCode, 200);
     await createService(f.app, "Credential validation", ["test"]);
     assert.equal((await f.app.inject({ method: "POST", url: "/api/issues", headers, payload: issuePayload("credential-validation") })).statusCode, 201);
     f.engine.running.clear();
     const before = await database.db.select().from(userCredentials);
-    const model = { provider: "fixture", mode: "replace", apiKey: "must-not-be-saved" };
+    const model = { ...personalModel, apiKey: "must-not-be-saved" };
     for (const payload of [
       { model: { ...model, provider: "bad provider" } },
+      { model: { ...model, thinkingLevel: "off" } },
+      { model: { ...model, unknown: true } },
       { model: { ...model, mode: "unsupported" } },
       { model: { ...model, apiKey: "" } },
       { model, git: { mode: "replace", type: "ssh", privateKey: "invalid-private-key" } },
@@ -113,16 +122,16 @@ test("rejects invalid credential groups before closing sessions or changing stor
     const saved = await update({ model });
     assert.equal(saved.statusCode, 200, saved.body);
     assert.deepEqual(f.engine.closedSessions, f.engine.enqueued);
-    assert.equal((await database.db.select().from(userCredentials))[0]!.modelApiKeys.fixture, "must-not-be-saved");
+    assert.equal((await database.db.select().from(userCredentials))[0]!.modelCredentials?.apiKey, "must-not-be-saved");
     f.engine.closeSessionHook = async () => { throw new Error("fixture_close_failed"); };
     const failed = await update({ model: { ...model, apiKey: "must-not-survive-close-failure" } });
     assert.equal(failed.statusCode, 500, failed.body);
     assert.deepEqual(JSON.parse(failed.body), { error: "user_credentials_save_failed" });
-    assert.equal((await database.db.select().from(userCredentials))[0]!.modelApiKeys.fixture, "must-not-be-saved");
+    assert.equal((await database.db.select().from(userCredentials))[0]!.modelCredentials?.apiKey, "must-not-be-saved");
     assert.equal(f.engine.reservations.size, 0);
     f.engine.closeSessionHook = undefined;
     assert.equal((await update({ model: { ...model, apiKey: "retry-key" } })).statusCode, 200);
-    assert.equal((await database.db.select().from(userCredentials))[0]!.modelApiKeys.fixture, "retry-key");
+    assert.equal((await database.db.select().from(userCredentials))[0]!.modelCredentials?.apiKey, "retry-key");
   } finally { await database.close(); await f.cleanup(); }
 });
 
@@ -173,12 +182,12 @@ test("does not save another user's credentials when the default identity changes
   const f = await createApiFixture(), database = openDatabase(f.databaseFile), app = Fastify();
   let release!: () => void, entered!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }), waiting = new Promise<void>(resolve => { entered = resolve; });
-  registerUserRoutes({ app, database, engine: f.engine, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
+  registerUserRoutes({ app, database, engine: f.engine, modelCatalog, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
   app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     const created = await f.app.inject({ method: "POST", url: "/api/users", headers: { "x-issue-pilot-subject": owner }, payload: { subject: "zz-next-developer", name: "Next", email: "next@example.test", role: "developer", isAdmin: true } });
     assert.equal(created.statusCode, 201, created.body);
-    const pending = app.inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { provider: "fixture", mode: "replace", apiKey: "queued-private-key" } } }).then(value => value);
+    const pending = app.inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, apiKey: "queued-private-key" } } }).then(value => value);
     await waiting;
     // The earlier scope operation deactivates the default user before this update enters.
     await database.db.update(subjects).set({ active: false }).where(eq(subjects.subject, owner));
@@ -197,9 +206,9 @@ test("credential changes reserve owned Issues and refuse an active Agent", async
   try {
     await createService(f.app, "Busy", ["dev"]);
     await inject({ method: "POST", url: "/api/issues", payload: { ...issuePayload("busy"), workMode: "development_fix" } });
-    const response = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { provider: "fixture", mode: "replace", apiKey: "new-key" } } });
+    const response = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, apiKey: "new-key" } } });
     assert.equal(response.statusCode, 409, response.body);
     assert.deepEqual(JSON.parse(response.body), { error: "issue_already_running" });
-    assert.deepEqual(JSON.parse((await inject({ method: "GET", url: "/api/me/credentials" })).body).modelProviders, []);
+    assert.equal(JSON.parse((await inject({ method: "GET", url: "/api/me/credentials" })).body).model, null);
   } finally { await f.cleanup(); }
 });

@@ -39,6 +39,7 @@ export interface StartPiSessionOptions {
   deploymentConfig: DeploymentConfig;
   workspaceRoot: string;
   readRoots?: string[];
+  /** SQLite-selected personal or shared key; AgentEngine always supplies it, only injected runtimes omit it. */
   modelApiKey?: string;
   gitEnvironment?: Record<string, string>;
   gitAccess?: "write" | "read";
@@ -209,15 +210,15 @@ export class PiSessionRuntime {
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
     const commands: PreparedIssueCommand[] = [];
-    const personal = options.modelApiKey ? createPiModelRuntime(getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey }) : undefined;
+    const keyed = options.modelApiKey ? createPiModelRuntime(getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey }) : undefined;
     const cleanup = async () => {
       const failures: unknown[] = [];
       for (const command of commands) try { await command.cleanup(); } catch (error) { failures.push(error); }
-      try { await personal?.close(); } catch (error) { failures.push(error); }
+      try { await keyed?.close(); } catch (error) { failures.push(error); }
       if (failures.length) throw new AggregateError(failures, "pi_runtime_cleanup_failed");
     };
     try {
-      const managed = await this.startWithRuntime(options, personal ?? this.#modelRuntime, commands);
+      const managed = await this.startWithRuntime(options, keyed ?? this.#modelRuntime, commands);
       let stopping: Promise<void> | undefined, stopped = false;
       return { ...managed, get streaming() { return managed.streaming; }, stop: () => stopped ? Promise.resolve() : stopping ??= (async () => {
         const failures: unknown[] = [];

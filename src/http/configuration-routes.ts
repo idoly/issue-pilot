@@ -3,14 +3,13 @@ import { resolveDmsScope } from "../capabilities/dms.ts";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
-import { saveGlobalAgentConfiguration, validateGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentRuntimeConfigurationError, inspectAgentResources, parseAgentRuntime } from "../configuration/pi-runtime.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
 import { selectDmsCredentials } from "../configuration/user-credentials.ts";
 import { applicationSettings, userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
-import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS } from "../domain/contracts.ts";
-import { ApiError, checkRevision, choice, optionalText, record, text } from "./input.ts";
-import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { agentModelSelection, ApiError, checkRevision, optionalText, record, text } from "./input.ts";
+import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
 
 function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
@@ -99,20 +98,27 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
   });
   app.get("/api/catalog", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); return runScopeExclusive(() => loadConfigurationCatalog(database.db)); });
   app.get("/api/config", async (_request, reply) => { reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache"); return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog)); });
-  app.put("/api/config/agent", async (request) => runScopeExclusive(async () => {
-    await requireDeveloper(database, request);
+  app.put("/api/config/agent", { logLevel: "silent" }, async (request) => runScopeExclusive(async () => {
+    await requireAdmin(database, request);
     const input = record(request.body);
+    let apiKey: string | undefined;
+    if (input.apiKey !== undefined) {
+      const update = record(input.apiKey);
+      if (update.mode === "replace" && Object.keys(update).length === 2) apiKey = text(update.value, "agent_api_key", 10_000);
+      else if (update.mode === "clear" && Object.keys(update).length === 1) apiKey = "";
+      else throw new ApiError(400, "invalid_credential_update");
+    }
     let runtime;
     try { runtime = parseAgentRuntime(input.runtime); }
     catch (error) { if (error instanceof AgentRuntimeConfigurationError) throw new ApiError(400, error.message); throw error; }
-    const configuration = { provider: text(input.provider, "agent_provider", 200), model: text(input.model, "agent_model", 500), thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS), codemode: choice(input.codemode, "agent_codemode", AGENT_CODEMODE_MODES), runtime };
-    try { validateGlobalAgentConfiguration(configuration, await modelCatalog.list()); }
-    catch (error) { if (error instanceof Error && ["agent_model_not_available", "agent_thinking_level_not_supported"].includes(error.message)) throw new ApiError(400, error.message); throw error; }
+    const configuration = { ...agentModelSelection(input, await modelCatalog.list()), runtime };
     const affected = await database.db.select({ id: issues.id }).from(issues);
     try {
       return await runIssueExclusive(engine, affected.map((row) => row.id), async (reservation) => {
+        // A preserved key stays bound to its provider; switching providers requires a new key or an explicit clear.
+        if (apiKey === undefined && (await loadGlobalAgentConfiguration(database.db)).provider !== configuration.provider && await loadSharedAgentApiKey(database.db)) throw new ApiError(400, "agent_api_key_required");
         for (const row of affected) await reservation.closeSession(row.id);
-        await database.db.transaction((transaction) => saveGlobalAgentConfiguration(transaction, configuration));
+        await database.db.transaction((transaction) => saveGlobalAgentConfiguration(transaction, configuration, apiKey));
         return { ok: true };
       });
     } catch (error) { if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, "global_configuration_has_running_issues"); throw error; }

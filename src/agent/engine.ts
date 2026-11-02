@@ -10,7 +10,7 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
 import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
-import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { loadGlobalAgentConfiguration, loadSharedAgentApiKey } from "../configuration/agent.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
@@ -308,12 +308,14 @@ export class AgentEngine implements AgentController {
     await this.stopSession(issue.id);
     const owner = await loadIssueCredentialOwner(this.database, issue.id);
     if (environmentKind === "dev" && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
-    const agentConfiguration = await loadGlobalAgentConfiguration(this.database);
-    let modelApiKey: string | undefined;
+    const globalConfiguration = await loadGlobalAgentConfiguration(this.database);
+    // A developer's complete personal model group replaces the shared model and key; only its absence selects the shared group.
+    const personalModel = owner.user.role === "developer" ? owner.credentials?.modelCredentials : null;
+    const { apiKey: modelApiKey, ...modelSelection } = personalModel ?? { provider: globalConfiguration.provider, model: globalConfiguration.model, thinkingLevel: globalConfiguration.thinkingLevel, codemode: globalConfiguration.codemode, apiKey: await loadSharedAgentApiKey(this.database) };
+    if (!modelApiKey) throw new Error("model_api_key_not_configured");
+    const agentConfiguration = { ...globalConfiguration, ...modelSelection };
     let personalGit: PersonalGitEnvironment | undefined;
     if (owner.user.role === "developer") {
-      modelApiKey = owner.credentials?.modelApiKeys[agentConfiguration.provider];
-      if (!modelApiKey) throw new Error("user_model_api_key_required");
       const deployment = await loadIssueDeployments(this.database, issue);
       personalGit = await createPersonalGitEnvironment(owner.credentials, deployment.repositories.map(({ repository }) => repository.url));
       this.personalGit.set(issue.id, personalGit);
@@ -367,7 +369,7 @@ export class AgentEngine implements AgentController {
         readRoots: project.relatedIssueKeys.map(key => issueRoot(this.stateRoot, key)),
         gitAccess: environmentKind === "dev" ? "write" : "read",
         gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,
-        ...(modelApiKey ? { modelApiKey } : {}),
+        modelApiKey,
         ...(personalGit ? { gitEnvironment: personalGit.env, gitReadRoots: personalGit.readRoots } : {}),
         workFiles: new IssueWorkFileStore(this.stateRoot, issue.key),
         systemPrompt: agentSystemPrompt(context),

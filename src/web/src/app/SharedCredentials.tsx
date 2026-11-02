@@ -27,9 +27,9 @@ export function SharedCredentials(props: { capability: CapabilityName }) {
     try { const value = await (isDms ? loadSharedDmsCredentials() : loadSharedSlsCredentials()); if (owner === generation) setStatus(value); }
     catch (cause) { if (owner === generation) setError(settingsError(cause)); }
   };
-  createEffect(() => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}`, identity => {
+  createEffect(() => `${currentUser()?.subject ?? ""}:${currentUser()?.isAdmin === true}`, identity => {
     generation++; close(); setStatus(null); setError(""); setSaving(false);
-    if (identity.endsWith(":developer")) void load();
+    if (identity.endsWith(":true")) void load();
   });
   onCleanup(() => { generation++; });
   const save = async (clear = false) => {
@@ -48,7 +48,7 @@ export function SharedCredentials(props: { capability: CapabilityName }) {
       if (owner === generation) { setSaveError(settingsError(cause)); setConflict(cause instanceof Error && cause.message === "configuration_changed"); }
     } finally { if (owner === generation) setSaving(false); }
   };
-  return <Show when={currentUser()?.role === "developer"}>
+  return <Show when={currentUser()?.isAdmin}>
     <section class="user-management-card shared-credentials" aria-label={title}>
       <header class="user-management-header">
         <div><strong>{title}</strong><span>个人未配置时使用，适用于正式和测试环境</span></div>

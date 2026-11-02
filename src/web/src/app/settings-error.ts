@@ -15,6 +15,10 @@ export function settingsError(error: unknown): string {
     last_active_user: "至少保留一位在用人员。",
     developer_role_required: "此操作需要开发角色。",
     admin_role_required: "此操作需要管理权限。",
+    agent_model_not_available: "该 provider／模型不在全局 Pi models.json 中。",
+    agent_thinking_level_not_supported: "该模型不支持所选的思考级别。",
+    agent_api_key_required: "请填写 API Key；更换 provider 时需要新的 API Key，或清除凭据。",
+    global_configuration_has_running_issues: "有工单正在运行，请稍后重试。",
     resource_in_use: "配置仍被使用，不能删除。",
   };
   return messages[code] ?? code;

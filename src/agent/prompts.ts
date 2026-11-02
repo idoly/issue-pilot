@@ -124,6 +124,7 @@ function workspaceContext(repositories: RepositoryContext[], attachmentPath: str
         "Do not start the project, a development server, preview server, watch mode, or any other persistent process. Node start/dev/serve/preview actions are unavailable.",
         "For defect_fix and feature_development, make only the minimum changes required by the issue. Avoid unrelated refactors, formatting churn, dependency changes, and speculative improvements.",
         "Leave working tree changes uncommitted for user review in the Issue Pilot code browser unless the user explicitly asks you to commit or push them.",
+        "Write every Git commit message in Simplified Chinese: a concise summary line, plus body lines only when they add useful context. Keep code identifiers, paths and the Issue key as written.",
       ]),
   ].join("\n");
 }

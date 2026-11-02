@@ -3,7 +3,7 @@ import { type Accessor, type ParentProps, createContext, createSignal, onCleanup
 import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
-const emptyConfiguration = (): Config => ({ agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {} }, environments: [], services: [], agentModels: [] });
+const emptyConfiguration = (): Config => ({ agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {}, apiKeyConfigured: false }, environments: [], services: [], agentModels: [] });
 
 interface ApplicationResources {
   catalog: Accessor<ConfigCatalog>;

@@ -55,4 +55,6 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(writable, /Do not start the project.*watch mode/);
   assert.match(writable, /Node start\/dev\/serve\/preview actions are unavailable/);
   assert.match(writable, /unless the user explicitly asks you to commit or push them/);
+  assert.match(writable, /Write every Git commit message in Simplified Chinese/);
+  assert.doesNotMatch(related, /commit message/);
 });

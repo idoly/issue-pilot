@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/libsql";
 import { asc, eq, inArray, sql } from "drizzle-orm";
 
-import { loadGlobalAgentConfiguration } from "./agent.ts";
+import { loadGlobalAgentConfiguration, loadSharedAgentApiKey } from "./agent.ts";
 import type { Database } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
@@ -55,8 +55,9 @@ export function loadConfigurationCatalog(database: Database): Promise<Configurat
 }
 
 async function projectConfiguration(database: ConfigurationReader, agentModels: AgentModelDefinition[]): Promise<Configuration> {
-  const [agent, environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows, mcp] = await Promise.all([
+  const [agent, apiKey, environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows, mcp] = await Promise.all([
     loadGlobalAgentConfiguration(database),
+    loadSharedAgentApiKey(database),
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
     database.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
     database.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
@@ -87,7 +88,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
     branchesByDeploymentId.set(branch.deploymentId, grouped);
   }
   return {
-    agent,
+    agent: { ...agent, apiKeyConfigured: Boolean(apiKey) },
     agentModels: agentModels.map(({ provider, id, thinkingLevels }) => ({ provider, id, thinkingLevels })),
     environments: environmentRows.map(({ key, name }) => ({ key, name })),
     services: serviceRows.map((service) => {

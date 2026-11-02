@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { type AgentRuntimeConfiguration, type DmsCredentials, type SlsCredentials, AGENT_CODEMODE_MODES, MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
+import { type AgentRuntimeConfiguration, type PersonalModelCredentials, type DmsCredentials, type SlsCredentials, AGENT_CODEMODE_MODES, MCP_TRANSPORTS, type McpStdioConfiguration, CAPABILITY_KEYS, USER_ROLES, ENVIRONMENT_KINDS, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_TYPES, ISSUE_WORK_MODES, WORKSPACE_STATUSES, type StoredDeploymentConfig, type IssueWorkMode } from "../domain/contracts.ts";
 
 const id = (name = "id") => text(name).primaryKey().$defaultFn(randomUUID);
 const date = (name: string) => integer(name, { mode: "timestamp" });
@@ -25,7 +25,9 @@ export const subjects = sqliteTable("subjects", {
 export const userCredentials = sqliteTable("user_credentials", {
   revision: integer("revision").notNull().default(0),
   subject: text("subject").primaryKey().references(() => subjects.subject, { onDelete: "cascade" }),
+  // Retired per-provider keys remain private history; model_credentials is the current personal group.
   modelApiKeys: json<Record<string, string>>("model_api_keys").notNull().default({}),
+  modelCredentials: json<PersonalModelCredentials>("model_credentials"),
   productionDmsUrl: text("production_dms_url").notNull().default(""),
   productionDmsAuthorization: text("production_dms_authorization").notNull().default(""),
   productionSlsAccessKeyId: text("production_sls_access_key_id").notNull().default(""),
@@ -81,6 +83,7 @@ export const globalAgentConfiguration = sqliteTable("global_agent_configuration"
   thinkingLevel: text("thinking_level").notNull(),
   codemode: text("codemode", { enum: AGENT_CODEMODE_MODES }).notNull().default("on"),
   runtime: json<AgentRuntimeConfiguration>("runtime").notNull().default({}),
+  apiKey: text("api_key").notNull().default(""),
   ...timestamps,
 }, (table) => [check("global_agent_configuration_singleton", sql`${table.id} = 1`), check("global_agent_codemode_valid", sql`${table.codemode} IN ('off','on','only')`)]);
 

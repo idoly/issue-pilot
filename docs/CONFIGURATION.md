@@ -8,9 +8,9 @@
 | --- | --- |
 | SQLite | 用户、凭证、仓库、服务部署、MCP、Agent 与业务偏好 |
 | `issue-pilot.config.ts` | 路径、启动默认值、预算与维护策略 |
-| Operator Pi 目录 | 模型、认证、settings、Skills、Prompts、Extensions 和指令 |
+| Operator Pi 目录 | 模型定义、settings、Skills、Prompts、Extensions 和指令（模型 API Key 只来自 SQLite） |
 
-SQLite 是业务配置唯一来源，页面和 API 由 owner 读写。配置页顺序为用户、仓库、服务、端点，分类首次访问加载，之后保留状态。标准 MCP JSON 导入接受 [mcpServers 结构](../examples/mcp.json)，结果保存到数据库。
+SQLite 是业务配置唯一来源，页面和 API 由 owner 读写。配置页分类为用户、仓库、服务、端点，首次访问加载，之后保留状态。标准 MCP JSON 导入接受 [mcpServers 结构](../examples/mcp.json)，结果保存到数据库。
 
 ## 身份与权限
 
@@ -20,15 +20,19 @@ SQLite 是业务配置唯一来源，页面和 API 由 owner 读写。配置页�
 
 ## 凭证与 owner
 
-owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 developer；developer owner 使用本人模型和 Git 身份，缺失或失败直接报告。
+owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 developer；developer owner 使用本人 Git 身份，缺失或失败直接报告。模型组（provider／模型／思考级别／Codemode／API Key）由服务端选择：developer owner 配置了个人模型组时整组使用个人设置，未配置时使用共享模型组（全局模型与共享 API Key）；其他 owner 只使用共享模型组。所选组没有 Key 时报 `model_api_key_not_configured`；选定 Key 调用失败不换身份。Pi runtime settings 与网络允许列表保持全局。运行用户的 `~/.pi/agent/auth.json` 和 `models.json` 中的 apiKey／headers 不参与请求。
 
-个人凭证分 API Key／SSH Key／DMS／SLS 四组，空白保留已有值，单独清除才删除。DMS 的 URL／Authorization 构成完整组，SLS 的 AccessKey ID／Secret 构成完整组。在正式和测试环境均优先使用工单 owner 的完整个人组，未配置个人组时才使用对应的应用共享组；个人组不完整或选定凭据失败时不换身份。凭据不能创建不存在的目标。历史 `production_*` 个人字段继续存储同一组凭据，其适用范围已统一为正式和测试。
+个人凭证分 API Key／SSH Key／DMS／SLS 四组，空白保留已有值，单独清除才删除。个人 API Key 与共享 API Key 使用同一弹窗，保存一个完整模型组 `user_credentials.model_credentials`：未配置时以共享模型为初始值，候选与校验同共享组；同一 provider 留空保留原 Key，新建或更换 provider 必须填写 Key（否则 `agent_api_key_required`），清除删除整组。`PUT /api/me/credentials` 的 `model` 为 `{ mode: "replace", provider, model, thinkingLevel, codemode, apiKey? }` 或 `{ mode: "clear" }`，状态只返回不含 Key 的 `model`。迁移 0067 将历史 `model_api_keys` 中当时全局 provider 的 Key 转为个人组（沿用当时全局模型设置）；其他 provider 的 Key 仅作为私有历史保留，不再读取。DMS 的 URL／Authorization 构成完整组，SLS 的 AccessKey ID／Secret 构成完整组。在正式和测试环境均优先使用工单 owner 的完整个人组，未配置个人组时才使用对应的应用共享组；个人组不完整或选定凭据失败时不换身份。凭据不能创建不存在的目标。历史 `production_*` 个人字段继续存储同一组凭据，其适用范围已统一为正式和测试。
 
 普通 GET 隐藏配置密钥；开发者选定服务的私有接口可返回约定的 DBHub／MCP 编辑值，native DMS Authorization 和 SLS Key 保持隐藏。配置密钥不进入提示词、工具输入、argv 或普通日志。用户明确请求的业务 token 可作为授权查询结果返回，附来源与时间，不扩大访问范围。
 
+## 共享 API Key
+
+管理人员（`isAdmin`）在“配置 → 用户”的“共享 API Key”（与共享 DMS／SLS 同样展示）中维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，非管理人员不显示该卡片，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
+
 ## 共享 DMS／SLS 凭据
 
-开发者在“配置 → 用户”分别集中设置或清除共享 DMS 和 SLS 凭据，留空保存保留原值；更换 DMS 地址必须同时填写 Authorization。接口不返回密钥，只返回配置状态、revision，以及供编辑的 DMS 地址。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务仅维护查询目标，保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。共享组分别保存在 `application_settings.shared_dms_credentials`／`shared_sls_credentials`，各自使用独立 revision 检测并发修改。DMS 目标解析由服务端选择当前操作用户的个人或共享凭据，浏览器只提交 alias 和 schema。
+管理人员（`isAdmin`）在“配置 → 用户”分别集中设置或清除共享 DMS 和 SLS 凭据，非管理人员不显示也不能调用对应接口，留空保存保留原值；更换 DMS 地址必须同时填写 Authorization。接口不返回密钥，只返回配置状态、revision，以及供编辑的 DMS 地址。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务仅维护查询目标，保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。共享组分别保存在 `application_settings.shared_dms_credentials`／`shared_sls_credentials`，各自使用独立 revision 检测并发修改。DMS 目标解析由服务端选择当前操作用户的个人或共享凭据，浏览器只提交 alias 和 schema。
 
 迁移 0065 将部署中的唯一完整 DMS 凭据组移入应用设置，移除部署中的地址和 Authorization，保留数据库目标。存在多组不同凭据或不完整组时迁移事务回滚，须先检查差异，不能任意选择一组。
 
@@ -74,7 +78,7 @@ Pi 管理发现、注册、资源、连接与关闭。应用保留字面私有�
 
 ## Agent 基座与资源
 
-全局模型、thinking、Codemode 应用于所有服务／环境。Pi ResourceLoader 从 getAgentDir 加载资源，默认 `~/.pi/agent`，模型由 models.json 定义；工单扩展不加载，Operator 扩展不能覆盖保护工具。
+共享模型组在“共享 API Key”中维护，适用于所有服务／环境；developer 的个人模型组只替换其作为 owner 的工单的模型、thinking、Codemode 与 Key。Pi ResourceLoader 从 getAgentDir 加载资源，默认 `~/.pi/agent`，模型由 models.json 定义，凭据只来自 SQLite；工单扩展不加载，Operator 扩展不能覆盖保护工具。
 
 Pi settings 为基线，数据库 runtime.settings 显式覆盖，省略则清除该覆盖。runtime.networkAllowedDomains 为本地工具和 stdio MCP 追加精确域名／端口，省略回到根配置列表；不能覆盖宿主控制地址拒绝或替代业务授权。资源检查 GET 只发现路径，实际会话才加载扩展，变化后重建会话或重启。
 

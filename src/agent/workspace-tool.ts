@@ -12,6 +12,7 @@ import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, mcpServ
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueLocalCommands } from "./native-tools.ts";
+import { objectToolParameters } from "./tool-schema.ts";
 import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
 import { loadDeploymentRepositories } from "../workspace/deployment.ts";
 import path from "node:path";
@@ -29,11 +30,11 @@ type WorkspaceInput = Static<(typeof inputShapes)[keyof typeof inputShapes]>;
 export async function createWorkspaceTool(database: Database, issue: Issue, environmentKind: EnvironmentKind, projects: IssueProjectManager, runtimeRoot: string, gitEnvironment?: Record<string, string>) {
   const available = await listEnvironmentServices(database, issue.environmentId);
   const keys = available.filter(row => row.environment.id === issue.environmentId).map(row => row.service.key);
-  const schema = Value.Clone(Type.Union([
+  const schema = objectToolParameters(Value.Clone(Type.Union([
     inputShapes.list,
     ...available.map(row => Type.Object({ ...inputShapes.describe.properties, service: Type.Literal(row.service.key), environment: Type.Literal(row.environment.key) }, { additionalProperties: false })),
     Type.Object({ ...inputShapes.change.properties, service: Type.Union(keys.map((key) => Type.Literal(key))) }, { additionalProperties: false }),
-  ]));
+  ])));
   const validateInput = Compile(schema);
   return defineTool({ name: "workspace", label: "Cross-service workspace", description: "List code services and permitted investigation sources; development Issues can describe production/test services. Describe with an explicit source environment before service_query. include/remove manage repositories only in this Issue's code environment; investigations get read-only snapshots. Existing Issue branches are preserved. remove can detach an additional service only when its repositories are safe to remove.", parameters: schema, outputSchema: Type.Unknown(),
     execute: async (_id, raw, signal) => {
