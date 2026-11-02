@@ -27,7 +27,7 @@ export function PersonalCredentials() {
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   let generation = 0;
   const isAdmin = () => currentUser()?.isAdmin === true;
-  const canEditPersonal = (group: Group) => group === "dms" || group === "sls" || currentUser()?.role === "developer";
+  const canEditPersonal = (group: Group) => group !== "git" || currentUser()?.role === "developer";
   const configured = (group: Group) => group === "model" ? Boolean(status()?.model) : group === "git" ? status()?.gitSshConfigured === true : group === "dms" ? status()?.productionDmsConfigured === true : status()?.productionSlsConfigured === true;
   const sharedConfigured = (group: Group) => group === "model" ? configuration().agent.apiKeyConfigured : group === "dms" ? sharedDms()?.configured === true : sharedSls()?.configured === true;
   const targetConfigured = (group: Group) => shared() ? sharedConfigured(group) : configured(group);

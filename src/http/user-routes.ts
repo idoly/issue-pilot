@@ -48,7 +48,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
   const { app, database, engine, modelCatalog, runScopeExclusive } = context;
   const personalStatus = (role: string | undefined, credentials?: typeof userCredentials.$inferSelect) => {
     const status = { ...credentialStatus(credentials), revision: credentials?.revision ?? 0 };
-    return role === "developer" ? status : { ...status, model: null, gitSshConfigured: false };
+    return role === "developer" ? status : { ...status, gitSshConfigured: false };
   };
 
   const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) => runScopeExclusive(async () => {
@@ -115,7 +115,8 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
   app.put("/api/me/credentials", { logLevel: "silent" }, async (request, reply) => {
     const subject = await ensureCurrentSubject(database, request);
     const input = record(request.body);
-    if (input.model || input.git) await requireDeveloper(database, request);
+    // Personal model groups are open to every role; SSH identities serve development Issues only.
+    if (input.git) await requireDeveloper(database, request);
     if (Object.keys(input).some((key) => !["model", "git", "production", "expectedRevision"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
     let modelUpdate: { selection: AgentModelSelection; apiKey?: string } | null | undefined;
     if (input.model) {
@@ -126,7 +127,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
         if (model.apiKey !== undefined) modelUpdate.apiKey = text(model.apiKey, "model_api_key", 10_000);
       } else throw new ApiError(400, "invalid_credential_update");
     }
-    const result = await changeUser(subject, () => input.model || input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async (closeSessions) => {
+    const result = await changeUser(subject, () => input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async (closeSessions) => {
       const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
       checkRevision(input.expectedRevision, existing?.revision ?? 0);
       const values = { revision: (existing?.revision ?? 0) + 1, modelCredentials: existing?.modelCredentials ?? null, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };

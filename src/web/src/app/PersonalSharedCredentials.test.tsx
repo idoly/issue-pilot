@@ -90,11 +90,14 @@ test("non-admins see no shared switch and never read shared credential status", 
   expect(state.loadDms).not.toHaveBeenCalled(); expect(state.loadSls).not.toHaveBeenCalled();
 });
 
-test("admins without the developer role can only edit the shared API key", async () => {
+test("admins without the developer role can still switch the API key to their own group but not SSH", async () => {
   state.user = () => ({ ...admin, role: "product" });
   const dialog = await openGroup(0);
   const checkbox = within(dialog).getByRole("checkbox", { name: /共享凭证/ });
-  expect(checkbox).toHaveProperty("checked", true); expect(checkbox).toHaveProperty("disabled", true);
+  expect(checkbox).toHaveProperty("checked", true); expect(checkbox).toHaveProperty("disabled", false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[1]).toHaveProperty("disabled", true);
 });
 
 test("an identity change discards the previous admin's shared status", async () => {

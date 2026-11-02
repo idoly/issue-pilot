@@ -16,7 +16,7 @@ import { environments, globalAgentConfiguration, issues, issueWorkspaces, servic
 
 const git = (args: string[]) => promisify(execFile)("git", args);
 
-test("developers with a personal model group use it entirely; everyone else uses the shared model and key", async () => {
+test("owners with a personal model group use it entirely; everyone else uses the shared model and key", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-model-key-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
@@ -36,7 +36,7 @@ test("developers with a personal model group use it entirely; everyone else uses
     await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: repository!.id, baseBranch: "prod" });
     await database.db.insert(subjects).values([{ subject: "product", displayName: "Product", role: "product" }, { subject: "developer", displayName: "Developer", role: "developer" }]);
     const personal = { provider: "personal-provider", model: "personal-model", thinkingLevel: "high" as const, codemode: "only" as const, apiKey: "personal-key" };
-    await database.db.insert(userCredentials).values({ subject: "product", modelCredentials: { ...personal, apiKey: "retained-key" } });
+    await database.db.insert(userCredentials).values({ subject: "product", modelApiKeys: { "test-provider": "retired-key" } });
     const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261102-001", title: "Keys", type: "defect_fix", serviceId: service!.id, environmentId: production!.id, reporterSubject: "product" }).returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
 
@@ -50,18 +50,21 @@ test("developers with a personal model group use it entirely; everyone else uses
 
     await assert.rejects(internal.run(issue!.id), /model_api_key_not_configured/);
     await database.db.update(globalAgentConfiguration).set({ apiKey: "shared-key" });
-    // Non-developers use only the shared group, even when a former developer group remains stored.
+    // Retired per-provider keys are history and do not form a personal group, for any role.
     await internal.run(issue!.id);
     await database.db.update(issues).set({ assigneeSubject: "developer" }).where(eq(issues.id, issue!.id));
     await internal.run(issue!.id);
-    // Retired per-provider keys are history and do not form a personal group.
     await database.db.insert(userCredentials).values({ subject: "developer", modelApiKeys: { "test-provider": "retired-key" } });
     await internal.run(issue!.id);
     await database.db.update(userCredentials).set({ modelCredentials: personal }).where(eq(userCredentials.subject, "developer"));
     await internal.run(issue!.id);
-    assert.deepEqual(keys, ["shared-key", "shared-key", "shared-key", "personal-key"]);
-    const shared = "test-provider/test-model/medium/on";
-    assert.deepEqual(models, [shared, shared, shared, "personal-provider/personal-model/high/only"]);
+    // Personal groups apply to every role, not only developers.
+    await database.db.update(userCredentials).set({ modelCredentials: { ...personal, apiKey: "product-key" } }).where(eq(userCredentials.subject, "product"));
+    await database.db.update(issues).set({ assigneeSubject: null }).where(eq(issues.id, issue!.id));
+    await internal.run(issue!.id);
+    assert.deepEqual(keys, ["shared-key", "shared-key", "shared-key", "personal-key", "product-key"]);
+    const shared = "test-provider/test-model/medium/on", own = "personal-provider/personal-model/high/only";
+    assert.deepEqual(models, [shared, shared, shared, own, own]);
     await engine.close();
   } finally {
     await database.close();

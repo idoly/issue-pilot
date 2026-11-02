@@ -309,9 +309,8 @@ export class AgentEngine implements AgentController {
     const owner = await loadIssueCredentialOwner(this.database, issue.id);
     if (environmentKind === "dev" && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
     const globalConfiguration = await loadGlobalAgentConfiguration(this.database);
-    // A developer's complete personal model group replaces the shared model and key; only its absence selects the shared group.
-    const personalModel = owner.user.role === "developer" ? owner.credentials?.modelCredentials : null;
-    const { apiKey: modelApiKey, ...modelSelection } = personalModel ?? { provider: globalConfiguration.provider, model: globalConfiguration.model, thinkingLevel: globalConfiguration.thinkingLevel, codemode: globalConfiguration.codemode, apiKey: await loadSharedAgentApiKey(this.database) };
+    // The owner's complete personal model group replaces the shared model and key; only its absence selects the shared group.
+    const { apiKey: modelApiKey, ...modelSelection } = owner.credentials?.modelCredentials ?? { provider: globalConfiguration.provider, model: globalConfiguration.model, thinkingLevel: globalConfiguration.thinkingLevel, codemode: globalConfiguration.codemode, apiKey: await loadSharedAgentApiKey(this.database) };
     if (!modelApiKey) throw new Error("model_api_key_not_configured");
     const agentConfiguration = { ...globalConfiguration, ...modelSelection };
     let personalGit: PersonalGitEnvironment | undefined;

@@ -78,7 +78,12 @@ test("personal credentials are private, independently updated and never returned
     assert.equal(productionOnly.statusCode, 200);
     assert.equal(JSON.parse(productionOnly.body).model, null);
     assert.equal(JSON.parse(productionOnly.body).gitSshConfigured, false);
-    assert.equal((await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, apiKey: "forbidden" } } })).statusCode, 403);
+    // Every role may keep a personal model group; SSH identities remain developer-only.
+    const nonDeveloperModel = await inject({ method: "PUT", url: "/api/me/credentials", payload: { model: { ...personalModel, apiKey: "product-secret" } } });
+    assert.equal(nonDeveloperModel.statusCode, 200, nonDeveloperModel.body);
+    assert.equal(JSON.parse(nonDeveloperModel.body).model.provider, "enterprise-ai");
+    assert.doesNotMatch(nonDeveloperModel.body, /product-secret/);
+    assert.equal((await inject({ method: "PUT", url: "/api/me/credentials", payload: { git: { mode: "replace", type: "ssh", privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nforbidden\n-----END OPENSSH PRIVATE KEY-----" } } })).statusCode, 403);
   } finally { await f.cleanup(); }
 });
 

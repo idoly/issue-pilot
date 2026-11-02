@@ -20,7 +20,7 @@ SQLite 是业务配置唯一来源，页面和 API 由 owner 读写。配置页�
 
 ## 凭证与 owner
 
-owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 developer；developer owner 使用本人 Git 身份，缺失或失败直接报告。模型组（provider／模型／思考级别／Codemode／API Key）由服务端选择：developer owner 配置了个人模型组时整组使用个人设置，未配置时使用共享模型组（全局模型与共享 API Key）；其他 owner 只使用共享模型组。所选组没有 Key 时报 `model_api_key_not_configured`；选定 Key 调用失败不换身份。Pi runtime settings 与网络允许列表保持全局。运行用户的 `~/.pi/agent/auth.json` 和 `models.json` 中的 apiKey／headers 不参与请求。
+owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 developer；developer owner 使用本人 Git 身份，缺失或失败直接报告。模型组（provider／模型／思考级别／Codemode／API Key）由服务端选择：owner 配置了个人模型组时整组使用个人设置，未配置时使用共享模型组（全局模型与共享 API Key），对所有角色相同。所选组没有 Key 时报 `model_api_key_not_configured`；选定 Key 调用失败不换身份。Pi runtime settings 与网络允许列表保持全局。运行用户的 `~/.pi/agent/auth.json` 和 `models.json` 中的 apiKey／headers 不参与请求。
 
 个人凭证分 API Key／SSH Key／DMS／SLS 四组，空白保留已有值，单独清除才删除。个人 API Key 与共享 API Key 使用同一弹窗，保存一个完整模型组 `user_credentials.model_credentials`：未配置时以共享模型为初始值，候选与校验同共享组；同一 provider 留空保留原 Key，新建或更换 provider 必须填写 Key（否则 `agent_api_key_required`），清除删除整组。`PUT /api/me/credentials` 的 `model` 为 `{ mode: "replace", provider, model, thinkingLevel, codemode, apiKey? }` 或 `{ mode: "clear" }`，状态只返回不含 Key 的 `model`。迁移 0067 将历史 `model_api_keys` 中当时全局 provider 的 Key 转为个人组（沿用当时全局模型设置）；其他 provider 的 Key 仅作为私有历史保留，不再读取。DMS 的 URL／Authorization 构成完整组，SLS 的 AccessKey ID／Secret 构成完整组。在正式和测试环境均优先使用工单 owner 的完整个人组，未配置个人组时才使用对应的应用共享组；个人组不完整或选定凭据失败时不换身份。凭据不能创建不存在的目标。历史 `production_*` 个人字段继续存储同一组凭据，其适用范围已统一为正式和测试。
 
@@ -28,7 +28,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 ## 共享 API Key
 
-共享组没有单独卡片：管理人员（`isAdmin`）在“我的凭证”打开 API Key／DMS／SLS 弹窗时默认勾选“共享凭证”，此时编辑应用共享组，取消勾选才编辑本人凭证；列表只显示个人状态。非管理人员没有该勾选，也不读取共享状态；非 developer 的管理人员只能编辑共享 API Key。共享 API Key 弹窗维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
+共享组没有单独卡片：管理人员（`isAdmin`）在“我的凭证”打开 API Key／DMS／SLS 弹窗时默认勾选“共享凭证”，此时编辑应用共享组，取消勾选才编辑本人凭证；列表只显示个人状态。非管理人员没有该勾选，也不读取共享状态。所有角色都可设置个人 API Key（模型组），SSH Key 仅限 developer。共享 API Key 弹窗维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
 
 ## 共享 DMS／SLS 凭据
 
@@ -78,7 +78,7 @@ Pi 管理发现、注册、资源、连接与关闭。应用保留字面私有�
 
 ## Agent 基座与资源
 
-共享模型组在勾选“共享凭证”的 API Key 弹窗中维护，适用于所有服务／环境；developer 的个人模型组只替换其作为 owner 的工单的模型、thinking、Codemode 与 Key。Pi ResourceLoader 从 getAgentDir 加载资源，默认 `~/.pi/agent`，模型由 models.json 定义，凭据只来自 SQLite；工单扩展不加载，Operator 扩展不能覆盖保护工具。
+共享模型组在勾选“共享凭证”的 API Key 弹窗中维护，适用于所有服务／环境；个人模型组只替换其作为 owner 的工单的模型、thinking、Codemode 与 Key。Pi ResourceLoader 从 getAgentDir 加载资源，默认 `~/.pi/agent`，模型由 models.json 定义，凭据只来自 SQLite；工单扩展不加载，Operator 扩展不能覆盖保护工具。
 
 Pi settings 为基线，数据库 runtime.settings 显式覆盖，省略则清除该覆盖。runtime.networkAllowedDomains 为本地工具和 stdio MCP 追加精确域名／端口，省略回到根配置列表；不能覆盖宿主控制地址拒绝或替代业务授权。资源检查 GET 只发现路径，实际会话才加载扩展，变化后重建会话或重启。
 
