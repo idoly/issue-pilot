@@ -5,12 +5,14 @@ import type { ManagedUser, Person, PersonalCredentialStatus } from "../data/clie
 
 const state = vi.hoisted(() => ({ user: undefined as unknown, users: vi.fn(), createUser: vi.fn(), updateUser: vi.fn(), credentials: vi.fn(), saveCredentials: vi.fn(), repositories: vi.fn(), register: vi.fn(), updateRepository: vi.fn(), removeRepository: vi.fn(), refreshPeople: vi.fn(), refreshConfiguration: vi.fn(), refreshCatalog: vi.fn() }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user, configurationLoaded: () => true, configuration: () => ({ agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "on" }, agentModels: [{ provider: "fixture", id: "model", thinkingLevels: ["medium"] }, { provider: "deepseek", id: "deepseek-flash", thinkingLevels: ["medium"] }] }), refreshPeople: state.refreshPeople, refreshConfiguration: state.refreshConfiguration, refreshCatalog: state.refreshCatalog }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), loadManagedUsers: state.users, createUser: state.createUser, updateUser: state.updateUser, loadPersonalCredentials: state.credentials, updatePersonalCredentials: state.saveCredentials, loadRepositories: state.repositories, registerRepository: state.register, updateRepository: state.updateRepository, deleteRepository: state.removeRepository }));
+vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), loadManagedUsers: state.users, createUser: state.createUser, updateUser: state.updateUser, loadPersonalCredentials: state.credentials, updatePersonalCredentials: state.saveCredentials, loadSharedDmsCredentials: async () => ({ configured: false, url: "", revision: 0 }), loadSharedSlsCredentials: async () => ({ configured: false, revision: 0 }), loadRepositories: state.repositories, registerRepository: state.register, updateRepository: state.updateRepository, deleteRepository: state.removeRepository }));
 import { PersonalCredentials } from "./PersonalCredentials";
 import { UserManagement } from "./UserManagement";
 import { RepositoryManagement } from "./RepositoryManagement";
 
 const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer", isAdmin: true };
+// Personal credential tests use a developer without management access, so dialogs edit personal groups.
+const personalOnly: Person = { ...alice, isAdmin: false };
 const users: ManagedUser[] = [{ ...alice, revision: 2, active: true, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }, { ...alice, subject: "inactive", name: "Inactive", email: "inactive@example.test", revision: 0, active: false, isAdmin: false, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }];
 const status: PersonalCredentialStatus = { model: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" }, gitSshConfigured: true, productionDmsConfigured: false, productionSlsConfigured: false, revision: 3 };
 beforeEach(() => {
@@ -65,6 +67,7 @@ for (const outcome of ["success", "failure"] as const) test(`old identity person
 });
 
 test("credential popup opens directly, preserves blanks and reports stale writes without discarding the new value", async () => {
+  state.user = () => personalOnly;
   state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
   render(() => <PersonalCredentials />); await screen.findByText("SSH Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!);
@@ -82,10 +85,11 @@ test("credential popup opens directly, preserves blanks and reports stale writes
 });
 
 test("personal API key reuses the model dialog, starts from the stored group and preserves its key", async () => {
+  state.user = () => personalOnly;
   state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
   render(() => <PersonalCredentials />); await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
-  const dialog = await screen.findByRole("dialog", { name: "更新个人 API Key" });
+  const dialog = await screen.findByRole("dialog", { name: "更新 API Key" });
   expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("off");
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("配置已被更新");
@@ -94,10 +98,11 @@ test("personal API key reuses the model dialog, starts from the stored group and
 });
 
 test("a new personal group starts from the shared model and switching providers requires a key", async () => {
+  state.user = () => personalOnly;
   state.credentials.mockResolvedValue({ ...status, model: null });
   render(() => <PersonalCredentials />); await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "设置凭证" })[0]!);
-  const dialog = await screen.findByRole("dialog", { name: "设置个人 API Key" });
+  const dialog = await screen.findByRole("dialog", { name: "设置 API Key" });
   expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("on");
   expect(within(dialog).queryByRole("button", { name: "清除凭据" })).toBeNull();
   fireEvent.click(within(dialog).getByLabelText("Provider"));
@@ -113,6 +118,7 @@ test("a new personal group starts from the shared model and switching providers 
 });
 
 test("clearing removes the whole personal model group", async () => {
+  state.user = () => personalOnly;
   render(() => <PersonalCredentials />); await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
   const dialog = await screen.findByRole("dialog");
@@ -121,7 +127,7 @@ test("clearing removes the whole personal model group", async () => {
 });
 
 test("identity changes clear secret drafts and late credential success cannot mutate the next identity", async () => {
-  const [user, setUser] = createSignal<Person>(alice, { ownedWrite: true }); state.user = user;
+  const [user, setUser] = createSignal<Person>(personalOnly, { ownedWrite: true }); state.user = user;
   let finish!: () => void;
   state.saveCredentials.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ...status, productionDmsConfigured: true }); }));
   render(() => <PersonalCredentials />); await screen.findByText("API Key");

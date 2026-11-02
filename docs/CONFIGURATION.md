@@ -28,11 +28,11 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 ## 共享 API Key
 
-管理人员（`isAdmin`）在“配置 → 用户”的“共享 API Key”（与共享 DMS／SLS 同样展示）中维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，非管理人员不显示该卡片，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
+共享组没有单独卡片：管理人员（`isAdmin`）在“我的凭证”打开 API Key／DMS／SLS 弹窗时默认勾选“共享凭证”，此时编辑应用共享组，取消勾选才编辑本人凭证；列表只显示个人状态。非管理人员没有该勾选，也不读取共享状态；非 developer 的管理人员只能编辑共享 API Key。共享 API Key 弹窗维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
 
 ## 共享 DMS／SLS 凭据
 
-管理人员（`isAdmin`）在“配置 → 用户”分别集中设置或清除共享 DMS 和 SLS 凭据，非管理人员不显示也不能调用对应接口，留空保存保留原值；更换 DMS 地址必须同时填写 Authorization。接口不返回密钥，只返回配置状态、revision，以及供编辑的 DMS 地址。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务仅维护查询目标，保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。共享组分别保存在 `application_settings.shared_dms_credentials`／`shared_sls_credentials`，各自使用独立 revision 检测并发修改。DMS 目标解析由服务端选择当前操作用户的个人或共享凭据，浏览器只提交 alias 和 schema。
+管理人员（`isAdmin`）在上述勾选“共享凭证”的 DMS／SLS 弹窗中设置或清除共享凭据，非管理人员不能调用对应接口，留空保存保留原值；更换 DMS 地址必须同时填写 Authorization。接口不返回密钥，只返回配置状态、revision，以及供编辑的 DMS 地址。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务仅维护查询目标，保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。共享组分别保存在 `application_settings.shared_dms_credentials`／`shared_sls_credentials`，各自使用独立 revision 检测并发修改。DMS 目标解析由服务端选择当前操作用户的个人或共享凭据，浏览器只提交 alias 和 schema。
 
 迁移 0065 将部署中的唯一完整 DMS 凭据组移入应用设置，移除部署中的地址和 Authorization，保留数据库目标。存在多组不同凭据或不完整组时迁移事务回滚，须先检查差异，不能任意选择一组。
 
@@ -78,7 +78,7 @@ Pi 管理发现、注册、资源、连接与关闭。应用保留字面私有�
 
 ## Agent 基座与资源
 
-共享模型组在“共享 API Key”中维护，适用于所有服务／环境；developer 的个人模型组只替换其作为 owner 的工单的模型、thinking、Codemode 与 Key。Pi ResourceLoader 从 getAgentDir 加载资源，默认 `~/.pi/agent`，模型由 models.json 定义，凭据只来自 SQLite；工单扩展不加载，Operator 扩展不能覆盖保护工具。
+共享模型组在勾选“共享凭证”的 API Key 弹窗中维护，适用于所有服务／环境；developer 的个人模型组只替换其作为 owner 的工单的模型、thinking、Codemode 与 Key。Pi ResourceLoader 从 getAgentDir 加载资源，默认 `~/.pi/agent`，模型由 models.json 定义，凭据只来自 SQLite；工单扩展不加载，Operator 扩展不能覆盖保护工具。
 
 Pi settings 为基线，数据库 runtime.settings 显式覆盖，省略则清除该覆盖。runtime.networkAllowedDomains 为本地工具和 stdio MCP 追加精确域名／端口，省略回到根配置列表；不能覆盖宿主控制地址拒绝或替代业务授权。资源检查 GET 只发现路径，实际会话才加载扩展，变化后重建会话或重启。
 

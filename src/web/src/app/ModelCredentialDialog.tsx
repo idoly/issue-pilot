@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Button, Modal, PasswordInput, Select } from "../ui";
 import { AGENT_CODEMODE_MODES, type AgentModelOption, type AgentModelSelection } from "../data/client";
 import { settingsError } from "./settings-error";
@@ -18,6 +19,8 @@ export function ModelCredentialDialog(props: {
   onClose: () => void;
   onSave: (selection: AgentModelSelection, apiKey: string | undefined) => Promise<void>;
   onClear: () => Promise<void>;
+  /** Controls shown above the fields, such as the shared/personal target switch. */
+  children?: JSX.Element;
 }) {
   const [provider, setProvider] = createSignal("", { ownedWrite: true });
   const [model, setModel] = createSignal("", { ownedWrite: true });
@@ -30,8 +33,9 @@ export function ModelCredentialDialog(props: {
   const modelsOf = (value: string) => props.models.filter(option => option.provider === value);
   const thinkingLevelsOf = (value: string, id: string) => props.models.find(option => option.provider === value && option.id === id)?.thinkingLevels ?? [];
   const keyPreserved = () => props.keyConfigured && provider() === props.initial.provider;
-  createEffect(() => props.open, open => {
-    if (!open) return;
+  // Drafts restart when the dialog opens or its target group (initial values or stored key) changes.
+  createEffect(() => props.open ? JSON.stringify([props.initial, props.keyConfigured]) : "", key => {
+    if (!key) return;
     const initial = props.initial;
     setProvider(initial.provider); setModel(initial.model); setThinkingLevel(initial.thinkingLevel); setCodemode(initial.codemode); setApiKey(""); setError(""); setSaving(false);
   });
@@ -61,6 +65,7 @@ export function ModelCredentialDialog(props: {
   };
   return <Modal width={460} open={props.open} title={props.title} okText="保存" cancelText="取消" confirmLoading={saving()} onCancel={props.onClose} onOk={save}>
     <div class="settings-form">
+      {props.children}
       <Show when={error()}><div role="alert" class="user-management-error">{error()}</div></Show>
       <Show when={providers().length} fallback={<div class="settings-target-feedback">全局 Pi models.json 未提供可用 provider。</div>}>
         <label><span>Provider</span><Select aria-label="Provider" value={provider()} options={providers().map(value => ({ value, label: value }))} onChange={selectProvider} /></label>
