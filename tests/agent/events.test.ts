@@ -121,6 +121,32 @@ test("keeps buffered events ahead of events published while replay is being deli
   assert.deepEqual(received, ["first", "second", "third", "fourth"]);
 });
 
+test("bounds live events buffered during slow replay and detaches only the slow subscriber", () => {
+  const bus = new AgentEventBus(), received: string[] = [], failures: unknown[] = [];
+  const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "issue_user", message: "中文" } });
+  const bytes = Buffer.byteLength(JSON.stringify(event("first")));
+  const slow = subscribeBufferedAgentEvents(bus, "issue-1", { maxPendingBytes: bytes, onFailure: error => failures.push(error) });
+  const stop = bus.subscribe("issue-1", ({ id }) => received.push(id));
+  bus.publish(event("first"));
+  assert.equal(failures.length, 0);
+  bus.publish(event("other"));
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /sse_queue_budget_exceeded/);
+  slow.activate(() => assert.fail("closed subscription must not deliver its backlog"));
+  bus.publish(event("third"));
+  assert.deepEqual(received, ["first", "other", "third"]);
+  assert.equal(failures.length, 1);
+  slow.unsubscribe(); stop();
+});
+
+test("unsubscribing before activation discards the buffered events", () => {
+  const bus = new AgentEventBus();
+  const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
+  bus.publish({ id: "first", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
+  subscription.unsubscribe();
+  subscription.activate(() => assert.fail("disconnected subscription must not replay"));
+});
+
 test("retains only the current non-durable Agent state for reconnecting clients", () => {
   const bus = new AgentEventBus();
   const event = (id: string, wireEvent: RunEvent["event"]): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: wireEvent });

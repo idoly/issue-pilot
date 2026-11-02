@@ -103,6 +103,62 @@ test("stops a backpressured stream on transport error before socket flags update
   for (const event of ["drain", "close", "error"]) assert.equal(response.listenerCount(event), 0, event);
 });
 
+test("bounds queued UTF-8 bytes and releases waits after a slow client exceeds the budget", async () => {
+  const response = new FakeResponse();
+  response.blockNextWrite = true;
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, error => failures.push(error), 6);
+  writer.write("first");
+  const drained = writer.drain();
+  writer.write("中文"); // Six bytes, exactly at the budget.
+  assert.equal(failures.length, 0);
+  writer.write("x");
+  await drained;
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /sse_queue_budget_exceeded/);
+  response.emit("drain");
+  writer.write("must-not-write");
+  assert.deepEqual(response.payloads, ["first"]);
+  for (const event of ["drain", "close", "error"]) assert.equal(response.listenerCount(event), 0);
+});
+
+test("paced replay can exceed the total queue budget without disconnecting", async () => {
+  const response = new FakeResponse();
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, error => failures.push(error), 4);
+  for (let index = 0; index < 5; index++) {
+    response.blockNextWrite = true;
+    writer.write(`replay-${index}`); // A single directly written frame need not fit the waiting queue.
+    let completed = false;
+    const pending = writer.drain().then(() => { completed = true; });
+    await Promise.resolve();
+    assert.equal(completed, false);
+    response.emit("drain");
+    await pending;
+  }
+  assert.equal(response.payloads.length, 5);
+  assert.deepEqual(failures, []);
+  await writer.drain();
+  response.emit("close");
+});
+
+test("queue bytes are reclaimed on drain and a disconnected replay stops waiting", async () => {
+  const response = new FakeResponse();
+  response.blockNextWrite = true;
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, error => failures.push(error), 4);
+  writer.write("first"); writer.write("four");
+  response.emit("drain");
+  await writer.drain();
+  response.blockNextWrite = true;
+  writer.write("second"); writer.write("four");
+  const pending = writer.drain();
+  response.emit("close");
+  await pending;
+  assert.deepEqual(response.payloads, ["first", "four", "second"]);
+  assert.deepEqual(failures, []);
+});
+
 test("releases SSE backpressure waits when the client disconnects", () => {
   const response = new FakeResponse();
   response.blockNextWrite = true;

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -90,22 +91,28 @@ export class SourceBrowser {
     const directory = await this.resolvePath(context.root, relativePath);
     const metadata = await stat(directory);
     if (!metadata.isDirectory()) throw new Error("source_path_not_directory");
-    const entries = await readdir(directory, { withFileTypes: true });
-    const visible = entries.filter((entry) => entry.name !== ".git").sort((left, right) => {
-      const leftRank = left.isDirectory() ? 0 : left.isFile() ? 1 : 2;
-      const rightRank = right.isDirectory() ? 0 : right.isFile() ? 1 : 2;
-      return leftRank - rightRank || left.name.localeCompare(right.name);
-    });
-    const selected = visible.slice(0, issuePilotConfig.limits.sourceBrowser.directoryEntries);
-    const parent = normalizedRelativePath(relativePath);
-    const serialized = await Promise.all(selected.map(async (entry): Promise<SourceTreeEntry> => {
-      const entryPath = sourcePath(path.join(parent, entry.name));
-      if (entry.isDirectory()) return { name: entry.name, path: entryPath, type: "directory", size: null };
-      if (entry.isFile()) return { name: entry.name, path: entryPath, type: "file", size: (await lstat(path.join(directory, entry.name))).size };
-      if (entry.isSymbolicLink()) return { name: entry.name, path: entryPath, type: "symlink", size: null };
-      return { name: entry.name, path: entryPath, type: "other", size: null };
-    }));
-    return { path: sourcePath(parent), entries: serialized, truncated: visible.length > selected.length };
+    const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      const pinned = `/proc/self/fd/${handle.fd}`;
+      if (await realpath(pinned) !== directory) throw new Error("source_path_outside_repository");
+      const entries = await readdir(pinned, { withFileTypes: true });
+      const visible = entries.filter((entry) => entry.name !== ".git").sort((left, right) => {
+        const leftRank = left.isDirectory() ? 0 : left.isFile() ? 1 : 2;
+        const rightRank = right.isDirectory() ? 0 : right.isFile() ? 1 : 2;
+        return leftRank - rightRank || left.name.localeCompare(right.name);
+      });
+      const selected = visible.slice(0, issuePilotConfig.limits.sourceBrowser.directoryEntries);
+      const parent = normalizedRelativePath(relativePath);
+      const results = await Promise.allSettled(selected.map(async (entry): Promise<SourceTreeEntry> => {
+        const entryPath = sourcePath(path.join(parent, entry.name));
+        if (entry.isDirectory()) return { name: entry.name, path: entryPath, type: "directory", size: null };
+        if (entry.isFile()) return { name: entry.name, path: entryPath, type: "file", size: (await lstat(path.join(pinned, entry.name))).size };
+        if (entry.isSymbolicLink()) return { name: entry.name, path: entryPath, type: "symlink", size: null };
+        return { name: entry.name, path: entryPath, type: "other", size: null };
+      }));
+      const serialized = results.map(result => { if (result.status === "rejected") throw result.reason; return result.value; });
+      return { path: sourcePath(parent), entries: serialized, truncated: visible.length > selected.length };
+    } finally { await handle.close(); }
   }
 
   async file(issue: IssueReference, repositoryName: string, relativePath: string): Promise<SourceFile> {
@@ -117,86 +124,98 @@ export class SourceBrowser {
     if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_source_hash");
     const selected = normalizedRelativePath(relativePath);
     if (!selected) throw new Error("source_path_not_file");
-    const candidate = await this.mutableDestination(context, selected, true);
-    let metadata;
-    try { metadata = await lstat(candidate); } catch (error) { missingPathError(error); }
-    if (!metadata!.isFile()) throw new Error("source_path_not_file");
-    const current = await readFile(candidate);
-    if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw new Error("source_file_changed");
-    const next = Buffer.from(content, "utf8");
-    const temporary = path.join(path.dirname(candidate), `.issue-pilot-${randomUUID()}.tmp`);
-    const handle = await open(temporary, "wx", metadata!.mode & 0o777);
-    const failures: unknown[] = [];
-    let published = false;
-    try {
-      await handle.writeFile(next);
-      await handle.close();
-      await rename(temporary, candidate);
-      published = true;
-    } catch (error) {
-      failures.push(error);
-      throw error;
-    } finally {
-      const cleanup: unknown[] = [];
-      try { await handle.close(); } catch (error) { cleanup.push(error); }
-      if (!published) try { await rm(temporary, { force: true }); } catch (error) { cleanup.push(error); }
-      if (cleanup.length) throw new AggregateError([...failures, ...cleanup], "source_save_cleanup_failed");
-    }
-    return this.workingFile(context, selected);
+    return this.withMutablePath(context, selected, true, async candidate => {
+      let metadata;
+      try { metadata = await lstat(candidate); } catch (error) { missingPathError(error); }
+      if (!metadata!.isFile()) throw new Error("source_path_not_file");
+      const currentFile = await open(candidate, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      let current: Buffer;
+      try {
+        if (!(await currentFile.stat()).isFile()) throw new Error("source_path_not_file");
+        current = await currentFile.readFile();
+      } finally { await currentFile.close(); }
+      if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw new Error("source_file_changed");
+      const next = Buffer.from(content, "utf8");
+      const temporary = path.join(path.dirname(candidate), `.issue-pilot-${randomUUID()}.tmp`);
+      const handle = await open(temporary, "wx", metadata!.mode & 0o777);
+      const failures: unknown[] = [];
+      let published = false;
+      try {
+        await handle.writeFile(next);
+        await handle.close();
+        await rename(temporary, candidate);
+        published = true;
+      } catch (error) {
+        failures.push(error);
+        throw error;
+      } finally {
+        const cleanup: unknown[] = [];
+        try { await handle.close(); } catch (error) { cleanup.push(error); }
+        if (!published) try { await rm(temporary, { force: true }); } catch (error) { cleanup.push(error); }
+        if (cleanup.length) throw new AggregateError([...failures, ...cleanup], "source_save_cleanup_failed");
+      }
+      return this.workingFile(context, selected);
+    });
   }
 
   async createFile(issue: IssueReference, repositoryName: string, relativePath: string, content: string): Promise<SourceFile> {
     const context = await this.writableContext(issue, repositoryName);
-    const candidate = await this.mutableDestination(context, relativePath);
-    const next = Buffer.from(content, "utf8");
-    try { await writeFile(candidate, next, { flag: "wx", mode: 0o644 }); }
-    catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
-      throw error;
-    }
-    return this.workingFile(context, relativePath);
+    return this.withMutablePath(context, relativePath, false, async candidate => {
+      const next = Buffer.from(content, "utf8");
+      try { await writeFile(candidate, next, { flag: "wx", mode: 0o644 }); }
+      catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+        throw error;
+      }
+      return this.workingFile(context, relativePath);
+    });
   }
 
   async createDirectory(issue: IssueReference, repositoryName: string, relativePath: string): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const candidate = await this.mutableDestination(context, relativePath);
-    try { await mkdir(candidate); }
-    catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
-      throw error;
-    }
+    await this.withMutablePath(context, relativePath, false, async candidate => {
+      try { await mkdir(candidate); }
+      catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+        throw error;
+      }
+    });
   }
 
   async deletePath(issue: IssueReference, repositoryName: string, relativePath: string, recursive: boolean): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const candidate = await this.mutableSource(context, relativePath);
-    await rm(candidate, { recursive, force: false });
+    await this.withMutablePath(context, relativePath, true, candidate => rm(candidate, { recursive, force: false }));
   }
 
   async renamePath(issue: IssueReference, repositoryName: string, relativePath: string, destinationPath: string, overwrite: boolean): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
-    const source = await this.mutableSource(context, relativePath);
-    if (source === path.resolve(context.root, normalizedRelativePath(destinationPath))) return;
-    const destination = await this.mutableDestination(context, destinationPath, overwrite);
-    if (isInside(source, destination) || isInside(destination, source)) throw new Error("invalid_source_path");
-    let previous: string | undefined;
-    if (overwrite) {
-      const backup = path.join(path.dirname(destination), `.issue-pilot-rename-${randomUUID()}.previous`);
-      try { await rename(destination, backup); previous = backup; }
-      catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
-    }
-    try { await rename(source, destination); }
-    catch (error) {
-      if (previous) {
-        try { await rename(previous, destination); }
-        catch (rollbackError) { throw new Error("source_rename_rollback_failed", { cause: new AggregateError([error, rollbackError], "source_rename_rollback_failed") }); }
-      }
-      throw error;
-    }
-    if (previous) {
-      try { await rm(previous, { recursive: true, force: true }); }
-      catch (error) { throw new Error("source_rename_finalize_failed", { cause: error }); }
-    }
+    const selectedSource = path.resolve(context.root, normalizedRelativePath(relativePath));
+    const selectedDestination = path.resolve(context.root, normalizedRelativePath(destinationPath));
+    if (selectedSource === selectedDestination) { await this.mutableSource(context, relativePath); return; }
+    if (isInside(selectedSource, selectedDestination) || isInside(selectedDestination, selectedSource)) throw new Error("invalid_source_path");
+    await this.withMutablePath(context, relativePath, true, async source => {
+      await lstat(source);
+      await this.withMutablePath(context, destinationPath, overwrite, async destination => {
+        let previous: string | undefined;
+        if (overwrite) {
+          const backup = path.join(path.dirname(destination), `.issue-pilot-rename-${randomUUID()}.previous`);
+          try { await rename(destination, backup); previous = backup; }
+          catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
+        }
+        try { await rename(source, destination); }
+        catch (error) {
+          if (previous) {
+            try { await rename(previous, destination); }
+            catch (rollbackError) { throw new Error("source_rename_rollback_failed", { cause: new AggregateError([error, rollbackError], "source_rename_rollback_failed") }); }
+          }
+          throw error;
+        }
+        if (previous) {
+          try { await rm(previous, { recursive: true, force: true }); }
+          catch (error) { throw new Error("source_rename_finalize_failed", { cause: error }); }
+        }
+      });
+    });
   }
 
   async stage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
@@ -279,9 +298,8 @@ export class SourceBrowser {
     const context = await this.context(issue, repositoryName);
     const selected = sourcePath(normalizedRelativePath(relativePath));
     if (!selected || !Number.isSafeInteger(line) || line < 1) throw new Error("invalid_source_line");
-    const absolute = await this.resolvePath(context.root, selected);
-    if (!(await stat(absolute)).isFile()) throw new Error("source_path_not_file");
-    const content = await readFile(absolute, "utf8"), lineCount = content.split("\n").length;
+    const { content } = await this.workingFile(context, selected);
+    const lineCount = content.split("\n").length;
     if (line > lineCount) throw new Error("invalid_source_line");
     const withoutCommit = (subject: string): SourceBlame => ({ path: selected, line, commit: null, shortCommit: null, author: "", date: null, subject });
     if (!content || content.endsWith("\n") && line === lineCount) return withoutCommit(content ? "文件末尾" : "空文件");
@@ -520,14 +538,20 @@ export class SourceBrowser {
 
   private async workingFile(context: SourceContext, relativePath: string): Promise<SourceFile> {
     const file = await this.resolvePath(context.root, relativePath);
-    const metadata = await stat(file);
-    if (!metadata.isFile()) throw new Error("source_path_not_file");
-    const content = await readFile(file);
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    let content: Buffer, size: number;
+    try {
+      if (await realpath(`/proc/self/fd/${handle.fd}`) !== file) throw new Error("source_path_outside_repository");
+      const metadata = await handle.stat();
+      if (!metadata.isFile()) throw new Error("source_path_not_file");
+      size = metadata.size;
+      content = await handle.readFile();
+    } finally { await handle.close(); }
     if (content.subarray(0, Math.min(content.length, 8192)).includes(0)) throw new Error("source_file_binary");
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(content); }
     catch { throw new Error("source_file_binary"); }
-    return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size: metadata.size, sha256: createHash("sha256").update(content).digest("hex") };
+    return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size, sha256: createHash("sha256").update(content).digest("hex") };
   }
 
   private async repositoryRows(issue: IssueReference): Promise<RepositoryRow[]> {
@@ -559,6 +583,23 @@ export class SourceBrowser {
       if (!selected) throw new Error("invalid_source_path");
       return selected;
     });
+  }
+
+  /** Pin the validated parent so rename/symlink races cannot redirect a filesystem mutation. */
+  private async withMutablePath<T>(context: SourceContext, relativePath: string, allowExisting: boolean, operation: (anchoredPath: string) => Promise<T>): Promise<T> {
+    const candidate = await this.mutableDestination(context, relativePath, allowExisting);
+    const parent = path.dirname(candidate);
+    const directory = await open(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    const failures: unknown[] = [];
+    try {
+      const descriptor = `/proc/self/fd/${directory.fd}`;
+      if (await realpath(descriptor) !== parent) throw new Error("source_path_outside_repository");
+      return await operation(path.join(descriptor, path.basename(candidate)));
+    } catch (error) { failures.push(error); throw error; }
+    finally {
+      try { await directory.close(); }
+      catch (error) { throw new AggregateError([...failures, error], "source_path_cleanup_failed"); }
+    }
   }
 
   private async mutableSource(context: SourceContext, relativePath: string): Promise<string> {

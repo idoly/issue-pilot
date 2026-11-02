@@ -16,25 +16,38 @@ async function waitFor(check: () => boolean): Promise<void> {
 }
 
 test("bounds concurrent Issue rounds while retaining reservations and draining queued work on close", async () => {
-  const engine = new AgentEngine({} as never, ".issue-pilot", undefined, undefined, undefined, 1);
-  const releases: Array<() => void> = [], started: string[] = [];
+  const published: RunEvent[] = [];
+  const engine = new AgentEngine({} as never, ".issue-pilot", event => published.push(event), undefined, undefined, 1);
+  let releaseFirst!: () => void, releaseSecond!: () => void;
+  const first = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const second = new Promise<void>(resolve => { releaseSecond = resolve; });
+  const started: string[] = [];
   (engine as unknown as { run(id: string): Promise<void> }).run = async id => {
     started.push(id);
-    await new Promise<void>(resolve => releases.push(resolve));
+    await (id === "first" ? first : second);
   };
-  engine.enqueue("first"); engine.enqueue("second");
-  await waitFor(() => started.length === 1);
-  assert.deepEqual(started, ["first"]);
-  assert.equal(engine.isRunning("second"), true);
-  await assert.rejects(engine.runExclusive(["second"], async () => undefined), /issue_already_running/);
-  let closed = false;
-  const closing = engine.close().then(() => { closed = true; });
-  releases.shift()!();
-  await waitFor(() => started.length === 2);
-  assert.equal(closed, false);
-  releases.shift()!(); await closing;
-  assert.equal(engine.isRunning("second"), false);
-  assert.equal(closed, true);
+  try {
+    assert.equal(engine.getRunState("second"), "idle");
+    engine.enqueue("first"); engine.enqueue("second");
+    await waitFor(() => started.length === 1);
+    assert.deepEqual(started, ["first"]);
+    assert.equal(engine.getRunState("first"), "running");
+    assert.equal(engine.getRunState("second"), "queued");
+    assert.equal(engine.isRunning("second"), true);
+    await assert.rejects(engine.runExclusive(["second"], async () => undefined), /issue_already_running/);
+    let closed = false;
+    const closing = engine.close().then(() => { closed = true; });
+    releaseFirst();
+    await waitFor(() => started.length === 2);
+    assert.equal(engine.getRunState("first"), "idle");
+    assert.equal(engine.getRunState("second"), "running");
+    assert.equal(closed, false);
+    releaseSecond(); await closing;
+    assert.equal(engine.isRunning("second"), false);
+    assert.equal(engine.getRunState("second"), "idle");
+    assert.equal(closed, true);
+    assert.deepEqual(published.filter(event => event.issueId === "second" && event.event.type === "issue_run_state").map(event => event.event.type === "issue_run_state" && event.event.state), ["queued", "running", "idle"]);
+  } finally { releaseFirst(); releaseSecond(); await engine.close(); }
 });
 
 test("selects repository preparation modes from environment and issue type", () => {
@@ -159,7 +172,7 @@ test("retains an accepted message without dispatching it after the Issue becomes
   assert.equal(recorded, 1);
   assert.equal(prompted, 0);
   assert.equal(workspaceUpdates, 0);
-  assert.equal(published.length, 1);
+  assert.deepEqual(published.filter(event => event.event.type !== "issue_run_state").map(event => event.event.type), ["issue_user"]);
 });
 
 test("serializes streaming messages and records only accepted steering", async () => {
@@ -363,12 +376,12 @@ test("closes a streaming session when an accepted steer cannot be recorded", asy
 
 test("finishes failed run cleanup before starting queued work", { timeout: 5_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-order-"));
-  const events: string[] = [];
+  const events: string[] = [], states: string[] = [];
   let entered!: () => void, release!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
   const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
   const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
-  const engine = new AgentEngine(database as never, root);
+  const engine = new AgentEngine(database as never, root, event => { if (event.event.type === "issue_run_state") states.push(event.event.state); });
   const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
   internal.sessions.set("issue-1", { async stop() { events.push("cleanup-start"); entered(); await gate; events.push("cleanup-end"); } });
   try {
@@ -376,8 +389,11 @@ test("finishes failed run cleanup before starting queued work", { timeout: 5_000
     internal.schedule("issue-1", async () => { events.push("second"); });
     await ready; await new Promise<void>(resolve => setImmediate(resolve));
     assert.deepEqual(events, ["first", "cleanup-start"]);
+    assert.equal(engine.getRunState("issue-1"), "running", "cleanup still owns the execution slot");
+    assert.deepEqual(states, ["queued", "running"]);
     release(); await waitFor(() => !engine.isRunning("issue-1"));
     assert.deepEqual(events, ["first", "cleanup-start", "cleanup-end", "second"]);
+    assert.deepEqual(states, ["queued", "running", "queued", "running", "idle"]);
   } finally { release(); await waitFor(() => !engine.isRunning("issue-1")); await engine.close(); await rm(root, { recursive: true, force: true }); }
 });
 

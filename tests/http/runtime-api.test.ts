@@ -12,7 +12,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus, type RunEvent } from "../../src/agent/events.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { PiSessionRuntime, createPrivateSessionManager } from "../../src/agent/pi-session.ts";
-import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { agentSessions, issues, issueWorkspaces, userCredentials } from "../../src/db/schema.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import type { AgentFooterStats, AgentRuntimeConfiguration } from "../../src/domain/contracts.ts";
 import { buildApi } from "../../src/http/api.ts";
@@ -29,7 +29,7 @@ for (const withSession of [false, true]) test(`reports configured automatic comp
       const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
       await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
       const manager = await createPrivateSessionManager(work, directory);
-      manager.appendMessage(fauxAssistantMessage("Synthetic completed answer."));
+      manager.appendMessage({ ...fauxAssistantMessage("Synthetic completed answer."), provider: testAgent.provider, model: testAgent.model });
       const database = openDatabase(fixture.databaseFile);
       try { await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work }); }
       finally { database.close(); }
@@ -54,6 +54,45 @@ for (const withSession of [false, true]) test(`reports configured automatic comp
       assert.equal(snapshot.footer.contextWindow, 32_000);
       if (!withSession) assert.equal(snapshot.footer.contextPercent, 0);
     }
+  } finally { await fixture.cleanup(); }
+});
+
+for (const withSession of [false, true]) test(`stream snapshot uses ${withSession ? "the recorded session" : "the owner's personal model"} rather than the shared model`, async () => {
+  const personal = { provider: "personal", model: "personal-model", thinkingLevel: "medium" as const, codemode: "off" as const, apiKey: "private-test-key" };
+  const fixture = await createApiFixture({ modelCatalog: { async list() { return [...await modelCatalog.list(), { provider: "personal", id: "personal-model", contextWindow: 64_000, thinkingLevels: ["medium" as const] }, { provider: "session", id: "session-model", contextWindow: 128_000, thinkingLevels: ["high" as const] }]; } } });
+  try {
+    await createService(fixture.app, "PersonalSnapshot");
+    const issue = await createIssue(fixture.app, "personalsnapshot"), key = String(issue.id), issueId = fixture.engine.enqueued[0]!;
+    const database = openDatabase(fixture.databaseFile);
+    try {
+      const [row] = await database.db.select().from(issues).where(eq(issues.id, issueId));
+      assert.ok(row);
+      await database.db.insert(userCredentials).values({ subject: row.assigneeSubject ?? row.reporterSubject, modelCredentials: personal });
+      if (withSession) {
+        const work = issueRoot(fixture.root, key);
+        await mkdir(work, { recursive: true });
+        const manager = await createPrivateSessionManager(work, work);
+        manager.appendModelChange("session", "session-model");
+        manager.appendThinkingLevelChange("high");
+        manager.appendMessage({ ...fauxAssistantMessage("Recorded answer."), provider: "session", model: "session-model" });
+        await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
+      }
+    } finally { await database.close(); }
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${key}/agent-stream`);
+    assert.equal(response.status, 200);
+    let payload = "";
+    for await (const chunk of response.body!) {
+      payload += new TextDecoder().decode(chunk);
+      const block = payload.split("\n\n").slice(0, -1).find(block => block.startsWith("event: snapshot_ready\n"));
+      if (!block) continue;
+      const snapshot = JSON.parse(block.split("\n").find(line => line.startsWith("data: "))!.slice(6));
+      assert.deepEqual(snapshot.agent, withSession ? { provider: "session", model: "session-model", thinkingLevel: "high" } : { provider: personal.provider, model: personal.model, thinkingLevel: personal.thinkingLevel });
+      assert.equal(snapshot.footer.contextWindow, withSession ? 128_000 : 64_000);
+      assert.doesNotMatch(block, /private-test-key/);
+      return;
+    }
+    assert.fail("missing snapshot_ready");
   } finally { await fixture.cleanup(); }
 });
 
@@ -237,6 +276,26 @@ for (const stage of ["model discovery", "snapshot read"] as const) test(`release
     release(); controller.abort();
     await new Promise<void>(resolve => setImmediate(resolve)); context.mock.restoreAll(); connection.close(); await fixture.cleanup();
   }
+});
+
+for (const state of ["idle", "queued", "running"] as const) test(`Agent stream snapshot distinguishes ${state} without changing the busy flag contract`, async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "QueueSnapshot");
+    const issue = await createIssue(fixture.app, "queuesnapshot"), issueId = fixture.engine.enqueued[0]!;
+    if (state === "idle") fixture.engine.running.clear();
+    if (state === "queued") fixture.engine.queued.add(issueId);
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`);
+    const reader = response.body!.getReader();
+    try {
+      const payload = await readStreamUntil(reader, "event: snapshot_ready\n");
+      const block = payload.split("\n\n").find(block => block.startsWith("event: snapshot_ready\n"))!;
+      const snapshot = JSON.parse(block.split("\n").find(line => line.startsWith("data: "))!.slice(6));
+      assert.equal(snapshot.runState, state);
+      assert.equal(snapshot.running, state !== "idle");
+    } finally { await reader.cancel(); }
+  } finally { await fixture.cleanup(); }
 });
 
 test("uses snapshot_ready as the versioned Agent stream handshake", async () => {

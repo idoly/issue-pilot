@@ -12,6 +12,28 @@ class ClosingErrorEventSource extends EventTarget {
 }
 
 describe("AgentStreamController", () => {
+  it("validates run states at the SSE boundary without accepting malformed snapshots or live events", () => {
+    const sources: ClosingErrorEventSource[] = [], onSnapshot = vi.fn(), onEvent = vi.fn(), onError = vi.fn();
+    const controller = new AgentStreamController(id => `/api/issues/${id}/agent-stream`, 1000, 45000,
+      { onConnection() {}, onError, onSnapshot, onEvent },
+      url => { const source = new ClosingErrorEventSource(url); sources.push(source); return source as unknown as EventSource; });
+    try {
+      controller.connect("ISSUE-20261030-001");
+      const source = sources[0]!;
+      for (const runState of [null, "unknown", 1]) source.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState }) }));
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(3);
+      expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
+      source.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState: "queued" }) }));
+      expect(onSnapshot).toHaveBeenCalledTimes(1);
+      source.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "bad", event: { type: "issue_run_state", state: "unknown" } }) }));
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(4);
+      source.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    } finally { controller.dispose(); }
+  });
+
   it("reconnects on a session reset and discards events from the previous stream", async () => {
     const sources: ClosingErrorEventSource[] = [], onEvent = vi.fn();
     const controller = new AgentStreamController(id => `/api/issues/${id}/agent-stream`, 1000, 45000,

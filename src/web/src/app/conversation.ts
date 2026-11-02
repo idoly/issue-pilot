@@ -150,12 +150,14 @@ export interface AgentActivity {
 }
 
 export function processingAfterEvent(current: boolean, event: RunEvent["event"]): boolean {
+  if (event.type === "issue_run_state") return event.state !== "idle";
   if (event.type === "agent_start") return true;
   if (event.type === "agent_settled" || event.type === "issue_status") return false;
   return current;
 }
 
 export function activityForEvent(event: RunEvent["event"]): AgentActivity | null | undefined {
+  if (event.type === "issue_run_state") return event.state === "queued" ? { text: "排队中，等待执行名额…", tone: "info" } : null;
   if (event.type === "agent_start" || event.type === "compaction_end" || event.type === "summarization_retry_finished") return null;
   if (event.type === "compaction_start") return { text: "Compacting context...", tone: "info" };
   if (event.type === "auto_retry_start") return { text: `Retrying ${event.attempt}/${event.maxAttempts} in ${duration(event.delayMs)}...`, tone: "warning" };

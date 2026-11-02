@@ -43,8 +43,9 @@ test("SDK 1.3 replays persistent sessions with current tools and canonical promp
       return fauxAssistantMessage("Resumed correctly.");
     },
   ]);
+  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
-    const first = await runtime.start({ manager, context, deploymentConfig: {}, workspaceRoot: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
+    const first = managed = await runtime.start({ manager, context, deploymentConfig: {}, workspaceRoot: root, agentDirectory: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
     await first.prompt("Check the evidence");
     assert.equal(prompts, 1);
     assert.ok(events.some((event) => event.type === "agent_settled" && event.aborted === false));
@@ -56,7 +57,7 @@ test("SDK 1.3 replays persistent sessions with current tools and canonical promp
     // current-context selection must override the transcript on read-only resume.
     manager.appendMessage({ role: "system", content: "", toolsAdded: [{ name: "bash", description: "old writable tool", parameters: {} }], timestamp: Date.now() });
     const reopened = SessionManager.open(persisted);
-    const resumed = await runtime.start({ manager: reopened, context, deploymentConfig: {}, workspaceRoot: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
+    const resumed = managed = await runtime.start({ manager: reopened, context, deploymentConfig: {}, workspaceRoot: root, agentDirectory: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
     assert.deepEqual(resumed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     await resumed.prompt("Continue after reopening");
     await resumed.stop();
@@ -64,5 +65,8 @@ test("SDK 1.3 replays persistent sessions with current tools and canonical promp
     assert.ok(JSON.stringify(replay).includes("Resumed correctly."));
     assert.equal(replay.some(({ event }) => event.type === "message_end" && event.message.role === "system"), false);
     assert.ok((await readFile(persisted, "utf8")).includes('"version":3'));
-  } finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    try { await managed?.stop(); }
+    finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
+  }
 });

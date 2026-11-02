@@ -17,6 +17,7 @@ export const issuePilotConfig = Object.freeze({
     logger: true,
     sseHeartbeatMs: 15_000,
     sseRecentEventIds: 4_096,
+    sseQueuedBytes: 8 * 1024 * 1024,
   }),
   web: Object.freeze({
     host: "0.0.0.0",

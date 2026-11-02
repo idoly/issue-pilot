@@ -71,14 +71,16 @@ export function PersonalCredentials() {
     const value = await updatePersonalCredentials({ expectedRevision: credentials.revision, model });
     if (owner === generation) { setStatus(value); close(); }
   };
-  const saveShared = async (group: "dms" | "sls", clear: boolean) => {
+  const saveShared = async (group: "dms" | "sls", clear: boolean, owner: number) => {
     if (group === "dms") {
       const current = sharedDms(); if (!current) throw new Error("shared_credentials_not_loaded");
-      setSharedDms(await updateSharedDmsCredentials(clear ? { expectedRevision: current.revision, mode: "clear" } : { expectedRevision: current.revision, mode: "replace", url: url().trim(), authorization: secret() }));
+      const value = await updateSharedDmsCredentials(clear ? { expectedRevision: current.revision, mode: "clear" } : { expectedRevision: current.revision, mode: "replace", url: url().trim(), authorization: secret() });
+      if (owner === generation) setSharedDms(value);
       return;
     }
     const current = sharedSls(); if (!current) throw new Error("shared_credentials_not_loaded");
-    setSharedSls(await updateSharedSlsCredentials(clear ? { expectedRevision: current.revision, mode: "clear" } : { expectedRevision: current.revision, mode: "replace", accessKeyId: accessKeyId(), accessKeySecret: secret() }));
+    const value = await updateSharedSlsCredentials(clear ? { expectedRevision: current.revision, mode: "clear" } : { expectedRevision: current.revision, mode: "replace", accessKeyId: accessKeyId(), accessKeySecret: secret() });
+    if (owner === generation) setSharedSls(value);
   };
   const save = async (clear = false) => {
     const group = selected(), credentials = status(); if (!group || !credentials || saving()) return;
@@ -91,7 +93,7 @@ export function PersonalCredentials() {
     if (!clear && (!secret().trim() || group === "sls" && !accessKeyId().trim() || group === "dms" && !url().trim())) { setSaveError("请填写完整凭证"); return; }
     setSaving(true); setSaveError("");
     try {
-      if (shared() && (group === "dms" || group === "sls")) { await saveShared(group, clear); if (owner === generation) close(); return; }
+      if (shared() && (group === "dms" || group === "sls")) { await saveShared(group, clear, owner); if (owner === generation) close(); return; }
       const input: PersonalCredentialUpdate = { expectedRevision: credentials.revision };
       if (group === "git") input.git = clear ? { mode: "clear" } : { mode: "replace", type: "ssh", privateKey: secret() };
       if (group === "dms") input.production = { dms: clear ? { mode: "clear" } : { mode: "replace", url: url().trim(), authorization: secret() } };
@@ -108,7 +110,7 @@ export function PersonalCredentials() {
     <Show when={status()} fallback={<Show when={!error()}><div class="user-management-loading"><Skeleton active paragraph={{ rows: 4 }} /></div></Show>}>
       <div class="personal-credential-summary"><For each={groups}>{group => <div><strong>{group.label}</strong><Tag color={configured(group.key) ? "green" : "default"}>{configured(group.key) ? "已配置" : "未配置"}</Tag><Button size="small" disabled={saving() || !canEditPersonal(group.key) && !(isAdmin() && sharedGroups.includes(group.key))} onClick={() => open(group.key)}>{configured(group.key) ? "更新凭证" : "设置凭证"}</Button></div>}</For></div>
     </Show>
-    <ModelCredentialDialog open={selected() === "model"} title={title("model")} models={configuration().agentModels} initial={modelInitial()} keyConfigured={targetConfigured("model")} onClose={close}
+    <ModelCredentialDialog open={selected() === "model"} draftKey={`${currentUser()?.subject}:${currentUser()?.role}:${isAdmin()}:${shared()}`} onSavingChange={setSaving} title={title("model")} models={configuration().agentModels} initial={modelInitial()} keyConfigured={targetConfigured("model")} onClose={close}
       onSave={(selection, apiKey) => saveModel(selection, apiKey)} onClear={() => saveModel(null, undefined)}>{targetSwitch("model")}</ModelCredentialDialog>
     <Modal width={460} open={selected() !== null && selected() !== "model"} title={title(selected())} okText="保存" cancelText="取消" confirmLoading={saving()} onCancel={close} onOk={() => { void save(); }}>
       <div class="settings-form">{targetSwitch(selected())}<Show when={saveError()}><div role="alert" class="user-management-error">{saveError()}<Show when={conflict()}><Button size="small" onClick={() => { close(); void load(isAdmin()); }}>重新加载</Button></Show></div></Show>

@@ -11,8 +11,8 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const project = fileURLToPath(new URL("../../", import.meta.url));
 const probe = fileURLToPath(new URL("../helpers/zod-security-probe.mjs", import.meta.url));
-const patchFiles = ["@earendil-works+pi-coding-agent+1.4.0.patch", "node-forge+1.4.0.patch", "zod+3.25.76.patch"];
-const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent", "node-forge"];
+const patchFiles = ["@earendil-works+pi-coding-agent+1.4.0.patch", "zod+3.25.76.patch"];
+const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent"];
 
 async function patchedPaths(): Promise<string[]> {
   const files = await Promise.all(patchFiles.map(name => readFile(path.join(project, "patches", name), "utf8")));

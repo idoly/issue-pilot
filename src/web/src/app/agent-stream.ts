@@ -1,10 +1,11 @@
-import type { AgentFooterStats, IssueStatus, RunEvent } from "../data/client";
+import { AGENT_RUN_STATES, type AgentRunState, type AgentFooterStats, type IssueStatus, type RunEvent } from "../data/client";
 import { activityForEvent, applyAgentEvent, type AgentActivity, type ConversationEntry } from "./conversation";
 
 interface AgentStreamSnapshot {
   agent?: { provider: string; model: string; thinkingLevel: string };
   footer?: AgentFooterStats;
   running?: boolean;
+  runState?: AgentRunState;
   issueStatus?: IssueStatus;
 }
 
@@ -89,6 +90,7 @@ export class AgentStreamController {
       try {
         const parsed = JSON.parse(event.data) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent_event_protocol_error");
+        if ("runState" in parsed && !AGENT_RUN_STATES.includes(parsed.runState as AgentRunState)) throw new Error("agent_event_protocol_error");
         this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replayEntries, activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
       } catch {
@@ -102,6 +104,7 @@ export class AgentStreamController {
         const parsed = JSON.parse(event.data) as Partial<RunEvent>;
         if (!parsed.event || typeof parsed.event.type !== "string") throw new Error("agent_event_protocol_error");
         const envelope = parsed as RunEvent;
+        if (envelope.event.type === "issue_run_state" && !AGENT_RUN_STATES.includes(envelope.event.state)) throw new Error("agent_event_protocol_error");
         if (envelope.event.type === "session_reset") {
           queueMicrotask(() => { if (this.isCurrent(generation)) this.connect(issueId); });
           return;

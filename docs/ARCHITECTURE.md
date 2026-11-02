@@ -29,13 +29,13 @@ Agent 活动、Issue-set reservation、配置 scope、生命周期、工单 insp
 | 服务／工单范围写入 | scope queue → Issue reservation |
 | 回收／重开 | lifecycle queue → inspection queue → Issue reservation |
 
-排队后重新授权。失败清理属于串行范围，旧失败不能覆盖新轮次；关闭等待已接收活动、队列与预约。SQLite 回滚不恢复文件和 Git，各 owner prepare、rollback、finalize，并保留操作与收尾两类错误。
+排队后重新授权。Engine 的 `idle`／`queued`／`running` 区分空闲、等待执行与已取得并发名额（含准备和失败清理）；SSE 快照和实时 `issue_run_state` 同步该状态，页面排队时不显示 Working。`isRunning`／`agentRunning` 仍表示包括排队在内的全部活动，用于预约和操作互斥，不等于占用执行名额。失败清理属于串行范围，旧失败不能覆盖新轮次；关闭等待已接收活动、队列与预约。SQLite 回滚不恢复文件和 Git，各 owner prepare、rollback、finalize，并保留操作与收尾两类错误。
 
 ## Web 与实时更新
 
 ApplicationResources 持有共享资源和编辑状态。切换身份取消旧身份未发送工作，迟到响应按身份与 generation 拒绝。代码浏览器、对话与请求 DTO 分别由所属模块维护。
 
-SSE 顺序为持久／当前回放、snapshot_ready、live／heartbeat。临时事件 ID 使用有界窗口，持久条目按连接生命周期去重；待发送帧队列没有独立字节上限。
+SSE 顺序为持久／当前回放、snapshot_ready、live／heartbeat。模型与上下文容量优先使用已记录会话；没有会话模型时按 owner 的个人模型组／共享组选择。临时事件 ID 使用有界窗口，持久条目按连接生命周期去重。历史回放等待 socket 排空；发送队列及回放期间的实时事件缓冲分别受 `http.sseQueuedBytes` 限制，超限断开慢连接并由重连恢复，不静默丢帧。预算不包含已经交给 socket 的单个帧，也不限制整份历史总大小。
 
 工作区统计共享正在执行的扫描及短期完成快照。生命周期操作前后使缓存失效，真实释放重新检查，首次采样仍受磁盘 I/O 影响。
 

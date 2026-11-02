@@ -54,7 +54,7 @@ print('files generated')` }),
       fauxAssistantMessage("Working files retained."),
     ]);
     const failures: unknown[] = [];
-    managed = await runtime.start({ manager, context: { issueKey: "ISSUE-20261017-001", serviceKey: "fixture", environmentKey: "prod", model: { provider: "native-files-fixture", modelId: "fixture", thinkingLevel: "off" }, codemode: "off", capabilities: [], canModifyCode: false }, deploymentConfig: {}, workspaceRoot: work, systemPrompt: "Process files in this working directory.", onEvent: (event) => { if (event.type === "tool_execution_end" && event.isError) failures.push(event.result); } });
+    managed = await runtime.start({ manager, context: { issueKey: "ISSUE-20261017-001", serviceKey: "fixture", environmentKey: "prod", model: { provider: "native-files-fixture", modelId: "fixture", thinkingLevel: "off" }, codemode: "off", capabilities: [], canModifyCode: false }, deploymentConfig: {}, workspaceRoot: work, agentDirectory: root, systemPrompt: "Process files in this working directory.", onEvent: (event) => { if (event.type === "tool_execution_end" && event.isError) failures.push(event.result); } });
     assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     await managed.prompt("Process the workbook and retain both files in the working directory.");
     assert.deepEqual(failures, []);

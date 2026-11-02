@@ -19,6 +19,7 @@ class StartupEngine implements AgentController {
   enqueue(): void {}
   async send(): Promise<void> {}
   isRunning(): boolean { return false; }
+  getRunState() { return "idle" as const; }
   async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(): Promise<void> }) => Promise<T>): Promise<T> {
     return operation({ enqueue() {}, async closeSession() {} });
   }

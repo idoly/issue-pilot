@@ -11,6 +11,11 @@ export async function loadGlobalAgentConfiguration(database: Pick<Database, "sel
   return { provider: configuration.provider, model: configuration.model, thinkingLevel: configuration.thinkingLevel as AgentConfiguration["thinkingLevel"], codemode: configuration.codemode, runtime: configuration.runtime };
 }
 
+/** Personal model fields replace the shared selection without projecting its API key. */
+export function selectAgentConfiguration(shared: AgentConfiguration, personal?: AgentModelSelection | null): AgentConfiguration {
+  return personal ? { ...shared, provider: personal.provider, model: personal.model, thinkingLevel: personal.thinkingLevel, codemode: personal.codemode } : shared;
+}
+
 // The shared API key belongs to the global provider and is never part of the projected configuration.
 export async function loadSharedAgentApiKey(database: Pick<Database, "select">): Promise<string> {
   const [configuration] = await database.select({ apiKey: globalAgentConfiguration.apiKey }).from(globalAgentConfiguration).where(eq(globalAgentConfiguration.id, 1)).limit(1);

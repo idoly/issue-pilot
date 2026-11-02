@@ -301,10 +301,11 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     },
     onSnapshot: (payload, replay, generation) => {
       setEntries(replay.entries); setFooter(payload.footer ?? emptyFooter()); clearUnread();
-      setActivity(replay.activity); setQueue(replay.queue); setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
+      setActivity(payload.runState === "queued" || payload.runState === "idle" ? activityForEvent({ type: "issue_run_state", state: payload.runState }) ?? null : replay.activity);
+      setQueue(replay.queue); setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
       const statusChanged = Boolean(payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus) && payload.issueStatus !== props.issue.status);
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
-      setProcessing(payload.running === true);
+      setProcessing(payload.runState ? payload.runState !== "idle" : payload.running === true);
       if (statusChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
       queueMicrotask(scrollLatest);
     },

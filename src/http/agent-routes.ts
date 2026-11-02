@@ -4,11 +4,11 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { loadGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues } from "../db/schema.ts";
+import { agentSessions, issues, userCredentials } from "../db/schema.ts";
 import { pathExists } from "../workspace/state.ts";
 import { ApiError, record, text } from "./input.ts";
 import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
@@ -103,14 +103,21 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
 
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    const { provider, model, thinkingLevel, runtime } = await loadGlobalAgentConfiguration(database.db);
-    const autoCompact = SettingsManager.inMemory(runtime.settings).getCompactionEnabled();
-    const configuredModel = (await modelCatalog.list()).find((candidate) => candidate.provider === provider && candidate.id === model);
-    const contextWindow = configuredModel?.contextWindow ?? 0;
+    const sharedConfiguration = await loadGlobalAgentConfiguration(database.db);
+    const [credentials] = await database.db.select({ model: userCredentials.modelCredentials }).from(userCredentials).where(eq(userCredentials.subject, issue.assigneeSubject ?? issue.reporterSubject)).limit(1);
+    const configured = selectAgentConfiguration(sharedConfiguration, credentials?.model);
+    const autoCompact = SettingsManager.inMemory(configured.runtime.settings).getCompactionEnabled();
+    const models = await modelCatalog.list();
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const sessionReady = Boolean(binding && await pathExists(binding.sessionFile));
     if (reply.raw.destroyed) { reply.hijack(); return; }
-    const liveEvents = subscribeBufferedAgentEvents(events, issue.id);
+    const liveEvents = subscribeBufferedAgentEvents(events, issue.id, {
+      maxPendingBytes: issuePilotConfig.http.sseQueuedBytes,
+      onFailure(error) {
+        try { app.log.error(error); }
+        finally { cleanup(); reply.raw.destroy(); }
+      },
+    });
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let hijacked = false;
     let cleaned = false;
@@ -126,6 +133,12 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       // Read durable and in-flight events together before awaiting newer Issue state.
       const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];
+      const sessionContext = manager?.buildSessionContext();
+      // A persisted session describes the displayed conversation, even if its owner has since changed models.
+      const { provider, model, thinkingLevel } = sessionContext?.model
+        ? { provider: sessionContext.model.provider, model: sessionContext.model.modelId, thinkingLevel: sessionContext.thinkingLevel }
+        : configured;
+      const contextWindow = models.find(candidate => candidate.provider === provider && candidate.id === model)?.contextWindow ?? 0;
       const footer = sessionFooterStats(manager, contextWindow, autoCompact);
       const currentEvents = events.replayCurrent(issue.id);
       const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
@@ -170,11 +183,20 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
         }
         writer.write(`id: ${event.id}\ndata: ${serialized}\n\n`);
       };
-      for (const event of transcript) send(event);
+      // Pace replay instead of queueing the entire transcript behind a slow socket.
+      for (const event of transcript) {
+        send(event);
+        await writer.drain();
+        if (cleaned) return;
+      }
       // Snapshot totals also include hidden entries, such as cache-warming usage.
       for (const entry of manager?.getEntries() ?? []) sentEntries.add(entry.id);
-      for (const event of currentEvents) send(event);
-      writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), issueStatus: currentIssue.status })}\n\n`);
+      for (const event of currentEvents) {
+        send(event);
+        await writer.drain();
+        if (cleaned) return;
+      }
+      writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), runState: engine.getRunState(issue.id), issueStatus: currentIssue.status })}\n\n`);
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
       liveEvents.activate(send);

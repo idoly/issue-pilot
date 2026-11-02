@@ -1,15 +1,16 @@
+import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { DingtalkSourceResponse, DingtalkImportInput, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 
 import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
 import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
-import { AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentModelSelection, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
+import { AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentModelSelection, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
-export type { AgentConfiguration, AgentModelSelection, CapabilityName } from "../../../domain/contracts";
+export { AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
+export type { AgentConfiguration, AgentModelSelection, AgentRunState, CapabilityName } from "../../../domain/contracts";
 export type { AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
@@ -160,16 +161,52 @@ async function requestError(response: Response): Promise<Error> {
   return new Error(code ?? `request_failed:${response.status}`);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
+function requestHeaders(init?: HeadersInit): Headers {
+  const headers = new Headers(init);
   const subject = currentUserSubject();
   if (subject) headers.set("X-Issue-Pilot-Subject", subject);
+  return headers;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = requestHeaders(init?.headers);
   if (init?.body !== undefined && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) throw await requestError(response);
   if (response.status === 204 || response.status === 205) return undefined as T;
   const body = await response.text();
   return body ? JSON.parse(body) as T : undefined as T;
+}
+
+/** Preview reads are bounded independently of stale file-list metadata; ordinary downloads stay unrestricted. */
+async function previewBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  signal?.throwIfAborted();
+  const response = await fetch(path, { headers: requestHeaders(), ...(signal ? { signal } : {}) });
+  if (!response.ok) throw await requestError(response);
+  const maximum = issuePilotConfig.web.filePreviewBytes;
+  if (Number(response.headers.get("content-length")) > maximum) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("file_preview_too_large");
+  }
+  const type = response.headers.get("content-type") ?? "";
+  if (!response.body) return new Blob([], { type });
+  const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = [];
+  let size = 0, completed = false;
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+      const { done, value } = await reader.read();
+      signal?.throwIfAborted();
+      if (done) { completed = true; break; }
+      size += value.byteLength;
+      if (size > maximum) throw new Error("file_preview_too_large");
+      chunks.push(new Uint8Array(value));
+    }
+    return new Blob(chunks, { type });
+  } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponent(key)}${suffix}`;
@@ -203,9 +240,7 @@ export const listIssueWorkFiles = async (key: string, path = "", signal?: AbortS
 export const issueWorkFileUrl = (key: string, path: string) => issuePath(key, `/files/download?path=${encodeURIComponent(path)}`);
 
 export async function fetchIssueWorkFile(key: string, path: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(issueWorkFileUrl(key, path), signal ? { signal } : undefined);
-  if (!response.ok) throw await requestError(response);
-  return response.blob();
+  return previewBlob(issueWorkFileUrl(key, path), signal);
 }
 export const loadWorkspaceStats = (signal?: AbortSignal, refresh = false) => request<WorkspaceStats>(`/api/workspaces/stats${refresh ? "?refresh=true" : ""}`, signal ? { signal } : undefined);
 
@@ -330,9 +365,7 @@ export function attachmentUrl(key: string, attachmentId: string): string {
 }
 
 export async function fetchAttachment(key: string, attachmentId: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(attachmentUrl(key, attachmentId), signal ? { signal } : undefined);
-  if (!response.ok) throw await requestError(response);
-  return response.blob();
+  return previewBlob(attachmentUrl(key, attachmentId), signal);
 }
 
 export function createIssue(input: IssueCreateInput, files: File[] = []): Promise<IssueExecutionItem> {

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Button, Modal, PasswordInput, Select } from "../ui";
 import { AGENT_CODEMODE_MODES, type AgentModelOption, type AgentModelSelection } from "../data/client";
@@ -11,6 +11,9 @@ export const modelSummary = (selection: AgentModelSelection) => `${selection.pro
 /** Edits one model group (provider, model, thinking level, Codemode and its API key) for shared or personal credentials. */
 export function ModelCredentialDialog(props: {
   open: boolean;
+  /** User identity and shared/personal target, independent of identical model settings. */
+  draftKey: string;
+  onSavingChange: (saving: boolean) => void;
   title: string;
   models: AgentModelOption[];
   initial: AgentModelSelection;
@@ -33,12 +36,16 @@ export function ModelCredentialDialog(props: {
   const modelsOf = (value: string) => props.models.filter(option => option.provider === value);
   const thinkingLevelsOf = (value: string, id: string) => props.models.find(option => option.provider === value && option.id === id)?.thinkingLevels ?? [];
   const keyPreserved = () => props.keyConfigured && provider() === props.initial.provider;
-  // Drafts restart when the dialog opens or its target group (initial values or stored key) changes.
-  createEffect(() => props.open ? JSON.stringify([props.initial, props.keyConfigured]) : "", key => {
+  let generation = 0;
+  // A target change invalidates both secret drafts and results of already-submitted writes.
+  createEffect(() => props.open ? JSON.stringify([props.draftKey, props.initial, props.keyConfigured]) : "", key => {
+    generation++;
+    setApiKey(""); setError(""); setSaving(false); props.onSavingChange(false);
     if (!key) return;
     const initial = props.initial;
-    setProvider(initial.provider); setModel(initial.model); setThinkingLevel(initial.thinkingLevel); setCodemode(initial.codemode); setApiKey(""); setError(""); setSaving(false);
+    setProvider(initial.provider); setModel(initial.model); setThinkingLevel(initial.thinkingLevel); setCodemode(initial.codemode);
   });
+  onCleanup(() => { generation++; });
   const selectProvider = (value: string) => {
     const first = modelsOf(value)[0];
     setProvider(value);
@@ -52,10 +59,11 @@ export function ModelCredentialDialog(props: {
   };
   const run = async (operation: () => Promise<void>) => {
     if (saving()) return;
-    setSaving(true); setError("");
+    const owner = generation;
+    setSaving(true); props.onSavingChange(true); setError("");
     try { await operation(); }
-    catch (cause) { setError(settingsError(cause)); }
-    finally { setSaving(false); }
+    catch (cause) { if (owner === generation) setError(settingsError(cause)); }
+    finally { if (owner === generation) { setSaving(false); props.onSavingChange(false); } }
   };
   const save = () => {
     if (!provider() || !model()) { setError("请选择 provider 和模型"); return; }

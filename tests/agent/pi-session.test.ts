@@ -134,12 +134,14 @@ test("starts an SDK session with only context-selected tools and explicit resour
   const manager = await createPrivateSessionManager(workspaceRoot, sessionDirectory);
   const refreshes: unknown[] = [];
   const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime(true, refreshes)));
+  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
-    const managed = await runtime.start({
+    managed = await runtime.start({
       manager,
       context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot,
+      agentDirectory: root,
       systemPrompt: "Issue Pilot test context.",
       onEvent: () => undefined,
     });
@@ -148,9 +150,9 @@ test("starts an SDK session with only context-selected tools and explicit resour
     assert.equal(managed.session.model?.id, "test-model");
     assert.equal(managed.session.thinkingLevel, "medium");
     assert.match(managed.session.systemPrompt, /Issue Pilot test context/);
-    await managed.stop();
   } finally {
-    await rm(root, { recursive: true, force: true });
+    try { await managed?.stop(); }
+    finally { await rm(root, { recursive: true, force: true }); }
   }
 });
 
@@ -160,20 +162,22 @@ test("an export writer does not register a separate publication tool", async () 
   await mkdir(sessionDirectory);
   const manager = await createPrivateSessionManager(root, sessionDirectory);
   const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime()));
+  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
-    const managed = await runtime.start({
+    managed = await runtime.start({
       manager,
       context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot: root,
+      agentDirectory: root,
       workFiles: new IssueWorkFileStore(root, "ISSUE-20260929-001"),
       systemPrompt: "",
       onEvent: () => undefined,
     });
     assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
-    await managed.stop();
   } finally {
-    await rm(root, { recursive: true, force: true });
+    try { await managed?.stop(); }
+    finally { await rm(root, { recursive: true, force: true }); }
   }
 });
 
@@ -263,7 +267,7 @@ for (const environment of ["prod", "test", "dev"] as const) test(`exposes non-re
     managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
       manager: await createPrivateSessionManager(root, root),
       context: { ...context({ writable: environment === "dev" }), environmentKey: environment },
-      deploymentConfig: {}, workspaceRoot: root,
+      deploymentConfig: {}, workspaceRoot: root, agentDirectory: root,
       mcpConfigurations: localMcp(root),
       systemPrompt: "", onEvent: () => undefined,
     });
@@ -278,7 +282,7 @@ test("does not start stdio processes when Agent identity validation fails", asyn
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-start-"));
   try {
     await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-      manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, mcpConfigurations: localMcp(root), gitIdentity: { name: "", email: "test@example.test" }, systemPrompt: "", onEvent: () => undefined,
+      manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, agentDirectory: root, mcpConfigurations: localMcp(root), gitIdentity: { name: "", email: "test@example.test" }, systemPrompt: "", onEvent: () => undefined,
     }), /invalid_git_commit_identity/);
     await assert.rejects(readFile(join(root, "pid")), { code: "ENOENT" });
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -293,6 +297,7 @@ test("rejects configured models that are not currently available", async () => {
       context: context({ writable: false }),
       deploymentConfig: {},
       workspaceRoot: root,
+      agentDirectory: root,
       systemPrompt: "",
       onEvent: () => undefined,
     }), /configured_model_unavailable/);

@@ -1,8 +1,10 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
+import type { AgentRunState } from "../domain/contracts.ts";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 
 type AgentWireEvent = JsonAgentSessionEvent
   | { type: "session_reset" }
+  | { type: "issue_run_state"; state: AgentRunState }
   | { type: "issue_user"; message: string; images?: ImageContent[] }
   | { type: "issue_status"; status: "complete" | "error" };
 
@@ -129,22 +131,43 @@ export class AgentEventBus {
 }
 
 // Buffer events between the replay snapshot and live activation so SSE preserves one ordered stream.
-export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string) {
+export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string, budget?: { maxPendingBytes: number; onFailure: (error: unknown) => void }) {
   let pending: RunEvent[] = [];
+  let pendingBytes = 0;
+  let closed = false;
   let sink: RunEventListener | undefined;
-  const unsubscribe = bus.subscribe(issueId, (event) => sink ? sink(event) : pending.push(event));
+  const unsubscribe = () => { closed = true; pending = []; pendingBytes = 0; stop(); };
+  const buffer = (event: RunEvent) => {
+    if (closed) return;
+    if (budget) {
+      try {
+        pendingBytes += Buffer.byteLength(JSON.stringify(event));
+        if (pendingBytes > budget.maxPendingBytes) throw new Error("sse_queue_budget_exceeded");
+      } catch (error) {
+        unsubscribe();
+        budget.onFailure(error);
+        return;
+      }
+    }
+    pending.push(event);
+  };
+  const stop = bus.subscribe(issueId, event => { if (!closed) { if (sink) sink(event); else buffer(event); } });
   return {
     activate(nextSink: RunEventListener): void {
       if (sink) throw new Error("agent_event_subscription_already_active");
+      if (closed) return;
       // Keep events published during replay behind the existing backlog.
-      sink = (event) => { pending.push(event); };
+      sink = buffer;
       for (const event of pending) {
+        if (closed) break;
+        if (budget) pendingBytes -= Buffer.byteLength(JSON.stringify(event));
         if (bus.deliver(nextSink, event)) continue;
         unsubscribe();
         break;
       }
       pending = [];
-      sink = nextSink;
+      pendingBytes = 0;
+      if (!closed) sink = nextSink;
     },
     unsubscribe,
   };

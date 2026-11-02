@@ -19,7 +19,7 @@
 
 DBHub 使用固定版本 stdio 工具，静态只读配置位于 `scripts/dbhub.toml`，服务目标与生成连接归 `configuration/dbhub.ts` 管理。
 
-准确 npm 版本以 [package.json](../package.json) 和 [package-lock.json](../package-lock.json) 为准，Python 以 [requirements.txt](../requirements.txt) 为准。Pi、node-forge 和 Zod 回补由[依赖补丁](../patches/README.md)统一说明，不能跳过 postinstall。
+准确 npm 版本以 [package.json](../package.json) 和 [package-lock.json](../package-lock.json) 为准，Python 以 [requirements.txt](../requirements.txt) 为准。Pi、Zod 回补及已由正式版替代的 Forge 安全修复由[依赖补丁](../patches/README.md)统一说明，不能跳过 postinstall。
 
 ## 修改入口
 
@@ -89,13 +89,13 @@ npm audit --omit=dev --audit-level=high
 .venv/bin/python3 -m pip check
 ```
 
-node-forge／Zod 固定版本回补的效果需结合安装 hash、攻击回归与协议兼容判断；审计按版本报告，不能屏蔽通告或用降级掩盖。SSH E2E 需要 sshd fixture，缺失时测试明确 skip，验收在具备服务端的独立环境完成。
+Forge 正式修复版及 Zod 固定版本回补的效果需结合锁文件、安装 hash、攻击回归与协议兼容判断；审计按版本报告，不能屏蔽通告或用降级掩盖。SSH E2E 需要 sshd fixture，缺失时测试明确 skip，验收在具备服务端的独立环境完成。
 
 CI 在 main 提交和 PR 触发，使用 GitHub Ubuntu runner。私有包源、系统依赖和 SRT 必须对 runner 可用，本机结果不代表远程 Actions 结果。
 
 ## 隔离与变更边界
 
-开始前检查 git status 并固定任务基线，保留已有改动。测试通过 `buildApi({ stateRoot, databaseFile })` 或 manager 注入临时根，使用临时 Git remote、faux 模型和协议 fixture。手工运行也使用独立项目及根配置，真实 `.issue-pilot` 不能作为测试夹具。
+开始前检查 git status 并固定任务基线，保留已有改动。测试通过 `buildApi({ stateRoot, databaseFile })` 或 manager 注入临时根，使用临时 Git remote、faux 模型和协议 fixture。手工运行也使用独立项目及根配置，真实 `.issue-pilot` 不能作为测试夹具。SDK 会话测试显式传入临时 `agentDirectory`，不读取运行用户的全局 Pi settings／扩展；测试模型 runtime 的注入不能替代资源目录隔离。已创建的会话在 `finally` 中关闭，避免断言失败后遗留扩展进程或句柄，阻塞测试退出。
 
 按风险覆盖失败、重试、取消、重复调用、rollback／finalize 和 shutdown；schema 升级覆盖 fresh DB 和已有 schema。SQLite 回滚不能撤销文件／Git，未知目录、dirty worktree、缺失 ref 和错误现场不能靠删除、reset 或改绑定使检查通过。已发布迁移与 journal 不可修改。
 
@@ -107,7 +107,7 @@ Solid 2 使用 `createEffect(compute, callback)`，回调只返回清理函数�
 
 历史会话列表仅包含已归档会话，打开后自动读取第一条，切换选择时重新读取。加载、空内容和读取失败在弹窗内明确展示；有对话内容时才渲染深色滚动区域，关闭或切换身份取消未完成读取。
 
-Monaco 组件负责释放 editor／model，保留 SHA-256 冲突、CRLF、自动保存、撤销、只读和导航语义。链接使用真实工单 URL，浏览器前进／后退及未保存代码拦截由行为测试验证。文件列表按需预览，加载失败可重试，超预算或不支持格式保留下载。
+Monaco 组件负责释放 editor／model，保留 SHA-256 冲突、CRLF、自动保存、撤销、只读和导航语义。链接使用真实工单 URL，浏览器前进／后退及未保存代码拦截由行为测试验证。文件列表按需预览，加载失败可重试，超预算或不支持格式保留下载。附件和工作文件预览共用 `web.filePreviewBytes`：已知超限时不发请求；响应按声明长度和实际流字节检查，即使列表大小过期或 Content-Length 不实也不能无界累积，超限取消读取。普通下载不受预览预算限制。
 
 图标使用 Phosphor SVG，编辑器 Codicon 按需加载，文件图标沿用 Material Icon Theme。Geist 字体、来源与许可证在 ui/assets 维护；更新同步 provenance 和许可证，保留焦点、减少动效及手机触控尺寸。
 

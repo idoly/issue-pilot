@@ -1,9 +1,62 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyIssueScopeTransition, createIssue, currentUserSubject, deleteService, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService } from "./client";
+import { issuePilotConfig } from "../../../../issue-pilot.config";
+import { fetchAttachment, fetchIssueWorkFile, applyIssueScopeTransition, createIssue, currentUserSubject, deleteService, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService } from "./client";
 
 describe("API client", () => {
   afterEach(() => { setCurrentUserSubject(null); localStorage.clear(); vi.unstubAllGlobals(); });
+
+  for (const read of [fetchAttachment, fetchIssueWorkFile]) {
+    it(`${read.name} enforces the streamed preview budget and cancels oversized responses`, async () => {
+      const cancel = vi.fn();
+      let pulls = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) { pulls++; if (pulls === 4) controller.close(); else controller.enqueue(new Uint8Array(issuePilotConfig.web.filePreviewBytes / 2)); },
+        cancel,
+      }, { highWaterMark: 0 });
+      const fetchMock = vi.fn().mockResolvedValue(new Response(body, { headers: { "content-type": "text/plain", "content-length": "1" } }));
+      vi.stubGlobal("fetch", fetchMock);
+      setCurrentUserSubject("alice");
+      await expect(read("ISSUE-1", "file.txt")).rejects.toThrow("file_preview_too_large");
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(pulls).toBe(3);
+      expect(new Headers(fetchMock.mock.calls[0]![1].headers).get("X-Issue-Pilot-Subject")).toBe("alice");
+    });
+
+    it(`${read.name} rejects a declared oversized body without reading and preserves ordinary errors`, async () => {
+      const cancel = vi.fn(), pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => controller.close());
+      const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
+      const fetchMock = vi.fn().mockResolvedValueOnce(new Response(body, { headers: { "content-length": String(issuePilotConfig.web.filePreviewBytes + 1) } }))
+        .mockResolvedValueOnce(Response.json({ error: "managed_issue_file_private" }, { status: 403 }));
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(read("ISSUE-1", "file.txt")).rejects.toThrow("file_preview_too_large");
+      expect(pull).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledOnce();
+      await expect(read("ISSUE-1", "file.txt")).rejects.toThrow("managed_issue_file_private");
+    });
+
+    it(`${read.name} cancels a partially read response when its preview is aborted`, async () => {
+      const cancel = vi.fn(), controller = new AbortController(), reason = new Error("preview_closed");
+      const body = new ReadableStream<Uint8Array>({
+        pull(stream) { stream.enqueue(new Uint8Array([1])); controller.abort(reason); },
+        cancel,
+      }, { highWaterMark: 0 });
+      const fetchMock = vi.fn().mockResolvedValue(new Response(body));
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(read("ISSUE-1", "file.txt", controller.signal)).rejects.toBe(reason);
+      expect(fetchMock.mock.calls[0]![1].signal).toBe(controller.signal);
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it(`${read.name} accepts the exact budget, preserves MIME type and rejects pre-cancelled work`, async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(new Uint8Array(issuePilotConfig.web.filePreviewBytes), { headers: { "content-type": "application/pdf" } }));
+      vi.stubGlobal("fetch", fetchMock);
+      const file = await read("ISSUE-1", "file.pdf");
+      expect(file.size).toBe(issuePilotConfig.web.filePreviewBytes); expect(file.type).toBe("application/pdf");
+      const controller = new AbortController(); controller.abort();
+      await expect(read("ISSUE-1", "file.pdf", controller.signal)).rejects.toThrow();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  }
 
   it("keeps this page's request identity when another tab changes the remembered user", async () => {
     const fetch = vi.fn()

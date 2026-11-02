@@ -9,8 +9,9 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
-import { AGENT_THINKING_LEVELS, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
+import { AGENT_THINKING_LEVELS, type AgentRunState, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
 import type { McpConnector } from "../../src/mcp/client.ts";
+import type { AgentModelCatalog } from "../../src/agent/model-runtime.ts";
 import { buildApi } from "../../src/http/api.ts";
 
 export const testAgent = { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high" as const, codemode: "off" as const, runtime: {} };
@@ -29,6 +30,7 @@ export class TestAgentController {
   readonly images: ImageContent[][] = [];
   readonly closedSessions: string[] = [];
   readonly running = new Set<string>();
+  readonly queued = new Set<string>();
   readonly reservations = new Set<string>();
   closeSessionHook: undefined | ((issueId: string) => Promise<void>);
 
@@ -41,6 +43,10 @@ export class TestAgentController {
 
   isRunning(issueId: string): boolean {
     return this.running.has(issueId);
+  }
+
+  getRunState(issueId: string): AgentRunState {
+    return !this.isRunning(issueId) ? "idle" : this.queued.has(issueId) ? "queued" : "running";
   }
 
   async runExclusive<T>(issueIds: string[], operation: (reservation: { enqueue(issueId: string, message?: string, recordMessage?: boolean): void; closeSession(issueId: string): Promise<void> }) => Promise<T>): Promise<T> {
@@ -80,11 +86,11 @@ export interface ApiFixture {
   cleanup(): Promise<void>;
 }
 
-export async function createApiFixture(options: { events?: AgentEventBus; dingtalkConnector?: McpConnector } = {}): Promise<ApiFixture> {
+export async function createApiFixture(options: { events?: AgentEventBus; dingtalkConnector?: McpConnector; modelCatalog?: AgentModelCatalog } = {}): Promise<ApiFixture> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
   const engine = new TestAgentController();
-  const app = await buildApi({ databaseFile, stateRoot: root, engine, ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}), ...(options.events ? { events: options.events } : {}), modelCatalog, logger: false });
+  const app = await buildApi({ databaseFile, stateRoot: root, engine, ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}), ...(options.events ? { events: options.events } : {}), modelCatalog: options.modelCatalog ?? modelCatalog, logger: false });
   let stopped = false;
   const stop = async () => {
     if (stopped) return;

@@ -31,6 +31,10 @@ export interface McpStdioConfiguration { command: string; args: string[]; env: R
 export const CAPABILITY_KEYS = ["dms", "sls"] as const;
 export type CapabilityName = typeof CAPABILITY_KEYS[number];
 
+// Queued work remains active for reservations, but has not acquired an execution slot.
+export const AGENT_RUN_STATES = ["idle", "queued", "running"] as const;
+export type AgentRunState = typeof AGENT_RUN_STATES[number];
+
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];
 

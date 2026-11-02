@@ -14,11 +14,15 @@
 
 本补丁没有提交到上游。待上游提供等价保存接口后删除补丁及对应安装逻辑。
 
-## node-forge RSA 验签修复
+## 已由正式版本替代的安全回补
 
-`node-forge+1.4.0.patch` 回补上游 [PR #1152](https://github.com/digitalbazaar/forge/pull/1152) 的嵌套 `DigestAlgorithm` 元素数量检查，修复 [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)。安装脚本固定版本、检查正向及反向补丁，无法匹配时停止安装。`tests/agent/forge-security.test.ts` 使用真实 RSA 签名验证正常 ASN.1，并拒绝包含额外嵌套元素的签名，覆盖有/无 NULL 两种形式。
+`package-lock.json` 使用 `node-forge@1.4.2`，符合 SRT 声明的 `^1.4.0` 范围。原先仅修复嵌套 `DigestAlgorithm` 校验的 1.4.0 本地回补及安装条目已删除，不再向正式修复版叠加旧补丁。`tests/agent/forge-security.test.ts` 继续使用真实 RSA 签名验证正常 ASN.1，并拒绝包含额外嵌套元素的签名，覆盖有/无 NULL 两种形式。
 
-核查时 npm 公共源最高发布版仍为 1.4.0。npm audit 根据包版本报告，因此仍会列出该包及 SRT 两项高危影响链；没有忽略公告、修改包版本或降级 SRT。待修复版正式发布，升级依赖并移除此回补。
+DBHub 的 Azure Identity 从 4.14.0 更新至兼容的 4.14.1，其声明依赖的 MSAL Node 更新至 7.1.2，消除 [GHSA-xcx6-jx8p-x3h5](https://github.com/advisories/GHSA-xcx6-jx8p-x3h5) 对应版本告警。没有强制跨越父依赖声明范围，也没有改变应用的模型／Git／数据库凭据选择规则。
+
+独立副本通过带 postinstall 的 `npm ci`、安全回归、完整前后端测试及构建；生产审计不再列出 Forge／Azure 告警，但仍列出 Zod/SRT 和 glob/minimatch 影响链。Zod 保留下述回补；glob/minimatch 的修复涉及父依赖兼容性，未采用审计建议的 Fastify Static 降级或强制主版本覆盖。审计并未全部通过，真实 Azure 登录、远程数据库及容器验收仍需对应部署环境。
+
+源码和锁文件更新不自动替换运行中依赖；实际安装、发布与服务切换仍按 Runbook 授权和验收流程执行。
 
 ## Zod 集合上限前置检查
 

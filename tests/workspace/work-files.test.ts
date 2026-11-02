@@ -144,6 +144,121 @@ test("Issue creation claims an empty working directory and preserves an unknown 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const phase of ["before-open", "after-validation"] as const) test(`work file listing does not follow a directory replaced ${phase}`, async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-list-parent-race-"));
+  const openDirectory = fs.open, resolve = fs.realpath;
+  try {
+    const work = await prepareIssueWorkDirectory(root, key), folder = path.join(work, "nested"), outside = path.join(root, "outside");
+    await mkdir(folder); await mkdir(outside);
+    await writeFile(path.join(folder, "inside.txt"), "inside");
+    await writeFile(path.join(outside, "private-file-name.txt"), "private");
+    let replaced = false;
+    const replace = async () => { replaced = true; await fs.rename(folder, path.join(work, "previous")); await symlink(outside, folder); };
+    if (phase === "before-open") context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (!replaced && args[0] === folder) await replace();
+      return openDirectory(...args);
+    });
+    else context.mock.method(fs, "realpath", async (...args: Parameters<typeof fs.realpath>) => {
+      const value = await resolve(...args);
+      if (!replaced && String(args[0]).startsWith("/proc/self/fd/") && value === folder) await replace();
+      return value;
+    });
+    syncBuiltinESMExports();
+    let entries: Awaited<ReturnType<typeof listIssueWorkFiles>> | undefined, error: unknown;
+    try { entries = await listIssueWorkFiles(root, key, "nested"); } catch (failure) { error = failure; }
+    assert.equal(replaced, true, "listing must pin its validated directory");
+    if (phase === "before-open") assert.ok(error);
+    else assert.deepEqual(entries?.map(entry => entry.name), ["inside.txt"]);
+    assert.ok(!JSON.stringify(entries ?? []).includes("private-file-name"));
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("listing waits for pending metadata before closing its directory after a failure", async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-list-metadata-cleanup-"));
+  const openDirectory = fs.open, metadata = fs.lstat;
+  let release!: () => void, entered!: () => void, closed = false;
+  const gate = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { entered = resolve; });
+  let observed: Promise<unknown> | undefined;
+  const failure = new Error("fixture_metadata_failed");
+  try {
+    const work = await prepareIssueWorkDirectory(root, key);
+    await writeFile(path.join(work, "failed.txt"), "failed"); await writeFile(path.join(work, "waiting.txt"), "waiting");
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await openDirectory(...args);
+      if (args[0] === work) {
+        const close = handle.close.bind(handle);
+        context.mock.method(handle, "close", async () => { closed = true; await close(); });
+      }
+      return handle;
+    });
+    context.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => {
+      if (String(args[0]).startsWith("/proc/self/fd/")) {
+        if (path.basename(String(args[0])) === "failed.txt") throw failure;
+        if (path.basename(String(args[0])) === "waiting.txt") { entered(); await gate; }
+      }
+      return metadata(...args);
+    });
+    syncBuiltinESMExports();
+    observed = listIssueWorkFiles(root, key).then(() => assert.fail("listing should fail"), error => assert.equal(error, failure));
+    await ready; await new Promise(resolve => setImmediate(resolve));
+    assert.equal(closed, false);
+    release(); await observed;
+    assert.equal(closed, true);
+  } finally {
+    release();
+    try { await observed; }
+    finally { context.mock.restoreAll(); syncBuiltinESMExports(); await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("a replaced parent directory cannot redirect a validated download to an outside file", async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-parent-race-"));
+  try {
+    const work = await prepareIssueWorkDirectory(root, key), outside = path.join(root, "outside");
+    await mkdir(path.join(work, "nested")); await mkdir(outside);
+    await writeFile(path.join(work, "nested/evidence.txt"), "inside");
+    await writeFile(path.join(outside, "evidence.txt"), "outside-private");
+    const openFile = fs.open;
+    let replaced = false;
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (!replaced && args[0] === path.join(work, "nested/evidence.txt")) {
+        replaced = true;
+        await fs.rename(path.join(work, "nested"), path.join(work, "previous"));
+        await symlink(outside, path.join(work, "nested"));
+      }
+      return openFile(...args);
+    });
+    syncBuiltinESMExports();
+    let accepted: Awaited<ReturnType<typeof openIssueWorkFile>> | undefined;
+    try {
+      await assert.rejects(async () => { accepted = await openIssueWorkFile(root, key, "nested/evidence.txt"); }, /invalid_issue_file_path/);
+    } finally { await accepted?.handle.close(); }
+    assert.equal(replaced, true);
+    assert.equal(await readFile(path.join(outside, "evidence.txt"), "utf8"), "outside-private");
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a rejected download closes its opened descriptor", async context => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-descriptor-check-"));
+  try {
+    const work = await prepareIssueWorkDirectory(root, key);
+    await writeFile(path.join(work, "evidence.txt"), "inside");
+    const resolve = fs.realpath;
+    let descriptor: number | undefined;
+    context.mock.method(fs, "realpath", async (...args: Parameters<typeof fs.realpath>) => {
+      if (String(args[0]).startsWith("/proc/self/fd/")) {
+        descriptor = Number(String(args[0]).split("/").at(-1));
+        throw new Error("fixture_descriptor_check_failed");
+      }
+      return resolve(...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(openIssueWorkFile(root, key, "evidence.txt"), /fixture_descriptor_check_failed/);
+    assert.ok(descriptor !== undefined);
+    await assert.rejects(fs.stat(`/proc/self/fd/${descriptor}`), { code: "ENOENT" });
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("lists and downloads working files without following paths outside the Issue or Git controls", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-working-files-"));
   try {

@@ -10,7 +10,7 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
 import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
-import { loadGlobalAgentConfiguration, loadSharedAgentApiKey } from "../configuration/agent.ts";
+import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, selectAgentConfiguration } from "../configuration/agent.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
@@ -36,7 +36,7 @@ import {
   services,
   subjects,
 } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, errorMessage, type EnvironmentKind } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, errorMessage, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "./model-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
@@ -51,6 +51,7 @@ export interface AgentController {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
   send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[]): Promise<void>;
   isRunning(issueId: string): boolean;
+  getRunState(issueId: string): AgentRunState;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
   close?(): Promise<void>;
 }
@@ -62,6 +63,7 @@ export class AgentEngine implements AgentController {
   private readonly steerQueue = new KeyedSerialQueue();
   private readonly sessionQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
+  private readonly executingIssues = new Set<string>();
   private readonly reservations = new Set<string>();
   private readonly idleWaiters = new Set<() => void>();
   private readonly projectManager: IssueProjectManager;
@@ -106,6 +108,10 @@ export class AgentEngine implements AgentController {
 
   isRunning(issueId: string): boolean {
     return (this.runCounts.get(issueId) ?? 0) > 0;
+  }
+
+  getRunState(issueId: string): AgentRunState {
+    return this.executingIssues.has(issueId) ? "running" : this.isRunning(issueId) ? "queued" : "idle";
   }
 
   async runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T> {
@@ -208,14 +214,22 @@ export class AgentEngine implements AgentController {
     if (this.reservations.has(issueId)) throw new Error("issue_already_running");
   }
 
-  private beginActivity(issueId: string): void {
-    this.runCounts.set(issueId, (this.runCounts.get(issueId) ?? 0) + 1);
+  private publishRunState(issueId: string, previous: AgentRunState): void {
+    const state = this.getRunState(issueId);
+    if (state !== previous) this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_run_state", state } });
   }
 
-  private endActivity(issueId: string): void {
+  private beginActivity(issueId: string): void {
+    const previous = this.getRunState(issueId);
+    this.runCounts.set(issueId, (this.runCounts.get(issueId) ?? 0) + 1);
+    this.publishRunState(issueId, previous);
+  }
+
+  private endActivity(issueId: string, previous = this.getRunState(issueId)): void {
     const remaining = (this.runCounts.get(issueId) ?? 1) - 1;
     if (remaining > 0) this.runCounts.set(issueId, remaining);
     else this.runCounts.delete(issueId);
+    this.publishRunState(issueId, previous);
     this.notifyIdle();
   }
 
@@ -243,6 +257,9 @@ export class AgentEngine implements AgentController {
     this.beginActivity(issueId);
     void this.issueQueue.run(issueId, async () => {
       const release = await this.acquireSlot();
+      const previous = this.getRunState(issueId);
+      this.executingIssues.add(issueId);
+      this.publishRunState(issueId, previous);
       try { await operation(); }
       catch (error) {
         const cleanupFailures: unknown[] = [];
@@ -265,8 +282,13 @@ export class AgentEngine implements AgentController {
           cleanupFailures.push(reportingError);
         }
         if (cleanupFailures.length) this.reportError(new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed"));
-      } finally { release(); }
-    }).finally(() => this.endActivity(issueId));
+      } finally {
+        // Keep execution and failure cleanup in the same per-Issue serialized round.
+        this.executingIssues.delete(issueId);
+        this.endActivity(issueId, "running");
+        release();
+      }
+    });
   }
 
   private async run(issueId: string, latestMessage?: string, displayMessage = false, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
@@ -310,9 +332,10 @@ export class AgentEngine implements AgentController {
     if (environmentKind === "dev" && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
     const globalConfiguration = await loadGlobalAgentConfiguration(this.database);
     // The owner's complete personal model group replaces the shared model and key; only its absence selects the shared group.
-    const { apiKey: modelApiKey, ...modelSelection } = owner.credentials?.modelCredentials ?? { provider: globalConfiguration.provider, model: globalConfiguration.model, thinkingLevel: globalConfiguration.thinkingLevel, codemode: globalConfiguration.codemode, apiKey: await loadSharedAgentApiKey(this.database) };
+    const personalModel = owner.credentials?.modelCredentials;
+    const modelApiKey = personalModel ? personalModel.apiKey : await loadSharedAgentApiKey(this.database);
     if (!modelApiKey) throw new Error("model_api_key_not_configured");
-    const agentConfiguration = { ...globalConfiguration, ...modelSelection };
+    const agentConfiguration = selectAgentConfiguration(globalConfiguration, personalModel);
     let personalGit: PersonalGitEnvironment | undefined;
     if (owner.user.role === "developer") {
       const deployment = await loadIssueDeployments(this.database, issue);

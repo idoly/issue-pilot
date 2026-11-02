@@ -2,9 +2,26 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail } from "../data/client";
+import { issuePilotConfig } from "../../../../issue-pilot.config";
 import { AttachmentPreview } from "./AttachmentPreview";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it("does not request a known oversized attachment and leaves it available for ordinary download", async () => {
+  const load = vi.fn();
+  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "large", fileName: "large.txt", mediaType: "text/plain", size: issuePilotConfig.web.filePreviewBytes + 1, sha256: "" }} loadFile={load} onClose={() => {}} />);
+  await screen.findByText("文件超过预览大小限制，请关闭弹窗后下载查看。");
+  expect(load).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("rejects a file that grew after listing before decoding or creating an object URL", async () => {
+  const blob = new Blob([new Uint8Array(issuePilotConfig.web.filePreviewBytes + 1)], { type: "text/plain" });
+  const decode = vi.spyOn(blob, "text");
+  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "growing", fileName: "growing.txt", mediaType: "text/plain", size: 1, sha256: "" }} loadFile={async () => blob} onClose={() => {}} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("文件超过预览大小限制");
+  expect(decode).not.toHaveBeenCalled();
+});
 
 for (const action of ["close", "switch"] as const) it(`cancels an attachment request when the preview ${action === "close" ? "closes" : "changes files"}`, async () => {
   const responses: Array<(response: Response) => void> = [];

@@ -50,22 +50,29 @@ async function resolveWorkPath(stateRoot: string, issueKey: string, relative: st
 export async function listIssueWorkFiles(stateRoot: string, issueKey: string, relative = "", access: WorkFileAccess = {}): Promise<IssueWorkFile[]> {
   const target = await resolveWorkPath(stateRoot, issueKey, relative, access);
   if (!(await lstat(target)).isDirectory()) throw new Error("issue_file_not_directory");
-  const entries = await readdir(target, { withFileTypes: true });
-  if (entries.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw new Error("issue_file_directory_too_large");
-  const files = await Promise.all(entries.filter(entry => entry.name.toLowerCase() !== ".git").map(async entry => {
-    const metadata = await lstat(path.join(target, entry.name));
-    const selected = path.posix.join(relative, entry.name);
-    const permittedDirectory = metadata.isSymbolicLink() && access.readRoots?.[selected] && await realpath(path.join(target, entry.name)) === access.readRoots[selected] && (await stat(access.readRoots[selected]!)).isDirectory();
-    return {
-      name: entry.name,
-      path: selected,
-      ...(isManagedIssueFile(selected) ? { managed: true } : {}),
-      kind: permittedDirectory ? "directory" as const : metadata.isSymbolicLink() ? "link" as const : metadata.isDirectory() ? "directory" as const : metadata.isFile() ? "file" as const : "special" as const,
-      size: metadata.size,
-      updatedAt: metadata.mtime.toISOString(),
-    };
-  }));
-  return files.sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name));
+  const directory = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const pinned = `/proc/self/fd/${directory.fd}`;
+    if (await realpath(pinned) !== target) throw new Error("invalid_issue_file_path");
+    const entries = await readdir(pinned, { withFileTypes: true });
+    if (entries.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw new Error("issue_file_directory_too_large");
+    const results = await Promise.allSettled(entries.filter(entry => entry.name.toLowerCase() !== ".git").map(async entry => {
+      const metadata = await lstat(path.join(pinned, entry.name));
+      const selected = path.posix.join(relative, entry.name);
+      const permittedDirectory = metadata.isSymbolicLink() && access.readRoots?.[selected] && await realpath(path.join(pinned, entry.name)) === access.readRoots[selected] && (await stat(access.readRoots[selected]!)).isDirectory();
+      return {
+        name: entry.name,
+        path: selected,
+        ...(isManagedIssueFile(selected) ? { managed: true } : {}),
+        kind: permittedDirectory ? "directory" as const : metadata.isSymbolicLink() ? "link" as const : metadata.isDirectory() ? "directory" as const : metadata.isFile() ? "file" as const : "special" as const,
+        size: metadata.size,
+        updatedAt: metadata.mtime.toISOString(),
+      };
+    }));
+    // Keep the directory open until every metadata lookup has stopped using its descriptor.
+    const files = results.map(result => { if (result.status === "rejected") throw result.reason; return result.value; });
+    return files.sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name));
+  } finally { await directory.close(); }
 }
 
 export async function openIssueWorkFile(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess = {}) {
@@ -74,6 +81,9 @@ export async function openIssueWorkFile(stateRoot: string, issueKey: string, rel
   if (isManagedIssueFile(relative) || issueRoots.some(root => inside(root, target) && isManagedIssueFile(path.relative(root, target)))) throw new Error("managed_issue_file_private");
   const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
+    // O_NOFOLLOW only protects the last component. A mutable ancestor can redirect open()
+    // after realpath validation; check the owned descriptor before exposing any file bytes.
+    if (await realpath(`/proc/self/fd/${handle.fd}`) !== target) throw new Error("invalid_issue_file_path");
     const metadata = await handle.stat();
     if (!metadata.isFile()) throw new Error("issue_file_not_regular");
     return { handle, size: metadata.size, fileName: path.basename(target) };

@@ -28,7 +28,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 ## 共享 API Key
 
-共享组没有单独卡片：管理人员（`isAdmin`）在“我的凭证”打开 API Key／DMS／SLS 弹窗时默认勾选“共享凭证”，此时编辑应用共享组，取消勾选才编辑本人凭证；列表只显示个人状态。非管理人员没有该勾选，也不读取共享状态。所有角色都可设置个人 API Key（模型组），SSH Key 仅限 developer。共享 API Key 弹窗维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
+共享组没有单独卡片：管理人员（`isAdmin`）在“我的凭证”打开 API Key／DMS／SLS 弹窗时默认勾选“共享凭证”，此时编辑应用共享组，取消勾选才编辑本人凭证；列表只显示个人状态。非管理人员没有该勾选，也不读取共享状态。切换共享／个人目标会清空 API Key 草稿，即使两组模型设置相同；保存模型组期间禁用目标切换。切换用户或关闭弹窗后，旧保存请求的结果不能覆盖新身份的弹窗和凭证状态；已提交的写入不会自动重试。所有角色都可设置个人 API Key（模型组），SSH Key 仅限 developer。共享 API Key 弹窗维护全局 Agent 的 provider／模型／思考级别／Codemode 和共享 API Key，接口要求管理权限。provider／模型／思考级别候选为全局 Pi `models.json`（`~/.pi/agent/models.json`，无需重启即生效）中定义的 provider 的全部模型；保存只接受其中的组合。`PUT /api/config/agent` 的 `apiKey` 为 `{ mode: "replace", value }` 或 `{ mode: "clear" }`，省略即保留；Key 绑定已保存的 provider，更换 provider 时必须同时替换或清除，否则返回 `agent_api_key_required`。Key 保存在 `global_agent_configuration.api_key`，`GET /api/config` 只返回 `agent.apiKeyConfigured`。修改会预约全部工单并关闭旧会话，运行中拒绝修改。
 
 ## 共享 DMS／SLS 凭据
 
@@ -82,7 +82,7 @@ Pi 管理发现、注册、资源、连接与关闭。应用保留字面私有�
 
 Pi settings 为基线，数据库 runtime.settings 显式覆盖，省略则清除该覆盖。runtime.networkAllowedDomains 为本地工具和 stdio MCP 追加精确域名／端口，省略回到根配置列表；不能覆盖宿主控制地址拒绝或替代业务授权。资源检查 GET 只发现路径，实际会话才加载扩展，变化后重建会话或重启。
 
-`application_settings.maxConcurrentIssues` 限制并发轮次，排队计入活动。根配置 `http.sseRecentEventIds` 默认 4096，只控制临时事件 ID 窗口。
+`application_settings.maxConcurrentIssues` 限制并发轮次，排队计入活动，但不占用执行名额。SSE 的 `runState` 为 `idle`／`queued`／`running`，页面显示等待名额或实际运行；原有 `running` 布尔值仍包含排队，以保持预约及操作禁用语义不变。根配置 `http.sseRecentEventIds` 默认 4096，只控制临时事件 ID 窗口。`http.sseQueuedBytes` 默认 8 MiB，分别限制慢连接的待发送帧和回放期间的实时事件缓冲（UTF-8 字节数）；超限关闭连接，经正常重连恢复。持久历史逐帧等待排空，历史总大小及直接交给 socket 的单帧不受该队列预算限制。
 
 ## 处理方式
 

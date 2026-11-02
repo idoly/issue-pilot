@@ -139,7 +139,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
         if (errorChain.includes(conflict)) return reply.code(409).send({ error: conflict });
       }
-      for (const operationalError of ["attachment_finalize_failed", "attachment_rollback_failed", "issue_state_rollback_failed", "issue_update_rollback_failed", "source_rename_rollback_failed", "source_rename_finalize_failed", "source_save_cleanup_failed", "workspace_runtime_restore_failed", "issue_workspace_missing", "agent_session_file_incomplete", "agent_session_file_missing"]) {
+      for (const operationalError of ["attachment_finalize_failed", "attachment_rollback_failed", "issue_state_rollback_failed", "issue_update_rollback_failed", "source_rename_rollback_failed", "source_rename_finalize_failed", "source_save_cleanup_failed", "source_path_cleanup_failed", "workspace_runtime_restore_failed", "issue_workspace_missing", "agent_session_file_incomplete", "agent_session_file_missing"]) {
         if (errorChain.includes(operationalError)) {
           app.log.error(errorDiagnostic(error));
           return reply.code(500).send({ error: operationalError });

@@ -44,6 +44,180 @@ async function fixture() {
   return { root, database, issue: issue!, repository, git, browser: new SourceBrowser(database.db, root), close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
+for (const operation of ["create-file", "create-directory", "save", "delete", "rename-source", "rename-destination"] as const) {
+  for (const phase of ["before-parent-open", "after-parent-validation"] as const) test(`${operation} cannot escape through a parent replaced ${phase}`, async context => {
+    const f = await fixture();
+    const openFile = fs.open, resolve = fs.realpath;
+    const folder = path.join(f.repository, "nested"), outside = path.join(f.root, "outside");
+    let replaced = false;
+    try {
+      await mkdir(folder); await mkdir(outside);
+      await writeFile(path.join(folder, "existing.txt"), "inside");
+      await writeFile(path.join(outside, "existing.txt"), "outside-private");
+      await writeFile(path.join(f.repository, "source.txt"), "source-evidence");
+      const original = await f.browser.file(f.issue, "application", "nested/existing.txt");
+      const replaceParent = async () => {
+        replaced = true;
+        await rename(folder, path.join(f.repository, "previous"));
+        await symlink(outside, folder);
+      };
+      if (phase === "before-parent-open") context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        if (!replaced && args[0] === folder) await replaceParent();
+        return openFile(...args);
+      });
+      else context.mock.method(fs, "realpath", async (...args: Parameters<typeof fs.realpath>) => {
+        const value = await resolve(...args);
+        if (!replaced && String(args[0]).startsWith("/proc/self/fd/") && value === folder) await replaceParent();
+        return value;
+      });
+      syncBuiltinESMExports();
+      let error: unknown;
+      try {
+        if (operation === "create-file") await f.browser.createFile(f.issue, "application", "nested/new.txt", "new evidence");
+        if (operation === "create-directory") await f.browser.createDirectory(f.issue, "application", "nested/new-directory");
+        if (operation === "save") await f.browser.writeFile(f.issue, "application", "nested/existing.txt", "replacement", original.sha256);
+        if (operation === "delete") await f.browser.deletePath(f.issue, "application", "nested/existing.txt", false);
+        if (operation === "rename-source") await f.browser.renamePath(f.issue, "application", "nested/existing.txt", "renamed.txt", false);
+        if (operation === "rename-destination") await f.browser.renamePath(f.issue, "application", "source.txt", "nested/existing.txt", true);
+      } catch (failure) { error = failure; }
+      assert.equal(replaced, true, "race must occur on the validated parent");
+      if (phase === "before-parent-open") assert.ok(error, "a substituted directory must be rejected before mutation");
+      assert.equal(await readFile(path.join(outside, "existing.txt"), "utf8"), "outside-private");
+      assert.deepEqual(await readdir(outside), ["existing.txt"], "no creation, rename backup or partial output may escape");
+    } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+  });
+}
+
+test("parent descriptor cleanup preserves a mutation failure and releases the directory", async context => {
+  const f = await fixture(), openFile = fs.open;
+  const primary = new Error("fixture_create_failed"), cleanup = new Error("fixture_parent_close_failed");
+  let descriptor: number | undefined;
+  try {
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await openFile(...args);
+      if (args[0] === f.repository) {
+        descriptor = handle.fd;
+        const close = handle.close.bind(handle);
+        context.mock.method(handle, "close", async () => { await close(); throw cleanup; });
+      }
+      return handle;
+    });
+    context.mock.method(fs, "writeFile", async () => { throw primary; });
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.createFile(f.issue, "application", "new.txt", "content"), error => error instanceof AggregateError && error.message === "source_path_cleanup_failed" && error.errors[0] === primary && error.errors[1] === cleanup);
+    assert.ok(descriptor !== undefined);
+    await assert.rejects(fs.stat(`/proc/self/fd/${descriptor}`), { code: "ENOENT" });
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
+
+for (const phase of ["before-open", "after-validation"] as const) test(`source tree stays inside the pinned directory when replaced ${phase}`, async context => {
+  const f = await fixture(), openDirectory = fs.open, resolve = fs.realpath;
+  try {
+    const folder = path.join(f.repository, "nested"), outside = path.join(f.root, "outside");
+    await mkdir(folder); await mkdir(outside);
+    await writeFile(path.join(folder, "inside.txt"), "inside");
+    await writeFile(path.join(outside, "private-file-name.txt"), "private");
+    let replaced = false;
+    const replace = async () => { replaced = true; await rename(folder, path.join(f.repository, "previous")); await symlink(outside, folder); };
+    if (phase === "before-open") context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (!replaced && args[0] === folder) await replace();
+      return openDirectory(...args);
+    });
+    else context.mock.method(fs, "realpath", async (...args: Parameters<typeof fs.realpath>) => {
+      const value = await resolve(...args);
+      if (!replaced && String(args[0]).startsWith("/proc/self/fd/") && value === folder) await replace();
+      return value;
+    });
+    syncBuiltinESMExports();
+    let tree: Awaited<ReturnType<SourceBrowser["tree"]>> | undefined, error: unknown;
+    try { tree = await f.browser.tree(f.issue, "application", "nested"); } catch (failure) { error = failure; }
+    assert.equal(replaced, true);
+    if (phase === "before-open") assert.ok(error);
+    else assert.deepEqual(tree?.entries.map(entry => entry.name), ["inside.txt"]);
+    assert.ok(!JSON.stringify(tree ?? {}).includes("private-file-name"));
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
+
+test("source tree waits for pending metadata before closing a failed listing", async context => {
+  const f = await fixture(), openDirectory = fs.open, metadata = fs.lstat;
+  let release!: () => void, entered!: () => void, closed = false;
+  const gate = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { entered = resolve; });
+  const failure = new Error("fixture_metadata_failed");
+  let observed: Promise<unknown> | undefined;
+  try {
+    await writeFile(path.join(f.repository, "failed.txt"), "failed"); await writeFile(path.join(f.repository, "waiting.txt"), "waiting");
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await openDirectory(...args);
+      if (args[0] === f.repository) {
+        const close = handle.close.bind(handle);
+        context.mock.method(handle, "close", async () => { closed = true; await close(); });
+      }
+      return handle;
+    });
+    context.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => {
+      if (String(args[0]).startsWith("/proc/self/fd/")) {
+        if (path.basename(String(args[0])) === "failed.txt") throw failure;
+        if (path.basename(String(args[0])) === "waiting.txt") { entered(); await gate; }
+      }
+      return metadata(...args);
+    });
+    syncBuiltinESMExports();
+    observed = f.browser.tree(f.issue, "application").then(() => assert.fail("listing should fail"), error => assert.equal(error, failure));
+    await ready; await new Promise(resolve => setImmediate(resolve));
+    assert.equal(closed, false);
+    release(); await observed;
+    assert.equal(closed, true);
+  } finally {
+    release();
+    try { await observed; }
+    finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+  }
+});
+
+test("blame rejects a parent directory swap before reading working content", async context => {
+  const f = await fixture(), openFile = fs.open;
+  try {
+    const folder = path.join(f.repository, "nested"), outside = path.join(f.root, "outside");
+    await mkdir(folder); await mkdir(outside);
+    await writeFile(path.join(folder, "evidence.txt"), "inside");
+    await writeFile(path.join(outside, "evidence.txt"), "outside-private");
+    let replaced = false;
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (!replaced && args[0] === path.join(folder, "evidence.txt")) {
+        replaced = true;
+        await rename(folder, path.join(f.repository, "previous"));
+        await symlink(outside, folder);
+      }
+      return openFile(...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.blame(f.issue, "application", "nested/evidence.txt", 1), /source_path_outside_repository/);
+    assert.equal(replaced, true);
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
+
+test("source reads validate the opened descriptor when a parent is replaced", async context => {
+  const f = await fixture(), openFile = fs.open;
+  try {
+    const folder = path.join(f.repository, "nested"), outside = path.join(f.root, "outside");
+    await mkdir(folder); await mkdir(outside);
+    await writeFile(path.join(folder, "evidence.txt"), "inside");
+    await writeFile(path.join(outside, "evidence.txt"), "outside-private");
+    let replaced = false;
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (!replaced && args[0] === path.join(folder, "evidence.txt")) {
+        replaced = true;
+        await rename(folder, path.join(f.repository, "previous"));
+        await symlink(outside, folder);
+      }
+      return openFile(...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.file(f.issue, "application", "nested/evidence.txt"), /source_path_outside_repository/);
+    assert.equal(replaced, true);
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
+});
+
 test("source save collisions preserve another operation's temporary file and the current source", async context => {
   const f = await fixture();
   const id = "11111111-1111-4111-8111-111111111111";
@@ -86,8 +260,9 @@ for (const cleanupFails of [false, true]) test(`failed source saves retain the p
       : error === primary);
     assert.equal(closed, true);
     assert.equal(await readFile(path.join(f.repository, "report.txt"), "utf8"), "original source");
-    if (cleanupFails) assert.equal(await readFile(temporary, "utf8"), "partial");
-    else await assert.rejects(lstat(temporary), { code: "ENOENT" });
+    const temporaryFile = path.join(f.repository, path.basename(temporary));
+    if (cleanupFails) assert.equal(await readFile(temporaryFile, "utf8"), "partial");
+    else await assert.rejects(lstat(temporaryFile), { code: "ENOENT" });
     context.mock.restoreAll(); syncBuiltinESMExports();
     assert.equal((await f.browser.writeFile(f.issue, "application", "report.txt", "retried", original.sha256)).content, "retried");
   } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
@@ -106,7 +281,7 @@ test("a completed save does not delete a newly reused temporary pathname", async
     });
     syncBuiltinESMExports();
     assert.equal((await f.browser.writeFile(f.issue, "application", "report.txt", "saved source", original.sha256)).content, "saved source");
-    assert.equal(await readFile(reused, "utf8"), "new owner's evidence");
+    assert.equal(await readFile(path.join(f.repository, path.basename(reused)), "utf8"), "new owner's evidence");
   } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
 });
 

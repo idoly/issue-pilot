@@ -1,3 +1,5 @@
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
+
 interface SseTarget {
   readonly destroyed: boolean;
   readonly writableEnded: boolean;
@@ -8,13 +10,19 @@ interface SseTarget {
 
 export interface OrderedSseWriter {
   write(payload: string): void;
+  /** Pace durable replay; resolves when drained or closed so disconnects cannot strand a route. */
+  drain(): Promise<void>;
 }
 
 export function createOrderedSseWriter(
   target: SseTarget,
   onWriteFailure: (error: unknown) => void = () => undefined,
+  maxQueuedBytes = issuePilotConfig.http.sseQueuedBytes,
 ): OrderedSseWriter {
   const queue: string[] = [];
+  let queuedBytes = 0;
+  const drainWaiters = new Set<() => void>();
+  const resolveDrain = () => { for (const resolve of drainWaiters) resolve(); drainWaiters.clear(); };
   let pumping = false;
   let closed = false;
   let removeDrainListener: (() => void) | undefined;
@@ -27,6 +35,8 @@ export function createOrderedSseWriter(
     target.off("close", onTransportClose);
     target.off("error", onTransportError);
     queue.length = 0;
+    queuedBytes = 0;
+    resolveDrain();
   };
   const fail = (error: unknown) => {
     if (closed) return;
@@ -47,6 +57,7 @@ export function createOrderedSseWriter(
       while (!closed && !removeDrainListener && consumed < queue.length) {
         if (target.destroyed || target.writableEnded) { close(); break; }
         const next = queue[consumed++]!;
+        queuedBytes -= Buffer.byteLength(next);
         let accepted: boolean;
         try { accepted = target.write(next); }
         catch (error) { fail(error); break; }
@@ -63,12 +74,19 @@ export function createOrderedSseWriter(
     } finally {
       queue.splice(0, consumed);
       pumping = false;
+      if (!queue.length && !removeDrainListener) resolveDrain();
     }
   };
   const write = (payload: string) => {
     if (closed) return;
     queue.push(payload);
+    queuedBytes += Buffer.byteLength(payload);
     pump();
+    // The transport owns a directly written frame. Bound only frames waiting behind backpressure.
+    if (queuedBytes > maxQueuedBytes) fail(new Error("sse_queue_budget_exceeded"));
   };
-  return { write };
+  const drain = () => closed || !queue.length && !removeDrainListener
+    ? Promise.resolve()
+    : new Promise<void>(resolve => { drainWaiters.add(resolve); });
+  return { write, drain };
 }

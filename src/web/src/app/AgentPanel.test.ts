@@ -298,6 +298,34 @@ describe("Agent conversation state", () => {
     view.unmount();
   });
 
+  it("distinguishes a queued Issue from an executing round across reconnect and live transitions", async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Queued", description: "", priority: "p1", type: "defect_fix", status: "pending",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    try {
+      const source = EventSourceMock.instances[0]!;
+      source.emit("message", event({ type: "auto_retry_end", success: false, attempt: 3 }));
+      source.emit("snapshot_ready", { running: true, runState: "queued", issueStatus: "pending" });
+      await screen.findByText("排队中，等待执行名额…");
+      expect(screen.queryByText("Working...")).toBeNull();
+      expect(screen.queryByText("Retry failed")).toBeNull();
+      source.emit("message", event({ type: "issue_run_state", state: "running" }));
+      await screen.findByText("Working...");
+      expect(screen.queryByText("排队中，等待执行名额…")).toBeNull();
+      source.emit("message", event({ type: "issue_status", status: "complete" }));
+      source.emit("message", event({ type: "issue_run_state", state: "queued" }));
+      await screen.findByText("排队中，等待执行名额…");
+      source.emit("message", event({ type: "issue_run_state", state: "idle" }));
+      await waitFor(() => expect(screen.queryByText("排队中，等待执行名额…")).toBeNull());
+      expect(screen.queryByText("Working...")).toBeNull();
+    } finally { view.unmount(); }
+  });
+
   it("renders the real EventSource lifecycle and active transcript", async () => {
     EventSourceMock.instances.length = 0;
     const issue = {
