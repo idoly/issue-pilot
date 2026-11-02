@@ -1,7 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTokens, type SessionManager } from "@earendil-works/pi-coding-agent";
 
-import type { AgentFooterStats } from "../domain/contracts.ts";
+import { mergeAgentCostSource, type AgentFooterStats } from "../domain/contracts.ts";
 
 function addUsage(stats: AgentFooterStats, usage: Usage): void {
   stats.input += usage.input;
@@ -9,6 +9,7 @@ function addUsage(stats: AgentFooterStats, usage: Usage): void {
   stats.cacheRead += usage.cacheRead;
   stats.cacheWrite += usage.cacheWrite;
   stats.cost += usage.cost.total;
+  stats.costSource = mergeAgentCostSource(stats.costSource, usage.cost);
 }
 
 function hasValidUsage(message: { role: string; stopReason?: string; usage?: Usage }): message is { role: string; usage: Usage } {
@@ -18,13 +19,14 @@ function hasValidUsage(message: { role: string; stopReason?: string; usage?: Usa
     && Boolean(message.usage && calculateContextTokens(message.usage) > 0);
 }
 
-export function sessionFooterStats(manager: SessionManager | undefined, contextWindow: number, autoCompact: boolean): AgentFooterStats {
+export function sessionFooterStats(manager: SessionManager | undefined, contextWindow: number, autoCompact: boolean, sessionContext?: ReturnType<SessionManager["buildSessionContext"]>): AgentFooterStats {
   const stats: AgentFooterStats = {
     input: 0,
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
     cost: 0,
+    costSource: null,
     latestCacheHitRate: null,
     contextPercent: manager ? null : 0,
     contextWindow,
@@ -51,7 +53,8 @@ export function sessionFooterStats(manager: SessionManager | undefined, contextW
   const compactionIndex = branch.findLastIndex((entry) => entry.type === "compaction");
   if (compactionIndex >= 0 && !branch.slice(compactionIndex + 1).some((entry) => entry.type === "message" && hasValidUsage(entry.message))) return stats;
 
-  const messages = manager.buildSessionContext().messages;
+  // SSE already resolves this same snapshot to identify its model; do not rebuild its context.
+  const messages = (sessionContext ?? manager.buildSessionContext()).messages;
   let lastUsageIndex = -1;
   let contextTokens = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {

@@ -16,7 +16,7 @@ const context: AgentSessionContext = {
   capabilities: [], canModifyCode: false,
 };
 
-test("SDK 1.3 replays persistent sessions with current tools and canonical prompts without restoring obsolete tools", async () => {
+test("SDK replays persistent sessions with current tools and canonical prompts without restoring obsolete tools", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-sdk-lifecycle-"));
   await mkdir(path.join(root, "sessions"));
   await writeFile(path.join(root, "evidence.txt"), "verified evidence\n");

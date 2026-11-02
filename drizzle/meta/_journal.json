@@ -477,6 +477,13 @@
       "when": 1793620000000,
       "tag": "0067_personal_model_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "6",
+      "when": 1793640000000,
+      "tag": "0068_dbhub_targets",
+      "breakpoints": true
     }
   ]
 }

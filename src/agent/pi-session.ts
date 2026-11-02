@@ -210,7 +210,7 @@ export class PiSessionRuntime {
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
     const commands: PreparedIssueCommand[] = [];
-    const keyed = options.modelApiKey ? createPiModelRuntime(getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey }) : undefined;
+    const keyed = options.modelApiKey ? createPiModelRuntime(options.agentDirectory ?? getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey }) : undefined;
     const cleanup = async () => {
       const failures: unknown[] = [];
       for (const command of commands) try { await command.cleanup(); } catch (error) { failures.push(error); }

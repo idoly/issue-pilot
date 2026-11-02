@@ -71,7 +71,7 @@ type DmsDatabaseDraft = NonNullable<ServiceDeploymentDraft["dms"]>["databases"][
 const newDmsDatabaseDraft = (): DmsDatabaseDraft => ({ instanceAlias: "", schemaName: "", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" });
 
 function serviceDeploymentDraft(deployment: Service["deployments"][number]): ServiceDeploymentDraft {
-  const dbhub = deployment.dbhub ?? deployment.mysql?.map(target => ({ ...target, type: "mysql" as const }));
+  const dbhub = deployment.dbhub;
   return {
     environmentKey: deployment.environmentKey,
     repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
@@ -359,7 +359,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     const deployments = environmentDrafts(service);
     setServiceDeployments(() => deployments);
     setConfigurationError(""); setServiceOpen(true);
-    if (service.deployments.some(deployment => deployment.dbhub?.length || deployment.mysql?.length)) {
+    if (service.deployments.some(deployment => deployment.dbhub?.length)) {
       setDbHubLoading(true);
       void loadServiceDbHubTargets(service.key).then(value => {
         if (owner !== editorGeneration) return;

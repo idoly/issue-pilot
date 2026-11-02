@@ -27,12 +27,12 @@ test("applies Pi settings, expands configured templates/skills, enables extensio
     await writeFile(path.join(skill, "SKILL.md"), "---\nname: example-skill\ndescription: Inspect example evidence.\n---\nLoaded skill body marker.\n");
     const prompt = path.join(f.root, "prompts", "audit.md"); await writeFile(prompt, "---\ndescription: Audit a target\n---\nAudit target: $1\n");
     const extension = path.join(f.root, "extensions", "extension.ts"), started = path.join(f.root, "started"), ended = path.join(f.root, "ended");
-    await writeFile(extension, `import { Type } from 'typebox'; import { writeFileSync } from 'node:fs';
+    await writeFile(extension, `import { writeFileSync } from 'node:fs';
 export default pi => {
   pi.on('session_start', () => { writeFileSync(${JSON.stringify(started)}, 'started'); });
   pi.on('session_shutdown', () => { writeFileSync(${JSON.stringify(ended)}, 'ended'); });
-  pi.registerTool({ name:'example_echo',label:'Example',description:'Return example evidence.',parameters:Type.Object({}),execute:async()=>({content:[{type:'text',text:'extension evidence'}],details:undefined}) });
-  pi.registerTool({ name:'example_deferred',label:'Deferred',description:'Read deferred evidence.',exposure:'codemode',parameters:Type.Object({}),execute:async()=>({content:[{type:'text',text:'deferred evidence'}],details:undefined}) });
+  pi.registerTool({ name:'example_echo',label:'Example',description:'Return example evidence.',parameters:{type:'object',properties:{},additionalProperties:false},execute:async()=>({content:[{type:'text',text:'extension evidence'}],details:undefined}) });
+  pi.registerTool({ name:'example_deferred',label:'Deferred',description:'Read deferred evidence.',exposure:'codemode',parameters:{type:'object',properties:{},additionalProperties:false},execute:async()=>({content:[{type:'text',text:'deferred evidence'}],details:undefined}) });
 }`);
     const base = { settings: { compaction: { enabled: false, reserveTokens: 2000 }, retry: { enabled: true, maxRetries: 2 }, shellPath: "/bin/bash", shellCommandPrefix: "export BASE_PREFIX='enabled-by-base';", cacheWarming: "off" as const, codemode: { inlineBudget: 900 } } };
     f.faux.setResponses([
@@ -85,7 +85,7 @@ test("reports extension loading and protected tool conflicts without leaking ext
     const broken = path.join(f.root, "extensions", "broken.ts"); await writeFile(broken, "export default () => { throw new Error('private-extension-error'); };\n");
     await assert.rejects(f.runtime.start(f.options), { message: "agent_extension_load_failed" });
     await rm(broken);
-    const conflict = path.join(f.root, "extensions", "conflict.ts"); await writeFile(conflict, "import { Type } from 'typebox'; export default pi => pi.registerTool({name:'service_query',label:'Conflict',description:'Conflict',parameters:Type.Object({}),execute:async()=>({content:[],details:undefined})});\n");
+    const conflict = path.join(f.root, "extensions", "conflict.ts"); await writeFile(conflict, "export default pi => pi.registerTool({name:'service_query',label:'Conflict',description:'Conflict',parameters:{type:'object',properties:{},additionalProperties:false},execute:async()=>({content:[],details:undefined})});\n");
     await assert.rejects(f.runtime.start(f.options), { message: "agent_extension_tool_conflict" });
   } finally { await f.close(); }
 });

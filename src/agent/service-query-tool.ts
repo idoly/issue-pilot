@@ -1,6 +1,5 @@
 import { defineTool, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
-import { Compile } from "typebox/compile";
+import { compile, lit, union, unknown as unknownSchema, type Schema } from "@earendil-works/pi-schema";
 import { structuredJsonResult } from "../capabilities/contracts.ts";
 import { DmsOperationError, queryDms } from "../capabilities/dms.ts";
 import { capabilityToolInputSchema, type CapabilityInputs } from "../capabilities/registry.ts";
@@ -15,19 +14,22 @@ export interface ServiceToolScope { environmentKey: string; serviceKey: string; 
 export function createCapabilityTools(context: Pick<AgentSessionContext, "serviceKey" | "environmentKey" | "capabilities">, deploymentConfig: DeploymentConfig, options: { workFiles?: IssueWorkFileStore | undefined; serviceScopes?: ServiceToolScope[] | undefined } = {}): ToolDefinition<any, any, any>[] {
   const { workFiles, serviceScopes } = options;
   const scopes = structuredClone(serviceScopes ?? [{ environmentKey: context.environmentKey, serviceKey: context.serviceKey, serviceName: context.serviceKey, config: deploymentConfig }]);
-  const schemas: TSchema[] = [];
+  const schemas: Schema[] = [];
   for (const scope of scopes) for (const capability of context.capabilities) {
     if (!scope.config[capability]) continue;
     const schema = capabilityToolInputSchema(capability, scope.config[capability]!, { exportEnabled: Boolean(workFiles) && capability === "dms" });
-    const union = schema as unknown as { anyOf?: TSchema[] };
-    const variants = Array.isArray(union.anyOf) ? union.anyOf : [schema];
-    for (const variant of variants) schemas.push(Type.Object({ environment: Type.Literal(scope.environmentKey), service: Type.Literal(scope.serviceKey, { description: scope.serviceName }), capability: Type.Literal(capability), ...(variant as unknown as { properties: Record<string, TSchema> }).properties }, { additionalProperties: false }));
+    const variants = Array.isArray(schema.anyOf) ? schema.anyOf as Schema[] : [schema];
+    for (const variant of variants) schemas.push({
+      ...variant,
+      properties: { environment: lit(scope.environmentKey), service: lit(scope.serviceKey, { description: scope.serviceName }), capability: lit(capability), ...(variant.properties as Record<string, Schema>) },
+      required: ["environment", "service", "capability", ...((variant.required as string[] | undefined) ?? [])],
+    });
   }
   if (!schemas.length) return [];
-  const schema = objectToolParameters(schemas.length === 1 ? schemas[0]! : Type.Union(schemas));
-  const validateInput = Compile(schema);
+  const schema = objectToolParameters(schemas.length === 1 ? schemas[0]! : union(schemas));
+  const validateInput = compile(structuredClone(schema));
   return [defineTool({
-    name: "service_query", label: "Query service evidence", parameters: schema, outputSchema: Type.Unknown(),
+    name: "service_query", label: "Query service evidence", parameters: schema, outputSchema: unknownSchema(),
     description: "Query evidence from a configured environment and service. Development Issues can read production/test sources; other Issues stay in their own environment. Use workspace list/describe to read service investigation notes before choosing a capability. Credentials and targets are injected by the server. Native operations remain read-only. External MCP servers expose separate tools through Pi.",
     promptGuidelines: [
       "When codemode is enabled, service_query resolves to structured JSON data. Batch independent non-DMS evidence reads with Promise.allSettled and return only the fields needed for the answer. Await calls that depend on an earlier result or write the same file.",
@@ -35,7 +37,7 @@ export function createCapabilityTools(context: Pick<AgentSessionContext, "servic
     ],
     execute: async (_id, raw, signal): Promise<AgentToolResult<unknown>> => {
       signal?.throwIfAborted();
-      if (!validateInput.Check(raw)) throw new Error("invalid_service_query_input");
+      if (!validateInput.check(raw)) throw new Error("invalid_service_query_input");
       const input = raw as Record<string, unknown>;
       const scope = scopes.find(scope => scope.serviceKey === input.service && scope.environmentKey === input.environment);
       const capability = input.capability as CapabilityName;

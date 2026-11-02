@@ -1,6 +1,4 @@
-import { StringEnum } from "@earendil-works/pi-ai";
-import { Type, type Static, type TSchema } from "typebox";
-import { Value } from "typebox/value";
+import { bool, int, lit, obj, oneOf, opt, str, union, type Static, type Schema } from "@earendil-works/pi-schema";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { CapabilityConfiguration, CapabilityName, DmsScope, SlsScope } from "../domain/contracts.ts";
 
@@ -78,36 +76,34 @@ export function parseSlsScopeConfiguration(value: unknown): SlsScope {
 }
 
 const slsQueryProperties = {
-  from: Type.Optional(Type.Integer({ minimum: 0 })), to: Type.Optional(Type.Integer({ minimum: 1 })),
-  query: Type.Optional(Type.String({ maxLength: limits.sls.queryChars, description: "Log filter or SQL analysis. SQL uses its LIMIT/ORDER BY for pagination; incomplete results fail explicitly." })),
-  trace_id: Type.Optional(Type.String({ maxLength: limits.sls.traceIdChars })),
+  from: opt(int({ minimum: 0 })), to: opt(int({ minimum: 1 })),
+  query: opt(str({ maxLength: limits.sls.queryChars, description: "Log filter or SQL analysis. SQL uses its LIMIT/ORDER BY for pagination; incomplete results fail explicitly." })),
+  trace_id: opt(str({ maxLength: limits.sls.traceIdChars })),
 };
-const dmsExportSchema = Type.Object({ fileName: Type.String({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Save the complete MCP result as a JSON work file in this Issue instead of returning query rows to the conversation. The UTF-8 basename byte limit also applies." }) }, { additionalProperties: false });
+const dmsExportSchema = obj({ fileName: str({ minLength: 1, maxLength: issuePilotConfig.limits.filesystemNameBytes, description: "Save the complete MCP result as a JSON work file in this Issue instead of returning query rows to the conversation. The UTF-8 basename byte limit also applies." }) });
+const dmsQueryProperties = {
+  script: str({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+  logic: opt(bool({ description: "Whether DMS should execute the statement as a logical database query." })),
+};
 export const capabilityInputSchemas = {
-  dms: Type.Object({
-    schema: Type.String({ minLength: 1, maxLength: 255, description: "Exact configured schema for the selected deployment." }),
-    script: Type.String({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
-    export: Type.Optional(dmsExportSchema), logic: Type.Optional(Type.Boolean({ description: "Whether DMS should execute the statement as a logical database query." })),
-  }, { additionalProperties: false }),
-  sls: Type.Object({ target: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), logstore: Type.String({ maxLength: 63, pattern: SLS_LOGSTORE.source }), ...slsQueryProperties }, { additionalProperties: false }),
+  dms: obj({ schema: str({ minLength: 1, maxLength: 255, description: "Exact configured schema for the selected deployment." }), ...dmsQueryProperties, export: opt(dmsExportSchema) }),
+  sls: obj({ target: opt(str({ minLength: 1, maxLength: 100 })), logstore: str({ maxLength: 63, pattern: SLS_LOGSTORE.source }), ...slsQueryProperties }),
 } as const;
 export type CapabilityInputs = { [Key in keyof typeof capabilityInputSchemas]: Static<(typeof capabilityInputSchemas)[Key]> };
-export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>, options: { exportEnabled?: boolean } = {}): TSchema {
+export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>, options: { exportEnabled?: boolean } = {}): Schema {
   if (key === "sls") {
     const configured = configuration as CapabilityConfig<"sls">;
     const logstoreSchema = (stores: string[]) => stores.includes("*")
-      ? Type.String({ maxLength: 63, pattern: SLS_LOGSTORE.source, description: "Any exact logstore name in this configured project. Specify one logstore, never *." })
-      : StringEnum(stores, { description: "Exact logstore configured for the selected deployment." });
+      ? str({ maxLength: 63, pattern: SLS_LOGSTORE.source, description: "Any exact logstore name in this configured project. Specify one logstore, never *." })
+      : oneOf(stores, { description: "Exact logstore configured for the selected deployment." });
     const schema = configured.targets
-      ? Type.Union(configured.targets.map(target => Type.Object({ target: Type.Literal(target.name), logstore: logstoreSchema(target.logstores), ...slsQueryProperties }, { additionalProperties: false })))
-      : Type.Object({ logstore: logstoreSchema(configured.logstores), ...slsQueryProperties }, { additionalProperties: false });
-    return Value.Clone(schema);
+      ? union(configured.targets.map(target => obj({ target: lit(target.name), logstore: logstoreSchema(target.logstores), ...slsQueryProperties })))
+      : obj({ logstore: logstoreSchema(configured.logstores), ...slsQueryProperties });
+    return structuredClone(schema);
   }
-  const fields = Value.Clone(capabilityInputSchemas.dms.properties);
-  return Type.Object({
-    schema: StringEnum((configuration as CapabilityConfig<"dms">).databases.map(({ schemaName }) => schemaName), { description: "Exact schema configured for the selected deployment." }),
-    script: fields.script,
-    ...(options.exportEnabled ? { export: fields.export } : {}),
-    logic: fields.logic,
-  }, { additionalProperties: false });
+  return structuredClone(obj({
+    schema: oneOf((configuration as CapabilityConfig<"dms">).databases.map(({ schemaName }) => schemaName), { description: "Exact schema configured for the selected deployment." }),
+    ...dmsQueryProperties,
+    ...(options.exportEnabled ? { export: opt(dmsExportSchema) } : {}),
+  }));
 }

@@ -14,16 +14,17 @@ for (const variant of ['v3/index.js', 'v3/index.cjs', 'v4/index.js', 'v4/index.c
   const z = variant.endsWith('.cjs') ? require(file) : await import(pathToFileURL(file));
   const mini = variant.includes('mini');
   const v3 = variant.startsWith('v3/');
+  const guarded = patched || !v3; // Zod 4 is fixed upstream; the local patch only hardens its v3 export.
   const capped = mini ? z.array(z.string()).check(z.maxLength(1)) : z.array(z.string()).max(1, 'too many');
   const oversized = capped.safeParse(Array(count).fill(7));
   assert.equal(oversized.success, false);
-  assert.equal(oversized.error.issues.length, patched ? 1 : count + 1);
-  if (patched) assert.equal(oversized.error.issues[0].code, 'too_big');
+  assert.equal(oversized.error.issues.length, guarded ? 1 : count + 1);
+  if (guarded) assert.equal(oversized.error.issues[0].code, 'too_big');
   assert.deepEqual(capped.parse(['a']), ['a']);
   assert.equal(capped.safeParse(7).error.issues.some(issue => issue.code === 'invalid_type'), true);
   const nested = z.object({items: capped}).safeParse({items: Array(count).fill(7)});
-  assert.equal(nested.error.issues.length, patched ? 1 : count + 1);
-  if (patched) assert.deepEqual(nested.error.issues[0].path, ['items']);
+  assert.equal(nested.error.issues.length, guarded ? 1 : count + 1);
+  if (guarded) assert.deepEqual(nested.error.issues[0].path, ['items']);
   assert.equal(z.array(z.string()).safeParse([7, 7]).error.issues.length, 2, 'unbounded schemas retain their normal behavior');
   if (!mini) {
     assert.equal(oversized.error.issues.find(issue => issue.code === 'too_big').message, 'too many');
@@ -36,29 +37,29 @@ for (const variant of ['v3/index.js', 'v3/index.cjs', 'v4/index.js', 'v4/index.c
     let refined = 0;
     const effectful = z.array(z.string().transform(value => { transformed++; return value; })).max(1).refine(() => { refined++; return true; });
     assert.equal(effectful.safeParse(['a', 'b']).success, false);
-    assert.equal(transformed, patched ? 0 : 2);
-    assert.equal(refined, patched ? 0 : 1);
+    assert.equal(transformed, guarded ? 0 : 2);
+    assert.equal(refined, guarded ? 0 : 1);
     let asyncTransforms = 0;
     const asynchronous = z.array(z.string().transform(async value => { asyncTransforms++; return value.toUpperCase(); })).max(1);
     assert.equal((await asynchronous.safeParseAsync(['a', 'b'])).success, false);
-    assert.equal(asyncTransforms, patched ? 0 : 2);
+    assert.equal(asyncTransforms, guarded ? 0 : 2);
     assert.deepEqual(await asynchronous.parseAsync(['a']), ['A']);
     const set = z.set(z.string()).max(1).safeParse(new Set(Array.from({length: count}, (_, i) => i)));
-    assert.equal(set.error.issues.length, patched ? 1 : count + 1);
+    assert.equal(set.error.issues.length, guarded ? 1 : count + 1);
     assert.deepEqual([...z.set(z.string()).size(1).parse(new Set(['a']))], ['a']);
     if (!v3) {
       assert.deepEqual(z.array(z.number()).overwrite(value => value.slice(0, 1)).max(1).parse([1, 2]), [1], 'a rewrite before the bound must retain its semantics');
       const collapsed = z.set(z.string().transform(() => 'same')).max(1).safeParse(new Set(['a', 'b']));
-      assert.equal(collapsed.success, !patched, 'the upstream security contract caps raw collection size before element transforms');
+      assert.equal(collapsed.success, !guarded, 'the upstream security contract caps raw collection size before element transforms');
     }
   } else {
     const set = z.set(z.string()).check(z.maxSize(1)).safeParse(new Set(Array.from({length: count}, (_, i) => i)));
-    assert.equal(set.error.issues.length, patched ? 1 : count + 1);
+    assert.equal(set.error.issues.length, guarded ? 1 : count + 1);
   }
   if (!v3) {
     const map = z.map(z.string(), z.string()).check(mini ? z.maxSize(1) : z.core._maxSize(1));
     const invalid = map.safeParse(new Map([[1, 1], [2, 2]]));
-    assert.equal(invalid.error.issues.length, patched ? 1 : 5);
+    assert.equal(invalid.error.issues.length, 1);
     assert.deepEqual([...map.parse(new Map([['key', 'value']]))], [['key', 'value']]);
     assert.equal(map.safeParse(new Set([1, 2])).error.issues.some(issue => issue.code === 'invalid_type'), true);
   }
@@ -69,8 +70,8 @@ const sdk = relative => import(pathToFileURL(path.join(root, 'node_modules/@mode
 const {CompleteResultSchema, CompleteRequestSchema} = await sdk('types.js');
 assert.equal(CompleteResultSchema.safeParse({completion: {values: ['normal']}}).success, true);
 const oversizedCompletion = CompleteResultSchema.safeParse({completion: {values: Array(count).fill(7)}});
-assert.equal(oversizedCompletion.error.issues.length, patched ? 1 : count + 1);
-if (patched) assert.deepEqual(oversizedCompletion.error.issues[0].path, ['completion', 'values']);
+assert.equal(oversizedCompletion.error.issues.length, 1);
+assert.deepEqual(oversizedCompletion.error.issues[0].path, ['completion', 'values']);
 const {Client} = await sdk('client/index.js');
 const {Server} = await sdk('server/index.js');
 const {InMemoryTransport} = await sdk('inMemory.js');
@@ -86,7 +87,7 @@ try {
   values = Array(count).fill(7);
   await assert.rejects(client.complete(params), error => {
     assert.equal(error instanceof Error, true);
-    assert.equal(patched ? error.message.length < 4096 : error.message.length > 100000, true);
+    assert.equal(error.message.length < 4096, true);
     return true;
   });
   values = ['normal-after-rejection'];

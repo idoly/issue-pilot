@@ -1,10 +1,10 @@
 import type { CodemodeToolDetails } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, NestedToolCalls, TextContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { RunEvent } from "../data/client";
 
-type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown };
+type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown; nestedCalls?: NestedToolCalls };
 type DisplayBlock = { type: "text"; value: string } | { type: "image"; data: string; mimeType: string };
 type CompletedMessage = Extract<RunEvent["event"], { type: "message_end" }>["message"];
 
@@ -67,6 +67,12 @@ function applyCompletedMessage(entries: ConversationEntry[], envelope: RunEvent,
     }
     return next;
   }
+  if (message.role === "toolResult" && message.nestedCalls) {
+    const previous = entries.find(entry => entry.kind === "tool" && entry.toolCallId === message.toolCallId);
+    const durationMs = message.durationMs ?? (previous?.kind === "tool" ? previous.durationMs : undefined);
+    const result = { content: message.content, details: message.details, nestedCalls: message.nestedCalls };
+    return applyAgentEvent(entries, { ...envelope, event: { type: "tool_execution_end", toolCallId: message.toolCallId, toolName: message.toolName, result, isError: message.isError, ...(durationMs === undefined ? {} : { durationMs }) } });
+  }
   if (message.role === "compactionSummary") return [...entries, { id: envelope.id, kind: "summary", summaryType: "compaction", summary: message.summary, tokensBefore: message.tokensBefore }];
   if (message.role === "branchSummary") return [...entries, { id: envelope.id, kind: "summary", summaryType: "branch", summary: message.summary }];
   if (message.role === "custom" && message.display) return [...entries, { id: envelope.id, kind: "custom", label: message.customType, blocks: displayBlocks(message.content) }];
@@ -113,7 +119,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
     const index = entries.findIndex((entry) => entry.kind === "tool" && entry.toolCallId === event.toolCallId);
     const previous = index >= 0 ? entries[index] as Extract<ConversationEntry, { kind: "tool" }> : undefined;
     const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
-    const result = rawResult ? displayToolResult(rawResult) : undefined;
+    const result = rawResult ? displayToolResult({ ...rawResult, ...(!("nestedCalls" in rawResult) && previous?.result?.nestedCalls ? { nestedCalls: previous.result.nestedCalls } : {}) }) : undefined;
     const entry: ConversationEntry = {
       id: previous?.id ?? envelope.id,
       kind: "tool",
@@ -203,13 +209,18 @@ export function codemodeCalls(entry: Extract<ConversationEntry, { kind: "tool" }
   return Array.isArray(calls) ? calls.filter(call => call && typeof call.name === "string" && typeof call.status === "string") : [];
 }
 
+export function toolNestedCalls(entry: Extract<ConversationEntry, { kind: "tool" }>) {
+  return entry.result?.nestedCalls?.calls ?? codemodeCalls(entry);
+}
+
 export function duration(value: number | undefined): string {
   if (value === undefined) return "";
   return value < 1_000 ? `${value}ms` : `${(value / 1_000).toFixed(1)}s`;
 }
 
 export function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
-  return entry.result?.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n") ?? "";
+  const text = entry.result?.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n") ?? "";
+  return entry.name === "bash" ? text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "") : text;
 }
 
 export function boundedText(value: string, maximumCharacters: number): string {
@@ -226,14 +237,6 @@ function displayToolResult(result: ToolResult): ToolResult {
   const images = result.content.filter((part): part is ImageContent => part.type === "image");
   const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
   return { ...result, content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images] };
-}
-
-export function shellToolOutput(entry: Extract<ConversationEntry, { kind: "tool" }>): { lines: string[]; omitted: number } | undefined {
-  if (entry.name !== "bash") return undefined;
-  const output = resultText(entry).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").split("\n");
-  while (output.length && !output[output.length - 1]?.trim()) output.pop();
-  const limit = 5;
-  return { lines: output.slice(-limit), omitted: Math.max(0, output.length - limit) };
 }
 
 export function assistantNotice(entry: Extract<ConversationEntry, { kind: "assistant" }>): string {

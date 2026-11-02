@@ -4,13 +4,10 @@ import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { mcpServices } from "../db/schema.ts";
-import { DBHUB_DATABASES, type DbHubTarget, type StoredDeploymentConfig } from "../domain/contracts.ts";
+import { DBHUB_DATABASES, type DbHubTarget } from "../domain/contracts.ts";
 import { ApiError, choice, record, text } from "../http/input.ts";
 
 type Writer = Pick<Database, "select" | "insert" | "update" | "delete">;
-export function deploymentDbHubTargets(config: Pick<StoredDeploymentConfig, "dbhub" | "mysql">): DbHubTarget[] {
-  return config.dbhub ?? (config.mysql ?? []).map(target => ({ ...target, type: "mysql" }));
-}
 export function parseDbHubTargets(value: unknown): DbHubTarget[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new ApiError(400, "invalid_dbhub_targets");

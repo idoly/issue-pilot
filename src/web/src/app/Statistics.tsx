@@ -48,9 +48,9 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   });
   const types = createMemo(() => Object.entries(typeLabel).map(([key, name]) => ({ key, name, count: filteredIssues().filter((issue) => issue.type === key).length })).filter((item) => item.count > 0).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)));
   const assignees = createMemo(() => {
-    const rows = new Map<string, { name: string; completed: number; active: number }>();
+    const rows = new Map<string | null, { name: string; completed: number; active: number }>();
     for (const issue of filteredIssues()) {
-      const key = issue.assigneeSubject ?? "unassigned";
+      const key = issue.assigneeSubject;
       const row = rows.get(key) ?? { name: issue.assignee ?? "未分配", completed: 0, active: 0 };
       if (issue.status === "resolved") row.completed += 1;
       else row.active += 1;

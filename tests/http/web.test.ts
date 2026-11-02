@@ -3,12 +3,18 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import Fastify from "fastify";
+import fastifyStatic from "@fastify/static";
 
 import { buildApi } from "../../src/http/api.ts";
 
 const stateLease = { async start() {}, async close() {} };
 
-test("serves the production Web and keeps unlisted files private", async () => {
+test("serves the production Web and keeps unlisted files private", async context => {
+  const listenerWarnings: Error[] = [];
+  const onWarning = (warning: Error) => { if (warning.name === "MaxListenersExceededWarning") listenerWarnings.push(warning); };
+  process.on("warning", onWarning);
+  context.after(() => { process.off("warning", onWarning); });
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-web-"));
   const webRoot = path.join(root, "web");
   const stateRoot = path.join(root, "state");
@@ -49,7 +55,28 @@ test("serves the production Web and keeps unlisted files private", async () => {
     } finally {
       await app.close();
     }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(listenerWarnings, [], "HTML fallback must not repeatedly assimilate the Fastify reply thenable");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the patched glob dependency preserves Fastify static precomputed routes and dotfile exclusion", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-static-glob-"));
+  const app = Fastify();
+  try {
+    await mkdir(path.join(root, "assets"));
+    await writeFile(path.join(root, "assets", "space [1].js"), "synthetic asset");
+    await writeFile(path.join(root, ".private"), "not public");
+    await app.register(fastifyStatic, { root, wildcard: false, index: false });
+    const asset = await app.inject({ method: "GET", url: "/assets/space%20%5B1%5D.js" });
+    assert.equal(asset.statusCode, 200);
+    assert.equal(asset.body, "synthetic asset");
+    assert.equal((await app.inject({ method: "GET", url: "/.private" })).statusCode, 404);
+    assert.equal((await app.inject({ method: "GET", url: "/assets/missing.js" })).statusCode, 404);
+  } finally {
+    await app.close();
     await rm(root, { recursive: true, force: true });
   }
 });

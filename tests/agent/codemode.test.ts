@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext, type Tool, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
+import { obj } from "@earendil-works/pi-schema";
 import { defineTool, ModelRuntime, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentCodemodeMode } from "../../src/domain/contracts.ts";
 import { PiSessionRuntime, createPrivateSessionManager, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
@@ -32,7 +32,7 @@ function declaredTools(context: TranscriptContext) {
   return tools;
 }
 function evidenceTool(url: string) {
-  return defineTool({ name: "evidence_read", label: "Fixture evidence", description: "Read isolated fixture evidence.", parameters: Type.Object({}), execute: async (_id, _input, signal) => ({ content: [{ type: "text", text: await (await fetch(url, signal ? { signal } : {})).text() }], details: undefined }) });
+  return defineTool({ name: "evidence_read", label: "Fixture evidence", description: "Read isolated fixture evidence.", parameters: obj({}), execute: async (_id, _input, signal) => ({ content: [{ type: "text", text: await (await fetch(url, signal ? { signal } : {})).text() }], details: undefined }) });
 }
 const call = (code: string, id = "script") => fauxAssistantMessage(fauxToolCall("codemode", { code }, { id }), { stopReason: "toolUse" });
 

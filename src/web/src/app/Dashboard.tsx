@@ -31,7 +31,9 @@ export function Dashboard(props: {
   const { catalog } = useApplicationResources();
   const activeIssues = createMemo(() => props.issues.filter((issue) => issue.status !== "resolved"));
   const focusIssues = createMemo(() => activeIssues()
-    .sort((left, right) => attentionRank(left) - attentionRank(right) || new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()));
+    .map(issue => ({ issue, rank: attentionRank(issue), updatedAt: Date.parse(issue.updatedAt) }))
+    .sort((left, right) => left.rank - right.rank || right.updatedAt - left.updatedAt)
+    .map(row => row.issue));
   const running = createMemo(() => activeIssues().filter((issue) => issue.agentRunning || issue.workspaceStatus === "running" || issue.workspaceStatus === "preparing").length);
   const failed = createMemo(() => activeIssues().filter((issue) => issue.workspaceStatus === "failed").length);
   const unassigned = createMemo(() => activeIssues().filter((issue) => !issue.assigneeSubject).length);

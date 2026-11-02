@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const patches = [
-  { name: "@earendil-works/pi-coding-agent", version: "1.4.0", file: "patches/@earendil-works+pi-coding-agent+1.4.0.patch" },
-  { name: "zod", version: "3.25.76", file: "patches/zod+3.25.76.patch" },
+  { name: "@earendil-works/pi-coding-agent", version: "1.5.0", file: "patches/@earendil-works+pi-coding-agent+1.5.0.patch" },
+  { name: "zod", version: "4.6.7", file: "patches/zod+4.6.7.patch" },
 ];
 for (const patch of patches) {
   const packageFile = new URL(`../node_modules/${patch.name}/package.json`, import.meta.url);

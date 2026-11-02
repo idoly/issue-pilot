@@ -1,13 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
-import { createSignal } from "solid-js";
+import { createSignal, createStore, reconcile } from "solid-js";
+import { marked } from "marked";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
-import { AgentPanel } from "./AgentPanel";
-import { activityForEvent, applyAgentEvent, boundedText, codemodeCalls, diffLineClass, processingAfterEvent, shellToolOutput, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
+import { AgentPanel, ConversationItem } from "./AgentPanel";
+import { activityForEvent, applyAgentEvent, boundedText, codemodeCalls, diffLineClass, processingAfterEvent, resultText, toolNestedCalls, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "63ccbb08-d769-47b6-87a6-e93acea184f7", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -175,21 +176,52 @@ describe("Agent conversation state", () => {
     expect(toolLabel(entry)).toBe("read src/index.ts:1-20");
     expect(diffLineClass("+12 const value = a - b")).toBe("added");
     expect(diffLineClass(" 11 const value = a + b")).toBeUndefined();
-    expect(shellToolOutput(entry)).toBeUndefined();
   });
 
-  it("shows only the final output lines for Pi bash tools", () => {
-    const entry = {
-      id: "tool-1", kind: "tool", toolCallId: "call-1", name: "bash", status: "complete",
-      startedAt: "2026-08-06T00:00:00.000Z", durationMs: 3_700,
-      arguments: { command: "npm test" },
-      result: { content: [{ type: "text", text: Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n") }] },
-    } satisfies ConversationEntry;
-    expect(toolLabel(entry)).toBe("$ npm test");
-    expect(shellToolOutput(entry)).toEqual({
-      lines: Array.from({ length: 5 }, (_, index) => `line ${index + 10}`),
-      omitted: 9,
-    });
+  it("keeps SDK tool cards compact, lazily mounts retained output and preserves expansion across updates", async () => {
+    const issue = { id: "ISSUE-20260810-001", title: "Tool card", description: "", priority: "p1", type: "defect_fix", status: "pending", assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" }, updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev", workspace: { status: "ready", sourceAvailable: false } } satisfies IssueDetail;
+    const initial: Extract<ConversationEntry, { kind: "tool" }> = {
+      id: "tool-1", kind: "tool", toolCallId: "call-1", name: "bash", status: "running", startedAt: "2026-08-06T00:00:00.000Z", durationMs: 3700, arguments: { command: "npm test" },
+      result: { content: [{ type: "text", text: `\u001b[31m${Array.from({ length: 14 }, (_, i) => `line ${i + 1}`).join("\n")}\u001b[0m` }], details: { fullOutputPath: "/state/workspaces/issue-20260810-001/full.log" }, nestedCalls: { calls: [{ id: "nested", name: "service_query", status: "unfinished" }], complete: false } },
+    };
+    const [entry, setEntry] = createStore(initial);
+    const view = render(() => ConversationItem({ issue, entry }));
+    try {
+      const card = view.container.querySelector("details")!;
+      expect(card.open).toBe(false);
+      expect(view.container.querySelector("pre")).toBeNull();
+      expect(view.container.querySelector(".agent-nested-call")).toBeNull();
+      card.open = true; fireEvent(card, new Event("toggle"));
+      await screen.findByText("嵌套调用记录不完整");
+      const output = view.container.querySelector("pre")!;
+      expect(output.textContent).toContain("line 1\n"); expect(output.textContent).toContain("line 14");
+      expect(output.textContent).not.toContain("\u001b");
+      expect(screen.getByText("未完成")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "输出文件" }).getAttribute("href")).toBe(`/api/issues/${issue.id}/files/download?path=full.log`);
+      setEntry(reconcile({ ...initial, status: "error", durationMs: 3800, result: { ...initial.result!, details: { fullOutputPath: "https://external.example/private.log" }, nestedCalls: { calls: [{ id: "nested", name: "service_query", status: "ok" }], complete: true } } }));
+      await screen.findByText("失败");
+      expect(view.container.querySelector("details")).toBe(card); expect(card.open).toBe(true);
+      expect(view.container.querySelector("pre")).toBe(output);
+      expect(screen.queryByText("嵌套调用记录不完整")).toBeNull();
+      expect(screen.queryByRole("link", { name: "输出文件" })).toBeNull();
+      expect(screen.getByText("3.8s")).toBeTruthy();
+      card.open = false; fireEvent(card, new Event("toggle"));
+      await waitFor(() => expect(view.container.querySelector("pre")).toBeNull());
+      expect(screen.getByText("失败")).toBeTruthy();
+    } finally { view.unmount(); }
+  });
+
+  for (const metadataFirst of [false, true]) it(`retains SDK nested-call metadata ${metadataFirst ? "before" : "after"} the tool completion without duplicate cards`, () => {
+    const nestedCalls = { calls: [{ id: "nested", name: "read", status: "unfinished" as const }], complete: false };
+    const completion = event({ type: "tool_execution_end", toolCallId: "parent", toolName: "custom", isError: false, durationMs: 123, result: { content: [{ type: "text", text: "parent result" }] } });
+    const metadata = event({ type: "message_end", message: { role: "toolResult", toolCallId: "parent", toolName: "custom", content: [{ type: "text", text: "parent result" }], nestedCalls, isError: false, timestamp: 1, durationMs: 123 } });
+    const entries = (metadataFirst ? [metadata, completion] : [completion, metadata]).reduce(applyAgentEvent, [] as ConversationEntry[]);
+    expect(entries).toHaveLength(1);
+    const entry = entries[0] as Extract<ConversationEntry, { kind: "tool" }>;
+    expect(toolNestedCalls(entry)).toEqual(nestedCalls.calls);
+    expect(entry.result?.nestedCalls?.complete).toBe(false);
+    expect(entry.durationMs).toBe(123);
+    expect(resultText(entry)).toBe("parent result");
   });
 
   it("checks expanded pasted text before sending and preserves the draft", async () => {
@@ -282,20 +314,57 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("snapshot_ready", {
       agent: { provider: "test", model: "model", thinkingLevel: "medium" },
-      footer: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, cost: 0.1, latestCacheHitRate: 90, contextPercent: 10, contextWindow: 10_000, autoCompact: true },
+      footer: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, cost: 0.1, costSource: "unknown", latestCacheHitRate: 90, contextPercent: 10, contextWindow: 10_000, autoCompact: true },
       running: false, issueStatus: "pending",
     });
-    await waitFor(() => expect(screen.getByText("↑100 ↓10 R900 CH90.0% $0.100 10.0%/10k (auto)")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("↑100 ↓10 R900 CH90.0% $0.100 (来源未标明) 10.0%/10k (auto)")).toBeTruthy());
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(editor, { target: { value: "draft survives usage updates" } });
     for (const [index, kind] of ["cache_warm", "native_auxiliary"].entries()) source.emit("message", event({
       type: "entry_appended",
       entry: { type: "usage", id: `usage-${index}`, parentId: null, timestamp: new Date().toISOString(), kind, provider: "test", model: "model", usage: { ...usage, cacheRead: 100, totalTokens: 100, cost: { ...usage.cost, cacheRead: 0.02, total: 0.02 } } },
     }, `auxiliary-${index}`));
-    await waitFor(() => expect(screen.getByText("↑100 ↓10 R1.1k CH90.0% $0.140 10.0%/10k (auto)")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("↑100 ↓10 R1.1k CH90.0% $0.140 (来源未标明) 10.0%/10k (auto)")).toBeTruthy());
     expect(editor.value).toBe("draft survives usage updates");
     expect(EventSourceMock.instances).toHaveLength(1);
     view.unmount();
+  });
+
+  for (const [flag, costSource, label] of [[true, "provider", "供应商报告"], [false, "estimated", "估算"], [undefined, "unknown", "来源未标明"]] as const) it(`keeps ${costSource} cost provenance consistent across snapshots, live entry types and reconnect`, async () => {
+    EventSourceMock.instances.length = 0;
+    const issue = {
+      id: "ISSUE-20260810-001", title: "Cost source", description: "", priority: "p1", type: "defect_fix", status: "pending",
+      assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    try {
+      const source = EventSourceMock.instances[0]!;
+      const footer = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.1, costSource, latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true };
+      const charged = { ...usage, cost: { ...usage.cost, total: 0.1, ...(flag === undefined ? {} : { totalFromProvider: flag }) } };
+      const base = { parentId: null, timestamp: new Date().toISOString() };
+      source.emit("snapshot_ready", { footer, running: false, issueStatus: "pending" });
+      await screen.findByText(`$0.100 (${label})`);
+      source.emit("message", event({ type: "entry_appended", entry: { ...base, type: "usage", id: "auxiliary", kind: "auxiliary", provider: "test", model: "model", usage: charged } }));
+      source.emit("message", event({ type: "message_end", message: { ...assistant([], "stop"), usage: charged } }));
+      source.emit("message", event({ type: "message_end", message: { role: "toolResult", toolCallId: "nested", toolName: "fixture", content: [], isError: false, usage: charged, timestamp: 1 } }));
+      source.emit("message", event({ type: "entry_appended", entry: { ...base, type: "compaction", id: "compaction", summary: "Summary", firstKeptEntryId: "compaction", tokensBefore: 0, usage: charged } }));
+      source.emit("message", event({ type: "entry_appended", entry: { ...base, type: "branch_summary", id: "branch", fromId: "previous", summary: "Branch", usage: charged } }));
+      await screen.findByText(`$0.600 (${label})`);
+      source.emit("message", event({ type: "entry_appended", entry: { ...base, type: "usage", id: "zero", kind: "zero", provider: "test", model: "model", usage: { ...charged, cost: { ...charged.cost, total: 0, totalFromProvider: !flag } } } }));
+      expect(screen.getByText(`$0.600 (${label})`)).toBeTruthy();
+      const mixed = event({ type: "entry_appended", entry: { ...base, type: "usage", id: "mixed", kind: "other", provider: "test", model: "model", usage: { ...charged, cost: { ...charged.cost, totalFromProvider: !flag } } } });
+      source.emit("message", mixed);
+      await screen.findByText("$0.700 (混合来源)");
+      source.emit("message", event({ type: "session_reset" }));
+      await waitFor(() => expect(EventSourceMock.instances).toHaveLength(2));
+      const resumed = EventSourceMock.instances[1]!;
+      resumed.emit("message", mixed);
+      resumed.emit("snapshot_ready", { footer: { ...footer, cost: 0.7, costSource: "mixed" }, running: false, issueStatus: "pending" });
+      await screen.findByText("$0.700 (混合来源)");
+      expect(screen.queryByText("$0.800 (混合来源)")).toBeNull();
+    } finally { view.unmount(); }
   });
 
   it("distinguishes a queued Issue from an executing round across reconnect and live transitions", async () => {
@@ -348,7 +417,7 @@ describe("Agent conversation state", () => {
     expect(EventSourceMock.instances).toHaveLength(1);
     source.emit("snapshot_ready", {
       agent: { provider: "test", model: "model", thinkingLevel: "medium" },
-      footer: { input: 11_000_000, output: 1_300_000, cacheRead: 498_000_000, cacheWrite: 0, cost: 385.206, latestCacheHitRate: 95, contextPercent: 32.9, contextWindow: 272_000, autoCompact: true },
+      footer: { input: 11_000_000, output: 1_300_000, cacheRead: 498_000_000, cacheWrite: 0, cost: 385.206, costSource: "unknown", latestCacheHitRate: 95, contextPercent: 32.9, contextWindow: 272_000, autoCompact: true },
       running: false,
       issueStatus: "in_progress",
     });
@@ -367,7 +436,7 @@ describe("Agent conversation state", () => {
     fireEvent.scroll(transcript);
     source.emit("message", event({ type: "issue_user", message: "Arrived after scrolling" }, "message-unread"));
     await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
-    expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 32.9%/272k (auto)")).toBeTruthy();
+    expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 (来源未标明) 32.9%/272k (auto)")).toBeTruthy();
     expect(screen.getByText("model")).toBeTruthy();
     const composer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(composer, { target: { value: "draft survives replay" } });
@@ -458,7 +527,7 @@ describe("Agent conversation state", () => {
     view.unmount();
   });
 
-  it("focuses the conversation and uses Enter to scroll to the latest message", () => {
+  it("focuses the conversation without hijacking native tool-card keyboard focus", async () => {
     EventSourceMock.instances.length = 0;
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "pending",
@@ -484,10 +553,42 @@ describe("Agent conversation state", () => {
     editor.focus();
     fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
     expect(scrollTo).toHaveBeenCalledTimes(1);
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("message", event({ type: "tool_execution_end", toolCallId: "keyboard-tool", toolName: "read", result: { content: [] }, isError: false }));
+    source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+    await waitFor(() => expect(panel.querySelector("summary.agent-tool-head")).toBeTruthy());
+    const summary = panel.querySelector("summary.agent-tool-head") as HTMLElement;
+    scrollTo.mockClear();
+    summary.focus(); fireEvent.click(summary);
+    expect(document.activeElement).toBe(summary);
+    fireEvent.keyDown(summary, { key: "Enter", code: "Enter" });
+    expect(scrollTo).not.toHaveBeenCalled();
     view.unmount();
   });
 
-  it("batches streaming deltas per frame and flushes them before the final message", async () => {
+  it("preserves completed message nodes and selection when another assistant message starts", async ({ onTestFinished }) => {
+    EventSourceMock.instances.length = 0;
+    const issue = { id: "ISSUE-20260810-001", title: "Selection fixture", description: "", priority: "p1", type: "defect_fix", status: "in_progress", assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" }, updatedAt: new Date().toISOString(), repositories: [], attachments: [], comments: [], environmentKey: "dev", workspace: { status: "running", sourceAvailable: false } } satisfies IssueDetail;
+    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    onTestFinished(() => { window.getSelection()?.removeAllRanges(); view.unmount(); });
+    const source = EventSourceMock.instances[0]!;
+    source.emit("open");
+    source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Stable completed text" }], "stop") }, "completed"));
+    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    const paragraph = await screen.findByText("Stable completed text");
+    const text = paragraph.firstChild!;
+    const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 6);
+    window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+    source.emit("message", event({ type: "message_start", message: assistant([], "pending") }, "next-start"));
+    source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Growing" } }, "next-delta"));
+    await screen.findByText("Growing");
+    expect(screen.getByText("Stable completed text")).toBe(paragraph);
+    expect(paragraph.firstChild).toBe(text);
+    expect(window.getSelection()?.toString()).toBe("Stable");
+  });
+
+  it("batches streaming deltas per frame and flushes them before the final message", async ({ onTestFinished }) => {
     EventSourceMock.instances.length = 0;
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
@@ -497,6 +598,7 @@ describe("Agent conversation state", () => {
       return frameId;
     });
     const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
+    const markdownParse = vi.spyOn(marked, "parse");
     const issue = {
       id: "ISSUE-20260810-001", title: "Test", description: "", priority: "p1", type: "defect_fix", status: "in_progress",
       assignee: null, assigneeSubject: null, service: { key: "service", name: "Service" },
@@ -504,6 +606,10 @@ describe("Agent conversation state", () => {
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    onTestFinished(() => {
+      view.unmount();
+      requestFrame.mockRestore(); cancelFrame.mockRestore(); markdownParse.mockRestore();
+    });
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
@@ -518,6 +624,7 @@ describe("Agent conversation state", () => {
     source.emit("message", event({ type: "message_start", message: assistant([], "pending") }, "stream-start"));
     source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "First " } }, "stream-first"));
     source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "second" } }, "stream-second"));
+    source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "Reasoning" } }, "stream-thinking"));
 
     expect(requestFrame).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("First second")).toBeNull();
@@ -529,22 +636,43 @@ describe("Agent conversation state", () => {
     expect(view.container.querySelector(".agent-message.assistant .agent-streaming-block")?.textContent).toBe("First second");
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")).toBeNull();
 
+    const assistantNode = view.container.querySelector(".agent-message.assistant");
+    const block = view.container.querySelector(".agent-streaming-block");
+    const thinking = view.container.querySelector(".agent-thinking .agent-streaming-block");
+    expect(thinking?.textContent).toBe("Reasoning");
     source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " queued" } }, "stream-queued"));
     expect(requestFrame).toHaveBeenCalledTimes(2);
-    source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Final response" }], "stop") }, "stream-final"));
+    frames.get(frameId)!(performance.now()); frames.delete(frameId);
+    await screen.findByText("First second queued");
+    expect(view.container.querySelector(".agent-message.assistant")).toBe(assistantNode);
+    expect(view.container.querySelector(".agent-streaming-block")).toBe(block);
+    expect(view.container.querySelector(".agent-thinking .agent-streaming-block")).toBe(thinking);
+    expect(markdownParse).not.toHaveBeenCalled();
+    for (let index = 0; index < 10; index += 1) {
+      source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "!" } }, `stream-${index}`));
+      frames.get(frameId)!(performance.now()); frames.delete(frameId);
+      await screen.findByText(`First second queued${"!".repeat(index + 1)}`);
+      expect(view.container.querySelector(".agent-message.assistant")).toBe(assistantNode);
+      expect(view.container.querySelector(".agent-streaming-block")).toBe(block);
+      expect(view.container.querySelector(".agent-thinking .agent-streaming-block")).toBe(thinking);
+    }
+    expect(markdownParse).not.toHaveBeenCalled();
+    source.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " discarded" } }, "stream-discarded"));
+    expect(requestFrame).toHaveBeenCalledTimes(13);
+    source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: 'Final response<img src="x" onerror="alert(1)">' }, { type: "thinking", thinking: "Final reasoning" }], "stop") }, "stream-final"));
     await waitFor(() => expect(screen.getByText("Final response")).toBeTruthy());
     expect(view.container.querySelector(".agent-message.assistant .agent-streaming-block")).toBeNull();
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")?.textContent).toContain("Final response");
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
+    expect(view.container.querySelector(".agent-message.assistant")).toBe(assistantNode);
+    expect(markdownParse).toHaveBeenCalledTimes(2);
+    expect(view.container.querySelector(".markdown-body img")?.hasAttribute("onerror")).toBe(false);
     expect(screen.queryByText("First second queued")).toBeNull();
     expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy();
     scroller.scrollTop = 800;
     fireEvent.scroll(scroller);
     await waitFor(() => expect(screen.queryByRole("button", { name: "1 条新消息" })).toBeNull());
 
-    view.unmount();
-    requestFrame.mockRestore();
-    cancelFrame.mockRestore();
   });
 
   it("reconnects with one close and atomically replaces the replayed transcript", async () => {

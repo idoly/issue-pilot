@@ -111,8 +111,8 @@ test("counts usage in the snapshot once and deduplicates live notifications by P
     try { await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work }); }
     finally { database.close(); }
     const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: new Date().toISOString(), event });
-    const appendUsage = (kind: string) => {
-      return manager.appendUsage(kind, "test", "model", { input: 0, output: 0, cacheRead: 100, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01 } });
+    const appendUsage = (kind: string, totalFromProvider = false) => {
+      return manager.appendUsage(kind, "test", "model", { input: 0, output: 0, cacheRead: 100, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01, totalFromProvider } });
     };
     const subscribe = events.subscribe.bind(events);
     events.subscribe = (id, listener) => {
@@ -136,13 +136,17 @@ test("counts usage in the snapshot once and deduplicates live notifications by P
     const data = block.split("\n").find(line => line.startsWith("data: ")); assert.ok(data);
     const snapshot = JSON.parse(data.slice(6)) as { footer: AgentFooterStats };
     assert.equal(snapshot.footer.cacheRead, 100); assert.equal(snapshot.footer.cost, 0.01);
+    assert.equal(snapshot.footer.costSource, "estimated");
     assert.equal(payload.includes("already-in-snapshot"), false);
-    const entry = appendUsage("native_auxiliary");
+    const entry = appendUsage("native_auxiliary", true);
     publish("new-usage", { type: "entry_appended", entry });
     publish("duplicate-usage", { type: "entry_appended", entry });
     publish("live-barrier", { type: "queue_update", steering: [], followUp: [] });
     await readThrough("live-barrier");
     assert.equal(payload.includes("new-usage"), true); assert.equal(payload.includes("duplicate-usage"), false);
+    const live = JSON.parse(payload.split("\n\n").find(block => block.startsWith("id: new-usage\n"))!.split("\n").find(line => line.startsWith("data: "))!.slice(6)) as RunEvent;
+    assert.ok(live.event.type === "entry_appended" && live.event.entry.type === "usage");
+    assert.equal(live.event.entry.usage.cost.totalFromProvider, true);
   } finally { await reader?.cancel().catch(() => undefined); await fixture.cleanup(); }
 });
 

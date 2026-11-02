@@ -71,19 +71,28 @@ export interface AgentModelDefinition {
   thinkingLevels: AgentThinkingLevel[];
 }
 
+export type AgentCostSource = "provider" | "estimated" | "unknown" | "mixed";
+
+/** Only nonzero charges contribute to the total's provenance; absent SDK flags stay unknown. */
+export function mergeAgentCostSource(current: AgentCostSource | null, cost: { total: number; totalFromProvider?: boolean }): AgentCostSource | null {
+  if (cost.total === 0) return current;
+  const source = cost.totalFromProvider === true ? "provider" : cost.totalFromProvider === false ? "estimated" : "unknown";
+  return current === null || current === source ? source : "mixed";
+}
+
 export interface AgentFooterStats {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  costSource: AgentCostSource | null;
   latestCacheHitRate: number | null;
   contextPercent: number | null;
   contextWindow: number;
   autoCompact: boolean;
 }
 
-export interface MysqlTarget { host: string; port: number; username: string; password: string; database: string }
 export const DBHUB_DATABASES = [
   { value: "postgres", label: "PostgreSQL", port: 5432 },
   { value: "mysql", label: "MySQL", port: 3306 },
@@ -92,7 +101,7 @@ export const DBHUB_DATABASES = [
   { value: "oracle", label: "Oracle", port: 1521 },
 ] as const;
 export type DbHubDatabaseType = typeof DBHUB_DATABASES[number]["value"];
-export interface DbHubTarget extends MysqlTarget { type: DbHubDatabaseType }
+export interface DbHubTarget { type: DbHubDatabaseType; host: string; port: number; username: string; password: string; database: string }
 
 export interface DmsCredentials { url: string; authorization: string }
 export interface DmsScope { databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> }
@@ -100,7 +109,6 @@ export interface SlsCredentials { accessKeyId: string; accessKeySecret: string }
 export interface SlsScope { region: string; project: string; logstores: string[]; targets?: Array<{ name: string; region: string; project: string; logstores: string[] }> }
 
 export interface CapabilityConfiguration {
-  mysql?: MysqlTarget[];
   dbhub?: DbHubTarget[];
   dms?: DmsScope & DmsCredentials;
   sls?: SlsScope & SlsCredentials;

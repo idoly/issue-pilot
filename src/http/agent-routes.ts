@@ -139,7 +139,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
         ? { provider: sessionContext.model.provider, model: sessionContext.model.modelId, thinkingLevel: sessionContext.thinkingLevel }
         : configured;
       const contextWindow = models.find(candidate => candidate.provider === provider && candidate.id === model)?.contextWindow ?? 0;
-      const footer = sessionFooterStats(manager, contextWindow, autoCompact);
+      const footer = sessionFooterStats(manager, contextWindow, autoCompact, sessionContext);
       const currentEvents = events.replayCurrent(issue.id);
       const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
       if (cleaned) { reply.hijack(); return; }

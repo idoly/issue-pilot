@@ -9,9 +9,7 @@ export const CAPABILITY_CREDENTIAL_FIELDS = {
 type CapabilityScopes = { dms: DmsScope; sls: SlsScope };
 export type ProjectedCapabilitySection<Key extends CapabilityName> = CapabilityScopes[Key];
 export type ProjectedCapabilityConfiguration = Partial<CapabilityScopes>;
-export type CapabilityConfigurationInput = {
-  [Key in CapabilityName]?: CapabilityScopes[Key] & { credentialUpdate?: { mode: "preserve" } };
-};
+export type CapabilityConfigurationInput = Partial<CapabilityScopes>;
 
 export type AgentModelOption = Pick<AgentModelDefinition, "provider" | "id" | "thinkingLevels">;
 
@@ -33,7 +31,6 @@ export interface ConfigurationCatalog {
 
 interface ServiceDeployment extends ProjectedCapabilityConfiguration {
   dbhub?: Array<Omit<NonNullable<CapabilityConfiguration["dbhub"]>[number], "password"> & { passwordConfigured: boolean }>;
-  mysql?: Array<Omit<NonNullable<CapabilityConfiguration["mysql"]>[number], "password"> & { passwordConfigured: boolean }>;
   environmentKey: string;
   repositoryBranches: Array<{ repositoryId: string; repositoryAlias: string; baseBranch: string }>;
   capabilities: CapabilityName[];
@@ -67,7 +64,6 @@ export interface ServiceConfigurationInput {
   repositories: Array<{ id?: string; alias: string; url: string }>;
   deployments: Array<CapabilityConfigurationInput & {
     dbhub?: CapabilityConfiguration["dbhub"];
-    mysql?: CapabilityConfiguration["mysql"];
     environmentKey: string;
     repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
     capabilities: CapabilityName[];

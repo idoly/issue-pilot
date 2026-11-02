@@ -1,6 +1,7 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
-import { Compile } from "typebox/compile";
+import { compile } from "@earendil-works/pi-schema";
+import { formats } from "@earendil-works/pi-schema/formats";
 import { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { KeyedSerialQueue } from "../serial.ts";
 import { executeLocalCommand } from "../process.ts";
@@ -37,10 +38,10 @@ function environment(extra: Record<string, string> = {}): Record<string, string>
 export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: () => Record<string, string> = () => ({})): ToolDefinition<any, any, any>[] {
   const root = policy.writeRoot;
   return [createReadToolDefinition(root), createBashToolDefinition(root), createEditToolDefinition(root), createWriteToolDefinition(root), createGrepToolDefinition(root), createFindToolDefinition(root), createLsToolDefinition(root)].map(tool => {
-    const validate = Compile(tool.parameters);
+    const validate = compile(structuredClone(tool.parameters), { formats });
     const { renderCall: _renderCall, renderResult: _renderResult, ...metadata } = tool;
     return { ...metadata, execute: (_id: string, input: unknown, signal: AbortSignal | undefined, update: ((value: any) => void) | undefined) => issueLocalCommands.run(root, async () => {
-      if (!validate.Check(input)) throw new Error(`invalid_issue_${tool.name}_input`);
+      if (!validate.check(input)) throw new Error(`invalid_issue_${tool.name}_input`);
       signal?.throwIfAborted();
       const prepared = await prepareIssueCommand(policy, [process.execPath, "--experimental-strip-types", path.join(import.meta.dirname, "native-tool-executor.ts"), tool.name, root]);
       let buffer = "", result: any, failure: string | undefined;

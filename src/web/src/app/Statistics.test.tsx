@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@solidjs/testing-library';
 import { afterEach, expect, test, vi } from 'vitest';
+import { createSignal } from 'solid-js';
 
-import { loadWorkspaceStats, type WorkspaceStats } from '../data/client';
+import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from '../data/client';
 import { Statistics } from './Statistics';
 
 vi.mock('../data/client', async (importOriginal) => ({
@@ -12,6 +13,65 @@ vi.mock('../data/client', async (importOriginal) => ({
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+});
+
+function issue(overrides: Partial<IssueListItem>): IssueListItem {
+  return { id: 'fixture', title: 'Fixture', priority: 'p1', type: 'smart_analysis', status: 'open', assignee: null, assigneeSubject: null, service: { key: 'orders', name: 'Orders' }, environmentKey: 'prod', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...overrides };
+}
+
+for (const reversed of [false, true]) test(`team statistics keep a real unassigned account separate from unassigned Issues in ${reversed ? 'reverse' : 'forward'} order`, async () => {
+  const issues = [
+    issue({ id: 'unassigned-issue', status: 'resolved' }),
+    issue({ id: 'user-open-1', assigneeSubject: 'unassigned', assignee: '真实处理人' }),
+    issue({ id: 'user-open-2', assigneeSubject: 'unassigned', assignee: '真实处理人' }),
+    issue({ id: 'user-resolved', assigneeSubject: 'unassigned', assignee: '真实处理人', status: 'resolved' }),
+  ];
+  render(() => <Statistics issues={reversed ? [...issues].reverse() : issues} />);
+  fireEvent.click(screen.getByRole('tab', { name: '团队' }));
+  const section = (await screen.findByRole('heading', { name: '个人处理情况' })).closest('section')!;
+  const userRow = within(section).getByText('真实处理人').parentElement!;
+  const unassignedRow = within(section).getByText('未分配').parentElement!;
+  expect([...userRow.querySelectorAll('span')].map(cell => cell.textContent)).toEqual(['1', '2', '3']);
+  expect([...unassignedRow.querySelectorAll('span')].map(cell => cell.textContent)).toEqual(['1', '0', '1']);
+  expect(section.querySelectorAll('.assignee-table > div')).toHaveLength(3);
+  expect(loadWorkspaceStats).not.toHaveBeenCalled();
+});
+
+test('team statistics use account identity rather than display name and react to reassignment', async () => {
+  const [issues, setIssues] = createSignal([
+    issue({ id: 'first', assigneeSubject: 'person-a', assignee: '同名', status: 'resolved' }),
+    issue({ id: 'second', assigneeSubject: 'person-b', assignee: '同名' }),
+    issue({ id: 'third' }),
+  ], { ownedWrite: true });
+  render(() => <Statistics issues={issues()} />);
+  fireEvent.click(screen.getByRole('tab', { name: '团队' }));
+  expect(screen.getAllByText('同名')).toHaveLength(2);
+  setIssues(current => current.map(row => row.id === 'second' ? { ...row, assigneeSubject: 'person-a' } : row));
+  await waitFor(() => expect(screen.getAllByText('同名')).toHaveLength(1));
+  const row = screen.getByText('同名').parentElement!;
+  expect([...row.querySelectorAll('span')].map(cell => cell.textContent)).toEqual(['1', '1', '2']);
+  expect(screen.getByText('未分配')).toBeTruthy();
+});
+
+test('period statistics use creation time rather than a recent update and recompute when the period changes', async () => {
+  const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60_000).toISOString();
+  render(() => <Statistics issues={[
+    issue({ id: 'recent', createdAt: daysAgo(2) }),
+    issue({ id: 'earlier', createdAt: daysAgo(10), status: 'resolved' }),
+    issue({ id: 'old-but-updated', createdAt: daysAgo(40), status: 'resolved' }),
+  ]} />);
+  fireEvent.click(screen.getByRole('tab', { name: '产出' }));
+  const metric = (label: string) => screen.getByText(label).parentElement!.querySelector('strong')!.textContent;
+  expect(metric('周期新增')).toBe('2'); expect(metric('周期解决')).toBe('1'); expect(metric('解决率')).toBe('50%');
+  fireEvent.click(screen.getByRole('combobox', { name: '统计周期' }));
+  fireEvent.click(await screen.findByRole('option', { name: '最近 7 天' }));
+  await waitFor(() => expect(metric('周期新增')).toBe('1'));
+  expect(metric('周期解决')).toBe('0'); expect(metric('解决率')).toBe('0%');
+  fireEvent.click(screen.getByRole('combobox', { name: '统计周期' }));
+  fireEvent.click(await screen.findByRole('option', { name: '最近 90 天' }));
+  await waitFor(() => expect(metric('周期新增')).toBe('3'));
+  expect(metric('周期解决')).toBe('2'); expect(metric('解决率')).toBe('66.7%');
+  expect(loadWorkspaceStats).not.toHaveBeenCalled();
 });
 
 test('distinguishes retained files from reclaim candidates and actual safety failures', async () => {

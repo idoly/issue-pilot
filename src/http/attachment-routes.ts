@@ -1,4 +1,5 @@
 import type { ReadStream } from "node:fs";
+import { create as contentDisposition } from "content-disposition";
 
 import { and, eq } from "drizzle-orm";
 
@@ -33,8 +34,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
       stream.once("close", cleanup);
       const safeInline = attachment.mediaType.startsWith("text/")
         || ["application/json", "application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType);
-      const fallbackName = attachment.fileName.replace(/[^a-zA-Z0-9._-]/g, "_") || "attachment";
-      reply.header("Content-Disposition", `${safeInline ? "inline" : "attachment"}; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(attachment.fileName)}`);
+      reply.header("Content-Disposition", contentDisposition(attachment.fileName, { type: safeInline ? "inline" : "attachment" }));
       reply.header("Content-Length", attachment.size);
       reply.header("Cache-Control", "private, no-store");
       reply.header("X-Content-Type-Options", "nosniff");

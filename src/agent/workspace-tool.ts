@@ -1,8 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type, type Static } from "typebox";
-import { Compile } from "typebox/compile";
-import { Value } from "typebox/value";
+import { compile, lit, obj, oneOf, str, union, unknown as unknownSchema, type Static } from "@earendil-works/pi-schema";
 import type { Database } from "../db/client.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { publicMcpUrl } from "../configuration/mcp.ts";
@@ -21,24 +19,24 @@ import type { IssueProjectManager } from "../workspace/project.ts";
 
 type Issue = typeof issues.$inferSelect;
 const inputShapes = {
-  list: Type.Object({ operation: Type.Literal("list") }, { additionalProperties: false }),
-  describe: Type.Object({ operation: Type.Literal("describe"), service: Type.String(), environment: Type.String() }, { additionalProperties: false }),
-  change: Type.Object({ operation: Type.Union([Type.Literal("include"), Type.Literal("remove")]), service: Type.String() }, { additionalProperties: false }),
+  list: obj({ operation: lit("list") }),
+  describe: obj({ operation: lit("describe"), service: str(), environment: str() }),
+  change: obj({ operation: oneOf(["include", "remove"]), service: str() }),
 };
 type WorkspaceInput = Static<(typeof inputShapes)[keyof typeof inputShapes]>;
 
 export async function createWorkspaceTool(database: Database, issue: Issue, environmentKind: EnvironmentKind, projects: IssueProjectManager, runtimeRoot: string, gitEnvironment?: Record<string, string>) {
   const available = await listEnvironmentServices(database, issue.environmentId);
   const keys = available.filter(row => row.environment.id === issue.environmentId).map(row => row.service.key);
-  const schema = objectToolParameters(Value.Clone(Type.Union([
+  const schema = objectToolParameters(structuredClone(union([
     inputShapes.list,
-    ...available.map(row => Type.Object({ ...inputShapes.describe.properties, service: Type.Literal(row.service.key), environment: Type.Literal(row.environment.key) }, { additionalProperties: false })),
-    Type.Object({ ...inputShapes.change.properties, service: Type.Union(keys.map((key) => Type.Literal(key))) }, { additionalProperties: false }),
+    ...available.map(row => obj({ operation: lit("describe"), service: lit(row.service.key), environment: lit(row.environment.key) })),
+    obj({ operation: oneOf(["include", "remove"]), service: oneOf(keys) }),
   ])));
-  const validateInput = Compile(schema);
-  return defineTool({ name: "workspace", label: "Cross-service workspace", description: "List code services and permitted investigation sources; development Issues can describe production/test services. Describe with an explicit source environment before service_query. include/remove manage repositories only in this Issue's code environment; investigations get read-only snapshots. Existing Issue branches are preserved. remove can detach an additional service only when its repositories are safe to remove.", parameters: schema, outputSchema: Type.Unknown(),
+  const validateInput = compile(structuredClone(schema));
+  return defineTool({ name: "workspace", label: "Cross-service workspace", description: "List code services and permitted investigation sources; development Issues can describe production/test services. Describe with an explicit source environment before service_query. include/remove manage repositories only in this Issue's code environment; investigations get read-only snapshots. Existing Issue branches are preserved. remove can detach an additional service only when its repositories are safe to remove.", parameters: schema, outputSchema: unknownSchema(),
     execute: async (_id, raw, signal) => {
-      if (!validateInput.Check(raw)) throw new Error("invalid_workspace_input");
+      if (!validateInput.check(raw)) throw new Error("invalid_workspace_input");
       // Dynamic selector tuples lose static variants; derive the union from their shared shapes.
       const input = raw as WorkspaceInput;
       if (input.operation === "list") {

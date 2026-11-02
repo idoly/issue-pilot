@@ -111,7 +111,6 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
           return {
             ...projectCapabilityConfiguration(deploymentConfig),
             ...(deploymentConfig.dbhub ? { dbhub: deploymentConfig.dbhub.map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })) } : {}),
-            ...(deploymentConfig.mysql ? { mysql: deploymentConfig.mysql.map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })) } : {}),
             environmentKey,
             repositoryBranches: repositories.map((repository) => ({ repositoryId: repository.id, repositoryAlias: repository.alias, baseBranch: branchByRepositoryId.get(repository.id)! })),
             capabilities: configuredCapabilities(deploymentConfig),

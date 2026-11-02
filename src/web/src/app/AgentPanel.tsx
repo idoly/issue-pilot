@@ -1,37 +1,48 @@
 import { Button } from "../ui";
-import { createEffect, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { ISSUE_STATUSES, agentStreamUrl, sendAgentMessage, type AgentFooterStats, type IssueDetail, type IssueStatus, type RunEvent } from "../data/client";
+import { ISSUE_STATUSES, agentStreamUrl, sendAgentMessage, mergeAgentCostSource, type AgentCostSource, type AgentFooterStats, type IssueDetail, type IssueStatus, type RunEvent } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
-import { IssueMarkdown } from "./IssueMarkdown";
-import { activityForEvent, applyAgentEvent, assistantNotice, codemodeCalls, diffLineClass, duration, panelError, processingAfterEvent, resultText, shellToolOutput, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
+import { IssueMarkdown, resolveIssueFileLink } from "./IssueMarkdown";
+import { activityForEvent, applyAgentEvent, assistantNotice, diffLineClass, duration, panelError, processingAfterEvent, resultText, toolNestedCalls, toolLabel, toolLabelParts, type AgentActivity, type ConversationEntry } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
 
-function ToolEntry(props: { entry: Extract<ConversationEntry, { kind: "tool" }> }) {
-  const label = () => toolLabel(props.entry);
-  const labelParts = () => toolLabelParts(label());
-  const diff = () => {
+function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "tool" }> }) {
+  const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
+  const label = createMemo(() => toolLabel(props.entry));
+  const labelParts = createMemo(() => toolLabelParts(label()));
+  const diff = createMemo(() => {
     if (props.entry.name !== "edit" || !props.entry.result?.details || typeof props.entry.result.details !== "object") return [];
     const diffText = (props.entry.result.details as Record<string, unknown>).diff;
     return typeof diffText === "string" ? diffText.split("\n") : [];
+  });
+  const text = createMemo(() => resultText(props.entry));
+  const calls = createMemo(() => toolNestedCalls(props.entry));
+  const outputFile = () => {
+    const details = props.entry.result?.details;
+    if (!details || typeof details !== "object" || !("fullOutputPath" in details) || typeof details.fullOutputPath !== "string") return undefined;
+    return resolveIssueFileLink(details.fullOutputPath, props.issue);
   };
-  const shellOutput = () => shellToolOutput(props.entry);
-  const genericOutput = () => ["bash", "edit", "write", "read", "grep", "find", "ls"].includes(props.entry.name) ? "" : resultText(props.entry);
   const images = () => props.entry.result?.content.filter((part): part is ImageContent => part.type === "image") ?? [];
-  return <div class={`agent-tool ${props.entry.status}`}>
-    <div class="agent-tool-head"><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code></div>
-    <Show when={diff().length}><pre class="agent-tool-diff"><For each={diff()}>{(line) => <span class={diffLineClass(line)}>{line}{"\n"}</span>}</For></pre></Show>
-    <Show when={shellOutput()}>{(result) => <>
-      <Show when={result().lines.length}><pre class="agent-tool-output"><Show when={result().omitted}><span class="omitted">... ({result().omitted} earlier lines)</span></Show><For each={result().lines}>{(line) => <span>{line}{"\n"}</span>}</For></pre></Show>
-      <Show when={props.entry.durationMs !== undefined}><div class="agent-tool-timing">Took {duration(props.entry.durationMs)}</div></Show>
-    </>}</Show>
-    <For each={codemodeCalls(props.entry)}>{call => <div class={`agent-nested-call ${call.status}`}><code>{call.name}</code><span>{({ running: "执行中", ok: "完成", error: "失败", cancelled: "已取消" })[call.status]}</span><Show when={call.durationMs !== undefined}><span>{duration(call.durationMs)}</span></Show><Show when={call.error}><span>{call.error}</span></Show></div>}</For>
-    <Show when={genericOutput()}>{(text) => <pre class="agent-tool-output">{text()}</pre>}</Show>
-    <For each={images()}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="Tool output" />}</For>
-  </div>;
+  return <details class={`agent-tool ${props.entry.status}`} onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary class="agent-tool-head" aria-label={`工具 ${label()}`}>
+      <ChevronRight size={14} /><code title={label()}><b>{labelParts().action}</b><Show when={labelParts().target}><span>{labelParts().target}</span></Show><Show when={labelParts().range}><em>{labelParts().range}</em></Show></code>
+      <span class="agent-tool-state">{({ running: "执行中", complete: "完成", error: "失败" })[props.entry.status]}</span>
+      <Show when={props.entry.durationMs !== undefined}><span class="agent-tool-timing">{duration(props.entry.durationMs)}</span></Show>
+    </summary>
+    <Show when={expanded()}>
+      <Show when={diff().length}><pre class="agent-tool-diff"><For each={diff()}>{line => <span class={diffLineClass(line)}>{line}{"\n"}</span>}</For></pre></Show>
+      <For each={calls()}>{call => <div class={`agent-nested-call ${call.status}`}><code>{call.name}</code><span>{({ running: "执行中", ok: "完成", error: "失败", cancelled: "已取消", unfinished: "未完成" })[call.status]}</span><Show when={call.durationMs !== undefined}><span>{duration(call.durationMs)}</span></Show><Show when={call.error}><span>{call.error}</span></Show></div>}</For>
+      <Show when={props.entry.result?.nestedCalls?.complete === false}><div class="agent-tool-timing">嵌套调用记录不完整</div></Show>
+      <Show when={text()}><pre class="agent-tool-output">{text()}</pre></Show>
+      <Show when={outputFile()}>{href => <a class="agent-tool-file" href={href()} download>输出文件</a>}</Show>
+      <For each={images()}>{image => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="Tool output" />}</For>
+      <Show when={!text() && !diff().length && !calls().length && !images().length}><div class="agent-tool-timing">{props.entry.status === "running" ? "等待工具结果…" : "无文本输出"}</div></Show>
+    </Show>
+  </details>;
 }
 
 function SessionSummaryEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "summary" }> }) {
@@ -60,18 +71,21 @@ function BashMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "ba
 }
 
 function AssistantBlock(props: { issue: IssueDetail; block: Extract<ConversationEntry, { kind: "assistant" }>["blocks"][number]; streaming: boolean }) {
-  const content = () => props.streaming ? <div class="agent-streaming-block">{props.block.value}</div> : <IssueMarkdown issue={props.issue} source={props.block.value} />;
-  return <Show when={props.block.type === "thinking"} fallback={content()}><div class="agent-thinking">{content()}</div></Show>;
+  // Stream as text, not partial HTML. Only the authoritative final message runs Markdown/link sanitization.
+  return <div class={{ "agent-thinking": props.block.type === "thinking" }}>
+    <Show when={props.streaming} fallback={<IssueMarkdown issue={props.issue} source={props.block.value} />}><div class="agent-streaming-block">{props.block.value}</div></Show>
+  </div>;
 }
 
 export function ConversationItem(props: { issue: IssueDetail; entry: ConversationEntry }) {
+  // Match render callbacks take an argument; zero-argument functions are accessors that can recreate DOM.
   return <Switch>
-    <Match when={props.entry.kind === "user"}>{() => { const entry = props.entry as Extract<ConversationEntry, { kind: "user" }>; return <div class="agent-message user"><IssueMarkdown issue={props.issue} source={entry.text} /><For each={entry.images ?? []}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="用户粘贴的图片" />}</For></div>; }}</Match>
-    <Match when={props.entry.kind === "assistant"}>{() => {
-      const entry = props.entry as Extract<ConversationEntry, { kind: "assistant" }>;
-      return <div class="agent-message assistant"><For each={entry.blocks}>{(block) => <AssistantBlock issue={props.issue} block={block} streaming={entry.streaming === true} />}</For><Show when={assistantNotice(entry)}>{(notice) => <div class="agent-message-notice">{notice()}</div>}</Show></div>;
+    <Match when={props.entry.kind === "user"}>{(_matched) => { const entry = () => props.entry as Extract<ConversationEntry, { kind: "user" }>; return <div class="agent-message user"><IssueMarkdown issue={props.issue} source={entry().text} /><For each={entry().images ?? []}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="用户粘贴的图片" />}</For></div>; }}</Match>
+    <Match when={props.entry.kind === "assistant"}>{(_matched) => {
+      const entry = () => props.entry as Extract<ConversationEntry, { kind: "assistant" }>;
+      return <div class="agent-message assistant"><For each={entry().blocks} keyed={block => block.contentIndex}>{block => <AssistantBlock issue={props.issue} block={block()} streaming={entry().streaming === true} />}</For><Show when={assistantNotice(entry())}>{notice => <div class="agent-message-notice">{notice()}</div>}</Show></div>;
     }}</Match>
-    <Match when={props.entry.kind === "tool"}><ToolEntry entry={props.entry as Extract<ConversationEntry, { kind: "tool" }>} /></Match>
+    <Match when={props.entry.kind === "tool"}><ToolEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "tool" }>} /></Match>
     <Match when={props.entry.kind === "summary"}><SessionSummaryEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "summary" }>} /></Match>
     <Match when={props.entry.kind === "custom"}><CustomMessageEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "custom" }>} /></Match>
     <Match when={props.entry.kind === "bash"}><BashMessageEntry entry={props.entry as Extract<ConversationEntry, { kind: "bash" }>} /></Match>
@@ -87,13 +101,13 @@ function formatTokens(tokens: number): string {
 }
 
 const emptyFooter = (): AgentFooterStats => ({
-  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costSource: null,
   latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true,
 });
 
 function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): AgentFooterStats {
   const message = event.type === "message_end" && typeof event.message === "object" ? event.message : undefined;
-  const usage = event.type === "entry_appended" && event.entry.type === "usage"
+  const usage = event.type === "entry_appended" && (event.entry.type === "usage" || event.entry.type === "compaction" || event.entry.type === "branch_summary")
     ? event.entry.usage
     : (message?.role === "assistant" || message?.role === "toolResult") ? message.usage : undefined;
   if (!usage) return current;
@@ -104,6 +118,7 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
     cacheRead: current.cacheRead + usage.cacheRead,
     cacheWrite: current.cacheWrite + usage.cacheWrite,
     cost: current.cost + usage.cost.total,
+    costSource: mergeAgentCostSource(current.costSource, usage.cost),
   };
   if (message?.role !== "assistant") return next;
   const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
@@ -114,6 +129,8 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
     contextPercent: current.contextWindow > 0 ? (contextTokens / current.contextWindow) * 100 : null,
   };
 }
+
+const costSourceLabels: Record<AgentCostSource, string> = { provider: "供应商报告", estimated: "估算", unknown: "来源未标明", mixed: "混合来源" };
 
 function footerText(footer: AgentFooterStats): string {
   const contextPercent = footer.contextPercent === null ? "?" : `${footer.contextPercent.toFixed(1)}%`;
@@ -126,7 +143,7 @@ function footerText(footer: AgentFooterStats): string {
     footer.cacheRead ? `R${formatTokens(footer.cacheRead)}` : "",
     footer.cacheWrite ? `W${formatTokens(footer.cacheWrite)}` : "",
     footer.latestCacheHitRate !== null && (footer.cacheRead > 0 || footer.cacheWrite > 0) ? `CH${footer.latestCacheHitRate.toFixed(1)}%` : "",
-    footer.cost ? `$${footer.cost.toFixed(3)}` : "",
+    footer.cost ? `$${footer.cost.toFixed(3)}${footer.costSource === null ? "" : ` (${costSourceLabels[footer.costSource]})`}` : "",
     context,
   ].filter(Boolean).join(" ");
 }
@@ -182,7 +199,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   };
   const focusConversation = (event: MouseEvent & { currentTarget: HTMLDivElement }) => {
     const target = event.target;
-    if (!(target instanceof Element) || target.closest("a, button, input, textarea, select, [contenteditable='true']")) return;
+    if (!(target instanceof Element) || target.closest("a, button, summary, input, textarea, select, [contenteditable='true']")) return;
     if (window.getSelection() && !window.getSelection()!.isCollapsed) return;
     panel?.focus({ preventScroll: true });
   };
@@ -211,7 +228,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   });
   const updateConversation = (update: (current: ConversationEntry[]) => ConversationEntry[]) => {
     let addedEntryIds: string[] = [];
-    setEntries((current) => {
+    setEntries(current => {
       const currentIds = new Set(current.map(({ id }) => id));
       const next = update(current);
       addedEntryIds = next.filter(({ id }) => !currentIds.has(id)).map(({ id }) => id);
@@ -438,7 +455,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   return <section ref={panel} class="agent-panel" aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
     <div ref={observeTranscript} class="agent-scroll ip-scrollbar ip-scrollbar-dark" onClick={focusConversation} onScroll={(event) => { const element = event.currentTarget; followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32; if (followLatest) clearUnread(); }}>
       <div class="agent-conversation" role="log" aria-live="polite">
-        <For each={entries()}>{(entry) => <ConversationItem issue={props.issue} entry={entry} />}</For>
+        <For each={entries()} keyed={entry => entry.id}>{entry => <ConversationItem issue={props.issue} entry={entry()} />}</For>
         <Show when={!entries().length && connected()}><div class="agent-empty">No conversation yet</div></Show>
       </div>
       <Show when={queue().steering.length || queue().followUp.length}><div class="agent-queue"><For each={queue().steering}>{(message) => <span><strong>Steering:</strong> {message}</span>}</For><For each={queue().followUp}>{(message) => <span><strong>Follow-up:</strong> {message}</span>}</For></div></Show>

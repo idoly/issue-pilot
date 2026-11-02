@@ -1,4 +1,3 @@
-import { deploymentDbHubTargets } from "../configuration/dbhub.ts";
 import { resolveDmsScope } from "../capabilities/dms.ts";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
@@ -29,16 +28,16 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
   // service differs. Config updates therefore invalidate all such sessions.
   const affectedIssues = async (serviceId: string, environmentKeys: string[] = [], globalMcp?: boolean) => {
     const deployments = await database.db.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId));
-    if (globalMcp ?? deployments.some(row => row.config.mysql?.length || row.config.dbhub?.length)) return database.db.select({ id: issues.id }).from(issues);
+    if (globalMcp ?? deployments.some(row => row.config.dbhub?.length)) return database.db.select({ id: issues.id }).from(issues);
     const added = environmentKeys.length ? await database.db.select().from(environments).where(inArray(environments.key, environmentKeys)) : [];
     const ids = [...new Set([...deployments.map((row) => row.environmentId), ...added.map((row) => row.id), ...(await database.db.select({ id: environments.id }).from(environments).where(eq(environments.kind, "dev"))).map(row => row.id)])];
     return ids.length ? database.db.select({ id: issues.id }).from(issues).where(inArray(issues.environmentId, ids)) : [];
   };
-  const mysqlChanged = (prepared: Awaited<ReturnType<typeof prepareServiceConfiguration>>) => {
+  const dbHubChanged = (prepared: Awaited<ReturnType<typeof prepareServiceConfiguration>>) => {
     const incoming = prepared.parsed.deployments;
-    const targets = (config: Parameters<typeof deploymentDbHubTargets>[0]) => JSON.stringify({ mysql: config.mysql ?? [], dbhub: config.dbhub ?? [] });
+    const targets = (config: { dbhub?: unknown }) => JSON.stringify(config.dbhub ?? []);
     return incoming.some(row => targets(row.config) !== targets(prepared.existingDeployments.find(old => old.environmentId === prepared.environmentsByKey.get(row.environmentKey)?.id)?.config ?? {}))
-      || prepared.existingDeployments.some(old => (old.config.mysql?.length || old.config.dbhub?.length) && !incoming.some(row => prepared.environmentsByKey.get(row.environmentKey)?.id === old.environmentId));
+      || prepared.existingDeployments.some(old => old.config.dbhub?.length && !incoming.some(row => prepared.environmentsByKey.get(row.environmentKey)?.id === old.environmentId));
   };
   app.get<{ Params: { key: string } }>("/api/services/:key/dbhub-targets", { logLevel: "silent" }, async (request, reply) => {
     reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
@@ -48,18 +47,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       if (!service) throw new ApiError(404, "service_not_found");
       const deployments = await database.db.select({ environmentKey: environments.key, config: serviceDeployments.config }).from(serviceDeployments)
         .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId)).where(eq(serviceDeployments.serviceId, service.id));
-      return { revision: service.revision, deployments: deployments.map(row => ({ environmentKey: row.environmentKey, dbhub: deploymentDbHubTargets(row.config) })) };
-    });
-  });
-  app.get<{ Params: { key: string } }>("/api/services/:key/mysql-targets", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
-    return runScopeExclusive(async () => {
-      await requireDeveloper(database, request);
-      const service = await findServiceByKey(request.params.key);
-      if (!service) throw new ApiError(404, "service_not_found");
-      const deployments = await database.db.select({ environmentKey: environments.key, config: serviceDeployments.config }).from(serviceDeployments)
-        .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId)).where(eq(serviceDeployments.serviceId, service.id));
-      return { revision: service.revision, deployments: deployments.map(row => ({ environmentKey: row.environmentKey, mysql: row.config.mysql ?? [] })) };
+      return { revision: service.revision, deployments: deployments.map(row => ({ environmentKey: row.environmentKey, dbhub: row.config.dbhub ?? [] })) };
     });
   });
   app.get<{ Params: { key: string } }>("/api/services/:key/configuration-description", { logLevel: "silent" }, async (request, reply) => {
@@ -139,7 +127,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       const serviceId = randomUUID();
       const [existing, prepared] = await Promise.all([database.db.select({ key: services.key }).from(services), prepareServiceConfiguration({ executor: database.db, serviceId, input })]);
       const key = uniqueServiceKey(name, new Set(existing.map((row) => row.key)));
-      const affected = await affectedIssues(serviceId, prepared.parsed.deployments.map(row => row.environmentKey), mysqlChanged(prepared));
+      const affected = await affectedIssues(serviceId, prepared.parsed.deployments.map(row => row.environmentKey), dbHubChanged(prepared));
       try {
         return await runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
           for (const row of affected) await reservation.closeSession(row.id);
@@ -155,7 +143,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     const input = record(request.body);
     checkRevision(input.expectedRevision, service.revision);
     const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input });
-    const affected = await affectedIssues(service.id, prepared.parsed.deployments.map(row => row.environmentKey), mysqlChanged(prepared));
+    const affected = await affectedIssues(service.id, prepared.parsed.deployments.map(row => row.environmentKey), dbHubChanged(prepared));
     try {
       return await runIssueExclusive(engine, affected.map((row) => row.id), async (reservation) => {
         const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };

@@ -183,6 +183,28 @@ test("SDK shutdown closes a stdio server whose initialization is pending", async
   } finally { await managed?.stop(); await f.close(); }
 });
 
+for (const [format, valid] of [["email", "reader@example.test"], ["date-time", "2026-11-01T00:00:00Z"]] as const) test(`execute-layer MCP validation retains ${format} checks after mutable Pi hooks`, async () => {
+  const schema = { type: "object", properties: { value: { type: "string", format } }, required: ["value"], additionalProperties: false };
+  const f = await fixture({ MCP_FIXTURE_WRITE_SCHEMA: JSON.stringify(schema) }); let managed: ManagedPiSession | undefined;
+  try {
+    await mkdir(path.join(f.root, "extensions"));
+    await writeFile(path.join(f.root, "extensions/mutate-format.ts"), "export default pi => pi.on('tool_call',event=>{if(event.toolName==='mcp__local__write')event.input.value='invalid';});");
+    f.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("mcp__local__write", { value: valid }, { id: "format" }), { stopReason: "toolUse" }),
+      context => {
+        const result = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "format");
+        assert.ok(result && result.role === "toolResult");
+        assert.equal(result.isError, true);
+        assert.match(JSON.stringify(result.content), /invalid_mcp_tool_input/);
+        return fauxAssistantMessage("Invalid format rejected before dispatch.");
+      },
+    ]);
+    managed = await f.runtime.start(f.options); await managed.prompt("Check formatted evidence.");
+    const result = data(await managed.session.extensionRunner.createToolContext("verify", undefined).executeTool("mcp__local__counter", {}));
+    assert.equal(result.count, 1);
+  } finally { await managed?.stop(); await f.close(); }
+});
+
 for (const nested of [false, true]) test(`rejects hook-mutated MCP input before ${nested ? "codemode" : "direct"} dispatch`, async () => {
   const f = await fixture(); let managed: ManagedPiSession | undefined;
   f.options.context.codemode = nested ? "on" : "off"; f.options.agentDirectory = f.root;

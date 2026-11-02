@@ -191,7 +191,12 @@ export class SourceBrowser {
     const context = await this.writableContext(issue, repositoryName);
     const selectedSource = path.resolve(context.root, normalizedRelativePath(relativePath));
     const selectedDestination = path.resolve(context.root, normalizedRelativePath(destinationPath));
-    if (selectedSource === selectedDestination) { await this.mutableSource(context, relativePath); return; }
+    if (selectedSource === selectedDestination) {
+      await this.withMutablePath(context, relativePath, true, async source => {
+        try { await lstat(source); } catch (error) { missingPathError(error); }
+      });
+      return;
+    }
     if (isInside(selectedSource, selectedDestination) || isInside(selectedDestination, selectedSource)) throw new Error("invalid_source_path");
     await this.withMutablePath(context, relativePath, true, async source => {
       await lstat(source);
@@ -600,12 +605,6 @@ export class SourceBrowser {
       try { await directory.close(); }
       catch (error) { throw new AggregateError([...failures, error], "source_path_cleanup_failed"); }
     }
-  }
-
-  private async mutableSource(context: SourceContext, relativePath: string): Promise<string> {
-    const candidate = await this.mutableDestination(context, relativePath, true);
-    try { await lstat(candidate); } catch (error) { missingPathError(error); }
-    return candidate;
   }
 
   private async mutableDestination(context: SourceContext, relativePath: string, allowExisting = false): Promise<string> {

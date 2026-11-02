@@ -3,11 +3,11 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueExecutionItem } from "../data/client";
 
-const mocks = vi.hoisted(() => ({ pin: vi.fn(), create: vi.fn(), list: vi.fn() }));
+const mocks = vi.hoisted(() => ({ pins: vi.fn(), pin: vi.fn(), create: vi.fn(), list: vi.fn() }));
 vi.mock("../data/client", async original => ({
   ...await original<typeof import("../data/client")>(),
   listIssues: mocks.list,
-  listIssuePins: async () => [],
+  listIssuePins: mocks.pins,
   setIssuePinned: mocks.pin,
   createIssue: mocks.create,
 }));
@@ -17,8 +17,37 @@ vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({
 import { IssueQueue } from "./IssueQueue";
 
 const rows = (): IssueExecutionItem[] => ["alice", "bob"].map(subject => ({ id: subject, title: `${subject} task`, assignee: subject, assigneeSubject: subject, service: { key: "orders", name: "Orders" }, environmentKey: "test", type: "smart_analysis", status: "open", priority: "p2", updatedAt: new Date().toISOString(), workspaceStatus: "ready", agentRunning: false, resolvedAt: null }));
-beforeEach(() => { mocks.list.mockImplementation(async () => rows()); });
+beforeEach(() => { mocks.pins.mockResolvedValue([]); mocks.list.mockImplementation(async () => rows()); });
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
+
+it("keeps original order within pinned and ordinary groups through pinning and filtering", async () => {
+  const base = rows()[0]!;
+  mocks.list.mockResolvedValue([
+    { ...base, id: "first", title: "first task" },
+    { ...base, id: "second", title: "second task", status: "pending" },
+    { ...base, id: "other-owner", title: "other task", assigneeSubject: "bob" },
+    { ...base, id: "third", title: "third task" },
+    { ...base, id: "fourth", title: "fourth task", status: "resolved" },
+  ]);
+  // Pin preference order must not become a new within-group sort order.
+  mocks.pins.mockResolvedValue(["fourth", "other-owner", "second"]);
+  mocks.pin.mockResolvedValue(undefined);
+  render(() => <IssueQueue selectedId="" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+  const order = () => screen.getAllByRole("listitem").map(item => item.querySelector(".issue-key")?.textContent);
+  await waitFor(() => expect(order()).toEqual(["second", "fourth", "first", "third"]));
+  expect(screen.queryByText("other task")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "固定 third" }));
+  await waitFor(() => expect(order()).toEqual(["second", "third", "fourth", "first"]));
+  fireEvent.click(screen.getByRole("button", { name: "取消固定 second" }));
+  await waitFor(() => expect(order()).toEqual(["third", "fourth", "first", "second"]));
+  await fireEvent.input(screen.getByLabelText("搜索工单"), { target: { value: "fourth" } });
+  await waitFor(() => expect(order()).toEqual(["fourth"]));
+  await fireEvent.input(screen.getByLabelText("搜索工单"), { target: { value: "" } });
+  await waitFor(() => expect(order()).toEqual(["third", "fourth", "first", "second"]));
+  fireEvent.click(screen.getByLabelText("按状态筛选"));
+  fireEvent.click(await screen.findByRole("option", { name: "未解决" }));
+  await waitFor(() => expect(order()).toEqual(["third", "first", "second"]));
+});
 
 it("waits for an identity before opening the creation dialog", async () => {
   const [subject, setSubject] = createSignal("", { ownedWrite: true });

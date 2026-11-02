@@ -7,7 +7,7 @@ import { mcpServices, serviceDeployments, services, environments, userPreference
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../../src/configuration/service-mcp.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
-import { Compile } from "typebox/compile";
+import { compile } from "@earendil-works/pi-schema";
 
 test("service descriptions and executable MCP selection use deployment ownership and exclude import connections", async () => {
   const f = await createApiFixture(), database = openDatabase(f.databaseFile);
@@ -40,7 +40,7 @@ test("service descriptions and executable MCP selection use deployment ownership
     // Configuration controls availability, irrespective of a test/prod label.
     const [tool] = createCapabilityTools({ serviceKey: "selected", environmentKey: "test", capabilities: ["dms", "sls"] }, { dms });
     assert.ok(tool);
-    assert.equal(Compile(tool.parameters).Check({ service: "selected", environment: "test", capability: "dms", schema: "configured_test", script: "SELECT 1" }), true);
+    assert.equal(compile(tool.parameters).check({ service: "selected", environment: "test", capability: "dms", schema: "configured_test", script: "SELECT 1" }), true);
     assert.deepEqual(createCapabilityTools({ serviceKey: "other", environmentKey: "test", capabilities: ["dms", "sls"] }, {}), []);
   } finally { await database.close(); await f.cleanup(); }
 });

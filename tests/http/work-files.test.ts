@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import { parse as parseDisposition } from "content-disposition";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
@@ -28,7 +29,19 @@ test("serves current work files with exact names and traversal checks", async ()
     const spaced = await fixture.app.inject({ method: "GET", url: `${base}/download?path=${encodeURIComponent(" leading and trailing .txt ")}` });
     assert.equal(spaced.statusCode, 200);
     assert.equal(spaced.body, "preserved spaces");
-    assert.match(String(download.headers["content-disposition"]), /attachment; filename\*=UTF-8''/);
+    assert.equal(parseDisposition(String(download.headers["content-disposition"])).parameters.filename, "结果 #1.xlsx");
+    for (const fileName of ["预算 '()*%.txt", 'reader "quoted".txt', "line\r\nbreak.txt"]) {
+      await writeFile(path.join(root, fileName), "exact filename bytes");
+      const response = await fixture.app.inject({ method: "GET", url: `${base}/download?path=${encodeURIComponent(fileName)}` });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.body, "exact filename bytes");
+      assert.equal(response.headers["x-content-type-options"], "nosniff");
+      const header = String(response.headers["content-disposition"]);
+      assert.equal(parseDisposition(header).type, "attachment");
+      assert.equal(parseDisposition(header).parameters.filename, fileName);
+      const encoded = /filename\*=UTF-8''([^;]+)/.exec(header);
+      if (encoded) assert.match(encoded[1]!, /^(?:[A-Za-z0-9!#$&+.^_`|~-]|%[0-9a-f]{2})*$/i);
+    }
     for (const selected of ["../secret", "escape", ".git/config"]) {
       const result = await fixture.app.inject({ method: "GET", url: `${base}/download?path=${encodeURIComponent(selected)}` });
       assert.equal(result.statusCode, 400);
@@ -40,6 +53,25 @@ test("serves current work files with exact names and traversal checks", async ()
     assert.deepEqual(detail.attachments, []);
     await rm(path.join(root, "结果 #1.xlsx"));
     assert.equal((await fixture.app.inject({ method: "GET", url: `${base}/download?path=${encodeURIComponent("结果 #1.xlsx")}` })).statusCode, 404);
+  } finally { await fixture.cleanup(); }
+});
+
+test("work file APIs distinguish missing paths, non-directory ancestors and symlink loops without leaking paths", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Paths", ["test"]);
+    const issue = await createIssue(fixture.app, "paths", "test", "Path errors");
+    const root = issueRoot(fixture.root, String(issue.id)), base = `/api/issues/${issue.id}/files`;
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, "regular.txt"), "fixture");
+    await symlink("loop", path.join(root, "loop"));
+    for (const [selected, status] of [["missing", 404], ["regular.txt/child", 404], ["loop", 400]] as const) {
+      for (const resource of [base, `${base}/download`]) {
+        const response = await fixture.app.inject({ method: "GET", url: `${resource}?path=${encodeURIComponent(selected)}` });
+        assert.equal(response.statusCode, status, response.body);
+        assert.equal(response.body.includes(fixture.root), false);
+      }
+    }
   } finally { await fixture.cleanup(); }
 });
 

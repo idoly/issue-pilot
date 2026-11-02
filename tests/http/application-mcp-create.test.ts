@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Settings } from "typebox/system";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { AgentEventBus } from "../../src/agent/events.ts";
@@ -53,10 +52,9 @@ test("MCP creation delegates to the standard transaction, attributes the reporte
   } finally { await client.close(); await f.cleanup(); }
 });
 
-test("MCP keeps strict input schemas even when another consumer enables corrective TypeBox parsing", async () => {
+test("MCP inputs stay strict instead of inheriting the Agent tool pipeline's coercion", async () => {
   const f = await createApiFixture();
   const client = new Client({ name: "strict-schema-fixture", version: "1" });
-  const settings = { ...Settings.Get() };
   try {
     await createService(f.app, "MCP Create", ["test"]);
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
@@ -66,7 +64,6 @@ test("MCP keeps strict input schemas even when another consumer enables correcti
     const issue = parsed(created);
     const queued = f.engine.enqueued.length;
     const messages = f.engine.messages.length;
-    Settings.Set({ correctiveParse: true });
     const invalid = [
       { name: "issue_create", arguments: { ...payload("Wrong title type"), title: 7 } },
       { name: "issue_create", arguments: { ...payload("Unknown start flag"), startAgent: false } },
@@ -80,7 +77,6 @@ test("MCP keeps strict input schemas even when another consumer enables correcti
     assert.equal(f.engine.enqueued.length, queued);
     assert.equal(f.engine.messages.length, messages);
   } finally {
-    Settings.Set(settings);
     await client.close();
     await f.cleanup();
   }

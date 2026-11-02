@@ -933,7 +933,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
     expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated", logstores: ["*"] }, secondary]);
-    expect(saved.deployments[1]?.sls?.credentialUpdate).toBeUndefined();
+    expect(saved.deployments[1]?.sls).not.toHaveProperty("credentialUpdate");
   });
 
   test("edits DMS and SLS targets consistently while preserving credentials and resolved bindings", async () => {
@@ -972,9 +972,9 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(client.updateService).toHaveBeenCalledOnce());
     const saved = vi.mocked(client.updateService).mock.calls[0]![1].deployments[1]!;
     expect(saved.dms?.databases).toEqual([database]);
-    expect(saved.dms?.credentialUpdate).toBeUndefined();
+    expect(saved.dms).not.toHaveProperty("credentialUpdate");
     expect(saved.sls?.targets).toEqual([target]);
-    expect(saved.sls?.credentialUpdate).toBeUndefined();
+    expect(saved.sls).not.toHaveProperty("credentialUpdate");
     expect(client.resolveDmsScope).not.toHaveBeenCalled();
   });
 
@@ -1020,7 +1020,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
     expect(saved.deployments[1]?.dms?.databases[0]?.databaseId).toBe("42");
-    expect(saved.deployments[1]?.dms?.credentialUpdate).toBeUndefined();
+    expect(saved.deployments[1]?.dms).not.toHaveProperty("credentialUpdate");
     expect(client.resolveDmsScope).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
   });

@@ -20,10 +20,7 @@ function resolveCapabilityConfiguration(key: CapabilityName, value: unknown): No
   const input = inputRecord(value);
   const fields = CAPABILITY_CREDENTIAL_FIELDS[key] as readonly string[];
   if (fields.some(field => field in input)) fail("credential_fields_not_allowed");
-  if (input.credentialUpdate !== undefined) {
-    const update = inputRecord(input.credentialUpdate);
-    if (update.mode !== "preserve" || Object.keys(update).length !== 1) fail(`service_${key}_credentials_not_allowed`);
-  }
+  if (Object.hasOwn(input, "credentialUpdate")) fail(`service_${key}_credentials_not_allowed`);
   return key === "dms" ? parseDmsScopeConfiguration(input) : parseSlsScopeConfiguration(input);
 }
 export function resolveConfiguredCapabilitySections(input: Record<string, unknown>, capabilities: CapabilityName[]): Pick<StoredDeploymentConfig, CapabilityName> {

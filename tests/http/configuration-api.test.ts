@@ -131,8 +131,14 @@ test("stores only DMS and SLS scopes without service credentials", async () => {
     assert.equal(deployment.dms.credentialConfigured, undefined);
     assert.equal(deployment.sls.credentialConfigured, undefined);
     assert.doesNotMatch(response.body, /dms-token|sls-key|sls-secret/);
-    const preserved = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], dms: { ...dms, credentialUpdate: { mode: "preserve" } }, sls: { ...sls, credentialUpdate: { mode: "preserve" } } }] } });
-    assert.equal(preserved.statusCode, 200, preserved.body);
+    for (const [key, scope] of [["dms", dms], ["sls", sls]] as const) {
+      const rejected = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: { ...payload, deployments: [{ ...payload.deployments[0], [key]: { ...scope, credentialUpdate: { mode: "preserve" } } }] } });
+      assert.equal(rejected.statusCode, 400, rejected.body);
+      assert.equal(rejected.json().error, `service_${key}_credentials_not_allowed`);
+    }
+    assert.deepEqual((await fixture.app.inject({ method: "GET", url: "/api/config" })).json(), response.json());
+    const repeated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload });
+    assert.equal(repeated.statusCode, 200, repeated.body);
     const sqlite = new DatabaseSync(fixture.databaseFile, { readOnly: true });
     try {
       const stored = JSON.parse(sqlite.prepare("SELECT config FROM service_deployments").get()!.config as string);

@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { create as contentDisposition } from "content-disposition";
 import { issueRelations, issues } from "../db/schema.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
@@ -43,7 +44,10 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     if (["invalid_issue_file_path", "invalid_issue_work_directory", "issue_file_not_directory", "issue_file_not_regular", "managed_issue_file_private"].includes(code)) throw new ApiError(400, code);
     if (code === "source_git_binding_invalid") throw new ApiError(409, code);
     if (code === "issue_file_directory_too_large") throw new ApiError(413, code);
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new ApiError(404, "issue_file_not_found");
+    if (error && typeof error === "object" && "code" in error) {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") throw new ApiError(404, "issue_file_not_found");
+      if (error.code === "ELOOP") throw new ApiError(400, "invalid_issue_file_path");
+    }
     throw error;
   };
   app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", async (request, reply) => {
@@ -65,7 +69,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
       reply.header("Content-Type", "application/octet-stream");
       reply.header("X-Content-Type-Options", "nosniff");
       reply.header("Content-Length", file.size);
-      reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+      reply.header("Content-Disposition", contentDisposition(file.fileName));
       return reply.send(file.handle.createReadStream({ autoClose: true }));
     } catch (error) { return workFileError(error); }
   });

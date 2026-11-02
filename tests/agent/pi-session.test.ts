@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,6 +76,31 @@ const model: Model<"openai-responses"> = {
   contextWindow: 32_000,
   maxTokens: 8_000,
 };
+
+test("a keyed runtime honors the explicit Agent directory instead of the Operator default", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-explicit-agent-"));
+  const agentDirectory = join(root, "agent"), otherDirectory = join(root, "other-agent");
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const runtime = new PiSessionRuntime({ load: async () => { throw new Error("unexpected_injected_runtime"); }, close: async () => {} });
+  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
+  try {
+    await mkdir(agentDirectory); await mkdir(otherDirectory);
+    await writeFile(join(otherDirectory, "models.json"), JSON.stringify({ providers: {} }));
+    await writeFile(join(agentDirectory, "models.json"), JSON.stringify({ providers: { [model.provider]: { api: model.api, baseUrl: model.baseUrl, models: [{ id: model.id, name: model.name, reasoning: model.reasoning, input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens }] } } }));
+    // Even the default is a temporary directory: a regression must never read the real Operator files.
+    process.env.PI_CODING_AGENT_DIR = otherDirectory;
+    managed = await runtime.start({ manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, agentDirectory, modelApiKey: "fixture-selected-key", systemPrompt: "Explicit resources.", onEvent: () => {} });
+    assert.equal(managed.session.model?.provider, model.provider);
+    assert.equal(managed.session.model?.id, model.id);
+    await managed.stop();
+  } finally {
+    try { await managed?.stop(); await runtime.close(); }
+    finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
 
 function modelRuntime(available = true, refreshes?: unknown[]): ModelRuntime {
   return {

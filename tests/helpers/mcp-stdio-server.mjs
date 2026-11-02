@@ -13,7 +13,7 @@ else {
   server.setRequestHandler(ListToolsRequestSchema, async request => {
     if (process.env.MCP_FIXTURE_ROOTS && !rootsChecked) { rootsChecked = true; await server.ping(); await server.listRoots(); }
     const names = process.env.MCP_FIXTURE_TOOL_COUNT ? Array.from({ length: Number(process.env.MCP_FIXTURE_TOOL_COUNT) }, (_, index) => `tool_${index}`) : ["counter", "fail", "tool_error", "slow", "die", "write", ...(process.env.MCP_FIXTURE_DYNAMIC ? ["change", "remove"] : [])].filter(name => !removed || name !== "counter");
-    const tools = names.map(name => ({ name, inputSchema: { type: "object", properties: name === "counter" && changed ? { confirm: { type: "boolean" } } : {}, ...(name === "counter" && changed ? { required: ["confirm"] } : {}), additionalProperties: false }, annotations: name === "write" ? { destructiveHint: true } : { readOnlyHint: true } }));
+    const tools = names.map(name => ({ name, inputSchema: name === "write" && process.env.MCP_FIXTURE_WRITE_SCHEMA ? JSON.parse(process.env.MCP_FIXTURE_WRITE_SCHEMA) : { type: "object", properties: name === "counter" && changed ? { confirm: { type: "boolean" } } : {}, ...(name === "counter" && changed ? { required: ["confirm"] } : {}), additionalProperties: false }, annotations: name === "write" ? { destructiveHint: true } : { readOnlyHint: true } }));
     const offset = Number(request.params?.cursor ?? 0), size = Number(process.env.MCP_FIXTURE_PAGE_SIZE ?? tools.length);
     return { tools: tools.slice(offset, offset + size), ...(offset + size < tools.length ? { nextCursor: String(offset + size) } : {}) };
   });

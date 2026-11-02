@@ -11,31 +11,37 @@ const issue = {
 describe("Issue file links", () => {
   it("normalizes file links to current working files", () => {
     const expected = `/api/issues/${issue.id}/files/download?path=${encodeURIComponent("库存 #1.xlsx")}`;
-    for (const href of ["./outputs/库存 #1.xlsx", "sandbox:/mnt/data/库存%20%231.xlsx", "file:///state/issues/issue-20261021-001/outputs/库存%20%231.xlsx"]) expect(resolveIssueFileLink(href, issue)).toBe(expected);
+    for (const href of ["./库存 #1.xlsx", "sandbox:/mnt/data/库存%20%231.xlsx", "file:///state/workspaces/issue-20261021-001/库存%20%231.xlsx"]) expect(resolveIssueFileLink(href, issue)).toBe(expected);
     for (const href of ["库存 #1.xlsx", "/state/workspaces/issue-20261021-001/库存 #1.xlsx"]) expect(resolveIssueFileLink(href, issue)).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent("库存 #1.xlsx")}`);
     expect(resolveIssueFileLink(".attachment-uuid-图片.png", issue)).toBe(`/api/issues/${issue.id}/attachments/image-id`);
     expect(resolveIssueFileLink("uuid-图片.png", issue)).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent("uuid-图片.png")}`);
     expect(resolveIssueFileLink("图片.png", issue)).toBe(`/api/issues/${issue.id}/attachments/image-id`);
-    expect(resolveIssueFileLink("attachments/.attachment-uuid-图片.png", issue)).toBe(`/api/issues/${issue.id}/attachments/image-id`);
+    for (const directory of ["outputs", "work", "attachments"]) {
+      const selected = `${directory}/库存 #1.xlsx`;
+      expect(resolveIssueFileLink(`./${selected}`, issue)).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent(selected)}`);
+    }
+    expect(resolveIssueFileLink("attachments/.attachment-uuid-图片.png", issue)).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent("attachments/.attachment-uuid-图片.png")}`);
+    expect(resolveIssueFileLink("file:///state/issues/issue-20261021-001/outputs/库存%20%231.xlsx", issue)).toBeNull();
     expect(resolveIssueFileLink("/state/workspaces/issue-20261021-001/checkpoint.json", issue)).toBe(`/api/issues/${issue.id}/files/download?path=checkpoint.json`);
   });
   it("blocks unrelated Issues and unsafe paths", () => {
     for (const href of ["file:///etc/passwd", "/state/issues/issue-20261021-002/outputs/库存 #1.xlsx", "../库存 #1.xlsx", "%2e%2e/secret", "work/.git/config", "javascript:alert(1)"]) expect(resolveIssueFileLink(href, issue)).toBeNull();
     expect(resolveIssueFileLink("https://example.com/report", issue)).toBeUndefined();
   });
-  it("resolves historical and current file paths only for explicitly related Issues", () => {
+  it("resolves current paths only for explicitly related Issues and refuses retired layouts", () => {
     const owner = "ISSUE-20260901-002", name = "customer-state-sync-java8-tests.log";
     const current = { ...issue, id: "ISSUE-20261023-003", relatedIssues: [{ id: owner }] } satisfies Parameters<typeof resolveIssueFileLink>[1];
-    const historical = `/home/idoly/issue-pilot/.issue-pilot/issues/${owner.toLowerCase()}/work/${name}`;
+    const selected = `/state/workspaces/${owner.toLowerCase()}/${name}`;
     const expected = `/api/issues/${current.id}/files/download?path=${encodeURIComponent(`.related-${owner.toLowerCase()}/${name}`)}`;
-    for (const href of [historical, `file://${historical}`, `${window.location.origin}${historical}?issue=${current.id}`, `/state/workspaces/${owner.toLowerCase()}/${name}`]) expect(resolveIssueFileLink(href, current)).toBe(expected);
-    expect(resolveIssueFileLink(historical, { ...current, relatedIssues: [] })).toBeNull();
-    expect(resolveIssueFileLink(`${window.location.origin}${historical}/../secret`, current)).toBeNull();
-    expect(resolveIssueFileLink(`https://external.example${historical}`, current)).toBeUndefined();
+    for (const href of [selected, `file://${selected}`, `${window.location.origin}${selected}?issue=${current.id}`]) expect(resolveIssueFileLink(href, current)).toBe(expected);
+    expect(resolveIssueFileLink(`/state/issues/${owner.toLowerCase()}/work/${name}`, current)).toBeNull();
+    expect(resolveIssueFileLink(selected, { ...current, relatedIssues: [] })).toBeNull();
+    expect(resolveIssueFileLink(`${window.location.origin}${selected}/../secret`, current)).toBeNull();
+    expect(resolveIssueFileLink(`https://external.example${selected}`, current)).toBeUndefined();
     expect(resolveIssueFileLink(`/?issue=${owner}`, current)).toBeUndefined();
   });
   it("rewrites raw HTML file links as well as Markdown links before sanitizing", () => {
-    const file = `file:///state/issues/${issue.id.toLowerCase()}/work/diagnostics.log`;
+    const file = `file:///state/workspaces/${issue.id.toLowerCase()}/diagnostics.log`;
     const view = render(() => <IssueMarkdown issue={issue} source={`[Markdown log](${file}) <a href="${file}" onmouseover="alert(1)">HTML log</a> <a href="/etc/passwd">unavailable</a>`} />);
     const links = view.container.querySelectorAll("a");
     expect(links).toHaveLength(2);

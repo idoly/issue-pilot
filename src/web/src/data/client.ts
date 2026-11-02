@@ -5,13 +5,13 @@ export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mc
 import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
 import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
 export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
-import { AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentModelSelection, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
+import { mergeAgentCostSource, AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentModelSelection, type AgentCostSource, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
+export { mergeAgentCostSource, AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
 export type { AgentConfiguration, AgentModelSelection, AgentRunState, CapabilityName } from "../../../domain/contracts";
-export type { AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
+export type { AgentCostSource, AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
 export type Service = ServiceConfiguration;

@@ -49,6 +49,7 @@ export const applicationSettings = sqliteTable("application_settings", {
   sharedDmsRevision: integer("shared_dms_revision").notNull().default(0),
   sharedSlsCredentials: json<SlsCredentials>("shared_sls_credentials"),
   sharedSlsRevision: integer("shared_sls_revision").notNull().default(0),
+  // Retired private recovery evidence; never read or executed by runtime.
   mysqlStdio: json<McpStdioConfiguration>("mysql_stdio"),
 }, table => [check("application_settings_singleton", sql`${table.id} = 1`)]);
 

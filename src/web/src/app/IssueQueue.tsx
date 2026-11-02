@@ -34,14 +34,18 @@ export function IssueQueue(props: {
     if (!subject) return [];
     const term = query().trim().toLowerCase();
     const pinned = new Set(pinnedIssueKeys());
-    return issues().filter((issue) => {
+    const matching = issues().filter((issue) => {
       const assigneeMatch = issue.assigneeSubject === subject;
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
       const environmentMatch = environmentFilter() === "all" || issue.environmentKey === environmentFilter();
       const serviceMatch = serviceFilter() === "all" || issue.service.key === serviceFilter();
       const searchMatch = !term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name} ${issue.environmentKey}`.toLowerCase().includes(term);
       return assigneeMatch && statusMatch && environmentMatch && serviceMatch && searchMatch;
-    }).sort((left, right) => Number(pinned.has(right.id)) - Number(pinned.has(left.id)));
+    });
+    // Only two ranks exist: retain server order inside each group without comparison sorting.
+    const pinnedItems: typeof matching = [], ordinaryItems: typeof matching = [];
+    for (const issue of matching) (pinned.has(issue.id) ? pinnedItems : ordinaryItems).push(issue);
+    return pinnedItems.concat(ordinaryItems);
   });
   const togglePinned = async (issueKey: string) => {
     if (pinningIssueKeys().includes(issueKey)) return;

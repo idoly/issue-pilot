@@ -218,6 +218,23 @@ test("source reads validate the opened descriptor when a parent is replaced", as
   } finally { context.mock.restoreAll(); syncBuiltinESMExports(); await f.close(); }
 });
 
+test("same-path renames retain existence and repository boundary checks without creating backup files", async () => {
+  const f = await fixture();
+  try {
+    await f.browser.createFile(f.issue, "application", "same.txt", "unchanged");
+    const before = await readdir(f.repository);
+    await f.browser.renamePath(f.issue, "application", "same.txt", "same.txt", true);
+    assert.equal(await readFile(path.join(f.repository, "same.txt"), "utf8"), "unchanged");
+    assert.deepEqual(await readdir(f.repository), before);
+    await assert.rejects(f.browser.renamePath(f.issue, "application", "missing.txt", "missing.txt", false), /source_path_not_found/);
+    const outside = path.join(f.root, "outside");
+    await mkdir(outside); await writeFile(path.join(outside, "private.txt"), "outside-private");
+    await symlink(outside, path.join(f.repository, "escape"));
+    await assert.rejects(f.browser.renamePath(f.issue, "application", "escape/private.txt", "escape/private.txt", true), /source_path_outside_repository/);
+    assert.equal(await readFile(path.join(outside, "private.txt"), "utf8"), "outside-private");
+  } finally { await f.close(); }
+});
+
 test("source save collisions preserve another operation's temporary file and the current source", async context => {
   const f = await fixture();
   const id = "11111111-1111-4111-8111-111111111111";

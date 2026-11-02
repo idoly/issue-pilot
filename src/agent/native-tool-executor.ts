@@ -2,7 +2,8 @@ import { access, lstat, mkdir, readFile, readlink, realpath, rename, rm, writeFi
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Compile } from "typebox/compile";
+import { compile } from "@earendil-works/pi-schema";
+import { formats } from "@earendil-works/pi-schema/formats";
 import { isManagedIssueFile } from "../workspace/work-files.ts";
 
 const [name, root] = process.argv.slice(2);
@@ -45,7 +46,7 @@ try {
   const tool = factories[name as keyof typeof factories]();
   const chunks: Buffer[] = []; for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  if (!Compile(tool.parameters).Check(input)) throw new Error("invalid_issue_tool_input");
+  if (!compile(tool.parameters, { formats }).check(input)) throw new Error("invalid_issue_tool_input");
   const signal = new AbortController();
   process.once("SIGTERM", () => signal.abort(new Error("issue_tool_cancelled")));
   const context = { cwd: root, sessionManager: { getSessionId: () => process.env.PI_SESSION_ID ?? "", getSessionFile: () => process.env.PI_SESSION_FILE }, model: { provider: process.env.PI_PROVIDER ?? "", id: process.env.PI_MODEL ?? "", input: JSON.parse(process.env.PI_MODEL_INPUT ?? '["text","image"]'), inputLimits: { images: { resize: JSON.parse(process.env.PI_MODEL_IMAGE_RESIZE ?? "null") ?? undefined } } }, thinkingLevel: process.env.PI_REASONING_LEVEL };

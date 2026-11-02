@@ -77,7 +77,7 @@ it("shows related Issue handler, status, service and environment with a navigabl
   expect(link.getAttribute("title")).toBe(related.title);
   expect(link.querySelectorAll("[title]")).toHaveLength(0);
   expect(within(screen.getByRole("link", { name: `打开关联工单 ${unassigned.id}` })).getByText("未分配")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "诊断日志" }).getAttribute("href")).toBe(`/api/issues/${issue.id}/files/download?path=diagnostics.log`);
+  expect(screen.getByRole("link", { name: "诊断日志" }).getAttribute("href")).toBe(`/api/issues/${issue.id}/files/download?path=${encodeURIComponent("work/diagnostics.log")}`);
   fireEvent.click(link);
   expect(open).toHaveBeenCalledWith(related.id);
 });

@@ -10,7 +10,7 @@ describe("capability deployment serialization", () => {
   it("serializes DMS and SLS scope without credentials", () => {
     const serialized = serializeCapabilityDraft(draft);
     expect(Object.keys(serialized)).toEqual(["dms", "sls"]);
-    expect(serialized.dms?.credentialUpdate).toBeUndefined();
+    expect(serialized.dms).not.toHaveProperty("credentialUpdate");
     expect(serialized.sls).toEqual({ region: "cn-test", project: "orders-test", logstores: ["application"] });
     expect(serialized.dms?.databases[0]?.instanceAlias).toBe("ORDERS-PROD");
     expect(JSON.stringify(serialized)).not.toMatch(/accessKeyId|accessKeySecret|authorization|password/);
@@ -25,8 +25,8 @@ describe("capability deployment serialization", () => {
   });
   it("omits connection changes and unselected capabilities", () => {
     const value = structuredClone(draft);
-    expect(serializeCapabilityDraft(value).dms?.credentialUpdate).toBeUndefined();
-    expect(serializeCapabilityDraft(value).sls?.credentialUpdate).toBeUndefined();
+    expect(serializeCapabilityDraft(value).dms).not.toHaveProperty("credentialUpdate");
+    expect(serializeCapabilityDraft(value).sls).not.toHaveProperty("credentialUpdate");
     expect(Object.keys(serializeCapabilityDraft({ ...draft, capabilities: ["dms"] }))).toEqual(["dms"]);
   });
 });

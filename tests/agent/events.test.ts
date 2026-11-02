@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -237,6 +240,27 @@ test("replays the visible transcript from the active Pi session branch", () => {
   assert.deepEqual((toolEvent.result as { details?: unknown }).details, { runtime: "container" });
 });
 
+test("replays SDK nested-call metadata after reopening without changing the durable session", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-nested-calls-"));
+  try {
+    const manager = SessionManager.create(root, path.join(root, "sessions"));
+    manager.appendMessage({ role: "assistant", api: "openai-responses", provider: "test", model: "test-model", content: [{ type: "toolCall", id: "parent", name: "codemode", arguments: { code: "return await tools.read({path:'a'});" } }], stopReason: "toolUse", usage, timestamp: 1 });
+    const nestedCalls = { calls: [{ id: "parent/1", name: "read", status: "unfinished" as const }], complete: false };
+    manager.appendMessage({ role: "toolResult", toolCallId: "parent", toolName: "codemode", content: [{ type: "text", text: "partial output" }], details: { fullOutputPath: path.join(root, "output.log") }, nestedCalls, isError: true, durationMs: 42, timestamp: 2 });
+    const file = manager.getSessionFile()!;
+    const before = await readFile(file, "utf8");
+    const reopened = SessionManager.open(file);
+    const replay = sessionTranscript(reopened, "issue-1");
+    assert.deepEqual(replay, sessionTranscript(manager, "issue-1"));
+    const event = replay.at(-1)!.event;
+    assert.ok(event.type === "tool_execution_end");
+    assert.deepEqual(event.result.nestedCalls, nestedCalls);
+    assert.equal(event.durationMs, 42);
+    assert.equal(event.isError, true);
+    assert.equal(await readFile(file, "utf8"), before);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("calculates Pi footer totals, cache hit rate, and context usage", () => {
   const manager = SessionManager.inMemory("/workspace");
   manager.appendMessage({ role: "user", content: "Inspect the issue", timestamp: Date.now() });
@@ -251,9 +275,62 @@ test("calculates Pi footer totals, cache hit rate, and context usage", () => {
   });
 
   assert.deepEqual(sessionFooterStats(manager, 20_000, true), {
-    input: 500, output: 500, cacheRead: 9_500, cacheWrite: 0, cost: 0.35,
+    input: 500, output: 500, cacheRead: 9_500, cacheWrite: 0, cost: 0.35, costSource: "unknown",
     latestCacheHitRate: 95, contextPercent: 52.5, contextWindow: 20_000, autoCompact: true,
   });
+});
+
+for (const [flag, expected] of [[true, "provider"], [false, "estimated"], [undefined, "unknown"]] as const) test(`footer preserves ${expected} cost provenance across all SDK usage entry types`, () => {
+  const manager = SessionManager.inMemory("/workspace");
+  const charged = { ...usage, input: 10, totalTokens: 10, cost: { ...usage.cost, total: 1, ...(flag === undefined ? {} : { totalFromProvider: flag }) } };
+  assert.equal(sessionFooterStats(manager, 0, true).costSource, null);
+  manager.appendUsage("zero", "test", "model", { ...charged, cost: { ...charged.cost, total: 0 } });
+  assert.equal(sessionFooterStats(manager, 0, true).costSource, null);
+  const first = manager.appendMessage({ role: "assistant", api: "openai-responses", provider: "test", model: "model", content: [], stopReason: "stop", usage: charged, timestamp: 1 });
+  manager.appendMessage({ role: "toolResult", toolCallId: "nested", toolName: "fixture", content: [], isError: false, usage: charged, timestamp: 2 });
+  manager.appendUsage("auxiliary", "test", "model", charged);
+  manager.appendCompaction("Summary", first, 100, undefined, false, charged);
+  manager.branchWithSummary(null, "Branch summary", undefined, false, charged);
+  const stats = sessionFooterStats(manager, 0, true);
+  assert.equal(stats.cost, 5);
+  assert.equal(stats.costSource, expected);
+  manager.appendUsage("zero-other-source", "test", "model", { ...charged, cost: { ...charged.cost, total: 0, totalFromProvider: !flag } });
+  assert.equal(sessionFooterStats(manager, 0, true).costSource, expected);
+  manager.appendUsage("other-source", "test", "model", { ...charged, cost: { ...charged.cost, totalFromProvider: !flag } });
+  assert.equal(sessionFooterStats(manager, 0, true).costSource, "mixed");
+});
+
+test("footer cost provenance survives reopening without rewriting historical usage or inventing missing flags", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-cost-provenance-"));
+  try {
+    const manager = SessionManager.create(root, path.join(root, "sessions"));
+    manager.appendMessage({ role: "assistant", api: "openai-responses", provider: "test", model: "model", content: [], stopReason: "error", usage: { ...usage, cost: { ...usage.cost, total: 1, totalFromProvider: true } }, timestamp: 1 });
+    manager.appendUsage("estimated", "test", "model", { ...usage, cost: { ...usage.cost, total: 2, totalFromProvider: false } });
+    manager.appendUsage("historical", "test", "model", { ...usage, cost: { ...usage.cost, total: 3 } });
+    const file = manager.getSessionFile()!;
+    const before = await readFile(file, "utf8");
+    const reopened = SessionManager.open(file);
+    const stats = sessionFooterStats(reopened, 0, true);
+    assert.equal(stats.cost, 6);
+    assert.equal(stats.costSource, "mixed");
+    assert.deepEqual(stats, sessionFooterStats(manager, 0, true));
+    assert.equal(await readFile(file, "utf8"), before);
+    const historical = reopened.getEntries().find(entry => entry.type === "usage" && entry.kind === "historical");
+    assert.ok(historical?.type === "usage");
+    assert.equal(Object.hasOwn(historical.usage.cost, "totalFromProvider"), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("footer reuses the caller's session context without changing its statistics", context => {
+  const manager = SessionManager.inMemory("/workspace");
+  manager.appendMessage({ role: "user", content: "Synthetic trailing input", timestamp: 1 });
+  manager.appendMessage({ role: "assistant", api: "openai-responses", provider: "fixture", model: "fixture-model", content: [{ type: "text", text: "Synthetic answer" }], stopReason: "stop", usage: { ...usage, input: 100, output: 20, totalTokens: 120 }, timestamp: 2 });
+  const expected = sessionFooterStats(manager, 20_000, true);
+  const snapshot = manager.buildSessionContext();
+  const rebuild = context.mock.method(manager, "buildSessionContext", () => { throw new Error("unexpected_context_rebuild"); });
+  assert.deepEqual(sessionFooterStats(manager, 20_000, true, snapshot), expected);
+  assert.equal(rebuild.mock.callCount(), 0);
+  assert.equal(snapshot.messages.length, 2);
 });
 
 test("includes SDK usage entries without exposing internal context edits in visible history", () => {
@@ -262,6 +339,7 @@ test("includes SDK usage entries without exposing internal context edits in visi
   manager.appendContextEdit(id, null);
   manager.appendUsage("cache_warm", "test", "test-model", { ...usage, input: 0, output: 0, cacheRead: 100, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01 } });
   const stats = sessionFooterStats(manager, 20000, true);
+  assert.deepEqual(sessionFooterStats(manager, 20000, true, manager.buildSessionContext()), stats);
   assert.equal(stats.cacheRead, usage.cacheRead + 100);
   assert.equal(stats.cost, usage.cost.total + 0.01);
   assert.equal(manager.buildSessionContext().messages.some((message) => message.role === "assistant"), false);
@@ -285,6 +363,7 @@ test("keeps the visible active-branch transcript after context compaction", () =
     content: [{ type: "text", text: "Latest answer" }], stopReason: "stop", usage, timestamp: Date.now(),
   });
   manager.appendCompaction("Earlier work summary", firstKept, 42_000);
+  assert.deepEqual(sessionFooterStats(manager, 20000, true, manager.buildSessionContext()), sessionFooterStats(manager, 20000, true));
 
   const transcript = sessionTranscript(manager, "issue-1");
   assert.deepEqual(transcript.map(({ event }) => event.type), ["issue_user", "message_end", "issue_user", "message_end", "message_end"]);

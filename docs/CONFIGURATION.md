@@ -32,7 +32,7 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 ## 共享 DMS／SLS 凭据
 
-管理人员（`isAdmin`）在上述勾选“共享凭证”的 DMS／SLS 弹窗中设置或清除共享凭据，非管理人员不能调用对应接口，留空保存保留原值；更换 DMS 地址必须同时填写 Authorization。接口不返回密钥，只返回配置状态、revision，以及供编辑的 DMS 地址。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务仅维护查询目标，保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。共享组分别保存在 `application_settings.shared_dms_credentials`／`shared_sls_credentials`，各自使用独立 revision 检测并发修改。DMS 目标解析由服务端选择当前操作用户的个人或共享凭据，浏览器只提交 alias 和 schema。
+管理人员（`isAdmin`）在上述勾选“共享凭证”的 DMS／SLS 弹窗中设置或清除共享凭据，非管理人员不能调用对应接口，留空保存保留原值；更换 DMS 地址必须同时填写 Authorization。接口不返回密钥，只返回配置状态、revision，以及供编辑的 DMS 地址。修改会预约全部工单并关闭旧会话，运行中拒绝修改。服务仅维护查询目标，保存不要求个人或共享凭据已经配置；实际查询缺少凭据时报错。服务 DMS／SLS 输入不再接受 `credentialUpdate`，包括旧的 `preserve`；凭据只从个人／共享凭据入口维护，MCP 连接自身的凭据更新契约不变。共享组分别保存在 `application_settings.shared_dms_credentials`／`shared_sls_credentials`，各自使用独立 revision 检测并发修改。DMS 目标解析由服务端选择当前操作用户的个人或共享凭据，浏览器只提交 alias 和 schema。
 
 迁移 0065 将部署中的唯一完整 DMS 凭据组移入应用设置，移除部署中的地址和 Authorization，保留数据库目标。存在多组不同凭据或不完整组时迁移事务回滚，须先检查差异，不能任意选择一组。
 
@@ -58,7 +58,9 @@ owner 是 assignee，否则为 reporter，必须活跃。开发任务要求 deve
 
 数据库能力使用固定版本 `@bytebase/dbhub@1.5.0` 的 stdio MCP，页面支持 PostgreSQL、MySQL、MariaDB、SQL Server、Oracle。DBHub 原生另支持 SQLite，本页配置远程数据库；Oracle 的 database 字段填写服务名。
 
-目标属于 `service_deployments.config.dbhub`，连接与配置在同一事务保存，按部署、类型、host、port、database 标识。页面保留分字段输入；旧 MySQL 字段可读取为 MySQL 类型，保存时使用 DBHub。生成连接归部署所有，通用 MCP API 不可改删，移除目标按归属删除。
+目标属于 `service_deployments.config.dbhub`，连接与配置在同一事务保存，按部署、类型、host、port、database 标识。页面和 API 只使用 `dbhub`；MySQL 使用其中的 `type: "mysql"`，不再接受独立 `mysql` 字段（返回 `mysql_configuration_retired`），旧 `mysql-targets` 接口已移除。生成连接归部署所有，通用 MCP API 不可改删，移除目标按归属删除。
+
+迁移 0068 将部署顶层的旧 `mysql` 数组一次性转换为 `dbhub`，保留顺序、字面凭证、现有 DBHub 连接和无关历史字段；空数组仅移除。关联服务 revision 每次迁移推进一次。冲突字段、无效／重复目标、开发环境的活动目标或部署所属 `mysql-` 历史连接会使迁移事务回滚，须先由 owner 检查并明确修正；迁移不猜测或重写未知命令。`archivedDevelopment` 内的历史记录不转换，运行时不再回退读取旧字段。
 
 DSN 经 URL 编码后只注入 `DBHUB_DSN` 环境，不进入 argv。`scripts/dbhub.toml` 只引用环境变量，设置 execute_sql 只读、最多 1000 行、连接 10 秒、查询 30 秒；数据库账号还应具有实际只读权限。Pi 管理工具发现与进程生命周期，连接变更沿用全部工单预约关闭旧会话。
 

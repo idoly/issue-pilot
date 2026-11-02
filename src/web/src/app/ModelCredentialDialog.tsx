@@ -4,9 +4,7 @@ import { Button, Modal, PasswordInput, Select } from "../ui";
 import { AGENT_CODEMODE_MODES, type AgentModelOption, type AgentModelSelection } from "../data/client";
 import { settingsError } from "./settings-error";
 
-export const codemodeLabels = { off: "关闭", on: "开启", only: "仅 Codemode" } as const;
-
-export const modelSummary = (selection: AgentModelSelection) => `${selection.provider || "未配置"} / ${selection.model || "未配置"} · ${selection.thinkingLevel} · Codemode ${codemodeLabels[selection.codemode]}`;
+const codemodeLabels = { off: "关闭", on: "开启", only: "仅 Codemode" } as const;
 
 /** Edits one model group (provider, model, thinking level, Codemode and its API key) for shared or personal credentials. */
 export function ModelCredentialDialog(props: {

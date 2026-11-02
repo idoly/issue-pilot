@@ -4,7 +4,7 @@ import { test } from "node:test";
 import type { CommandExecutor } from "../../src/process.ts";
 import { prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
 import { capabilityInputSchemas, capabilityToolInputSchema, parseSlsScopeConfiguration } from "../../src/capabilities/registry.ts";
-import { Compile } from "typebox/compile";
+import { compile } from "@earendil-works/pi-schema";
 
 const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
 const base = { logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600 };
@@ -49,10 +49,10 @@ test("aliyun sls paginates complete results and keeps credentials out of argv, r
 
 test("a configured wildcard grants exact logstores within the selected project only", async () => {
   const config = { ...configured, ...parseSlsScopeConfiguration({ ...configured, logstores: [" * "] }) };
-  const schema = Compile(capabilityToolInputSchema("sls", config));
-  assert.equal(schema.Check({ ...base, logstore: "new_logstore" }), true);
+  const schema = compile(capabilityToolInputSchema("sls", config));
+  assert.equal(schema.check({ ...base, logstore: "new_logstore" }), true);
   for (const logstore of ["*", "prefix*", "../other", "", "bad/store"]) {
-    assert.equal(schema.Check({ ...base, logstore }), false);
+    assert.equal(schema.check({ ...base, logstore }), false);
     assert.throws(() => prepareSlsQuery({ ...base, logstore }, config), /sls_logstore_not_granted/);
   }
   const f = fixture([page([{ message: "selected project" }])]);
@@ -69,10 +69,10 @@ test("target wildcard schemas and execution keep independent logstore permission
     { name: "any", region: "cn-other", project: "other-project", logstores: ["*"] },
     { name: "restricted", region: configured.region, project: configured.project, logstores: ["application_log"] },
   ] }) };
-  const schema = Compile(capabilityToolInputSchema("sls", config));
-  assert.equal(schema.Check({ ...base, target: "any", logstore: "new_store" }), true);
-  assert.equal(schema.Check({ ...base, target: "restricted", logstore: "new_store" }), false);
-  assert.equal(schema.Check({ ...base, target: "any", logstore: "*" }), false);
+  const schema = compile(capabilityToolInputSchema("sls", config));
+  assert.equal(schema.check({ ...base, target: "any", logstore: "new_store" }), true);
+  assert.equal(schema.check({ ...base, target: "restricted", logstore: "new_store" }), false);
+  assert.equal(schema.check({ ...base, target: "any", logstore: "*" }), false);
   const f = fixture([page([])]);
   await readSlsLogs({ ...base, target: "any", logstore: "new_store" }, config, undefined, f.executor);
   assert.equal(f.calls[0]!.args[f.calls[0]!.args.indexOf("--project") + 1], "other-project");

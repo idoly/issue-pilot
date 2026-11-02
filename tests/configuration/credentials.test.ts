@@ -11,12 +11,12 @@ test("projects and resolves only DMS and SLS scopes, without deployment credenti
   assert.deepEqual(projected.dms, { databases: configuration.dms!.databases });
   assert.doesNotMatch(JSON.stringify(projected), /sls-secret|dms-token|dms.example|sls-key|accessKeyId|accessKeySecret|credentialConfigured/);
   assert.deepEqual(resolveConfiguredCapabilitySections(projected, ["dms", "sls"]), projected);
-  for (const key of ["dms", "sls"] as const) assert.deepEqual(resolveConfiguredCapabilitySections({ [key]: { ...projected[key], credentialUpdate: { mode: "preserve" } } }, [key])[key], projected[key]);
 });
 test("deployment inputs reject connection credentials and credential mutations", () => {
   const projected = projectCapabilityConfiguration(configuration);
   for (const key of ["dms", "sls"] as const) {
-    for (const mode of ["replace", "clear"]) assert.throws(() => resolveConfiguredCapabilitySections({ [key]: { ...projected[key], credentialUpdate: { mode, values: {} } } }, [key]), new RegExp(`service_${key}_credentials_not_allowed`));
+    for (const mode of ["preserve", "replace", "clear"]) assert.throws(() => resolveConfiguredCapabilitySections({ [key]: { ...projected[key], credentialUpdate: { mode, values: {} } } }, [key]), new RegExp(`service_${key}_credentials_not_allowed`));
+    for (const credentialUpdate of [null, undefined, {}]) assert.throws(() => resolveConfiguredCapabilitySections({ [key]: { ...projected[key], credentialUpdate } }, [key]), new RegExp(`service_${key}_credentials_not_allowed`));
     const credentials = key === "dms" ? { url: "https://dms.example.test/sse" } : { accessKeyId: "key" };
     assert.throws(() => resolveConfiguredCapabilitySections({ [key]: { ...projected[key], ...credentials } }, [key]), /credential_fields_not_allowed/);
   }

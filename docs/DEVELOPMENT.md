@@ -10,9 +10,9 @@
 
 | 组件 | 版本来源 |
 | --- | --- |
-| Pi AI／Coding Agent | 1.4.0，postinstall 校验固定版本补丁 |
+| Pi AI／Coding Agent／Schema | 1.5.0，Coding Agent 固定版本补丁由 postinstall 校验 |
 | SRT | 0.0.81，依赖 Linux 隔离能力 |
-| Solid | runtime／web 2.0.0-rc.17，编译与测试包按锁文件 |
+| Solid | runtime／web 2.0.0-rc.20、Vite 插件 3.0.0-next.55，编译与测试包按锁文件 |
 | Monaco | 0.57.0，使用公开 editor／model API |
 | Python | 应用 `.venv`，openpyxl 3.1.5、et_xmlfile 2.0.0 |
 | 容器 Git／aliyun CLI | 2.56.0／3.5.2 |
@@ -43,7 +43,7 @@ TypeScript 参考 [Google TypeScript Style Guide](https://google.github.io/style
 
 后端不使用 strip-types 不支持的 enum、参数属性或装饰器。`issueId` 表示数据库 ID，`issueKey` 表示业务编号，工作文件用 workFile／workFiles，原始上传用 attachment。持久名称、Git refs 和协议字段按契约维护。
 
-项目结构化 schema 使用 TypeBox。输入边界做严格检查，低频 Value.Check，重复执行热路径可一次 Compile 后复用。默认值、规范化和授权由 owner 处理，不借 Value.Parse 隐式纠正输入。交给可变 SDK 管线的共享 schema 用 Value.Clone 隔离；保留执行时再校验和等待后重新授权。
+项目结构化 schema 统一使用 Pi 1.5 的 `@earendil-works/pi-schema` 公开 builders 与 `compile().check()`，不再直接依赖 TypeBox，也不保留兼容包装。对象默认关闭额外属性；HTTP／入站 MCP 和 execute 边界严格校验，不启用 coercion，重复使用的 schema 只编译一次。外部 MCP／SDK 工具 schema 显式使用官方 formats。只有 Pi 的模型工具初始管线负责协议级类型转换；应用仍保留权限、只读、目标范围及必要输入检查。默认值、规范化和授权由 owner 处理，不通过转换器隐式纠正。普通 JSON Schema 用 `structuredClone` 隔离，执行检查编译独立快照，防止可变钩子改写校验规则；等待后重新授权。SDK 自身仍依赖 TypeBox 的部分内部能力，不能据此声称整个依赖树已无 TypeBox。
 
 第三方 MCP／SRT 自有 schema 沿用官方 SDK，包括其 Zod 与域名规则。路由协调 owner，SQLite、Git、附件和命令授权各自维护；并发顺序见[系统架构](ARCHITECTURE.md#并发与失败清理)。
 
@@ -89,7 +89,7 @@ npm audit --omit=dev --audit-level=high
 .venv/bin/python3 -m pip check
 ```
 
-Forge 正式修复版及 Zod 固定版本回补的效果需结合锁文件、安装 hash、攻击回归与协议兼容判断；审计按版本报告，不能屏蔽通告或用降级掩盖。SSH E2E 需要 sshd fixture，缺失时测试明确 skip，验收在具备服务端的独立环境完成。
+Forge／Zod／glob 的正式修复版和剩余 Zod v3 加固需结合锁文件、安装 hash、攻击回归与协议兼容判断；定向主版本覆盖必须验证父依赖实际使用的 API，审计不能靠屏蔽通告或降级掩盖。SSH E2E 需要 sshd fixture，缺失时测试明确 skip，验收在具备服务端的独立环境完成。
 
 CI 在 main 提交和 PR 触发，使用 GitHub Ubuntu runner。私有包源、系统依赖和 SRT 必须对 runner 可用，本机结果不代表远程 Actions 结果。
 
@@ -99,7 +99,7 @@ CI 在 main 提交和 PR 触发，使用 GitHub Ubuntu runner。私有包源、�
 
 按风险覆盖失败、重试、取消、重复调用、rollback／finalize 和 shutdown；schema 升级覆盖 fresh DB 和已有 schema。SQLite 回滚不能撤销文件／Git，未知目录、dirty worktree、缺失 ref 和错误现场不能靠删除、reset 或改绑定使检查通过。已发布迁移与 journal 不可修改。
 
-依赖／资源清理检查动态 import、Worker、CLI、类型、资源 URL、镜像和实际使用者。运行服务的依赖和网页产物通过发布步骤切换，提交、推送和真实状态操作须有授权。
+依赖／资源清理检查动态 import、Worker、CLI、类型、资源 URL、镜像和实际使用者。运行服务的依赖和网页产物通过发布步骤切换，提交、推送和真实状态操作须有授权。运行服务不要共用正在编辑且依赖未同步的开发 checkout：`native-tool-executor.ts`／`network-exec.ts` 是动态子进程入口，即使主进程未重启，也会读取当前源码；单独检查 `/health` 不能证明这些执行链路仍可用。
 
 ## Web 与浏览器
 
@@ -108,6 +108,8 @@ Solid 2 使用 `createEffect(compute, callback)`，回调只返回清理函数�
 历史会话列表仅包含已归档会话，打开后自动读取第一条，切换选择时重新读取。加载、空内容和读取失败在弹窗内明确展示；有对话内容时才渲染深色滚动区域，关闭或切换身份取消未完成读取。
 
 Monaco 组件负责释放 editor／model，保留 SHA-256 冲突、CRLF、自动保存、撤销、只读和导航语义。链接使用真实工单 URL，浏览器前进／后退及未保存代码拦截由行为测试验证。文件列表按需预览，加载失败可重试，超预算或不支持格式保留下载。附件和工作文件预览共用 `web.filePreviewBytes`：已知超限时不发请求；响应按声明长度和实际流字节检查，即使列表大小过期或 Content-Length 不实也不能无界累积，超限取消读取。普通下载不受预览预算限制。
+
+CodeBrowser／Monaco 已按页面需求动态加载；Monaco 的单个上游 editor.api 及语言服务产物仍可能超过 Vite 默认 500 kB 提醒。先核对首页加载图和实际压缩传输体积，不为消除提示随意拆分同一上游模块、抬高告警阈值或删除现有编辑能力。
 
 图标使用 Phosphor SVG，编辑器 Codicon 按需加载，文件图标沿用 Material Icon Theme。Geist 字体、来源与许可证在 ui/assets 维护；更新同步 provenance 和许可证，保留焦点、减少动效及手机触控尺寸。
 

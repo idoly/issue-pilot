@@ -13,7 +13,7 @@ function configuration(): Config {
   return {
     agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false }, agentModels: [],
     environments: [{ key: "dev", name: "开发" }, { key: "test", name: "测试" }, { key: "prod", name: "正式" }],
-    services: [{ key: "orders", name: "Orders", description: "", context: "", revision: 1, repositories: [{ id: "repo", alias: "app", url: "git@example.test:team/app.git" }], deployments: ["dev", "test", "prod"].map(environmentKey => ({ environmentKey, capabilities: [], repositoryBranches: [{ repositoryId: "repo", repositoryAlias: "app", baseBranch: "main" }], ...(environmentKey === "prod" ? { mysql: [{ host: mysql.host, port: mysql.port, username: mysql.username, database: mysql.database, passwordConfigured: true }] } : {}) })) }],
+    services: [{ key: "orders", name: "Orders", description: "", context: "", revision: 1, repositories: [{ id: "repo", alias: "app", url: "git@example.test:team/app.git" }], deployments: ["dev", "test", "prod"].map(environmentKey => ({ environmentKey, capabilities: [], repositoryBranches: [{ repositoryId: "repo", repositoryAlias: "app", baseBranch: "main" }], ...(environmentKey === "prod" ? { dbhub: [{ type: "mysql" as const, host: mysql.host, port: mysql.port, username: mysql.username, database: mysql.database, passwordConfigured: true }] } : {}) })) }],
   };
 }
 beforeEach(() => {
@@ -41,7 +41,7 @@ for (const outcome of ["success", "failure"] as const) test(`closing a private M
   fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
   await waitFor(() => expect(state.create).toHaveBeenCalled());
   const input = state.create.mock.calls[0]![0]; expect(input.name).toBe("New draft");
-  expect(input.deployments.every((row: { mysql?: unknown[] }) => !row.mysql?.length)).toBe(true);
+  expect(input.deployments.every((row: { dbhub?: unknown[] }) => !row.dbhub?.length)).toBe(true);
   expect(JSON.stringify(input)).not.toContain(mysql.password);
 });
 
@@ -90,7 +90,7 @@ for (const failed of ["configuration", "catalog"] as const) test(`a successful s
   expect(state.save).toHaveBeenCalledTimes(1);
 });
 
-test("DBHub converts existing MySQL targets and saves PostgreSQL fields with the selected default port", async () => {
+test("DBHub changes MySQL targets to PostgreSQL with the selected default port", async () => {
   render(() => <ConfigurationView />);
   fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
   const dialog = await screen.findByRole("dialog");
@@ -111,7 +111,7 @@ test("DBHub converts existing MySQL targets and saves PostgreSQL fields with the
 
 test("DBHub is an optional service ability and can be added and removed like the others", async () => {
   const value = configuration();
-  for (const deployment of value.services[0]!.deployments) delete deployment.mysql;
+  for (const deployment of value.services[0]!.deployments) delete deployment.dbhub;
   state.replaceConfiguration(value);
   render(() => <ConfigurationView />);
   fireEvent.click(await screen.findByRole("button", { name: "编辑" }));

@@ -1,8 +1,11 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent, NestedToolCalls } from "@earendil-works/pi-ai";
 import type { AgentRunState } from "../domain/contracts.ts";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 
-type AgentWireEvent = JsonAgentSessionEvent
+type ToolCompletionEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_end" }>;
+// Replay carries the SDK's persisted nested-call record alongside the tool result.
+type AgentWireEvent = Exclude<JsonAgentSessionEvent, ToolCompletionEvent>
+  | (ToolCompletionEvent & { result: ToolCompletionEvent["result"] & { nestedCalls?: NestedToolCalls } })
   | { type: "session_reset" }
   | { type: "issue_run_state"; state: AgentRunState }
   | { type: "issue_user"; message: string; images?: ImageContent[] }
@@ -196,6 +199,7 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
       if (message.role === "user" || message.role === "system") continue;
       const id = messages.length === 1 ? entry.id : `${entry.id}:${index}`;
       if (message.role === "toolResult") {
+        const result = { content: message.content, details: message.details, ...(message.nestedCalls ? { nestedCalls: message.nestedCalls } : {}) };
         events.push({
           id,
           issueId,
@@ -204,7 +208,7 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
             type: "tool_execution_end",
             toolCallId: message.toolCallId,
             toolName: message.toolName,
-            result: { content: message.content, details: message.details },
+            result,
             ...(message.durationMs === undefined ? {} : { durationMs: message.durationMs }),
             isError: message.isError,
           },

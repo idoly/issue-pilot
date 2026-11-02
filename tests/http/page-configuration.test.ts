@@ -66,21 +66,21 @@ test("development baselines derive only from production and reject independent o
   } finally { await f.cleanup(); }
 });
 
-test("MySQL targets save atomically with deployment-owned global MCP connections and private reads", async () => {
+test("DBHub MySQL targets save atomically with deployment-owned MCP connections and private reads", async () => {
   const f = await createApiFixture();
   try {
     const input = servicePayload("Mysql", ["prod", "dev"]);
     await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Mysql", url: input.repositories[0]!.url } });
     const password = " private mysql password ";
-    const withMysql = { ...input, deployments: input.deployments.map(row => ({ ...row, ...(row.environmentKey === "prod" ? { mysql: [{ host: "db.example.test", port: 3306, username: "reader", password, database: "orders" }] } : {}) })) };
-    const created = await f.app.inject({ method: "POST", url: "/api/services", headers, payload: withMysql });
+    const withDbHub = { ...input, deployments: input.deployments.map(row => ({ ...row, ...(row.environmentKey === "prod" ? { dbhub: [{ type: "mysql", host: "db.example.test", port: 3306, username: "reader", password, database: "orders" }] } : {}) })) };
+    const created = await f.app.inject({ method: "POST", url: "/api/services", headers, payload: withDbHub });
     assert.equal(created.statusCode, 201, created.body);
     const publicConfig = await f.app.inject({ method: "GET", url: "/api/config" });
     assert.doesNotMatch(publicConfig.body, /private mysql password/);
-    assert.equal(publicConfig.json().services[0].deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").mysql[0].passwordConfigured, true);
-    const selected = await f.app.inject({ method: "GET", url: "/api/services/mysql/mysql-targets", headers });
+    assert.equal(publicConfig.json().services[0].deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].passwordConfigured, true);
+    const selected = await f.app.inject({ method: "GET", url: "/api/services/mysql/dbhub-targets", headers });
     assert.equal(selected.statusCode, 200); assert.equal(selected.headers["cache-control"], "private, no-store");
-    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").mysql[0].password, password);
+    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, password);
     const connection = openDatabase(f.databaseFile);
     try {
       const rows = await connection.db.select().from(mcpServices);
@@ -89,8 +89,8 @@ test("MySQL targets save atomically with deployment-owned global MCP connections
       assert.match(rows[0]!.stdio!.args[0]!, /@bytebase\/dbhub\/dist\/index\.js$/);
       assert.doesNotMatch(JSON.stringify(rows[0]!.stdio!.args), /private mysql/);
       await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });
-      assert.equal((await f.app.inject({ method: "GET", url: "/api/services/mysql/mysql-targets", headers: { "x-issue-pilot-subject": "product" } })).statusCode, 403);
-      const invalid = { ...withMysql, name: "Duplicate", deployments: withMysql.deployments.map(row => ({ ...row, ...(row.mysql ? { mysql: [...row.mysql, ...row.mysql] } : {}) })) };
+      assert.equal((await f.app.inject({ method: "GET", url: "/api/services/mysql/dbhub-targets", headers: { "x-issue-pilot-subject": "product" } })).statusCode, 403);
+      const invalid = { ...withDbHub, name: "Duplicate", deployments: withDbHub.deployments.map(row => ({ ...row, ...(row.dbhub ? { dbhub: [...row.dbhub, ...row.dbhub] } : {}) })) };
       const failed = await f.app.inject({ method: "POST", url: "/api/services", headers, payload: invalid });
       assert.equal(failed.statusCode, 400);
       assert.equal((await connection.db.select().from(services)).length, 1);
@@ -105,14 +105,14 @@ test("MySQL targets save atomically with deployment-owned global MCP connections
   } finally { await f.cleanup(); }
 });
 
-test("MySQL connection changes reserve all Issue environments because the generated tools are global", async () => {
+test("DBHub connection changes reserve all Issue environments", async () => {
   const f = await createApiFixture();
   try {
     await createService(f.app, "Other", ["test"]);
     await createIssue(f.app, "other", "test");
     const input = servicePayload("Global Mysql", ["prod", "dev"]);
     await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Global Mysql", url: input.repositories[0]!.url } });
-    const payload = { ...input, deployments: input.deployments.map(row => ({ ...row, ...(row.environmentKey === "prod" ? { mysql: [{ host: "db.example.test", port: 3306, username: "reader", password: "fixture-password", database: "orders" }] } : {}) })) };
+    const payload = { ...input, deployments: input.deployments.map(row => ({ ...row, ...(row.environmentKey === "prod" ? { dbhub: [{ type: "mysql", host: "db.example.test", port: 3306, username: "reader", password: "fixture-password", database: "orders" }] } : {}) })) };
     const blocked = await f.app.inject({ method: "POST", url: "/api/services", headers, payload });
     assert.equal(blocked.statusCode, 409, blocked.body);
     const database = openDatabase(f.databaseFile);

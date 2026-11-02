@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const project = fileURLToPath(new URL("../../", import.meta.url));
 const probe = fileURLToPath(new URL("../helpers/zod-security-probe.mjs", import.meta.url));
-const patchFiles = ["@earendil-works+pi-coding-agent+1.4.0.patch", "zod+3.25.76.patch"];
+const patchFiles = ["@earendil-works+pi-coding-agent+1.5.0.patch", "zod+4.6.7.patch"];
 const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent"];
 
 async function patchedPaths(): Promise<string[]> {
@@ -49,7 +49,7 @@ async function fixture() {
     await copyFile(path.join(project, "scripts/apply-pi-sdk-patch.mjs"), path.join(root, "scripts/apply-pi-sdk-patch.mjs"));
     for (const name of patchFiles) await copyFile(path.join(project, "patches", name), path.join(root, "patches", name));
     for (const file of await patchedPaths()) assert.ok((await realpath(path.join(root, file))).startsWith(root + path.sep), "every patched file must remain inside the isolated fixture");
-    const patch = path.join(root, "patches/zod+3.25.76.patch");
+    const patch = path.join(root, "patches/zod+4.6.7.patch");
     let installed = false;
     try { await exec("git", ["apply", "--reverse", "--check", patch], { cwd: root }); installed = true; }
     catch { await exec("git", ["apply", "--check", patch], { cwd: root }); }
@@ -58,18 +58,18 @@ async function fixture() {
   } catch (error) { await rm(root, { recursive: true, force: true }); throw error; }
 }
 
-test("backports constrained-collection guards in isolation with MCP compatibility and repeatable installation", { timeout: 30_000 }, async () => {
+test("uses upstream Zod 4 guards and retains v3 collection limits with MCP/SRT compatibility", { timeout: 30_000 }, async () => {
   const original = await hashes(project);
   const { root } = await fixture();
   try {
     const before = await exec(process.execPath, ["--max-old-space-size=256", probe, root, "before"], { timeout: 15_000, maxBuffer: 1024 * 1024 });
     const pristine = JSON.parse(before.stdout) as { results: Array<{ oversizedIssues: number }>; completionIssues: number };
     assert.equal(pristine.results.length, 6);
-    assert.ok(pristine.results.every(result => result.oversizedIssues === 10_001));
-    assert.equal(pristine.completionIssues, 10_001);
+    assert.deepEqual(pristine.results.map(result => result.oversizedIssues), [10_001, 10_001, 1, 1, 1, 1]);
+    assert.equal(pristine.completionIssues, 1);
     const install = path.join(root, "scripts/apply-pi-sdk-patch.mjs");
     const first = await exec(process.execPath, [install], { cwd: root });
-    assert.match(first.stdout, /Verified dependency patch: zod@3\.25\.76/);
+    assert.match(first.stdout, /Verified dependency patch: zod@4\.6\.7/);
     const after = await exec(process.execPath, ["--max-old-space-size=256", probe, root, "after"], { timeout: 15_000, maxBuffer: 1024 * 1024 });
     const patched = JSON.parse(after.stdout) as { results: Array<{ oversizedIssues: number }>; completionIssues: number; protocolRoundTrip: boolean; sandboxPolicyCompatible: boolean };
     assert.ok(patched.results.every(result => result.oversizedIssues === 1));
@@ -90,12 +90,12 @@ test("refuses Zod version drift and patch-context drift rather than silently app
     const install = path.join(root, "scripts/apply-pi-sdk-patch.mjs");
     const metadata = path.join(root, "node_modules/zod/package.json");
     const contents = await readFile(metadata, "utf8");
-    await writeFile(metadata, JSON.stringify({ ...JSON.parse(contents), version: "3.25.77" }));
+    await writeFile(metadata, JSON.stringify({ ...JSON.parse(contents), version: "4.6.8" }));
     await assert.rejects(exec(process.execPath, [install], { cwd: root }), /dependency_patch_version_mismatch:zod/);
     await writeFile(metadata, contents);
     await exec(process.execPath, [install], { cwd: root });
-    const runtime = path.join(root, "node_modules/zod/v4/core/schemas.js");
-    const modified = (await readFile(runtime, "utf8")).replace("maximum >= 0", "maximum > 0");
+    const runtime = path.join(root, "node_modules/zod/v3/types.js");
+    const modified = (await readFile(runtime, "utf8")).replace("if (tooBig) return INVALID;", "if (tooBig && false) return INVALID;");
     await writeFile(runtime, modified);
     await assert.rejects(exec(process.execPath, [install], { cwd: root }), /dependency_patch_does_not_apply:zod/);
     assert.deepEqual(await hashes(project), original);

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import { parse as parseDisposition } from "content-disposition";
 
 import { openDatabase } from "../../src/db/client.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
@@ -24,7 +25,7 @@ function issueMultipart(boundary: string, issue: Record<string, unknown>, fileNa
   ].join("\r\n"));
 }
 
-for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt"]) test(`preserves long attachment names without exceeding filesystem limits (${Buffer.byteLength(fileName)} UTF-8 bytes)`, async () => {
+for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt", "预算 '()*%.txt"]) test(`preserves attachment names, filesystem limits and valid disposition (${Buffer.byteLength(fileName)} UTF-8 bytes)`, async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Long names");
@@ -38,7 +39,11 @@ for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt"]) te
     assert.equal(files.length, 1); assert.ok(Buffer.byteLength(files[0]!) <= 255); assert.equal(path.extname(files[0]!), ".txt"); assert.ok(!files[0]!.includes("\ufffd"));
     const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${detail.attachments[0]!.id}` });
     assert.equal(download.statusCode, 200, download.body); assert.equal(download.body, content);
-    assert.ok(String(download.headers["content-disposition"]).includes(encodeURIComponent(fileName)));
+    const header = String(download.headers["content-disposition"]);
+    assert.equal(parseDisposition(header).type, "inline");
+    assert.equal(parseDisposition(header).parameters.filename, fileName);
+    const encoded = /filename\*=UTF-8''([^;]+)/.exec(header);
+    if (encoded) assert.match(encoded[1]!, /^(?:[A-Za-z0-9!#$&+.^_`|~-]|%[0-9a-f]{2})*$/i);
   } finally { await fixture.cleanup(); }
 });
 

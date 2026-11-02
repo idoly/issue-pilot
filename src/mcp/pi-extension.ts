@@ -4,15 +4,15 @@ import path from "node:path";
 import { createMcpExtension, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { Type } from "typebox";
-import { Compile } from "typebox/compile";
+import { compile } from "@earendil-works/pi-schema";
+import { formats } from "@earendil-works/pi-schema/formats";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentCodemodeMode } from "../domain/contracts.ts";
 import { generatedWorkFileSaver } from "../workspace/work-files.ts";
 import { createMcpTransport, type McpConfiguration, type McpTool } from "./client.ts";
 
 const limits = issuePilotConfig.limits.capability;
-type Validators = Map<string, ReturnType<typeof Compile>>;
+type Validators = Map<string, ReturnType<typeof compile>>;
 
 /** Pi owns discovery and lifecycle; the application's validated configuration projection is authoritative. */
 export function createIssueMcpExtension(configurations: McpConfiguration[], codemode: AgentCodemodeMode, root: string): ExtensionFactory {
@@ -58,7 +58,7 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
               for (const tool of result.tools) {
                 if (previous.has(tool.name)) throw new Error("mcp_duplicate_tool_names");
                 if (tool.inputSchema.type && tool.inputSchema.type !== "object") throw new Error("mcp_invalid_tool_schema");
-                previous.set(tool.name, Compile(Type.Unsafe({ ...tool.inputSchema, type: "object", properties: tool.inputSchema.properties ?? {} })));
+                previous.set(tool.name, compile(structuredClone({ ...tool.inputSchema, type: "object", properties: tool.inputSchema.properties ?? {} }), { formats }));
               }
               if (previous.size > limits.mcp.tools) throw new Error("mcp_too_many_tools");
               if (result.nextCursor) {
@@ -100,7 +100,7 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
           if ("method" in message) {
             const input = message.params as { name?: string; arguments?: unknown; cursor?: string } | undefined;
             if (message.method === "tools/list" && "id" in message) requests.set(message.id, new Map(input?.cursor ? pages.get(input.cursor) : undefined));
-            if (message.method === "tools/call" && !validators.get(input?.name ?? "")?.Check(input?.arguments ?? {})) throw new Error("invalid_mcp_tool_input");
+            if (message.method === "tools/call" && !validators.get(input?.name ?? "")?.check(input?.arguments ?? {})) throw new Error("invalid_mcp_tool_input");
           }
           try {
             await transport.send(message as JSONRPCMessage);

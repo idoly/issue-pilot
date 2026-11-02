@@ -2,13 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { DefaultPackageManager, DefaultResourceLoader, getAgentDir, getPackageDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { NetworkConfigSchema } from "@anthropic-ai/sandbox-runtime";
-import { Type, type TSchema } from "typebox";
-import { Value } from "typebox/value";
+import { arr, compile, num, obj, opt, str, type Schema } from "@earendil-works/pi-schema";
 import { AGENT_PI_SETTING_KEYS, type AgentRuntimeConfiguration } from "../domain/contracts.ts";
 type SettingsSchema = Record<string, unknown> & { properties?: Record<string, SettingsSchema>; patternProperties?: Record<string, SettingsSchema>; anyOf?: SettingsSchema[] };
 const nativeSchema = JSON.parse(readFileSync(path.join(getPackageDir(), "schemas/settings.schema.json"), "utf8")) as { properties: Record<string, SettingsSchema> };
 // Keep the SDK's field contracts, reject unknown/deprecated settings, and bound numeric budgets.
-function exactSchema(schema: SettingsSchema): TSchema {
+function exactSchema(schema: SettingsSchema): Schema {
   const result = structuredClone(schema) as Record<string, unknown>;
   if (result.type === "number") result.minimum = Math.max(0, typeof result.minimum === "number" ? result.minimum : 0);
   if (schema.properties) {
@@ -17,15 +16,15 @@ function exactSchema(schema: SettingsSchema): TSchema {
   }
   if (schema.patternProperties) result.patternProperties = Object.fromEntries(Object.entries(schema.patternProperties).map(([key, value]) => [key, exactSchema(value)]));
   if (schema.anyOf) result.anyOf = schema.anyOf.map(exactSchema);
-  return Type.Unsafe(result);
+  return result;
 }
-const settingProperties = Object.fromEntries(AGENT_PI_SETTING_KEYS.map(key => [key, Type.Optional(exactSchema(nativeSchema.properties[key]!))]));
-settingProperties.codemode = Type.Optional(Type.Object({ inlineBudget: Type.Optional(Type.Number({ minimum: 0 })) }, { additionalProperties: false }));
-const agentPiSettingsSchema = Type.Object(settingProperties, { additionalProperties: false });
-const runtimeSchema = Type.Object({ settings: Type.Optional(agentPiSettingsSchema), networkAllowedDomains: Type.Optional(Type.Array(Type.String())) }, { additionalProperties: false });
+const settingProperties = Object.fromEntries(AGENT_PI_SETTING_KEYS.map(key => [key, opt(exactSchema(nativeSchema.properties[key]!))]));
+settingProperties.codemode = opt(obj({ inlineBudget: opt(num({ minimum: 0 })) }));
+const agentPiSettingsSchema = obj(settingProperties);
+const validateRuntime = compile(obj({ settings: opt(agentPiSettingsSchema), networkAllowedDomains: opt(arr(str())) }));
 export class AgentRuntimeConfigurationError extends Error {}
 export function parseAgentRuntime(value: unknown): AgentRuntimeConfiguration {
-  if (!Value.Check(runtimeSchema, value)) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
+  if (!validateRuntime.check(value)) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
   const runtime = structuredClone(value) as AgentRuntimeConfiguration;
   if (runtime.networkAllowedDomains && !NetworkConfigSchema.safeParse({ allowedDomains: runtime.networkAllowedDomains, deniedDomains: [] }).success) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
   return runtime;
