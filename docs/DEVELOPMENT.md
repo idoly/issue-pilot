@@ -1,57 +1,50 @@
 # 开发指南
 
-[文档导航](README.md) · [系统架构](ARCHITECTURE.md) · [Agent](AGENT.md) · [存储](STORAGE.md)
+[文档导航](README.md) · [架构](ARCHITECTURE.md) · [Agent 规则](../AGENTS.md)
 
-开发从所属模块和业务契约开始，设计与授权约束见 [AGENTS.md](../AGENTS.md)。测试使用独立状态，发布操作按[运维手册](RUNBOOK.md)。
+## 环境与依赖
 
-## 环境
-
-安装命令见[首次本地运行](DEPLOYMENT.md#首次本地运行)。开发／CI 使用 Node 24.18.0，容器使用 Node 26；后端直接 strip-types 运行 TypeScript，前端使用配套 Solid runtime／compiler。
-
-| 组件 | 版本来源 |
+| 项目 | 当前约束 |
 | --- | --- |
-| Pi AI／Coding Agent／Schema | 1.5.0，Coding Agent 固定版本补丁由 postinstall 校验 |
-| SRT | 0.0.81，依赖 Linux 隔离能力 |
-| Solid | runtime／web 2.0.0-rc.20、Vite 插件 3.0.0-next.55，编译与测试包按锁文件 |
+| Node | 本地／CI 24.18.0，容器 Node 26；后端直接 strip-types 执行 TS |
+| Pi AI／Coding Agent／Schema | 1.5.0，Coding Agent 有固定补丁 |
+| Solid | runtime／web 2.0.0-rc.20，Vite 插件 3.0.0-next.55，编译器按锁文件 |
+| SRT | 0.0.81，需要真实 Linux namespace／seccomp 能力 |
 | Monaco | 0.57.0，使用公开 editor／model API |
-| Python | 应用 `.venv`，openpyxl 3.1.5、et_xmlfile 2.0.0 |
-| 容器 Git／aliyun CLI | 2.56.0／3.5.2 |
+| Python | 应用 .venv，版本约束见 requirements.txt |
+| DBHub | 1.5.0，stdio 与只读配置由应用生成 |
 
-DBHub 使用固定版本 stdio 工具，静态只读配置位于 `scripts/dbhub.toml`，服务目标与生成连接归 `configuration/dbhub.ts` 管理。
+准确 npm 版本与 overrides 以 [package.json](../package.json)／[package-lock.json](../package-lock.json) 为准。安装入口见[部署](DEPLOYMENT.md#首次本地运行)，补丁含义见[依赖补丁](../patches/README.md)。不得跳过 postinstall，也不批准来源未审查的安装脚本。
 
-准确 npm 版本以 [package.json](../package.json) 和 [package-lock.json](../package-lock.json) 为准，Python 以 [requirements.txt](../requirements.txt) 为准。Pi、Zod 回补及已由正式版替代的 Forge 安全修复由[依赖补丁](../patches/README.md)统一说明，不能跳过 postinstall。
+## 开始修改
 
-## 修改入口
+1. 运行 `git status --short`，固定任务基线，保留已有改动。
+2. 找到 owner、业务契约、根配置、schema 和聚焦测试，先读当前实现。
+3. 将影响状态分类为持久、有条件持久或生成，确认提交／推送／重启／真实状态操作的授权范围。
+4. 实现最小完整修改，不把路由变成协议、Git 或存储的第二个 owner。
+5. 验证边界与失败路径，检查最终 diff 中的无关改动、密钥、生成文件和迁移前缀。
 
-| 关注点 | Owner |
-| --- | --- |
-| 角色、状态、处理方式 | `src/domain/contracts.ts` |
-| 路径、预算和保留 | `issue-pilot.config.ts`、`src/config.ts` |
-| schema、启动与升级 | `src/db/`、`drizzle/` |
-| 业务配置和身份 | `src/configuration/`、`src/http/route-context.ts` |
-| HTTP 协调与附件 | `src/http/*-routes.ts`、`attachment-store.ts` |
-| Agent 队列和会话 | `src/agent/engine.ts`、`pi-session.ts`、`model-runtime.ts` |
-| 原生工具与隔离 | `native-tools.ts`、`native-tool-executor.ts`、`issue-sandbox.ts` |
-| 工具和外部协议 | `src/capabilities/`、`src/mcp/` |
-| Git、生命周期和文件 | `src/workspace/` |
-| Web 请求、SSE、共享状态 | `src/web/src/data/client.ts`、`agent-stream.ts`、`ApplicationResources.tsx` |
-| 代码浏览器 | `CodeBrowser.tsx`、`SourceText.tsx`、`SourceDiff.tsx`、`monaco.ts`、`source-browser.ts` |
+责任索引见[架构](ARCHITECTURE.md#owner-与入口)。业务规则集中在 domain，路径和预算集中在根配置，配置／凭证集中在 configuration，媒体事务交给存储 owner。
 
-## 代码风格
+## 代码约定
 
-TypeScript 参考 [Google TypeScript Style Guide](https://google.github.io/styleguide/tsguide.html)，页面参考 [Google HTML/CSS Style Guide](https://google.github.io/styleguide/htmlcssguide.html)，沿用相邻代码格式。模块使用 kebab-case，TSX 组件和类型使用 PascalCase，函数及局部变量使用 camelCase。
+TS／TSX 沿用相邻风格，模块 kebab-case、组件与类型 PascalCase、局部符号 camelCase。后端不使用 strip-types 不支持的 enum、参数属性或装饰器。内部 UUID 称 issueId，业务编号称 issueKey，普通工作文件称 workFile，不混淆持久名称。
 
-后端不使用 strip-types 不支持的 enum、参数属性或装饰器。`issueId` 表示数据库 ID，`issueKey` 表示业务编号，工作文件用 workFile／workFiles，原始上传用 attachment。持久名称、Git refs 和协议字段按契约维护。
+应用 schema 使用公开 Pi Schema builders 与 `compile().check()`，默认对象关闭额外字段。HTTP、入站 MCP 和 execute 检查严格，不靠 coercion 修正输入；Pi 的初始模型工具管线可做其协议规范化，但不能代替可变钩子后的执行检查。外部格式显式使用官方 formats，重复验证器编译复用，公开 schema 与执行快照隔离。
 
-项目结构化 schema 统一使用 Pi 1.5 的 `@earendil-works/pi-schema` 公开 builders 与 `compile().check()`，不再直接依赖 TypeBox，也不保留兼容包装。对象默认关闭额外属性；HTTP／入站 MCP 和 execute 边界严格校验，不启用 coercion，重复使用的 schema 只编译一次。外部 MCP／SDK 工具 schema 显式使用官方 formats。只有 Pi 的模型工具初始管线负责协议级类型转换；应用仍保留权限、只读、目标范围及必要输入检查。默认值、规范化和授权由 owner 处理，不通过转换器隐式纠正。普通 JSON Schema 用 `structuredClone` 隔离，执行检查编译独立快照，防止可变钩子改写校验规则；等待后重新授权。SDK 自身仍依赖 TypeBox 的部分内部能力，不能据此声称整个依赖树已无 TypeBox。
+第三方 SDK／SRT 的 schema 继续使用其官方类型。应用不直接使用 TypeBox；SDK 的传递依赖仍可能包含它。默认值、凭证选择和授权不放进 schema 转换器。
 
-第三方 MCP／SRT 自有 schema 沿用官方 SDK，包括其 Zod 与域名规则。路由协调 owner，SQLite、Git、附件和命令授权各自维护；并发顺序见[系统架构](ARCHITECTURE.md#并发与失败清理)。
+抽象须有具体维护收益。重复校验若保护不同时间点／边界不能删；仅转发的层、不显著的扫描合并和无依据缓存也不应加入。
 
-DMS／SLS 共享凭据使用同一个 Web 表单和路由流程，差异仅为字段、解析器和存储列；查询目标由各自 scope 解析器校验。凭据选择与环境参数解耦，使用命名的个人／共享组。不要为已无运行调用者的旧整组配置解析入口保留分发层。输入校验与排队后重新授权、可变工具钩子后的执行检查属于不同边界，不能作为重复校验合并。
+## 隔离与变更边界
+
+真实 `.issue-pilot` 可能含密钥、附件、会话、dirty worktree 和恢复证据，绝不能作为测试夹具。后端使用 `buildApi({ stateRoot, databaseFile })` 或 manager 构造器注入临时根；手工服务器使用独立项目及根配置，没有 state 环境变量覆盖。
+
+Pi 会话测试显式传临时 agentDirectory，不能因注入模型 runtime 就忽略资源目录隔离。结束时关闭会话、扩展、协议和句柄；断言失败也必须 finally／onTestFinished 清理。
+
+不要在运行中的 checkout 安装依赖或覆盖 dist。动态 native-tool-executor／network-exec 会读取磁盘源码，即使 API 主进程没重启；健康 200 不证明动态执行可用。运行环境切换按[发布流程](RUNBOOK.md#按风险发布与重启)。
 
 ## 验证
-
-代码变更先运行所属行为测试，再完成适用的检查：
 
 ```bash
 npm run typecheck
@@ -60,59 +53,46 @@ npm run build
 git diff --check
 ```
 
-| 检查 | 覆盖 |
-| --- | --- |
-| typecheck | 前后端类型、DTO 与未使用局部符号 |
-| Node tests | 身份、配置、队列、事务、Git、文件和协议 |
-| Vitest／jsdom | 页面状态、交互、请求取消和适配 |
-| Vite build | 页面、Worker、字体及许可证资源 |
-| 浏览器／部署 | 真实尺寸、导航、运行环境和挂载 |
-
-没有独立 lint 脚本。递归 glob 作为一个带引号的参数传给 Node；资源受限时限制并发：
+没有独立 lint 脚本。资源受限时使用等价的有界并发：
 
 ```bash
 node --experimental-strip-types --test --test-concurrency=2 'tests/**/*.test.ts'
 npx vitest run --config src/web/vite.config.ts --environment jsdom --maxWorkers=1
 ```
 
-运行中的 API 若直接提供本 checkout 的 dist，验证构建使用独立目录：
+| 范围 | 验证重点 |
+| --- | --- |
+| 后端 | 身份重检、事务、预约、文件模式／哈希、Git、协议与关闭 |
+| Web | DTO、身份切换、取消、草稿、重连、冲突与局部状态 |
+| 迁移 | fresh DB、已有 schema、无损失败、纠正后重试、幂等和历史保留 |
+| 工具 | 可变钩子后输入、范围、只读、取消、预算与凭证不回退 |
+| 构建 | Worker、动态入口、字体、图标、许可证和生产依赖可导入 |
 
-```bash
-web_build_root="$(mktemp -d /tmp/issue-pilot-web.XXXXXX)"
-npm run build -- --outDir "$web_build_root"
-```
-
-运行时、依赖、协议安全和容器变更还验证生产依赖审计、Python 依赖、浏览器环境和可用健康检查：
+运行时、依赖、协议安全或容器变化还检查：
 
 ```bash
 npm audit --omit=dev --audit-level=high
 .venv/bin/python3 -m pip check
 ```
 
-Forge／Zod／glob 的正式修复版和剩余 Zod v3 加固需结合锁文件、安装 hash、攻击回归与协议兼容判断；定向主版本覆盖必须验证父依赖实际使用的 API，审计不能靠屏蔽通告或降级掩盖。SSH E2E 需要 sshd fixture，缺失时测试明确 skip，验收在具备服务端的独立环境完成。
+审计不能靠屏蔽或降级通过，主版本 override 必须覆盖父依赖实际 API。需要 sshd 的 SSH 测试缺夹具时明确 skip，不得把 skip 当通过。远程模型、认证、数据库和容器验收需要对应环境，测试不能证明所有代码安全。
 
-CI 在 main 提交和 PR 触发，使用 GitHub Ubuntu runner。私有包源、系统依赖和 SRT 必须对 runner 可用，本机结果不代表远程 Actions 结果。
-
-## 隔离与变更边界
-
-开始前检查 git status 并固定任务基线，保留已有改动。测试通过 `buildApi({ stateRoot, databaseFile })` 或 manager 注入临时根，使用临时 Git remote、faux 模型和协议 fixture。手工运行也使用独立项目及根配置，真实 `.issue-pilot` 不能作为测试夹具。SDK 会话测试显式传入临时 `agentDirectory`，不读取运行用户的全局 Pi settings／扩展；测试模型 runtime 的注入不能替代资源目录隔离。已创建的会话在 `finally` 中关闭，避免断言失败后遗留扩展进程或句柄，阻塞测试退出。
-
-按风险覆盖失败、重试、取消、重复调用、rollback／finalize 和 shutdown；schema 升级覆盖 fresh DB 和已有 schema。SQLite 回滚不能撤销文件／Git，未知目录、dirty worktree、缺失 ref 和错误现场不能靠删除、reset 或改绑定使检查通过。已发布迁移与 journal 不可修改。
-
-依赖／资源清理检查动态 import、Worker、CLI、类型、资源 URL、镜像和实际使用者。运行服务的依赖和网页产物通过发布步骤切换，提交、推送和真实状态操作须有授权。运行服务不要共用正在编辑且依赖未同步的开发 checkout：`native-tool-executor.ts`／`network-exec.ts` 是动态子进程入口，即使主进程未重启，也会读取当前源码；单独检查 `/health` 不能证明这些执行链路仍可用。
+CI 见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)：main push／PR 使用 Ubuntu 24.04，安装匹配依赖与 Python 后运行类型、测试、构建；本机通过不代表远程 Actions 已通过。
 
 ## Web 与浏览器
 
-Solid 2 使用 `createEffect(compute, callback)`，回调只返回清理函数或 undefined；有意仅读取初始值时用 untrack。ApplicationResources 持有共享资源与草稿，切换身份取消旧身份工作，迟到响应不能覆盖当前身份。Markdown 与 HTML 链接先解析到授权文件路径，再 DOMPurify 清洗。
+Solid 2 使用双参数 createEffect；回调只返回清理函数或 undefined。显式键的 For 子项是 accessor，读取最新值，不捕获会失效的原始对象。Match render callback 保留参数，零参数函数会按 accessor 处理，可能重建 DOM。
 
-历史会话列表仅包含已归档会话，打开后自动读取第一条，切换选择时重新读取。加载、空内容和读取失败在弹窗内明确展示；有对话内容时才渲染深色滚动区域，关闭或切换身份取消未完成读取。
+会话应覆盖流式帧批处理、最终覆盖、完整消息选区、原生 details 键盘操作、快照去重和身份隔离。不能只用 jsdom 断言节点来代替浏览器选区与布局检查。
 
-Monaco 组件负责释放 editor／model，保留 SHA-256 冲突、CRLF、自动保存、撤销、只读和导航语义。链接使用真实工单 URL，浏览器前进／后退及未保存代码拦截由行为测试验证。文件列表按需预览，加载失败可重试，超预算或不支持格式保留下载。附件和工作文件预览共用 `web.filePreviewBytes`：已知超限时不发请求；响应按声明长度和实际流字节检查，即使列表大小过期或 Content-Length 不实也不能无界累积，超限取消读取。普通下载不受预览预算限制。
+Markdown／HTML 经过授权路径解析和 DOMPurify。预览按响应声明与实际字节限制，超限取消读取；下载不因此截断。Monaco 负责释放 editor／model，保留 SHA-256 冲突、CRLF、撤销、自动保存和导航拦截。
 
-CodeBrowser／Monaco 已按页面需求动态加载；Monaco 的单个上游 editor.api 及语言服务产物仍可能超过 Vite 默认 500 kB 提醒。先核对首页加载图和实际压缩传输体积，不为消除提示随意拆分同一上游模块、抬高告警阈值或删除现有编辑能力。
+CodeBrowser／Monaco 已动态加载。单个上游编辑器或语言服务仍可能超过默认 chunk 提醒；先看加载图和压缩传输，不为消除提示抬高阈值、任意拆分或删掉编辑能力。
 
-图标使用 Phosphor SVG，编辑器 Codicon 按需加载，文件图标沿用 Material Icon Theme。Geist 字体、来源与许可证在 ui/assets 维护；更新同步 provenance 和许可证，保留焦点、减少动效及手机触控尺寸。
+真实浏览器使用独立演示数据、临时工具／镜像，记录源码版本、工具版本、视口、场景及缺口；不要把历史截图当当前验收。图片读取夹具在 [tests/fixtures](../tests/fixtures/README.md)，替换其字节须运行 `tests/agent/codemode.test.ts`。
 
-真实浏览器采用 Operator 工具或临时镜像，记录工具版本、尺寸和结果；使用独立演示数据。弹窗不因点击遮罩关闭，通过关闭、取消或 Esc 退出；保存期间保留关闭限制。截图位于 [images](images/README.md)，源码树、文件 hash 和验证来源写入 manifest。workspace.jpg 还供图片读取测试使用，替换时运行 `tests/agent/codemode.test.ts`。
+## 文档与资源清理
 
-文档检查链接、锚点、页面阅读效果与代码契约；流程使用简短文字步骤。纯文档变更按此范围验证，完成后清理临时页面、服务和构建，只保留有用结果。
+指南按 owner 描述当前契约，不维护功能变更流水账。检查相对链接、锚点、示例和源码一致性；旧方案留在 Git 历史，必要离线迁移说明单独保存。
+
+删除前检查静态和动态 import、CLI、Worker、构建复制、URL、测试夹具和外部使用者。迁移 SQL／journal 不变，无法证明无用的路径保留。node_modules、venv 和 dist 若服务仍在使用就不是垃圾；测试临时根、旧构建与镜像也须确认进程／挂载和持久引用后再删。

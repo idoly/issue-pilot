@@ -1,26 +1,24 @@
 # 部署指南
 
-[文档导航](README.md) · [配置](CONFIGURATION.md) · [发布与恢复](RUNBOOK.md)
+[文档导航](README.md) · [配置](CONFIGURATION.md) · [运维](RUNBOOK.md)
 
-应用可在 Linux 主机或单副本容器中运行。Fastify 同源提供网页、API、SSE 和入站 MCP，同一 state root 只允许一个 API 实例。
+## 部署拓扑
 
-## 部署结构
-
-浏览器与 MCP 客户端经认证网关进入 Node 应用。应用连接持久 state、Operator 配置和允许的外部目标。
+应用在 Linux 主机或单副本容器运行。API 同源提供网页、HTTP、SSE 和入站 MCP，同一 state root 只能有一个 API 实例。生产访问经可信认证网关，不能仅把 subject 请求头或页面账号选择当认证。
 
 | 资源 | 要求 |
 | --- | --- |
-| 业务 state | SQLite 文件组、工单目录、Git 和单实例控制目录，独立持久化 |
-| Operator HOME | Pi 模型、认证、settings、资源、SSH known_hosts 和工具配置 |
-| 运行工具 | Python、Git、Java／Maven、aliyun CLI 与 SRT 系统依赖 |
-| 外部目标 | 模型、Git、日志／数据源及服务 MCP 的精确网络出口 |
-| 网关 | 认证并绑定 subject，支持 SSE 长连接，关闭流式代理缓冲 |
+| 业务 state | SQLite 文件组、工单、Git、控制目录持久化 |
+| Operator 配置 | 运行账号的 Pi 设置／模型／资源、SSH known_hosts 和工具配置 |
+| 系统能力 | 非特权 namespace、seccomp、SRT 依赖和实际开发工具 |
+| 外部出口 | 精确模型、Git、查询目标和服务 MCP 地址 |
+| 网关 | 认证并绑定 subject，限制传输和内存压力，支持长 SSE |
 
 ## 首次本地运行
 
-开发与 CI 使用 Node 24.18.0。准备 Python 3.8+ 与 venv、Git、ripgrep、fd／fdfind、OpenSSH client、bubblewrap、socat、proxychains4、aliyun CLI，以及项目所需 Java／Maven。
+开发／CI 使用 Node 24.18.0，容器使用 Node 26。安装 Python 与 venv、Git、ripgrep、fd／fdfind、OpenSSH client、bubblewrap、socat、proxychains4；SLS 需要 aliyun CLI，开发项目另需对应 Java／Maven／Node 工具。
 
-在独立安装目录检查[根配置](../issue-pilot.config.ts)，设置部署账号的 bootstrapUser，准备 Operator Pi 模型和 SSH known_hosts，再执行：
+在独立安装目录检查 [issue-pilot.config.ts](../issue-pilot.config.ts)：bootstrapUser、监听地址、端口、预算和根路径必须适合该部署。准备运行用户的 Pi models／settings 和可信 known_hosts，再执行：
 
 ```bash
 npm ci
@@ -30,50 +28,57 @@ npm run build
 node --experimental-strip-types src/http/production.ts
 ```
 
-默认 3000 同时提供网页和接口。state 默认为安装目录 `.issue-pilot`，路径由根配置决定，没有 state／database 环境变量覆盖。隔离运行使用独立项目和根配置；测试由 fixture 注入临时路径。
+npm postinstall 校验固定版本补丁，需要 Git，不可跳过。不要擅自批准被安装策略阻止的脚本；外部数据库原生驱动等能力需单独验收。
 
-业务配置在页面／API 保存，个人凭证在“配置 → 用户”维护。`npm ci` 的 postinstall 校验并应用固定版本补丁，需要 Git；安装与 SDK 校验不能跳过。Python 库按 [requirements.txt](../requirements.txt) 安装到应用 `.venv`，原生 Bash 自动使用该环境。
+state 默认是安装目录 `.issue-pilot`，数据库文件名来自根配置。路径相对于源码根解析，没有 state／database 环境变量覆盖；手工隔离服务器使用独立项目和根配置，测试使用构造器注入。
 
-### 前端入口与进程
+用户、凭证、仓库、服务与部署由页面／API 保存到 SQLite，不创建业务 YAML。模型请求 Key 来自数据库，Pi 的认证文件不作为 fallback。
 
-| 入口 | 用途 |
+## HTTP 与 Web 入口
+
+| 入口 | 行为 |
 | --- | --- |
-| API 3000 | 直接提供构建网页和所有接口 |
-| `npm run dev:web`，4173 | 开发 HMR，转发 API／MCP 到 3000 |
-| `vite preview --config src/web/vite.config.ts --strictPort`，4173 | 提供构建产物，转发到同一个 API |
-
-现有主机使用 user systemd units `issue-pilot-api.service` 与 `issue-pilot-web.service`。操作前核对实际启动目录、产物和 PID：
+| API 3000 | 提供构建后的 Web、API、SSE 和 MCP |
+| dev:web 4173 | 开发 HMR，代理 /api 和 /mcp |
+| vite preview 4173 | 提供已构建产物，代理到同一 API |
 
 ```bash
-systemctl --user show issue-pilot-api.service issue-pilot-web.service --property=MainPID,ExecStart,WorkingDirectory --no-pager
+npm run dev:web
+# 或仅提供构建产物
+node node_modules/vite/bin/vite.js preview --config src/web/vite.config.ts --strictPort
 ```
 
-前端构建与 TypeScript 后端更新按[发布流程](RUNBOOK.md#按风险发布与重启)激活，开发 HMR 不替代后端发布。
+现有主机的 user units 为 issue-pilot-api.service 和 issue-pilot-web.service。4173 是可选入口，但已有使用者时不能仅因 API 也能提供网页就认定它无用。
 
-## 容器构建与 Kubernetes
+```bash
+systemctl --user show issue-pilot-api.service issue-pilot-web.service \
+  --property=MainPID,ExecStart,WorkingDirectory --no-pager
+```
 
-[Containerfile](../Containerfile) 以 Node 26 构建，安装生产依赖、Python venv、Git 2.56.0、aliyun CLI 3.5.2 与 Java／Maven，以 UID／GID 1000 运行。Git 使用官方 NO_RUST 构建选项，基础镜像跟随声明 tag；准确依赖由锁文件、requirements 和安装补丁决定。
+supervisor 应使用匹配的源码、依赖、venv 和产物，后端允许足够时间优雅排空。已有实例的更新、备份和回退遵循[运维手册](RUNBOOK.md)，不能在运行中混装依赖。
 
-在独立构建目录完成[验证](DEVELOPMENT.md#验证)，替换版本与 registry：
+## 容器构建
+
+[Containerfile](../Containerfile) 使用 Node 26 构建 Web 并保留已修补生产依赖；从 Maven 镜像提供 Java 8／Maven，从独立阶段构建 Git 2.56.0，安装 aliyun CLI 3.5.2 和 Python requirements。Git 采用 NO_RUST 构建，不依赖主机 Git。
 
 ```bash
 podman build -f Containerfile -t registry.example.com/issue-pilot:<version> .
 podman push registry.example.com/issue-pilot:<version>
 ```
 
-构建网络需访问基础镜像、npm／Python／Debian 包源和 Git 源码。部署使用 [deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml)，单副本 Recreate；SQLite、进程队列和受管 Git 不支持多个 API 共享写入。
+替换 registry 和版本，网络须能访问声明的基础镜像、包源和源码。构建缓存是可再生成资源，但当前 Containerfile 引用的基础镜像不是运行服务本身；清理前区分镜像、容器、挂载和 volume。
 
-| 挂载 | 容器路径 |
+## Kubernetes
+
+[deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml) 使用单副本 Recreate、UID／GID 1000、只读根文件系统、RuntimeDefault seccomp，不挂载 ServiceAccount token，并移除 capabilities。不能用 privileged 或弱隔离绕过 SRT 失败。
+
+| 主机资源 | 容器路径 |
 | --- | --- |
-| `/var/lib/issue-pilot`，持久 hostPath | `/opt/issue-pilot/.issue-pilot` |
-| `/etc/issue-pilot`，只读 hostPath | `/home/node`，Operator 配置 |
-| 临时 emptyDir | `/tmp` |
+| /var/lib/issue-pilot | /opt/issue-pilot/.issue-pilot，持久 state |
+| /etc/issue-pilot | /home/node，只读 Operator 配置 |
+| emptyDir | /tmp，临时执行资源 |
 
-准备目录的 owner／mode、容量及 `issue-pilot/state=true` 节点标签。已有状态的绝对路径必须继续可解析，路径迁移单独演练。Pi 资源随 Operator HOME 提供，默认位于 `~/.pi/agent`；Node／Maven 缓存和工具 TMPDIR 位于工单根。
-
-容器只读根文件系统、移除 capabilities、不挂载 ServiceAccount token。节点需支持非特权 user／PID／mount／network namespace 与 seccomp，按 SRT 正常隔离条件部署，不使用 privileged 或弱隔离规避错误。
-
-准备 namespace、网关和数据后执行：
+准备 owner／mode、容量、节点标签 `issue-pilot/state=true`、网关与镜像后执行：
 
 ```bash
 kubectl -n issue-pilot apply -f deploy/issue-pilot.yaml
@@ -81,12 +86,12 @@ kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 kubectl -n issue-pilot get deployment,pod,service
 ```
 
-DNS、TLS 证书、认证网关和业务凭证由部署方准备。
+示例域名和 registry 不能直接当生产配置。绝对路径已成为状态记录时，迁移路径必须独立演练，不能仅改挂载点或批量改数据库绑定。
 
 ## 网络与验收
 
-网关保护 API、源码、下载、私有配置和 MCP，约束 `X-Issue-Pilot-Subject` 与认证身份，日志不记录密钥或完整敏感响应。应用附件不设业务总大小／数量上限，边缘传输限制由部署方明确，图片／MCP／预览预算见根配置。
+网关限制可信 subject、源码／下载／私有配置／MCP 的访问，日志不能记录密钥或完整敏感响应。SSE 代理关闭缓冲并设置合理长连接超时；应用附件没有业务总大小／数量上限，边缘层应约束请求和容量。
 
-本地工具与 stdio MCP 的出口通过全局 Agent runtime 追加精确域名／端口，SSH 22 与 HTTPS 443 分别声明。验证模型、包源、Git 和协议目标，远程服务仍实施自己的授权。
+本地工具及 stdio MCP 按全局 runtime 追加精确出口域名／端口，SSH 与 HTTPS 分别配置；不能用允许列表代替外部业务授权。
 
-验收覆盖健康、页面、临时工单工具写入与越界拒绝、Python／Excel、stdio MCP、Git 暂存／提交。个人 SSH 用临时身份或 fixture 验证成功、错误身份和未知主机拒绝。容器隔离失败、协议异常和依赖审计按[开发指南](DEVELOPMENT.md)定位；数据与 Git 检查及回退按[运维手册](RUNBOOK.md)执行。
+上线验收至少覆盖健康、页面与身份、SSE、动态工具执行、文件越界拒绝、Python／Excel、stdio MCP、Git 与个人 SSH。健康 200 只说明服务可响应，不能证明外部模型、数据库、认证或所有沙箱链路可用。验收方法见[开发指南](DEVELOPMENT.md#验证)，真实状态检查见[运维手册](RUNBOOK.md)。

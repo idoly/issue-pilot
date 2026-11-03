@@ -164,7 +164,7 @@ for (const autoResize of [true, false]) test(`native image reads retain resize s
   let managed;
   try {
     // Valid JPEG with trailing padding exercises the SDK's encoded-size limit without a new image dependency.
-    const original = Buffer.concat([await readFile(new URL("../../docs/images/workspace.jpg", import.meta.url)), Buffer.alloc(4 * 1024 * 1024)]);
+    const original = Buffer.concat([await readFile(new URL("../fixtures/agent-image.jpg", import.meta.url)), Buffer.alloc(4 * 1024 * 1024)]);
     await writeFile(path.join(f.root, "input.jpg"), original);
     const model = f.models.getModel("codemode-fixture", "fixture");
     assert.ok(model);

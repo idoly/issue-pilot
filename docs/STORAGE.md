@@ -1,39 +1,39 @@
-# 数据存储设计
+# 数据存储
 
-[文档导航](README.md) · [系统架构](ARCHITECTURE.md) · [运维手册](RUNBOOK.md)
+[文档导航](README.md) · [架构](ARCHITECTURE.md) · [运维](RUNBOOK.md)
 
-SQLite 保存业务关系，Pi JSONL 保存对话，普通文件保存附件与工作结果，Git 保存代码状态。它们共同构成工单事实，恢复时必须匹配。
+## 事实来源与状态分类
 
-## 数据分别放在哪里
+| 分类 | 内容 | 处理原则 |
+| --- | --- | --- |
+| 持久 | SQLite 文件组、Pi JSONL、附件、工作文件、私有 Git refs／新对象／索引 | 匹配恢复，不能作为缓存删除 |
+| 有条件持久 | 活动开发 worktree、未提交／untracked／ignored 文件 | 只有满足 owner 释放条件才移除 |
+| 生成 | 运行视图、控制 socket、临时网络配置、受管共享 checkout、缓存 | 先确认归属与状态，异常内容可能是恢复证据 |
+| 配置 | 根配置、SQLite 业务设置、Operator Pi／工具配置 | 与运行版本一起保留 |
+| 安装产物 | node_modules、venv、构建网页 | 从匹配锁文件、依赖补丁和 requirements 生成 |
 
-| 内容 | 存储与 owner |
-| --- | --- |
-| 用户、配置、工单和绑定 | SQLite，[schema.ts](../src/db/schema.ts) |
-| 消息、工具结果、会话分支 | Pi JSONL，[pi-session.ts](../src/agent/pi-session.ts) |
-| 附件原件与元数据 | 工单文件加 DB，[attachment-store.ts](../src/http/attachment-store.ts) |
-| 普通工作文件与查询导出 | 工单根目录，[work-files.ts](../src/workspace/work-files.ts) |
-| 代码、对象、refs 与索引 | 共享／工单 Git store，[git.ts](../src/workspace/git.ts)、[issue-git.ts](../src/workspace/issue-git.ts) |
-
-Agent 对话不另建 SQL 消息表。人工评论属于 `issue_comments`，与 Pi 对话分开。
+SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来源，普通文件保存原件和成果。Agent 对话不另存 SQL 消息表；人工评论独立保存在 issue_comments。GET 脱敏不等于存储加密，数据库和恢复点均属敏感数据。
 
 ## 数据表关系
 
-| 关系 | 约束 |
+当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。
+
+| 关系 | 要点 |
 | --- | --- |
-| repositories → service_repositories | 仓库 URL 去重，服务关联保存 alias |
-| services + environments → service_deployments | 每个服务／环境组合唯一，config 保存查询目标 |
-| deployment + service_repository → service_deployment_repositories | 保存部署基线分支 |
-| deployment → mcp_services | 标记服务工具归属，生成连接随部署级联删除 |
+| subjects → credentials／preferences | 角色、管理标记、活跃状态与个人组分离 |
+| services + environments → deployments | 服务／环境组合唯一，部署保存目标和仓库基线 |
+| repositories → service_repositories | URL 去重，服务关联保存别名 |
+| deployment → mcp_services | 标记工具归属，生成连接随对应目标管理 |
 | issues → issue_workspaces | 每张工单恰有一条 Workspace |
-| issues → issue_pilot_sessions | 绑定 Pi JSONL 与工作根 |
-| issues → issue_repositories | 保存 URL、基线／工作分支、路径、workspace name、commit |
-| issues → issue_attachments | 保存文件名、物理名、mediaType、size、SHA-256 和上传者 |
-| issues → scope／transition | 保存 include／remove 意图及范围变更计划快照 |
-| issues → comments／cc／relations／pins | 人工评论、抄送、有向关联与用户置顶 |
+| issues → issue_pilot_sessions | 绑定当前 JSONL 和工作根 |
+| issues → issue_repositories | 记录 URL、基线／工作分支、路径、workspace name 和 commit |
+| issues → attachments | 文件名、物理路径、mediaType、size、SHA-256、上传者 |
+| issues → scopes／transitions | 包含服务意图与范围变更快照 |
+| issues → comments／cc／relations／pins | 评论、抄送、有向关联和用户置顶 |
 
-`issues.id` 是内部 UUID；业务编号为 `ISSUE-YYYYMMDD-NNN...`，按配置时区生成，HTTP 工单 DTO 的 id 使用业务编号，磁盘目录用小写编号。工单范围必须匹配有效 Deployment，resolved 与非空 resolved_at 等价。字段与触发器以 schema 和 migration SQL 为准。
+内部 issues.id 为 UUID，业务编号为配置时区的 `ISSUE-YYYYMMDD-NNN...`。HTTP 工单 DTO 的 id 使用业务编号，磁盘目录使用小写。工单服务／环境须匹配 Deployment，resolved 与非空 resolved_at 等价。
 
-用户、个人凭证、仓库和服务带 revision；共享 DMS／SLS 凭据及各自独立版本保存在 application_settings，共享 API Key 与全局 Agent 一起保存在 global_agent_configuration，个人模型组保存在 user_credentials.model_credentials（历史 model_api_keys 仅保留不读取），部署仅保存对应查询范围。配置关系在 owner 事务中更新，服务仓库绑定变化保留其 ID 与创建时间；全局 Agent、开关和偏好分别保存在对应业务表。
+用户、个人凭证、仓库和服务使用 revision；共享 DMS／SLS 各有独立版本，保存在 application_settings。共享模型组在 global_agent_configuration，个人模型组在 user_credentials.model_credentials。历史私有字段不能用于补齐当前配置。
 
 ## 目录布局
 
@@ -48,43 +48,46 @@ Agent 对话不另建 SQL 消息表。人工评论属于 `issue_comments`，与 
     │   ├── repositories/<url-hash>/
     │   └── checkouts/<url-hash>/<commit>/
     ├── workspaces/<issue-key>/
-    │   ├── <repo>/
+    │   ├── <repository>/
     │   ├── .issue-git/<url-hash>/
     │   ├── .session-<name>.jsonl
     │   ├── .attachment-<id>.<ext>
     │   ├── .issue-runtime.json
     │   ├── .related-<key>{,.json,.jsonl}
     │   ├── .npm-cache/、.maven-cache/
-    │   └── 脚本、检查点、日志、报告等普通文件
+    │   └── 普通脚本、日志、报告与检查点
     └── control/
 ```
 
-`issueRoot(stateRoot, issueKey)` 是统一工单根，也是 Agent cwd。state 目录为 0700，数据库与 JSONL 为 0600，附件为 0400。模型与资源配置位于 Operator 的 Pi 全局目录，默认 `~/.pi/agent`；安装产物和完整恢复点位于工单目录之外。
+[issueRoot](../src/workspace/state.ts) 是统一工作根和 Agent cwd。state 为 0700，数据库／JSONL 为 0600，附件为 0400。资源来自 Operator 全局 Pi 目录，完整恢复点必须在 state 之外。
 
-仓库目录在活动开发时是 worktree，在调查或已释放状态下是受控只读视图。关联链接指向源工单真实目录，json 元信息和 jsonl 引用在准备时生成。管理文件仅列名称，不提供普通原始下载；越界链接、Git 控制文件和特殊文件由 API 拒绝。工作文件下载和源码文件读取在路径校验后，还通过 Linux `/proc/self/fd` 复核实际打开的描述符，防止父目录在校验与打开之间被替换。工作文件列表和源码树从固定目录描述符枚举并读取元信息，单项失败时也等待其他元信息操作结束后再关闭目录，避免描述符提前释放。blame 的工作文件预读复用源码读取校验。源码文件保存、新建、目录创建、删除和重命名固定已校验父目录的描述符后执行，临时文件、回滚备份和清理同样使用该固定目录；不能仅在写入之后检查路径并报错。目录并发改名可能使返回内容的读取失败，但不应把操作重定向至符号链接的外部目标；失败保留现场，不自动重试写入。
+工作目录 API 可列管理文件名称，但不提供普通原始下载。源码和工作文件使用校验后的固定目录／文件描述符，拒绝越界、Git 控制文件、特殊文件和非法链接。写操作固定父目录后执行临时写入、回滚与清理，不能仅在写后检查路径。
 
 ## 文件写入与发布
 
-附件先暂存并计算 size／hash，再由工单事务协调文件与 DB。原始文件名保存在元数据及下载响应；物理名包含 UUID，按 UTF-8 字节预算裁剪描述并保留可容纳的扩展名。
+### 附件
 
-读取原件检查直属路径、regular file、精确 0400、DB 大小与 SHA-256。下载用固定缓冲先完整校验，再从同一描述符流式发送，取消时关闭；因此可能读文件两次，但内存有界且校验失败不会发送内容。Agent 准备使用同样校验，随后关闭描述符交原生工具读取；这不是持续监控。删除先 quarantine，事务失败恢复，提交后 finalize；收尾失败和原失败一起报告。
+[attachment-store.ts](../src/http/attachment-store.ts) 暂存原件、计算大小／哈希，再与工单事务协调。物理名包含 UUID，并遵守文件名 UTF-8 字节预算；原名留在元数据与下载响应。
 
-Agent 粘贴图片保存在 Pi 消息中。工作目录中的脚本、表格和报告是普通文件，附件要编辑时显式另存。文件预览按类型及预算按需读取，下载通过授权工作文件 API。附件及工作文件的下载文件名由 `content-disposition` 按标准生成，保留 Unicode 与标点，不手写扩展参数编码。工作文件 API 将不存在／非目录祖先返回 404、符号链接循环返回 400，不向响应暴露内部路径。
+读取要求直属工单根、regular file、精确 0400、DB 大小与 SHA-256 匹配。下载先有界完整校验，再从同一描述符发送，避免校验后重新打开可变路径；取消关闭句柄。Agent 准备也验证原件，但不声称持续监控之后的外部修改。
 
-对话文件链接只解析当前 `workspaces/<key>` 布局、普通相对路径及受支持的 sandbox 链接。相对路径中的 `outputs/`、`work/`、`attachments/` 是真实目录名，不再剥除为历史别名；旧 `issues/<key>` 绝对路径不自动转换。历史对话和离线迁移证据原样保留，关联工单仍须显式授权。
+删除先 quarantine，事务失败恢复，提交后 finalize；原失败和收尾失败都保留。准备 Agent 不自动复制可编辑附件，粘贴图片属于 Pi 消息。
 
-1. 校验文件名、路径、目标类型和取消信号。
-2. 独占创建临时文件，完成内容写入和协议收尾。
-3. 关闭文件并再次检查取消，用原子 rename 替换目标。
-4. 返回下载路径；提交前失败保留原文件，收尾错误独立报告。
+### 工作文件与导出
 
-查询导出同名目标按实际路径跨实例串行，排队取消不启动生产者；拒绝管理名、路径和非普通目标。DMS 收尾成功后才替换文件，提交的 rename 不自动回滚，清理失败保留原始错误。
+[work-files.ts](../src/workspace/work-files.ts) 负责普通工作文件。导出先校验目标，再独占临时文件、完成内容与协议收尾、复查取消，最后原子 rename 替换。提交前失败保留旧文件，清理失败不掩盖原错误；已经提交的 rename 不因后续诊断自动回滚。
 
-Source 保存先核对读取时 SHA-256，冲突返回 `source_file_changed`。临时文件独占创建，只清理本次拥有且尚未发布的临时路径；原失败和清理失败聚合为 `source_save_cleanup_failed`。
+同一路径导出串行，等待取消不启动生产者。下载文件名使用标准 Content-Disposition；不存在或非目录祖先返回 404，链接循环返回 400，不暴露内部路径。预览有预算，普通下载不因此截断。
+
+对话链接解析当前 workspace、普通相对路径和授权相关工单。`outputs/`、`work/`、`attachments/` 是真实相对目录，不剥除为旧别名；旧 issues 绝对路径不自动转换，历史 JSONL 和离线索引不改写。
+
+### 源码保存
+
+Source API 使用读取时 SHA-256 检测冲突，`source_file_changed` 不可盲目覆盖。临时文件独占创建，只清理本次拥有且未发布的路径；原写入和清理失败聚合报告。目录并发变化可使读取失败，不能把写入重定向到外部链接目标。
 
 ## Git 与工作区
 
-共享 bare store 提供基线对象和只读 checkout。开发工单建立私有 Git store，复用只读基线对象，持有自己的分支、新对象、worktree 和索引。满足释放条件后移除代码目录，保留本地分支及其他工单文件；重开从本地分支恢复。
+共享 bare store 提供基线对象及 detached 只读快照。开发工单持有私有 store、分支、新对象、worktree 和索引，只读复用基线对象，不跨工单共享可写硬链接。
 
 | 仓库集合状态 | local_path | working_branch |
 | --- | --- | --- |
@@ -93,32 +96,24 @@ Source 保存先核对读取时 SHA-256，冲突返回 `source_file_changed`。�
 | development_snapshot | 全 NULL | 全非空 |
 | invalid | 空集合、混合或其他组合 | 拒绝并检查 |
 
-工单 `.issue-git` 是持久数据，保存 refs、索引、新对象和发布检查点；基线通过只读 alternates 复用，不跨工单共享可写硬链接。Git config、hooks、alternates 和绑定指针由应用维护，可信操作前检查真实路径、类型和 link count。
+只读基线按完整远端 ref 解析；冷启动可准备新共享快照并刷新对应 commit 基线，不修改历史分支／路径。已有开发分支只从本地 store／ref 恢复，缺失或损坏时报错，不 reset、远程回退或猜测修复。
 
-共享基线按完整 `refs/remotes/origin/<branch>` 解析，checkout 复用时核对 HEAD、common dir、tracked／untracked／ignored。已有工作分支的准备与重开只用本地 store/ref，缺失时失败。`show-ref --exists` 仅返回码 2 代表不存在，损坏 ref 或缺对象继续报告。
+复用 checkout 检查 HEAD、common dir 和 tracked／untracked／ignored；config、hooks、alternates、指针和 link count 也由 owner 检查。模型不可改 Git 配置，推送可显式指定分支；远端成功而本地 upstream 更新失败时先核对远端，不自动重复推送。
 
-释放要求已解决、空闲、布局和分支匹配、工作树 clean，包括 staged、untracked 和 ignored 检查；只移除登记的 worktree，保留根目录其他文件。应用导入工单对象并以发布提交作 compare-and-swap，ref 外部变化时拒绝覆盖。批量失败按原 ref／commit 恢复，不能 reset 或猜测修复绑定。
+释放要求已解决、空闲、布局与分支匹配且 clean，包括 staged、untracked、ignored。只移除登记的代码 worktree，保留工单根、文件、会话和持久分支。发布使用 compare-and-swap，外部 ref 变化拒绝覆盖；跨媒体失败按 owner 恢复，不能用 SQL rollback 代替。
 
-私有 origin 使用标准 fetch 映射，安全的自身分支跟踪配置可保留。模型工具不能写 Git 配置，推送可显式指定 `git push origin <branch>`；需要改跟踪设置时由受信操作者在空闲状态维护。远端更新而本地 upstream 写入失败时，先核对远端再处理本地。
-
-`issue_service_scopes` 先保存服务意图，再准备资源；同 URL 分支冲突拒绝，失败保留事实供重试。代码释放后视图恢复失败记录 runtimeReady 和 lastError，下一轮维护在预约内重新检查并恢复。单候选失败记录后继续其他候选，整体 DB／容量测量失败正常上报。
+服务 scope 先保存意图，再准备资源；相同 URL 的分支冲突拒绝。失败保留事实供重试，释放后视图恢复失败记录 runtimeReady／lastError，维护在预约内重新检查。
 
 ### 容量统计
 
-`totalBytes` 累计工单根目录，包含附件、会话、工作文件、缓存和私有 Git；`sharedGitBytes` 单独计算共享 git 目录。采样是按目录分配空间，不是主机全盘占用或同一时点快照。
+`totalBytes` 统计工单根分配空间，含缓存和私有 Git，`sharedGitBytes` 单独计量。结果不是主机全盘占用或原子磁盘快照。
 
-完成快照最多缓存 60 秒，并发请求共享扫描；`GET /api/workspaces/stats?refresh=true` 重新采样，结果带 sampledAt。回收／重开／范围变更前后失效缓存，真实释放重新检查。每个工单独立 du，释放结果是根目录的实际减少量，候选占用不等于可释放量。
+并发读取共享扫描，完成快照最多缓存 60 秒；`GET /api/workspaces/stats?refresh=true` 请求重新采样并返回 sampledAt。生命周期变更使缓存失效，真实释放重新检查。候选占用不等于可释放量，释放量以实际减少为准。
 
-## 一致性与恢复单位
+## 升级与恢复
 
-| 分类 | 内容与要求 |
-| --- | --- |
-| 持久 | DB 文件组、JSONL、附件、工作文件、本地 Git；恢复时保持匹配 |
-| 有条件持久 | 活动 worktree；满足释放条件前保留未提交及 ignored 内容 |
-| 生成 | runtime、临时网络配置、控制 socket、受管 checkout、缓存；由 owner 确认状态后处理 |
-| 配置 | 根运行配置、SQLite、Pi 与 Operator 工具配置；随匹配版本保留 |
-| 安装产物 | node_modules、venv、构建网页；从匹配锁文件和补丁生成 |
+数据库使用 WAL 和 FK，配置读取使用 read snapshot。已发布 SQL／journal 不改写，升级增加新迁移并验证 fresh DB、已有 schema、失败回滚和重试。
 
-SQLite 使用本地 libSQL，启用 WAL 和 FK，时间戳以秒保存。配置读取通过原生 read transaction 获取快照；已发布 migration SQL／journal 不可修改，新增升级要覆盖 fresh DB 与已有 schema。
+正常启动不自动解析旧目录或采用未知路径。离线迁移工具独立处理确认过的旧状态，见[旧目录迁移](operations/legacy-layout-migration.md)。迁移索引仅是恢复证据，正常运行读取当前工作文件。
 
-SQLite 回滚不恢复文件和 Git。未知目录、变化的 checkout、quarantine 和异常临时文件可能是证据，先检查所属事务阶段。凭证 GET 脱敏不等于存储加密，数据库、会话、文件及备份均按敏感数据管理。保留与恢复步骤统一见[运维手册](RUNBOOK.md)。
+未知目录、quarantine、异常临时文件或变化的 checkout 先查所属阶段，不当作垃圾删除。备份、发布检查与恢复顺序统一见[运维手册](RUNBOOK.md)。
