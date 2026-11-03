@@ -167,7 +167,7 @@ describe("native code browser", () => {
     expect(screen.getByRole("button", { name: "查看差异 a.txt" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "历史" }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(screen.getByText("CHANGES")).toBeTruthy();
+    expect(screen.getByText("变更")).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看差异 a.txt" })).toBeTruthy();
   });
 
@@ -269,7 +269,7 @@ describe("native code browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
-    fireEvent.click(await screen.findByRole("button", { name: "Open in editor" }));
+    fireEvent.click(await screen.findByRole("button", { name: "在编辑器中打开" }));
     const editor = (await screen.findByLabelText("代码内容 搜索结果 needle")) as HTMLTextAreaElement;
     expect(editor.readOnly).toBe(true);
     expect(editor.value).toBe("app/b.txt\n  1: needle");

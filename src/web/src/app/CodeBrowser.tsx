@@ -1077,7 +1077,7 @@ export default function CodeBrowser(props: {
           <Show when={view() === "changes"}>
             <div class="source-section-title">
               <Codicon name="chevron-down" size={14} />
-              <span>REPOSITORIES</span>
+              <span>仓库</span>
             </div>
             <div class="source-repository-list">
               <For each={repositories()}>
@@ -1188,7 +1188,7 @@ export default function CodeBrowser(props: {
             <Show when={!searching() && searched()}>
               <div class="source-search-summary" role="status">
                 <Show when={matches().length} fallback="没有搜索结果">
-                  {matches().length} results in {searchFiles().length} files - <button onClick={openSearchEditor}>Open in editor</button>
+                  在 {searchFiles().length} 个文件中找到 {matches().length} 条结果 · <button onClick={openSearchEditor}>在编辑器中打开</button>
                 </Show>
               </div>
             </Show>
@@ -1291,7 +1291,7 @@ export default function CodeBrowser(props: {
             <section class="source-git-pane">
               <div class="source-section-title">
                 <Codicon name="chevron-down" size={14} />
-                <span>CHANGES</span>
+                <span>变更</span>
               </div>
               <Show when={writable()}>
                 <form class="source-commit-form" onSubmit={commit}>

@@ -268,7 +268,7 @@ textarea {
   width: 100%;
   min-height: 88px;
   gap: 5px;
-  padding: 10px 30px 10px 14px;
+  padding: 12px 32px 12px 16px;
   text-align: left;
   border: 0;
   border-bottom: 1px solid #e1e6e3;
@@ -304,8 +304,8 @@ textarea {
 }
 .queue-pin {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 8px;
+  right: 8px;
   display: grid;
   width: 24px;
   height: 24px;
@@ -389,7 +389,7 @@ textarea {
   overflow: hidden;
   color: #202724;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.45;
   overflow-wrap: anywhere;
   text-overflow: ellipsis;
@@ -435,7 +435,7 @@ textarea {
 .queue-chevron {
   position: absolute;
   top: 50%;
-  right: 9px;
+  right: 12px;
   color: #a4aeaa;
   transform: translateY(-50%);
   transition:
@@ -450,7 +450,7 @@ textarea {
 .queue-empty,
 .queue-loading,
 .queue-error {
-  padding: 24px 14px;
+  padding: 24px 16px;
   color: #77817d;
   text-align: center;
 }
@@ -628,7 +628,7 @@ textarea {
 .attachment-picker-header small {
   margin-left: 3px;
   color: #89928e;
-  font-size: 10px;
+  font-size: 11px;
 }
 .attachment-file-list {
   display: grid;
@@ -662,7 +662,7 @@ textarea {
 }
 .attachment-file small {
   color: #7a8580;
-  font-size: 10px;
+  font-size: 11px;
 }
 .create-error {
   padding: 8px 10px;
@@ -910,7 +910,7 @@ textarea {
   background: #eef3f0;
   color: #738079;
   text-align: center;
-  font-size: 10px;
+  font-size: 11px;
 }
 .working-files-heading {
   min-width: 0;
@@ -945,7 +945,7 @@ textarea {
   overflow-y: auto;
   scrollbar-gutter: stable;
   border: 1px solid #e1e5e3;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 .issue-directory-list .issue-attachment-row {
   min-height: 42px;
@@ -1876,8 +1876,8 @@ summary.agent-tool-head > svg {
 }
 .agent-composer textarea {
   width: 100%;
-  height: 18px;
-  min-height: 18px;
+  height: 20px;
+  min-height: 20px;
   overflow: hidden;
   resize: none;
   padding: 0;
@@ -1885,10 +1885,10 @@ summary.agent-tool-head > svg {
   outline: 0;
   background: transparent;
   color: var(--agent-text);
-  font-family: monospace;
-  font-size: 15px;
+  font-family: var(--mono-font);
+  font-size: 14px;
   font-weight: 400;
-  line-height: 18px;
+  line-height: 20px;
   letter-spacing: 0;
   font-synthesis: none;
   scrollbar-width: none;
@@ -1984,11 +1984,11 @@ summary.agent-tool-head > svg {
 .dashboard-workspace,
 .statistics-workspace {
   overflow-y: auto;
-  padding: 24px clamp(16px, 3vw, 42px) 40px;
+  padding: 24px clamp(16px, 3vw, 32px) 48px;
 }
 .dashboard-header {
   display: flex;
-  max-width: 1440px;
+  max-width: 1180px;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
@@ -2013,11 +2013,11 @@ summary.agent-tool-head > svg {
 }
 .dashboard-summary {
   display: grid;
-  width: min(1440px, 100%);
+  width: min(1180px, 100%);
   grid-template-columns: repeat(4, minmax(130px, 1fr));
   margin: 0 auto 24px;
   border: 1px solid #d9dfdc;
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
   background: #fff;
 }
@@ -2058,27 +2058,17 @@ summary.agent-tool-head > svg {
   min-width: 0;
   overflow: hidden;
   border: 1px solid #dce2df;
-  border-radius: 12px;
+  border-radius: 8px;
   background: #fff;
 }
 .dashboard-section-heading {
   display: flex;
-  min-height: 64px;
-  align-items: end;
+  min-height: 56px;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 16px;
   border-bottom: 1px solid #e3e8e5;
-}
-.dashboard-section-heading > div {
-  display: grid;
-  gap: 4px;
-}
-.dashboard-section-heading span,
-.dashboard-section-heading small {
-  color: #65706c;
-  font-size: 12px;
-  line-height: 16px;
 }
 .dashboard-section-heading h2 {
   margin: 0;
@@ -2100,8 +2090,8 @@ summary.agent-tool-head > svg {
   grid-template-columns: 88px minmax(0, 1fr) 90px auto 15px;
   align-items: center;
   gap: 12px;
-  min-height: 58px;
-  padding: 9px 13px;
+  min-height: 56px;
+  padding: 12px 16px;
   border: 0;
   border-bottom: 1px solid #e8ecea;
   outline: 0;
@@ -2520,8 +2510,8 @@ summary.agent-tool-head > svg {
 .metric-strip > div {
   display: grid;
   min-width: 0;
-  gap: 3px;
-  padding: 15px 18px;
+  gap: 4px;
+  padding: 16px 20px;
   border-right: 1px solid #e1e6e3;
 }
 .metric-strip > div:last-child {
@@ -2562,7 +2552,7 @@ summary.agent-tool-head > svg {
 .workspace-capacity-meter > span {
   color: #66736d;
   text-align: right;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 .statistics-section {
@@ -2931,7 +2921,7 @@ summary.agent-tool-head > svg {
   border-radius: 999px;
   background: #eef3f0;
   color: #718079;
-  font-size: 10px;
+  font-size: 11px;
 }
 .service-overview-header {
   padding: 18px;
@@ -2989,7 +2979,7 @@ summary.agent-tool-head > svg {
 }
 .service-repository-option code {
   color: #7b8780;
-  font-size: 10px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 .service-description {

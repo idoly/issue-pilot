@@ -256,7 +256,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
       <div class="insight-panel" role="tabpanel" hidden={view() !== "resources"}>
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
           <div class="statistics-title">
-            <h2 id="workspace-capacity-title">Workspace 存储</h2>
+            <h2 id="workspace-capacity-title">工作区存储</h2>
             <span>{storedWorkspaces().length} 个占用空间</span>
             <Button size="small" disabled={loading()} onClick={() => refresh(true)}>
               刷新统计

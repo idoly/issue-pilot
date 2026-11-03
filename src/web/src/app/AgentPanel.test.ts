@@ -125,9 +125,9 @@ describe("Agent conversation state", () => {
     expect(processingAfterEvent(true, event({ type: "agent_end", messages: [], willRetry: true }).event)).toBe(true);
     expect(processingAfterEvent(false, event({ type: "agent_start" }).event)).toBe(true);
     expect(processingAfterEvent(true, event({ type: "agent_settled", aborted: false }).event)).toBe(false);
-    expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "Compacting context...", tone: "info" });
+    expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "正在压缩上下文…", tone: "info" });
     expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000, errorMessage: "overloaded" }).event)).toEqual({
-      text: "Retrying 2/3 in 2.0s...",
+      text: "第 2/3 次重试，2.0s后进行…",
       tone: "warning",
     });
     expect(activityForEvent(event({ type: "auto_retry_end", success: true, attempt: 2 }).event)).toBeNull();
@@ -650,17 +650,17 @@ describe("Agent conversation state", () => {
       source.emit("message", event({ type: "auto_retry_end", success: false, attempt: 3 }));
       source.emit("snapshot_ready", { running: true, runState: "queued", issueStatus: "pending" });
       await screen.findByText("排队中，等待执行名额…");
-      expect(screen.queryByText("Working...")).toBeNull();
-      expect(screen.queryByText("Retry failed")).toBeNull();
+      expect(screen.queryByText("处理中…")).toBeNull();
+      expect(screen.queryByText("重试失败")).toBeNull();
       source.emit("message", event({ type: "issue_run_state", state: "running" }));
-      await screen.findByText("Working...");
+      await screen.findByText("处理中…");
       expect(screen.queryByText("排队中，等待执行名额…")).toBeNull();
       source.emit("message", event({ type: "issue_status", status: "complete" }));
       source.emit("message", event({ type: "issue_run_state", state: "queued" }));
       await screen.findByText("排队中，等待执行名额…");
       source.emit("message", event({ type: "issue_run_state", state: "idle" }));
       await waitFor(() => expect(screen.queryByText("排队中，等待执行名额…")).toBeNull());
-      expect(screen.queryByText("Working...")).toBeNull();
+      expect(screen.queryByText("处理中…")).toBeNull();
     } finally {
       view.unmount();
     }

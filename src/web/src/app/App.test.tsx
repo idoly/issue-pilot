@@ -813,7 +813,7 @@ describe("issue pilot workspace", () => {
     expect(submitted.parentElement?.textContent).toContain("3");
     expect(screen.getByText("周期解决").parentElement?.textContent).toContain("0");
     fireEvent.click(screen.getByRole("tab", { name: "资源" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Workspace 存储" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "工作区存储" })).toBeTruthy());
     expect(await screen.findByText("每 15 分钟自动检查 · 已解决保留 7 天")).toBeTruthy();
     expect(screen.getByText("20.0 GB")).toBeTruthy();
     expect(screen.getByText("解决后纳入")).toBeTruthy();
@@ -1390,7 +1390,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(screen.getByRole("radio", { name: "首页" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "运营洞察" })).toBeTruthy());
     fireEvent.click(screen.getByRole("tab", { name: "资源" }));
-    const workspaceSection = await waitFor(() => screen.getByRole("heading", { name: "Workspace 存储" }).closest("section"));
+    const workspaceSection = await waitFor(() => screen.getByRole("heading", { name: "工作区存储" }).closest("section"));
     expect(workspaceSection?.getAttribute("aria-busy")).toBe("true");
 
     fireEvent.click(screen.getByRole("radio", { name: "工单" }));
@@ -1425,7 +1425,7 @@ describe("issue pilot workspace", () => {
     const source = EventSourceMock.instances.at(-1)!;
     source.emit("open");
     source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
-    await waitFor(() => expect(screen.getByText("Working...")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("处理中…")).toBeTruthy());
     const client = await import("../data/client");
     vi.mocked(client.sendAgentMessage).mockClear();
     const composer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;

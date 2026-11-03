@@ -112,7 +112,7 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
 function SessionSummaryEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "summary" }> }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
   const label = () => (props.entry.summaryType === "compaction" ? "compaction" : "branch");
-  const description = () => (props.entry.summaryType === "compaction" ? `Compacted from ${(props.entry.tokensBefore ?? 0).toLocaleString()} tokens` : "Branch summary");
+  const description = () => (props.entry.summaryType === "compaction" ? `已压缩 ${(props.entry.tokensBefore ?? 0).toLocaleString()} tokens` : "分支摘要");
   return (
     <section class="agent-summary">
       <button type="button" aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((value) => !value)}>
@@ -155,7 +155,7 @@ function BashMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "ba
         <pre class="agent-tool-output">{props.entry.output}</pre>
       </Show>
       <Show when={props.entry.truncated}>
-        <div class="agent-tool-timing">Output truncated</div>
+        <div class="agent-tool-timing">输出已截断</div>
       </Show>
     </section>
   );
@@ -722,7 +722,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
             {(entry) => <ConversationItem issue={props.issue} entry={entry()} />}
           </For>
           <Show when={!entries().length && connected()}>
-            <div class="agent-empty">No conversation yet</div>
+            <div class="agent-empty">还没有对话</div>
           </Show>
         </div>
         <Show when={queue().steering.length || queue().followUp.length}>
@@ -730,14 +730,14 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
             <For each={queue().steering}>
               {(message) => (
                 <span>
-                  <strong>Steering:</strong> {message}
+                  <strong>插话：</strong> {message}
                 </span>
               )}
             </For>
             <For each={queue().followUp}>
               {(message) => (
                 <span>
-                  <strong>Follow-up:</strong> {message}
+                  <strong>后续：</strong> {message}
                 </span>
               )}
             </For>
@@ -746,7 +746,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         <Show when={running() || activity()}>
           <div class={`agent-working ${activity()?.tone ?? "info"}`} role="status">
             <i />
-            {activity()?.text ?? "Working..."}
+            {activity()?.text ?? "处理中…"}
           </div>
         </Show>
         <div class="agent-composer-gutter">

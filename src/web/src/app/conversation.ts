@@ -196,13 +196,13 @@ export function processingAfterEvent(current: boolean, event: RunEvent["event"])
 export function activityForEvent(event: RunEvent["event"]): AgentActivity | null | undefined {
   if (event.type === "issue_run_state") return event.state === "queued" ? { text: "排队中，等待执行名额…", tone: "info" } : null;
   if (event.type === "agent_start" || event.type === "compaction_end" || event.type === "summarization_retry_finished") return null;
-  if (event.type === "compaction_start") return { text: "Compacting context...", tone: "info" };
-  if (event.type === "auto_retry_start") return { text: `Retrying ${event.attempt}/${event.maxAttempts} in ${duration(event.delayMs)}...`, tone: "warning" };
-  if (event.type === "auto_retry_end") return event.success ? null : { text: "Retry failed", tone: "error" };
+  if (event.type === "compaction_start") return { text: "正在压缩上下文…", tone: "info" };
+  if (event.type === "auto_retry_start") return { text: `第 ${event.attempt}/${event.maxAttempts} 次重试，${duration(event.delayMs)}后进行…`, tone: "warning" };
+  if (event.type === "auto_retry_end") return event.success ? null : { text: "重试失败", tone: "error" };
   if (event.type === "summarization_retry_scheduled") {
-    return { text: `Retrying context summary ${event.attempt}/${event.maxAttempts}...`, tone: "warning" };
+    return { text: `第 ${event.attempt}/${event.maxAttempts} 次重试上下文摘要…`, tone: "warning" };
   }
-  if (event.type === "summarization_retry_attempt_start") return { text: "Rebuilding context summary...", tone: "info" };
+  if (event.type === "summarization_retry_attempt_start") return { text: "正在重建上下文摘要…", tone: "info" };
   return undefined;
 }
 
