@@ -50,10 +50,12 @@ Pi 会话测试显式传临时 agentDirectory，不能因注入模型 runtime �
 npm run typecheck
 npm test
 npm run build
+npm run format:check
+npm run lint
 git diff --check
 ```
 
-没有独立 lint 脚本。资源受限时使用等价的有界并发：
+检查失败时先区分格式化、lint 与类型错误，再运行测试。资源受限时使用等价的有界并发：
 
 ```bash
 node --experimental-strip-types --test --test-concurrency=2 'tests/**/*.test.ts'

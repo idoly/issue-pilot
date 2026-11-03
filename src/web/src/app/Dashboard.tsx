@@ -45,7 +45,6 @@ export function Dashboard(props: {
     <section class="dashboard-workspace">
       <header class="dashboard-header">
         <div>
-          <span>每 10 秒自动刷新</span>
           <h1>运营总览</h1>
         </div>
         <Button aria-label="刷新运营总览" icon={<RefreshCw size={14} />} loading={props.refreshing} onClick={props.onRefresh}>
@@ -74,12 +73,10 @@ export function Dashboard(props: {
             <div>
               <span>正在执行</span>
               <strong>{running()}</strong>
-              <small>Agent / Workspace</small>
             </div>
             <div>
               <span>执行失败</span>
               <strong>{failed()}</strong>
-              <small>需要人工检查</small>
             </div>
             <div>
               <span>未分配</span>

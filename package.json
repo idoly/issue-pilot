@@ -17,7 +17,8 @@
     "build": "vite build --config src/web/vite.config.ts",
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
     "format": "biome format --write .",
-    "format:check": "biome format ."
+    "format:check": "biome format .",
+    "lint": "biome lint ."
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",
