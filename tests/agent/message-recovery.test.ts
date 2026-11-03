@@ -26,7 +26,10 @@ async function fixture(t: TestContext, blockFirst = false) {
   assert.ok(environment && service);
   await database.db.insert(subjects).values({ subject: "recovery-owner", role: "product" });
   const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service.id, environmentId: environment.id, config: {} }).returning();
-  const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261023-931", title: "Recovery fixture", type: "smart_analysis", serviceId: service.id, environmentId: environment.id, reporterSubject: "recovery-owner" }).returning();
+  const [issue] = await database.db
+    .insert(issues)
+    .values({ key: "ISSUE-20261023-931", title: "Recovery fixture", type: "smart_analysis", serviceId: service.id, environmentId: environment.id, reporterSubject: "recovery-owner" })
+    .returning();
   assert.ok(deployment && issue);
   await database.db.insert(issueWorkspaces).values({ issueId: issue.id });
   await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {}, apiKey: "fixture-key" });
@@ -40,28 +43,53 @@ async function fixture(t: TestContext, blockFirst = false) {
   t.mock.method(internal.projectManager, "prepare", async () => project);
   let started!: () => void;
   let release = () => {};
-  const firstStarted = new Promise<void>(resolve => { started = resolve; });
-  const gate = blockFirst ? new Promise<void>(resolve => { release = resolve; }) : Promise.resolve();
+  const firstStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const gate = blockFirst
+    ? new Promise<void>((resolve) => {
+        release = resolve;
+      })
+    : Promise.resolve();
   const deliveries: Array<{ message: string; images: ImageContent[]; pendingBeforePrompt: string[] }> = [];
   t.mock.method(internal.piRuntime, "start", async (options: StartPiSessionOptions) => ({
     session: { sessionManager: options.manager } as AgentSession,
-    streaming: false, setGitIdentity() {}, async stop() {},
+    streaming: false,
+    setGitIdentity() {},
+    async stop() {},
     async prompt(message: string, images: ImageContent[] = []) {
       const persisted = SessionManager.open(options.manager.getSessionFile()!);
-      deliveries.push({ message, images, pendingBeforePrompt: pendingAgentMessages(persisted).map(input => input.id) });
-      if (deliveries.length === 1) { started(); await gate; }
+      deliveries.push({ message, images, pendingBeforePrompt: pendingAgentMessages(persisted).map((input) => input.id) });
+      if (deliveries.length === 1) {
+        started();
+        await gate;
+      }
       options.manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
     },
   }));
-  return { root, database, issue, manager, engine, deliveries, firstStarted, release,
-    async cleanup() { release(); await engine.close(); t.mock.restoreAll(); await database.close(); await rm(root, { recursive: true, force: true }); },
+  return {
+    root,
+    database,
+    issue,
+    manager,
+    engine,
+    deliveries,
+    firstStarted,
+    release,
+    async cleanup() {
+      release();
+      await engine.close();
+      t.mock.restoreAll();
+      await database.close();
+      await rm(root, { recursive: true, force: true });
+    },
   };
 }
 
 async function idle(engine: AgentEngine, issueId: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
     if (!engine.isRunning(issueId)) return;
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("recovery_round_not_idle");
 }
@@ -71,7 +99,7 @@ test("explicit retry recovers unstarted text and images without recording anothe
   try {
     const images: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }];
     appendQueuedAgentMessage(f.manager, f.issue, "Recover this unstarted input", images);
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(f.deliveries.length, 0, "opening an Engine does not automatically resume work");
     f.engine.enqueue(f.issue.id);
     await f.engine.close();
@@ -81,50 +109,66 @@ test("explicit retry recovers unstarted text and images without recording anothe
     assert.deepEqual(f.deliveries[0]!.pendingBeforePrompt, [], "delivery must be recorded on disk before model dispatch");
     const manager = SessionManager.open(f.manager.getSessionFile()!);
     assert.deepEqual(pendingAgentMessages(manager), []);
-    assert.equal(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "issue-pilot-user").length, 1);
-  } finally { await f.cleanup(); }
-});
-
-for (const phase of ["queued", "started"] as const) test(`process death after the ${phase} checkpoint preserves conservative retry behavior`, { timeout: 15_000 }, async (t) => {
-  const f = await fixture(t);
-  const child = fork(fileURLToPath(new URL("../helpers/agent-delivery-process.ts", import.meta.url)), [f.manager.getSessionFile()!, f.issue.serviceId, f.issue.environmentId, phase], {
-    execArgv: ["--experimental-strip-types"], stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
-  let diagnostics = "";
-  child.stderr!.on("data", data => { diagnostics += data.toString(); });
-  const exited = once(child, "exit");
-  try {
-    await Promise.race([
-      once(child, "message").then(([message]) => { assert.deepEqual(message, { type: "checkpoint", phase }); }),
-      exited.then(() => { throw new Error(`delivery_child_exited:${diagnostics}`); }),
-    ]);
-    child.kill("SIGKILL");
-    const [, signal] = await exited;
-    assert.equal(signal, "SIGKILL");
-    assert.equal(f.deliveries.length, 0);
-    f.engine.enqueue(f.issue.id);
-    await f.engine.close();
-    assert.equal(f.deliveries.length, 1);
-    if (phase === "queued") {
-      assert.match(f.deliveries[0]!.message, /Crash-boundary input/);
-      assert.deepEqual(f.deliveries[0]!.images, [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
-    } else {
-      assert.doesNotMatch(f.deliveries[0]!.message, /Crash-boundary input/);
-      assert.deepEqual(f.deliveries[0]!.images, []);
-    }
-    assert.deepEqual(pendingAgentMessages(SessionManager.open(f.manager.getSessionFile()!)), []);
+    assert.equal(manager.getEntries().filter((entry) => entry.type === "custom" && entry.customType === "issue-pilot-user").length, 1);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    try { await exited; } finally { await f.cleanup(); }
+    await f.cleanup();
   }
 });
+
+for (const phase of ["queued", "started"] as const)
+  test(`process death after the ${phase} checkpoint preserves conservative retry behavior`, { timeout: 15_000 }, async (t) => {
+    const f = await fixture(t);
+    const child = fork(fileURLToPath(new URL("../helpers/agent-delivery-process.ts", import.meta.url)), [f.manager.getSessionFile()!, f.issue.serviceId, f.issue.environmentId, phase], {
+      execArgv: ["--experimental-strip-types"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    });
+    let diagnostics = "";
+    child.stderr!.on("data", (data) => {
+      diagnostics += data.toString();
+    });
+    const exited = once(child, "exit");
+    try {
+      await Promise.race([
+        once(child, "message").then(([message]) => {
+          assert.deepEqual(message, { type: "checkpoint", phase });
+        }),
+        exited.then(() => {
+          throw new Error(`delivery_child_exited:${diagnostics}`);
+        }),
+      ]);
+      child.kill("SIGKILL");
+      const [, signal] = await exited;
+      assert.equal(signal, "SIGKILL");
+      assert.equal(f.deliveries.length, 0);
+      f.engine.enqueue(f.issue.id);
+      await f.engine.close();
+      assert.equal(f.deliveries.length, 1);
+      if (phase === "queued") {
+        assert.match(f.deliveries[0]!.message, /Crash-boundary input/);
+        assert.deepEqual(f.deliveries[0]!.images, [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
+      } else {
+        assert.doesNotMatch(f.deliveries[0]!.message, /Crash-boundary input/);
+        assert.deepEqual(f.deliveries[0]!.images, []);
+      }
+      assert.deepEqual(pendingAgentMessages(SessionManager.open(f.manager.getSessionFile()!)), []);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      try {
+        await exited;
+      } finally {
+        await f.cleanup();
+      }
+    }
+  });
 
 test("a preparation failure leaves the input pending for a later explicit retry", async (t) => {
   const f = await fixture(t);
   try {
     appendQueuedAgentMessage(f.manager, f.issue, "Retry after preparation fails", []);
     const internal = f.engine as unknown as { projectManager: IssueProjectManager };
-    const failure = t.mock.method(internal.projectManager, "prepare", async () => { throw new Error("fixture_prepare_failed"); });
+    const failure = t.mock.method(internal.projectManager, "prepare", async () => {
+      throw new Error("fixture_prepare_failed");
+    });
     f.engine.enqueue(f.issue.id);
     await idle(f.engine, f.issue.id);
     assert.equal(f.deliveries.length, 0);
@@ -134,7 +178,9 @@ test("a preparation failure leaves the input pending for a later explicit retry"
     await f.engine.close();
     assert.equal(f.deliveries.length, 1);
     assert.match(f.deliveries[0]!.message, /Retry after preparation fails/);
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });
 
 test("recovers queued messages in order alongside a newly admitted message and drains them on close", async (t) => {
@@ -152,7 +198,9 @@ test("recovers queued messages in order alongside a newly admitted message and d
     const manager = SessionManager.open(f.manager.getSessionFile()!);
     assert.equal(manager.getBranch().length, manager.getEntries().length);
     assert.deepEqual(pendingAgentMessages(manager), []);
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });
 
 test("scope changes reject stale queued intent before model work and leave new scope input usable", async (t) => {
@@ -169,5 +217,7 @@ test("scope changes reject stale queued intent before model work and leave new s
     assert.equal(f.deliveries.length, 1);
     assert.match(f.deliveries[0]!.message, /New scope request/);
     assert.doesNotMatch(f.deliveries[0]!.message, /Old scope request/);
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });

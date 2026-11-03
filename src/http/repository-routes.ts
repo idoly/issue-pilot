@@ -10,8 +10,13 @@ function repositoryInput(body: unknown) {
   if (/\s|\0/.test(url)) throw new ApiError(400, "invalid_repository_url");
   if (url.startsWith("https://") || url.startsWith("ssh://")) {
     let parsed: URL;
-    try { parsed = new URL(url); } catch { throw new ApiError(400, "invalid_repository_url"); }
-    if (!parsed.hostname || parsed.password || parsed.search || parsed.hash || parsed.pathname === "/" || url.startsWith("https://") && parsed.username) throw new ApiError(400, "invalid_repository_url");
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new ApiError(400, "invalid_repository_url");
+    }
+    if (!parsed.hostname || parsed.password || parsed.search || parsed.hash || parsed.pathname === "/" || (url.startsWith("https://") && parsed.username))
+      throw new ApiError(400, "invalid_repository_url");
   } else if (!/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+:[^\s\0]+$/.test(url)) throw new ApiError(400, "invalid_repository_url");
   return { name, url };
 }
@@ -23,8 +28,16 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
     reply.header("Cache-Control", "private, no-store");
     return runScopeExclusive(async () => {
       const rows = await database.db.select().from(repositories).orderBy(asc(repositories.url));
-      const uses = await database.db.select({ url: serviceRepositories.url, serviceKey: services.key, serviceName: services.name }).from(serviceRepositories).innerJoin(services, eq(services.id, serviceRepositories.serviceId));
-      return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), services: uses.filter((use) => use.url === row.url).map(({ serviceKey, serviceName }) => ({ key: serviceKey, name: serviceName })) }));
+      const uses = await database.db
+        .select({ url: serviceRepositories.url, serviceKey: services.key, serviceName: services.name })
+        .from(serviceRepositories)
+        .innerJoin(services, eq(services.id, serviceRepositories.serviceId));
+      return rows.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+        services: uses.filter((use) => use.url === row.url).map(({ serviceKey, serviceName }) => ({ key: serviceKey, name: serviceName })),
+      }));
     });
   });
   app.post("/api/repositories", async (request, reply) => {
@@ -47,27 +60,50 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
       checkRevision(record(request.body).expectedRevision, existing.revision);
       if (existing.name === input.name && existing.url === input.url) return { ok: true };
       if (existing.url === input.url) {
-        await database.db.update(repositories).set({ name: input.name, revision: existing.revision + 1, updatedAt: new Date() }).where(eq(repositories.id, existing.id));
+        await database.db
+          .update(repositories)
+          .set({ name: input.name, revision: existing.revision + 1, updatedAt: new Date() })
+          .where(eq(repositories.id, existing.id));
         return { ok: true };
       }
       const bindings = await database.db.select({ serviceId: serviceRepositories.serviceId }).from(serviceRepositories).where(eq(serviceRepositories.url, existing.url));
-      const serviceIds = [...new Set(bindings.map(row => row.serviceId))];
-      const affected = serviceIds.length ? await database.db.select({ id: issues.id }).from(issues).where(or(
-        inArray(issues.serviceId, serviceIds),
-        inArray(issues.id, database.db.select({ issueId: issueServiceScopes.issueId }).from(issueServiceScopes).where(inArray(issueServiceScopes.serviceId, serviceIds))),
-      )) : [];
-      return runIssueExclusive(engine, affected.map(({ id }) => id), async (reservation) => {
-        for (const { id } of affected) await reservation.closeSession(id);
-        await database.db.transaction(async (tx) => {
-          const now = new Date();
-          await tx.update(repositories).set({ ...input, revision: existing.revision + 1, updatedAt: now }).where(eq(repositories.id, existing.id));
-          if (serviceIds.length) {
-            await tx.update(services).set({ revision: sql`${services.revision} + 1`, updatedAt: now }).where(inArray(services.id, serviceIds));
-            await tx.update(serviceRepositories).set({ updatedAt: now }).where(and(inArray(serviceRepositories.serviceId, serviceIds), eq(serviceRepositories.url, input.url)));
-          }
-        });
-        return { ok: true };
-      });
+      const serviceIds = [...new Set(bindings.map((row) => row.serviceId))];
+      const affected = serviceIds.length
+        ? await database.db
+            .select({ id: issues.id })
+            .from(issues)
+            .where(
+              or(
+                inArray(issues.serviceId, serviceIds),
+                inArray(issues.id, database.db.select({ issueId: issueServiceScopes.issueId }).from(issueServiceScopes).where(inArray(issueServiceScopes.serviceId, serviceIds))),
+              ),
+            )
+        : [];
+      return runIssueExclusive(
+        engine,
+        affected.map(({ id }) => id),
+        async (reservation) => {
+          for (const { id } of affected) await reservation.closeSession(id);
+          await database.db.transaction(async (tx) => {
+            const now = new Date();
+            await tx
+              .update(repositories)
+              .set({ ...input, revision: existing.revision + 1, updatedAt: now })
+              .where(eq(repositories.id, existing.id));
+            if (serviceIds.length) {
+              await tx
+                .update(services)
+                .set({ revision: sql`${services.revision} + 1`, updatedAt: now })
+                .where(inArray(services.id, serviceIds));
+              await tx
+                .update(serviceRepositories)
+                .set({ updatedAt: now })
+                .where(and(inArray(serviceRepositories.serviceId, serviceIds), eq(serviceRepositories.url, input.url)));
+            }
+          });
+          return { ok: true };
+        },
+      );
     });
   });
   app.delete<{ Params: { id: string } }>("/api/repositories/:id", async (request, reply) => {

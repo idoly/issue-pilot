@@ -67,14 +67,16 @@ export async function executeLocalCommand(command: string, args: string[], optio
     };
     const groupAlive = () => {
       if (!usesProcessGroup || child.pid === undefined) return false;
-      try { process.kill(-child.pid, 0); return true; }
-      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code !== "ESRCH";
+      }
     };
     const complete = () => {
       if (!closed || settled || escalation) return;
-      finish(() => failure
-        ? reject(failure)
-        : resolve({ stdout, stderr, code: exitCode ?? 1, killed }));
+      finish(() => (failure ? reject(failure) : resolve({ stdout, stderr, code: exitCode ?? 1, killed })));
     };
     const terminate = () => {
       if (killed) return;
@@ -109,17 +111,27 @@ export async function executeLocalCommand(command: string, args: string[], optio
     if (options.input) child.stdin?.end(options.input);
     child.stderr!.setEncoding("utf8");
     const captureStdout = capture((chunk) => {
-      if (!options.onStdout) { stdout += chunk; return; }
-      try { options.onStdout(chunk); }
-      catch (error) { fail(error instanceof Error ? error : new Error("command_output_processing_failed")); }
+      if (!options.onStdout) {
+        stdout += chunk;
+        return;
+      }
+      try {
+        options.onStdout(chunk);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error("command_output_processing_failed"));
+      }
     });
     if (options.strictStdoutUtf8) {
       const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
       const decode = (chunk?: Buffer) => {
         if (failure || killed) return;
         let text: string;
-        try { text = decoder.decode(chunk, { stream: chunk !== undefined }); }
-        catch { fail(new Error("command_stdout_not_utf8")); return; }
+        try {
+          text = decoder.decode(chunk, { stream: chunk !== undefined });
+        } catch {
+          fail(new Error("command_stdout_not_utf8"));
+          return;
+        }
         if (text) captureStdout(text);
       };
       child.stdout!.on("data", decode);
@@ -128,7 +140,12 @@ export async function executeLocalCommand(command: string, args: string[], optio
       child.stdout!.setEncoding("utf8");
       child.stdout!.on("data", captureStdout);
     }
-    child.stderr!.on("data", capture((chunk) => { stderr += chunk; }));
+    child.stderr!.on(
+      "data",
+      capture((chunk) => {
+        stderr += chunk;
+      }),
+    );
     child.stdout!.on("error", fail);
     child.stderr!.on("error", fail);
     child.on("error", (error) => {

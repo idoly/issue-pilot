@@ -8,7 +8,8 @@ import { globalAgentConfiguration } from "../../src/db/schema.ts";
 const headers: Record<string, string> = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 
 test("the shared API key is saved with the global model, hidden, bound to its provider and admin-only", async () => {
-  const f = await createApiFixture(); const db = openDatabase(f.databaseFile);
+  const f = await createApiFixture();
+  const db = openDatabase(f.databaseFile);
   try {
     const put = (payload: Record<string, unknown>, selected = headers) => f.app.inject({ method: "PUT", url: "/api/config/agent", headers: selected, payload });
     const agent = async () => (await f.app.inject({ method: "GET", url: "/api/config", headers })).json().agent as Record<string, unknown>;
@@ -31,18 +32,23 @@ test("the shared API key is saved with the global model, hidden, bound to its pr
     // A stale or switched provider must not inherit a key issued for another provider.
     await db.db.update(globalAgentConfiguration).set({ provider: "previous-provider" });
     const switched = await put(testAgent);
-    assert.equal(switched.statusCode, 400); assert.equal(switched.json().error, "agent_api_key_required");
+    assert.equal(switched.statusCode, 400);
+    assert.equal(switched.json().error, "agent_api_key_required");
     assert.equal((await db.db.select().from(globalAgentConfiguration))[0]!.provider, "previous-provider");
     assert.equal((await put({ ...testAgent, apiKey: { mode: "replace", value: "replacement" } })).statusCode, 200);
     assert.equal(await stored(), "replacement");
 
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "plain-developer", name: "Developer", email: "developer@example.test", role: "developer" } });
     const denied = await put({ ...testAgent, apiKey: { mode: "clear" } }, { "x-issue-pilot-subject": "plain-developer" });
-    assert.equal(denied.statusCode, 403); assert.equal(denied.json().error, "admin_role_required");
+    assert.equal(denied.statusCode, 403);
+    assert.equal(denied.json().error, "admin_role_required");
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config/shared-sls-credentials", headers: { "x-issue-pilot-subject": "plain-developer" } })).statusCode, 403);
 
     assert.equal((await put({ ...testAgent, apiKey: { mode: "clear" } })).statusCode, 200);
     assert.equal(await stored(), "");
     assert.equal((await agent()).apiKeyConfigured, false);
-  } finally { await db.close(); await f.cleanup(); }
+  } finally {
+    await db.close();
+    await f.cleanup();
+  }
 });

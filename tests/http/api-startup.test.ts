@@ -18,33 +18,76 @@ class StartupEngine implements AgentController {
   closeError: Error | undefined;
   enqueue(): void {}
   async send(): Promise<void> {}
-  isRunning(): boolean { return false; }
-  getRunState() { return "idle" as const; }
+  isRunning(): boolean {
+    return false;
+  }
+  getRunState() {
+    return "idle" as const;
+  }
   async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(): Promise<void> }) => Promise<T>): Promise<T> {
     return operation({ enqueue() {}, async closeSession() {} });
   }
-  async close(): Promise<void> { this.closed += 1; if (this.closeError) throw this.closeError; }
+  async close(): Promise<void> {
+    this.closed += 1;
+    if (this.closeError) throw this.closeError;
+  }
 }
 
+test("classifies malformed, unsupported and oversized request bodies as client errors", async () => {
+  const fixture = await createApiFixture();
+  try {
+    const empty = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": "application/json" }, payload: "" });
+    assert.equal(empty.statusCode, 400);
+    assert.deepEqual(empty.json(), { error: "invalid_json" });
+    const malformed = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": "application/json" }, payload: "{" });
+    assert.equal(malformed.statusCode, 400);
+    assert.deepEqual(malformed.json(), { error: "invalid_json" });
+    const oversized = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": "application/json" }, payload: JSON.stringify("x".repeat(1_200_000)) });
+    assert.equal(oversized.statusCode, 413);
+    assert.deepEqual(oversized.json(), { error: "payload_too_large" });
+    const boundary = "issue-pilot-boundary";
+    const fields = Array.from({ length: 65 }, (_, index) => `--${boundary}\r\nContent-Disposition: form-data; name="field${index}"\r\n\r\nx\r\n`).join("");
+    const tooManyFields = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: `${fields}--${boundary}--\r\n`,
+    });
+    assert.equal(tooManyFields.statusCode, 413);
+    assert.deepEqual(tooManyFields.json(), { error: "payload_too_large" });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("rejects a second API before recovering the first API's active Issue state", async () => {
-  const fixture = await createApiFixture(), connection = openDatabase(fixture.databaseFile);
+  const fixture = await createApiFixture(),
+    connection = openDatabase(fixture.databaseFile);
   try {
     await createService(fixture.app, "Startup ownership");
     const issue = await createIssue(fixture.app, "startup-ownership");
     await connection.client.execute({ sql: "UPDATE issues SET status = 'in_progress' WHERE key = ?", args: [String(issue.id)] });
     await connection.client.execute({ sql: "UPDATE issue_workspaces SET status = 'running' WHERE issue_id = (SELECT id FROM issues WHERE key = ?)", args: [String(issue.id)] });
     await assert.rejects(buildApi({ stateRoot: fixture.root, databaseFile: fixture.databaseFile, engine: new StartupEngine(), modelCatalog, logger: false }), /application_already_running/);
-    const states = await connection.client.execute({ sql: "SELECT issues.status AS issue_status, issue_workspaces.status AS workspace_status FROM issues JOIN issue_workspaces ON issues.id = issue_workspaces.issue_id WHERE issues.key = ?", args: [String(issue.id)] });
+    const states = await connection.client.execute({
+      sql: "SELECT issues.status AS issue_status, issue_workspaces.status AS workspace_status FROM issues JOIN issue_workspaces ON issues.id = issue_workspaces.issue_id WHERE issues.key = ?",
+      args: [String(issue.id)],
+    });
     assert.deepEqual(states.rows, [{ issue_status: "in_progress", workspace_status: "running" }]);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);
-  } finally { await connection.close(); await fixture.cleanup(); }
+  } finally {
+    await connection.close();
+    await fixture.cleanup();
+  }
 });
 
 test("closes Fastify exactly once when the process receives a shutdown signal", async () => {
   const target = new EventEmitter();
   let closes = 0;
   const app = {
-    async close() { closes += 1; },
+    async close() {
+      closes += 1;
+    },
     log: { error() {} },
   } as unknown as FastifyInstance;
   const removeHandlers = installShutdownHandlers(app, target as never);
@@ -63,22 +106,39 @@ test("redacts nested database failures from shutdown diagnostics while retaining
   const query = new DrizzleQueryError("insert into private_configuration values (?)", ["fixture-private-key"], cause);
   const failure = new Error("shutdown_cleanup_failed", { cause: new AggregateError([query], "cleanup_failed") });
   const logged: unknown[] = [];
-  const app = { async close() { throw failure; }, log: { error(error: unknown) { logged.push(error); } } } as unknown as FastifyInstance;
+  const app = {
+    async close() {
+      throw failure;
+    },
+    log: {
+      error(error: unknown) {
+        logged.push(error);
+      },
+    },
+  } as unknown as FastifyInstance;
   const removeHandlers = installShutdownHandlers(app, target);
   try {
     target.emit("SIGTERM");
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(logged.length, 1);
     assert.doesNotMatch(inspect(logged), /fixture-private-key|insert into private_configuration/);
     assert.match(inspect(logged), /database_operation_failed:SQLITE_IOERR/);
-  } finally { removeHandlers(); }
+  } finally {
+    removeHandlers();
+  }
 });
 
 test("isolates shutdown reporting failures", async () => {
   const target = new EventEmitter();
   const app = {
-    async close() { throw new Error("close_failed"); },
-    log: { error() { throw new Error("logger_failed"); } },
+    async close() {
+      throw new Error("close_failed");
+    },
+    log: {
+      error() {
+        throw new Error("logger_failed");
+      },
+    },
   } as unknown as FastifyInstance;
   const removeHandlers = installShutdownHandlers(app, target as never);
   target.emit("SIGTERM");
@@ -109,13 +169,16 @@ test("closes initialized resources when API assembly fails", async () => {
   const databaseFile = path.join(root, "issues.db");
   const engine = new StartupEngine();
   try {
-    await assert.rejects(buildApi({
-      stateRoot: root,
-      databaseFile,
-      engine,
-      logger: false,
-      workspacePolicy: { retentionMs: 0, highWaterBytes: 1, targetBytes: 1, maintenanceIntervalMs: 0, taskConcurrency: 1 },
-    }), /workspace_target_must_be_below_high_water/);
+    await assert.rejects(
+      buildApi({
+        stateRoot: root,
+        databaseFile,
+        engine,
+        logger: false,
+        workspacePolicy: { retentionMs: 0, highWaterBytes: 1, targetBytes: 1, maintenanceIntervalMs: 0, taskConcurrency: 1 },
+      }),
+      /workspace_target_must_be_below_high_water/,
+    );
     assert.equal(engine.closed, 1);
     const database = openDatabase(databaseFile);
     assert.deepEqual((await database.client.execute("pragma integrity_check")).rows, [{ integrity_check: "ok" }]);

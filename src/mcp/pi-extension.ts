@@ -16,23 +16,28 @@ type Validators = Map<string, ReturnType<typeof compile>>;
 
 /** Pi owns discovery and lifecycle; the application's validated configuration projection is authoritative. */
 export function createIssueMcpExtension(configurations: McpConfiguration[], codemode: AgentCodemodeMode, root: string): ExtensionFactory {
-  const configured = structuredClone(configurations.filter(configuration => configuration.enabled));
+  const configured = structuredClone(configurations.filter((configuration) => configuration.enabled));
   const exposure = codemode === "off" ? "direct" : "codemode";
   const extension = createMcpExtension({
     saveOutput: generatedWorkFileSaver(root, "mcp"),
     loadConfig: () => ({
-      errors: [], autoEnableCodemode: false,
-      servers: configured.map(configuration => ({
-        name: configuration.id, source: "Issue Pilot", scope: "extension" as const,
+      errors: [],
+      autoEnableCodemode: false,
+      servers: configured.map((configuration) => ({
+        name: configuration.id,
+        source: "Issue Pilot",
+        scope: "extension" as const,
         config: {
           ...(configuration.transport === "stdio" ? configuration.stdio! : { url: configuration.url, headers: { Authorization: configuration.authorization } }),
-          exposure, timeout: limits.mcp.executionMs / 1000, description: configuration.name,
+          exposure,
+          timeout: limits.mcp.executionMs / 1000,
+          description: configuration.name,
         },
       })),
     }),
     logPath: devNull,
     createTransport: (entry, cwd) => {
-      const stored = configured.find(configuration => configuration.id === entry.name);
+      const stored = configured.find((configuration) => configuration.id === entry.name);
       if (!stored) throw new Error("mcp_service_not_configured");
       const configuration = stored.stdio ? { ...stored, stdio: { ...stored.stdio, cwd: path.resolve(cwd, stored.stdio.cwd ?? ".") } } : stored;
       const lifetime = new AbortController();
@@ -42,10 +47,18 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
       const requests = new Map<string | number, Validators>();
       const pages = new Map<string, Validators>();
       let closing: Promise<void> | undefined;
-      const close = () => closing ??= (async () => { lifetime.abort(); await transport.close(); })();
+      const close = () =>
+        (closing ??= (async () => {
+          lifetime.abort();
+          await transport.close();
+        })());
       const onMessage = (message: JSONRPCMessage) => {
-        if ("method" in message || !("id" in message) || message.id === undefined) { events.emit("message", message); return; }
-        const previous = requests.get(message.id); requests.delete(message.id);
+        if ("method" in message || !("id" in message) || message.id === undefined) {
+          events.emit("message", message);
+          return;
+        }
+        const previous = requests.get(message.id);
+        requests.delete(message.id);
         try {
           if ("error" in message) {
             events.emit("message", { ...message, error: { code: message.error.code, message: "mcp_operation_failed" } });
@@ -64,7 +77,10 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
               if (result.nextCursor) {
                 if (result.nextCursor.length > 1024) throw new Error("mcp_invalid_cursor");
                 pages.set(result.nextCursor, previous);
-              } else { validators = previous; pages.clear(); }
+              } else {
+                validators = previous;
+                pages.clear();
+              }
             }
             if ((message.result as { isError?: boolean }).isError === true) {
               events.emit("message", { jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: "mcp_tool_failed" }] } });
@@ -77,23 +93,33 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
           events.emit("message", { jsonrpc: "2.0", id: message.id, error: { code: -32603, message: reason } });
         }
       };
-      const onError = () => { events.emit("failure", new Error("mcp_connection_failed")); };
-      const onClose = () => { events.emit("close"); };
+      const onError = () => {
+        events.emit("failure", new Error("mcp_connection_failed"));
+      };
+      const onClose = () => {
+        events.emit("close");
+      };
       transport.onmessage = onMessage;
-      transport.onerror = onError; transport.onclose = onClose;
+      transport.onerror = onError;
+      transport.onclose = onClose;
       return {
         async start() {
           const signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(limits.mcp.executionMs)]);
           let cancellation: ReturnType<typeof addAbortListener> | undefined;
           try {
             signal.throwIfAborted();
-            await Promise.race([transport.start(), new Promise<never>((_, reject) => {
-              cancellation = addAbortListener(signal, () => reject(new Error("mcp_timeout_or_aborted")));
-            })]);
+            await Promise.race([
+              transport.start(),
+              new Promise<never>((_, reject) => {
+                cancellation = addAbortListener(signal, () => reject(new Error("mcp_timeout_or_aborted")));
+              }),
+            ]);
           } catch {
             await close();
             throw new Error(signal.aborted ? "mcp_timeout_or_aborted" : "mcp_connection_failed");
-          } finally { cancellation?.[Symbol.dispose](); }
+          } finally {
+            cancellation?.[Symbol.dispose]();
+          }
         },
         async send(message, options) {
           options?.signal?.throwIfAborted();
@@ -112,13 +138,30 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
           }
         },
         close,
-        onMessage(listener) { events.on("message", listener); return () => { events.off("message", listener); }; },
-        onError(listener) { events.on("failure", listener); return () => { events.off("failure", listener); }; },
-        onClose(listener) { events.on("close", listener); return () => { events.off("close", listener); }; },
-        setProtocolVersion(version) { transport.setProtocolVersion?.(version); },
+        onMessage(listener) {
+          events.on("message", listener);
+          return () => {
+            events.off("message", listener);
+          };
+        },
+        onError(listener) {
+          events.on("failure", listener);
+          return () => {
+            events.off("failure", listener);
+          };
+        },
+        onClose(listener) {
+          events.on("close", listener);
+          return () => {
+            events.off("close", listener);
+          };
+        },
+        setProtocolVersion(version) {
+          transport.setProtocolVersion?.(version);
+        },
       };
     },
   });
   // Configuration is managed by HTTP/DB, so the terminal manager must not create a second owner.
-  return pi => extension({ ...pi, registerCommand() {} });
+  return (pi) => extension({ ...pi, registerCommand() {} });
 }

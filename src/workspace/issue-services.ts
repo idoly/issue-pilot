@@ -8,9 +8,13 @@ type IssueScope = { id: string; serviceId: string; environmentId: string };
 export async function listEnvironmentServices(database: Database, environmentId: string) {
   const [current] = await database.select().from(environments).where(eq(environments.id, environmentId)).limit(1);
   const includeSources = current?.kind === "dev";
-  return database.select({ service: services, deployment: serviceDeployments, environment: environments }).from(serviceDeployments)
-    .innerJoin(services, eq(services.id, serviceDeployments.serviceId)).innerJoin(environments, eq(environments.id, serviceDeployments.environmentId))
-    .where(includeSources ? inArray(environments.kind, ENVIRONMENT_KINDS) : eq(serviceDeployments.environmentId, environmentId)).orderBy(asc(environments.key), asc(services.createdAt), asc(services.key));
+  return database
+    .select({ service: services, deployment: serviceDeployments, environment: environments })
+    .from(serviceDeployments)
+    .innerJoin(services, eq(services.id, serviceDeployments.serviceId))
+    .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId))
+    .where(includeSources ? inArray(environments.kind, ENVIRONMENT_KINDS) : eq(serviceDeployments.environmentId, environmentId))
+    .orderBy(asc(environments.key), asc(services.createdAt), asc(services.key));
 }
 export async function issueServiceIds(database: Database, issue: IssueScope) {
   const extra = await database.select().from(issueServiceScopes).where(eq(issueServiceScopes.issueId, issue.id)).orderBy(asc(issueServiceScopes.createdAt), asc(issueServiceScopes.serviceId));
@@ -25,13 +29,22 @@ export async function loadServiceRepositorySet(database: Database, serviceIds: s
     for (const row of additional.repositories) {
       const existing = byUrl.get(row.repository.url);
       if (existing && existing.baseBranch !== row.baseBranch) throw new Error("cross_service_repository_branch_conflict");
-      if (!existing) { byUrl.set(row.repository.url, row); repositories.push(row); }
+      if (!existing) {
+        byUrl.set(row.repository.url, row);
+        repositories.push(row);
+      }
     }
   }
   return { deployment: primary.deployment, repositories };
 }
-export async function loadIssueDeployments(database: Database, issue: IssueScope) { return loadServiceRepositorySet(database, await issueServiceIds(database, issue), issue.environmentId); }
+export async function loadIssueDeployments(database: Database, issue: IssueScope) {
+  return loadServiceRepositorySet(database, await issueServiceIds(database, issue), issue.environmentId);
+}
 export async function participatingServices(database: Database, issue: IssueScope) {
-  const rows = await database.select({ id: services.id, key: services.key, name: services.name }).from(issueServiceScopes).innerJoin(services, eq(services.id, issueServiceScopes.serviceId)).where(eq(issueServiceScopes.issueId, issue.id));
+  const rows = await database
+    .select({ id: services.id, key: services.key, name: services.name })
+    .from(issueServiceScopes)
+    .innerJoin(services, eq(services.id, issueServiceScopes.serviceId))
+    .where(eq(issueServiceScopes.issueId, issue.id));
   return rows.filter((row) => row.id !== issue.serviceId).map(({ key, name }) => ({ key, name }));
 }

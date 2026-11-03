@@ -10,7 +10,16 @@ type CompletedMessage = Extract<RunEvent["event"], { type: "message_end" }>["mes
 
 export type ConversationEntry =
   | { id: string; kind: "user"; text: string; images?: ImageContent[] }
-  | { id: string; kind: "assistant"; blocks: Array<{ contentIndex: number; type: "text" | "thinking"; value: string }>; streaming?: boolean; stopReason?: string; errorMessage?: string; hasToolCalls?: boolean; usage?: AssistantMessage["usage"] }
+  | {
+      id: string;
+      kind: "assistant";
+      blocks: Array<{ contentIndex: number; type: "text" | "thinking"; value: string }>;
+      streaming?: boolean;
+      stopReason?: string;
+      errorMessage?: string;
+      hasToolCalls?: boolean;
+      usage?: AssistantMessage["usage"];
+    }
   | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: ToolResult }
   | { id: string; kind: "summary"; summaryType: "compaction" | "branch"; summary: string; tokensBefore?: number }
   | { id: string; kind: "custom"; label: string; blocks: DisplayBlock[] }
@@ -60,29 +69,48 @@ function applyCompletedMessage(entries: ConversationEntry[], envelope: RunEvent,
       ...(message.usage ? { usage: message.usage } : {}),
     };
     const completed = assistant as Extract<ConversationEntry, { kind: "assistant" }>;
-    if (index >= 0) next[index] = assistant; else if (completed.blocks.length || completed.errorMessage || completed.stopReason) next.push(assistant);
+    if (index >= 0) next[index] = assistant;
+    else if (completed.blocks.length || completed.errorMessage || completed.stopReason) next.push(assistant);
     for (const part of content) {
       if (part.type !== "toolCall" || !part.id || !part.name || next.some((entry) => entry.kind === "tool" && entry.toolCallId === part.id)) continue;
       next.push({ id: `${envelope.id}:${part.id}`, kind: "tool", toolCallId: part.id, name: part.name, status: "running", startedAt: envelope.createdAt, arguments: part.arguments });
     }
     return next;
   }
-  if (message.role === "toolResult" && message.nestedCalls) {
-    const previous = entries.find(entry => entry.kind === "tool" && entry.toolCallId === message.toolCallId);
+  // With parallel tools a reconnect can miss a tool's end event; its saved result still completes a running entry.
+  const pendingTool = message.role === "toolResult" && entries.some((entry) => entry.kind === "tool" && entry.toolCallId === message.toolCallId && entry.status === "running");
+  if (message.role === "toolResult" && (message.nestedCalls || pendingTool)) {
+    const previous = entries.find((entry) => entry.kind === "tool" && entry.toolCallId === message.toolCallId);
     const durationMs = message.durationMs ?? (previous?.kind === "tool" ? previous.durationMs : undefined);
     const result = { content: message.content, details: message.details, nestedCalls: message.nestedCalls };
-    return applyAgentEvent(entries, { ...envelope, event: { type: "tool_execution_end", toolCallId: message.toolCallId, toolName: message.toolName, result, isError: message.isError, ...(durationMs === undefined ? {} : { durationMs }) } });
+    return applyAgentEvent(entries, {
+      ...envelope,
+      event: { type: "tool_execution_end", toolCallId: message.toolCallId, toolName: message.toolName, result, isError: message.isError, ...(durationMs === undefined ? {} : { durationMs }) },
+    });
   }
   if (message.role === "compactionSummary") return [...entries, { id: envelope.id, kind: "summary", summaryType: "compaction", summary: message.summary, tokensBefore: message.tokensBefore }];
   if (message.role === "branchSummary") return [...entries, { id: envelope.id, kind: "summary", summaryType: "branch", summary: message.summary }];
   if (message.role === "custom" && message.display) return [...entries, { id: envelope.id, kind: "custom", label: message.customType, blocks: displayBlocks(message.content) }];
-  if (message.role === "bashExecution") return [...entries, { id: envelope.id, kind: "bash", command: message.command, output: message.output, ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}), cancelled: message.cancelled, truncated: message.truncated }];
+  if (message.role === "bashExecution")
+    return [
+      ...entries,
+      {
+        id: envelope.id,
+        kind: "bash",
+        command: message.command,
+        output: message.output,
+        ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}),
+        cancelled: message.cancelled,
+        truncated: message.truncated,
+      },
+    ];
   return entries;
 }
 
 export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent): ConversationEntry[] {
   const event = envelope.event;
-  if (event.type === "issue_user" && typeof event.message === "string") return [...entries, { id: envelope.id, kind: "user", text: event.message, ...(event.images?.length ? { images: event.images } : {}) }];
+  if (event.type === "issue_user" && typeof event.message === "string")
+    return [...entries, { id: envelope.id, kind: "user", text: event.message, ...(event.images?.length ? { images: event.images } : {}) }];
   if (event.type === "message_start" && typeof event.message === "object" && event.message?.role === "assistant") {
     return [...entries, { id: envelope.id, kind: "assistant", blocks: [], streaming: true }];
   }
@@ -91,21 +119,20 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
     if (!update) return entries;
     const index = streamingAssistantIndex(entries);
     const next = [...entries];
-    const current = index >= 0 ? next[index] as Extract<ConversationEntry, { kind: "assistant" }> : { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true };
+    const current = index >= 0 ? (next[index] as Extract<ConversationEntry, { kind: "assistant" }>) : { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true };
     if (!("delta" in update) || typeof update.delta !== "string" || (update.type !== "text_delta" && update.type !== "thinking_delta")) return entries;
-    const blockType = update.type === "thinking_delta" ? "thinking" as const : "text" as const;
+    const blockType = update.type === "thinking_delta" ? ("thinking" as const) : ("text" as const);
     const contentIndex = update.contentIndex ?? 0;
     const blocks = [...current.blocks];
     const blockIndex = blocks.findIndex((block) => block.contentIndex === contentIndex);
     const existing = blockIndex >= 0 ? blocks[blockIndex] : undefined;
-    const block = existing && existing.type === blockType
-      ? { ...existing, value: existing.value + update.delta }
-      : { contentIndex, type: blockType, value: update.delta };
+    const block = existing && existing.type === blockType ? { ...existing, value: existing.value + update.delta } : { contentIndex, type: blockType, value: update.delta };
     if (blockIndex >= 0) blocks[blockIndex] = block;
     else blocks.push(block);
     blocks.sort((left, right) => left.contentIndex - right.contentIndex);
     const updated = { ...current, blocks };
-    if (index >= 0) next[index] = updated; else next.push(updated);
+    if (index >= 0) next[index] = updated;
+    else next.push(updated);
     return next;
   }
   if (event.type === "message_end" && typeof event.message === "object") return applyCompletedMessage(entries, envelope, event.message);
@@ -117,7 +144,7 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
   if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
     if (event.parentToolCallId) return entries;
     const index = entries.findIndex((entry) => entry.kind === "tool" && entry.toolCallId === event.toolCallId);
-    const previous = index >= 0 ? entries[index] as Extract<ConversationEntry, { kind: "tool" }> : undefined;
+    const previous = index >= 0 ? (entries[index] as Extract<ConversationEntry, { kind: "tool" }>) : undefined;
     const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
     const result = rawResult ? displayToolResult({ ...rawResult, ...(!("nestedCalls" in rawResult) && previous?.result?.nestedCalls ? { nestedCalls: previous.result.nestedCalls } : {}) }) : undefined;
     const entry: ConversationEntry = {
@@ -125,14 +152,18 @@ export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent
       kind: "tool",
       toolCallId: event.toolCallId,
       name: event.toolName,
-      status: event.type === "tool_execution_end" ? event.isError ? "error" : "complete" : "running",
+      status: event.type === "tool_execution_end" ? (event.isError ? "error" : "complete") : "running",
       startedAt: previous?.startedAt ?? envelope.createdAt,
-      ...(event.type === "tool_execution_end" && (event.durationMs !== undefined || previous) ? { durationMs: event.durationMs ?? Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous!.startedAt)) } : {}),
+      ...(event.type === "tool_execution_end" && (event.durationMs !== undefined || previous)
+        ? { durationMs: event.durationMs ?? Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous!.startedAt)) }
+        : {}),
       ...("args" in event ? { arguments: event.args } : previous?.arguments !== undefined ? { arguments: previous.arguments } : {}),
       ...(result ? { result } : previous?.result ? { result: previous.result } : {}),
     };
     if (index < 0) return [...entries, entry];
-    const next = [...entries]; next[index] = entry; return next;
+    const next = [...entries];
+    next[index] = entry;
+    return next;
   }
   return entries;
 }
@@ -181,8 +212,8 @@ function compactPath(value: string): string {
 }
 
 export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
-  const input = entry.arguments && typeof entry.arguments === "object" ? entry.arguments as Record<string, unknown> : {};
-  const value = (key: string) => typeof input[key] === "string" ? input[key] as string : "";
+  const input = entry.arguments && typeof entry.arguments === "object" ? (entry.arguments as Record<string, unknown>) : {};
+  const value = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
   const path = () => compactPath(value("path"));
   const name = entry.name;
   if (name === "bash") return `$ ${value("command")}`.trim();
@@ -206,7 +237,7 @@ export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): 
 export function codemodeCalls(entry: Extract<ConversationEntry, { kind: "tool" }>): CodemodeToolDetails["calls"] {
   if (entry.name !== "codemode" || !entry.result?.details || typeof entry.result.details !== "object") return [];
   const calls = (entry.result.details as Partial<CodemodeToolDetails>).calls;
-  return Array.isArray(calls) ? calls.filter(call => call && typeof call.name === "string" && typeof call.status === "string") : [];
+  return Array.isArray(calls) ? calls.filter((call) => call && typeof call.name === "string" && typeof call.status === "string") : [];
 }
 
 export function toolNestedCalls(entry: Extract<ConversationEntry, { kind: "tool" }>) {
@@ -219,7 +250,11 @@ export function duration(value: number | undefined): string {
 }
 
 export function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
-  const text = entry.result?.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n") ?? "";
+  const text =
+    entry.result?.content
+      .filter((part): part is TextContent => part.type === "text")
+      .map((part) => part.text)
+      .join("\n") ?? "";
   return entry.name === "bash" ? text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "") : text;
 }
 
@@ -233,7 +268,10 @@ export function boundedText(value: string, maximumCharacters: number): string {
 }
 
 function displayToolResult(result: ToolResult): ToolResult {
-  const text = result.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n");
+  const text = result.content
+    .filter((part): part is TextContent => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
   const images = result.content.filter((part): part is ImageContent => part.type === "image");
   const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
   return { ...result, content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images] };

@@ -51,7 +51,7 @@ SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来
     │   ├── <repository>/
     │   ├── .issue-git/<url-hash>/
     │   ├── .session-<name>.jsonl
-    │   ├── .attachment-<id>.<ext>
+    │   ├── .attachment-<uuid>-<原名>
     │   ├── .issue-runtime.json
     │   ├── .related-<key>{,.json,.jsonl}
     │   ├── .npm-cache/、.maven-cache/
@@ -67,11 +67,11 @@ SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来
 
 ### 附件
 
-[attachment-store.ts](../src/http/attachment-store.ts) 暂存原件、计算大小／哈希，再与工单事务协调。物理名包含 UUID，并遵守文件名 UTF-8 字节预算；原名留在元数据与下载响应。
+[attachment-store.ts](../src/http/attachment-store.ts) 暂存原件、计算大小／哈希，再与工单事务协调：原件在 SQLite 写事务之前复制进工单根，事务内只插入记录，回滚时删除本次独占创建的文件，避免大文件复制占用写锁。物理名包含 UUID，并遵守文件名 UTF-8 字节预算；原名留在元数据与下载响应。
 
 读取要求直属工单根、regular file、精确 0400、DB 大小与 SHA-256 匹配。下载先有界完整校验，再从同一描述符发送，避免校验后重新打开可变路径；取消关闭句柄。Agent 准备也验证原件，但不声称持续监控之后的外部修改。
 
-删除先 quarantine，事务失败恢复，提交后 finalize；原失败和收尾失败都保留。准备 Agent 不自动复制可编辑附件，粘贴图片属于 Pi 消息。
+删除先 quarantine，事务失败恢复，提交后 finalize；事务失败时原失败和收尾失败都保留。提交后的 finalize 失败只记录日志并保留 `.deleting` 文件供 Operator 清理，不把已提交的编辑报告为失败。准备 Agent 不自动复制可编辑附件，粘贴图片属于 Pi 消息。
 
 ### 工作文件与导出
 
@@ -96,7 +96,7 @@ Source API 使用读取时 SHA-256 检测冲突，`source_file_changed` 不可�
 | development_snapshot | 全 NULL | 全非空 |
 | invalid | 空集合、混合或其他组合 | 拒绝并检查 |
 
-只读基线按完整远端 ref 解析；冷启动可准备新共享快照并刷新对应 commit 基线，不修改历史分支／路径。已有开发分支只从本地 store／ref 恢复，缺失或损坏时报错，不 reset、远程回退或猜测修复。
+只读基线按完整远端 ref 解析；冷启动可准备新共享快照并刷新对应 commit 基线，不修改历史分支／路径。已有开发分支只从本地 store／ref 恢复，缺失或损坏时报错，不 reset、远程回退或猜测修复。工单根缺失的开发工单（私有 store 随之丢失）回收和重开都以 `workspace_missing` 拒绝，不标记为已回收，也不从较旧的共享 ref 重建。
 
 复用 checkout 检查 HEAD、common dir 和 tracked／untracked／ignored；config、hooks、alternates、指针和 link count 也由 owner 检查。模型不可改 Git 配置，推送可显式指定分支；远端成功而本地 upstream 更新失败时先核对远端，不自动重复推送。
 

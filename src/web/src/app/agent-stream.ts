@@ -57,13 +57,13 @@ export class AgentStreamController {
     let replayAgentStarted = false;
     const source = this.createEventSource(this.streamUrl(issueId));
     this.stream = source;
-    const recover = () => {
+    const recover = (reason: "agent_event_connection_failed" | "agent_event_protocol_error" = "agent_event_connection_failed") => {
       if (!this.isCurrent(generation)) return;
       this.generation += 1;
       this.clearStaleTimer();
       this.closeStream(source);
       this.callbacks.onConnection(false);
-      this.callbacks.onError("agent_event_connection_failed");
+      this.callbacks.onError(reason);
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = undefined;
         if (!this.disposed && this.issueId === issueId) this.connect(issueId);
@@ -94,7 +94,8 @@ export class AgentStreamController {
         this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replayEntries, activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
       } catch {
-        this.callbacks.onError("agent_event_protocol_error");
+        // Without a trustworthy snapshot the stream cannot deliver live events; reconnect for a fresh replay.
+        recover("agent_event_protocol_error");
       }
     });
     source.addEventListener("message", (event) => {
@@ -106,7 +107,9 @@ export class AgentStreamController {
         const envelope = parsed as RunEvent;
         if (envelope.event.type === "issue_run_state" && !AGENT_RUN_STATES.includes(envelope.event.state)) throw new Error("agent_event_protocol_error");
         if (envelope.event.type === "session_reset") {
-          queueMicrotask(() => { if (this.isCurrent(generation)) this.connect(issueId); });
+          queueMicrotask(() => {
+            if (this.isCurrent(generation)) this.connect(issueId);
+          });
           return;
         }
         if (!replayComplete) {
@@ -119,13 +122,15 @@ export class AgentStreamController {
         }
         this.callbacks.onEvent(envelope, generation);
         if (envelope.event.type === "compaction_end" && !envelope.event.aborted && !envelope.event.willRetry) {
-          queueMicrotask(() => { if (this.isCurrent(generation)) this.connect(issueId); });
+          queueMicrotask(() => {
+            if (this.isCurrent(generation)) this.connect(issueId);
+          });
         }
       } catch {
         this.callbacks.onError("agent_event_protocol_error");
       }
     });
-    source.addEventListener("error", recover);
+    source.addEventListener("error", () => recover());
   }
 
   isCurrent(generation: number): boolean {

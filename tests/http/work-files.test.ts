@@ -3,7 +3,8 @@ import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { parse as parseDisposition } from "content-disposition";
-import { createApiFixture, createIssue, createService } from "./fixture.ts";
+import { createApiFixture, createIssue, createService, issuePayload } from "./fixture.ts";
+import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 
@@ -12,7 +13,8 @@ test("serves current work files with exact names and traversal checks", async ()
   try {
     await createService(fixture.app, "Files", ["test"]);
     const issue = await createIssue(fixture.app, "files", "test", "Working files");
-    const key = String(issue.id), root = issueRoot(fixture.root, key);
+    const key = String(issue.id),
+      root = issueRoot(fixture.root, key);
     const base = `/api/issues/${key}/files`;
     assert.deepEqual((await fixture.app.inject({ method: "GET", url: base })).json(), []);
     await mkdir(root, { recursive: true });
@@ -53,7 +55,9 @@ test("serves current work files with exact names and traversal checks", async ()
     assert.deepEqual(detail.attachments, []);
     await rm(path.join(root, "结果 #1.xlsx"));
     assert.equal((await fixture.app.inject({ method: "GET", url: `${base}/download?path=${encodeURIComponent("结果 #1.xlsx")}` })).statusCode, 404);
-  } finally { await fixture.cleanup(); }
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("work file APIs distinguish missing paths, non-directory ancestors and symlink loops without leaking paths", async () => {
@@ -61,18 +65,25 @@ test("work file APIs distinguish missing paths, non-directory ancestors and syml
   try {
     await createService(fixture.app, "Paths", ["test"]);
     const issue = await createIssue(fixture.app, "paths", "test", "Path errors");
-    const root = issueRoot(fixture.root, String(issue.id)), base = `/api/issues/${issue.id}/files`;
+    const root = issueRoot(fixture.root, String(issue.id)),
+      base = `/api/issues/${issue.id}/files`;
     await mkdir(root, { recursive: true });
     await writeFile(path.join(root, "regular.txt"), "fixture");
     await symlink("loop", path.join(root, "loop"));
-    for (const [selected, status] of [["missing", 404], ["regular.txt/child", 404], ["loop", 400]] as const) {
+    for (const [selected, status] of [
+      ["missing", 404],
+      ["regular.txt/child", 404],
+      ["loop", 400],
+    ] as const) {
       for (const resource of [base, `${base}/download`]) {
         const response = await fixture.app.inject({ method: "GET", url: `${resource}?path=${encodeURIComponent(selected)}` });
         assert.equal(response.statusCode, status, response.body);
         assert.equal(response.body.includes(fixture.root), false);
       }
     }
-  } finally { await fixture.cleanup(); }
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("current downloads ignore migration indexes and expose updated working bytes", async () => {
@@ -80,9 +91,12 @@ test("current downloads ignore migration indexes and expose updated working byte
   try {
     await createService(fixture.app, "Files", ["prod"]);
     const issue = await createIssue(fixture.app, "files", "prod", "Current download");
-    const key = String(issue.id), root = issueRoot(fixture.root, key);
+    const key = String(issue.id),
+      root = issueRoot(fixture.root, key);
     const workFiles = new IssueWorkFileStore(fixture.root, key);
-    await workFiles.generate("orders.csv", async append => { await append("count\n3\n"); });
+    await workFiles.generate("orders.csv", async (append) => {
+      await append("count\n3\n");
+    });
     await writeFile(path.join(root, ".legacy-output-links.json"), "invalid historical index");
     assert.equal((await fixture.app.inject({ method: "GET", url: `/api/issues/${key}` })).statusCode, 200);
     assert.equal((await fixture.app.inject({ method: "GET", url: `/api/issues/${key}/outputs/orders.csv` })).statusCode, 404);
@@ -91,7 +105,35 @@ test("current downloads ignore migration indexes and expose updated working byte
     assert.equal(first.statusCode, 200);
     assert.equal(first.headers["cache-control"], "private, no-store");
     assert.equal(first.body, "count\n3\n");
-    await workFiles.generate("orders.csv", async append => { await append("count\n4\n"); });
+    await workFiles.generate("orders.csv", async (append) => {
+      await append("count\n4\n");
+    });
     assert.equal((await fixture.app.inject({ method: "GET", url: download })).body, "count\n4\n");
-  } finally { await fixture.cleanup(); }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a related Issue whose checkouts cannot be resolved does not block the primary Issue's files", async (context) => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Files", ["test"]);
+    const related = await createIssue(fixture.app, "files", "test", "Related evidence");
+    fixture.engine.running.clear();
+    const created = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...issuePayload("files", "test", "Primary"), relatedIssueKeys: [related.id] } });
+    assert.equal(created.statusCode, 201, created.body);
+    const key = String(created.json().id);
+    await mkdir(issueRoot(fixture.root, key), { recursive: true });
+    await writeFile(path.join(issueRoot(fixture.root, key), "own.txt"), "primary evidence");
+    const readRoots = SourceBrowser.prototype.readRoots;
+    context.mock.method(SourceBrowser.prototype, "readRoots", async function (this: SourceBrowser, issue: { id: string; key: string }) {
+      if (issue.key === related.id) throw new Error("source_git_binding_invalid");
+      return readRoots.call(this, issue);
+    });
+    const listed = await fixture.app.inject({ method: "GET", url: `/api/issues/${key}/files` });
+    assert.equal(listed.statusCode, 200, listed.body);
+    assert.ok(listed.json().some((file: { name: string }) => file.name === "own.txt"));
+  } finally {
+    await fixture.cleanup();
+  }
 });

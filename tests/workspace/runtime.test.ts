@@ -22,16 +22,21 @@ test("bounds runtime preparation concurrency and preserves Issue result order", 
       return { set: () => ({ where: async () => undefined }) };
     },
   };
-  const result = await prepareIssueRuntimeBatch(database as never, issues, async (issue) => {
-    active += 1;
-    maximumActive = Math.max(maximumActive, active);
-    try {
-      await new Promise((resolve) => setTimeout(resolve, issue.id === "001" ? 15 : 2));
-      if (issue.id === "002") throw new Error("runtime_blocked");
-    } finally {
-      active -= 1;
-    }
-  }, { concurrency: 2 });
+  const result = await prepareIssueRuntimeBatch(
+    database as never,
+    issues,
+    async (issue) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, issue.id === "001" ? 15 : 2));
+        if (issue.id === "002") throw new Error("runtime_blocked");
+      } finally {
+        active -= 1;
+      }
+    },
+    { concurrency: 2 },
+  );
 
   assert.equal(maximumActive, 2);
   assert.equal(failedUpdates, 1);
@@ -48,23 +53,40 @@ test("keeps unchanged runtime timestamps across preparation failures and retries
     const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     const [service] = await database.db.insert(services).values({ key: "runtime-failure", name: "Runtime failure" }).returning();
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
-    const rows = await database.db.insert(issueRecords).values(["001", "002", "003"].map(suffix => ({ key: `ISSUE-20261018-${suffix}`, title: "Runtime retry", type: "defect_fix" as const, serviceId: service!.id, environmentId: environment!.id, reporterSubject: issuePilotConfig.bootstrapUser.subject }))).returning();
+    const rows = await database.db
+      .insert(issueRecords)
+      .values(
+        ["001", "002", "003"].map((suffix) => ({
+          key: `ISSUE-20261018-${suffix}`,
+          title: "Runtime retry",
+          type: "defect_fix" as const,
+          serviceId: service!.id,
+          environmentId: environment!.id,
+          reporterSubject: issuePilotConfig.bootstrapUser.subject,
+        })),
+      )
+      .returning();
     const unchangedAt = new Date("2026-08-01T00:00:00Z");
     await database.db.insert(issueWorkspaces).values(rows.map((issue, index) => ({ issueId: issue.id, runtimeReady: index > 0, updatedAt: unchangedAt })));
-    const prepare = async (issue: typeof rows[number]) => { if (issue.id !== rows[2]!.id) throw new Error("runtime_blocked"); };
+    const prepare = async (issue: (typeof rows)[number]) => {
+      if (issue.id !== rows[2]!.id) throw new Error("runtime_blocked");
+    };
     const first = await prepareIssueRuntimeBatch(database.db, rows, prepare);
-    const firstStates = new Map((await database.db.select().from(issueWorkspaces)).map(row => [row.issueId, row]));
+    const firstStates = new Map((await database.db.select().from(issueWorkspaces)).map((row) => [row.issueId, row]));
     assert.equal(firstStates.get(rows[0]!.id)!.updatedAt.getTime(), unchangedAt.getTime());
     assert.equal(firstStates.get(rows[1]!.id)!.runtimeReady, false);
     assert.notEqual(firstStates.get(rows[1]!.id)!.updatedAt.getTime(), unchangedAt.getTime());
     assert.equal(firstStates.get(rows[2]!.id)!.runtimeReady, true);
     const repeated = await prepareIssueRuntimeBatch(database.db, rows, prepare);
     assert.deepEqual(repeated, first);
-    assert.deepEqual(first, { prepared: [rows[2]!.key], blocked: rows.slice(0, 2).map(issue => ({ issueKey: issue.key, reason: "runtime_blocked" })) });
+    assert.deepEqual(first, { prepared: [rows[2]!.key], blocked: rows.slice(0, 2).map((issue) => ({ issueKey: issue.key, reason: "runtime_blocked" })) });
     for (const workspace of await database.db.select().from(issueWorkspaces)) {
       assert.equal(workspace.updatedAt.getTime(), firstStates.get(workspace.issueId)!.updatedAt.getTime());
     }
-  } finally { await database.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("prepares the same issue runtime shape for read-only checkouts and writable worktrees", async () => {
@@ -97,21 +119,20 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     const relatedDirectory = issueRoot(root, "ISSUE-20260809-099");
     await mkdir(relatedDirectory, { recursive: true });
     const conversation = path.join(relatedDirectory, ".session-related.jsonl");
-    await writeFile(conversation, "{\"type\":\"session\"}\n", "utf8");
-    const relatedRuntime = await prepareIssueRuntime(root, readOnlyIssue, [{ name: "orders", repositoryPath: checkout }], "read", [{
-      key: "ISSUE-20260809-099",
-      metadata: { key: "ISSUE-20260809-099", title: "Earlier development" },
-      conversationPath: conversation,
-      workDirectory: relatedDirectory,
-    }]);
+    await writeFile(conversation, '{"type":"session"}\n', "utf8");
+    const relatedRuntime = await prepareIssueRuntime(root, readOnlyIssue, [{ name: "orders", repositoryPath: checkout }], "read", [
+      {
+        key: "ISSUE-20260809-099",
+        metadata: { key: "ISSUE-20260809-099", title: "Earlier development" },
+        conversationPath: conversation,
+        workDirectory: relatedDirectory,
+      },
+    ]);
     assert.deepEqual(JSON.parse(await readFile(path.join(relatedRuntime, ".related-issue-20260809-099.json"), "utf8")), { key: "ISSUE-20260809-099", title: "Earlier development" });
-    assert.equal(await readFile(path.join(relatedRuntime, ".related-issue-20260809-099.jsonl"), "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal(await readFile(path.join(relatedRuntime, ".related-issue-20260809-099.jsonl"), "utf8"), '{"type":"session"}\n');
     assert.equal(await readlink(path.join(relatedRuntime, ".related-issue-20260809-099")), path.relative(relatedRuntime, relatedDirectory));
 
-    await assert.rejects(
-      prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"),
-      /repository_workspace_outside_issue_root/,
-    );
+    await assert.rejects(prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"), /repository_workspace_outside_issue_root/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

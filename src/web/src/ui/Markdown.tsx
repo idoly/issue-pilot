@@ -9,6 +9,34 @@ const maximumCachedCharacters = issuePilotConfig.web.markdownCacheCharacters;
 const htmlCache = new Map<string, { html: string; weight: number }>();
 let cachedCharacters = 0;
 
+// Issue and agent text may contain raw HTML. Keep rendering inert: no forms or controls to spoof,
+// no inline styles to cover the UI, and no predictable ids to shadow modal labels.
+const sanitizeOptions = {
+  FORBID_TAGS: ["form", "input", "button", "select", "textarea", "label", "dialog", "iframe", "video", "audio", "object", "embed"],
+  FORBID_ATTR: ["style", "formaction"],
+  SANITIZE_NAMED_PROPS: true,
+};
+const sanitize = (html: string) => {
+  const cleaned = DOMPurify.sanitize(html, sanitizeOptions) as string;
+  // External links open in a new tab so Agent output never navigates the application away.
+  // Resolve every href so protocol-relative and mixed-case forms are handled too.
+  if (!/href=/i.test(cleaned)) return cleaned;
+  const template = document.createElement("template");
+  template.innerHTML = cleaned;
+  for (const link of template.content.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+    let url: URL;
+    try {
+      url = new URL(link.getAttribute("href")!, window.location.href);
+    } catch {
+      continue;
+    }
+    if (url.origin === window.location.origin) continue;
+    link.setAttribute("target", "_blank");
+    link.setAttribute("rel", "noopener noreferrer");
+  }
+  return template.innerHTML;
+};
+
 function renderMarkdown(source: string): string {
   const cached = htmlCache.get(source);
   if (cached) {
@@ -16,7 +44,7 @@ function renderMarkdown(source: string): string {
     htmlCache.set(source, cached);
     return cached.html;
   }
-  const html = DOMPurify.sanitize(marked.parse(source, { async: false }) as string);
+  const html = sanitize(marked.parse(source, { async: false }) as string);
   const weight = source.length + html.length;
   if (weight > maximumCachedCharacters) return html;
   while (htmlCache.size >= maximumCachedEntries || cachedCharacters + weight > maximumCachedCharacters) {
@@ -32,7 +60,7 @@ function renderMarkdown(source: string): string {
 
 export function Markdown(props: { source: string; cache?: boolean; resolveLink?: (href: string) => string | null | undefined }) {
   const html = createMemo(() => {
-    if (!props.resolveLink) return props.cache === false ? DOMPurify.sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source);
+    if (!props.resolveLink) return props.cache === false ? sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source);
     const template = document.createElement("template");
     template.innerHTML = marked.parse(props.source, { async: false }) as string;
     for (const link of template.content.querySelectorAll("a[href]")) {
@@ -43,7 +71,7 @@ export function Markdown(props: { source: string; cache?: boolean; resolveLink?:
         link.setAttribute("download", "");
       }
     }
-    return DOMPurify.sanitize(template.innerHTML);
+    return sanitize(template.innerHTML);
   });
   return <div class="markdown markdown-body" innerHTML={html()} />;
 }

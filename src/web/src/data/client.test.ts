@@ -1,19 +1,56 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config";
-import { fetchAttachment, fetchIssueWorkFile, applyIssueScopeTransition, createIssue, currentUserSubject, deleteService, listIssuePins, listIssues, loadCatalog, loadCurrentUser, loadSourceBlame, loadSourceCommit, loadSourceCommitFile, loadSourceDiff, loadSourceDiffFile, loadSourceFile, planIssueScopeTransition, saveSourceFile, searchSource, sendAgentMessage, setCurrentUserSubject, setIssuePinned, updateIssue, updateIssueRelatedIssues, updateService } from "./client";
+import {
+  fetchAttachment,
+  fetchIssueWorkFile,
+  applyIssueScopeTransition,
+  createIssue,
+  currentUserSubject,
+  deleteService,
+  listIssuePins,
+  listIssues,
+  loadCatalog,
+  loadCurrentUser,
+  loadSourceBlame,
+  loadSourceCommit,
+  loadSourceCommitFile,
+  loadSourceDiff,
+  loadSourceDiffFile,
+  loadSourceFile,
+  planIssueScopeTransition,
+  saveSourceFile,
+  searchSource,
+  sendAgentMessage,
+  setCurrentUserSubject,
+  setIssuePinned,
+  updateIssue,
+  updateIssueRelatedIssues,
+  updateService,
+} from "./client";
 
 describe("API client", () => {
-  afterEach(() => { setCurrentUserSubject(null); localStorage.clear(); vi.unstubAllGlobals(); });
+  afterEach(() => {
+    setCurrentUserSubject(null);
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
 
   for (const read of [fetchAttachment, fetchIssueWorkFile]) {
     it(`${read.name} enforces the streamed preview budget and cancels oversized responses`, async () => {
       const cancel = vi.fn();
       let pulls = 0;
-      const body = new ReadableStream<Uint8Array>({
-        pull(controller) { pulls++; if (pulls === 4) controller.close(); else controller.enqueue(new Uint8Array(issuePilotConfig.web.filePreviewBytes / 2)); },
-        cancel,
-      }, { highWaterMark: 0 });
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls++;
+            if (pulls === 4) controller.close();
+            else controller.enqueue(new Uint8Array(issuePilotConfig.web.filePreviewBytes / 2));
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      );
       const fetchMock = vi.fn().mockResolvedValue(new Response(body, { headers: { "content-type": "text/plain", "content-length": "1" } }));
       vi.stubGlobal("fetch", fetchMock);
       setCurrentUserSubject("alice");
@@ -24,22 +61,34 @@ describe("API client", () => {
     });
 
     it(`${read.name} rejects a declared oversized body without reading and preserves ordinary errors`, async () => {
-      const cancel = vi.fn(), pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => controller.close());
+      const cancel = vi.fn(),
+        pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => controller.close());
       const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
-      const fetchMock = vi.fn().mockResolvedValueOnce(new Response(body, { headers: { "content-length": String(issuePilotConfig.web.filePreviewBytes + 1) } }))
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(body, { headers: { "content-length": String(issuePilotConfig.web.filePreviewBytes + 1) } }))
         .mockResolvedValueOnce(Response.json({ error: "managed_issue_file_private" }, { status: 403 }));
       vi.stubGlobal("fetch", fetchMock);
       await expect(read("ISSUE-1", "file.txt")).rejects.toThrow("file_preview_too_large");
-      expect(pull).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledOnce();
+      expect(pull).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledOnce();
       await expect(read("ISSUE-1", "file.txt")).rejects.toThrow("managed_issue_file_private");
     });
 
     it(`${read.name} cancels a partially read response when its preview is aborted`, async () => {
-      const cancel = vi.fn(), controller = new AbortController(), reason = new Error("preview_closed");
-      const body = new ReadableStream<Uint8Array>({
-        pull(stream) { stream.enqueue(new Uint8Array([1])); controller.abort(reason); },
-        cancel,
-      }, { highWaterMark: 0 });
+      const cancel = vi.fn(),
+        controller = new AbortController(),
+        reason = new Error("preview_closed");
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(stream) {
+            stream.enqueue(new Uint8Array([1]));
+            controller.abort(reason);
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      );
       const fetchMock = vi.fn().mockResolvedValue(new Response(body));
       vi.stubGlobal("fetch", fetchMock);
       await expect(read("ISSUE-1", "file.txt", controller.signal)).rejects.toBe(reason);
@@ -51,15 +100,18 @@ describe("API client", () => {
       const fetchMock = vi.fn().mockResolvedValue(new Response(new Uint8Array(issuePilotConfig.web.filePreviewBytes), { headers: { "content-type": "application/pdf" } }));
       vi.stubGlobal("fetch", fetchMock);
       const file = await read("ISSUE-1", "file.pdf");
-      expect(file.size).toBe(issuePilotConfig.web.filePreviewBytes); expect(file.type).toBe("application/pdf");
-      const controller = new AbortController(); controller.abort();
+      expect(file.size).toBe(issuePilotConfig.web.filePreviewBytes);
+      expect(file.type).toBe("application/pdf");
+      const controller = new AbortController();
+      controller.abort();
       await expect(read("ISSUE-1", "file.pdf", controller.signal)).rejects.toThrow();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   }
 
   it("keeps this page's request identity when another tab changes the remembered user", async () => {
-    const fetch = vi.fn()
+    const fetch = vi
+      .fn()
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json({ subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" }));
     vi.stubGlobal("fetch", fetch);
@@ -78,16 +130,19 @@ describe("API client", () => {
     vi.stubGlobal("fetch", fetch);
     const file = new File(["evidence"], "evidence.txt", { type: "text/plain" });
 
-    await createIssue({
-      title: "Investigate",
-      description: "Details",
-      priority: "p1",
-      workMode: "production_analysis",
-      serviceKey: "service-a",
-      assigneeSubject: null,
-      ccSubjects: [],
-      relatedIssueKeys: ["ISSUE-20260809-099"],
-    }, [file]);
+    await createIssue(
+      {
+        title: "Investigate",
+        description: "Details",
+        priority: "p1",
+        workMode: "production_analysis",
+        serviceKey: "service-a",
+        assigneeSubject: null,
+        ccSubjects: [],
+        relatedIssueKeys: ["ISSUE-20260809-099"],
+      },
+      [file],
+    );
 
     const [, init] = fetch.mock.calls[0]!;
     expect(init.method).toBe("POST");
@@ -165,10 +220,13 @@ describe("API client", () => {
 
     await updateIssueRelatedIssues("ISSUE-20260810-001", ["ISSUE-20260809-099"]);
 
-    expect(fetch).toHaveBeenCalledWith("/api/issues/ISSUE-20260810-001/related-issues", expect.objectContaining({
-      method: "PUT",
-      body: JSON.stringify({ relatedIssueKeys: ["ISSUE-20260809-099"] }),
-    }));
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/issues/ISSUE-20260810-001/related-issues",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ relatedIssueKeys: ["ISSUE-20260809-099"] }),
+      }),
+    );
   });
 
   it("uses idempotent per-Issue pin endpoints", async () => {
@@ -185,19 +243,31 @@ describe("API client", () => {
 
   it("keeps source paths and search queries out of request URLs", async () => {
     const fetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.endsWith("/source/commit-file")) return new Response(JSON.stringify({
-        file: { status: "modified", path: "src/订单.ts", previousPath: null },
-        before: { path: "src/订单.ts", revision: "b".repeat(40), content: "before" },
-        after: { path: "src/订单.ts", revision: "a".repeat(40), content: "after" },
-      }), { status: 200 });
+      if (url.endsWith("/source/commit-file"))
+        return new Response(
+          JSON.stringify({
+            file: { status: "modified", path: "src/订单.ts", previousPath: null },
+            before: { path: "src/订单.ts", revision: "b".repeat(40), content: "before" },
+            after: { path: "src/订单.ts", revision: "a".repeat(40), content: "after" },
+          }),
+          { status: 200 },
+        );
       if (url.endsWith("/source/commit")) return new Response(JSON.stringify({ files: [{ status: "modified", path: "src/订单.ts", previousPath: null }], truncated: false }), { status: 200 });
-      if (url.endsWith("/source/diff-file")) return new Response(JSON.stringify({
-        file: { status: "modified", path: "src/订单.ts", previousPath: null },
-        before: { path: "src/订单.ts", version: "index", content: "before" },
-        after: { path: "src/订单.ts", version: "working-tree", content: "after" },
-      }), { status: 200 });
+      if (url.endsWith("/source/diff-file"))
+        return new Response(
+          JSON.stringify({
+            file: { status: "modified", path: "src/订单.ts", previousPath: null },
+            before: { path: "src/订单.ts", version: "index", content: "before" },
+            after: { path: "src/订单.ts", version: "working-tree", content: "after" },
+          }),
+          { status: 200 },
+        );
       if (url.endsWith("/source/diff")) return new Response(JSON.stringify({ files: [{ status: "modified", path: "src/订单.ts", previousPath: null }], truncated: false }), { status: 200 });
-      if (url.endsWith("/source/blame")) return new Response(JSON.stringify({ path: "src/订单.ts", line: 7, commit: "a".repeat(40), shortCommit: "a".repeat(8), author: "Fixture", date: "2026-08-15T00:00:00.000Z", subject: "Fix order" }), { status: 200 });
+      if (url.endsWith("/source/blame"))
+        return new Response(
+          JSON.stringify({ path: "src/订单.ts", line: 7, commit: "a".repeat(40), shortCommit: "a".repeat(8), author: "Fixture", date: "2026-08-15T00:00:00.000Z", subject: "Fix order" }),
+          { status: 200 },
+        );
       return new Response(JSON.stringify({ path: "src/index.ts", content: "", size: 0 }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetch);
@@ -270,7 +340,8 @@ describe("API client", () => {
 
   it("uses plan and apply for scope transitions", async () => {
     const plan = { planHash: `sha256:${"a".repeat(64)}`, expectedIssueUpdatedAt: "2026-08-10T00:00:00.000Z" };
-    const fetch = vi.fn()
+    const fetch = vi
+      .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(plan), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ issueKey: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);

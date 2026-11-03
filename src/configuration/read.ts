@@ -14,13 +14,35 @@ import { projectCapabilityConfiguration } from "./credentials.ts";
 
 const descriptionEnvironmentOrder = ["dev", "test", "prod"];
 
+type ServiceContextEntry = {
+  environment: Parameters<typeof deploymentContext>[0];
+  configuration: Parameters<typeof deploymentContext>[1];
+  connections: Parameters<typeof deploymentContext>[2];
+  credentials?: Parameters<typeof deploymentContext>[3];
+};
+
+/** One owner for the description plus environment-ordered deployment sections used by both projections. */
+function serviceContext(description: string, entries: readonly ServiceContextEntry[], privateConfiguration: boolean): string {
+  return [
+    description,
+    ...entries
+      .toSorted((left, right) => descriptionEnvironmentOrder.indexOf(left.environment.key) - descriptionEnvironmentOrder.indexOf(right.environment.key))
+      .map(({ environment, configuration, connections, credentials }) => deploymentContext(environment, configuration, connections, credentials ?? [], privateConfiguration)),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 type ConfigurationReader = Pick<Database, "select">;
 
 async function projectConfigurationCatalog(database: ConfigurationReader): Promise<ConfigurationCatalog> {
   const [environmentRows, serviceRows, deploymentRows] = await Promise.all([
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
     database.select({ id: services.id, key: services.key, name: services.name }).from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
-    database.select({ serviceId: serviceDeployments.serviceId, environmentId: serviceDeployments.environmentId }).from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
+    database
+      .select({ serviceId: serviceDeployments.serviceId, environmentId: serviceDeployments.environmentId })
+      .from(serviceDeployments)
+      .orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
   ]);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
   const deploymentsByServiceId = new Map<string, Array<{ environmentKey: string }>>();
@@ -63,11 +85,20 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
     database.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
     database.select().from(serviceRepositories).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
     database.select().from(serviceDeploymentRepositories),
-    database.select({ id: schema.mcpServices.id, name: schema.mcpServices.name, url: schema.mcpServices.url, transport: schema.mcpServices.transport, enabled: schema.mcpServices.enabled, deploymentId: schema.mcpServices.deploymentId }).from(schema.mcpServices),
+    database
+      .select({
+        id: schema.mcpServices.id,
+        name: schema.mcpServices.name,
+        url: schema.mcpServices.url,
+        transport: schema.mcpServices.transport,
+        enabled: schema.mcpServices.enabled,
+        deploymentId: schema.mcpServices.deploymentId,
+      })
+      .from(schema.mcpServices),
   ]);
   const importNames = await dingtalkMcpNames(database);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
-  const environmentById = new Map(environmentRows.map(environment => [environment.id, environment]));
+  const environmentById = new Map(environmentRows.map((environment) => [environment.id, environment]));
   const deploymentsByServiceId = new Map<string, typeof deploymentRows>();
   const repositoriesByServiceId = new Map<string, typeof repositoryRows>();
   const branchesByDeploymentId = new Map<string, Map<string, string>>();
@@ -94,20 +125,26 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
     services: serviceRows.map((service) => {
       const deployments = deploymentsByServiceId.get(service.id) ?? [];
       const repositories = repositoriesByServiceId.get(service.id) ?? [];
+      const contextEntries = deployments.map((deployment) => {
+        const environment = environmentById.get(deployment.environmentId);
+        if (!environment) throw new Error("deployment_environment_not_found");
+        return { environment, configuration: deployment.config, connections: serviceMcpConnections(mcp, [deployment.id], importNames) };
+      });
       return {
         revision: service.revision,
         key: service.key,
         name: service.name,
         description: service.description,
-        context: [service.description, ...deployments.toSorted((left, right) => descriptionEnvironmentOrder.indexOf(environmentKeyById.get(left.environmentId)!) - descriptionEnvironmentOrder.indexOf(environmentKeyById.get(right.environmentId)!)).map(deployment => deploymentContext(environmentById.get(deployment.environmentId)!, deployment.config, serviceMcpConnections(mcp, [deployment.id], importNames)))].filter(Boolean).join("\n\n"),
+        context: serviceContext(service.description, contextEntries, false),
         deployments: deployments.map((deployment) => {
           const deploymentConfig = deployment.config;
           const environmentKey = environmentKeyById.get(deployment.environmentId);
           if (!environmentKey) throw new Error("deployment_environment_not_found");
-          const branchDeployment = environmentKey === "dev" ? deployments.find(row => environmentKeyById.get(row.environmentId) === "prod") : deployment;
+          const branchDeployment = environmentKey === "dev" ? deployments.find((row) => environmentKeyById.get(row.environmentId) === "prod") : deployment;
           if (!branchDeployment) throw new Error("development_production_deployment_required");
           const branchByRepositoryId = branchesByDeploymentId.get(branchDeployment.id) ?? new Map<string, string>();
-          if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length) throw new Error("deployment_repository_branches_invalid");
+          if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length)
+            throw new Error("deployment_repository_branches_invalid");
           return {
             ...projectCapabilityConfiguration(deploymentConfig),
             ...(deploymentConfig.dbhub ? { dbhub: deploymentConfig.dbhub.map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })) } : {}),
@@ -123,20 +160,22 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
 }
 
 export function loadServiceConfigurationDescription(database: Database, key: string): Promise<{ context: string } | undefined> {
-  return readSnapshot(database, async reader => {
+  return readSnapshot(database, async (reader) => {
     const [service] = await reader.select().from(services).where(eq(services.key, key)).limit(1);
     if (!service) return undefined;
     const [deployments, environmentRows, mcp] = await Promise.all([
       reader.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, service.id)),
-      reader.select().from(environments), reader.select().from(schema.mcpServices),
+      reader.select().from(environments),
+      reader.select().from(schema.mcpServices),
     ]);
     const importNames = await dingtalkMcpNames(reader);
-    return { context: [service.description, ...deployments.toSorted((left, right) => descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === left.environmentId)?.key ?? "") - descriptionEnvironmentOrder.indexOf(environmentRows.find(row => row.id === right.environmentId)?.key ?? "")).map(deployment => {
-      const environment = environmentRows.find(row => row.id === deployment.environmentId);
+    const entries = deployments.map((deployment) => {
+      const environment = environmentRows.find((row) => row.id === deployment.environmentId);
       if (!environment) throw new Error("deployment_environment_not_found");
       const connections = serviceMcpConnections(mcp, [deployment.id], importNames);
-      return deploymentContext(environment, deployment.config, connections, connections, true);
-    })].filter(Boolean).join("\n\n") };
+      return { environment, configuration: deployment.config, connections, credentials: connections };
+    });
+    return { context: serviceContext(service.description, entries, true) };
   });
 }
 

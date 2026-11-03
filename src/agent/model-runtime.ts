@@ -84,7 +84,9 @@ export function createPiModelRuntime(agentDir = getAgentDir(), credential?: { pr
     load,
     close() {
       closing ??= (async () => {
-        try { await runtime; } catch {
+        try {
+          await runtime;
+        } catch {
           // Initialization errors are reported by the caller that requested the runtime.
         }
         await cleanup();
@@ -108,7 +110,9 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
 
   async close(): Promise<void> {
     if (!this.ownsRuntime) return;
-    try { await this.listing; } catch {
+    try {
+      await this.listing;
+    } catch {
       // The list caller owns refresh errors; close still releases private storage.
     }
     await this.runtime.close();
@@ -116,7 +120,9 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
 
   list(): Promise<AgentModelDefinition[]> {
     if (this.listing) return this.listing;
-    this.listing = this.load().finally(() => { this.listing = undefined; });
+    this.listing = this.load().finally(() => {
+      this.listing = undefined;
+    });
     return this.listing;
   }
 
@@ -125,7 +131,8 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
     await runtime.refresh({ allowNetwork: false });
     // Candidates are the Operator models.json providers; SQLite keys make them usable, so host authentication is not a filter.
     const providers = new Set(Object.keys((await readOperatorModels(this.agentDir))?.providers ?? {}));
-    return runtime.getModels()
+    return runtime
+      .getModels()
       .filter((model) => providers.has(model.provider))
       .map((model) => ({
         provider: model.provider,

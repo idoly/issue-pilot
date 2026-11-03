@@ -23,14 +23,23 @@ export function registerCapabilityRoutes(context: ApiRouteContext) {
       const current = (await loadCapabilitySwitches(database.db)).find((row) => row.key === key)!;
       if (current.enabled === enabled) return { key, enabled };
       const deployments = (await database.db.select().from(serviceDeployments)).filter((row) => Boolean(row.config[key]));
-      const environmentIds = [...new Set([...deployments.map(row => row.environmentId), ...(deployments.length ? (await database.db.select({ id: environments.id }).from(environments).where(eq(environments.kind, "dev"))).map(row => row.id) : [])])];
+      const environmentIds = [
+        ...new Set([
+          ...deployments.map((row) => row.environmentId),
+          ...(deployments.length ? (await database.db.select({ id: environments.id }).from(environments).where(eq(environments.kind, "dev"))).map((row) => row.id) : []),
+        ]),
+      ];
       const affected = environmentIds.length ? await database.db.select({ id: issues.id }).from(issues).where(inArray(issues.environmentId, environmentIds)) : [];
       try {
-        return await runIssueExclusive(engine, affected.map((row) => row.id), async (reservation) => {
-          for (const row of affected) await reservation.closeSession(row.id);
-          await database.db.update(capabilitySwitches).set({ enabled, updatedAt: new Date() }).where(eq(capabilitySwitches.key, key));
-          return { key, enabled };
-        });
+        return await runIssueExclusive(
+          engine,
+          affected.map((row) => row.id),
+          async (reservation) => {
+            for (const row of affected) await reservation.closeSession(row.id);
+            await database.db.update(capabilitySwitches).set({ enabled, updatedAt: new Date() }).where(eq(capabilitySwitches.key, key));
+            return { key, enabled };
+          },
+        );
       } catch (error) {
         if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "capability_has_running_issues");
         throw error;

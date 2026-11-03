@@ -27,6 +27,15 @@ interface PlannedRepository {
 
 type ScopeTransitionAction = "none" | "rebind_read_only" | "convert_to_development" | "migrate_development";
 
+// Deterministic deployment/config conditions that the operator can correct, not server failures.
+const deploymentRefusals = new Set([
+  "issue_service_deployment_not_found",
+  "selected_service_has_no_repository",
+  "development_production_deployment_required",
+  "deployment_repository_branches_invalid",
+  "cross_service_repository_branch_conflict",
+]);
+
 export interface ScopeTransitionPlan {
   planHash: string;
   expectedIssueUpdatedAt: string;
@@ -69,9 +78,7 @@ function repositoryDiff(current: PlannedRepository[], target: PlannedRepository[
   const currentByUrl = new Map(current.map((repository) => [repository.url, repository]));
   const targetByUrl = new Map(target.map((repository) => [repository.url, repository]));
   return {
-    retained: preserveRetainedState
-      ? current.filter((repository) => targetByUrl.has(repository.url))
-      : target.filter((repository) => currentByUrl.has(repository.url)),
+    retained: preserveRetainedState ? current.filter((repository) => targetByUrl.has(repository.url)) : target.filter((repository) => currentByUrl.has(repository.url)),
     added: target.filter((repository) => !currentByUrl.has(repository.url)),
     removed: current.filter((repository) => !targetByUrl.has(repository.url)),
   };
@@ -89,7 +96,8 @@ export class IssueScopeTransitionManager {
   }
 
   async plan(issueId: string, target: ScopeTransitionTarget): Promise<ScopeTransitionPlan> {
-    const [current] = await this.database.select({ issue: issues, environment: environments, service: services, workspace: issueWorkspaces })
+    const [current] = await this.database
+      .select({ issue: issues, environment: environments, service: services, workspace: issueWorkspaces })
       .from(issues)
       .innerJoin(environments, eq(environments.id, issues.environmentId))
       .innerJoin(services, eq(services.id, issues.serviceId))
@@ -102,8 +110,18 @@ export class IssueScopeTransitionManager {
 
     const targetScope = issueScopeForWorkMode(target.workMode);
     const [targetService, targetEnvironment] = await Promise.all([
-      this.database.select().from(services).where(eq(services.key, target.serviceKey)).limit(1).then((rows) => rows[0]),
-      this.database.select().from(environments).where(eq(environments.kind, targetScope.environmentKind)).limit(1).then((rows) => rows[0]),
+      this.database
+        .select()
+        .from(services)
+        .where(eq(services.key, target.serviceKey))
+        .limit(1)
+        .then((rows) => rows[0]),
+      this.database
+        .select()
+        .from(environments)
+        .where(eq(environments.kind, targetScope.environmentKind))
+        .limit(1)
+        .then((rows) => rows[0]),
     ]);
     if (!targetService || !targetEnvironment) throw new ScopeTransitionRefusal("scope_transition_target_not_found");
 
@@ -111,7 +129,7 @@ export class IssueScopeTransitionManager {
     try {
       targetDeployment = await loadIssueDeployments(this.database, { id: current.issue.id, serviceId: targetService.id, environmentId: targetEnvironment.id });
     } catch (error) {
-      if (error instanceof Error && error.message === "issue_service_deployment_not_found") throw new ScopeTransitionRefusal(error.message);
+      if (error instanceof Error && deploymentRefusals.has(error.message)) throw new ScopeTransitionRefusal(error.message);
       throw error;
     }
 
@@ -132,26 +150,22 @@ export class IssueScopeTransitionManager {
     if (sameScope) action = "none";
     else if (current.environment.kind !== "dev" && targetScope.repositoryAccess === "read") action = "rebind_read_only";
     else if (
-      current.environment.kind !== "dev"
-      && current.issue.type === "smart_analysis"
-      && target.workMode === "development_fix"
-      && current.service.id === targetService.id
-      && ["open", "pending"].includes(current.issue.status)
-      && current.workspace.status === "ready"
-    ) action = "convert_to_development";
+      current.environment.kind !== "dev" &&
+      current.issue.type === "smart_analysis" &&
+      target.workMode === "development_fix" &&
+      current.service.id === targetService.id &&
+      ["open", "pending"].includes(current.issue.status) &&
+      current.workspace.status === "ready"
+    )
+      action = "convert_to_development";
     else if (current.environment.kind === "dev" && targetScope.repositoryAccess === "write") {
       if (current.issue.type !== targetScope.issueType) throw new ScopeTransitionRefusal("development_branch_mode_immutable");
-      if (
-        current.service.id !== targetService.id
-        && ["open", "pending"].includes(current.issue.status)
-        && current.workspace.status === "ready"
-      ) action = "migrate_development";
+      if (current.service.id !== targetService.id && ["open", "pending"].includes(current.issue.status) && current.workspace.status === "ready") action = "migrate_development";
       else throw new ScopeTransitionRefusal("scope_transition_not_supported");
     } else throw new ScopeTransitionRefusal("scope_transition_not_supported");
 
-    const branch = action === "convert_to_development" || action === "migrate_development"
-      ? `${targetScope.issueType === "defect_fix" ? "hotfix" : "feature"}-${current.issue.key.toLowerCase()}`
-      : null;
+    const branch =
+      action === "convert_to_development" || action === "migrate_development" ? `${targetScope.issueType === "defect_fix" ? "hotfix" : "feature"}-${current.issue.key.toLowerCase()}` : null;
     const warnings: string[] = [];
     const planWithoutHash: Omit<ScopeTransitionPlan, "planHash"> = {
       expectedIssueUpdatedAt: current.issue.updatedAt.toISOString(),
@@ -176,7 +190,8 @@ export class IssueScopeTransitionManager {
   }
 
   async history(issueId: string) {
-    const rows = await this.database.select({ transition: issueScopeTransitions, actor: subjects })
+    const rows = await this.database
+      .select({ transition: issueScopeTransitions, actor: subjects })
       .from(issueScopeTransitions)
       .innerJoin(subjects, eq(subjects.subject, issueScopeTransitions.actorSubject))
       .where(eq(issueScopeTransitions.issueId, issueId))
@@ -213,17 +228,18 @@ export class IssueScopeTransitionManager {
         this.database.select().from(environments).where(eq(environments.kind, targetScope.environmentKind)).limit(1),
       ]);
       if (!targetService || !targetEnvironment) throw new ScopeTransitionRefusal("scope_transition_plan_stale");
-      return this.workspaces.migrateDevelopmentIssueScope(
-        issueId,
-        { serviceId: targetService.id, environmentId: targetEnvironment.id },
-        expectation.expectedIssueUpdatedAt,
-        recordTransition,
-      );
+      return this.workspaces.migrateDevelopmentIssueScope(issueId, { serviceId: targetService.id, environmentId: targetEnvironment.id }, expectation.expectedIssueUpdatedAt, recordTransition);
     }
     return this.engine.runExclusive([issueId], async (reservation) => this.applyReadOnlyRebind(issueId, target, expectation, actorSubject, reservation));
   }
 
-  private async applyReadOnlyRebind(issueId: string, target: ScopeTransitionTarget, expectation: ScopeTransitionExpectation, actorSubject: string, reservation: AgentReservation): Promise<typeof issues.$inferSelect> {
+  private async applyReadOnlyRebind(
+    issueId: string,
+    target: ScopeTransitionTarget,
+    expectation: ScopeTransitionExpectation,
+    actorSubject: string,
+    reservation: AgentReservation,
+  ): Promise<typeof issues.$inferSelect> {
     const plan = await this.plan(issueId, target);
     this.assertExpected(plan, expectation);
     if (plan.action !== "rebind_read_only") throw new ScopeTransitionRefusal("scope_transition_plan_stale");
@@ -236,12 +252,16 @@ export class IssueScopeTransitionManager {
     await reservation.closeSession(issueId);
     const updated = await this.database.transaction(async (transaction) => {
       const now = new Date();
-      const [changed] = await transaction.update(issues).set({
-        serviceId: targetService.id,
-        environmentId: targetEnvironment.id,
-        type: targetScope.issueType,
-        updatedAt: now,
-      }).where(and(eq(issues.id, issueId), eq(issues.updatedAt, new Date(expectation.expectedIssueUpdatedAt)))).returning();
+      const [changed] = await transaction
+        .update(issues)
+        .set({
+          serviceId: targetService.id,
+          environmentId: targetEnvironment.id,
+          type: targetScope.issueType,
+          updatedAt: now,
+        })
+        .where(and(eq(issues.id, issueId), eq(issues.updatedAt, new Date(expectation.expectedIssueUpdatedAt))))
+        .returning();
       if (!changed) throw new ScopeTransitionRefusal("scope_transition_plan_stale");
       await transaction.delete(issueRepositories).where(eq(issueRepositories.issueId, issueId));
       await transaction.update(issueWorkspaces).set({ status: "not_created", runtimeReady: false, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));

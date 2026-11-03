@@ -18,6 +18,8 @@ export const issuePilotConfig = Object.freeze({
     sseHeartbeatMs: 15_000,
     sseRecentEventIds: 4_096,
     sseQueuedBytes: 8 * 1024 * 1024,
+    // Graceful stop waits for in-flight requests; stalled connections are destroyed after this.
+    shutdownGraceMs: 30_000,
   }),
   web: Object.freeze({
     host: "0.0.0.0",
@@ -51,16 +53,26 @@ export const issuePilotConfig = Object.freeze({
   }),
   runtime: Object.freeze({
     agent: Object.freeze({
-      modelResponseIdleMs: 5 * 60 * 1000, maxConcurrentIssues: 10,
+      modelResponseIdleMs: 5 * 60 * 1000,
+      maxConcurrentIssues: 10,
       networkAllowedDomains: Object.freeze(["registry.npmjs.org", "registry.npmmirror.com", "repo.maven.apache.org", "repo1.maven.org", "github.com", "*.githubusercontent.com"]),
     }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
-
   }),
   limits: Object.freeze({
     filesystemNameBytes: 255,
     codemode: Object.freeze({ queueWaitMs: 120_000, queueEntries: 32 }),
-    mcpServer: Object.freeze({ requestBytes: Number.MAX_SAFE_INTEGER, responseBytes: 1024 * 1024, pageItems: 100, textLines: 1000 }),
+    // readBytes bounds the whole text file buffered for line paging; responseBytes bounds each returned page.
+    mcpServer: Object.freeze({
+      requestBytes: Number.MAX_SAFE_INTEGER,
+      responseBytes: 1024 * 1024,
+      readBytes: 64 * 1024 * 1024,
+      // Inbound MCP is decoded in memory; the HTTP upload path streams to disk and is not bounded here.
+      attachmentBytes: 20 * 1024 * 1024,
+      attachments: 20,
+      pageItems: 100,
+      textLines: 1000,
+    }),
     agentMessageChars: 50_000,
     relatedIssues: 20,
     agentImage: Object.freeze({
@@ -70,6 +82,7 @@ export const issuePilotConfig = Object.freeze({
     }),
     sourceBrowser: Object.freeze({
       directoryEntries: 500,
+      fileBytes: 64 * 1024 * 1024,
       searchQueryCharacters: 200,
       searchMatches: 1_000,
       historyCommits: 100,
@@ -92,7 +105,15 @@ export const issuePilotConfig = Object.freeze({
       dingtalk: Object.freeze({ attachmentHosts: ["alidocs2.oss-cn-zhangjiakou.aliyuncs.com"] as readonly string[], tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512 }),
       mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
       dms: Object.freeze({ executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
-      sls: Object.freeze({ pageResults: 100, queryChars: 4096, traceIdChars: 36, traceWindowSeconds: 24 * 60 * 60, defaultWindowSeconds: 15 * 60, futureToleranceSeconds: 5 * 60, executionMs: 30_000 }),
+      sls: Object.freeze({
+        pageResults: 100,
+        queryChars: 4096,
+        traceIdChars: 36,
+        traceWindowSeconds: 24 * 60 * 60,
+        defaultWindowSeconds: 15 * 60,
+        futureToleranceSeconds: 5 * 60,
+        executionMs: 30_000,
+      }),
     }),
   }),
 });

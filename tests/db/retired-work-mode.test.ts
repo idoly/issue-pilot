@@ -7,11 +7,16 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { openDatabase } from "../../src/db/client.ts";
 
 test("retired production data Issues and both history directions become investigation while preserving bindings", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-retired-mode-")), migrations = path.join(root, "migrations"), source = path.resolve("drizzle");
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-retired-mode-")),
+    migrations = path.join(root, "migrations"),
+    source = path.resolve("drizzle");
   const database = openDatabase(path.join(root, "issues.db"));
   try {
     const journal = JSON.parse(await readFile(path.join(source, "meta", "_journal.json"), "utf8"));
-    journal.entries = journal.entries.slice(0, journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0062_retire_production_data"));
+    journal.entries = journal.entries.slice(
+      0,
+      journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0062_retire_production_data"),
+    );
     await mkdir(path.join(migrations, "meta"), { recursive: true });
     await writeFile(path.join(migrations, "meta", "_journal.json"), JSON.stringify(journal));
     await Promise.all(journal.entries.map((entry: { tag: string }) => copyFile(path.join(source, entry.tag + ".sql"), path.join(migrations, entry.tag + ".sql"))));
@@ -30,14 +35,24 @@ test("retired production data Issues and both history directions become investig
     `);
     await migrate(database.db, { migrationsFolder: source });
     assert.deepEqual((await database.client.execute("SELECT id,type,updated_at FROM issues")).rows, [{ id: "issue", type: "smart_analysis", updated_at: 1 }]);
-    assert.deepEqual((await database.client.execute("SELECT from_work_mode,to_work_mode,plan_hash FROM issue_scope_transitions")).rows, [{ from_work_mode: "production_analysis", to_work_mode: "production_analysis", plan_hash: "unchanged-plan" }]);
+    assert.deepEqual((await database.client.execute("SELECT from_work_mode,to_work_mode,plan_hash FROM issue_scope_transitions")).rows, [
+      { from_work_mode: "production_analysis", to_work_mode: "production_analysis", plan_hash: "unchanged-plan" },
+    ]);
     assert.deepEqual((await database.client.execute("SELECT session_file,workspace_path FROM issue_pilot_sessions")).rows, [{ session_file: "/state/session.jsonl", workspace_path: "/state/work" }]);
     await assert.rejects(database.client.execute("UPDATE issues SET type='data_processing'"), /retired_issue_type/);
     await assert.rejects(database.client.execute("UPDATE issue_scope_transitions SET to_work_mode='production_data'"), /retired_issue_work_mode/);
-    await assert.rejects(database.client.execute("INSERT INTO issues(id,key,title,type,service_id,environment_id,reporter_subject,created_at,updated_at) VALUES('other','ISSUE-20261022-002','Other','data_processing','service','prod','owner',1,1)"), /retired_issue_type/);
+    await assert.rejects(
+      database.client.execute(
+        "INSERT INTO issues(id,key,title,type,service_id,environment_id,reporter_subject,created_at,updated_at) VALUES('other','ISSUE-20261022-002','Other','data_processing','service','prod','owner',1,1)",
+      ),
+      /retired_issue_type/,
+    );
     assert.equal((await database.client.execute("PRAGMA integrity_check")).rows[0]!.integrity_check, "ok");
     assert.deepEqual((await database.client.execute("PRAGMA foreign_key_check")).rows, []);
     await migrate(database.db, { migrationsFolder: source });
     assert.equal((await database.client.execute("SELECT count(*) AS count FROM issue_scope_transitions")).rows[0]!.count, 1);
-  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

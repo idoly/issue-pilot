@@ -4,7 +4,9 @@ import path from "node:path";
 import { test } from "node:test";
 import { createPersonalGitEnvironment } from "../../src/workspace/git-credentials.ts";
 
-function credentials(key: string) { return { subject: "developer", modelApiKeys: {}, gitPrivateKey: key, updatedAt: new Date() }; }
+function credentials(key: string) {
+  return { subject: "developer", modelApiKeys: {}, gitPrivateKey: key, updatedAt: new Date() };
+}
 const identityPath = (command: string) => command.match(/-i '([^']+)'/)![1]!;
 
 test("isolates personal SSH keys, enforces host verification and removes private files", async () => {
@@ -22,7 +24,10 @@ test("isolates personal SSH keys, enforces host verification and removes private
     assert.match(a.env.GIT_SSH_COMMAND!, /IdentityAgent=none/);
     assert.match(a.env.GIT_SSH_COMMAND!, /-F \/dev\/null/);
     assert.equal(JSON.stringify(a.env).includes("alice-fixture-key"), false);
-  } finally { await a.close(); await b.close(); }
+  } finally {
+    await a.close();
+    await b.close();
+  }
   await assert.rejects(access(aKey));
   await a.close();
 });

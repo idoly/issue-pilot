@@ -3,9 +3,51 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ManagedUser, Person, PersonalCredentialStatus } from "../data/client";
 
-const state = vi.hoisted(() => ({ user: undefined as unknown, users: vi.fn(), createUser: vi.fn(), updateUser: vi.fn(), credentials: vi.fn(), saveCredentials: vi.fn(), repositories: vi.fn(), register: vi.fn(), updateRepository: vi.fn(), removeRepository: vi.fn(), refreshPeople: vi.fn(), refreshConfiguration: vi.fn(), refreshCatalog: vi.fn() }));
-vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user, configurationLoaded: () => true, configuration: () => ({ agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "on" }, agentModels: [{ provider: "fixture", id: "model", thinkingLevels: ["medium"] }, { provider: "deepseek", id: "deepseek-flash", thinkingLevels: ["medium"] }] }), refreshPeople: state.refreshPeople, refreshConfiguration: state.refreshConfiguration, refreshCatalog: state.refreshCatalog }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), loadManagedUsers: state.users, createUser: state.createUser, updateUser: state.updateUser, loadPersonalCredentials: state.credentials, updatePersonalCredentials: state.saveCredentials, loadSharedDmsCredentials: async () => ({ configured: false, url: "", revision: 0 }), loadSharedSlsCredentials: async () => ({ configured: false, revision: 0 }), loadRepositories: state.repositories, registerRepository: state.register, updateRepository: state.updateRepository, deleteRepository: state.removeRepository }));
+const state = vi.hoisted(() => ({
+  user: undefined as unknown,
+  users: vi.fn(),
+  createUser: vi.fn(),
+  updateUser: vi.fn(),
+  credentials: vi.fn(),
+  saveCredentials: vi.fn(),
+  repositories: vi.fn(),
+  register: vi.fn(),
+  updateRepository: vi.fn(),
+  removeRepository: vi.fn(),
+  refreshPeople: vi.fn(),
+  refreshConfiguration: vi.fn(),
+  refreshCatalog: vi.fn(),
+}));
+vi.mock("./ApplicationResources", () => ({
+  useApplicationResources: () => ({
+    currentUser: state.user,
+    configurationLoaded: () => true,
+    configuration: () => ({
+      agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "on" },
+      agentModels: [
+        { provider: "fixture", id: "model", thinkingLevels: ["medium"] },
+        { provider: "deepseek", id: "deepseek-flash", thinkingLevels: ["medium"] },
+      ],
+    }),
+    refreshPeople: state.refreshPeople,
+    refreshConfiguration: state.refreshConfiguration,
+    refreshCatalog: state.refreshCatalog,
+  }),
+}));
+vi.mock("../data/client", async (original) => ({
+  ...(await original<typeof import("../data/client")>()),
+  loadManagedUsers: state.users,
+  createUser: state.createUser,
+  updateUser: state.updateUser,
+  loadPersonalCredentials: state.credentials,
+  updatePersonalCredentials: state.saveCredentials,
+  loadSharedDmsCredentials: async () => ({ configured: false, url: "", revision: 0 }),
+  loadSharedSlsCredentials: async () => ({ configured: false, revision: 0 }),
+  loadRepositories: state.repositories,
+  registerRepository: state.register,
+  updateRepository: state.updateRepository,
+  deleteRepository: state.removeRepository,
+}));
 import { PersonalCredentials } from "./PersonalCredentials";
 import { UserManagement } from "./UserManagement";
 import { RepositoryManagement } from "./RepositoryManagement";
@@ -13,69 +55,108 @@ import { RepositoryManagement } from "./RepositoryManagement";
 const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer", isAdmin: true };
 // Personal credential tests use a developer without management access, so dialogs edit personal groups.
 const personalOnly: Person = { ...alice, isAdmin: false };
-const users: ManagedUser[] = [{ ...alice, revision: 2, active: true, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }, { ...alice, subject: "inactive", name: "Inactive", email: "inactive@example.test", revision: 0, active: false, isAdmin: false, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }];
-const status: PersonalCredentialStatus = { model: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" }, gitSshConfigured: true, productionDmsConfigured: false, productionSlsConfigured: false, revision: 3 };
+const users: ManagedUser[] = [
+  { ...alice, revision: 2, active: true, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" },
+  { ...alice, subject: "inactive", name: "Inactive", email: "inactive@example.test", revision: 0, active: false, isAdmin: false, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" },
+];
+const status: PersonalCredentialStatus = {
+  model: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" },
+  gitSshConfigured: true,
+  productionDmsConfigured: false,
+  productionSlsConfigured: false,
+  revision: 3,
+};
 beforeEach(() => {
   state.user = () => alice;
-  state.users.mockResolvedValue(structuredClone(users)); state.createUser.mockResolvedValue(users[0]); state.updateUser.mockResolvedValue(users[0]);
-  state.credentials.mockResolvedValue(status); state.saveCredentials.mockResolvedValue({ ...status, revision: 4 });
+  state.users.mockResolvedValue(structuredClone(users));
+  state.createUser.mockResolvedValue(users[0]);
+  state.updateUser.mockResolvedValue(users[0]);
+  state.credentials.mockResolvedValue(status);
+  state.saveCredentials.mockResolvedValue({ ...status, revision: 4 });
   state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", services: [], revision: 2 }]);
-  state.register.mockResolvedValue({ id: "new" }); state.updateRepository.mockResolvedValue({ ok: true }); state.removeRepository.mockResolvedValue(undefined);
-  state.refreshPeople.mockResolvedValue([]); state.refreshConfiguration.mockResolvedValue({}); state.refreshCatalog.mockResolvedValue({});
+  state.register.mockResolvedValue({ id: "new" });
+  state.updateRepository.mockResolvedValue({ ok: true });
+  state.removeRepository.mockResolvedValue(undefined);
+  state.refreshPeople.mockResolvedValue([]);
+  state.refreshConfiguration.mockResolvedValue({});
+  state.refreshCatalog.mockResolvedValue({});
 });
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.resetAllMocks();
+});
 
 test("inactive personnel are hidden until requested and enablement carries the row revision", async () => {
   render(() => <UserManagement />);
-  await screen.findByText("Alice"); expect(screen.queryByText("Inactive")).toBeNull();
+  await screen.findByText("Alice");
+  expect(screen.queryByText("Inactive")).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: "显示停用人员" }));
-  await screen.findByText("Inactive"); fireEvent.click(screen.getByRole("button", { name: "启用" }));
+  await screen.findByText("Inactive");
+  fireEvent.click(screen.getByRole("button", { name: "启用" }));
   await waitFor(() => expect(state.updateUser).toHaveBeenCalledWith("inactive", { active: true, expectedRevision: 0 }));
   await waitFor(() => expect(state.refreshPeople).toHaveBeenCalled());
 });
 
 test("new personnel use a stable email account and failures retain the draft", async () => {
   state.createUser.mockRejectedValueOnce(new Error("conflict"));
-  render(() => <UserManagement />); await screen.findByText("Alice");
+  render(() => <UserManagement />);
+  await screen.findByText("Alice");
   fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
   const dialog = await screen.findByRole("dialog", { name: "添加人员" });
   await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New person" } });
   await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "NEW@example.test" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await within(dialog).findByRole("alert"); expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "New person");
+  await within(dialog).findByRole("alert");
+  expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "New person");
   expect(state.createUser).toHaveBeenCalledWith({ subject: "new@example.test", name: "New person", email: "NEW@example.test", role: "product", isAdmin: false });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
-for (const outcome of ["success", "failure"] as const) test(`old identity personnel save ${outcome} cannot close or overwrite the next editor`, async () => {
-  const [user, setUser] = createSignal<Person>(alice, { ownedWrite: true }); state.user = user;
-  let finish!: () => void;
-  state.createUser.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = outcome === "success" ? () => resolve(users[0]) : () => reject(new Error("old_user_save_failed")); }));
-  render(() => <UserManagement />); await screen.findByText("Alice");
-  fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
-  let dialog = await screen.findByRole("dialog");
-  await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "Old draft" } });
-  await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "old@example.test" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "保存" })); await waitFor(() => expect(finish).toBeTypeOf("function"));
-  setUser({ ...alice, subject: "bob", name: "Bob" }); await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); dialog = await screen.findByRole("dialog");
-  await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "Current draft" } });
-  finish(); await new Promise(resolve => setTimeout(resolve, 0));
-  expect(screen.getByRole("dialog")).toBe(dialog); expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "Current draft");
-  expect(screen.queryByText("old_user_save_failed")).toBeNull();
-});
+for (const outcome of ["success", "failure"] as const)
+  test(`old identity personnel save ${outcome} cannot close or overwrite the next editor`, async () => {
+    const [user, setUser] = createSignal<Person>(alice, { ownedWrite: true });
+    state.user = user;
+    let finish!: () => void;
+    state.createUser.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = outcome === "success" ? () => resolve(users[0]) : () => reject(new Error("old_user_save_failed"));
+        }),
+    );
+    render(() => <UserManagement />);
+    await screen.findByText("Alice");
+    fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
+    let dialog = await screen.findByRole("dialog");
+    await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "Old draft" } });
+    await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "old@example.test" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    setUser({ ...alice, subject: "bob", name: "Bob" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
+    dialog = await screen.findByRole("dialog");
+    await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "Current draft" } });
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "Current draft");
+    expect(screen.queryByText("old_user_save_failed")).toBeNull();
+  });
 
 test("credential popup opens directly, preserves blanks and reports stale writes without discarding the new value", async () => {
   state.user = () => personalOnly;
   state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
-  render(() => <PersonalCredentials />); await screen.findByText("SSH Key");
+  render(() => <PersonalCredentials />);
+  await screen.findByText("SSH Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!);
   let dialog = await screen.findByRole("dialog");
   expect(within(dialog).queryByRole("button", { name: "替换" })).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); expect(state.saveCredentials).not.toHaveBeenCalled();
-  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!); dialog = await screen.findByRole("dialog");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(state.saveCredentials).not.toHaveBeenCalled();
+  fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!);
+  dialog = await screen.findByRole("dialog");
   const privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nreplacement\n-----END OPENSSH PRIVATE KEY-----";
   await fireEvent.input(within(dialog).getByLabelText("SSH 私钥"), { target: { value: privateKey } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
@@ -87,20 +168,27 @@ test("credential popup opens directly, preserves blanks and reports stale writes
 test("personal API key reuses the model dialog, starts from the stored group and preserves its key", async () => {
   state.user = () => personalOnly;
   state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
-  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  render(() => <PersonalCredentials />);
+  await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
   const dialog = await screen.findByRole("dialog", { name: "更新 API Key" });
   expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("off");
+  // Another tab saved meanwhile; the conflict reloads the revision so the next save can succeed.
+  state.credentials.mockResolvedValue({ ...status, revision: 4 });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("配置已被更新");
   expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "replace", provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" } });
   expect(screen.getByRole("dialog")).toBe(dialog);
+  await waitFor(() => expect(state.credentials).toHaveBeenCalledTimes(2));
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.saveCredentials).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 4 })));
 });
 
 test("a new personal group starts from the shared model and switching providers requires a key", async () => {
   state.user = () => personalOnly;
   state.credentials.mockResolvedValue({ ...status, model: null });
-  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  render(() => <PersonalCredentials />);
+  await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "设置凭证" })[0]!);
   const dialog = await screen.findByRole("dialog", { name: "设置 API Key" });
   expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("on");
@@ -113,13 +201,19 @@ test("a new personal group starts from the shared model and switching providers 
   expect(state.saveCredentials).not.toHaveBeenCalled();
   await fireEvent.input(within(dialog).getByLabelText("API Key"), { target: { value: "deepseek-key" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "replace", provider: "deepseek", model: "deepseek-flash", thinkingLevel: "medium", codemode: "on", apiKey: "deepseek-key" } }));
+  await waitFor(() =>
+    expect(state.saveCredentials).toHaveBeenCalledWith({
+      expectedRevision: 3,
+      model: { mode: "replace", provider: "deepseek", model: "deepseek-flash", thinkingLevel: "medium", codemode: "on", apiKey: "deepseek-key" },
+    }),
+  );
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 test("clearing removes the whole personal model group", async () => {
   state.user = () => personalOnly;
-  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  render(() => <PersonalCredentials />);
+  await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "清除凭据" }));
@@ -127,70 +221,116 @@ test("clearing removes the whole personal model group", async () => {
 });
 
 test("identity changes clear secret drafts and late credential success cannot mutate the next identity", async () => {
-  const [user, setUser] = createSignal<Person>(personalOnly, { ownedWrite: true }); state.user = user;
+  const [user, setUser] = createSignal<Person>(personalOnly, { ownedWrite: true });
+  state.user = user;
   let finish!: () => void;
-  state.saveCredentials.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ...status, productionDmsConfigured: true }); }));
-  render(() => <PersonalCredentials />); await screen.findByText("API Key");
+  state.saveCredentials.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ ...status, productionDmsConfigured: true });
+      }),
+  );
+  render(() => <PersonalCredentials />);
+  await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[1]!);
   await fireEvent.input(await screen.findByLabelText("SSH 私钥"), { target: { value: "old-secret" } });
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(finish).toBeTypeOf("function")); setUser({ ...alice, subject: "bob", name: "Bob" });
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); await screen.findByText("API Key");
-  finish(); await new Promise(resolve => setTimeout(resolve, 0));
-  expect(screen.queryByText("old-secret")).toBeNull(); expect(screen.getAllByText("未配置")).toHaveLength(2);
+  await waitFor(() => expect(finish).toBeTypeOf("function"));
+  setUser({ ...alice, subject: "bob", name: "Bob" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await screen.findByText("API Key");
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.queryByText("old-secret")).toBeNull();
+  expect(screen.getAllByText("未配置")).toHaveLength(2);
 });
 
 test("repository saving infers a name, preserves stale drafts and refreshes shared configuration", async () => {
   state.register.mockRejectedValueOnce(new Error("conflict"));
-  render(() => <RepositoryManagement />); await screen.findByText("Repository");
-  fireEvent.click(screen.getByRole("button", { name: "登记仓库" })); const dialog = await screen.findByRole("dialog");
+  render(() => <RepositoryManagement />);
+  await screen.findByText("Repository");
+  fireEvent.click(screen.getByRole("button", { name: "登记仓库" }));
+  const dialog = await screen.findByRole("dialog");
   await fireEvent.input(within(dialog).getByLabelText("仓库地址"), { target: { value: "git@example.test:team/added.git" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await within(dialog).findByRole("alert"); expect(within(dialog).getByLabelText("仓库地址")).toHaveProperty("value", "git@example.test:team/added.git");
+  await within(dialog).findByRole("alert");
+  expect(within(dialog).getByLabelText("仓库地址")).toHaveProperty("value", "git@example.test:team/added.git");
   expect(state.register).toHaveBeenCalledWith({ name: "added", url: "git@example.test:team/added.git" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "保存" })); await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  await waitFor(() => expect(state.refreshCatalog).toHaveBeenCalled()); expect(state.refreshConfiguration).toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(state.refreshCatalog).toHaveBeenCalled());
+  expect(state.refreshConfiguration).toHaveBeenCalled();
 });
 
 test("repository usage navigates to its service and linked repositories cannot be deleted", async () => {
   state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", revision: 2, services: [{ key: "orders", name: "Orders" }] }]);
-  const select = vi.fn(); render(() => <RepositoryManagement onSelectService={select} />); await screen.findByText("Repository");
-  fireEvent.click(screen.getByRole("button", { name: "Orders" })); expect(select).toHaveBeenCalledWith("orders");
+  const select = vi.fn();
+  render(() => <RepositoryManagement onSelectService={select} />);
+  await screen.findByText("Repository");
+  fireEvent.click(screen.getByRole("button", { name: "Orders" }));
+  expect(select).toHaveBeenCalledWith("orders");
   expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
 });
 
-for (const failedRead of ["configuration", "catalog"] as const) test(`repository retry restores shared ${failedRead} after a successful write without repeating it`, async () => {
-  const shared = failedRead === "configuration" ? state.refreshConfiguration : state.refreshCatalog;
-  shared.mockRejectedValueOnce(new Error("shared_refresh_failed"));
-  render(() => <RepositoryManagement />); await screen.findByText("Repository");
-  fireEvent.click(screen.getByRole("button", { name: "登记仓库" })); const dialog = await screen.findByRole("dialog");
-  await fireEvent.input(within(dialog).getByLabelText("仓库地址"), { target: { value: "git@example.test:team/retry.git" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  const error = await screen.findByRole("alert"); expect(error.textContent).toContain("shared_refresh_failed");
-  fireEvent.click(within(error).getByRole("button", { name: "重试" }));
-  await waitFor(() => expect(shared).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull()); expect(state.register).toHaveBeenCalledTimes(1);
+test("a failed repository delete keeps the loaded table and reports the failure in the dialog", async () => {
+  state.removeRepository.mockRejectedValueOnce(new Error("repository_in_use"));
+  render(() => <RepositoryManagement />);
+  await screen.findByText("Repository");
+  fireEvent.click(screen.getByRole("button", { name: "删除" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
+  const alert = await within(dialog).findByRole("alert");
+  expect(alert.textContent).toContain("repository_in_use");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("Repository")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByText("Repository")).toBeTruthy();
 });
+
+for (const failedRead of ["configuration", "catalog"] as const)
+  test(`repository retry restores shared ${failedRead} after a successful write without repeating it`, async () => {
+    const shared = failedRead === "configuration" ? state.refreshConfiguration : state.refreshCatalog;
+    shared.mockRejectedValueOnce(new Error("shared_refresh_failed"));
+    render(() => <RepositoryManagement />);
+    await screen.findByText("Repository");
+    fireEvent.click(screen.getByRole("button", { name: "登记仓库" }));
+    const dialog = await screen.findByRole("dialog");
+    await fireEvent.input(within(dialog).getByLabelText("仓库地址"), { target: { value: "git@example.test:team/retry.git" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const error = await screen.findByRole("alert");
+    expect(error.textContent).toContain("shared_refresh_failed");
+    fireEvent.click(within(error).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(shared).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(state.register).toHaveBeenCalledTimes(1);
+  });
 
 test("personnel retry refreshes shared identities after a successful write without creating another user", async () => {
   state.refreshPeople.mockRejectedValueOnce(new Error("people_refresh_failed"));
-  render(() => <UserManagement />); await screen.findByText("Alice");
-  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); const dialog = await screen.findByRole("dialog");
+  render(() => <UserManagement />);
+  await screen.findByText("Alice");
+  fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
+  const dialog = await screen.findByRole("dialog");
   await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New member" } });
   await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "new@example.test" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  const error = await screen.findByRole("alert"); expect(error.textContent).toContain("people_refresh_failed");
+  const error = await screen.findByRole("alert");
+  expect(error.textContent).toContain("people_refresh_failed");
   fireEvent.click(within(error).getByRole("button", { name: "重试" }));
   await waitFor(() => expect(state.refreshPeople).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull()); expect(state.createUser).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(state.createUser).toHaveBeenCalledTimes(1);
 });
 
 test("user management translates the actual admin authorization error and preserves its draft", async () => {
   state.createUser.mockRejectedValueOnce(new Error("admin_role_required"));
-  render(() => <UserManagement />); await screen.findByText("Alice");
-  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); const dialog = await screen.findByRole("dialog");
+  render(() => <UserManagement />);
+  await screen.findByText("Alice");
+  fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
+  const dialog = await screen.findByRole("dialog");
   await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New member" } });
   await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "new@example.test" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
@@ -199,8 +339,10 @@ test("user management translates the actual admin authorization error and preser
 });
 
 test("personnel email errors stay local and retain the entered name", async () => {
-  render(() => <UserManagement />); await screen.findByText("Alice");
-  fireEvent.click(screen.getByRole("button", { name: "添加人员" })); const dialog = await screen.findByRole("dialog");
+  render(() => <UserManagement />);
+  await screen.findByText("Alice");
+  fireEvent.click(screen.getByRole("button", { name: "添加人员" }));
+  const dialog = await screen.findByRole("dialog");
   await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "New member" } });
   await fireEvent.input(within(dialog).getByLabelText("人员邮箱"), { target: { value: "invalid-email" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));

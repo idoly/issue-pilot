@@ -22,24 +22,45 @@ for (const transport of ["streamable_http", "sse"] as const) {
       assert.equal(init?.redirect, "error");
       const method = init?.method ?? "GET";
       methods.push(method);
-      if (method === "GET") return new Response(new ReadableStream({ start(controller) { stream = controller; controller.enqueue(encoder.encode("event: endpoint\ndata: /messages\n\n")); } }), { headers: { "content-type": "text/event-stream" } });
+      if (method === "GET")
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              stream = controller;
+              controller.enqueue(encoder.encode("event: endpoint\ndata: /messages\n\n"));
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
       const request = JSON.parse(String(init?.body));
       let result: unknown;
       if (request.method === "initialize") result = { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } };
       if (request.method === "tools/list") result = { tools: definitions };
-      if (request.method === "tools/call") { calls += 1; result = { content: [{ type: "text", text: "ok" }] }; }
+      if (request.method === "tools/call") {
+        calls += 1;
+        result = { content: [{ type: "text", text: "ok" }] };
+      }
       if (!result) return new Response(null, { status: 202 });
       const message = { jsonrpc: "2.0", id: request.id, result };
-      if (transport === "sse") { stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`)); return new Response(null, { status: 202 }); }
+      if (transport === "sse") {
+        stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
+        return new Response(null, { status: 202 });
+      }
       return new Response(JSON.stringify(message), { headers: { "content-type": "application/json" } });
     };
     try {
       const tools = await inspectMcp({ ...configuration, transport });
-      assert.deepEqual(tools, [{ name: "search", readOnly: true }, { name: "write", readOnly: false }, { name: "unknown", readOnly: false }]);
+      assert.deepEqual(tools, [
+        { name: "search", readOnly: true },
+        { name: "write", readOnly: false },
+        { name: "unknown", readOnly: false },
+      ]);
       assert.equal(calls, 0);
       assert.ok(methods.includes("POST"));
       if (transport === "sse") assert.ok(methods.includes("GET"));
-    } finally { globalThis.fetch = original; }
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 }
 
@@ -82,16 +103,35 @@ test("guarded fetch preserves Request cancellation and RequestInit signal overri
 
 test("rejects redirects and cross-origin SSE targets without leaking remote errors", async () => {
   const original = globalThis.fetch;
-  globalThis.fetch = async () => { throw new Error("private-token"); };
+  globalThis.fetch = async () => {
+    throw new Error("private-token");
+  };
   try {
     await assert.rejects(connectMcp(configuration, AbortSignal.timeout(100)), { message: "mcp_connection_failed" });
     let posted = false;
     globalThis.fetch = async (_input, init) => {
-      if ((init?.method ?? "GET") !== "GET") { posted = true; throw new Error("cross-origin request attempted"); }
-      return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("event: endpoint\ndata: https://other.example.test/messages\n\n")); } }), { headers: { "content-type": "text/event-stream" } });
+      if ((init?.method ?? "GET") !== "GET") {
+        posted = true;
+        throw new Error("cross-origin request attempted");
+      }
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("event: endpoint\ndata: https://other.example.test/messages\n\n"));
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
     };
     await assert.rejects(connectMcp({ ...configuration, transport: "sse" }, AbortSignal.timeout(200)), /mcp_connection_failed|mcp_timeout_or_aborted/);
     assert.equal(posted, false);
-  } finally { globalThis.fetch = original; }
-  await assert.rejects(inspectMcp(configuration, async () => { throw new Error("private-token"); }), { message: "mcp_operation_failed" });
+  } finally {
+    globalThis.fetch = original;
+  }
+  await assert.rejects(
+    inspectMcp(configuration, async () => {
+      throw new Error("private-token");
+    }),
+    { message: "mcp_operation_failed" },
+  );
 });

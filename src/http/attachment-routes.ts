@@ -13,11 +13,17 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
   const { app, database, stateRoot } = context;
   app.get<{ Params: { key: string; attachmentId: string } }>("/api/issues/:key/attachments/:attachmentId", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    const [attachment] = await database.db.select().from(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId))).limit(1);
+    const [attachment] = await database.db
+      .select()
+      .from(issueAttachments)
+      .where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId)))
+      .limit(1);
     if (!attachment) throw new ApiError(404, "attachment_not_found");
 
     const controller = new AbortController();
-    const cancel = () => { if (!reply.raw.writableFinished) controller.abort(); };
+    const cancel = () => {
+      if (!reply.raw.writableFinished) controller.abort();
+    };
     const cleanup = () => {
       request.raw.off("aborted", cancel);
       reply.raw.off("close", cancel);
@@ -27,13 +33,9 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
     if (request.raw.aborted || reply.raw.destroyed) controller.abort();
     let stream: ReadStream | undefined;
     try {
-      stream = await openVerifiedAttachmentStream(
-        issueRoot(stateRoot, issue.key), attachment.objectKey,
-        attachment.size, attachment.sha256, controller.signal,
-      );
+      stream = await openVerifiedAttachmentStream(issueRoot(stateRoot, issue.key), attachment.objectKey, attachment.size, attachment.sha256, controller.signal);
       stream.once("close", cleanup);
-      const safeInline = attachment.mediaType.startsWith("text/")
-        || ["application/json", "application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType);
+      const safeInline = attachment.mediaType.startsWith("text/") || ["application/json", "application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType);
       reply.header("Content-Disposition", contentDisposition(attachment.fileName, { type: safeInline ? "inline" : "attachment" }));
       reply.header("Content-Length", attachment.size);
       reply.header("Cache-Control", "private, no-store");

@@ -2,10 +2,18 @@ import { asc, eq } from "drizzle-orm";
 import { mcpServices, issues } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configuration/mcp.ts";
+import { errorDiagnostic } from "../diagnostics.ts";
 import { ApiError, record } from "./input.ts";
-import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireAdmin, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
-const project = (row: McpRow) => ({ id: row.id, name: row.name, url: publicMcpUrl(row.url), transport: row.transport, enabled: row.enabled, credentialConfigured: row.transport === "stdio" ? Boolean(row.stdio) : Boolean(row.authorization || new URL(row.url).search) });
+const project = (row: McpRow) => ({
+  id: row.id,
+  name: row.name,
+  url: publicMcpUrl(row.url),
+  transport: row.transport,
+  enabled: row.enabled,
+  credentialConfigured: row.transport === "stdio" ? Boolean(row.stdio) : Boolean(row.authorization || new URL(row.url).search),
+});
 export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">) {
   const { app, database, engine, runScopeExclusive } = context;
   const requireService = async (id: string) => {
@@ -16,15 +24,20 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
   const mutate = async <T>(operation: () => Promise<T>) => {
     const affected = await database.db.select({ id: issues.id }).from(issues);
     try {
-      return await runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
-        for (const row of affected) await reservation.closeSession(row.id);
-        return operation();
-      });
+      return await runIssueExclusive(
+        engine,
+        affected.map((row) => row.id),
+        async (reservation) => {
+          for (const row of affected) await reservation.closeSession(row.id);
+          return operation();
+        },
+      );
     } catch (error) {
       if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "mcp_has_running_issues");
       if (error instanceof ApiError) throw error;
       const chain = error instanceof Error ? error.cause : undefined;
       if (chain instanceof Error && /UNIQUE constraint/.test(chain.message)) throw new ApiError(409, "mcp_name_conflict");
+      app.log.error(errorDiagnostic(error));
       throw new ApiError(500, "mcp_configuration_save_failed");
     }
   };
@@ -32,12 +45,18 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     reply.header("Cache-Control", "private, no-store");
     return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).map(project));
   });
+  // Global connections (including the DingTalk import gateway) carry shared credentials and launch host
+  // processes, so reading their configuration, changing, deleting or testing them is admin-only like creation.
   app.get<{ Params: { id: string } }>("/api/mcp-services/:id/configuration", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store"); reply.header("Pragma", "no-cache");
+    reply.header("Cache-Control", "private, no-store");
+    reply.header("Pragma", "no-cache");
     return runScopeExclusive(async () => {
-      await requireDeveloper(database, request);
+      await requireAdmin(database, request);
       const row = await requireService(request.params.id);
-      const configuration = row.transport === "stdio" ? { ...(row.stdio ?? { type: "stdio" }) } : { url: row.url, ...(row.transport === "sse" ? { type: "sse" } : {}), ...(row.authorization ? { headers: { Authorization: row.authorization } } : {}) };
+      const configuration =
+        row.transport === "stdio"
+          ? { ...(row.stdio ?? { type: "stdio" }) }
+          : { url: row.url, ...(row.transport === "sse" ? { type: "sse" } : {}), ...(row.authorization ? { headers: { Authorization: row.authorization } } : {}) };
       return { mcpServers: { [row.name]: { ...configuration, ...(!row.enabled ? { enabled: false } : {}) } } };
     });
   });
@@ -46,7 +65,10 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     const result = await runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const input = parseMcpConfiguration(request.body);
-      return mutate(async () => { const [row] = await database.db.insert(mcpServices).values(input).returning(); return project(row!); });
+      return mutate(async () => {
+        const [row] = await database.db.insert(mcpServices).values(input).returning();
+        return project(row!);
+      });
     });
     return reply.code(201).send(result);
   });
@@ -55,31 +77,52 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     const result = await runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const inputs = parseMcpImport(request.body);
-      return mutate(() => database.db.transaction(async transaction => (await transaction.insert(mcpServices).values(inputs).returning()).map(project)));
+      return mutate(() => database.db.transaction(async (transaction) => (await transaction.insert(mcpServices).values(inputs).returning()).map(project)));
     });
     return reply.code(201).send(result);
   });
-  app.patch<{ Params: { id: string } }>("/api/mcp-services/:id", { logLevel: "silent" }, async request => {
-    await requireDeveloper(database, request);
+  app.patch<{ Params: { id: string } }>("/api/mcp-services/:id", { logLevel: "silent" }, async (request) => {
+    await requireAdmin(database, request);
     return runScopeExclusive(async () => {
-      await requireDeveloper(database, request);
+      await requireAdmin(database, request);
       const current = await requireService(request.params.id);
       if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service");
       const input = "mcpServers" in record(request.body) ? parseMcpImport(request.body, current)[0]! : parseMcpConfiguration(request.body, current);
-      if (Object.entries(input).every(([key, value]) => key === "stdio" ? JSON.stringify(current.stdio) === JSON.stringify(value) : current[key as keyof typeof input] === value)) return project(current);
-      return mutate(async () => { const [row] = await database.db.update(mcpServices).set({ ...input, updatedAt: new Date() }).where(eq(mcpServices.id, current.id)).returning(); return project(row!); });
+      if (Object.entries(input).every(([key, value]) => (key === "stdio" ? JSON.stringify(current.stdio) === JSON.stringify(value) : current[key as keyof typeof input] === value)))
+        return project(current);
+      return mutate(async () => {
+        const [row] = await database.db
+          .update(mcpServices)
+          .set({ ...input, updatedAt: new Date() })
+          .where(eq(mcpServices.id, current.id))
+          .returning();
+        return project(row!);
+      });
     });
   });
   app.delete<{ Params: { id: string } }>("/api/mcp-services/:id", async (request, reply) => {
-    await requireDeveloper(database, request);
-    await runScopeExclusive(async () => { await requireDeveloper(database, request); const current = await requireService(request.params.id); if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service"); await mutate(() => database.db.delete(mcpServices).where(eq(mcpServices.id, current.id))); });
+    await requireAdmin(database, request);
+    await runScopeExclusive(async () => {
+      await requireAdmin(database, request);
+      const current = await requireService(request.params.id);
+      if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service");
+      await mutate(() => database.db.delete(mcpServices).where(eq(mcpServices.id, current.id)));
+    });
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string } }>("/api/mcp-services/:id/test", { logLevel: "silent" }, async (request, reply) => {
-    await requireDeveloper(database, request);
-    const configuration: McpConfiguration = await runScopeExclusive(async () => { await requireDeveloper(database, request); return requireService(request.params.id); });
+    await requireAdmin(database, request);
+    const configuration: McpConfiguration = await runScopeExclusive(async () => {
+      await requireAdmin(database, request);
+      return requireService(request.params.id);
+    });
     reply.header("Cache-Control", "private, no-store");
-    try { return { tools: await inspectMcp(configuration) }; }
-    catch (error) { throw new ApiError(502, error instanceof Error && /^mcp_[a-z_]+$/.test(error.message) ? error.message : "mcp_connection_failed"); }
+    try {
+      return { tools: await inspectMcp(configuration) };
+    } catch (error) {
+      const code = error instanceof Error && /^mcp_[a-z_]+$/.test(error.message) ? error.message : "mcp_connection_failed";
+      app.log.error({ code }, "mcp_connection_test_failed");
+      throw new ApiError(502, code);
+    }
   });
 }

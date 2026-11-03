@@ -62,10 +62,12 @@ export interface ServiceConfigurationInput {
   name: string;
   description: string;
   repositories: Array<{ id?: string; alias: string; url: string }>;
-  deployments: Array<CapabilityConfigurationInput & {
-    dbhub?: CapabilityConfiguration["dbhub"];
-    environmentKey: string;
-    repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
-    capabilities: CapabilityName[];
-  }>;
+  deployments: Array<
+    CapabilityConfigurationInput & {
+      dbhub?: CapabilityConfiguration["dbhub"];
+      environmentKey: string;
+      repositoryBranches: Array<{ repositoryAlias: string; baseBranch: string }>;
+      capabilities: CapabilityName[];
+    }
+  >;
 }

@@ -1,14 +1,13 @@
-import { CAPABILITY_KEYS, type CapabilityName } from "../../../domain/contracts";
-import { type CapabilityConfigurationInput, type ProjectedCapabilityConfiguration, type ProjectedCapabilitySection } from "../../../configuration/contracts";
+import { CAPABILITY_KEYS, type CapabilityName, type DmsScope } from "../../../domain/contracts";
+import type { CapabilityConfigurationInput, ProjectedCapabilityConfiguration, ProjectedCapabilitySection } from "../../../configuration/contracts";
 
 export type DeploymentCapabilityDraft = ProjectedCapabilityConfiguration & {
   capabilities: CapabilityName[];
 };
 
-type CapabilitySerializer<Key extends CapabilityName> = (draft: ProjectedCapabilitySection<Key>) => NonNullable<CapabilityConfigurationInput[Key]>;
-
-const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
-  dms: (draft) => ({
+/** Trim every DMS identity field once for both the editor preview and the save payload. */
+export function normalizeDmsScope(draft: Pick<DmsScope, "databases">): DmsScope {
+  return {
     databases: draft.databases.map((database) => ({
       instanceAlias: database.instanceAlias.trim(),
       schemaName: database.schemaName.trim(),
@@ -17,8 +16,19 @@ const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
       instancePort: database.instancePort.trim(),
       databaseId: database.databaseId.trim(),
     })),
+  };
+}
+
+type CapabilitySerializer<Key extends CapabilityName> = (draft: ProjectedCapabilitySection<Key>) => NonNullable<CapabilityConfigurationInput[Key]>;
+
+const serializers: { [Key in CapabilityName]: CapabilitySerializer<Key> } = {
+  dms: (draft) => normalizeDmsScope(draft),
+  sls: (draft) => ({
+    region: draft.region.trim(),
+    project: draft.project.trim(),
+    logstores: [...draft.logstores],
+    ...(draft.targets ? { targets: draft.targets.map((target) => ({ ...target, logstores: [...target.logstores] })) } : {}),
   }),
-  sls: (draft) => ({ region: draft.region.trim(), project: draft.project.trim(), logstores: [...draft.logstores], ...(draft.targets ? { targets: draft.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) }),
 };
 
 export function serializeCapabilityDraft(draft: DeploymentCapabilityDraft): CapabilityConfigurationInput {

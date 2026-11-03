@@ -22,7 +22,10 @@ test("all work modes can create and edit related Issues without weakening reserv
       f.engine.running.clear();
       await db.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, id));
       const detail = JSON.parse((await f.app.inject({ method: "GET", url: `/api/issues/${key}` })).body);
-      assert.deepEqual(detail.relatedIssues.map((row: { id: string }) => row.id), [evidence.id]);
+      assert.deepEqual(
+        detail.relatedIssues.map((row: { id: string }) => row.id),
+        [evidence.id],
+      );
       const self = await f.app.inject({ method: "PUT", url: `/api/issues/${key}/related-issues`, payload: { relatedIssueKeys: [key] } });
       assert.equal(self.statusCode, 400, self.body);
       f.engine.running.add(evidenceId);
@@ -34,5 +37,8 @@ test("all work modes can create and edit related Issues without weakening reserv
       await db.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, id));
       assert.equal((await f.app.inject({ method: "PUT", url: `/api/issues/${key}/related-issues`, payload: { relatedIssueKeys: [evidence.id] } })).statusCode, 409);
     }
-  } finally { db.close(); await f.cleanup(); }
+  } finally {
+    db.close();
+    await f.cleanup();
+  }
 });

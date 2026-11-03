@@ -1,4 +1,16 @@
-import { CAPABILITY_KEYS, configuredCapabilities, ISSUE_TYPES_BY_ENVIRONMENT, normalizeIssueKey, type CapabilityName, type AgentConfiguration, type AgentCodemodeMode, type AgentThinkingLevel, type DeploymentConfig, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
+import {
+  CAPABILITY_KEYS,
+  configuredCapabilities,
+  ISSUE_TYPES_BY_ENVIRONMENT,
+  normalizeIssueKey,
+  type CapabilityName,
+  type AgentConfiguration,
+  type AgentCodemodeMode,
+  type AgentThinkingLevel,
+  type DeploymentConfig,
+  type EnvironmentKind,
+  type IssueType,
+} from "../domain/contracts.ts";
 
 export interface AgentSessionContext {
   issueKey: string;
@@ -34,7 +46,9 @@ export function createAgentSessionContext(input: {
     environmentKey: input.environmentKey,
     model: { provider: agent.provider, modelId: agent.model, thinkingLevel: agent.thinkingLevel },
     codemode: agent.codemode,
-    capabilities: CAPABILITY_KEYS.filter((key) => input.enabledCapabilities.includes(key) && [input.deploymentConfig, ...(input.additionalDeploymentConfigs ?? [])].some((config) => configuredCapabilities(config).includes(key))),
+    capabilities: CAPABILITY_KEYS.filter(
+      (key) => input.enabledCapabilities.includes(key) && [input.deploymentConfig, ...(input.additionalDeploymentConfigs ?? [])].some((config) => configuredCapabilities(config).includes(key)),
+    ),
     canModifyCode: writableIssue && input.repositoryAccess.length > 0 && input.repositoryAccess.every((access) => access === "write"),
   };
 }

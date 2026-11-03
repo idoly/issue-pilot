@@ -18,101 +18,160 @@ import type { AgentFooterStats, AgentRuntimeConfiguration } from "../../src/doma
 import { buildApi } from "../../src/http/api.ts";
 import { createApiFixture, createIssue, createService, json, modelCatalog, TestAgentController, testAgent } from "./fixture.ts";
 
-for (const withSession of [false, true]) test(`reports configured automatic compaction ${withSession ? "with" : "without"} a persisted session`, async () => {
-  const fixture = await createApiFixture();
-  try {
-    await createService(fixture.app, "Footer");
-    const issue = await createIssue(fixture.app, "footer");
-    const issueId = fixture.engine.enqueued[0]!, key = String(issue.id);
-    fixture.engine.running.clear();
-    if (withSession) {
-      const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
-      await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
-      const manager = await createPrivateSessionManager(work, directory);
-      manager.appendMessage({ ...fauxAssistantMessage("Synthetic completed answer."), provider: testAgent.provider, model: testAgent.model });
-      const database = openDatabase(fixture.databaseFile);
-      try { await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work }); }
-      finally { database.close(); }
+for (const withSession of [false, true])
+  test(`reports configured automatic compaction ${withSession ? "with" : "without"} a persisted session`, async () => {
+    const fixture = await createApiFixture();
+    try {
+      await createService(fixture.app, "Footer");
+      const issue = await createIssue(fixture.app, "footer");
+      const issueId = fixture.engine.enqueued[0]!,
+        key = String(issue.id);
+      fixture.engine.running.clear();
+      if (withSession) {
+        const work = issueRoot(fixture.root, key),
+          directory = issueRoot(fixture.root, key);
+        await mkdir(work, { recursive: true });
+        await mkdir(directory, { recursive: true });
+        const manager = await createPrivateSessionManager(work, directory);
+        manager.appendMessage({ ...fauxAssistantMessage("Synthetic completed answer."), provider: testAgent.provider, model: testAgent.model });
+        const database = openDatabase(fixture.databaseFile);
+        try {
+          await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
+        } finally {
+          database.close();
+        }
+      }
+      const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+      const configurations: AgentRuntimeConfiguration[] = [{ settings: { compaction: { enabled: false } } }, { settings: { compaction: { enabled: true } } }, {}];
+      for (const runtime of configurations) {
+        const saved = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, runtime } });
+        assert.equal(saved.statusCode, 200, saved.body);
+        const response = await fetch(`${address}/api/issues/${key}/agent-stream`);
+        assert.equal(response.status, 200);
+        const decoder = new TextDecoder();
+        let payload = "",
+          snapshot: { footer: AgentFooterStats } | undefined;
+        for await (const chunk of response.body!) {
+          payload += decoder.decode(chunk, { stream: true });
+          const block = payload
+            .split("\n\n")
+            .slice(0, -1)
+            .find((block) => block.startsWith("event: snapshot_ready\n"));
+          if (!block) continue;
+          const data = block.split("\n").find((line) => line.startsWith("data: "));
+          assert.ok(data);
+          snapshot = JSON.parse(data.slice(6));
+          break;
+        }
+        assert.ok(snapshot);
+        assert.equal(snapshot.footer.autoCompact, SettingsManager.inMemory(runtime.settings).getCompactionEnabled());
+        assert.equal(snapshot.footer.contextWindow, 32_000);
+        if (!withSession) assert.equal(snapshot.footer.contextPercent, 0);
+      }
+    } finally {
+      await fixture.cleanup();
     }
-    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
-    const configurations: AgentRuntimeConfiguration[] = [{ settings: { compaction: { enabled: false } } }, { settings: { compaction: { enabled: true } } }, {}];
-    for (const runtime of configurations) {
-      const saved = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, runtime } });
-      assert.equal(saved.statusCode, 200, saved.body);
+  });
+
+for (const withSession of [false, true])
+  test(`stream snapshot uses ${withSession ? "the recorded session" : "the owner's personal model"} rather than the shared model`, async () => {
+    const personal = { provider: "personal", model: "personal-model", thinkingLevel: "medium" as const, codemode: "off" as const, apiKey: "private-test-key" };
+    const fixture = await createApiFixture({
+      modelCatalog: {
+        async list() {
+          return [
+            ...(await modelCatalog.list()),
+            { provider: "personal", id: "personal-model", contextWindow: 64_000, thinkingLevels: ["medium" as const] },
+            { provider: "session", id: "session-model", contextWindow: 128_000, thinkingLevels: ["high" as const] },
+          ];
+        },
+      },
+    });
+    try {
+      await createService(fixture.app, "PersonalSnapshot");
+      const issue = await createIssue(fixture.app, "personalsnapshot"),
+        key = String(issue.id),
+        issueId = fixture.engine.enqueued[0]!;
+      const database = openDatabase(fixture.databaseFile);
+      try {
+        const [row] = await database.db.select().from(issues).where(eq(issues.id, issueId));
+        assert.ok(row);
+        await database.db.insert(userCredentials).values({ subject: row.assigneeSubject ?? row.reporterSubject, modelCredentials: personal });
+        if (withSession) {
+          const work = issueRoot(fixture.root, key);
+          await mkdir(work, { recursive: true });
+          const manager = await createPrivateSessionManager(work, work);
+          manager.appendModelChange("session", "session-model");
+          manager.appendThinkingLevelChange("high");
+          manager.appendMessage({ ...fauxAssistantMessage("Recorded answer."), provider: "session", model: "session-model" });
+          await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
+        }
+      } finally {
+        await database.close();
+      }
+      const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
       const response = await fetch(`${address}/api/issues/${key}/agent-stream`);
       assert.equal(response.status, 200);
-      const decoder = new TextDecoder(); let payload = "", snapshot: { footer: AgentFooterStats } | undefined;
+      let payload = "";
       for await (const chunk of response.body!) {
-        payload += decoder.decode(chunk, { stream: true });
-        const block = payload.split("\n\n").slice(0, -1).find(block => block.startsWith("event: snapshot_ready\n"));
+        payload += new TextDecoder().decode(chunk);
+        const block = payload
+          .split("\n\n")
+          .slice(0, -1)
+          .find((block) => block.startsWith("event: snapshot_ready\n"));
         if (!block) continue;
-        const data = block.split("\n").find(line => line.startsWith("data: ")); assert.ok(data);
-        snapshot = JSON.parse(data.slice(6)); break;
+        const snapshot = JSON.parse(
+          block
+            .split("\n")
+            .find((line) => line.startsWith("data: "))!
+            .slice(6),
+        );
+        assert.deepEqual(
+          snapshot.agent,
+          withSession ? { provider: "session", model: "session-model", thinkingLevel: "high" } : { provider: personal.provider, model: personal.model, thinkingLevel: personal.thinkingLevel },
+        );
+        assert.equal(snapshot.footer.contextWindow, withSession ? 128_000 : 64_000);
+        assert.doesNotMatch(block, /private-test-key/);
+        return;
       }
-      assert.ok(snapshot);
-      assert.equal(snapshot.footer.autoCompact, SettingsManager.inMemory(runtime.settings).getCompactionEnabled());
-      assert.equal(snapshot.footer.contextWindow, 32_000);
-      if (!withSession) assert.equal(snapshot.footer.contextPercent, 0);
+      assert.fail("missing snapshot_ready");
+    } finally {
+      await fixture.cleanup();
     }
-  } finally { await fixture.cleanup(); }
-});
+  });
 
-for (const withSession of [false, true]) test(`stream snapshot uses ${withSession ? "the recorded session" : "the owner's personal model"} rather than the shared model`, async () => {
-  const personal = { provider: "personal", model: "personal-model", thinkingLevel: "medium" as const, codemode: "off" as const, apiKey: "private-test-key" };
-  const fixture = await createApiFixture({ modelCatalog: { async list() { return [...await modelCatalog.list(), { provider: "personal", id: "personal-model", contextWindow: 64_000, thinkingLevels: ["medium" as const] }, { provider: "session", id: "session-model", contextWindow: 128_000, thinkingLevels: ["high" as const] }]; } } });
-  try {
-    await createService(fixture.app, "PersonalSnapshot");
-    const issue = await createIssue(fixture.app, "personalsnapshot"), key = String(issue.id), issueId = fixture.engine.enqueued[0]!;
-    const database = openDatabase(fixture.databaseFile);
-    try {
-      const [row] = await database.db.select().from(issues).where(eq(issues.id, issueId));
-      assert.ok(row);
-      await database.db.insert(userCredentials).values({ subject: row.assigneeSubject ?? row.reporterSubject, modelCredentials: personal });
-      if (withSession) {
-        const work = issueRoot(fixture.root, key);
-        await mkdir(work, { recursive: true });
-        const manager = await createPrivateSessionManager(work, work);
-        manager.appendModelChange("session", "session-model");
-        manager.appendThinkingLevelChange("high");
-        manager.appendMessage({ ...fauxAssistantMessage("Recorded answer."), provider: "session", model: "session-model" });
-        await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
-      }
-    } finally { await database.close(); }
-    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
-    const response = await fetch(`${address}/api/issues/${key}/agent-stream`);
-    assert.equal(response.status, 200);
-    let payload = "";
-    for await (const chunk of response.body!) {
-      payload += new TextDecoder().decode(chunk);
-      const block = payload.split("\n\n").slice(0, -1).find(block => block.startsWith("event: snapshot_ready\n"));
-      if (!block) continue;
-      const snapshot = JSON.parse(block.split("\n").find(line => line.startsWith("data: "))!.slice(6));
-      assert.deepEqual(snapshot.agent, withSession ? { provider: "session", model: "session-model", thinkingLevel: "high" } : { provider: personal.provider, model: personal.model, thinkingLevel: personal.thinkingLevel });
-      assert.equal(snapshot.footer.contextWindow, withSession ? 128_000 : 64_000);
-      assert.doesNotMatch(block, /private-test-key/);
-      return;
-    }
-    assert.fail("missing snapshot_ready");
-  } finally { await fixture.cleanup(); }
-});
-
-test("counts usage in the snapshot once and deduplicates live notifications by Pi entry ID", { timeout: 5_000 }, async context => {
-  const events = new AgentEventBus(), fixture = await createApiFixture({ events });
+test("counts usage in the snapshot once and deduplicates live notifications by Pi entry ID", { timeout: 5_000 }, async (context) => {
+  const events = new AgentEventBus(),
+    fixture = await createApiFixture({ events });
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
     await createService(fixture.app, "Usage");
-    const issue = await createIssue(fixture.app, "usage"), issueId = fixture.engine.enqueued[0]!, key = String(issue.id);
+    const issue = await createIssue(fixture.app, "usage"),
+      issueId = fixture.engine.enqueued[0]!,
+      key = String(issue.id);
     fixture.engine.running.clear();
-    const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
-    await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
+    const work = issueRoot(fixture.root, key),
+      directory = issueRoot(fixture.root, key);
+    await mkdir(work, { recursive: true });
+    await mkdir(directory, { recursive: true });
     const manager = await createPrivateSessionManager(work, directory);
     manager.appendMessage(fauxAssistantMessage("Synthetic completed answer."));
     const database = openDatabase(fixture.databaseFile);
-    try { await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work }); }
-    finally { database.close(); }
+    try {
+      await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
+    } finally {
+      database.close();
+    }
     const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: new Date().toISOString(), event });
     const appendUsage = (kind: string, totalFromProvider = false) => {
-      return manager.appendUsage(kind, "test", "model", { input: 0, output: 0, cacheRead: 100, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01, totalFromProvider } });
+      return manager.appendUsage(kind, "test", "model", {
+        input: 0,
+        output: 0,
+        cacheRead: 100,
+        cacheWrite: 0,
+        totalTokens: 100,
+        cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01, totalFromProvider },
+      });
     };
     const subscribe = events.subscribe.bind(events);
     events.subscribe = (id, listener) => {
@@ -123,19 +182,25 @@ test("counts usage in the snapshot once and deduplicates live notifications by P
     };
     const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
     const response = await fetch(`${address}/api/issues/${key}/agent-stream`, { signal: context.signal });
-    assert.equal(response.status, 200); reader = response.body!.getReader();
-    const decoder = new TextDecoder(); let payload = "";
+    assert.equal(response.status, 200);
+    reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let payload = "";
     const readThrough = async (id: string) => {
       while (!payload.includes(`id: ${id}\n`)) {
-        const { done, value } = await reader!.read(); assert.equal(done, false);
+        const { done, value } = await reader!.read();
+        assert.equal(done, false);
         payload += decoder.decode(value, { stream: true });
       }
     };
     await readThrough("snapshot-barrier");
-    const block = payload.split("\n\n").find(block => block.startsWith("event: snapshot_ready\n")); assert.ok(block);
-    const data = block.split("\n").find(line => line.startsWith("data: ")); assert.ok(data);
+    const block = payload.split("\n\n").find((block) => block.startsWith("event: snapshot_ready\n"));
+    assert.ok(block);
+    const data = block.split("\n").find((line) => line.startsWith("data: "));
+    assert.ok(data);
     const snapshot = JSON.parse(data.slice(6)) as { footer: AgentFooterStats };
-    assert.equal(snapshot.footer.cacheRead, 100); assert.equal(snapshot.footer.cost, 0.01);
+    assert.equal(snapshot.footer.cacheRead, 100);
+    assert.equal(snapshot.footer.cost, 0.01);
     assert.equal(snapshot.footer.costSource, "estimated");
     assert.equal(payload.includes("already-in-snapshot"), false);
     const entry = appendUsage("native_auxiliary", true);
@@ -143,23 +208,39 @@ test("counts usage in the snapshot once and deduplicates live notifications by P
     publish("duplicate-usage", { type: "entry_appended", entry });
     publish("live-barrier", { type: "queue_update", steering: [], followUp: [] });
     await readThrough("live-barrier");
-    assert.equal(payload.includes("new-usage"), true); assert.equal(payload.includes("duplicate-usage"), false);
-    const live = JSON.parse(payload.split("\n\n").find(block => block.startsWith("id: new-usage\n"))!.split("\n").find(line => line.startsWith("data: "))!.slice(6)) as RunEvent;
+    assert.equal(payload.includes("new-usage"), true);
+    assert.equal(payload.includes("duplicate-usage"), false);
+    const live = JSON.parse(
+      payload
+        .split("\n\n")
+        .find((block) => block.startsWith("id: new-usage\n"))!
+        .split("\n")
+        .find((line) => line.startsWith("data: "))!
+        .slice(6),
+    ) as RunEvent;
     assert.ok(live.event.type === "entry_appended" && live.event.entry.type === "usage");
     assert.equal(live.event.entry.usage.cost.totalFromProvider, true);
-  } finally { await reader?.cancel().catch(() => undefined); await fixture.cleanup(); }
+  } finally {
+    await reader?.cancel().catch(() => undefined);
+    await fixture.cleanup();
+  }
 });
 
-test("keeps SDK completions and merged deltas produced during snapshot preparation exactly once", { timeout: 10_000 }, async context => {
-  const events = new AgentEventBus(), fixture = await createApiFixture({ events });
+test("keeps SDK completions and merged deltas produced during snapshot preparation exactly once", { timeout: 10_000 }, async (context) => {
+  const events = new AgentEventBus(),
+    fixture = await createApiFixture({ events });
   const connection = openDatabase(fixture.databaseFile);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined, runtime: PiSessionRuntime | undefined, managed;
   try {
     await createService(fixture.app, "Snapshot race");
-    const issue = await createIssue(fixture.app, "snapshot-race"), issueId = fixture.engine.enqueued[0]!, key = String(issue.id);
+    const issue = await createIssue(fixture.app, "snapshot-race"),
+      issueId = fixture.engine.enqueued[0]!,
+      key = String(issue.id);
     fixture.engine.running.clear();
-    const work = issueRoot(fixture.root, key), directory = issueRoot(fixture.root, key);
-    await mkdir(work, { recursive: true }); await mkdir(directory, { recursive: true });
+    const work = issueRoot(fixture.root, key),
+      directory = issueRoot(fixture.root, key);
+    await mkdir(work, { recursive: true });
+    await mkdir(directory, { recursive: true });
     await writeFile(path.join(work, "evidence.txt"), "Synthetic tool result.");
     const manager = await createPrivateSessionManager(work, directory);
     const models = await ModelRuntime.create({ authPath: path.join(fixture.root, "auth.json"), modelsPath: null, modelsStorePath: path.join(fixture.root, "models.json"), refreshOnCreate: false });
@@ -169,15 +250,33 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
     let sequence = 0;
     const publish = (event: RunEvent["event"], id = `live-${++sequence}`) => events.publish({ id, issueId, createdAt: new Date().toISOString(), event });
-    managed = await runtime.start({ manager, agentDirectory: fixture.root, workspaceRoot: work, context: { issueKey: key, serviceKey: "snapshot-race", environmentKey: "test", model: { provider: "stream-fixture", modelId: "model", thinkingLevel: "off" }, codemode: "off", capabilities: [], canModifyCode: false }, deploymentConfig: {}, systemPrompt: "Use the native read tool.", onEvent: publish });
+    managed = await runtime.start({
+      manager,
+      agentDirectory: fixture.root,
+      workspaceRoot: work,
+      context: {
+        issueKey: key,
+        serviceKey: "snapshot-race",
+        environmentKey: "test",
+        model: { provider: "stream-fixture", modelId: "model", thinkingLevel: "off" },
+        codemode: "off",
+        capabilities: [],
+        canModifyCode: false,
+      },
+      deploymentConfig: {},
+      systemPrompt: "Use the native read tool.",
+      onEvent: publish,
+    });
     const session = managed;
     const repeated = fauxAssistantMessage("Same reply.", { timestamp: Date.now() });
     faux.setResponses([fauxAssistantMessage(fauxToolCall("read", { path: "evidence.txt" }, { id: "snapshot-read" }), { stopReason: "toolUse" }), repeated, repeated]);
     await connection.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
     let duringRead: (() => Promise<void>) | undefined;
-    const prototype = Object.getPrototypeOf(connection.client) as { execute: typeof connection.client.execute }, execute = prototype.execute;
-    context.mock.method(prototype, "execute", async function(this: typeof connection.client, ...args: Parameters<typeof execute>) {
-      const run = duringRead; duringRead = undefined;
+    const prototype = Object.getPrototypeOf(connection.client) as { execute: typeof connection.client.execute },
+      execute = prototype.execute;
+    context.mock.method(prototype, "execute", async function (this: typeof connection.client, ...args: Parameters<typeof execute>) {
+      const run = duringRead;
+      duringRead = undefined;
       if (run) await run();
       return execute.apply(this, args);
     });
@@ -185,7 +284,8 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     events.subscribe = (id, listener) => {
       const unsubscribe = subscribe(id, listener);
       duringRead = async () => {
-        await session.prompt("Read the evidence."); await session.prompt("Repeat the reply.");
+        await session.prompt("Read the evidence.");
+        await session.prompt("Repeat the reply.");
         publish({ type: "agent_start" });
         publish({ type: "message_start", message: fauxAssistantMessage("") });
         for (const delta of ["alpha", "beta"]) publish({ type: "message_update", usage: repeated.usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta } }, `partial-${delta}`);
@@ -195,114 +295,203 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     };
     const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
     const response = await fetch(`${address}/api/issues/${key}/agent-stream`, { signal: context.signal });
-    assert.equal(response.status, 200); reader = response.body!.getReader();
-    const decoder = new TextDecoder(); let payload = "";
-    while (!payload.split("\n\n").slice(0, -1).some(block => block.startsWith("id: snapshot-barrier\n"))) {
-      const { done, value } = await reader.read(); assert.equal(done, false);
+    assert.equal(response.status, 200);
+    reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let payload = "";
+    while (
+      !payload
+        .split("\n\n")
+        .slice(0, -1)
+        .some((block) => block.startsWith("id: snapshot-barrier\n"))
+    ) {
+      const { done, value } = await reader.read();
+      assert.equal(done, false);
       payload += decoder.decode(value, { stream: true });
     }
-    const blocks = payload.split("\n\n"), ready = blocks.find(block => block.startsWith("event: snapshot_ready\n")); assert.ok(ready);
-    const snapshot = JSON.parse(ready.split("\n").find(line => line.startsWith("data: "))!.slice(6)) as { footer: AgentFooterStats };
-    const delivered = blocks.filter(block => block.startsWith("id: ")).map(block => JSON.parse(block.split("\n").find(line => line.startsWith("data: "))!.slice(6)) as RunEvent);
-    const completions = delivered.filter(envelope => envelope.event.type === "message_end");
-    assert.deepEqual({
-      assistants: completions.filter(({ event }) => event.type === "message_end" && event.message.role === "assistant").length,
-      identicalReplies: completions.filter(({ event }) => event.type === "message_end" && event.message.role === "assistant" && event.message.content.some(part => part.type === "text" && part.text === "Same reply.")).length,
-      toolEnds: delivered.filter(({ event }) => event.type === "tool_execution_end").length,
-      toolMessages: completions.filter(({ event }) => event.type === "message_end" && event.message.role === "toolResult").length,
-      partial: delivered.filter(({ id }) => id.startsWith("partial-")).map(({ event }) => event.type === "message_update" && "delta" in event.assistantMessageEvent ? event.assistantMessageEvent.delta : "").join(""),
-      snapshotInput: snapshot.footer.input,
-      snapshotCost: snapshot.footer.cost,
-    }, { assistants: 3, identicalReplies: 2, toolEnds: 1, toolMessages: 1, partial: "alphabeta", snapshotInput: 0, snapshotCost: 0 });
+    const blocks = payload.split("\n\n"),
+      ready = blocks.find((block) => block.startsWith("event: snapshot_ready\n"));
+    assert.ok(ready);
+    const snapshot = JSON.parse(
+      ready
+        .split("\n")
+        .find((line) => line.startsWith("data: "))!
+        .slice(6),
+    ) as { footer: AgentFooterStats };
+    const delivered = blocks
+      .filter((block) => block.startsWith("id: "))
+      .map(
+        (block) =>
+          JSON.parse(
+            block
+              .split("\n")
+              .find((line) => line.startsWith("data: "))!
+              .slice(6),
+          ) as RunEvent,
+      );
+    const completions = delivered.filter((envelope) => envelope.event.type === "message_end");
+    assert.deepEqual(
+      {
+        assistants: completions.filter(({ event }) => event.type === "message_end" && event.message.role === "assistant").length,
+        identicalReplies: completions.filter(
+          ({ event }) => event.type === "message_end" && event.message.role === "assistant" && event.message.content.some((part) => part.type === "text" && part.text === "Same reply."),
+        ).length,
+        toolEnds: delivered.filter(({ event }) => event.type === "tool_execution_end").length,
+        toolMessages: completions.filter(({ event }) => event.type === "message_end" && event.message.role === "toolResult").length,
+        partial: delivered
+          .filter(({ id }) => id.startsWith("partial-"))
+          .map(({ event }) => (event.type === "message_update" && "delta" in event.assistantMessageEvent ? event.assistantMessageEvent.delta : ""))
+          .join(""),
+        snapshotInput: snapshot.footer.input,
+        snapshotCost: snapshot.footer.cost,
+      },
+      { assistants: 3, identicalReplies: 2, toolEnds: 1, toolMessages: 1, partial: "alphabeta", snapshotInput: 0, snapshotCost: 0 },
+    );
   } finally {
-    context.mock.restoreAll(); await reader?.cancel().catch(() => undefined);
-    await managed?.stop(); await runtime?.close(); connection.close(); await fixture.cleanup();
+    context.mock.restoreAll();
+    await reader?.cancel().catch(() => undefined);
+    await managed?.stop();
+    await runtime?.close();
+    connection.close();
+    await fixture.cleanup();
   }
 });
 
-for (const stage of ["model discovery", "snapshot read"] as const) test(`releases an Agent stream disconnected during ${stage} and accepts a new connection`, { timeout: 5_000 }, async context => {
-  const events = new AgentEventBus(), fixture = await createApiFixture({ events }), connection = openDatabase(fixture.databaseFile);
-  let entered!: () => void, release!: () => void;
-  const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
-  const controller = new AbortController();
-  try {
-    await createService(fixture.app, "Disconnect");
-    const issue = await createIssue(fixture.app, "disconnect"), key = String(issue.id);
-    fixture.engine.running.clear();
-    let subscriptions = 0, unsubscriptions = 0, paused = false, holdRead = false;
-    const subscribe = events.subscribe.bind(events);
-    events.subscribe = (id, listener) => {
-      subscriptions += 1;
-      const unsubscribe = subscribe(id, listener);
-      if (stage === "snapshot read" && !paused) { paused = true; holdRead = true; }
-      return () => { unsubscriptions += 1; unsubscribe(); };
-    };
-    if (stage === "model discovery") {
-      const list = modelCatalog.list.bind(modelCatalog);
-      context.mock.method(modelCatalog, "list", async () => {
-        if (!paused) { paused = true; entered(); await gate; }
-        return list();
+for (const stage of ["model discovery", "snapshot read"] as const)
+  test(`releases an Agent stream disconnected during ${stage} and accepts a new connection`, { timeout: 5_000 }, async (context) => {
+    const events = new AgentEventBus(),
+      fixture = await createApiFixture({ events }),
+      connection = openDatabase(fixture.databaseFile);
+    let entered!: () => void, release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+        entered = resolve;
+      }),
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
       });
-    } else {
-      const prototype = Object.getPrototypeOf(connection.client) as { execute: typeof connection.client.execute }, execute = prototype.execute;
-      context.mock.method(prototype, "execute", async function(this: typeof connection.client, ...args: Parameters<typeof execute>) {
-        if (holdRead) { holdRead = false; entered(); await gate; }
-        return execute.apply(this, args);
-      });
-    }
-    let abandoned: ServerResponse | undefined;
-    const disconnected = new Promise<void>(resolve => fixture.app.server.once("request", (_request, response) => {
-      abandoned = response; response.once("close", resolve);
-    }));
-    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
-    const pending = fetch(`${address}/api/issues/${key}/agent-stream`, { signal: AbortSignal.any([controller.signal, context.signal]) });
-    const rejected = assert.rejects(pending, { name: "AbortError" });
-    await ready; controller.abort(); await rejected; await disconnected;
-    assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
-    assert.equal(unsubscriptions, subscriptions);
-    release(); await new Promise<void>(resolve => setImmediate(resolve));
-    assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
-    assert.equal(unsubscriptions, subscriptions);
-    assert.ok(abandoned); assert.equal(abandoned.headersSent, false);
-    const before = subscriptions;
-    const closed = new Promise<void>(resolve => fixture.app.server.once("request", (_request, response) => response.once("close", resolve)));
-    const response = await fetch(`${address}/api/issues/${key}/agent-stream`, { signal: context.signal });
-    assert.equal(response.status, 200);
-    const decoder = new TextDecoder(); let payload = "";
-    for await (const chunk of response.body!) {
-      payload += decoder.decode(chunk, { stream: true });
-      if (payload.includes("event: snapshot_ready\n")) break;
-    }
-    assert.match(payload, /event: snapshot_ready\n/);
-    await closed;
-    assert.equal(subscriptions, before + 1); assert.equal(unsubscriptions, subscriptions);
-  } finally {
-    release(); controller.abort();
-    await new Promise<void>(resolve => setImmediate(resolve)); context.mock.restoreAll(); connection.close(); await fixture.cleanup();
-  }
-});
-
-for (const state of ["idle", "queued", "running"] as const) test(`Agent stream snapshot distinguishes ${state} without changing the busy flag contract`, async () => {
-  const fixture = await createApiFixture();
-  try {
-    await createService(fixture.app, "QueueSnapshot");
-    const issue = await createIssue(fixture.app, "queuesnapshot"), issueId = fixture.engine.enqueued[0]!;
-    if (state === "idle") fixture.engine.running.clear();
-    if (state === "queued") fixture.engine.queued.add(issueId);
-    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
-    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`);
-    const reader = response.body!.getReader();
+    const controller = new AbortController();
     try {
-      const payload = await readStreamUntil(reader, "event: snapshot_ready\n");
-      const block = payload.split("\n\n").find(block => block.startsWith("event: snapshot_ready\n"))!;
-      const snapshot = JSON.parse(block.split("\n").find(line => line.startsWith("data: "))!.slice(6));
-      assert.equal(snapshot.runState, state);
-      assert.equal(snapshot.running, state !== "idle");
-    } finally { await reader.cancel(); }
-  } finally { await fixture.cleanup(); }
-});
+      await createService(fixture.app, "Disconnect");
+      const issue = await createIssue(fixture.app, "disconnect"),
+        key = String(issue.id);
+      fixture.engine.running.clear();
+      let subscriptions = 0,
+        unsubscriptions = 0,
+        paused = false,
+        holdRead = false;
+      const subscribe = events.subscribe.bind(events);
+      events.subscribe = (id, listener) => {
+        subscriptions += 1;
+        const unsubscribe = subscribe(id, listener);
+        if (stage === "snapshot read" && !paused) {
+          paused = true;
+          holdRead = true;
+        }
+        return () => {
+          unsubscriptions += 1;
+          unsubscribe();
+        };
+      };
+      if (stage === "model discovery") {
+        const list = modelCatalog.list.bind(modelCatalog);
+        context.mock.method(modelCatalog, "list", async () => {
+          if (!paused) {
+            paused = true;
+            entered();
+            await gate;
+          }
+          return list();
+        });
+      } else {
+        const prototype = Object.getPrototypeOf(connection.client) as { execute: typeof connection.client.execute },
+          execute = prototype.execute;
+        context.mock.method(prototype, "execute", async function (this: typeof connection.client, ...args: Parameters<typeof execute>) {
+          if (holdRead) {
+            holdRead = false;
+            entered();
+            await gate;
+          }
+          return execute.apply(this, args);
+        });
+      }
+      let abandoned: ServerResponse | undefined;
+      const disconnected = new Promise<void>((resolve) =>
+        fixture.app.server.once("request", (_request, response) => {
+          abandoned = response;
+          response.once("close", resolve);
+        }),
+      );
+      const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+      const pending = fetch(`${address}/api/issues/${key}/agent-stream`, { signal: AbortSignal.any([controller.signal, context.signal]) });
+      const rejected = assert.rejects(pending, { name: "AbortError" });
+      await ready;
+      controller.abort();
+      await rejected;
+      await disconnected;
+      assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
+      assert.equal(unsubscriptions, subscriptions);
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
+      assert.equal(unsubscriptions, subscriptions);
+      assert.ok(abandoned);
+      assert.equal(abandoned.headersSent, false);
+      const before = subscriptions;
+      const closed = new Promise<void>((resolve) => fixture.app.server.once("request", (_request, response) => response.once("close", resolve)));
+      const response = await fetch(`${address}/api/issues/${key}/agent-stream`, { signal: context.signal });
+      assert.equal(response.status, 200);
+      const decoder = new TextDecoder();
+      let payload = "";
+      for await (const chunk of response.body!) {
+        payload += decoder.decode(chunk, { stream: true });
+        if (payload.includes("event: snapshot_ready\n")) break;
+      }
+      assert.match(payload, /event: snapshot_ready\n/);
+      await closed;
+      assert.equal(subscriptions, before + 1);
+      assert.equal(unsubscriptions, subscriptions);
+    } finally {
+      release();
+      controller.abort();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      context.mock.restoreAll();
+      connection.close();
+      await fixture.cleanup();
+    }
+  });
 
-test("uses snapshot_ready as the versioned Agent stream handshake", async () => {
+for (const state of ["idle", "queued", "running"] as const)
+  test(`Agent stream snapshot distinguishes ${state} without changing the busy flag contract`, async () => {
+    const fixture = await createApiFixture();
+    try {
+      await createService(fixture.app, "QueueSnapshot");
+      const issue = await createIssue(fixture.app, "queuesnapshot"),
+        issueId = fixture.engine.enqueued[0]!;
+      if (state === "idle") fixture.engine.running.clear();
+      if (state === "queued") fixture.engine.queued.add(issueId);
+      const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+      const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`);
+      const reader = response.body!.getReader();
+      try {
+        const payload = await readStreamUntil(reader, "event: snapshot_ready\n");
+        const block = payload.split("\n\n").find((block) => block.startsWith("event: snapshot_ready\n"))!;
+        const snapshot = JSON.parse(
+          block
+            .split("\n")
+            .find((line) => line.startsWith("data: "))!
+            .slice(6),
+        );
+        assert.equal(snapshot.runState, state);
+        assert.equal(snapshot.running, state !== "idle");
+      } finally {
+        await reader.cancel();
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+test("uses snapshot_ready as the versioned Agent stream handshake", { timeout: 5_000 }, async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Beta", ["dev"]);
@@ -331,7 +520,7 @@ test("uses snapshot_ready as the versioned Agent stream handshake", async () => 
   }
 });
 
-test("replays current non-durable Agent output before the stream snapshot", async () => {
+test("replays current non-durable Agent output before the stream snapshot", { timeout: 5_000 }, async () => {
   const events = new AgentEventBus();
   const fixture = await createApiFixture({ events });
   try {
@@ -390,8 +579,11 @@ test("keeps durable entry deduplication and recent transient duplicates after th
     manager.appendMessage(fauxAssistantMessage("Historical durable answer."));
     const historical = manager.getEntries().at(-1)!;
     const database = openDatabase(fixture.databaseFile);
-    try { await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work }); }
-    finally { await database.close(); }
+    try {
+      await database.db.insert(agentSessions).values({ issueId, sessionFile: manager.getSessionFile()!, workspacePath: work });
+    } finally {
+      await database.close();
+    }
     const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
     const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
     reader = response.body!.getReader();
@@ -400,7 +592,11 @@ test("keeps durable entry deduplication and recent transient duplicates after th
     manager.appendMessage(fauxAssistantMessage("New durable answer."));
     const current = manager.getEntries().at(-1)!;
     publish("new-durable", { type: "entry_appended", entry: current });
-    const update: RunEvent["event"] = { type: "message_update", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" } };
+    const update: RunEvent["event"] = {
+      type: "message_update",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" },
+    };
     const count = issuePilotConfig.http.sseRecentEventIds * 2 + 17;
     for (let index = 0; index < count; index++) publish(`live-${index}`, update);
     publish(`live-${count - 1}`, update);
@@ -428,7 +624,11 @@ test("deduplicates the entire buffered replay before applying the smaller live I
     const issue = await createIssue(fixture.app, "replaywindow");
     const issueId = fixture.engine.enqueued[0]!;
     const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: "2026-10-23T00:00:00.000Z", event });
-    const update: RunEvent["event"] = { type: "message_update", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "cached" } };
+    const update: RunEvent["event"] = {
+      type: "message_update",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "cached" },
+    };
     publish("replay-start", { type: "agent_start" });
     publish("replay-edge", update);
     let injected = false;
@@ -475,9 +675,22 @@ test("closes a live Agent stream when an event cannot be serialized and allows a
     await readStreamUntil(reader, "event: snapshot_ready\n");
     const details: Record<string, unknown> = {};
     details.self = details;
-    const closed = reader.read().then(result => result.done === true, () => true);
-    events.publish({ id: "circular-result", issueId, createdAt: "2026-10-23T00:00:00.000Z", event: { type: "tool_execution_end", toolCallId: "circular", toolName: "fixture", result: { content: [{ type: "text", text: "Synthetic result" }], details }, isError: false } });
-    const disconnected = await Promise.race([closed, new Promise<false>(resolve => { guard = setTimeout(() => resolve(false), 500); })]);
+    const closed = reader.read().then(
+      (result) => result.done === true,
+      () => true,
+    );
+    events.publish({
+      id: "circular-result",
+      issueId,
+      createdAt: "2026-10-23T00:00:00.000Z",
+      event: { type: "tool_execution_end", toolCallId: "circular", toolName: "fixture", result: { content: [{ type: "text", text: "Synthetic result" }], details }, isError: false },
+    });
+    const disconnected = await Promise.race([
+      closed,
+      new Promise<false>((resolve) => {
+        guard = setTimeout(() => resolve(false), 500);
+      }),
+    ]);
     clearTimeout(guard);
     assert.equal(disconnected, true, "a failed subscription must not leave a heartbeat-only connection open");
     await reader.cancel().catch(() => undefined);
@@ -534,7 +747,9 @@ test("reports oversized Agent text distinctly for JSON and multipart requests", 
       assert.deepEqual(JSON.parse(response.body), { error: "agent_message_too_long" });
     }
     assert.equal(fixture.engine.messages.length, initialMessageCount);
-  } finally { await fixture.cleanup(); }
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("accepts clipboard images as bounded Pi image content", async () => {
@@ -577,13 +792,69 @@ test("recovers interrupted Agent state after an API restart", async () => {
 
     const restarted = await buildApi({ databaseFile: fixture.databaseFile, stateRoot: fixture.root, engine: new TestAgentController(), modelCatalog, logger: false });
     try {
-      const recovered = await restarted.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { status: string; workspace: { status: string; lastError: string | null } };
+      const recovered = (await restarted.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as {
+        status: string;
+        workspace: { status: string; lastError: string | null };
+      };
       assert.equal(recovered.status, "open");
       assert.equal(recovered.workspace.status, "failed");
       assert.equal(recovered.workspace.lastError, "agent_interrupted_by_api_restart");
       assert.equal((await json(await restarted.inject({ method: "GET", url: "/health" }))).ok, true);
     } finally {
       await restarted.close();
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("rejects an Agent image over the per-file and per-request budgets", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Images", ["dev"]);
+    const issue = await createIssue(fixture.app, "images", "dev");
+    fixture.engine.running.clear();
+    const boundary = "issue-pilot-agent-image-budget";
+    const oversized = Buffer.alloc(issuePilotConfig.limits.agentImage.fileBytes + 1, 0x89);
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="message"\r\n\r\n请检查截图\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="images"; filename="huge.png"\r\nContent-Type: image/png\r\n\r\n`),
+      oversized,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const messages = fixture.engine.messages.length;
+    const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload });
+    assert.equal(response.statusCode, 413, response.body);
+    assert.deepEqual(JSON.parse(response.body), { error: "agent_image_limit_exceeded" });
+    assert.equal(fixture.engine.messages.length, messages);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("graceful shutdown ends open Agent streams instead of waiting for them", { timeout: 10_000 }, async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Streams", ["test"]);
+    const issue = await createIssue(fixture.app, "streams", "test");
+    fixture.engine.running.clear();
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`);
+    assert.equal(response.status, 200);
+    const reader = response.body!.getReader();
+    let received = "";
+    while (!received.includes("event: snapshot_ready")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += new TextDecoder().decode(value);
+    }
+    assert.match(received, /event: snapshot_ready/);
+    // Without a preClose hook this close would wait on the open stream until the test timeout.
+    const outcome = await Promise.race([fixture.stop().then(() => "closed"), new Promise((resolve) => setTimeout(() => resolve("timeout"), 5_000))]);
+    assert.equal(outcome, "closed");
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
     }
   } finally {
     await fixture.cleanup();

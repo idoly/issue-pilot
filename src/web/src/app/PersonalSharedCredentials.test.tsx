@@ -5,28 +5,72 @@ import type { PersonalCredentialStatus } from "../data/client";
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown as () => { subject: string; name: string; role: string; isAdmin?: boolean },
-  load: vi.fn(), savePersonal: vi.fn(), loadDms: vi.fn(), saveDms: vi.fn(), loadSls: vi.fn(), saveSls: vi.fn(), saveAgent: vi.fn(), refresh: vi.fn(),
+  load: vi.fn(),
+  savePersonal: vi.fn(),
+  loadDms: vi.fn(),
+  saveDms: vi.fn(),
+  loadSls: vi.fn(),
+  saveSls: vi.fn(),
+  saveAgent: vi.fn(),
+  refresh: vi.fn(),
 }));
-const agent = { provider: "shared", model: "shared-model", thinkingLevel: "high" as const, codemode: "on" as const, runtime: { networkAllowedDomains: ["maven.aliyun.com:443"] }, apiKeyConfigured: true };
-vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({
-  currentUser: () => state.user(), configurationLoaded: () => true, refreshConfiguration: state.refresh,
-  configuration: () => ({ agent, agentModels: [{ provider: "shared", id: "shared-model", thinkingLevels: ["medium", "high"] }, { provider: "personal", id: "personal-model", thinkingLevels: ["low", "medium"] }] }),
-}) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(),
-  loadPersonalCredentials: state.load, updatePersonalCredentials: state.savePersonal, loadSharedDmsCredentials: state.loadDms, updateSharedDmsCredentials: state.saveDms,
-  loadSharedSlsCredentials: state.loadSls, updateSharedSlsCredentials: state.saveSls, updateAgentConfiguration: state.saveAgent }));
+const agent = {
+  provider: "shared",
+  model: "shared-model",
+  thinkingLevel: "high" as const,
+  codemode: "on" as const,
+  runtime: { networkAllowedDomains: ["maven.aliyun.com:443"] },
+  apiKeyConfigured: true,
+};
+vi.mock("./ApplicationResources", () => ({
+  useApplicationResources: () => ({
+    currentUser: () => state.user(),
+    configurationLoaded: () => true,
+    refreshConfiguration: state.refresh,
+    configuration: () => ({
+      agent,
+      agentModels: [
+        { provider: "shared", id: "shared-model", thinkingLevels: ["medium", "high"] },
+        { provider: "personal", id: "personal-model", thinkingLevels: ["low", "medium"] },
+      ],
+    }),
+  }),
+}));
+vi.mock("../data/client", async (original) => ({
+  ...(await original<typeof import("../data/client")>()),
+  loadPersonalCredentials: state.load,
+  updatePersonalCredentials: state.savePersonal,
+  loadSharedDmsCredentials: state.loadDms,
+  updateSharedDmsCredentials: state.saveDms,
+  loadSharedSlsCredentials: state.loadSls,
+  updateSharedSlsCredentials: state.saveSls,
+  updateAgentConfiguration: state.saveAgent,
+}));
 import { PersonalCredentials } from "./PersonalCredentials";
 
-const status: PersonalCredentialStatus = { revision: 2, model: { provider: "personal", model: "personal-model", thinkingLevel: "low", codemode: "off" }, gitSshConfigured: false, productionDmsConfigured: true, productionDmsUrl: "https://personal.example.test/sse" };
+const status: PersonalCredentialStatus = {
+  revision: 2,
+  model: { provider: "personal", model: "personal-model", thinkingLevel: "low", codemode: "off" },
+  gitSshConfigured: false,
+  productionDmsConfigured: true,
+  productionDmsUrl: "https://personal.example.test/sse",
+};
 const admin = { subject: "alice", name: "Alice", role: "developer", isAdmin: true };
 beforeEach(() => {
   state.user = () => admin;
-  state.load.mockResolvedValue(status); state.savePersonal.mockResolvedValue({ ...status, revision: 3 });
-  state.loadDms.mockResolvedValue({ configured: true, url: "https://shared.example.test/sse", revision: 5 }); state.saveDms.mockResolvedValue({ configured: true, url: "https://new.example.test/sse", revision: 6 });
-  state.loadSls.mockResolvedValue({ configured: true, revision: 7 }); state.saveSls.mockResolvedValue({ configured: false, revision: 8 });
-  state.saveAgent.mockResolvedValue({ ok: true }); state.refresh.mockResolvedValue({});
+  state.load.mockResolvedValue(status);
+  state.savePersonal.mockResolvedValue({ ...status, revision: 3 });
+  state.loadDms.mockResolvedValue({ configured: true, url: "https://shared.example.test/sse", revision: 5 });
+  state.saveDms.mockResolvedValue({ configured: true, url: "https://new.example.test/sse", revision: 6 });
+  state.loadSls.mockResolvedValue({ configured: true, revision: 7 });
+  state.saveSls.mockResolvedValue({ configured: false, revision: 8 });
+  state.saveAgent.mockResolvedValue({ ok: true });
+  state.refresh.mockResolvedValue({});
 });
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.resetAllMocks();
+});
 
 const openGroup = async (index: number) => {
   render(() => <PersonalCredentials />);
@@ -55,7 +99,9 @@ test("clearing the checkbox switches the dialog to the admin's personal credenti
   await waitFor(() => expect(within(dialog).getByLabelText("DMS 地址")).toHaveProperty("value", "https://personal.example.test/sse"));
   await fireEvent.input(within(dialog).getByLabelText("新凭证"), { target: { value: "Bearer personal" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(state.savePersonal).toHaveBeenCalledWith({ expectedRevision: 2, production: { dms: { mode: "replace", url: "https://personal.example.test/sse", authorization: "Bearer personal" } } }));
+  await waitFor(() =>
+    expect(state.savePersonal).toHaveBeenCalledWith({ expectedRevision: 2, production: { dms: { mode: "replace", url: "https://personal.example.test/sse", authorization: "Bearer personal" } } }),
+  );
   expect(state.saveDms).not.toHaveBeenCalled();
 });
 
@@ -71,7 +117,16 @@ test("the shared API key reuses the model dialog and keeps the global runtime se
   expect(within(dialog).getByLabelText("模型").closest(".ui-select")?.textContent).toContain("shared-model");
   await fireEvent.input(within(dialog).getByLabelText("API Key"), { target: { value: "shared-key" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(state.saveAgent).toHaveBeenCalledWith({ provider: "shared", model: "shared-model", thinkingLevel: "high", codemode: "on", runtime: agent.runtime, apiKey: { mode: "replace", value: "shared-key" } }));
+  await waitFor(() =>
+    expect(state.saveAgent).toHaveBeenCalledWith({
+      provider: "shared",
+      model: "shared-model",
+      thinkingLevel: "high",
+      codemode: "on",
+      runtime: agent.runtime,
+      apiKey: { mode: "replace", value: "shared-key" },
+    }),
+  );
   await waitFor(() => expect(state.refresh).toHaveBeenCalled());
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[0]!);
@@ -79,7 +134,9 @@ test("the shared API key reuses the model dialog and keeps the global runtime se
   fireEvent.click(within(reopened).getByRole("checkbox", { name: /共享凭证/ }));
   await waitFor(() => expect(within(reopened).getByLabelText("模型").closest(".ui-select")?.textContent).toContain("personal-model"));
   fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(state.savePersonal).toHaveBeenCalledWith({ expectedRevision: 2, model: { mode: "replace", provider: "personal", model: "personal-model", thinkingLevel: "low", codemode: "off" } }));
+  await waitFor(() =>
+    expect(state.savePersonal).toHaveBeenCalledWith({ expectedRevision: 2, model: { mode: "replace", provider: "personal", model: "personal-model", thinkingLevel: "low", codemode: "off" } }),
+  );
 });
 
 test("non-admins see no shared switch and never read shared credential status", async () => {
@@ -87,14 +144,16 @@ test("non-admins see no shared switch and never read shared credential status", 
   const dialog = await openGroup(2);
   expect(within(dialog).queryByRole("checkbox")).toBeNull();
   expect(within(dialog).getByLabelText("DMS 地址")).toHaveProperty("value", "https://personal.example.test/sse");
-  expect(state.loadDms).not.toHaveBeenCalled(); expect(state.loadSls).not.toHaveBeenCalled();
+  expect(state.loadDms).not.toHaveBeenCalled();
+  expect(state.loadSls).not.toHaveBeenCalled();
 });
 
 test("admins without the developer role can still switch the API key to their own group but not SSH", async () => {
   state.user = () => ({ ...admin, role: "product" });
   const dialog = await openGroup(0);
   const checkbox = within(dialog).getByRole("checkbox", { name: /共享凭证/ });
-  expect(checkbox).toHaveProperty("checked", true); expect(checkbox).toHaveProperty("disabled", false);
+  expect(checkbox).toHaveProperty("checked", true);
+  expect(checkbox).toHaveProperty("disabled", false);
   fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[1]).toHaveProperty("disabled", true);
@@ -103,7 +162,12 @@ test("admins without the developer role can still switch the API key to their ow
 test("switching identical model groups clears the API key draft and blocks target changes during save", async () => {
   state.load.mockResolvedValue({ ...status, model: { provider: agent.provider, model: agent.model, thinkingLevel: agent.thinkingLevel, codemode: agent.codemode } });
   let finish!: () => void;
-  state.savePersonal.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ...status, revision: 3 }); }));
+  state.savePersonal.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ ...status, revision: 3 });
+      }),
+  );
   const dialog = await openGroup(0);
   await fireEvent.input(within(dialog).getByLabelText("API Key"), { target: { value: "shared-draft" } });
   fireEvent.click(within(dialog).getByRole("checkbox", { name: /共享凭证/ }));
@@ -116,57 +180,77 @@ test("switching identical model groups clears the API key draft and blocks targe
   expect(state.savePersonal.mock.calls[0]![0].model).not.toHaveProperty("apiKey");
 });
 
-for (const group of ["dms", "sls"] as const) test(`late shared ${group} save does not overwrite the next admin's status`, async () => {
-  const [user, setUser] = createSignal(admin, { ownedWrite: true }); state.user = user;
-  const save = group === "dms" ? state.saveDms : state.saveSls;
-  let finish!: () => void;
-  save.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(group === "dms" ? { configured: true, url: "https://old-response.example.test/sse", revision: 6 } : { configured: false, revision: 8 }); }));
-  const dialog = await openGroup(group === "dms" ? 2 : 3);
-  fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
-  await waitFor(() => expect(finish).toBeTypeOf("function"));
-  state.loadDms.mockResolvedValue({ configured: true, url: "https://bob.example.test/sse", revision: 20 });
-  state.loadSls.mockResolvedValue({ configured: true, revision: 20 });
-  setUser({ ...admin, subject: "bob", name: "Bob" });
-  await waitFor(() => expect(state.load).toHaveBeenCalledTimes(2));
-  await screen.findByText("API Key");
-  finish();
-  await new Promise(resolve => setTimeout(resolve, 0));
-  fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[group === "dms" ? 2 : 3]!);
-  const reopened = await screen.findByRole("dialog");
-  if (group === "dms") expect(within(reopened).getByLabelText("DMS 地址")).toHaveProperty("value", "https://bob.example.test/sse");
-  fireEvent.click(within(reopened).getByRole("button", { name: "清除凭证" }));
-  await waitFor(() => expect(save).toHaveBeenLastCalledWith({ expectedRevision: 20, mode: "clear" }));
-});
+for (const group of ["dms", "sls"] as const)
+  test(`late shared ${group} save does not overwrite the next admin's status`, async () => {
+    const [user, setUser] = createSignal(admin, { ownedWrite: true });
+    state.user = user;
+    const save = group === "dms" ? state.saveDms : state.saveSls;
+    let finish!: () => void;
+    save.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve(group === "dms" ? { configured: true, url: "https://old-response.example.test/sse", revision: 6 } : { configured: false, revision: 8 });
+        }),
+    );
+    const dialog = await openGroup(group === "dms" ? 2 : 3);
+    fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    state.loadDms.mockResolvedValue({ configured: true, url: "https://bob.example.test/sse", revision: 20 });
+    state.loadSls.mockResolvedValue({ configured: true, revision: 20 });
+    setUser({ ...admin, subject: "bob", name: "Bob" });
+    await waitFor(() => expect(state.load).toHaveBeenCalledTimes(2));
+    await screen.findByText("API Key");
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[group === "dms" ? 2 : 3]!);
+    const reopened = await screen.findByRole("dialog");
+    if (group === "dms") expect(within(reopened).getByLabelText("DMS 地址")).toHaveProperty("value", "https://bob.example.test/sse");
+    fireEvent.click(within(reopened).getByRole("button", { name: "清除凭证" }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ expectedRevision: 20, mode: "clear" }));
+  });
 
-for (const outcome of ["success", "failure"] as const) test(`late model save ${outcome} cannot mutate another identity's editor`, async () => {
-  const [user, setUser] = createSignal(admin, { ownedWrite: true }); state.user = user;
-  let finish!: () => void;
-  state.saveAgent.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = outcome === "success" ? () => resolve({ ok: true }) : () => reject(new Error("old_model_save_failed")); }));
-  const dialog = await openGroup(0);
-  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(finish).toBeTypeOf("function"));
-  setUser({ ...admin, subject: "bob", name: "Bob" });
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  await screen.findByText("API Key");
-  fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[0]!);
-  const reopened = await screen.findByRole("dialog");
-  await fireEvent.input(within(reopened).getByLabelText("API Key"), { target: { value: "bob-draft" } });
-  let finishNext!: () => void;
-  state.saveAgent.mockImplementationOnce(() => new Promise(resolve => { finishNext = () => resolve({ ok: true }); }));
-  fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(finishNext).toBeTypeOf("function"));
-  finish();
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(screen.getByRole("dialog")).toBe(reopened);
-  expect(within(reopened).getByLabelText("API Key")).toHaveProperty("value", "bob-draft");
-  expect(within(reopened).getByRole("checkbox", { name: /共享凭证/ })).toHaveProperty("disabled", true);
-  expect(within(reopened).queryByRole("alert")).toBeNull();
-  finishNext();
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-});
+for (const outcome of ["success", "failure"] as const)
+  test(`late model save ${outcome} cannot mutate another identity's editor`, async () => {
+    const [user, setUser] = createSignal(admin, { ownedWrite: true });
+    state.user = user;
+    let finish!: () => void;
+    state.saveAgent.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = outcome === "success" ? () => resolve({ ok: true }) : () => reject(new Error("old_model_save_failed"));
+        }),
+    );
+    const dialog = await openGroup(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    setUser({ ...admin, subject: "bob", name: "Bob" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByText("API Key");
+    fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[0]!);
+    const reopened = await screen.findByRole("dialog");
+    await fireEvent.input(within(reopened).getByLabelText("API Key"), { target: { value: "bob-draft" } });
+    let finishNext!: () => void;
+    state.saveAgent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishNext = () => resolve({ ok: true });
+        }),
+    );
+    fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(finishNext).toBeTypeOf("function"));
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByRole("dialog")).toBe(reopened);
+    expect(within(reopened).getByLabelText("API Key")).toHaveProperty("value", "bob-draft");
+    expect(within(reopened).getByRole("checkbox", { name: /共享凭证/ })).toHaveProperty("disabled", true);
+    expect(within(reopened).queryByRole("alert")).toBeNull();
+    finishNext();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 
 test("an identity change discards the previous admin's shared status", async () => {
-  const [user, setUser] = createSignal(admin, { ownedWrite: true }); state.user = user;
+  const [user, setUser] = createSignal(admin, { ownedWrite: true });
+  state.user = user;
   render(() => <PersonalCredentials />);
   await screen.findByText("API Key");
   await waitFor(() => expect(state.loadDms).toHaveBeenCalledTimes(1));

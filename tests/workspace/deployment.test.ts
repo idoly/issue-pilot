@@ -16,16 +16,22 @@ test("loads deployment branches in service repository order and rejects incomple
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
     const [prod] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
-    const [service, otherService] = await database.db.insert(services).values([
-      { key: "orders", name: "Orders" },
-      { key: "payments", name: "Payments" },
-    ]).returning();
+    const [service, otherService] = await database.db
+      .insert(services)
+      .values([
+        { key: "orders", name: "Orders" },
+        { key: "payments", name: "Payments" },
+      ])
+      .returning();
     await registerTestRepositories(database.db, ["https://example.test/orders-api.git", "https://example.test/orders-web.git", "https://example.test/payments-api.git"]);
-    const repositories = await database.db.insert(serviceRepositories).values([
-      { serviceId: service!.id, alias: "orders-api", url: "https://example.test/orders-api.git" },
-      { serviceId: service!.id, alias: "orders-web", url: "https://example.test/orders-web.git" },
-      { serviceId: otherService!.id, alias: "payments-api", url: "https://example.test/payments-api.git" },
-    ]).returning();
+    const repositories = await database.db
+      .insert(serviceRepositories)
+      .values([
+        { serviceId: service!.id, alias: "orders-api", url: "https://example.test/orders-api.git" },
+        { serviceId: service!.id, alias: "orders-web", url: "https://example.test/orders-web.git" },
+        { serviceId: otherService!.id, alias: "payments-api", url: "https://example.test/payments-api.git" },
+      ])
+      .returning();
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values([
       { deploymentId: deployment!.id, repositoryId: repositories[1]!.id, baseBranch: "release" },
@@ -34,15 +40,17 @@ test("loads deployment branches in service repository order and rejects incomple
 
     const loaded = await loadDeploymentRepositories(database.db, { serviceId: service!.id, environmentId: prod!.id });
     assert.equal(loaded.deployment.id, deployment!.id);
-    assert.deepEqual(loaded.repositories.map(({ repository, baseBranch }) => ({ alias: repository.alias, baseBranch })), [
-      { alias: "orders-api", baseBranch: "main" },
-      { alias: "orders-web", baseBranch: "release" },
-    ]);
+    assert.deepEqual(
+      loaded.repositories.map(({ repository, baseBranch }) => ({ alias: repository.alias, baseBranch })),
+      [
+        { alias: "orders-api", baseBranch: "main" },
+        { alias: "orders-web", baseBranch: "release" },
+      ],
+    );
 
-    await database.db.delete(serviceDeploymentRepositories).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployment!.id),
-      eq(serviceDeploymentRepositories.repositoryId, repositories[1]!.id),
-    ));
+    await database.db
+      .delete(serviceDeploymentRepositories)
+      .where(and(eq(serviceDeploymentRepositories.deploymentId, deployment!.id), eq(serviceDeploymentRepositories.repositoryId, repositories[1]!.id)));
     await assert.rejects(loadDeploymentRepositories(database.db, { serviceId: service!.id, environmentId: prod!.id }), /deployment_repository_branches_invalid/);
 
     await database.db.insert(serviceDeploymentRepositories).values([

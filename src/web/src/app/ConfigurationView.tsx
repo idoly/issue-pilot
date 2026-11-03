@@ -4,8 +4,21 @@ import { createEffect, createMemo, createSignal, createStore, For, Match, onClea
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { ChevronRight, Pencil, Plus, Trash2 } from "../ui/icons";
-import { loadServiceDbHubTargets, loadRepositories, loadServiceConfigurationDescription, type ServiceInput, type ManagedRepository, createService, deleteService, errorMessage, resolveDmsScope, updateService, type CapabilityName, type Service } from "../data/client";
-import { serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
+import {
+  loadServiceDbHubTargets,
+  loadRepositories,
+  loadServiceConfigurationDescription,
+  type ServiceInput,
+  type ManagedRepository,
+  createService,
+  deleteService,
+  errorMessage,
+  resolveDmsScope,
+  updateService,
+  type CapabilityName,
+  type Service,
+} from "../data/client";
+import { normalizeDmsScope, serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 import { DbHubTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
@@ -37,7 +50,12 @@ function serviceSaveErrorMessage(error: unknown): string {
     invalid_dbhub_database: "请填写 DBHub 数据库",
     invalid_dbhub_target: "DBHub 主机或端口无效",
     duplicate_dbhub_target: "同一环境的 DBHub 目标不能重复",
-    invalid_sls_access_key_secret: "请填写 SLS AccessKeySecret",
+    invalid_sls_scope: "SLS 目标无效：region 和 project 只能使用小写字母、数字和连字符，logstore 使用字母、数字、下划线或连字符，目标名称不能重复",
+    invalid_sls_region: "请填写 SLS region",
+    invalid_sls_project: "请填写 SLS project",
+    invalid_sls_logstores: "请至少填写一个 SLS logstore",
+    invalid_sls_logstore: "SLS logstore 无效",
+    invalid_sls_target: "请填写 SLS 目标名称",
     credential_required: "该能力必须配置凭据",
     credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
     invalid_credential_replacement: "请填写完整的新凭据",
@@ -74,25 +92,49 @@ function serviceDeploymentDraft(deployment: Service["deployments"][number]): Ser
   const dbhub = deployment.dbhub;
   return {
     environmentKey: deployment.environmentKey,
-    repositoryBranches: deployment.repositoryBranches.map(branch => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })), capabilities: [...deployment.capabilities],
-    ...(deployment.dms ? { dms: { databases: deployment.dms.databases.map(database => ({ ...database })) } } : {}),
+    repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })),
+    capabilities: [...deployment.capabilities],
+    ...(deployment.dms ? { dms: { databases: deployment.dms.databases.map((database) => ({ ...database })) } } : {}),
     ...(dbhub ? { dbhub: dbhub.map(({ passwordConfigured: _configured, ...target }) => ({ ...target, password: "" })) } : {}),
-    ...(deployment.sls ? { sls: { region: deployment.sls.region, project: deployment.sls.project, logstores: [...deployment.sls.logstores], ...(deployment.sls.targets ? { targets: deployment.sls.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) } } : {}),
+    ...(deployment.sls
+      ? {
+          sls: {
+            region: deployment.sls.region,
+            project: deployment.sls.project,
+            logstores: [...deployment.sls.logstores],
+            ...(deployment.sls.targets ? { targets: deployment.sls.targets.map((target) => ({ ...target, logstores: [...target.logstores] })) } : {}),
+          },
+        }
+      : {}),
   };
 }
 
 function serializeServiceDeployment(deployment: ServiceDeploymentDraft, repositories: ServiceRepositoryDraft[]): ServiceInput["deployments"][number] {
-  return { environmentKey: deployment.environmentKey, capabilities: [...deployment.capabilities], repositoryBranches: deployment.environmentKey === "dev" ? [] : deployment.repositoryBranches.map(branch => ({ repositoryAlias: repositories.find(repository => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })), ...(deployment.dbhub?.length ? { dbhub: deployment.dbhub } : {}), ...serializeCapabilityDraft(deployment) };
+  return {
+    environmentKey: deployment.environmentKey,
+    capabilities: [...deployment.capabilities],
+    repositoryBranches:
+      deployment.environmentKey === "dev"
+        ? []
+        : deployment.repositoryBranches.map((branch) => ({ repositoryAlias: repositories.find((repository) => repository.key === branch.repositoryKey)!.alias, baseBranch: branch.baseBranch.trim() })),
+    ...(deployment.dbhub?.length ? { dbhub: deployment.dbhub } : {}),
+    ...serializeCapabilityDraft(deployment),
+  };
 }
 
 function deploymentValidationError(deployment: ServiceDeploymentDraft): string {
   if (deployment.environmentKey === "dev") return "";
-  if (deployment.repositoryBranches.some(branch => !branch.baseBranch.trim())) return "请填写所有仓库分支";
+  if (deployment.repositoryBranches.some((branch) => !branch.baseBranch.trim())) return "请填写所有仓库分支";
   if (deployment.capabilities.includes("dms")) {
     if (!deployment.dms?.databases.length) return "请添加 DMS 数据库";
-    if (deployment.dms.databases.some(database => !database.instanceAlias.trim() || !database.schemaName.trim())) return "请填写全部 DMS 数据库的实例和 schema";
+    if (deployment.dms.databases.some((database) => !database.instanceAlias.trim() || !database.schemaName.trim())) return "请填写全部 DMS 数据库的实例和 schema";
   }
-  if (deployment.capabilities.includes("sls") && (!deployment.sls?.region.trim() || !deployment.sls.project.trim() || !deployment.sls.logstores.length)) return "请填写 SLS 日志目标";
+  if (deployment.capabilities.includes("sls")) {
+    // Every target is saved, not only the first one mirrored at the top level.
+    const targets = deployment.sls?.targets ?? (deployment.sls ? [{ name: deployment.environmentKey, ...deployment.sls }] : []);
+    if (!targets.length || targets.some((target) => !target.name.trim() || !target.region.trim() || !target.project.trim() || !target.logstores.length))
+      return "请填写全部 SLS 日志目标的名称、region、project 和 logstore";
+  }
   return "";
 }
 
@@ -110,38 +152,89 @@ function DmsDatabaseEditorRow(props: {
   const [resolveError, setResolveError] = createSignal("", { ownedWrite: true });
   let resolveTimer: ReturnType<typeof setTimeout> | undefined;
   let resolveGeneration = 0;
-  const emit = (next: DmsDatabaseDraft) => { current = next; setDatabase(next); props.onChange(next); };
+  const emit = (next: DmsDatabaseDraft) => {
+    current = next;
+    setDatabase(next);
+    props.onChange(next);
+  };
   const scheduleResolve = (next: DmsDatabaseDraft) => {
     if (resolveTimer) clearTimeout(resolveTimer);
     const generation = ++resolveGeneration;
     const instanceAlias = next.instanceAlias.trim();
     const schemaName = next.schemaName.trim();
-    if (!instanceAlias || !schemaName) { setLoading(false); setResolveError(""); return; }
+    if (!instanceAlias || !schemaName) {
+      setLoading(false);
+      setResolveError("");
+      return;
+    }
     resolveTimer = setTimeout(() => {
-      setLoading(true); setResolveError("");
-      void resolveDmsScope({ instanceAlias, schemaName }).then((scope) => {
-        if (generation !== resolveGeneration || current.instanceAlias.trim() !== instanceAlias || current.schemaName.trim() !== schemaName) return;
-        emit({ ...current, ...scope });
-      }).catch((error) => { if (generation === resolveGeneration) setResolveError(serviceSaveErrorMessage(error)); })
-        .finally(() => { if (generation === resolveGeneration) setLoading(false); });
+      setLoading(true);
+      setResolveError("");
+      void resolveDmsScope({ instanceAlias, schemaName })
+        .then((scope) => {
+          if (generation !== resolveGeneration || current.instanceAlias.trim() !== instanceAlias || current.schemaName.trim() !== schemaName) return;
+          emit({ ...current, ...scope });
+        })
+        .catch((error) => {
+          if (generation === resolveGeneration) setResolveError(serviceSaveErrorMessage(error));
+        })
+        .finally(() => {
+          if (generation === resolveGeneration) setLoading(false);
+        });
     }, 500);
   };
   const updateScope = (change: Partial<Pick<DmsDatabaseDraft, "instanceAlias" | "schemaName">>) => {
     if (Object.entries(change).every(([key, value]) => current[key as "instanceAlias" | "schemaName"].trim() === value?.trim())) return;
     const next = { ...current, ...change, instanceId: "", instanceHost: "", instancePort: "", databaseId: "" };
-    emit(next); scheduleResolve(next);
+    emit(next);
+    scheduleResolve(next);
   };
-  onCleanup(() => { if (resolveTimer) clearTimeout(resolveTimer); resolveGeneration += 1; });
-  return <div class="settings-target-row">
-    <div class="settings-target-actions"><Button size="small" type="text" danger aria-label={`移除 DMS ${props.deploymentIndex} ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete}>移除</Button></div>
-    <div class="settings-target-fields">
-      <label><span class="required-field">实例别名（alias）</span><Input aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 RDS-XHGJ-SRM" value={database().instanceAlias} onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })} /></label>
-      <label><span class="required-field">数据库（schema）</span><Input aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`} placeholder="例如 srm" value={database().schemaName} onInput={(event) => updateScope({ schemaName: event.currentTarget.value })} /></label>
-      <Show when={loading()}><small class="settings-target-feedback">正在解析实例和数据库...</small></Show>
-      <Show when={database().databaseId}><small class="settings-target-feedback">数据库范围已确认</small></Show>
-      <Show when={resolveError()}>{(message) => <div class="form-error" role="alert">{message()}</div>}</Show>
+  onCleanup(() => {
+    if (resolveTimer) clearTimeout(resolveTimer);
+    resolveGeneration += 1;
+  });
+  return (
+    <div class="settings-target-row">
+      <div class="settings-target-actions">
+        <Button size="small" type="text" danger aria-label={`移除 DMS ${props.deploymentIndex} ${props.databaseIndex}`} disabled={props.only} onClick={props.onDelete}>
+          移除
+        </Button>
+      </div>
+      <div class="settings-target-fields">
+        <label>
+          <span class="required-field">实例别名（alias）</span>
+          <Input
+            aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`}
+            placeholder="例如 RDS-XHGJ-SRM"
+            value={database().instanceAlias}
+            onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })}
+          />
+        </label>
+        <label>
+          <span class="required-field">数据库（schema）</span>
+          <Input
+            aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`}
+            placeholder="例如 srm"
+            value={database().schemaName}
+            onInput={(event) => updateScope({ schemaName: event.currentTarget.value })}
+          />
+        </label>
+        <Show when={loading()}>
+          <small class="settings-target-feedback">正在解析实例和数据库...</small>
+        </Show>
+        <Show when={database().databaseId}>
+          <small class="settings-target-feedback">数据库范围已确认</small>
+        </Show>
+        <Show when={resolveError()}>
+          {(message) => (
+            <div class="form-error" role="alert">
+              {message()}
+            </div>
+          )}
+        </Show>
+      </div>
     </div>
-  </div>;
+  );
 }
 
 function ServiceDeploymentEditorRow(props: {
@@ -165,14 +258,33 @@ function ServiceDeploymentEditorRow(props: {
   let dbhubDraft = initialDeployment.dbhub ?? [];
   const abilityNames = { dms: "DMS", sls: "SLS", dbhub: "DBHub" };
   const selectedAbilities = () => [...selectedCapabilities(), ...(dbhubEnabled() ? ["dbhub" as const] : [])];
-  let currentDmsDraft = { databases: initialDeployment.dms?.databases?.map(database => ({ ...database })) ?? [newDmsDatabaseDraft()] };
+  let currentDmsDraft = { databases: initialDeployment.dms?.databases?.map((database) => ({ ...database })) ?? [newDmsDatabaseDraft()] };
   const [dmsDraft, setDmsDraft] = createSignal(currentDmsDraft, { ownedWrite: true });
   const initialSlsTarget = initialDeployment.sls?.targets?.[0] ?? initialDeployment.sls;
-  const [slsDraft, setSlsDraft] = createSignal({ region: initialSlsTarget?.region ?? "", project: initialSlsTarget?.project ?? "", logstores: initialSlsTarget?.logstores.join(", ") ?? "",...(initialDeployment.sls?.targets ? { targets: initialDeployment.sls.targets.map(target => ({ ...target, logstores: [...target.logstores] })) } : {}) }, { ownedWrite: true });
-  const dms = (value = dmsDraft()) => ({ ...value, databases: value.databases.map((database) => ({ instanceAlias: database.instanceAlias.trim(), schemaName: database.schemaName.trim(), instanceId: database.instanceId.trim(), instanceHost: database.instanceHost.trim(), instancePort: database.instancePort.trim(), databaseId: database.databaseId.trim() })) });
+  const [slsDraft, setSlsDraft] = createSignal(
+    {
+      region: initialSlsTarget?.region ?? "",
+      project: initialSlsTarget?.project ?? "",
+      logstores: initialSlsTarget?.logstores.join(", ") ?? "",
+      ...(initialDeployment.sls?.targets ? { targets: initialDeployment.sls.targets.map((target) => ({ ...target, logstores: [...target.logstores] })) } : {}),
+    },
+    { ownedWrite: true },
+  );
+  const dms = (value = dmsDraft()) => normalizeDmsScope(value);
   const sls = (value = slsDraft()) => {
-    const fields = { region: value.region.trim(), project: value.project.trim(), logstores: value.logstores.split(",").map(item => item.trim()).filter(Boolean) };
-    return { ...value, ...fields, ...(value.targets ? { targets: value.targets.map((target, index) => index === 0 ? { ...target, ...fields } : { ...target, logstores: [...target.logstores] }) } : {}) };
+    const fields = {
+      region: value.region.trim(),
+      project: value.project.trim(),
+      logstores: value.logstores
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    };
+    return {
+      ...value,
+      ...fields,
+      ...(value.targets ? { targets: value.targets.map((target, index) => (index === 0 ? { ...target, ...fields } : { ...target, logstores: [...target.logstores] })) } : {}),
+    };
   };
   const update = (change: Partial<ServiceDeploymentDraft>) => {
     currentDeployment = { ...currentDeployment, ...change };
@@ -182,25 +294,32 @@ function ServiceDeploymentEditorRow(props: {
     () => props.repositories(),
     (repositories) => {
       const current = untrack(repositoryBranches);
-      const next = repositories.map((repository) => current.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch });
+      const next = repositories.map(
+        (repository) => current.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch },
+      );
       if (next.length === current.length && next.every((branch, index) => branch.repositoryKey === current[index]?.repositoryKey && branch.baseBranch === current[index]?.baseBranch)) return;
       setRepositoryBranches(next);
       untrack(() => update({ repositoryBranches: next }));
     },
   );
   const updateRepositoryBranch = (repositoryKey: string, baseBranch: string) => {
-    const next = repositoryBranches().map((branch) => branch.repositoryKey === repositoryKey ? { ...branch, baseBranch } : branch);
+    const next = repositoryBranches().map((branch) => (branch.repositoryKey === repositoryKey ? { ...branch, baseBranch } : branch));
     setRepositoryBranches(next);
     update({ repositoryBranches: next });
   };
-  const updateDms = (change: Partial<ReturnType<typeof dmsDraft>>) => { currentDmsDraft = { ...currentDmsDraft, ...change }; setDmsDraft(currentDmsDraft); update({ dms: dms(currentDmsDraft) }); };
+  const updateDms = (change: Partial<ReturnType<typeof dmsDraft>>) => {
+    currentDmsDraft = { ...currentDmsDraft, ...change };
+    setDmsDraft(currentDmsDraft);
+    update({ dms: dms(currentDmsDraft) });
+  };
   const addDmsDatabase = () => {
     if (dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases) return;
     updateDms({ databases: [...dmsDraft().databases, newDmsDatabaseDraft()] });
     requestAnimationFrame(() => {
       if (!dmsTargets?.isConnected) return;
       const input = dmsTargets.querySelector<HTMLInputElement>(".settings-target-row:last-child input");
-      input?.focus({ preventScroll: true }); input?.scrollIntoView?.({ block: "nearest" });
+      input?.focus({ preventScroll: true });
+      input?.scrollIntoView?.({ block: "nearest" });
     });
   };
   const updateDmsDatabase = (database: DmsDatabaseDraft, next: DmsDatabaseDraft) => {
@@ -208,11 +327,17 @@ function ServiceDeploymentEditorRow(props: {
     updateDms({ databases: [...dmsDraft().databases] });
   };
   const removeDmsDatabase = (database: DmsDatabaseDraft) => updateDms({ databases: dmsDraft().databases.filter((candidate) => candidate !== database) });
-  const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => { const draft = { ...slsDraft(), ...change }; setSlsDraft(draft); update({ sls: sls(draft) }); };
+  const updateSls = (change: Partial<ReturnType<typeof slsDraft>>) => {
+    const draft = { ...slsDraft(), ...change };
+    setSlsDraft(draft);
+    update({ sls: sls(draft) });
+  };
   const addCapability = (key: CapabilityName | "dbhub") => {
     if (key === "dbhub") {
       if (!dbhubDraft.length) dbhubDraft = [{ type: "postgres", host: "", port: 5432, username: "", password: "", database: "" }];
-      update({ dbhub: dbhubDraft }); setDbHubEnabled(true); return;
+      update({ dbhub: dbhubDraft });
+      setDbHubEnabled(true);
+      return;
     }
     if (selectedCapabilities().includes(key)) return;
     const capabilities = [...selectedCapabilities(), key];
@@ -220,46 +345,166 @@ function ServiceDeploymentEditorRow(props: {
     update({ capabilities, ...(key === "dms" ? { dms: dms() } : {}), ...(key === "sls" ? { sls: sls() } : {}) });
   };
   const removeCapability = (key: CapabilityName | "dbhub") => {
-    if (key === "dbhub") { setDbHubEnabled(false); update({ dbhub: [] }); return; }
+    if (key === "dbhub") {
+      setDbHubEnabled(false);
+      update({ dbhub: [] });
+      return;
+    }
     const capabilities = selectedCapabilities().filter((capability) => capability !== key);
     setSelectedCapabilities(capabilities);
     update({ capabilities });
   };
   return (
     <div class={`service-deployment-row${expanded() ? "" : " collapsed"}`}>
-      <div class="deployment-environment" aria-label={`部署 ${props.index + 1} 环境`}><strong>{props.environmentName}</strong></div>
+      <div class="deployment-environment" aria-label={`部署 ${props.index + 1} 环境`}>
+        <strong>{props.environmentName}</strong>
+      </div>
       <div class="deployment-summary" aria-label={`部署 ${props.index + 1} 能力`}>
         <Show when={!codeOnly} fallback={<small>分支继承正式 · 查询继承正式/测试</small>}>
-          <Show when={expanded()} fallback={<div class="capability-labels"><For each={selectedAbilities()}>{key => <code>{abilityNames[key]}</code>}</For></div>}>
+          <Show
+            when={expanded()}
+            fallback={
+              <div class="capability-labels">
+                <For each={selectedAbilities()}>{(key) => <code>{abilityNames[key]}</code>}</For>
+              </div>
+            }
+          >
             <div class="deployment-capabilities" role="group" aria-label={`${props.environmentName}能力选择`}>
-              <For each={["dbhub", ...CAPABILITY_KEYS] as const}>{key => <label class="deployment-ability-choice"><input type="checkbox" checked={selectedAbilities().includes(key)} onChange={event => event.currentTarget.checked ? addCapability(key) : removeCapability(key)} /><span>{abilityNames[key]}</span></label>}</For>
+              <For each={["dbhub", ...CAPABILITY_KEYS] as const}>
+                {(key) => (
+                  <label class="deployment-ability-choice">
+                    <input type="checkbox" checked={selectedAbilities().includes(key)} onChange={(event) => (event.currentTarget.checked ? addCapability(key) : removeCapability(key))} />
+                    <span>{abilityNames[key]}</span>
+                  </label>
+                )}
+              </For>
             </div>
           </Show>
         </Show>
       </div>
-      <Button class="icon-button deployment-toggle" type="text" shape="circle" icon={<ChevronRight size={15} />} title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`} aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((current) => !current)} />
+      <Button
+        class="icon-button deployment-toggle"
+        type="text"
+        shape="circle"
+        icon={<ChevronRight size={15} />}
+        title={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`}
+        aria-label={`${expanded() ? "收起" : "展开"}部署${props.index + 1}`}
+        aria-expanded={expanded() ? "true" : "false"}
+        onClick={() => setExpanded((current) => !current)}
+      />
       <Show when={expanded()}>
-      <div class="deployment-repositories"><div class="capability-settings-head"><code>代码分支</code></div><For each={props.repositories()}>{(repository) => <label><span class="required-field">{props.repositoryName(repository)}</span><Show when={codeOnly} fallback={<Input aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`} value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""} onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)} />}><code class="inherited-branch" aria-label={`${props.repositoryName(repository)} 开发基线`}>{props.productionBranches().find(branch => branch.repositoryKey === repository.key)?.baseBranch.trim() || "待配置正式分支"}</code></Show></label>}</For></div>
-      <Show when={!codeOnly && dbhubEnabled()}><DbHubTargetsEditor value={currentDeployment.dbhub ?? []} environment={initialDeployment.environmentKey} onChange={dbhub => { dbhubDraft = dbhub; update({ dbhub }); }} /></Show>
-      <For each={codeOnly ? [] : CAPABILITY_KEYS.filter(key => selectedCapabilities().includes(key))}>{key => <Switch>
-        <Match when={key === "dms"}>
-          <div class="deployment-capability-settings" role="group" aria-label="DMS 配置">
-            <div class="capability-settings-head"><code>DMS</code></div>
-            <p class="settings-target-feedback">使用个人 DMS 凭据，未配置时使用共享凭据。</p>
-            <section class="settings-targets" aria-label="DMS 查询目标">
-              <div class="settings-targets-head"><span>查询目标</span><Button size="small" aria-label="添加 DMS 目标" disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>添加目标</Button></div>
-              <div ref={value => { dmsTargets = value; }}><For each={dmsDraft().databases}>{(database, databaseIndex) => <DmsDatabaseEditorRow deploymentIndex={props.index + 1} databaseIndex={databaseIndex() + 1} database={database} only={dmsDraft().databases.length === 1} onChange={(next) => updateDmsDatabase(database, next)} onDelete={() => removeDmsDatabase(database)} />}</For></div>
-            </section>
+        <div class="deployment-repositories">
+          <div class="capability-settings-head">
+            <code>代码分支</code>
           </div>
-        </Match>
-        <Match when={key === "sls"}>
-          <div class="deployment-capability-settings" role="group" aria-label="SLS 配置">
-            <div class="capability-settings-head"><code>SLS</code></div>
-            <p class="settings-target-feedback">使用个人 SLS 凭据，未配置时使用共享凭据。</p>
-            <SlsTargetsEditor deploymentIndex={props.index + 1} value={slsDraft().targets ?? [{ name: initialDeployment.environmentKey, region: slsDraft().region, project: slsDraft().project, logstores: slsDraft().logstores.split(",").map(value => value.trim()).filter(Boolean) }]} onChange={targets => updateSls({ targets: targets.length === 1 && !initialDeployment.sls?.targets && targets[0]?.name === initialDeployment.environmentKey ? undefined : targets, region: targets[0]?.region ?? "", project: targets[0]?.project ?? "", logstores: targets[0]?.logstores.join(", ") ?? "" })} />
-          </div>
-        </Match>
-      </Switch>}</For></Show>
+          <For each={props.repositories()}>
+            {(repository) => (
+              <label>
+                <span class="required-field">{props.repositoryName(repository)}</span>
+                <Show
+                  when={codeOnly}
+                  fallback={
+                    <Input
+                      aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`}
+                      value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""}
+                      onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)}
+                    />
+                  }
+                >
+                  <code class="inherited-branch" aria-label={`${props.repositoryName(repository)} 开发基线`}>
+                    {props
+                      .productionBranches()
+                      .find((branch) => branch.repositoryKey === repository.key)
+                      ?.baseBranch.trim() || "待配置正式分支"}
+                  </code>
+                </Show>
+              </label>
+            )}
+          </For>
+        </div>
+        <Show when={!codeOnly && dbhubEnabled()}>
+          <DbHubTargetsEditor
+            value={currentDeployment.dbhub ?? []}
+            environment={initialDeployment.environmentKey}
+            onChange={(dbhub) => {
+              dbhubDraft = dbhub;
+              update({ dbhub });
+            }}
+          />
+        </Show>
+        <For each={codeOnly ? [] : CAPABILITY_KEYS.filter((key) => selectedCapabilities().includes(key))}>
+          {(key) => (
+            <Switch>
+              <Match when={key === "dms"}>
+                <div class="deployment-capability-settings" role="group" aria-label="DMS 配置">
+                  <div class="capability-settings-head">
+                    <code>DMS</code>
+                  </div>
+                  <p class="settings-target-feedback">使用个人 DMS 凭据，未配置时使用共享凭据。</p>
+                  <section class="settings-targets" aria-label="DMS 查询目标">
+                    <div class="settings-targets-head">
+                      <span>查询目标</span>
+                      <Button size="small" aria-label="添加 DMS 目标" disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>
+                        添加目标
+                      </Button>
+                    </div>
+                    <div
+                      ref={(value) => {
+                        dmsTargets = value;
+                      }}
+                    >
+                      <For each={dmsDraft().databases}>
+                        {(database, databaseIndex) => (
+                          <DmsDatabaseEditorRow
+                            deploymentIndex={props.index + 1}
+                            databaseIndex={databaseIndex() + 1}
+                            database={database}
+                            only={dmsDraft().databases.length === 1}
+                            onChange={(next) => updateDmsDatabase(database, next)}
+                            onDelete={() => removeDmsDatabase(database)}
+                          />
+                        )}
+                      </For>
+                    </div>
+                  </section>
+                </div>
+              </Match>
+              <Match when={key === "sls"}>
+                <div class="deployment-capability-settings" role="group" aria-label="SLS 配置">
+                  <div class="capability-settings-head">
+                    <code>SLS</code>
+                  </div>
+                  <p class="settings-target-feedback">使用个人 SLS 凭据，未配置时使用共享凭据。</p>
+                  <SlsTargetsEditor
+                    deploymentIndex={props.index + 1}
+                    value={
+                      slsDraft().targets ?? [
+                        {
+                          name: initialDeployment.environmentKey,
+                          region: slsDraft().region,
+                          project: slsDraft().project,
+                          logstores: slsDraft()
+                            .logstores.split(",")
+                            .map((value) => value.trim())
+                            .filter(Boolean),
+                        },
+                      ]
+                    }
+                    onChange={(targets) =>
+                      updateSls({
+                        targets: targets.length === 1 && !initialDeployment.sls?.targets && targets[0]?.name === initialDeployment.environmentKey ? undefined : targets,
+                        region: targets[0]?.region ?? "",
+                        project: targets[0]?.project ?? "",
+                        logstores: targets[0]?.logstores.join(", ") ?? "",
+                      })
+                    }
+                  />
+                </div>
+              </Match>
+            </Switch>
+          )}
+        </For>
+      </Show>
     </div>
   );
 }
@@ -267,7 +512,8 @@ function ServiceDeploymentEditorRow(props: {
 export function ConfigurationView(props: { selectedServiceKey?: string; onSelectService?: (key: string) => void } = {}) {
   const { currentUser, configuration, configurationLoaded, refreshCatalog, refreshConfiguration, configurationError: resourceError } = useApplicationResources();
   const canConfigure = () => currentUser()?.role === "developer";
-  let editorGeneration = 0, serviceRevisionDraft: number | undefined;
+  let editorGeneration = 0,
+    serviceRevisionDraft: number | undefined;
   const [dbhubLoading, setDbHubLoading] = createSignal(false, { ownedWrite: true });
   const [saveConflict, setSaveConflict] = createSignal(false, { ownedWrite: true });
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
@@ -290,33 +536,66 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   };
   createEffect(
     () => ({ services: configuration().services, selectedKey: selectedServiceKey() }),
-    ({ services, selectedKey }) => { if (!services.some((service) => service.key === selectedKey)) setSelectedServiceKey(services[0]?.key ?? ""); },
+    ({ services, selectedKey }) => {
+      if (!services.some((service) => service.key === selectedKey)) setSelectedServiceKey(services[0]?.key ?? "");
+    },
   );
-  createEffect(() => props.selectedServiceKey, key => { if (key) setSelectedServiceKey(key); });
+  createEffect(
+    () => props.selectedServiceKey,
+    (key) => {
+      if (key) setSelectedServiceKey(key);
+    },
+  );
   const selectedService = createMemo(() => configuration().services.find((service) => service.key === selectedServiceKey()));
   const [configurationDescription, setConfigurationDescription] = createSignal<{ serviceKey: string; subject: string; context: string } | null>(null, { ownedWrite: true });
   const [descriptionError, setDescriptionError] = createSignal("", { ownedWrite: true });
   let descriptionController: AbortController | undefined;
-  createEffect(() => ({ service: selectedService(), user: currentUser() }), ({ service, user }) => {
-    descriptionController?.abort(); setConfigurationDescription(null); setDescriptionError("");
-    if (!service || user?.role !== "developer") return;
-    const controller = new AbortController(); descriptionController = controller;
-    void loadServiceConfigurationDescription(service.key, controller.signal).then(value => {
-      if (!controller.signal.aborted) setConfigurationDescription({ serviceKey: service.key, subject: user.subject, context: value.context });
-    }).catch(() => { if (!controller.signal.aborted) setDescriptionError("无法读取完整配置，请刷新重试"); });
+  createEffect(
+    () => ({ service: selectedService(), user: currentUser() }),
+    ({ service, user }) => {
+      descriptionController?.abort();
+      setConfigurationDescription(null);
+      setDescriptionError("");
+      if (!service || user?.role !== "developer") return;
+      const controller = new AbortController();
+      descriptionController = controller;
+      void loadServiceConfigurationDescription(service.key, controller.signal)
+        .then((value) => {
+          if (!controller.signal.aborted) setConfigurationDescription({ serviceKey: service.key, subject: user.subject, context: value.context });
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setDescriptionError("无法读取完整配置，请刷新重试");
+        });
+    },
+  );
+  onCleanup(() => {
+    editorGeneration++;
+    descriptionController?.abort();
   });
-  onCleanup(() => { editorGeneration++; descriptionController?.abort(); });
   const visibleConfigurationDescription = () => {
     const value = configurationDescription();
     return currentUser()?.role === "developer" && value?.serviceKey === selectedServiceKey() && value.subject === currentUser()?.subject ? value.context : undefined;
   };
-  const environmentDrafts = (service?: Service): ServiceDeploymentDraft[] => ["dev", "test", "prod"].map(environmentKey => {
-    const existing = service?.deployments.find(row => row.environmentKey === environmentKey);
-    return existing ? serviceDeploymentDraft(existing) : { environmentKey, capabilities: [], repositoryBranches: service?.repositories.map(repository => ({ repositoryKey: repository.id, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })) ?? [] };
-  });
+  const environmentDrafts = (service?: Service): ServiceDeploymentDraft[] =>
+    ["dev", "test", "prod"].map((environmentKey) => {
+      const existing = service?.deployments.find((row) => row.environmentKey === environmentKey);
+      return existing
+        ? serviceDeploymentDraft(existing)
+        : {
+            environmentKey,
+            capabilities: [],
+            repositoryBranches: service?.repositories.map((repository) => ({ repositoryKey: repository.id, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })) ?? [],
+          };
+    });
   const resetServiceForm = () => {
-    serviceRevisionDraft = undefined; setDbHubLoading(false); setSaveConflict(false);
-    setServiceName(""); setDescription(""); setServiceRepositories([]); setServiceDeployments(() => environmentDrafts()); setEditingServiceKey(null);
+    serviceRevisionDraft = undefined;
+    setDbHubLoading(false);
+    setSaveConflict(false);
+    setServiceName("");
+    setDescription("");
+    setServiceRepositories([]);
+    setServiceDeployments(() => environmentDrafts());
+    setEditingServiceKey(null);
   };
   const closeServiceEditor = () => {
     editorGeneration++;
@@ -325,49 +604,80 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     setSaving(false);
     setConfigurationError("");
   };
-  createEffect(() => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}`, (identity, previous) => {
-    if (identity === previous) return;
-    closeServiceEditor(); setDeleteTarget(null);
-  });
+  createEffect(
+    () => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}`,
+    (identity, previous) => {
+      if (identity === previous) return;
+      closeServiceEditor();
+      setDeleteTarget(null);
+    },
+  );
   const [repositoryChoices, setRepositoryChoices] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
   const [repositoryLoading, setRepositoryLoading] = createSignal(false, { ownedWrite: true });
   const [repositoryError, setRepositoryError] = createSignal("", { ownedWrite: true });
   let repositoryGeneration = 0;
   const loadRepositoryChoices = () => {
     const generation = ++repositoryGeneration;
-    setRepositoryLoading(true); setRepositoryError("");
-    void loadRepositories().then(rows => { if (generation === repositoryGeneration) setRepositoryChoices(rows); })
-      .catch((cause) => { if (generation === repositoryGeneration) setRepositoryError(errorMessage(cause)); })
-      .finally(() => { if (generation === repositoryGeneration) setRepositoryLoading(false); });
+    setRepositoryLoading(true);
+    setRepositoryError("");
+    void loadRepositories()
+      .then((rows) => {
+        if (generation === repositoryGeneration) setRepositoryChoices(rows);
+      })
+      .catch((cause) => {
+        if (generation === repositoryGeneration) setRepositoryError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (generation === repositoryGeneration) setRepositoryLoading(false);
+      });
   };
-  createEffect(() => configurationLoaded() ? configuration().services : undefined, services => {
-    if (services) loadRepositoryChoices();
+  createEffect(
+    () => (configurationLoaded() ? configuration().services : undefined),
+    (services) => {
+      if (services) loadRepositoryChoices();
+    },
+  );
+  onCleanup(() => {
+    repositoryGeneration += 1;
   });
-  onCleanup(() => { repositoryGeneration += 1; });
   const openNewService = () => {
     editorGeneration++;
     loadRepositoryChoices();
-    resetServiceForm(); setConfigurationError(""); setServiceOpen(true);
+    resetServiceForm();
+    setConfigurationError("");
+    setServiceOpen(true);
   };
   const openServiceEditor = (service: Service) => {
     loadRepositoryChoices();
     const owner = ++editorGeneration;
-    serviceRevisionDraft = service.revision; setDbHubLoading(false); setSaveConflict(false);
+    serviceRevisionDraft = service.revision;
+    setDbHubLoading(false);
+    setSaveConflict(false);
     setEditingServiceKey(service.key);
-    setServiceName(service.name); setDescription(service.description);
+    setServiceName(service.name);
+    setDescription(service.description);
     setServiceRepositories(service.repositories.map((repository) => ({ id: repository.id, key: repository.id, alias: repository.alias, url: repository.url })));
     const deployments = environmentDrafts(service);
     setServiceDeployments(() => deployments);
-    setConfigurationError(""); setServiceOpen(true);
-    if (service.deployments.some(deployment => deployment.dbhub?.length)) {
+    setConfigurationError("");
+    setServiceOpen(true);
+    if (service.deployments.some((deployment) => deployment.dbhub?.length)) {
       setDbHubLoading(true);
-      void loadServiceDbHubTargets(service.key).then(value => {
-        if (owner !== editorGeneration) return;
-        if (value.revision !== service.revision) throw new Error("configuration_changed");
-        const loaded = environmentDrafts(service).map(deployment => ({ ...deployment, dbhub: value.deployments.find(row => row.environmentKey === deployment.environmentKey)?.dbhub ?? [] }));
-        setServiceDeployments(() => loaded);
-        setDbHubLoading(false);
-      }).catch(error => { if (owner === editorGeneration) setConfigurationError(serviceSaveErrorMessage(error)); });
+      void loadServiceDbHubTargets(service.key)
+        .then((value) => {
+          if (owner !== editorGeneration) return;
+          if (value.revision !== service.revision) throw new Error("configuration_changed");
+          const loaded = environmentDrafts(service).map((deployment) => ({ ...deployment, dbhub: value.deployments.find((row) => row.environmentKey === deployment.environmentKey)?.dbhub ?? [] }));
+          setServiceDeployments(() => loaded);
+          setDbHubLoading(false);
+        })
+        .catch((error) => {
+          if (owner === editorGeneration) {
+            setSaveConflict(true);
+            setConfigurationError(serviceSaveErrorMessage(error));
+            setDbHubLoading(false);
+          }
+        });
     }
   };
   const serviceValidationError = () => {
@@ -390,7 +700,10 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     setServiceRepositories(next);
     setServiceDeployments((deployments) => {
       for (const deployment of deployments) {
-        deployment.repositoryBranches = next.map((repository) => deployment.repositoryBranches.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch });
+        deployment.repositoryBranches = next.map(
+          (repository) =>
+            deployment.repositoryBranches.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch },
+        );
       }
     });
   };
@@ -404,13 +717,19 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     if (saving() || dbhubLoading() || !canConfigure()) return;
     const owner = editorGeneration;
     const validationError = serviceValidationError();
-    if (validationError) { showServiceSaveError(validationError); return; }
-    setSaving(true); setConfigurationError("");
+    if (validationError) {
+      showServiceSaveError(validationError);
+      return;
+    }
+    setSaving(true);
+    setConfigurationError("");
     try {
       const definition = {
-        expectedRevision: serviceRevisionDraft, name: serviceName().trim(), description: description().trim(),
+        expectedRevision: serviceRevisionDraft,
+        name: serviceName().trim(),
+        description: description().trim(),
         repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), alias: repository.alias.trim(), url: repository.url.trim() })),
-        deployments: serviceDeployments.map(deployment => serializeServiceDeployment(deployment, serviceRepositories())),
+        deployments: serviceDeployments.map((deployment) => serializeServiceDeployment(deployment, serviceRepositories())),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, definition);
@@ -419,56 +738,279 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       closeServiceEditor();
       await refresh(editorGeneration);
     } catch (error) {
-      if (owner === editorGeneration) { setSaveConflict(error instanceof Error && error.message === "configuration_changed"); showServiceSaveError(serviceSaveErrorMessage(error)); }
-    } finally { if (owner === editorGeneration) setSaving(false); }
+      if (owner === editorGeneration) {
+        setSaveConflict(error instanceof Error && error.message === "configuration_changed");
+        showServiceSaveError(serviceSaveErrorMessage(error));
+      }
+    } finally {
+      if (owner === editorGeneration) setSaving(false);
+    }
   };
   const confirmDelete = async () => {
     const target = deleteTarget();
     if (!target || saving() || !canConfigure()) return;
     const owner = editorGeneration;
-    setSaving(true); setConfigurationError("");
+    setSaving(true);
+    setConfigurationError("");
     try {
       await deleteService(target.key);
       if (owner === editorGeneration) setDeleteTarget(null);
       await refresh(owner);
     } catch (error) {
       if (owner === editorGeneration) setConfigurationError(serviceSaveErrorMessage(error));
-    } finally { if (owner === editorGeneration) setSaving(false); }
+    } finally {
+      if (owner === editorGeneration) setSaving(false);
+    }
   };
   return (
     <main class="configuration-workspace">
-      <Show when={!configurationLoaded()}><section class="queue-loading configuration-loading"><Show when={resourceError()} fallback={<Skeleton active paragraph={{ rows: 10 }} />}><div class="workspace-error" role="alert"><span>{resourceError()}</span><Button onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show></section></Show>
+      <Show when={!configurationLoaded()}>
+        <section class="queue-loading configuration-loading">
+          <Show when={resourceError()} fallback={<Skeleton active paragraph={{ rows: 10 }} />}>
+            <div class="workspace-error" role="alert">
+              <span>{resourceError()}</span>
+              <Button
+                onClick={() => {
+                  void refreshConfiguration().catch(() => undefined);
+                }}
+              >
+                重试
+              </Button>
+            </div>
+          </Show>
+        </section>
+      </Show>
       <section class="service-panel" hidden={!configurationLoaded()}>
-        <div class="service-tabs"><div class="service-tabs-inner"><div class="service-tab-list" role="tablist" aria-label="服务列表"><For each={configuration().services}>{(service) => <button type="button" role="tab" aria-selected={selectedServiceKey() === service.key ? "true" : "false"} class={selectedServiceKey() === service.key ? "selected" : ""} onClick={() => { setSelectedServiceKey(service.key); props.onSelectService?.(service.key); }}>{service.name}</button>}</For></div><div class="service-tab-actions"><Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>添加</Button><Show when={selectedService()}>{(service) => <Button type="primary" icon={<Pencil size={14} />} disabled={!canConfigure()} onClick={() => openServiceEditor(service())}>编辑</Button>}</Show></div></div></div>
+        <div class="service-tabs">
+          <div class="service-tabs-inner">
+            <div class="service-tab-list" role="tablist" aria-label="服务列表">
+              <For each={configuration().services}>
+                {(service) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={selectedServiceKey() === service.key ? "true" : "false"}
+                    class={selectedServiceKey() === service.key ? "selected" : ""}
+                    onClick={() => {
+                      setSelectedServiceKey(service.key);
+                      props.onSelectService?.(service.key);
+                    }}
+                  >
+                    {service.name}
+                  </button>
+                )}
+              </For>
+            </div>
+            <div class="service-tab-actions">
+              <Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>
+                添加
+              </Button>
+              <Show when={selectedService()}>
+                {(service) => (
+                  <Button type="primary" icon={<Pencil size={14} />} disabled={!canConfigure()} onClick={() => openServiceEditor(service())}>
+                    编辑
+                  </Button>
+                )}
+              </Show>
+            </div>
+          </div>
+        </div>
         <Show when={configurationError() && !serviceOpen() && !deleteTarget()}>
-          <div class="workspace-error" role="alert">{configurationError()}<Button size="small" onClick={() => { void refresh(editorGeneration); }}>重新加载</Button></div>
+          <div class="workspace-error" role="alert">
+            {configurationError()}
+            <Button
+              size="small"
+              onClick={() => {
+                void refresh(editorGeneration);
+              }}
+            >
+              重新加载
+            </Button>
+          </div>
         </Show>
-        <Show when={resourceError()}><div class="workspace-error" role="alert">{resourceError()}</div></Show>
-        <Show when={selectedService()} fallback={<div class="empty-band">暂无服务</div>}>{(service) => (<>
-          <Show when={descriptionError()}><div class="workspace-error" role="alert">{descriptionError()}<Button size="small" onClick={() => { void refreshConfiguration().catch(() => undefined); }}>重试</Button></div></Show>
-          <ServiceOverview service={service()} configurationDescription={visibleConfigurationDescription()} repositories={repositoryChoices()} environments={configuration().environments} />
-        </>)}</Show>
+        <Show when={resourceError()}>
+          <div class="workspace-error" role="alert">
+            {resourceError()}
+          </div>
+        </Show>
+        <Show when={selectedService()} fallback={<div class="empty-band">暂无服务</div>}>
+          {(service) => (
+            <>
+              <Show when={descriptionError()}>
+                <div class="workspace-error" role="alert">
+                  {descriptionError()}
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      void refreshConfiguration().catch(() => undefined);
+                    }}
+                  >
+                    重试
+                  </Button>
+                </div>
+              </Show>
+              <ServiceOverview service={service()} configurationDescription={visibleConfigurationDescription()} repositories={repositoryChoices()} environments={configuration().environments} />
+            </>
+          )}
+        </Show>
       </section>
-      <Modal width={780} open={serviceOpen()} title={editingServiceKey() ? "编辑服务" : "添加服务"} okText={editingServiceKey() ? "保存" : "添加"} cancelText="取消" confirmLoading={saving()} okButtonProps={{ disabled: dbhubLoading() || repositoryLoading() || Boolean(repositoryError()) }} onOk={() => { void saveService(); }} onCancel={closeServiceEditor}>
+      <Modal
+        width={780}
+        open={serviceOpen()}
+        title={editingServiceKey() ? "编辑服务" : "添加服务"}
+        okText={editingServiceKey() ? "保存" : "添加"}
+        cancelText="取消"
+        confirmLoading={saving()}
+        okButtonProps={{ disabled: saveConflict() || dbhubLoading() || repositoryLoading() || Boolean(repositoryError()) }}
+        onOk={() => {
+          void saveService();
+        }}
+        onCancel={closeServiceEditor}
+      >
         <div class="service-form">
           <Show when={configurationError()}>
-            <div ref={element => { serviceErrorElement = element; }} class="create-error" role="alert">
+            <div
+              ref={(element) => {
+                serviceErrorElement = element;
+              }}
+              class="create-error"
+              role="alert"
+            >
               {configurationError()}
               <Show when={saveConflict() || dbhubLoading()}>
-                <Button size="small" onClick={() => { closeServiceEditor(); void refreshConfiguration().catch(() => undefined); }}>重新加载</Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    closeServiceEditor();
+                    void refreshConfiguration().catch(() => undefined);
+                  }}
+                >
+                  重新加载
+                </Button>
               </Show>
             </div>
           </Show>
-          <label class="service-form-field"><span class="required-field">服务名称</span><Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} /></label>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong class="required-field">关联仓库</strong><span>可多选，仓库名称和地址统一在仓库配置中维护</span></div><span class="service-repository-count">已选 {serviceRepositories().length} 个</span></div><Show when={repositoryError()}><div class="workspace-error" role="alert">仓库加载失败：{repositoryError()}<Button size="small" onClick={loadRepositoryChoices}>重试</Button></div></Show><Select mode="multiple" aria-label="关联仓库" placeholder="选择已登记仓库（可多选）" loading={repositoryLoading()} value={serviceRepositories().map((repository) => repository.url)} options={repositoryOptions()} showSearch={{ filterOption: (query, option) => `${option.label} ${option.url}`.toLowerCase().includes(query.trim().toLowerCase()) }} optionRender={(option) => <span class="service-repository-option"><strong>{option.label}</strong><code>{option.url}</code></span>} onChange={selectRepositories} maxTagCount={4} listHeight={360} notFoundContent="暂无可选仓库，请先在仓库配置中添加" /><Show when={!repositoryLoading() && !repositoryError() && !repositoryChoices().length}><p class="service-form-empty">暂无已登记仓库，请先在“配置 → 仓库”中添加。</p></Show></div>
-          <div class="service-form-section"><div class="service-form-section-header"><div><strong>环境部署</strong><span>开发基线继承正式分支；查询来源保持正式／测试</span></div></div><div class="service-deployment-editor"><Show when={!dbhubLoading()} fallback={<Skeleton active paragraph={{ rows: 3 }} />}><For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>{(deployment, index) => <ServiceDeploymentEditorRow index={index()} deployment={deployment} productionBranches={() => serviceDeployments.find(row => row.environmentKey === "prod")?.repositoryBranches ?? []} repositories={serviceRepositories} repositoryName={repositoryName} environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey} onChange={(next) => setServiceDeployments((current) => { Object.assign(current[index()]!, next); })} />}</For></Show></div></div>
-          <label class="service-form-field"><span>服务描述（Markdown）</span><TextArea aria-label="项目描述" placeholder="记录业务知识、排查步骤和查询范例；分支和公开能力参数会自动附加到展示及 AI 读取的描述中。" autoSize={{ minRows: 5, maxRows: 10 }} value={description()} onInput={(event) => setDescription(event.currentTarget.value)} /></label>
-          <Show when={editingServiceKey()}><div class="destructive-action"><Button danger icon={<Trash2 size={14} />} onClick={() => { const target = { kind: "service" as const, key: editingServiceKey()!, name: serviceName() }; closeServiceEditor(); setDeleteTarget(target); }}>删除服务</Button></div></Show>
+          <label class="service-form-field">
+            <span class="required-field">服务名称</span>
+            <Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} />
+          </label>
+          <div class="service-form-section">
+            <div class="service-form-section-header">
+              <div>
+                <strong class="required-field">关联仓库</strong>
+                <span>仓库在“仓库配置”中登记</span>
+              </div>
+              <span class="service-repository-count">已选 {serviceRepositories().length} 个</span>
+            </div>
+            <Show when={repositoryError()}>
+              <div class="workspace-error" role="alert">
+                仓库加载失败：{repositoryError()}
+                <Button size="small" onClick={loadRepositoryChoices}>
+                  重试
+                </Button>
+              </div>
+            </Show>
+            <Select
+              mode="multiple"
+              aria-label="关联仓库"
+              placeholder="选择已登记的仓库"
+              loading={repositoryLoading()}
+              disabled={dbhubLoading()}
+              value={serviceRepositories().map((repository) => repository.url)}
+              options={repositoryOptions()}
+              showSearch={{ filterOption: (query, option) => `${option.label} ${option.url}`.toLowerCase().includes(query.trim().toLowerCase()) }}
+              optionRender={(option) => (
+                <span class="service-repository-option">
+                  <strong>{option.label}</strong>
+                  <code>{option.url}</code>
+                </span>
+              )}
+              onChange={selectRepositories}
+              maxTagCount={4}
+              listHeight={360}
+              notFoundContent="暂无可选仓库，请先在仓库配置中添加"
+            />
+            <Show when={!repositoryLoading() && !repositoryError() && !repositoryChoices().length}>
+              <p class="service-form-empty">暂无已登记仓库，请先在“配置 → 仓库”中添加。</p>
+            </Show>
+          </div>
+          <div class="service-form-section">
+            <div class="service-form-section-header">
+              <div>
+                <strong>环境部署</strong>
+                <span>开发基线继承正式分支；查询来源保持正式／测试</span>
+              </div>
+            </div>
+            <div class="service-deployment-editor">
+              <Show when={!dbhubLoading()} fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+                <For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>
+                  {(deployment, index) => (
+                    <ServiceDeploymentEditorRow
+                      index={index()}
+                      deployment={deployment}
+                      productionBranches={() => serviceDeployments.find((row) => row.environmentKey === "prod")?.repositoryBranches ?? []}
+                      repositories={serviceRepositories}
+                      repositoryName={repositoryName}
+                      environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey}
+                      onChange={(next) =>
+                        setServiceDeployments((current) => {
+                          Object.assign(current[index()]!, next);
+                        })
+                      }
+                    />
+                  )}
+                </For>
+              </Show>
+            </div>
+          </div>
+          <label class="service-form-field">
+            <span>服务描述（Markdown）</span>
+            <TextArea
+              aria-label="项目描述"
+              placeholder="记录业务知识、排查步骤和查询范例；分支和公开能力参数会自动附加到展示及 AI 读取的描述中。"
+              autoSize={{ minRows: 5, maxRows: 10 }}
+              value={description()}
+              onInput={(event) => setDescription(event.currentTarget.value)}
+            />
+          </label>
+          <Show when={editingServiceKey()}>
+            <div class="destructive-action">
+              <Button
+                danger
+                icon={<Trash2 size={14} />}
+                onClick={() => {
+                  const target = { kind: "service" as const, key: editingServiceKey()!, name: serviceName() };
+                  closeServiceEditor();
+                  setDeleteTarget(target);
+                }}
+              >
+                删除服务
+              </Button>
+            </div>
+          </Show>
         </div>
       </Modal>
-      <Modal open={Boolean(deleteTarget())} title="删除服务" okText="确认删除" cancelText="取消" confirmLoading={saving()} okButtonProps={{ danger: true }} onOk={() => { void confirmDelete(); }} onCancel={() => { setDeleteTarget(null); setConfigurationError(""); }}>
+      <Modal
+        open={Boolean(deleteTarget())}
+        title="删除服务"
+        okText="确认删除"
+        cancelText="取消"
+        confirmLoading={saving()}
+        okButtonProps={{ danger: true }}
+        onOk={() => {
+          void confirmDelete();
+        }}
+        onCancel={() => {
+          setDeleteTarget(null);
+          setConfigurationError("");
+        }}
+      >
         <p>确定删除“{deleteTarget()?.name}”吗？已被工单使用的配置不能删除。</p>
-        <Show when={configurationError()}><div class="create-error" role="alert">{configurationError()}</div></Show>
+        <Show when={configurationError()}>
+          <div class="create-error" role="alert">
+            {configurationError()}
+          </div>
+        </Show>
       </Modal>
     </main>
   );

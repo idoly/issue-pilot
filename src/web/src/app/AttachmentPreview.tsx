@@ -1,5 +1,5 @@
 import { Button, Modal, Skeleton } from "../ui";
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 
 import { Copy, Paperclip, ZoomIn, ZoomOut } from "../ui/icons";
 import { copyText as copyToClipboard } from "../ui/clipboard";
@@ -29,28 +29,33 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
 
   const reset = () => {
     requestSequence += 1;
-    controller?.abort(); controller = undefined;
+    controller?.abort();
+    controller = undefined;
     const url = untrack(objectUrl);
     if (url) URL.revokeObjectURL(url);
     setObjectUrl("");
     setText("");
     setError("");
-    setCopied(false); setCopyError("");
+    setCopied(false);
+    setCopyError("");
     setImageZoom(1);
     setImageDragging(false);
     imageDrag = undefined;
     setLoading(false);
   };
-  createEffect(
-    () => ({ attachment: props.attachment, issueKey: props.issueKey, attempt: attempt() }),
-    ({ attachment, issueKey }) => {
-      reset();
-      if (!attachment || attachment.size > issuePilotConfig.web.filePreviewBytes || attachmentPreviewKind(attachment) === "unsupported") return;
-      const sequence = ++requestSequence;
-      controller = new AbortController();
-      setLoading(true);
-      const file = props.loadFile ? props.loadFile(controller.signal) : fetchAttachment(issueKey, attachment.id, controller.signal);
-      void file.then(async (blob) => {
+  // Re-fetch only when the stable identity changes; unrelated issue refreshes produce new attachment objects.
+  const previewKey = createMemo(() => `${props.issueKey}\0${props.attachment?.id ?? ""}\0${attempt()}`);
+  createEffect(previewKey, () => {
+    const attachment = untrack(() => props.attachment),
+      issueKey = untrack(() => props.issueKey);
+    reset();
+    if (!attachment || attachment.size > issuePilotConfig.web.filePreviewBytes || attachmentPreviewKind(attachment) === "unsupported") return;
+    const sequence = ++requestSequence;
+    controller = new AbortController();
+    setLoading(true);
+    const file = props.loadFile ? props.loadFile(controller.signal) : fetchAttachment(issueKey, attachment.id, controller.signal);
+    void file
+      .then(async (blob) => {
         if (sequence !== requestSequence) return;
         if (blob.size > issuePilotConfig.web.filePreviewBytes) throw new Error("file_preview_too_large");
         if (attachmentPreviewKind(attachment) === "text") {
@@ -59,13 +64,14 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
         } else {
           setObjectUrl(URL.createObjectURL(blob));
         }
-      }).catch((cause) => {
-        if (sequence === requestSequence) setError(cause instanceof Error ? cause.message === "file_preview_too_large" ? previewTooLarge : cause.message : "attachment_preview_failed");
-      }).finally(() => {
+      })
+      .catch((cause) => {
+        if (sequence === requestSequence) setError(cause instanceof Error ? (cause.message === "file_preview_too_large" ? previewTooLarge : cause.message) : "attachment_preview_failed");
+      })
+      .finally(() => {
         if (sequence === requestSequence) setLoading(false);
       });
-    },
-  );
+  });
   onCleanup(reset);
 
   const changeImageZoom = (requestedZoom: number, focusX?: number, focusY?: number) => {
@@ -78,11 +84,12 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
     const contentX = (viewport?.scrollLeft ?? 0) + x;
     const contentY = (viewport?.scrollTop ?? 0) + y;
     setImageZoom(nextZoom);
-    if (viewport) requestAnimationFrame(() => {
-      const ratio = nextZoom / previousZoom;
-      viewport.scrollLeft = contentX * ratio - x;
-      viewport.scrollTop = contentY * ratio - y;
-    });
+    if (viewport)
+      requestAnimationFrame(() => {
+        const ratio = nextZoom / previousZoom;
+        viewport.scrollLeft = contentX * ratio - x;
+        viewport.scrollTop = contentY * ratio - y;
+      });
   };
   const handleImageWheel = (event: WheelEvent) => {
     event.preventDefault();
@@ -115,7 +122,8 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
   };
   const copyText = async () => {
     const sequence = requestSequence;
-    setCopied(false); setCopyError("");
+    setCopied(false);
+    setCopyError("");
     try {
       await copyToClipboard(text());
       if (sequence === requestSequence) setCopied(true);
@@ -125,22 +133,121 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
   };
 
   return (
-    <Modal width={960} open={Boolean(props.attachment)} title={props.attachment?.fileName ?? "附件预览"} onOk={props.onClose} onCancel={props.onClose} footer={<>
-      <Button type="primary" onClick={props.onClose}>关闭</Button>
-    </>}>
+    <Modal
+      width={960}
+      open={Boolean(props.attachment)}
+      title={props.attachment?.fileName ?? "附件预览"}
+      onOk={props.onClose}
+      onCancel={props.onClose}
+      footer={
+        <>
+          <Button type="primary" onClick={props.onClose}>
+            关闭
+          </Button>
+        </>
+      }
+    >
       <div class="attachment-preview">
         <Show when={!loading()} fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
-          <Show when={!error()} fallback={<div class="attachment-preview-message is-error" role="alert"><p>{error()}</p><Button onClick={() => setAttempt(value => value + 1)}>重试</Button></div>}>
-            <Show when={props.attachment}>{(attachment) => {
-              const kind = () => attachmentPreviewKind(attachment());
-              return <Show when={kind() !== "unsupported" && attachment().size <= issuePilotConfig.web.filePreviewBytes} fallback={<div class="attachment-preview-message" role="status"><Paperclip size={24} /><p>{attachment().size > issuePilotConfig.web.filePreviewBytes ? previewTooLarge : "此格式不支持内嵌预览，请关闭弹窗后从附件列表下载查看"}</p></div>}>
-                <Show when={kind() !== "text"} fallback={<div class="attachment-text-preview-shell"><div class="attachment-preview-toolbar"><Button icon={<Copy size={14} />} onClick={() => { void copyText(); }}>{copied() ? "已复制" : "复制文字"}</Button></div><Show when={copyError()}><div class="create-error" role="alert">{copyError()}</div></Show><pre class="attachment-text-preview" tabindex="0">{text()}</pre></div>}>
-                  <Show when={kind() !== "image"} fallback={<div class="attachment-image-preview-shell"><div class="attachment-preview-toolbar"><Button class="icon-button" type="text" shape="circle" icon={<ZoomOut size={15} />} disabled={imageZoom() <= 1} title="缩小" aria-label="缩小" onClick={() => changeImageZoom(imageZoom() / 1.25)} /><button type="button" class="attachment-zoom-value" title="恢复 100%" aria-label="恢复 100%" onClick={() => changeImageZoom(1)}>{Math.round(imageZoom() * 100)}%</button><Button class="icon-button" type="text" shape="circle" icon={<ZoomIn size={15} />} disabled={imageZoom() >= 4} title="放大" aria-label="放大" onClick={() => changeImageZoom(imageZoom() * 1.25)} /></div><div ref={imageViewport} class={`attachment-image-viewport${imageZoom() > 1 ? " is-pannable" : ""}${imageDragging() ? " is-dragging" : ""}`} onWheel={handleImageWheel} onPointerDown={beginImageDrag} onPointerMove={moveImageDrag} onPointerUp={endImageDrag} onPointerCancel={endImageDrag}><div class="attachment-image-stage" style={{ width: `${imageZoom() * 100}%`, height: `${imageZoom() * 100}%` }}><img class="attachment-image-preview" src={objectUrl()} alt={attachment().fileName} draggable={false} /></div></div></div>}>
-                    <iframe class="attachment-pdf-preview" src={objectUrl()} title={`预览 ${attachment().fileName}`} />
+          <Show
+            when={!error()}
+            fallback={
+              <div class="attachment-preview-message is-error" role="alert">
+                <p>{error()}</p>
+                <Button onClick={() => setAttempt((value) => value + 1)}>重试</Button>
+              </div>
+            }
+          >
+            <Show when={props.attachment}>
+              {(attachment) => {
+                const kind = () => attachmentPreviewKind(attachment());
+                return (
+                  <Show
+                    when={kind() !== "unsupported" && attachment().size <= issuePilotConfig.web.filePreviewBytes}
+                    fallback={
+                      <div class="attachment-preview-message" role="status">
+                        <Paperclip size={24} />
+                        <p>{attachment().size > issuePilotConfig.web.filePreviewBytes ? previewTooLarge : "此格式不支持内嵌预览，请关闭弹窗后从附件列表下载查看"}</p>
+                      </div>
+                    }
+                  >
+                    <Show
+                      when={kind() !== "text"}
+                      fallback={
+                        <div class="attachment-text-preview-shell">
+                          <div class="attachment-preview-toolbar">
+                            <Button
+                              icon={<Copy size={14} />}
+                              onClick={() => {
+                                void copyText();
+                              }}
+                            >
+                              {copied() ? "已复制" : "复制文字"}
+                            </Button>
+                          </div>
+                          <Show when={copyError()}>
+                            <div class="create-error" role="alert">
+                              {copyError()}
+                            </div>
+                          </Show>
+                          <pre class="attachment-text-preview" tabindex="0">
+                            {text()}
+                          </pre>
+                        </div>
+                      }
+                    >
+                      <Show
+                        when={kind() !== "image"}
+                        fallback={
+                          <div class="attachment-image-preview-shell">
+                            <div class="attachment-preview-toolbar">
+                              <Button
+                                class="icon-button"
+                                type="text"
+                                shape="circle"
+                                icon={<ZoomOut size={15} />}
+                                disabled={imageZoom() <= 1}
+                                title="缩小"
+                                aria-label="缩小"
+                                onClick={() => changeImageZoom(imageZoom() / 1.25)}
+                              />
+                              <button type="button" class="attachment-zoom-value" title="恢复 100%" aria-label="恢复 100%" onClick={() => changeImageZoom(1)}>
+                                {Math.round(imageZoom() * 100)}%
+                              </button>
+                              <Button
+                                class="icon-button"
+                                type="text"
+                                shape="circle"
+                                icon={<ZoomIn size={15} />}
+                                disabled={imageZoom() >= 4}
+                                title="放大"
+                                aria-label="放大"
+                                onClick={() => changeImageZoom(imageZoom() * 1.25)}
+                              />
+                            </div>
+                            <div
+                              ref={imageViewport}
+                              class={`attachment-image-viewport${imageZoom() > 1 ? " is-pannable" : ""}${imageDragging() ? " is-dragging" : ""}`}
+                              onWheel={handleImageWheel}
+                              onPointerDown={beginImageDrag}
+                              onPointerMove={moveImageDrag}
+                              onPointerUp={endImageDrag}
+                              onPointerCancel={endImageDrag}
+                            >
+                              <div class="attachment-image-stage" style={{ width: `${imageZoom() * 100}%`, height: `${imageZoom() * 100}%` }}>
+                                <img class="attachment-image-preview" src={objectUrl()} alt={attachment().fileName} draggable={false} />
+                              </div>
+                            </div>
+                          </div>
+                        }
+                      >
+                        <iframe class="attachment-pdf-preview" src={objectUrl()} title={`预览 ${attachment().fileName}`} />
+                      </Show>
+                    </Show>
                   </Show>
-                </Show>
-              </Show>;
-            }}</Show>
+                );
+              }}
+            </Show>
           </Show>
         </Show>
       </div>

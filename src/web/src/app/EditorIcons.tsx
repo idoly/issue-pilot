@@ -7,7 +7,11 @@ type IconTheme = {
   fileExtensions: Record<string, string>;
   folderNames: Record<string, string>;
   folderNamesExpanded: Record<string, string>;
-  file: string; folder: string; folderExpanded: string; rootFolder: string; rootFolderExpanded: string;
+  file: string;
+  folder: string;
+  folderExpanded: string;
+  rootFolder: string;
+  rootFolderExpanded: string;
 };
 const theme = themeData as IconTheme;
 

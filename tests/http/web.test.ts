@@ -10,11 +10,15 @@ import { buildApi } from "../../src/http/api.ts";
 
 const stateLease = { async start() {}, async close() {} };
 
-test("serves the production Web and keeps unlisted files private", async context => {
+test("serves the production Web and keeps unlisted files private", async (context) => {
   const listenerWarnings: Error[] = [];
-  const onWarning = (warning: Error) => { if (warning.name === "MaxListenersExceededWarning") listenerWarnings.push(warning); };
+  const onWarning = (warning: Error) => {
+    if (warning.name === "MaxListenersExceededWarning") listenerWarnings.push(warning);
+  };
   process.on("warning", onWarning);
-  context.after(() => { process.off("warning", onWarning); });
+  context.after(() => {
+    process.off("warning", onWarning);
+  });
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-web-"));
   const webRoot = path.join(root, "web");
   const stateRoot = path.join(root, "state");
@@ -23,7 +27,8 @@ test("serves the production Web and keeps unlisted files private", async context
     await Promise.all([
       writeFile(path.join(webRoot, "index.html"), "<!doctype html><title>Issue Pilot</title>"),
       writeFile(path.join(webRoot, "unlisted.html"), "<!doctype html><title>Unlisted</title>"),
-      writeFile(path.join(webRoot, "assets", "app-123.js"), "globalThis.issuePilot = true;"),
+      writeFile(path.join(webRoot, "assets", "app-b1c2d3e4.js"), "globalThis.issuePilot = true;"),
+      writeFile(path.join(webRoot, "assets", "app-icon.svg"), "<svg/>"),
       writeFile(path.join(webRoot, "private.txt"), "not public"),
     ]);
     const app = await buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, stateLease, webRoot });
@@ -33,14 +38,23 @@ test("serves the production Web and keeps unlisted files private", async context
       assert.match(index.headers["content-type"] ?? "", /^text\/html/);
       assert.equal(index.headers["cache-control"], "private, no-cache, no-store, must-revalidate");
       assert.equal(index.headers["x-content-type-options"], "nosniff");
+      assert.match(String(index.headers["content-security-policy"]), /default-src 'self'/);
+      assert.match(String(index.headers["content-security-policy"]), /frame-ancestors 'none'/);
+      assert.equal(index.headers["x-frame-options"], "DENY");
+      assert.equal(index.headers["referrer-policy"], "no-referrer");
 
       const removedPage = await app.inject({ method: "GET", url: "/unlisted.html?issue=ISSUE-20260815-001", headers: { accept: "text/html" } });
       assert.equal(removedPage.statusCode, 404);
 
-      const asset = await app.inject({ method: "GET", url: "/assets/app-123.js" });
+      // Only content-hashed bundles may be cached immutably; public stable names must revalidate soon.
+      const asset = await app.inject({ method: "GET", url: "/assets/app-b1c2d3e4.js" });
       assert.equal(asset.statusCode, 200);
       assert.match(asset.headers["cache-control"] ?? "", /immutable/);
       assert.equal(asset.headers["x-content-type-options"], "nosniff");
+      const publicAsset = await app.inject({ method: "GET", url: "/assets/app-icon.svg" });
+      assert.equal(publicAsset.statusCode, 200);
+      assert.doesNotMatch(publicAsset.headers["cache-control"] ?? "", /immutable/);
+      assert.match(publicAsset.headers["cache-control"] ?? "", /max-age=3600/);
 
       const spa = await app.inject({ method: "GET", url: "/issues/ISSUE-20260815-001", headers: { accept: "text/html" } });
       assert.equal(spa.statusCode, 200);
@@ -55,7 +69,7 @@ test("serves the production Web and keeps unlisted files private", async context
     } finally {
       await app.close();
     }
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(listenerWarnings, [], "HTML fallback must not repeatedly assimilate the Fastify reply thenable");
   } finally {
     await rm(root, { recursive: true, force: true });

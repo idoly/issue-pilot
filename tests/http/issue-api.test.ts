@@ -17,17 +17,23 @@ test("allocates numeric Issue sequences beyond three digits within the current d
     await createService(fixture.app, "Sequence", ["test"]);
     const first = await createIssue(fixture.app, "sequence", "test");
     const prefix = String(first.id).slice(0, -3);
-    const [original] = await database.db.select().from(issues).where(eq(issues.key, String(first.id)));
+    const [original] = await database.db
+      .select()
+      .from(issues)
+      .where(eq(issues.key, String(first.id)));
     for (const key of [`${prefix}099`, `${prefix}999`, `${prefix}1000`, "ISSUE-19000101-999999"]) {
       const id = randomUUID();
-      await database.db.transaction(async tx => {
+      await database.db.transaction(async (tx) => {
         await tx.insert(issues).values({ ...original!, id, key });
         await tx.insert(issueWorkspaces).values({ issueId: id });
       });
     }
     assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1001`);
     assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1002`);
-  } finally { database.close(); await fixture.cleanup(); }
+  } finally {
+    database.close();
+    await fixture.cleanup();
+  }
 });
 
 test("treats whitespace-only optional Issue fields as empty", async () => {
@@ -39,12 +45,18 @@ test("treats whitespace-only optional Issue fields as empty", async () => {
     const created = await json(response);
     assert.equal(created.assigneeSubject, null);
     fixture.engine.running.clear();
-    const updated = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${created.id}`, payload: { title: "Optional fields", description: " \t ", priority: "p2", assigneeSubject: " \t ", ccSubjects: [] } });
+    const updated = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${created.id}`,
+      payload: { title: "Optional fields", description: " \t ", priority: "p2", assigneeSubject: " \t ", ccSubjects: [] },
+    });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.equal((await json(updated)).assigneeSubject, null);
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` });
     assert.equal((await json(detail)).description, "");
-  } finally { await fixture.cleanup(); }
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("creates each Issue work mode and rejects ambiguous scope input", async () => {
@@ -91,9 +103,17 @@ test("creates production smart-analysis Issues with related context", async () =
     const sessionRoot = path.join(fixture.root, "workspaces", String(development.id).toLowerCase());
     const sessionFile = path.join(sessionRoot, "session.jsonl");
     await mkdir(sessionRoot, { recursive: true });
-    await writeFile(sessionFile, "{\"type\":\"session\"}\n", { mode: 0o600 });
+    await writeFile(sessionFile, '{"type":"session"}\n', { mode: 0o600 });
     const database = openDatabase(fixture.databaseFile);
-    await database.db.insert(issueRepositories).values({ issueId: developmentId, url: "https://example.test/orders.git", baseBranch: "develop", workingBranch: `hotfix-${String(development.id).toLowerCase()}`, localPath: workspacePath, workspaceName: "orders", commitBefore: "a".repeat(40) });
+    await database.db.insert(issueRepositories).values({
+      issueId: developmentId,
+      url: "https://example.test/orders.git",
+      baseBranch: "develop",
+      workingBranch: `hotfix-${String(development.id).toLowerCase()}`,
+      localPath: workspacePath,
+      workspaceName: "orders",
+      commitBefore: "a".repeat(40),
+    });
     await database.db.insert(agentSessions).values({ issueId: developmentId, sessionFile, workspacePath: path.dirname(workspacePath) });
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, developmentId));
     await database.close();
@@ -102,13 +122,21 @@ test("creates production smart-analysis Issues with related context", async () =
     const response = await fixture.app.inject({ method: "POST", url: "/api/issues", payload });
     assert.equal(response.statusCode, 201, response.body);
     const created = await json(response);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((result) => JSON.parse(result.body)) as { relatedIssues: Array<{ id: string; title: string; environmentKey: string }> };
-    assert.deepEqual(detail.relatedIssues.map(({ id, title, environmentKey }) => ({ id, title, environmentKey })), [{ id: development.id, title: "Implemented fix", environmentKey: "dev" }]);
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((result) => JSON.parse(result.body))) as {
+      relatedIssues: Array<{ id: string; title: string; environmentKey: string }>;
+    };
+    assert.deepEqual(
+      detail.relatedIssues.map(({ id, title, environmentKey }) => ({ id, title, environmentKey })),
+      [{ id: development.id, title: "Implemented fix", environmentKey: "dev" }],
+    );
 
     const persisted = openDatabase(fixture.databaseFile);
     const targetIssueId = fixture.engine.enqueued.at(-1)!;
     await persisted.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, targetIssueId));
-    assert.deepEqual((await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId), [developmentId]);
+    assert.deepEqual(
+      (await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId),
+      [developmentId],
+    );
 
     fixture.engine.running.clear();
     const missingRelated = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: { ...payload, workMode: "production_analysis", relatedIssueKeys: ["ISSUE-20260101-999"] } });
@@ -123,7 +151,10 @@ test("creates production smart-analysis Issues with related context", async () =
     const invalidUpdate = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: [created.id] } });
     assert.equal(invalidUpdate.statusCode, 400);
     assert.equal((await json(invalidUpdate)).error, "invalid_related_issues");
-    assert.deepEqual((await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId), [developmentId]);
+    assert.deepEqual(
+      (await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId),
+      [developmentId],
+    );
 
     fixture.engine.running.add(developmentId);
     const runningRelated = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: [] } });
@@ -131,20 +162,32 @@ test("creates production smart-analysis Issues with related context", async () =
     assert.equal((await json(runningRelated)).error, "issue_already_running");
     fixture.engine.running.delete(developmentId);
 
-    fixture.engine.closeSessionHook = async () => { throw new Error("stop_failed"); };
+    fixture.engine.closeSessionHook = async () => {
+      throw new Error("stop_failed");
+    };
     const closeFailure = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: [] } });
     assert.equal(closeFailure.statusCode, 500);
     fixture.engine.closeSessionHook = undefined;
-    assert.deepEqual((await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId), [developmentId]);
+    assert.deepEqual(
+      (await persisted.db.select().from(issueRelations)).map(({ relatedIssueId }) => relatedIssueId),
+      [developmentId],
+    );
 
     const removed = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: [] } });
     assert.equal(removed.statusCode, 204, removed.body);
     assert.equal(fixture.engine.enqueued.length, enqueueCount + 1);
     assert.deepEqual(await persisted.db.select().from(issueRelations), []);
-    const [updatedWorkspace] = await persisted.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, fixture.engine.enqueued.at(-1)!));
+    const [updatedWorkspace] = await persisted.db
+      .select()
+      .from(issueWorkspaces)
+      .where(eq(issueWorkspaces.issueId, fixture.engine.enqueued.at(-1)!));
     assert.equal(updatedWorkspace?.runtimeReady, false);
 
-    const tooMany = await fixture.app.inject({ method: "PUT", url: `/api/issues/${created.id}/related-issues`, payload: { relatedIssueKeys: Array.from({ length: 21 }, (_, index) => `ISSUE-20260809-${String(index + 1).padStart(3, "0")}`) } });
+    const tooMany = await fixture.app.inject({
+      method: "PUT",
+      url: `/api/issues/${created.id}/related-issues`,
+      payload: { relatedIssueKeys: Array.from({ length: 21 }, (_, index) => `ISSUE-20260809-${String(index + 1).padStart(3, "0")}`) },
+    });
     assert.equal(tooMany.statusCode, 400);
     assert.equal((await json(tooMany)).error, "related_issue_limit_exceeded");
     await persisted.close();
@@ -167,8 +210,13 @@ test("allows production investigations to relate Issues without development bran
     });
     assert.equal(response.statusCode, 201, response.body);
     const created = await json(response);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((result) => JSON.parse(result.body)) as { relatedIssues: Array<{ id: string; environmentKey: string }> };
-    assert.deepEqual(detail.relatedIssues.map(({ id, environmentKey }) => ({ id, environmentKey })), [{ id: related.id, environmentKey: "test" }]);
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${created.id}` }).then((result) => JSON.parse(result.body))) as {
+      relatedIssues: Array<{ id: string; environmentKey: string }>;
+    };
+    assert.deepEqual(
+      detail.relatedIssues.map(({ id, environmentKey }) => ({ id, environmentKey })),
+      [{ id: related.id, environmentKey: "test" }],
+    );
   } finally {
     await fixture.cleanup();
   }
@@ -188,10 +236,7 @@ test("serializes retries, status transitions, messages, and comments with one Is
     await database.db.update(issues).set({ status: "open" }).where(eq(issues.id, issueId));
     await database.db.update(issueWorkspaces).set({ status: "failed" }).where(eq(issueWorkspaces.issueId, issueId));
     await database.close();
-    const retries = await Promise.all([
-      fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/retry` }),
-      fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/retry` }),
-    ]);
+    const retries = await Promise.all([fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/retry` }), fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/retry` })]);
     assert.deepEqual(retries.map(({ statusCode }) => statusCode).sort(), [202, 409]);
     fixture.engine.running.delete(issueId);
 
@@ -199,7 +244,9 @@ test("serializes retries, status transitions, messages, and comments with one Is
     const pending = openDatabase(fixture.databaseFile);
     await pending.db.update(issues).set({ status: "pending" }).where(eq(issues.id, issueId));
     await pending.close();
-    fixture.engine.closeSessionHook = async () => { throw new Error("stop_failed"); };
+    fixture.engine.closeSessionHook = async () => {
+      throw new Error("stop_failed");
+    };
     assert.equal((await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}/status`, payload: { status: "resolved" } })).statusCode, 500);
     fixture.engine.closeSessionHook = undefined;
     assert.equal((await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}/status`, payload: { status: "resolved" } })).statusCode, 200);
@@ -208,10 +255,18 @@ test("serializes retries, status transitions, messages, and comments with one Is
 
     const commentUser = await fixture.app.inject({ method: "POST", url: "/api/users", payload: { subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" } });
     assert.equal(commentUser.statusCode, 201);
-    const comment = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/comments`, headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" }, payload: { body: "A note" } });
+    const comment = await fixture.app.inject({
+      method: "POST",
+      url: `/api/issues/${issue.id}/comments`,
+      headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" },
+      payload: { body: "A note" },
+    });
     assert.equal(comment.statusCode, 201);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { comments: Array<{ author: string; body: string }> };
-    assert.deepEqual(detail.comments.map(({ author, body }) => ({ author, body })), [{ author: "刘宜展", body: "A note" }]);
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { comments: Array<{ author: string; body: string }> };
+    assert.deepEqual(
+      detail.comments.map(({ author, body }) => ({ author, body })),
+      [{ author: "刘宜展", body: "A note" }],
+    );
     const message = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "Check evidence" } });
     assert.equal(message.statusCode, 202);
     assert.equal(fixture.engine.messages.at(-1), "Check evidence");
@@ -221,19 +276,28 @@ test("serializes retries, status transitions, messages, and comments with one Is
   }
 });
 
-for (const [code, status] of [["agent_message_outcome_unknown", 409], ["agent_session_file_incomplete", 500], ["agent_session_file_missing", 500]] as const) test(`classifies ${code} without resubmitting the message`, async () => {
-  const fixture = await createApiFixture();
-  try {
-    await createService(fixture.app, "Uncertain");
-    const issue = await createIssue(fixture.app, "uncertain", "test", "Uncertain message");
-    const queued = fixture.engine.enqueued.length;
-    fixture.engine.send = async () => { throw new Error(code); };
-    const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "check the outcome" } });
-    assert.equal(response.statusCode, status);
-    assert.deepEqual(JSON.parse(response.body), { error: code });
-    assert.equal(fixture.engine.enqueued.length, queued);
-  } finally { await fixture.cleanup(); }
-});
+for (const [code, status] of [
+  ["agent_message_outcome_unknown", 409],
+  ["agent_session_file_incomplete", 500],
+  ["agent_session_file_missing", 500],
+] as const)
+  test(`classifies ${code} without resubmitting the message`, async () => {
+    const fixture = await createApiFixture();
+    try {
+      await createService(fixture.app, "Uncertain");
+      const issue = await createIssue(fixture.app, "uncertain", "test", "Uncertain message");
+      const queued = fixture.engine.enqueued.length;
+      fixture.engine.send = async () => {
+        throw new Error(code);
+      };
+      const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "check the outcome" } });
+      assert.equal(response.statusCode, status);
+      assert.deepEqual(JSON.parse(response.body), { error: code });
+      assert.equal(fixture.engine.enqueued.length, queued);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
 test("serializes Issue assignee changes with user deactivation", async () => {
   const fixture = await createApiFixture();
@@ -247,22 +311,39 @@ test("serializes Issue assignee changes with user deactivation", async () => {
     const issue = await fixture.app.inject({ method: "POST", url: "/api/issues", headers, payload: issuePayload("assignment") }).then(json);
     fixture.engine.running.clear();
     let entered!: () => void;
-    const started = new Promise<void>(resolve => { entered = resolve; });
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    fixture.engine.closeSessionHook = async () => { entered(); await gate; };
-    const edit = fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers, payload: { title: "Assign to next owner", description: "Keep owner valid", priority: "p1", assigneeSubject: "next-owner", ccSubjects: [] } });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fixture.engine.closeSessionHook = async () => {
+      entered();
+      await gate;
+    };
+    const edit = fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      headers,
+      payload: { title: "Assign to next owner", description: "Keep owner valid", priority: "p1", assigneeSubject: "next-owner", ccSubjects: [] },
+    });
     await started;
-    const disable = fixture.app.inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { name: "Next Owner", email: "next@example.test", role: "developer", active: false } }).then(response => response);
-    const disabledBeforeEdit = await Promise.race([disable.then(() => true), new Promise<false>(resolve => setTimeout(() => resolve(false), 100))]);
+    const disable = fixture.app
+      .inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { name: "Next Owner", email: "next@example.test", role: "developer", active: false } })
+      .then((response) => response);
+    const disabledBeforeEdit = await Promise.race([disable.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 100))]);
     release();
     assert.equal((await edit).statusCode, 200);
     assert.equal((await disable).statusCode, 409);
     assert.equal(disabledBeforeEdit, false);
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(json);
     assert.equal(detail.assigneeSubject, "next-owner");
-    const users = await fixture.app.inject({ method: "GET", url: "/api/users" }).then(response => JSON.parse(response.body) as Array<{ subject: string }>);
-    assert.ok(users.some(user => user.subject === "next-owner"));
-  } finally { release?.(); await fixture.cleanup(); }
+    const users = await fixture.app.inject({ method: "GET", url: "/api/users" }).then((response) => JSON.parse(response.body) as Array<{ subject: string }>);
+    assert.ok(users.some((user) => user.subject === "next-owner"));
+  } finally {
+    release?.();
+    await fixture.cleanup();
+  }
 });
 
 test("edits only Issue metadata and rejects scope fields", async () => {
@@ -283,9 +364,17 @@ test("edits only Issue metadata and rejects scope fields", async () => {
     assert.equal(scopeUpdate.statusCode, 400);
     assert.equal((await json(scopeUpdate)).error, "issue_scope_update_not_allowed");
 
-    const metadataUpdate = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, payload: {
-      title: "Updated investigation", description: "Preserve scope", priority: "p2", assigneeSubject: null, ccSubjects: [],
-    } });
+    const metadataUpdate = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      payload: {
+        title: "Updated investigation",
+        description: "Preserve scope",
+        priority: "p2",
+        assigneeSubject: null,
+        ccSubjects: [],
+      },
+    });
     assert.equal(metadataUpdate.statusCode, 200, metadataUpdate.body);
     assert.equal((await json(metadataUpdate)).environmentKey, "test");
     assert.equal(((await json(metadataUpdate)).service as { key: string }).key, "alpha");
@@ -296,7 +385,13 @@ test("edits only Issue metadata and rejects scope fields", async () => {
     assert.match(fixture.engine.messages.at(-1) ?? "", /"key": "alpha"/);
 
     fixture.engine.running.clear();
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { title: string; environmentKey: string; service: { key: string }; repositories: unknown[]; workspace: { status: string; sourceAvailable: boolean } };
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as {
+      title: string;
+      environmentKey: string;
+      service: { key: string };
+      repositories: unknown[];
+      workspace: { status: string; sourceAvailable: boolean };
+    };
     assert.equal(detail.title, "Updated investigation");
     assert.equal(detail.environmentKey, "test");
     assert.equal(detail.service.key, "alpha");
@@ -316,17 +411,38 @@ test("lists newer Issues first without letting later updates reorder them", asyn
     fixture.engine.running.clear();
 
     const database = openDatabase(fixture.databaseFile);
-    await database.db.update(issues).set({ createdAt: new Date("2026-08-14T00:00:00.000Z"), updatedAt: new Date("2026-08-14T02:00:00.000Z") }).where(eq(issues.key, String(older.id)));
-    await database.db.update(issues).set({ createdAt: new Date("2026-08-14T01:00:00.000Z"), updatedAt: new Date("2026-08-14T01:00:00.000Z") }).where(eq(issues.key, String(newer.id)));
+    await database.db
+      .update(issues)
+      .set({ createdAt: new Date("2026-08-14T00:00:00.000Z"), updatedAt: new Date("2026-08-14T02:00:00.000Z") })
+      .where(eq(issues.key, String(older.id)));
+    await database.db
+      .update(issues)
+      .set({ createdAt: new Date("2026-08-14T01:00:00.000Z"), updatedAt: new Date("2026-08-14T01:00:00.000Z") })
+      .where(eq(issues.key, String(newer.id)));
     await database.close();
 
-    const listed = await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body)) as Array<{ id: string; environmentKey: string; workspaceStatus: string; agentRunning: boolean; resolvedAt: string | null }>;
-    assert.deepEqual(listed.map(({ id }) => id), [newer.id, older.id]);
-    assert.deepEqual(listed.map(({ environmentKey }) => environmentKey), ["test", "test"]);
-    assert.deepEqual(listed.map(({ workspaceStatus, agentRunning, resolvedAt }) => ({ workspaceStatus, agentRunning, resolvedAt })), [
-      { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
-      { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
-    ]);
+    const listed = (await fixture.app.inject({ method: "GET", url: "/api/issues" }).then((response) => JSON.parse(response.body))) as Array<{
+      id: string;
+      environmentKey: string;
+      workspaceStatus: string;
+      agentRunning: boolean;
+      resolvedAt: string | null;
+    }>;
+    assert.deepEqual(
+      listed.map(({ id }) => id),
+      [newer.id, older.id],
+    );
+    assert.deepEqual(
+      listed.map(({ environmentKey }) => environmentKey),
+      ["test", "test"],
+    );
+    assert.deepEqual(
+      listed.map(({ workspaceStatus, agentRunning, resolvedAt }) => ({ workspaceStatus, agentRunning, resolvedAt })),
+      [
+        { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
+        { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
+      ],
+    );
   } finally {
     await fixture.cleanup();
   }
@@ -336,7 +452,7 @@ test("persists personal queue pins without changing Issue order or ownership", a
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
-    const currentUser = await fixture.app.inject({ method: "GET", url: "/api/me" }).then((response) => JSON.parse(response.body)) as { subject: string };
+    const currentUser = (await fixture.app.inject({ method: "GET", url: "/api/me" }).then((response) => JSON.parse(response.body))) as { subject: string };
     const assignedResponse = await fixture.app.inject({
       method: "POST",
       url: "/api/issues",
@@ -383,7 +499,10 @@ test("generates concurrent Issue keys and refuses unmanaged state", async () => 
       fixture.app.inject({ method: "POST", url: "/api/issues", payload: issuePayload("alpha", "test", "Concurrent A") }),
       fixture.app.inject({ method: "POST", url: "/api/issues", payload: issuePayload("alpha", "test", "Concurrent B") }),
     ]);
-    assert.deepEqual(concurrent.map(({ statusCode }) => statusCode), [201, 201]);
+    assert.deepEqual(
+      concurrent.map(({ statusCode }) => statusCode),
+      [201, 201],
+    );
     const keys = await Promise.all(concurrent.map(async (response) => String((await json(response)).id)));
     assert.equal(new Set(keys).size, 2);
     assert.deepEqual(keys.sort(), [unmanagedKey, String(first.id).replace(/001$/, "003")]);
@@ -408,18 +527,39 @@ test("plans and applies read-only scope transitions with stale-plan protection",
     const target = { serviceKey: "beta", workMode: "production_analysis" };
     const planResponse = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/scope-transition/plan`, payload: target });
     assert.equal(planResponse.statusCode, 200, planResponse.body);
-    const plan = await json(planResponse) as { planHash: string; expectedIssueUpdatedAt: string; action: string; repositories: { added: unknown[]; removed: unknown[] } };
+    const plan = (await json(planResponse)) as { planHash: string; expectedIssueUpdatedAt: string; action: string; repositories: { added: unknown[]; removed: unknown[] } };
     assert.equal(plan.action, "rebind_read_only");
     assert.equal(plan.repositories.added.length, 1);
     assert.equal(plan.repositories.removed.length, 1);
 
-    const stale = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/scope-transition/apply`, payload: { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: `sha256:${"0".repeat(64)}` } });
+    const stale = await fixture.app.inject({
+      method: "POST",
+      url: `/api/issues/${issue.id}/scope-transition/apply`,
+      payload: { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: `sha256:${"0".repeat(64)}` },
+    });
     assert.equal(stale.statusCode, 409);
     assert.equal((await json(stale)).error, "scope_transition_plan_stale");
 
-    const applied = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/scope-transition/apply`, payload: { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash } });
+    const applied = await fixture.app.inject({
+      method: "POST",
+      url: `/api/issues/${issue.id}/scope-transition/apply`,
+      payload: { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash },
+    });
     assert.equal(applied.statusCode, 200, applied.body);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { service: { key: string }; environmentKey: string; repositories: unknown[]; workspace: { status: string; sourceAvailable: boolean }; scopeTransitions: Array<{ action: string; planHash: string; from: { service: { key: string }; workMode: string }; to: { service: { key: string }; workMode: string }; repositories: { added: string[]; removed: string[] }; actor: { subject: string } }> };
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as {
+      service: { key: string };
+      environmentKey: string;
+      repositories: unknown[];
+      workspace: { status: string; sourceAvailable: boolean };
+      scopeTransitions: Array<{
+        action: string;
+        planHash: string;
+        from: { service: { key: string }; workMode: string };
+        to: { service: { key: string }; workMode: string };
+        repositories: { added: string[]; removed: string[] };
+        actor: { subject: string };
+      }>;
+    };
     assert.equal(detail.service.key, "beta");
     assert.equal(detail.environmentKey, "prod");
     assert.deepEqual(detail.repositories, []);
@@ -446,12 +586,20 @@ test("plans and applies read-only scope transitions with stale-plan protection",
     await conversionDatabase.db.update(issues).set({ status: "pending" }).where(eq(issues.id, convertibleId));
     await conversionDatabase.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, convertibleId));
     await conversionDatabase.close();
-    const conversionPlanResponse = await fixture.app.inject({ method: "POST", url: `/api/issues/${convertible.id}/scope-transition/plan`, payload: { serviceKey: "convertible", workMode: "development_fix" } });
+    const conversionPlanResponse = await fixture.app.inject({
+      method: "POST",
+      url: `/api/issues/${convertible.id}/scope-transition/plan`,
+      payload: { serviceKey: "convertible", workMode: "development_fix" },
+    });
     assert.equal(conversionPlanResponse.statusCode, 200, conversionPlanResponse.body);
-    const conversionPlan = await json(conversionPlanResponse) as { action: string; branch: string };
+    const conversionPlan = (await json(conversionPlanResponse)) as { action: string; branch: string };
     assert.equal(conversionPlan.action, "convert_to_development");
     assert.equal(conversionPlan.branch, `hotfix-${String(convertible.id).toLowerCase()}`);
-    const invalidExpectation = await fixture.app.inject({ method: "POST", url: `/api/issues/${convertible.id}/scope-transition/apply`, payload: { serviceKey: "convertible", workMode: "development_fix", expectedIssueUpdatedAt: "invalid", expectedPlanHash: "invalid" } });
+    const invalidExpectation = await fixture.app.inject({
+      method: "POST",
+      url: `/api/issues/${convertible.id}/scope-transition/apply`,
+      payload: { serviceKey: "convertible", workMode: "development_fix", expectedIssueUpdatedAt: "invalid", expectedPlanHash: "invalid" },
+    });
     assert.equal(invalidExpectation.statusCode, 400);
     assert.equal((await json(invalidExpectation)).error, "invalid_scope_transition_expectation");
   } finally {
@@ -526,11 +674,30 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     assert.equal((await json(acceptedSearchModes)).error, "source_browser_unavailable");
     const stats = await fixture.app.inject({ method: "GET", url: "/api/workspaces/stats" });
     assert.equal(stats.statusCode, 200);
-    const body = await json(stats) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };
+    const body = (await json(stats)) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };
     assert.equal(typeof body.totalBytes, "number");
     assert.deepEqual(Object.keys(body.policy).sort(), ["highWaterBytes", "maintenanceIntervalMinutes", "retentionHours", "targetBytes"]);
-    assert.equal(body.workspaces.some((workspace) => "issueId" in workspace), false);
+    assert.equal(
+      body.workspaces.some((workspace) => "issueId" in workspace),
+      false,
+    );
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/issues/not-an-issue" })).statusCode, 404);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("an unknown or foreign session id is a not-found history entry", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Sessions", ["test"]);
+    const issue = await createIssue(fixture.app, "sessions", "test");
+    fixture.engine.running.clear();
+    for (const sessionId of ["not-a-real-session", ""]) {
+      const response = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/sessions/${encodeURIComponent(sessionId)}` });
+      assert.equal(response.statusCode, 404, `${sessionId}: ${response.body}`);
+      assert.equal(JSON.parse(response.body).error, "agent_session_not_found");
+    }
   } finally {
     await fixture.cleanup();
   }

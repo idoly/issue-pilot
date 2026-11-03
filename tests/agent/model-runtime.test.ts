@@ -39,17 +39,25 @@ test("shares one offline Pi catalog refresh and lists every model of the Operato
       return [model("z-provider", "second"), model("built-in", "unlisted"), model("a-provider", "first")];
     },
   } as unknown as ModelRuntime;
-  const sharedRuntime: PiModelRuntime = { async load() { return runtime; }, async close() {} };
+  const sharedRuntime: PiModelRuntime = {
+    async load() {
+      return runtime;
+    },
+    async close() {},
+  };
   const catalog = new PiAgentModelCatalog(sharedRuntime, agentDir);
 
   const [first, second] = await Promise.all([catalog.list(), catalog.list()]);
 
   assert.deepEqual(refreshes, [{ allowNetwork: false }]);
   assert.deepEqual(first, second);
-  assert.deepEqual(first.map(({ provider, id, contextWindow }) => ({ provider, id, contextWindow })), [
-    { provider: "a-provider", id: "first", contextWindow: 64_000 },
-    { provider: "z-provider", id: "second", contextWindow: 64_000 },
-  ]);
+  assert.deepEqual(
+    first.map(({ provider, id, contextWindow }) => ({ provider, id, contextWindow })),
+    [
+      { provider: "a-provider", id: "first", contextWindow: 64_000 },
+      { provider: "z-provider", id: "second", contextWindow: 64_000 },
+    ],
+  );
   assert.ok(first.every(({ thinkingLevels }) => thinkingLevels.includes("off") && thinkingLevels.includes("high")));
 
   await catalog.list();
@@ -66,39 +74,42 @@ test("refreshes models without writing to the read-only Pi configuration", async
     await Promise.all([
       writeFile(join(agentDir, "auth.json"), "{}\n", { mode: 0o600 }),
       writeFile(join(agentDir, "models-store.json"), "{}\n", { mode: 0o600 }),
-      writeFile(join(agentDir, "models.json"), JSON.stringify({
-        providers: {
-          "test-provider": {
-            baseUrl: "https://example.test/v1",
-            api: "openai-responses",
-            apiKey: "test-key",
-            models: [{
-              id: "test-model",
-              name: "Test Model",
-              reasoning: true,
-              input: ["text"],
-              contextWindow: 64_000,
-              maxTokens: 8_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            }],
+      writeFile(
+        join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            "test-provider": {
+              baseUrl: "https://example.test/v1",
+              api: "openai-responses",
+              apiKey: "test-key",
+              models: [
+                {
+                  id: "test-model",
+                  name: "Test Model",
+                  reasoning: true,
+                  input: ["text"],
+                  contextWindow: 64_000,
+                  maxTokens: 8_000,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
           },
-        },
-      }), { mode: 0o400 }),
+        }),
+        { mode: 0o400 },
+      ),
     ]);
-    await Promise.all([
-      chmod(join(agentDir, "auth.json"), 0o400),
-      chmod(join(agentDir, "models-store.json"), 0o400),
-      chmod(agentDir, 0o500),
-    ]);
+    await Promise.all([chmod(join(agentDir, "auth.json"), 0o400), chmod(join(agentDir, "models-store.json"), 0o400), chmod(agentDir, 0o500)]);
 
     const [first, second] = await Promise.all([runtime.load(), runtime.load()]);
     assert.equal(first, second);
     const refreshed = await first.refresh({ allowNetwork: false });
 
     assert.equal(refreshed.errors.size, 0);
-    assert.deepEqual(first.getModels("test-provider").map(({ provider, id }) => ({ provider, id })), [
-      { provider: "test-provider", id: "test-model" },
-    ]);
+    assert.deepEqual(
+      first.getModels("test-provider").map(({ provider, id }) => ({ provider, id })),
+      [{ provider: "test-provider", id: "test-model" }],
+    );
     assert.deepEqual((await readdir(agentDir)).sort(), ["auth.json", "models-store.json", "models.json"]);
   } finally {
     await runtime.close();

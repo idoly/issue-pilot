@@ -10,10 +10,13 @@ import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 
 const context: AgentSessionContext = {
-  issueKey: "ISSUE-20261016-004", serviceKey: "fixture", environmentKey: "prod",
+  issueKey: "ISSUE-20261016-004",
+  serviceKey: "fixture",
+  environmentKey: "prod",
   model: { provider: "sdk-fixture", modelId: "sdk-model", thinkingLevel: "medium" },
   codemode: "off",
-  capabilities: [], canModifyCode: false,
+  capabilities: [],
+  canModifyCode: false,
 };
 
 test("SDK replays persistent sessions with current tools and canonical prompts without restoring obsolete tools", async () => {
@@ -45,7 +48,15 @@ test("SDK replays persistent sessions with current tools and canonical prompts w
   ]);
   let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
-    const first = managed = await runtime.start({ manager, context, deploymentConfig: {}, workspaceRoot: root, agentDirectory: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
+    const first = (managed = await runtime.start({
+      manager,
+      context,
+      deploymentConfig: {},
+      workspaceRoot: root,
+      agentDirectory: root,
+      systemPrompt: "Issue Pilot SDK policy",
+      onEvent: (event) => events.push(event),
+    }));
     await first.prompt("Check the evidence");
     assert.equal(prompts, 1);
     assert.ok(events.some((event) => event.type === "agent_settled" && event.aborted === false));
@@ -57,16 +68,31 @@ test("SDK replays persistent sessions with current tools and canonical prompts w
     // current-context selection must override the transcript on read-only resume.
     manager.appendMessage({ role: "system", content: "", toolsAdded: [{ name: "bash", description: "old writable tool", parameters: {} }], timestamp: Date.now() });
     const reopened = SessionManager.open(persisted);
-    const resumed = managed = await runtime.start({ manager: reopened, context, deploymentConfig: {}, workspaceRoot: root, agentDirectory: root, systemPrompt: "Issue Pilot SDK policy", onEvent: (event) => events.push(event) });
+    const resumed = (managed = await runtime.start({
+      manager: reopened,
+      context,
+      deploymentConfig: {},
+      workspaceRoot: root,
+      agentDirectory: root,
+      systemPrompt: "Issue Pilot SDK policy",
+      onEvent: (event) => events.push(event),
+    }));
     assert.deepEqual(resumed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     await resumed.prompt("Continue after reopening");
     await resumed.stop();
     const replay = sessionTranscript(SessionManager.open(persisted), "issue");
     assert.ok(JSON.stringify(replay).includes("Resumed correctly."));
-    assert.equal(replay.some(({ event }) => event.type === "message_end" && event.message.role === "system"), false);
+    assert.equal(
+      replay.some(({ event }) => event.type === "message_end" && event.message.role === "system"),
+      false,
+    );
     assert.ok((await readFile(persisted, "utf8")).includes('"version":3'));
   } finally {
-    try { await managed?.stop(); }
-    finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
+    try {
+      await managed?.stop();
+    } finally {
+      await runtime.close();
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });

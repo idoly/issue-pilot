@@ -40,17 +40,23 @@ function cancellationError(signal: AbortSignal): Error {
 
 async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, signal: AbortSignal, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
   let closing: Promise<void> | undefined;
-  const close = () => closing ??= Promise.resolve().then(() => session.close());
+  const close = () => (closing ??= Promise.resolve().then(() => session.close()));
   let failure: { error: unknown } | undefined;
-  try { return await operation(close); }
-  catch (error) { failure = { error }; throw error; }
-  finally {
-    try { await close(); }
-    catch (cleanupError) {
+  try {
+    return await operation(close);
+  } catch (error) {
+    failure = { error };
+    throw error;
+  } finally {
+    try {
+      await close();
+    } catch (cleanupError) {
       signal.throwIfAborted();
       // An export may have already awaited this same close failure before replacing the working file.
+      // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
       if (!failure || failure.error === cleanupError) throw cleanupError;
       const primary = failure.error;
+      // biome-ignore lint/correctness/noUnsafeFinally: aggregates the in-flight primary error with the close failure.
       throw new AggregateError([primary, cleanupError], primary instanceof Error ? primary.message : "dms_mcp_operation_cleanup_failed");
     }
   }
@@ -90,8 +96,10 @@ export class DmsOperationError extends Error {
   constructor(diagnostics: DmsDiagnostics, cause: unknown) {
     // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
     const code = cause instanceof Error ? cause.message : "";
-    const safeCode = /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed)$/.test(code)
-      || code === "invalid_dms_mcp_target";
+    const safeCode =
+      /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed|result_too_large_use_export)$/.test(
+        code,
+      ) || code === "invalid_dms_mcp_target";
     super(safeCode ? code : "dms_mcp_operation_failed", { cause });
     this.diagnostics = diagnostics;
   }
@@ -127,16 +135,21 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
     const attemptSignal = AbortSignal.any([signal, handshakeController.signal]);
     let httpFailure: DmsHttpFailure | undefined, backoff: number | undefined;
     const transport = new SSEClientTransport(target, {
-      fetch: sameOriginFetch(target.origin, attemptSignal, failure => { httpFailure = failure; }),
+      fetch: sameOriginFetch(target.origin, attemptSignal, (failure) => {
+        httpFailure = failure;
+      }),
       requestInit: { headers },
     });
     const candidate = new Client({ name: "issue-pilot", version: "0.1.0" });
     let cancellation: ReturnType<typeof addAbortListener> | undefined;
     try {
       attemptSignal.throwIfAborted();
-      await Promise.race([candidate.connect(transport), new Promise<never>((_, reject) => {
-        cancellation = addAbortListener(attemptSignal, () => reject(attemptSignal.reason));
-      })]);
+      await Promise.race([
+        candidate.connect(transport),
+        new Promise<never>((_, reject) => {
+          cancellation = addAbortListener(attemptSignal, () => reject(attemptSignal.reason));
+        }),
+      ]);
       if (signal.aborted) throw signal.reason;
       client = candidate;
       break;
@@ -158,8 +171,11 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       clearTimeout(handshakeTimer);
     }
     if (backoff !== undefined) {
-      try { await delay(backoff, undefined, { signal }); }
-      catch { throw cancellationError(signal); }
+      try {
+        await delay(backoff, undefined, { signal });
+      } catch {
+        throw cancellationError(signal);
+      }
     }
   }
   if (!client) throw new Error("dms_mcp_timeout");
@@ -171,7 +187,7 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       let cursor: string | undefined;
       do {
         const result = await connectedClient.listTools(cursor ? { cursor } : undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
-        tools.push(...result.tools as DmsMcpTool[]);
+        tools.push(...(result.tools as DmsMcpTool[]));
         cursor = result.nextCursor;
         if (cursor && (cursor.length > 1024 || cursors.has(cursor))) throw new Error("dms_mcp_invalid_cursor");
         if (cursor) cursors.add(cursor);
@@ -193,9 +209,18 @@ function isReadOnlyScriptTool(tool: DmsMcpTool): boolean {
   const fields = properties as Record<string, unknown>;
   const databaseId = fields.database_id;
   const script = fields.script;
-  return required.includes("database_id") && required.includes("script")
-    && databaseId !== null && typeof databaseId === "object" && !Array.isArray(databaseId) && (databaseId as Record<string, unknown>).type === "string"
-    && script !== null && typeof script === "object" && !Array.isArray(script) && (script as Record<string, unknown>).type === "string";
+  return (
+    required.includes("database_id") &&
+    required.includes("script") &&
+    databaseId !== null &&
+    typeof databaseId === "object" &&
+    !Array.isArray(databaseId) &&
+    (databaseId as Record<string, unknown>).type === "string" &&
+    script !== null &&
+    typeof script === "object" &&
+    !Array.isArray(script) &&
+    (script as Record<string, unknown>).type === "string"
+  );
 }
 
 function uniqueTool(tools: DmsMcpTool[], name: string, accepts: (tool: DmsMcpTool) => boolean): DmsMcpTool | undefined {
@@ -220,7 +245,11 @@ function mcpTextRecords(result: unknown, failureCode: string, invalidCode: strin
   return result.content.flatMap((item) => {
     if (!item || typeof item !== "object" || !("type" in item) || item.type !== "text" || !("text" in item) || typeof item.text !== "string") return [];
     let value: unknown;
-    try { value = JSON.parse(item.text); } catch { throw new Error(invalidCode); }
+    try {
+      value = JSON.parse(item.text);
+    } catch {
+      throw new Error(invalidCode);
+    }
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalidCode);
     return [value as Record<string, unknown>];
   });
@@ -233,7 +262,13 @@ export interface DmsScopeResolution {
   databaseId: string;
 }
 
-export async function resolveDmsScope(configured: DmsConnectionConfiguration, instanceAlias: string, schemaName: string, signal?: AbortSignal, connect: ConnectDmsMcp = connectDmsMcp): Promise<DmsScopeResolution> {
+export async function resolveDmsScope(
+  configured: DmsConnectionConfiguration,
+  instanceAlias: string,
+  schemaName: string,
+  signal?: AbortSignal,
+  connect: ConnectDmsMcp = connectDmsMcp,
+): Promise<DmsScopeResolution> {
   const boundedSignal = operationSignal(signal);
   const session = await connect(configured, boundedSignal);
   return withDmsSession(session, boundedSignal, async () => {
@@ -246,7 +281,8 @@ export async function resolveDmsScope(configured: DmsConnectionConfiguration, in
     const matchingInstances = mcpTextRecords(instanceResult, "dms_mcp_scope_resolve_failed", "dms_mcp_scope_resolve_invalid_response").filter((instance) => instance.InstanceAlias === normalizedAlias);
     if (matchingInstances.length !== 1) throw new Error("dms_mcp_scope_resolve_invalid_response");
     const instance = matchingInstances[0]!;
-    const instanceId = typeof instance.InstanceId === "number" && Number.isSafeInteger(instance.InstanceId) ? String(instance.InstanceId) : typeof instance.InstanceId === "string" ? instance.InstanceId.trim() : "";
+    const instanceId =
+      typeof instance.InstanceId === "number" && Number.isSafeInteger(instance.InstanceId) ? String(instance.InstanceId) : typeof instance.InstanceId === "string" ? instance.InstanceId.trim() : "";
     const instanceHost = typeof instance.Host === "string" ? instance.Host.trim() : "";
     const instancePort = typeof instance.Port === "number" && Number.isSafeInteger(instance.Port) ? String(instance.Port) : typeof instance.Port === "string" ? instance.Port.trim() : "";
     const instanceType = typeof instance.InstanceType === "string" ? instance.InstanceType.trim() : "";
@@ -257,8 +293,10 @@ export async function resolveDmsScope(configured: DmsConnectionConfiguration, in
     const databases = mcpTextRecords(databaseResult, "dms_mcp_scope_resolve_failed", "dms_mcp_scope_resolve_invalid_response");
     if (databases.length !== 1) throw new Error("dms_mcp_scope_resolve_invalid_response");
     const database = databases[0]!;
-    const databaseId = typeof database.DatabaseId === "number" && Number.isSafeInteger(database.DatabaseId) ? String(database.DatabaseId) : typeof database.DatabaseId === "string" ? database.DatabaseId.trim() : "";
-    const resolvedInstanceId = typeof database.InstanceId === "number" && Number.isSafeInteger(database.InstanceId) ? String(database.InstanceId) : typeof database.InstanceId === "string" ? database.InstanceId.trim() : "";
+    const databaseId =
+      typeof database.DatabaseId === "number" && Number.isSafeInteger(database.DatabaseId) ? String(database.DatabaseId) : typeof database.DatabaseId === "string" ? database.DatabaseId.trim() : "";
+    const resolvedInstanceId =
+      typeof database.InstanceId === "number" && Number.isSafeInteger(database.InstanceId) ? String(database.InstanceId) : typeof database.InstanceId === "string" ? database.InstanceId.trim() : "";
     const resolvedSchema = typeof database.SchemaName === "string" ? database.SchemaName.trim() : "";
     if (!databaseId || resolvedInstanceId !== instanceId || resolvedSchema !== normalizedSchema) throw new Error("dms_mcp_scope_resolve_invalid_response");
     return { instanceId, instanceHost, instancePort, databaseId };
@@ -267,7 +305,12 @@ export async function resolveDmsScope(configured: DmsConnectionConfiguration, in
 
 const resolvedFileTargets = new WeakMap<object, { url: string; authorization: string; targets: Map<string, DmsScopeResolution> }>();
 
-async function resolveFileTarget(configured: CapabilityConfig<"dms">, database: CapabilityConfig<"dms">["databases"][number], signal: AbortSignal, connect: ConnectDmsMcp): Promise<DmsScopeResolution> {
+async function resolveFileTarget(
+  configured: CapabilityConfig<"dms">,
+  database: CapabilityConfig<"dms">["databases"][number],
+  signal: AbortSignal,
+  connect: ConnectDmsMcp,
+): Promise<DmsScopeResolution> {
   let cache = resolvedFileTargets.get(configured);
   if (!cache || cache.url !== configured.url || cache.authorization !== configured.authorization) {
     cache = { url: configured.url, authorization: configured.authorization, targets: new Map() };
@@ -282,13 +325,7 @@ async function resolveFileTarget(configured: CapabilityConfig<"dms">, database: 
   return resolved;
 }
 
-export async function queryDms(
-  input: CapabilityInputs["dms"],
-  configured: CapabilityConfig<"dms">,
-  signal?: AbortSignal,
-  connect: ConnectDmsMcp = connectDmsMcp,
-  workFiles?: IssueWorkFileStore,
-) {
+export async function queryDms(input: CapabilityInputs["dms"], configured: CapabilityConfig<"dms">, signal?: AbortSignal, connect: ConnectDmsMcp = connectDmsMcp, workFiles?: IssueWorkFileStore) {
   if (input.export) {
     if (!workFiles) throw new Error("issue_work_files_not_available");
     workFileName(input.export.fileName);
@@ -305,12 +342,15 @@ export async function queryDms(
   let httpError: DmsHttpError | undefined;
   const phase = async <T>(name: DmsPhase, operation: () => Promise<T>): Promise<T> => {
     const phaseStarted = performance.now();
-    try { return await operation(); }
-    catch (error) {
+    try {
+      return await operation();
+    } catch (error) {
       failedPhase ??= name;
       if (error instanceof DmsHttpError) httpError ??= error;
       throw error;
-    } finally { phaseElapsedMs[name] = Math.round(performance.now() - phaseStarted); }
+    } finally {
+      phaseElapsedMs[name] = Math.round(performance.now() - phaseStarted);
+    }
   };
   try {
     const session = await phase("connect", async () => {
@@ -322,7 +362,10 @@ export async function queryDms(
     });
     return await withDmsSession({ close: () => phase("close", () => session.close()) }, boundedSignal, async (close) => {
       const tool = uniqueTool(await phase("discovery", () => session.listTools(boundedSignal)), "executeScript", isReadOnlyScriptTool);
-      if (!tool) { failedPhase = "discovery"; throw new Error("dms_mcp_execute_script_unavailable"); }
+      if (!tool) {
+        failedPhase = "discovery";
+        throw new Error("dms_mcp_execute_script_unavailable");
+      }
       const result = await phase("execute", async () => {
         // This records a dispatch attempt, not proof the server received or executed SQL.
         sqlDispatchAttempted = true;
@@ -333,19 +376,37 @@ export async function queryDms(
       });
       const text = JSON.stringify({ tool: tool.name, result }, null, 2);
       if (input.export) {
-        const exported = await phase("export", () => workFiles!.generate(input.export!.fileName, async (append) => { await append(text); await close(); boundedSignal.throwIfAborted(); }, boundedSignal));
-        return capabilityTextResult(JSON.stringify({ tool: tool.name, export: { fileName: exported.fileName, size: exported.size, format: "dms-mcp-json", downloadPath: workFiles!.downloadPath(exported.fileName) } }), { provider: "aliyun-dms-mcp", tool: tool.name, fileName: exported.fileName });
+        const exported = await phase("export", () =>
+          workFiles!.generate(
+            input.export!.fileName,
+            async (append) => {
+              await append(text);
+              await close();
+              boundedSignal.throwIfAborted();
+            },
+            boundedSignal,
+          ),
+        );
+        return capabilityTextResult(
+          JSON.stringify({ tool: tool.name, export: { fileName: exported.fileName, size: exported.size, format: "dms-mcp-json", downloadPath: workFiles!.downloadPath(exported.fileName) } }),
+          { provider: "aliyun-dms-mcp", tool: tool.name, fileName: exported.fileName },
+        );
       }
+      // Inline results share the capability result budget; larger result sets must use export.
+      if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes) throw new Error("dms_mcp_result_too_large_use_export");
       return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    throw new DmsOperationError({
-      phase: failedPhase ?? "execute",
-      elapsedMs: Math.round(performance.now() - started),
-      phaseElapsedMs,
-      sqlDispatchAttempted,
-      ...(httpError?.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: httpError.retryAfterSeconds }),
-    }, boundedSignal.aborted ? cancellationError(boundedSignal) : error);
+    throw new DmsOperationError(
+      {
+        phase: failedPhase ?? "execute",
+        elapsedMs: Math.round(performance.now() - started),
+        phaseElapsedMs,
+        sqlDispatchAttempted,
+        ...(httpError?.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: httpError.retryAfterSeconds }),
+      },
+      boundedSignal.aborted ? cancellationError(boundedSignal) : error,
+    );
   }
 }

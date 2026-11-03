@@ -13,7 +13,7 @@ const monacoRoot = path.resolve(path.dirname(require.resolve("monaco-editor")), 
 const monacoVersion = (JSON.parse(readFileSync(path.join(monacoRoot, "package.json"), "utf8")) as { version: string }).version;
 const materialVersion = (require("material-icon-theme/package.json") as { version: string }).version;
 const iconRoot = path.join(materialRoot, "icons");
-const iconFiles = readdirSync(iconRoot).filter(name => name.endsWith(".svg"));
+const iconFiles = readdirSync(iconRoot).filter((name) => name.endsWith(".svg"));
 const iconNames = new Set(iconFiles);
 const iconPrefix = `assets/editor-icons-${materialVersion}/`;
 const iconLicenses = `Material Icon Theme — https://github.com/material-extensions/vscode-material-icon-theme\n${readFileSync(path.join(materialRoot, "LICENSE"), "utf8")}\n\nCodicons © Microsoft Corporation — https://github.com/microsoft/vscode-codicons\nOriginal icon font, licensed under CC BY 4.0. The code browser uses the unchanged font distributed in monaco-editor ${monacoVersion}, from https://github.com/microsoft/vscode-codicons.\n${readFileSync(path.resolve("src/web/src/ui/codicons.LICENSE"), "utf8")}\n\nMonaco Editor © Microsoft Corporation — https://github.com/microsoft/monaco-editor\n${readFileSync(path.join(monacoRoot, "LICENSE"), "utf8")}\n${readFileSync(path.join(monacoRoot, "ThirdPartyNotices.txt"), "utf8")}`;
@@ -24,10 +24,17 @@ function editorIconAssets(): Plugin {
   return {
     name: "editor-icon-assets",
     configureServer(server) {
-      server.middlewares.use("/assets/editor-icon-licenses.txt", (_request, response) => { response.setHeader("Content-Type", "text/plain; charset=utf-8"); response.end(iconLicenses); });
+      server.middlewares.use("/assets/editor-icon-licenses.txt", (_request, response) => {
+        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.end(iconLicenses);
+      });
       server.middlewares.use(`/${iconPrefix}`, (request, response, next) => {
         let name: string;
-        try { name = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname.slice(1)); } catch { return next(); }
+        try {
+          name = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname.slice(1));
+        } catch {
+          return next();
+        }
         if (!iconNames.has(name)) return next();
         response.setHeader("Content-Type", "image/svg+xml");
         createReadStream(path.join(iconRoot, name)).on("error", next).pipe(response);

@@ -1,9 +1,15 @@
-import { type Accessor, type ParentProps, createContext, createSignal, onCleanup, useContext } from "solid-js";
+import { type Accessor, type ParentProps, createContext, createEffect, createSignal, onCleanup, useContext } from "solid-js";
 
 import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
+import { AgentDraftStore } from "./agent-drafts";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
-const emptyConfiguration = (): Config => ({ agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {}, apiKeyConfigured: false }, environments: [], services: [], agentModels: [] });
+const emptyConfiguration = (): Config => ({
+  agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {}, apiKeyConfigured: false },
+  environments: [],
+  services: [],
+  agentModels: [],
+});
 
 interface ApplicationResources {
   catalog: Accessor<ConfigCatalog>;
@@ -18,6 +24,7 @@ interface ApplicationResources {
   refreshConfiguration: () => Promise<Config>;
   refreshPeople: () => Promise<Person[]>;
   selectCurrentUser: (subject: string) => void;
+  agentDrafts: AgentDraftStore;
 }
 
 const ResourcesContext = createContext<ApplicationResources>();
@@ -50,10 +57,39 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
   const [peopleError, setPeopleError] = createSignal("", { ownedWrite: true });
 
+  const agentDrafts = new AgentDraftStore();
+  // Drafts live in application resources; warn before a reload or tab close discards them.
+  const beforeUnload = (event: BeforeUnloadEvent) => {
+    if (!agentDrafts.hasPending()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  };
+  window.addEventListener("beforeunload", beforeUnload);
+  onCleanup(() => window.removeEventListener("beforeunload", beforeUnload));
+  let lastSubject: string | null | undefined;
+  createEffect(
+    () => currentUser()?.subject ?? null,
+    (subject) => {
+      if (lastSubject !== undefined && subject !== lastSubject) agentDrafts.clearAll();
+      lastSubject = subject;
+    },
+  );
+
   const refreshCatalog = latestLoader(loadCatalog, setCatalog, setCatalogError);
-  const refreshConfiguration = latestLoader(loadConfig, (value) => { setConfiguration(value); setConfigurationLoaded(true); }, setConfigurationError);
-  let peopleGeneration = 0, disposed = false;
-  onCleanup(() => { disposed = true; peopleGeneration++; });
+  const refreshConfiguration = latestLoader(
+    loadConfig,
+    (value) => {
+      setConfiguration(value);
+      setConfigurationLoaded(true);
+    },
+    setConfigurationError,
+  );
+  let peopleGeneration = 0,
+    disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    peopleGeneration++;
+  });
   const refreshPeople = async () => {
     if (disposed) throw new DOMException("Application resources were disposed", "AbortError");
     const owner = ++peopleGeneration;
@@ -89,7 +125,23 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   void refreshPeople().catch(() => undefined);
 
   return (
-    <ResourcesContext value={{ catalog, configuration, configurationLoaded, people, currentUser, catalogError, configurationError, peopleError, refreshCatalog, refreshConfiguration, refreshPeople, selectCurrentUser }}>
+    <ResourcesContext
+      value={{
+        catalog,
+        configuration,
+        configurationLoaded,
+        people,
+        currentUser,
+        catalogError,
+        configurationError,
+        peopleError,
+        refreshCatalog,
+        refreshConfiguration,
+        refreshPeople,
+        selectCurrentUser,
+        agentDrafts,
+      }}
+    >
       {props.children}
     </ResourcesContext>
   );

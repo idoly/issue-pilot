@@ -16,17 +16,21 @@ test("lists and hydrates more Issues than SQLite permits in one parameter list",
     const [service] = await database.db.select().from(services).where(eq(services.key, "scale"));
     const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "test"));
     const count = 33000;
-    await database.client.execute({ sql: `WITH RECURSIVE sequence(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM sequence WHERE n < ${count})
+    await database.client.execute({
+      sql: `WITH RECURSIVE sequence(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM sequence WHERE n < ${count})
       INSERT INTO issues(id,key,title,description,status,priority,type,service_id,environment_id,reporter_subject,created_at,updated_at)
       SELECT 'scale-'||n,'ISSUE-20261020-'||printf('%05d',n),'Fixture '||n,'','open','p2','smart_analysis',?,?,?,unixepoch(),unixepoch() FROM sequence`,
-      args: [service!.id, environment!.id, issuePilotConfig.bootstrapUser.subject] });
+      args: [service!.id, environment!.id, issuePilotConfig.bootstrapUser.subject],
+    });
     await database.client.execute("INSERT INTO issue_workspaces(issue_id,status,runtime_ready,created_at,updated_at) SELECT id,'not_created',0,unixepoch(),unixepoch() FROM issues");
-    await database.client.execute("INSERT INTO issue_repositories(id,issue_id,url,base_branch,created_at,updated_at) SELECT id,id,'https://example.test/scale.git','main',unixepoch(),unixepoch() FROM issues");
+    await database.client.execute(
+      "INSERT INTO issue_repositories(id,issue_id,url,base_branch,created_at,updated_at) SELECT id,id,'https://example.test/scale.git','main',unixepoch(),unixepoch() FROM issues",
+    );
     const response = await fixture.app.inject({ method: "GET", url: "/api/issues" });
     assert.equal(response.statusCode, 200, response.body.slice(0, 200));
     const listed = response.json<Array<{ id: string }>>();
     assert.equal(listed.length, count);
-    assert.equal(new Set(listed.map(row => row.id)).size, count);
+    assert.equal(new Set(listed.map((row) => row.id)).size, count);
     assert.equal(listed[0]!.id, "ISSUE-20261020-33000");
     assert.equal(listed.at(-1)!.id, "ISSUE-20261020-00001");
 
@@ -46,5 +50,8 @@ test("lists and hydrates more Issues than SQLite permits in one parameter list",
     assert.deepEqual(result.blocked, []);
     assert.equal(new Set(hydrated).size, count);
     assert.deepEqual((await database.client.execute("PRAGMA foreign_key_check")).rows, []);
-  } finally { await database.close(); await fixture.cleanup(); }
+  } finally {
+    await database.close();
+    await fixture.cleanup();
+  }
 });

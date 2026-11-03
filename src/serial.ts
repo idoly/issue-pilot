@@ -3,7 +3,10 @@ export class SerialQueue {
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.tail.then(operation);
-    this.tail = result.then(() => undefined, () => undefined);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
@@ -17,7 +20,10 @@ export class KeyedSerialQueue {
 
   async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const result = (this.tails.get(key) ?? Promise.resolve()).then(operation);
-    const tail = result.then(() => undefined, () => undefined);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     this.tails.set(key, tail);
     try {
       return await result;

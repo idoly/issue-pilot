@@ -13,5 +13,9 @@
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
 }
-.ui-codicon { font-family: codicon; }
-.ui-codicon::before { content: attr(data-icon); }
+.ui-codicon {
+  font-family: codicon;
+}
+.ui-codicon::before {
+  content: attr(data-icon);
+}

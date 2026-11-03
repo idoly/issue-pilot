@@ -5,6 +5,7 @@ import { subjects, issues, userCredentials, applicationSettings } from "../db/sc
 import { CAPABILITY_CREDENTIAL_FIELDS } from "../configuration/contracts.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
 import { CAPABILITY_KEYS, USER_ROLES, type AgentModelSelection } from "../domain/contracts.ts";
+import { errorDiagnostic } from "../diagnostics.ts";
 import { agentModelSelection, ApiError, checkRevision, choice, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
@@ -51,13 +52,22 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     return role === "developer" ? status : { ...status, gitSshConfigured: false };
   };
 
-  const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) => runScopeExclusive(async () => {
-    await authorize();
-    const affected = await database.db.select({ id: issues.id }).from(issues).where(or(eq(issues.reporterSubject, subject), eq(issues.assigneeSubject, subject)));
-    return runIssueExclusive(engine, affected.map(({ id }) => id), (reservation) => change(async () => {
-      for (const { id } of affected) await reservation.closeSession(id);
-    }));
-  });
+  const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) =>
+    runScopeExclusive(async () => {
+      await authorize();
+      const affected = await database.db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(or(eq(issues.reporterSubject, subject), eq(issues.assigneeSubject, subject)));
+      return runIssueExclusive(
+        engine,
+        affected.map(({ id }) => id),
+        (reservation) =>
+          change(async () => {
+            for (const { id } of affected) await reservation.closeSession(id);
+          }),
+      );
+    });
 
   for (const kind of CAPABILITY_KEYS) {
     const url = `/api/config/shared-${kind}-credentials`;
@@ -67,7 +77,11 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       reply.header("Cache-Control", "private, no-store");
       return runScopeExclusive(async () => {
         await requireAdmin(database, request);
-        const [row] = await database.db.select({ dms: applicationSettings.sharedDmsCredentials, sls: applicationSettings.sharedSlsCredentials, revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
+        const [row] = await database.db
+          .select({ dms: applicationSettings.sharedDmsCredentials, sls: applicationSettings.sharedSlsCredentials, revision: revisionColumn })
+          .from(applicationSettings)
+          .where(eq(applicationSettings.id, 1))
+          .limit(1);
         const revision = row?.revision ?? 0;
         return kind === "dms"
           ? { configured: Boolean(row?.dms?.url && row.dms.authorization), url: row?.dms?.url ?? "", revision }
@@ -78,29 +92,43 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       reply.header("Cache-Control", "private, no-store");
       await requireAdmin(database, request);
       const input = record(request.body);
-      if (Object.keys(input).some(key => !["mode", "expectedRevision", ...fields].includes(key)) || input.mode === "clear" && fields.some(field => input[field] !== undefined)) throw new ApiError(400, `invalid_shared_${kind}_credentials`);
+      if (Object.keys(input).some((key) => !["mode", "expectedRevision", ...fields].includes(key)) || (input.mode === "clear" && fields.some((field) => input[field] !== undefined)))
+        throw new ApiError(400, `invalid_shared_${kind}_credentials`);
       if (input.mode !== "clear" && input.mode !== "replace") throw new ApiError(400, "invalid_credential_update");
       let update: Pick<typeof applicationSettings.$inferInsert, "sharedDmsCredentials" | "sharedSlsCredentials">;
       try {
-        update = kind === "dms"
-          ? { sharedDmsCredentials: input.mode === "clear" ? null : parseDmsConnectionConfiguration(input) }
-          : { sharedSlsCredentials: input.mode === "clear" ? null : parseSlsConnectionConfiguration(input) };
-      } catch (error) { if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message); throw error; }
+        update =
+          kind === "dms"
+            ? { sharedDmsCredentials: input.mode === "clear" ? null : parseDmsConnectionConfiguration(input) }
+            : { sharedSlsCredentials: input.mode === "clear" ? null : parseSlsConnectionConfiguration(input) };
+      } catch (error) {
+        if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
+        throw error;
+      }
       return runScopeExclusive(async () => {
         await requireAdmin(database, request);
         const affected = await database.db.select({ id: issues.id }).from(issues);
-        return runIssueExclusive(engine, affected.map(row => row.id), async reservation => {
-          await requireAdmin(database, request);
-          const [existing] = await database.db.select({ revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
-          checkRevision(input.expectedRevision, existing?.revision ?? 0);
-          for (const row of affected) await reservation.closeSession(row.id);
-          const revision = (existing?.revision ?? 0) + 1;
-          const values = { ...update, ...(kind === "dms" ? { sharedDmsRevision: revision } : { sharedSlsRevision: revision }) };
-          await database.db.transaction(transaction => transaction.insert(applicationSettings).values({ id: 1, ...values }).onConflictDoUpdate({ target: applicationSettings.id, set: values }));
-          return kind === "dms"
-            ? { configured: Boolean(update.sharedDmsCredentials), url: update.sharedDmsCredentials?.url ?? "", revision }
-            : { configured: Boolean(update.sharedSlsCredentials), revision };
-        });
+        return runIssueExclusive(
+          engine,
+          affected.map((row) => row.id),
+          async (reservation) => {
+            await requireAdmin(database, request);
+            const [existing] = await database.db.select({ revision: revisionColumn }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
+            checkRevision(input.expectedRevision, existing?.revision ?? 0);
+            for (const row of affected) await reservation.closeSession(row.id);
+            const revision = (existing?.revision ?? 0) + 1;
+            const values = { ...update, ...(kind === "dms" ? { sharedDmsRevision: revision } : { sharedSlsRevision: revision }) };
+            await database.db.transaction((transaction) =>
+              transaction
+                .insert(applicationSettings)
+                .values({ id: 1, ...values })
+                .onConflictDoUpdate({ target: applicationSettings.id, set: values }),
+            );
+            return kind === "dms"
+              ? { configured: Boolean(update.sharedDmsCredentials), url: update.sharedDmsCredentials?.url ?? "", revision }
+              : { configured: Boolean(update.sharedSlsCredentials), revision };
+          },
+        );
       });
     });
   }
@@ -117,59 +145,90 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const input = record(request.body);
     // Personal model groups are open to every role; SSH identities serve development Issues only.
     if (input.git) await requireDeveloper(database, request);
-    if (Object.keys(input).some((key) => !["model", "git", "production", "expectedRevision"].includes(key)) || (!input.model && !input.git && !input.production)) throw new ApiError(400, "invalid_user_credentials");
+    if (Object.keys(input).some((key) => !["model", "git", "production", "expectedRevision"].includes(key)) || (!input.model && !input.git && !input.production))
+      throw new ApiError(400, "invalid_user_credentials");
     let modelUpdate: { selection: AgentModelSelection; apiKey?: string } | null | undefined;
     if (input.model) {
       const model = record(input.model);
       if (model.mode === "clear" && Object.keys(model).length === 1) modelUpdate = null;
-      else if (model.mode === "replace" && Object.keys(model).every(key => ["mode", "provider", "model", "thinkingLevel", "codemode", "apiKey"].includes(key))) {
+      else if (model.mode === "replace" && Object.keys(model).every((key) => ["mode", "provider", "model", "thinkingLevel", "codemode", "apiKey"].includes(key))) {
         modelUpdate = { selection: agentModelSelection(model, await modelCatalog.list()) };
         if (model.apiKey !== undefined) modelUpdate.apiKey = text(model.apiKey, "model_api_key", 10_000);
       } else throw new ApiError(400, "invalid_credential_update");
     }
-    const result = await changeUser(subject, () => input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request), async (closeSessions) => {
-      const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
-      checkRevision(input.expectedRevision, existing?.revision ?? 0);
-      const values = { revision: (existing?.revision ?? 0) + 1, modelCredentials: existing?.modelCredentials ?? null, gitPrivateKey: existing?.gitPrivateKey ?? "", productionDmsUrl: existing?.productionDmsUrl ?? "", productionDmsAuthorization: existing?.productionDmsAuthorization ?? "", productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "", productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "" };
-      if (modelUpdate === null) values.modelCredentials = null;
-      else if (modelUpdate) {
-        // A preserved key stays bound to its provider; a new group or provider requires a new key.
-        const apiKey = modelUpdate.apiKey ?? (values.modelCredentials?.provider === modelUpdate.selection.provider ? values.modelCredentials.apiKey : undefined);
-        if (!apiKey) throw new ApiError(400, "agent_api_key_required");
-        values.modelCredentials = { ...modelUpdate.selection, apiKey };
-      }
-      if (input.git) {
-        const git = record(input.git);
-        if (git.mode === "clear") values.gitPrivateKey = "";
-        else if (git.mode === "replace" && git.type === "ssh") {
-          values.gitPrivateKey = text(git.privateKey, "git_private_key", 50_000) + "\n";
-          if (!/^(?:-----BEGIN (?:OPENSSH|RSA|EC) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----)/.test(values.gitPrivateKey)) throw new ApiError(400, "invalid_git_private_key");
-        } else throw new ApiError(400, "invalid_credential_update");
-      }
-      if (input.production) {
-        const production = record(input.production);
-        if (Object.keys(production).some(key => !["dms", "sls"].includes(key)) || (!production.dms && !production.sls)) throw new ApiError(400, "invalid_production_credentials");
-        try {
-          if (production.dms) {
-            const dms = record(production.dms);
-            if (dms.mode === "clear") { values.productionDmsUrl = ""; values.productionDmsAuthorization = ""; }
-            else if (dms.mode === "replace") { const value = parseDmsConnectionConfiguration(dms); values.productionDmsUrl = value.url; values.productionDmsAuthorization = value.authorization; }
-            else throw new ApiError(400, "invalid_credential_update");
+    const result = await changeUser(
+      subject,
+      () => (input.git ? requireDeveloper(database, request) : ensureCurrentSubject(database, request)),
+      async (closeSessions) => {
+        const [existing] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);
+        checkRevision(input.expectedRevision, existing?.revision ?? 0);
+        const values = {
+          revision: (existing?.revision ?? 0) + 1,
+          modelCredentials: existing?.modelCredentials ?? null,
+          gitPrivateKey: existing?.gitPrivateKey ?? "",
+          productionDmsUrl: existing?.productionDmsUrl ?? "",
+          productionDmsAuthorization: existing?.productionDmsAuthorization ?? "",
+          productionSlsAccessKeyId: existing?.productionSlsAccessKeyId ?? "",
+          productionSlsAccessKeySecret: existing?.productionSlsAccessKeySecret ?? "",
+        };
+        if (modelUpdate === null) values.modelCredentials = null;
+        else if (modelUpdate) {
+          // A preserved key stays bound to its provider; a new group or provider requires a new key.
+          const apiKey = modelUpdate.apiKey ?? (values.modelCredentials?.provider === modelUpdate.selection.provider ? values.modelCredentials.apiKey : undefined);
+          if (!apiKey) throw new ApiError(400, "agent_api_key_required");
+          values.modelCredentials = { ...modelUpdate.selection, apiKey };
+        }
+        if (input.git) {
+          const git = record(input.git);
+          if (git.mode === "clear") values.gitPrivateKey = "";
+          else if (git.mode === "replace" && git.type === "ssh") {
+            values.gitPrivateKey = text(git.privateKey, "git_private_key", 50_000) + "\n";
+            if (!/^(?:-----BEGIN (?:OPENSSH|RSA|EC) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----)/.test(values.gitPrivateKey)) throw new ApiError(400, "invalid_git_private_key");
+          } else throw new ApiError(400, "invalid_credential_update");
+        }
+        if (input.production) {
+          const production = record(input.production);
+          if (Object.keys(production).some((key) => !["dms", "sls"].includes(key)) || (!production.dms && !production.sls)) throw new ApiError(400, "invalid_production_credentials");
+          try {
+            if (production.dms) {
+              const dms = record(production.dms);
+              if (dms.mode === "clear") {
+                values.productionDmsUrl = "";
+                values.productionDmsAuthorization = "";
+              } else if (dms.mode === "replace") {
+                const value = parseDmsConnectionConfiguration(dms);
+                values.productionDmsUrl = value.url;
+                values.productionDmsAuthorization = value.authorization;
+              } else throw new ApiError(400, "invalid_credential_update");
+            }
+            if (production.sls) {
+              const sls = record(production.sls);
+              if (sls.mode === "clear") {
+                values.productionSlsAccessKeyId = "";
+                values.productionSlsAccessKeySecret = "";
+              } else if (sls.mode === "replace") {
+                const value = parseSlsConnectionConfiguration(sls);
+                values.productionSlsAccessKeyId = value.accessKeyId;
+                values.productionSlsAccessKeySecret = value.accessKeySecret;
+              } else throw new ApiError(400, "invalid_credential_update");
+            }
+          } catch (error) {
+            if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
+            throw error;
           }
-          if (production.sls) {
-            const sls = record(production.sls);
-            if (sls.mode === "clear") { values.productionSlsAccessKeyId = ""; values.productionSlsAccessKeySecret = ""; }
-            else if (sls.mode === "replace") { const value = parseSlsConnectionConfiguration(sls); values.productionSlsAccessKeyId = value.accessKeyId; values.productionSlsAccessKeySecret = value.accessKeySecret; }
-            else throw new ApiError(400, "invalid_credential_update");
-          }
-        } catch (error) { if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message); throw error; }
-      }
-      await closeSessions();
-      const [saved] = await database.db.insert(userCredentials).values({ subject, ...values }).onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } }).returning();
-      const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-      return personalStatus(user?.role, saved);
-    }).catch((error) => {
+        }
+        await closeSessions();
+        const [saved] = await database.db
+          .insert(userCredentials)
+          .values({ subject, ...values })
+          .onConflictDoUpdate({ target: userCredentials.subject, set: { ...values, updatedAt: new Date() } })
+          .returning();
+        const [user] = await database.db.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+        return personalStatus(user?.role, saved);
+      },
+    ).catch((error) => {
       if (error instanceof ApiError) throw error;
+      app.log.error(errorDiagnostic(error));
       throw new ApiError(500, "user_credentials_save_failed");
     });
     reply.header("Cache-Control", "private, no-store");
@@ -189,7 +248,8 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
   });
 
   app.get("/api/users/manage", async (request, reply) => {
-    await ensureCurrentSubject(database, request);
+    // Management data (inactive users, revisions, admin flags) follows the documented developer gate.
+    await requireDeveloper(database, request);
     reply.header("Cache-Control", "private, no-store");
     const users = await database.db.select().from(subjects).orderBy(desc(subjects.active), asc(subjects.displayName), asc(subjects.subject));
     return users.map(serializeManagedUser);
@@ -203,13 +263,17 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       const role = choice(input.role ?? "product", "user_role", USER_ROLES);
       const isAdmin = input.isAdmin === undefined ? false : userAdmin(input.isAdmin);
       if (isAdmin) await requireAdmin(database, request);
-      const [saved] = await database.db.insert(subjects).values({ subject: userSubject(input.subject), displayName: userName(input.name), email: userEmail(input.email), role, isAdmin, active: true }).returning();
+      const [saved] = await database.db
+        .insert(subjects)
+        .values({ subject: userSubject(input.subject), displayName: userName(input.name), email: userEmail(input.email), role, isAdmin, active: true })
+        .returning();
       return saved!;
     });
     return reply.code(201).send(serializeManagedUser(created));
   });
 
-  app.patch<{ Params: { subject: string } }>("/api/users/:subject", async (request) => {
+  // The path contains the user subject (a login address); keep it out of request logs.
+  app.patch<{ Params: { subject: string } }>("/api/users/:subject", { logLevel: "silent" }, async (request) => {
     await requireDeveloper(database, request);
     const subject = userSubject(request.params.subject);
     const input = record(request.body);
@@ -221,40 +285,64 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       ...(input.isAdmin === undefined ? {} : { isAdmin: userAdmin(input.isAdmin) }),
     };
     if (!Object.keys(update).length) throw new ApiError(400, "invalid_user_update");
-    return changeUser(subject, async () => {
-      const actor = await requireDeveloper(database, request);
-      const [existing] = await database.db.select({ isAdmin: subjects.isAdmin }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
-      if (existing?.isAdmin || update.isAdmin === true) await requireAdmin(database, request);
-      return actor;
-    }, async (closeSessions) => {
-      await closeSessions();
-      return database.db.transaction(async (transaction) => {
-        const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-        if (!existing) throw new ApiError(404, "user_not_found");
-        checkRevision(input.expectedRevision, existing.revision);
-        const active = update.active ?? existing.active;
-        const nextRole = update.role ?? existing.role;
-        const isAdmin = update.isAdmin ?? existing.isAdmin;
-        if (existing.active && !active) {
-          const activeUsers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).limit(2);
-          if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
-        }
-        if (existing.active && existing.isAdmin && (!active || !isAdmin)) {
-          const administrators = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.active, true))).limit(2);
-          if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
-        }
-        if (existing.active && existing.role === "developer" && (!active || nextRole !== "developer")) {
-          const developers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
-          if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
-        }
-        // Changing management access requires both developer and isAdmin.
-        if (existing.active && existing.isAdmin && existing.role === "developer" && (!active || !isAdmin || nextRole !== "developer")) {
-          const managers = await transaction.select({ subject: subjects.subject }).from(subjects).where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true))).limit(2);
-          if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
-        }
-        const [updated] = await transaction.update(subjects).set({ ...update, revision: existing.revision + 1, updatedAt: new Date() }).where(eq(subjects.subject, subject)).returning();
-        return serializeManagedUser(updated!);
-      });
-    });
+    return changeUser(
+      subject,
+      async () => {
+        const actor = await requireDeveloper(database, request);
+        const [existing] = await database.db.select({ isAdmin: subjects.isAdmin }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
+        if (existing?.isAdmin || update.isAdmin === true) await requireAdmin(database, request);
+        return actor;
+      },
+      async (closeSessions) => {
+        // Reject stale or missing targets before closing sessions; the transaction rechecks under the reservation.
+        const [preflight] = await database.db.select({ revision: subjects.revision }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
+        if (!preflight) throw new ApiError(404, "user_not_found");
+        checkRevision(input.expectedRevision, preflight.revision);
+        await closeSessions();
+        return database.db.transaction(async (transaction) => {
+          const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
+          if (!existing) throw new ApiError(404, "user_not_found");
+          checkRevision(input.expectedRevision, existing.revision);
+          const active = update.active ?? existing.active;
+          const nextRole = update.role ?? existing.role;
+          const isAdmin = update.isAdmin ?? existing.isAdmin;
+          if (existing.active && !active) {
+            const activeUsers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).limit(2);
+            if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
+          }
+          if (existing.active && existing.isAdmin && (!active || !isAdmin)) {
+            const administrators = await transaction
+              .select({ subject: subjects.subject })
+              .from(subjects)
+              .where(and(eq(subjects.isAdmin, true), eq(subjects.active, true)))
+              .limit(2);
+            if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+          }
+          if (existing.active && existing.role === "developer" && (!active || nextRole !== "developer")) {
+            const developers = await transaction
+              .select({ subject: subjects.subject })
+              .from(subjects)
+              .where(and(eq(subjects.role, "developer"), eq(subjects.active, true)))
+              .limit(2);
+            if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
+          }
+          // Changing management access requires both developer and isAdmin.
+          if (existing.active && existing.isAdmin && existing.role === "developer" && (!active || !isAdmin || nextRole !== "developer")) {
+            const managers = await transaction
+              .select({ subject: subjects.subject })
+              .from(subjects)
+              .where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true)))
+              .limit(2);
+            if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+          }
+          const [updated] = await transaction
+            .update(subjects)
+            .set({ ...update, revision: existing.revision + 1, updatedAt: new Date() })
+            .where(eq(subjects.subject, subject))
+            .returning();
+          return serializeManagedUser(updated!);
+        });
+      },
+    );
   });
 }

@@ -15,7 +15,9 @@
     "typecheck": "tsc --noEmit && tsc -p src/web/tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test 'tests/**/*.test.ts' && vitest run --config src/web/vite.config.ts --environment jsdom",
     "build": "vite build --config src/web/vite.config.ts",
-    "db:migrate": "node --experimental-strip-types src/db/migrate.ts"
+    "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
+    "format": "biome format --write .",
+    "format:check": "biome format ."
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",
@@ -33,6 +35,7 @@
     "p-map": "^7.1.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
     "@solidjs/testing-library": "1.0.0-rc.2",
     "@solidjs/vite-plugin": "3.0.0-next.55",
     "@solidjs/web": "2.0.0-rc.20",
@@ -49,7 +52,9 @@
     "vitest": "^5.0.5"
   },
   "overrides": {
-    "@fastify/static": { "glob": "14.0.3" },
+    "@fastify/static": {
+      "glob": "14.0.3"
+    },
     "zod": "4.6.7",
     "dompurify": "$dompurify",
     "seroval": "1.7.0",

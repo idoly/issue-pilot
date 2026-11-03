@@ -39,16 +39,26 @@ export async function requireCurrentUser(database: ApiRouteContext["database"], 
   if (!selected && request) {
     let selection = defaultRequestSubjects.get(request);
     if (!selection) {
-      selection = database.db.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.createdAt), asc(subjects.subject)).limit(1).then(([user]) => {
-        if (!user) throw new ApiError(400, "invalid_current_subject");
-        return user.subject;
-      });
+      selection = database.db
+        .select({ subject: subjects.subject })
+        .from(subjects)
+        .where(eq(subjects.active, true))
+        .orderBy(asc(subjects.createdAt), asc(subjects.subject))
+        .limit(1)
+        .then(([user]) => {
+          if (!user) throw new ApiError(400, "invalid_current_subject");
+          return user.subject;
+        });
       defaultRequestSubjects.set(request, selection);
     }
     selected = await selection;
   }
   const [user] = selected
-    ? await database.db.select().from(subjects).where(and(eq(subjects.subject, selected), eq(subjects.active, true))).limit(1)
+    ? await database.db
+        .select()
+        .from(subjects)
+        .where(and(eq(subjects.subject, selected), eq(subjects.active, true)))
+        .limit(1)
     : await database.db.select().from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.createdAt), asc(subjects.subject)).limit(1);
   if (!user) throw new ApiError(400, "invalid_current_subject");
   return user;
@@ -78,16 +88,15 @@ export async function authorizeWorkMode(database: ApiRouteContext["database"], r
 
 export async function requireIssue(database: ApiRouteContext["database"], key: string) {
   const normalized = parseIssueKey(key);
-  const issue = normalized
-    ? (await database.db.select().from(issues).where(eq(issues.key, normalized)).limit(1))[0]
-    : undefined;
+  const issue = normalized ? (await database.db.select().from(issues).where(eq(issues.key, normalized)).limit(1))[0] : undefined;
   if (!issue) throw new ApiError(404, "issue_not_found");
   return issue;
 }
 
 export async function runIssueExclusive<T>(engine: AgentController, issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T> {
-  try { return await engine.runExclusive(issueIds, operation); }
-  catch (error) {
+  try {
+    return await engine.runExclusive(issueIds, operation);
+  } catch (error) {
     if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
     throw error;
   }

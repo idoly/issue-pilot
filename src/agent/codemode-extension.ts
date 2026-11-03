@@ -23,7 +23,9 @@ export class CodemodeQueue {
     try {
       signal?.throwIfAborted();
       return await operation();
-    } finally { release(); }
+    } finally {
+      release();
+    }
   }
 
   private acquire(signal?: AbortSignal): Promise<() => void> {
@@ -40,10 +42,20 @@ export class CodemodeQueue {
         clearTimeout(timer);
         cancellation?.[Symbol.dispose]();
       };
-      const start = () => { cleanup(); resolve(() => this.release()); };
+      const start = () => {
+        cleanup();
+        resolve(() => this.release());
+      };
       this.waiting.add(start);
-      timer = setTimeout(() => { cleanup(); reject(new Error("codemode_queue_timeout")); }, this.waitMs);
-      if (signal) cancellation = addAbortListener(signal, () => { cleanup(); reject(signal.reason); });
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("codemode_queue_timeout"));
+      }, this.waitMs);
+      if (signal)
+        cancellation = addAbortListener(signal, () => {
+          cleanup();
+          reject(signal.reason);
+        });
     });
   }
 
@@ -58,15 +70,19 @@ const scripts = new CodemodeQueue();
 
 export function createIssueCodemodeExtension(root: string): ExtensionFactory {
   const extension = createCodemodeExtension({ models: false, saveOutput: generatedWorkFileSaver(root, "codemode") });
-  return pi => extension({
-    ...pi,
-    registerTool(tool) {
-      if (tool.name !== "codemode") { pi.registerTool(tool); return; }
-      pi.registerTool({
-        ...tool,
-        promptGuidelines: [...(tool.promptGuidelines ?? []), "Codemode scripts wait for a process-wide execution slot. Independent tool calls inside a script can still run in parallel."],
-        execute: (id, input, signal, update, context) => scripts.run(() => tool.execute(id, input, signal, update, context), signal),
-      });
-    },
-  });
+  return (pi) =>
+    extension({
+      ...pi,
+      registerTool(tool) {
+        if (tool.name !== "codemode") {
+          pi.registerTool(tool);
+          return;
+        }
+        pi.registerTool({
+          ...tool,
+          promptGuidelines: [...(tool.promptGuidelines ?? []), "Codemode scripts wait for a process-wide execution slot. Independent tool calls inside a script can still run in parallel."],
+          execute: (id, input, signal, update, context) => scripts.run(() => tool.execute(id, input, signal, update, context), signal),
+        });
+      },
+    });
 }

@@ -9,7 +9,9 @@ import * as schema from "./schema.ts";
 
 export function openDatabase(file = applicationConfig.databaseFile) {
   const databasePath = path.resolve(file);
-  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const directory = path.dirname(databasePath);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
   closeSync(openSync(databasePath, "a", 0o600));
   chmodSync(databasePath, 0o600);
 
@@ -28,7 +30,7 @@ export type Database = DatabaseConnection["db"];
 export async function readInBatches<Input, Row>(values: readonly Input[], select: (batch: Input[]) => PromiseLike<Row[]>): Promise<Row[]> {
   const rows: Row[] = [];
   for (let offset = 0; offset < values.length; offset += 500) {
-    rows.push(...await select(values.slice(offset, offset + 500)));
+    rows.push(...(await select(values.slice(offset, offset + 500))));
   }
   return rows;
 }

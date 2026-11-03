@@ -8,7 +8,13 @@ import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 export async function loadGlobalAgentConfiguration(database: Pick<Database, "select">): Promise<AgentConfiguration> {
   const [configuration] = await database.select().from(globalAgentConfiguration).where(eq(globalAgentConfiguration.id, 1)).limit(1);
   if (!configuration) throw new Error("global_agent_configuration_missing");
-  return { provider: configuration.provider, model: configuration.model, thinkingLevel: configuration.thinkingLevel as AgentConfiguration["thinkingLevel"], codemode: configuration.codemode, runtime: configuration.runtime };
+  return {
+    provider: configuration.provider,
+    model: configuration.model,
+    thinkingLevel: configuration.thinkingLevel as AgentConfiguration["thinkingLevel"],
+    codemode: configuration.codemode,
+    runtime: configuration.runtime,
+  };
 }
 
 /** Personal model fields replace the shared selection without projecting its API key. */
@@ -45,6 +51,10 @@ export async function ensureGlobalAgentConfiguration(database: Database, modelCa
 }
 
 export async function saveGlobalAgentConfiguration(database: Pick<Database, "update">, configuration: AgentConfiguration, apiKey?: string): Promise<void> {
-  const [updated] = await database.update(globalAgentConfiguration).set({ ...configuration, ...(apiKey === undefined ? {} : { apiKey }), updatedAt: new Date() }).where(eq(globalAgentConfiguration.id, 1)).returning({ id: globalAgentConfiguration.id });
+  const [updated] = await database
+    .update(globalAgentConfiguration)
+    .set({ ...configuration, ...(apiKey === undefined ? {} : { apiKey }), updatedAt: new Date() })
+    .where(eq(globalAgentConfiguration.id, 1))
+    .returning({ id: globalAgentConfiguration.id });
   if (!updated) throw new Error("global_agent_configuration_missing");
 }

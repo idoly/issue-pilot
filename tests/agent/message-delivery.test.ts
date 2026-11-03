@@ -19,10 +19,13 @@ test("recovers only explicitly queued inputs and keeps delivery bookkeeping out 
   assert.deepEqual(pendingAgentMessages(manager), []);
   assert.equal(selectAgentMessage(manager, scope, id), undefined);
   assert.throws(() => startAgentMessage(manager, id, scope), /agent_message_state_changed/);
-  assert.deepEqual(sessionTranscript(manager, "issue").map(item => item.event), [
-    { type: "issue_user", message: "Historical request" },
-    { type: "issue_user", message: "Unstarted request", images },
-  ]);
+  assert.deepEqual(
+    sessionTranscript(manager, "issue").map((item) => item.event),
+    [
+      { type: "issue_user", message: "Historical request" },
+      { type: "issue_user", message: "Unstarted request", images },
+    ],
+  );
 });
 
 test("selects pending input in admission order even when a newer request owns the queued callback", () => {
@@ -44,9 +47,15 @@ test("rejects all queued inputs from a changed scope while retaining their origi
   const changed = { serviceId: "service-b", environmentId: "prod" };
   const current = appendQueuedAgentMessage(manager, changed, "Current scope", []);
   assert.throws(() => selectAgentMessage(manager, changed), /agent_message_scope_changed/);
-  assert.deepEqual(pendingAgentMessages(manager).map(message => message.id), [current]);
+  assert.deepEqual(
+    pendingAgentMessages(manager).map((message) => message.id),
+    [current],
+  );
   assert.equal(selectAgentMessage(manager, changed)?.id, current);
-  assert.deepEqual(sessionTranscript(manager, "issue").map(item => item.event.type === "issue_user" ? item.event.message : "unexpected"), ["Old scope one", "Old scope two", "Current scope"]);
+  assert.deepEqual(
+    sessionTranscript(manager, "issue").map((item) => (item.event.type === "issue_user" ? item.event.message : "unexpected")),
+    ["Old scope one", "Old scope two", "Current scope"],
+  );
 });
 
 test("refuses malformed delivery metadata rather than guessing or repairing it", () => {

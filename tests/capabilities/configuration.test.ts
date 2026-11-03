@@ -10,7 +10,8 @@ test("validates DMS connection credentials independently from query targets", ()
   assert.throws(() => parseDmsScopeConfiguration({ databases: [] }), /invalid_dms_databases/);
   assert.throws(() => parseDmsScopeConfiguration({ databases: [database, { ...database, databaseId: "456" }] }), /duplicate_dms_database_schema/);
   assert.throws(() => parseDmsScopeConfiguration({ databases: [database, { ...database, schemaName: "archive" }] }), /duplicate_dms_database_id/);
-  for (const url of ["", "http://dms.example.test/sse", "https://user@dms.example.test/sse", "https://dms.example.test/sse?token=secret"]) assert.throws(() => parseDmsConnectionConfiguration({ ...connection, url }), /invalid_dms_url/);
+  for (const url of ["", "http://dms.example.test/sse", "https://user@dms.example.test/sse", "https://dms.example.test/sse?token=secret"])
+    assert.throws(() => parseDmsConnectionConfiguration({ ...connection, url }), /invalid_dms_url/);
   for (const authorization of ["", "token", "Bearer token with spaces"]) assert.throws(() => parseDmsConnectionConfiguration({ ...connection, authorization }), /invalid_dms_authorization/);
 });
 
@@ -19,7 +20,12 @@ test("validates SLS credentials and uses the same target rules for single and na
   const scope = { region: "cn-test", project: "orders-test", logstores: ["application"] };
   assert.deepEqual(parseSlsConnectionConfiguration(credentials), credentials);
   assert.deepEqual(parseSlsScopeConfiguration(scope), scope);
-  for (const invalid of [{ ...scope, logstores: [] }, { ...scope, project: "INVALID" }, { ...scope, region: "INVALID" }, { ...scope, logstores: ["bad/store"] }]) {
+  for (const invalid of [
+    { ...scope, logstores: [] },
+    { ...scope, project: "INVALID" },
+    { ...scope, region: "INVALID" },
+    { ...scope, logstores: ["bad/store"] },
+  ]) {
     assert.throws(() => parseSlsScopeConfiguration(invalid), /invalid_sls_scope/);
     assert.throws(() => parseSlsScopeConfiguration({ ...scope, targets: [{ name: "invalid", ...invalid }] }), /invalid_sls_scope/);
   }

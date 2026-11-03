@@ -30,7 +30,10 @@ export function classifyRepositoryState(repositories: RepositoryStateRecord[]): 
 }
 
 export function pathExists(candidate: string): Promise<boolean> {
-  return access(candidate).then(() => true, () => false);
+  return access(candidate).then(
+    () => true,
+    () => false,
+  );
 }
 
 function issueSegment(issueKey: string): string {
@@ -54,16 +57,18 @@ export function legacyIssueRoot(stateRoot: string, issueKey: string): string {
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
   const root = issueRoot(stateRoot, issueKey);
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
-  try { await mkdir(root, { mode: 0o700 }); }
-  catch (error) {
+  try {
+    await mkdir(root, { mode: 0o700 });
+  } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:workspaces/${path.basename(root)}`);
     throw error;
   }
 }
 
 export async function removeEmptyIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
-  try { await rmdir(issueRoot(stateRoot, issueKey)); }
-  catch (error) {
+  try {
+    await rmdir(issueRoot(stateRoot, issueKey));
+  } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
     throw new Error("issue_state_rollback_failed", { cause: new AggregateError([error], "issue_state_rollback_failed") });
   }
@@ -97,8 +102,9 @@ async function directoryNames(directory: string): Promise<string[]> {
 async function validateSharedCheckouts(stateRoot: string): Promise<void> {
   const checkoutRoot = sharedCheckoutsRoot(stateRoot);
   let repositoryEntries;
-  try { repositoryEntries = await readdir(checkoutRoot, { withFileTypes: true }); }
-  catch (error) {
+  try {
+    repositoryEntries = await readdir(checkoutRoot, { withFileTypes: true });
+  } catch (error) {
     if (isMissing(error)) return;
     throw error;
   }
@@ -116,18 +122,25 @@ async function validateSharedCheckouts(stateRoot: string): Promise<void> {
       checkouts: commitEntries.map((entry) => ({ checkout: path.join(repositoryRoot, entry.name), commit: entry.name })),
     });
   }
-  const checkouts = sharedRepositories.flatMap(({ commonDirectory, checkouts }) =>
-    checkouts.map((checkout) => ({ ...checkout, commonDirectory }))
-  );
+  const checkouts = sharedRepositories.flatMap(({ commonDirectory, checkouts }) => checkouts.map((checkout) => ({ ...checkout, commonDirectory })));
   try {
-    await pMap(checkouts, async ({ checkout, commit, commonDirectory }) => {
-      const [head, status, actualCommonDirectory] = await Promise.all([
-        execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
-        execFileAsync("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored=matching"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
-        execFileAsync("git", ["-C", checkout, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
-      ]);
-      if (head.stdout.trim() !== commit || status.stdout.trim() || path.resolve(checkout, actualCommonDirectory.stdout.trim()) !== commonDirectory) throw new Error("shared_checkout_changed");
-    }, stateTaskOptions);
+    await pMap(
+      checkouts,
+      async ({ checkout, commit, commonDirectory }) => {
+        const [head, status, actualCommonDirectory] = await Promise.all([
+          execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
+          execFileAsync("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored=matching"], {
+            encoding: "utf8",
+            env: gitEnvironment,
+            timeout: gitOperationMs,
+            maxBuffer: gitOutputBytes,
+          }),
+          execFileAsync("git", ["-C", checkout, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
+        ]);
+        if (head.stdout.trim() !== commit || status.stdout.trim() || path.resolve(checkout, actualCommonDirectory.stdout.trim()) !== commonDirectory) throw new Error("shared_checkout_changed");
+      },
+      stateTaskOptions,
+    );
   } catch (error) {
     throw new Error("shared_checkout_changed", { cause: error });
   }
@@ -142,10 +155,6 @@ function managedIssueWorkspaceEntries(workspaceRoot: string, localPaths: string[
   }
   if (expectedEntries.size !== localPaths.length) throw new Error("workspace_repository_missing");
   return expectedEntries;
-}
-
-export function assertManagedIssueWorkspacePaths(workspaceRoot: string, localPaths: string[]): void {
-  managedIssueWorkspaceEntries(workspaceRoot, localPaths);
 }
 
 export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, localPaths: string[]): Promise<void> {
@@ -167,7 +176,10 @@ export async function pruneState(stateRoot: string, issueKeys: string[]): Promis
   if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
   for (const key of issueKeys) {
     const legacy = legacyIssueRoot(stateRoot, key);
-    const content = await readdir(legacy).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+    const content = await readdir(legacy).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
     if (content.length) throw new Error("issue_layout_migration_required");
   }
   await validateSharedCheckouts(stateRoot);

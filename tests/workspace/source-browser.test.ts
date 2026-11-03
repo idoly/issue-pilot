@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -24,20 +24,34 @@ test("browses only registered Issue repository content", async () => {
     await database.db.insert(subjects).values({ subject: "source-tester" });
     const [service] = await database.db.insert(services).values({ key: "source-browser", name: "Source Browser" }).returning();
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment.id, config: {} });
-    const [issue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260815-002", title: "Browse source", type: "defect_fix", serviceId: service!.id, environmentId: environment.id, reporterSubject: "source-tester",
-    }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260815-002",
+        title: "Browse source",
+        type: "defect_fix",
+        serviceId: service!.id,
+        environmentId: environment.id,
+        reporterSubject: "source-tester",
+      })
+      .returning();
     const repository = path.join(issueRoot(root, issue!.key), "application");
     await mkdir(path.join(repository, "src"), { recursive: true, mode: 0o700 });
     await writeFile(path.join(repository, "README.md"), "# Application\n", "utf8");
     await writeFile(path.join(repository, "src", "index.ts"), "export const ready = true;\n", "utf8");
     await database.db.insert(issueRepositories).values({
-      issueId: issue!.id, url: "https://git.example.test/application.git", baseBranch: "main", workingBranch: "hotfix-issue-20260815-002",
-      localPath: repository, workspaceName: "application", commitBefore: "a".repeat(40),
+      issueId: issue!.id,
+      url: "https://git.example.test/application.git",
+      baseBranch: "main",
+      workingBranch: "hotfix-issue-20260815-002",
+      localPath: repository,
+      workspaceName: "application",
+      commitBefore: "a".repeat(40),
     });
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
-    const store = repositoryStorePath(root, "https://git.example.test/application.git"), gitDirectory = path.join(store, "worktrees", "application");
+    const store = repositoryStorePath(root, "https://git.example.test/application.git"),
+      gitDirectory = path.join(store, "worktrees", "application");
     await mkdir(gitDirectory, { recursive: true });
     await writeFile(path.join(repository, ".git"), `gitdir: ${gitDirectory}\n`);
     await writeFile(path.join(gitDirectory, "gitdir"), path.join(repository, ".git"));
@@ -48,18 +62,28 @@ test("browses only registered Issue repository content", async () => {
     const executor: CommandExecutor = {
       async execute(command, args, options) {
         commands.push({ command, args, ...(options?.cwd ? { cwd: options.cwd } : {}), ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}) });
-        if (command === "rg") return {
-          code: 0, stderr: "", killed: false,
-          stdout: `${JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "export const ready = true;\n" }, line_number: 1, submatches: [{ start: 13 }] } })}\n`,
-        };
+        if (command === "rg")
+          return {
+            code: 0,
+            stderr: "",
+            killed: false,
+            stdout: `${JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "export const ready = true;\n" }, line_number: 1, submatches: [{ start: 13 }] } })}\n`,
+          };
         if (args.includes("--git-common-dir")) return { code: 0, stderr: "", killed: false, stdout: `${gitDirectory}\n${store}\n${repository}\nhotfix-issue-20260815-002\n` };
         if (args.includes("rev-parse")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\n` };
-        if (args.includes("log")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\x1f${"a".repeat(40)}\x1fTest User\x1f2026-08-15T08:00:00+08:00\x1fFix source browser\x1e\n` };
-        if (args.includes("blame")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} 1 1 1\nauthor Test User\nauthor-mail <test@example.test>\nauthor-time 1786752000\nauthor-tz +0800\nsummary Fix source browser\nfilename src/index.ts\n\texport const ready = true;\n` };
+        if (args.includes("log")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)}\x00${"a".repeat(40)}\x00Test User\x002026-08-15T08:00:00+08:00\x00Fix source browser\x00\n` };
+        if (args.includes("blame"))
+          return {
+            code: 0,
+            stderr: "",
+            killed: false,
+            stdout: `${"b".repeat(40)} 1 1 1\nauthor Test User\nauthor-mail <test@example.test>\nauthor-time 1786752000\nauthor-tz +0800\nsummary Fix source browser\nfilename src/index.ts\n\texport const ready = true;\n`,
+          };
         if (args.includes("merge-base")) return { code: args.includes("c".repeat(40)) ? 1 : 0, stderr: "", killed: false, stdout: "" };
         if (args.includes("rev-list")) return { code: 0, stderr: "", killed: false, stdout: `${"b".repeat(40)} ${"a".repeat(40)}\n` };
         if (args.includes("--name-status")) return { code: 0, stderr: "", killed: false, stdout: "M\0src/index.ts\0R100\0README.md\0GUIDE.md\0" };
-        if (args.includes("cat-file") && args.includes("blob")) return { code: 0, stderr: "", killed: false, stdout: /^(a|:)/.test(args.at(-1)!) ? "export const ready = false;\n" : "export const ready = true;\n" };
+        if (args.includes("cat-file") && args.includes("blob"))
+          return { code: 0, stderr: "", killed: false, stdout: /^(a|:)/.test(args.at(-1)!) ? "export const ready = false;\n" : "export const ready = true;\n" };
         if (args.includes("ls-files") && !args.includes("--others")) return { code: 0, stderr: "", killed: false, stdout: "src/index.ts\0" };
         return { code: 0, stderr: "", killed: false, stdout: "" };
       },
@@ -67,7 +91,13 @@ test("browses only registered Issue repository content", async () => {
     const browser = new SourceBrowser(database.db, root, executor);
     assert.deepEqual(await browser.repositories(issue!), [{ name: "application", url: "https://git.example.test/application.git", branch: "hotfix-issue-20260815-002", access: "write" }]);
     const tree = await browser.tree(issue!, "application");
-    assert.deepEqual(tree.entries.map(({ name, type }) => ({ name, type })), [{ name: "src", type: "directory" }, { name: "README.md", type: "file" }]);
+    assert.deepEqual(
+      tree.entries.map(({ name, type }) => ({ name, type })),
+      [
+        { name: "src", type: "directory" },
+        { name: "README.md", type: "file" },
+      ],
+    );
     const sourceFile = await browser.file(issue!, "application", "src/index.ts");
     assert.equal(sourceFile.content, "export const ready = true;\n");
     assert.match(sourceFile.sha256, /^[a-f0-9]{64}$/);
@@ -87,6 +117,9 @@ test("browses only registered Issue repository content", async () => {
     await browser.createFile(issue!, "application", "generated/child/evidence.txt", "preserve\n");
     await assert.rejects(browser.renamePath(issue!, "application", "generated", "generated/child", true), /invalid_source_path/);
     assert.equal(await readFile(path.join(repository, "generated", "child", "evidence.txt"), "utf8"), "preserve\n");
+    await assert.rejects(browser.deletePath(issue!, "application", "generated", false), /source_path_not_empty/);
+    await assert.rejects(browser.deletePath(issue!, "application", "generated/missing.ts", false), /source_path_not_found/);
+    await assert.rejects(browser.renamePath(issue!, "application", "generated/missing.ts", "generated/other.ts", false), /source_path_not_found/);
     const longName = `${"文".repeat(83)}.ts`;
     const longFile = await browser.createFile(issue!, "application", `generated/${longName}`, "before\n");
     assert.equal((await browser.writeFile(issue!, "application", `generated/${longName}`, "after\n", longFile.sha256)).content, "after\n");
@@ -99,6 +132,11 @@ test("browses only registered Issue repository content", async () => {
     const largeFile = await browser.createFile(issue!, "application", "generated/large.txt", largeSource);
     assert.equal(largeFile.size, Buffer.byteLength(largeSource));
     assert.equal((await browser.file(issue!, "application", "generated/large.txt")).content.length, largeSource.length);
+    const tooLarge = path.join(repository, "generated", "too-large.txt");
+    await writeFile(tooLarge, "");
+    await truncate(tooLarge, issuePilotConfig.limits.sourceBrowser.fileBytes + 1);
+    await assert.rejects(browser.file(issue!, "application", "generated/too-large.txt"), /source_file_too_large/);
+    await rm(tooLarge);
     await browser.deletePath(issue!, "application", "generated", true);
     await assert.rejects(readFile(path.join(repository, "generated", "result.ts")), /ENOENT/);
     await browser.stage(issue!, "application", ["src/index.ts"]);
@@ -106,13 +144,16 @@ test("browses only registered Issue repository content", async () => {
     await browser.discard(issue!, "application", ["src/index.ts"]);
     await browser.createCommit(issue!, "application", "Update source browser", { name: "Test User", email: "test@example.test" });
     assert.deepEqual(await browser.search(issue!, "application", "ready"), {
-      matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false,
+      matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }],
+      truncated: false,
     });
     await browser.search(issue!, "application", "ready", { caseSensitive: false, wordMatch: true });
     const completeSearchBrowser = new SourceBrowser(database.db, root, {
       async execute(_command, _args, options) {
         assert.equal(options?.maxOutputBytes, issuePilotConfig.limits.sourceBrowser.commandOutputBytes);
-        const matches = Array.from({ length: 250 }, (_, index) => JSON.stringify({ type: "match", data: { path: { text: `./src/result-${index}.ts` }, lines: { text: "export const ready = true;\n" }, line_number: index + 1, submatches: [{ start: 13 }] } }));
+        const matches = Array.from({ length: 250 }, (_, index) =>
+          JSON.stringify({ type: "match", data: { path: { text: `./src/result-${index}.ts` }, lines: { text: "export const ready = true;\n" }, line_number: index + 1, submatches: [{ start: 13 }] } }),
+        );
         return { code: 0, stderr: "", killed: false, stdout: `${matches.join("\n")}\n` };
       },
     });
@@ -122,23 +163,53 @@ test("browses only registered Issue repository content", async () => {
     assert.equal(completeSearch.truncated, false);
     const unicodeSearch = new SourceBrowser(database.db, root, {
       async execute() {
-        return { code: 0, stderr: "", killed: false, stdout: JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "订单😀 ready\n" }, line_number: 1, submatches: [{ start: 11 }] } }) + "\n" };
+        return {
+          code: 0,
+          stderr: "",
+          killed: false,
+          stdout: JSON.stringify({ type: "match", data: { path: { text: "./src/index.ts" }, lines: { text: "订单😀 ready\n" }, line_number: 1, submatches: [{ start: 11 }] } }) + "\n",
+        };
       },
     });
     assert.deepEqual((await unicodeSearch.search(issue!, "application", "ready")).matches, [{ path: "src/index.ts", line: 1, column: 6, preview: "订单😀 ready" }]);
     assert.deepEqual(await browser.blame(issue!, "application", "src/index.ts", 1), {
-      path: "src/index.ts", line: 1, commit: "b".repeat(40), shortCommit: "b".repeat(8), author: "Test User", date: "2026-08-15T00:00:00.000Z", subject: "Fix source browser",
+      path: "src/index.ts",
+      line: 1,
+      commit: "b".repeat(40),
+      shortCommit: "b".repeat(8),
+      author: "Test User",
+      date: "2026-08-15T00:00:00.000Z",
+      subject: "Fix source browser",
     });
     const endOfFile = await browser.blame(issue!, "application", "src/index.ts", 2);
-    assert.equal(endOfFile.subject, "文件末尾"); assert.equal(endOfFile.commit, null);
+    assert.equal(endOfFile.subject, "文件末尾");
+    assert.equal(endOfFile.commit, null);
     await assert.rejects(browser.blame(issue!, "application", "src/index.ts", 3), /invalid_source_line/);
     const untrackedBlame = new SourceBrowser(database.db, root, {
-      async execute(_command, args) { return { code: args.includes("blame") ? 128 : 1, stdout: "", stderr: "", killed: false }; },
+      async execute(_command, args) {
+        return { code: args.includes("blame") ? 128 : 1, stdout: "", stderr: "", killed: false };
+      },
     });
     assert.equal((await untrackedBlame.blame(issue!, "application", "src/index.ts", 1)).subject, "未提交变更");
     assert.deepEqual(await browser.history(issue!, "application"), {
       commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Test User", date: "2026-08-15T08:00:00+08:00", subject: "Fix source browser" }],
-      truncated: false, nextCursor: null,
+      truncated: false,
+      nextCursor: null,
+    });
+    const separatorHistory = new SourceBrowser(database.db, root, {
+      async execute(command, args, options) {
+        const result = await executor.execute(command, args, options);
+        if (!args.includes("log")) return result;
+        return { ...result, stdout: `${"b".repeat(40)}\x00${"a".repeat(40)}\x00Test\x1fUser\x002026-08-15T08:00:00+08:00\x00subject\x1fwith\x1eseparators\x00\n` };
+      },
+    });
+    assert.deepEqual((await separatorHistory.history(issue!, "application")).commits[0], {
+      hash: "b".repeat(40),
+      shortHash: "b".repeat(8),
+      parents: ["a".repeat(40)],
+      author: "Test\x1fUser",
+      date: "2026-08-15T08:00:00+08:00",
+      subject: "subject\x1fwith\x1eseparators",
     });
     assert.deepEqual(await browser.commit(issue!, "application", "b".repeat(40)), {
       files: [
@@ -177,15 +248,15 @@ test("browses only registered Issue repository content", async () => {
     const blameCommand = commands.find(({ args }) => args.includes("blame"))!;
     assert.deepEqual(blameCommand.args.slice(-4), ["-L", "1,1", "--", "src/index.ts"]);
     const historyCommand = commands.find(({ args }) => args.includes("log"))!;
-    assert.match(historyCommand.args.find((argument) => argument.startsWith("--format="))!, /%H%x1f%P/);
+    assert.match(historyCommand.args.find((argument) => argument.startsWith("--format="))!, /%H%x00%P/);
     const commitDiffCommand = commands.find(({ args }) => args.includes("--name-status"))!;
     assert.ok(commitDiffCommand.args.includes("--no-ext-diff"));
     assert.ok(commitDiffCommand.args.includes("--no-textconv"));
-    assert.ok(commands.some(({ args, maxOutputBytes }) => args.includes("cat-file") && args.includes("blob") && maxOutputBytes === null));
+    assert.ok(commands.some(({ args, maxOutputBytes }) => args.includes("cat-file") && args.includes("blob") && maxOutputBytes === issuePilotConfig.limits.sourceBrowser.fileBytes));
     const workspaceDiffCommand = commands.find(({ args }) => args.includes("diff") && args.includes("--name-status") && !args.includes("a".repeat(40)))!;
     assert.ok(workspaceDiffCommand.args.includes("--no-ext-diff"));
     assert.ok(workspaceDiffCommand.args.includes("--no-textconv"));
-    assert.ok(commands.some(({ args }) => args.at(-1) === ":src/index.ts"));
+    assert.ok(commands.some(({ args }) => args.at(-1) === ":0:src/index.ts"));
     assert.ok(commands.some(({ args }) => args.includes("add") && args.includes("src/index.ts")));
     assert.ok(commands.some(({ args }) => args.includes("reset") && args.includes("HEAD")));
     assert.ok(commands.some(({ args }) => args.includes("checkout") && args.includes("src/index.ts")));
@@ -202,14 +273,26 @@ test("browses only registered Issue repository content", async () => {
     await assert.rejects(browser.tree(issue!, "unknown"), /source_repository_not_found/);
     await assert.rejects(browser.commit(issue!, "application", "c".repeat(40)), /source_commit_not_found/);
 
-    const [readOnlyIssue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260815-003", title: "Read source", type: "defect_fix", serviceId: service!.id, environmentId: environment.id, reporterSubject: "source-tester",
-    }).returning();
+    const [readOnlyIssue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260815-003",
+        title: "Read source",
+        type: "defect_fix",
+        serviceId: service!.id,
+        environmentId: environment.id,
+        reporterSubject: "source-tester",
+      })
+      .returning();
     const readOnlyRepository = path.join(sharedCheckoutsRoot(root), path.basename(store), "c".repeat(40));
     await mkdir(path.join(readOnlyRepository, ".git"), { recursive: true, mode: 0o700 });
     await writeFile(path.join(readOnlyRepository, "README.md"), "# Snapshot\n", "utf8");
     await database.db.insert(issueRepositories).values({
-      issueId: readOnlyIssue!.id, url: "https://git.example.test/application.git", baseBranch: "main", commitBefore: "c".repeat(40), workspaceName: "application",
+      issueId: readOnlyIssue!.id,
+      url: "https://git.example.test/application.git",
+      baseBranch: "main",
+      commitBefore: "c".repeat(40),
+      workspaceName: "application",
     });
     await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });
     await prepareIssueRuntime(root, readOnlyIssue!.key, [{ name: "application", repositoryPath: readOnlyRepository }], "read");

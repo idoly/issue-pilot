@@ -11,10 +11,12 @@ import { isolateIssueWorktree, publishIssueBranch, publishedIssueBranchFile } fr
 const exec = promisify(execFile);
 const git = async (args: string[]) => (await exec("git", args)).stdout.trim();
 
-test("legacy worktree isolation rolls back a failed switch and preserves staged, unstaged and untracked files on retry", async context => {
+test("legacy worktree isolation rolls back a failed switch and preserves staged, unstaged and untracked files on retry", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-git-migration-"));
   try {
-    const shared = path.join(root, "shared"), workspace = path.join(root, "issue", "repo"), privateStore = path.join(root, "issue", ".issue-git-fixture");
+    const shared = path.join(root, "shared"),
+      workspace = path.join(root, "issue", "repo"),
+      privateStore = path.join(root, "issue", ".issue-git-fixture");
     await git(["init", "--bare", shared]);
     const source = path.join(root, "source");
     await git(["clone", shared, source]);
@@ -31,17 +33,20 @@ test("legacy worktree isolation rolls back a failed switch and preserves staged,
     await git(["-C", workspace, "add", "."]);
     await writeFile(path.join(workspace, "file.txt"), "unstaged");
     await writeFile(path.join(workspace, "new.txt"), "untracked");
-    const pointerFile = path.join(workspace, ".git"), pointer = await readFile(pointerFile, "utf8");
+    const pointerFile = path.join(workspace, ".git"),
+      pointer = await readFile(pointerFile, "utf8");
     const metadata = path.resolve(workspace, pointer.slice(8).trim());
     const status = await git(["-C", workspace, "status", "--porcelain"]);
-    const rename = fs.rename, failure = new Error("registration move failed");
+    const rename = fs.rename,
+      failure = new Error("registration move failed");
     context.mock.method(fs, "rename", (...args: Parameters<typeof fs.rename>) => {
       if (args[0] === metadata) return Promise.reject(failure);
       return rename(...args);
     });
     syncBuiltinESMExports();
-    await assert.rejects(isolateIssueWorktree(shared, privateStore, workspace, branch), error => error === failure);
-    context.mock.restoreAll(); syncBuiltinESMExports();
+    await assert.rejects(isolateIssueWorktree(shared, privateStore, workspace, branch), (error) => error === failure);
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     assert.equal(await readFile(pointerFile, "utf8"), pointer);
     assert.equal(await git(["-C", workspace, "status", "--porcelain"]), status);
     await isolateIssueWorktree(shared, privateStore, workspace, branch);
@@ -54,12 +59,14 @@ test("legacy worktree isolation rolls back a failed switch and preserves staged,
     assert.equal(await readFile(path.join(workspace, "file.txt"), "utf8"), "unstaged");
     assert.equal(await readFile(path.join(workspace, "new.txt"), "utf8"), "untracked");
     await git(["-C", workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "staged change"]);
-    const markerFile = path.join(privateStore, publishedIssueBranchFile), marker = await readFile(markerFile, "utf8");
+    const markerFile = path.join(privateStore, publishedIssueBranchFile),
+      marker = await readFile(markerFile, "utf8");
     const publicationFailure = new Error("checkpoint rename failed");
-    context.mock.method(fs, "rename", (...args: Parameters<typeof fs.rename>) => args[1] === markerFile ? Promise.reject(publicationFailure) : rename(...args));
+    context.mock.method(fs, "rename", (...args: Parameters<typeof fs.rename>) => (args[1] === markerFile ? Promise.reject(publicationFailure) : rename(...args)));
     syncBuiltinESMExports();
-    await assert.rejects(publishIssueBranch(shared, privateStore, branch), error => error === publicationFailure);
-    context.mock.restoreAll(); syncBuiltinESMExports();
+    await assert.rejects(publishIssueBranch(shared, privateStore, branch), (error) => error === publicationFailure);
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     assert.equal(await readFile(markerFile, "utf8"), marker);
     await publishIssueBranch(shared, privateStore, branch);
     await publishIssueBranch(shared, privateStore, branch);
@@ -71,7 +78,8 @@ test("legacy worktree isolation rolls back a failed switch and preserves staged,
     await assert.rejects(publishIssueBranch(shared, privateStore, branch), /working_branch_changed_outside_issue/);
     assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${branch}`]), changed);
   } finally {
-    context.mock.restoreAll(); syncBuiltinESMExports();
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     await rm(root, { recursive: true, force: true });
   }
 });

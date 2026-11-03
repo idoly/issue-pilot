@@ -38,9 +38,11 @@ export function pendingAgentMessages(manager: SessionManager, requestedId?: stri
     const data = object(entry.data);
     if (data.delivery === undefined) continue;
     const delivery = object(data.delivery);
-    if (delivery.version !== 1 || delivery.state !== "queued" || typeof delivery.serviceId !== "string" || typeof delivery.environmentId !== "string" || typeof data.message !== "string") throw new Error("agent_message_state_invalid");
+    if (delivery.version !== 1 || delivery.state !== "queued" || typeof delivery.serviceId !== "string" || typeof delivery.environmentId !== "string" || typeof data.message !== "string")
+      throw new Error("agent_message_state_invalid");
     const images = data.images ?? [];
-    if (!Array.isArray(images) || !images.every(image => image && typeof image === "object" && image.type === "image" && typeof image.mimeType === "string" && typeof image.data === "string")) throw new Error("agent_message_state_invalid");
+    if (!Array.isArray(images) || !images.every((image) => image && typeof image === "object" && image.type === "image" && typeof image.mimeType === "string" && typeof image.data === "string"))
+      throw new Error("agent_message_state_invalid");
     known.add(entry.id);
     pending.push({ id: entry.id, message: data.message, images: images as ImageContent[], scope: { serviceId: delivery.serviceId, environmentId: delivery.environmentId } });
   }
@@ -60,8 +62,8 @@ export function appendQueuedAgentMessage(manager: SessionManager, scope: AgentMe
 /** Validate the current business scope before selecting the oldest unstarted input. */
 export function selectAgentMessage(manager: SessionManager, scope: AgentMessageScope, requestedId?: string): PendingAgentMessage | undefined {
   const pending = pendingAgentMessages(manager, requestedId);
-  if (requestedId && !pending.some(message => message.id === requestedId)) return undefined;
-  const rejected = pending.filter(message => message.scope.serviceId !== scope.serviceId || message.scope.environmentId !== scope.environmentId);
+  if (requestedId && !pending.some((message) => message.id === requestedId)) return undefined;
+  const rejected = pending.filter((message) => message.scope.serviceId !== scope.serviceId || message.scope.environmentId !== scope.environmentId);
   for (const message of rejected) manager.appendCustomEntry(deliveryType, { version: 1, entryId: message.id, state: "rejected", reason: "scope_changed" });
   if (rejected.length) throw new Error("agent_message_scope_changed");
   return pending[0];

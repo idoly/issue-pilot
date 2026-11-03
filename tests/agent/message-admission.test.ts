@@ -13,7 +13,7 @@ import { eq } from "drizzle-orm";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
-import type { PiSessionRuntime, StartPiSessionOptions } from "../../src/agent/pi-session.ts";
+import { assertSessionFileComplete, type PiSessionRuntime, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import type { IssueProjectManager, PreparedIssueProject } from "../../src/workspace/project.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -31,7 +31,10 @@ async function fixture() {
     await database.db.insert(subjects).values({ subject: "admit-owner", role: "developer" });
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service.id, environmentId: environment.id, config: {} }).returning();
     assert.ok(deployment);
-    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261023-921", title: "Admission", type: "smart_analysis", serviceId: service.id, environmentId: environment.id, reporterSubject: "admit-owner" }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({ key: "ISSUE-20261023-921", title: "Admission", type: "smart_analysis", serviceId: service.id, environmentId: environment.id, reporterSubject: "admit-owner" })
+      .returning();
     assert.ok(issue);
     await database.db.insert(issueWorkspaces).values({ issueId: issue.id });
     await claimIssueRoot(root, issue.key);
@@ -47,16 +50,24 @@ test("preserves accepted text and images after a process dies before the round s
   const { root, file, database, issue } = await fixture();
   await database.close();
   const child = fork(fileURLToPath(new URL("../helpers/agent-admission-process.ts", import.meta.url)), [root, issue.id], {
-    execArgv: ["--experimental-strip-types"], stdio: ["ignore", "ignore", "pipe", "ipc"],
+    execArgv: ["--experimental-strip-types"],
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
   let diagnostics = "";
-  child.stderr!.on("data", chunk => { diagnostics += chunk.toString(); });
+  child.stderr!.on("data", (chunk) => {
+    diagnostics += chunk.toString();
+  });
   const exited = once(child, "exit");
   try {
     const accepted = once(child, "message").then(([message]) => {
       assert.deepEqual(message, { type: "accepted" });
     });
-    await Promise.race([accepted, exited.then(() => { throw new Error(`admission_child_exited:${diagnostics}`); })]);
+    await Promise.race([
+      accepted,
+      exited.then(() => {
+        throw new Error(`admission_child_exited:${diagnostics}`);
+      }),
+    ]);
     assert.equal(child.kill("SIGKILL"), true);
     const [code, signal] = await exited;
     assert.equal(code, null);
@@ -68,10 +79,16 @@ test("preserves accepted text and images after a process dies before the round s
       assert.ok(binding, "acceptance must have a persisted session binding");
       assert.equal((await stat(binding.sessionFile)).mode & 0o777, 0o600);
       const manager = SessionManager.open(binding.sessionFile);
-      assert.deepEqual(sessionTranscript(manager, issue.id).map(item => item.event), [{ type: "issue_user", message: "Keep this accepted input after a crash", images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] }]);
+      assert.deepEqual(
+        sessionTranscript(manager, issue.id).map((item) => item.event),
+        [{ type: "issue_user", message: "Keep this accepted input after a crash", images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] }],
+      );
       assert.equal(manager.buildSessionContext().messages.length, 0);
       assert.equal(engine.isRunning(issue.id), false, "reopening does not replay model work");
-    } finally { await engine.close(); await reopened.close(); }
+    } finally {
+      await engine.close();
+      await reopened.close();
+    }
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await exited;
@@ -83,7 +100,9 @@ test("uses one session branch for concurrent admissions and dispatches each mess
   const { root, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);
   let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const dispatched: Array<{ message: string | undefined; record: boolean | undefined }> = [];
   (engine as unknown as { run(issueId: string, message?: string, record?: boolean): Promise<void> }).run = async (_issueId, message, record) => {
     dispatched.push({ message, record });
@@ -96,12 +115,26 @@ test("uses one session branch for concurrent admissions and dispatches each mess
     const manager = SessionManager.open(binding.sessionFile);
     assert.equal(manager.getEntries().length, 2);
     assert.equal(manager.getBranch().length, 2);
-    assert.deepEqual(sessionTranscript(manager, issue.id).map(item => item.event), [{ type: "issue_user", message: "first" }, { type: "issue_user", message: "second" }]);
-    assert.equal((await readdir(path.dirname(binding.sessionFile))).filter(name => name.startsWith(".session-")).length, 1);
+    assert.deepEqual(
+      sessionTranscript(manager, issue.id).map((item) => item.event),
+      [
+        { type: "issue_user", message: "first" },
+        { type: "issue_user", message: "second" },
+      ],
+    );
+    assert.equal((await readdir(path.dirname(binding.sessionFile))).filter((name) => name.startsWith(".session-")).length, 1);
     release();
     await engine.close();
-    assert.deepEqual(dispatched, [{ message: "first", record: false }, { message: "second", record: false }]);
-  } finally { release(); await engine.close(); await database.close(); await rm(root, { recursive: true, force: true }); }
+    assert.deepEqual(dispatched, [
+      { message: "first", record: false },
+      { message: "second", record: false },
+    ]);
+  } finally {
+    release();
+    await engine.close();
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("keeps admissions and executed rounds on the same branch during session startup", async (t) => {
@@ -110,8 +143,12 @@ test("keeps admissions and executed rounds on the same branch during session sta
   const internal = engine as unknown as { projectManager: IssueProjectManager; piRuntime: PiSessionRuntime };
   let started!: () => void;
   let release!: () => void;
-  const starting = new Promise<void>(resolve => { started = resolve; });
-  const gate = new Promise<void>(resolve => { release = resolve; });
+  const starting = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const prompts: string[] = [];
   try {
     await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, "admit-owner"));
@@ -126,7 +163,9 @@ test("keeps admissions and executed rounds on the same branch during session sta
       return {
         // Engine only consumes the public manager surface from the SDK session here.
         session: { sessionManager: options.manager } as AgentSession,
-        streaming: false, setGitIdentity() {}, async stop() {},
+        streaming: false,
+        setGitIdentity() {},
+        async stop() {},
         async prompt(message: string) {
           prompts.push(message);
           options.manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
@@ -143,7 +182,13 @@ test("keeps admissions and executed rounds on the same branch during session sta
     assert.ok(binding);
     const manager = SessionManager.open(binding.sessionFile);
     assert.equal(manager.getBranch().length, manager.getEntries().length);
-    assert.deepEqual(sessionTranscript(manager, issue.id).map(item => item.event), [{ type: "issue_user", message: "first" }, { type: "issue_user", message: "second" }]);
+    assert.deepEqual(
+      sessionTranscript(manager, issue.id).map((item) => item.event),
+      [
+        { type: "issue_user", message: "first" },
+        { type: "issue_user", message: "second" },
+      ],
+    );
     assert.equal(prompts.length, 2);
     assert.match(prompts[0]!, /first/);
     assert.match(prompts[1]!, /second/);
@@ -160,7 +205,9 @@ test("preserves a missing journal binding instead of silently starting another c
   const { root, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);
   let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const dispatched: Array<string | undefined> = [];
   (engine as unknown as { run(issueId: string, message?: string): Promise<void> }).run = async (_issueId, message) => {
     dispatched.push(message);
@@ -177,18 +224,25 @@ test("preserves a missing journal binding instead of silently starting another c
     const [unchanged] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id));
     assert.deepEqual(unchanged, binding);
     assert.deepEqual(await readFile(preserved), original);
-    assert.equal((await readdir(path.dirname(binding.sessionFile))).filter(name => name.startsWith(".session-")).length, 0);
+    assert.equal((await readdir(path.dirname(binding.sessionFile))).filter((name) => name.startsWith(".session-")).length, 0);
     release();
     await engine.close();
     assert.deepEqual(dispatched, ["first"]);
-  } finally { release(); await engine.close(); await database.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    release();
+    await engine.close();
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("rejects a partial journal write before admission and preserves the incomplete file on retry", async (t) => {
   const { root, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);
   let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const dispatched: Array<string | undefined> = [];
   (engine as unknown as { run(issueId: string, message?: string): Promise<void> }).run = async (_issueId, message) => {
     dispatched.push(message);
@@ -207,7 +261,7 @@ test("rejects a partial journal write before admission and preserves the incompl
     };
     t.mock.method(fs, "appendFileSync", failAppend);
     syncBuiltinESMExports();
-    await assert.rejects(engine.send(issue.id, "not accepted"), error => error === failure);
+    await assert.rejects(engine.send(issue.id, "not accepted"), (error) => error === failure);
     t.mock.restoreAll();
     syncBuiltinESMExports();
     const damaged = await readFile(binding.sessionFile);
@@ -222,6 +276,87 @@ test("rejects a partial journal write before admission and preserves the incompl
     release();
     await engine.close();
     await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const damage of ["interior", "header"] as const)
+  test(`refuses a session file with a damaged ${damage} line instead of dropping records or rebinding`, async () => {
+    const { root, database, issue } = await fixture();
+    const engine = new AgentEngine(database.db, root);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (engine as unknown as { run(issueId: string, message?: string): Promise<void> }).run = async () => {
+      await gate;
+    };
+    try {
+      await engine.send(issue.id, "first");
+      const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id));
+      assert.ok(binding);
+      const original = await readFile(binding.sessionFile, "utf8");
+      // A partial append merges with the next record into one malformed line that still ends with a newline;
+      // the header case rewrites line 1. Both were accepted by the former last-byte check.
+      const damaged =
+        damage === "interior"
+          ? `${original}{"type":"custom","partial\n{"type":"custom","customType":"issue-pilot-user","data":{"message":"merged"}}\n`
+          : `not a session header\n${original.split("\n").slice(1).join("\n")}`;
+      await fs.promises.writeFile(binding.sessionFile, damaged);
+      const before = await readFile(binding.sessionFile);
+      await assert.rejects(engine.send(issue.id, "must not drop history"), { message: "agent_session_file_incomplete" });
+      const [unchanged] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id));
+      assert.deepEqual(unchanged, binding);
+      assert.deepEqual(await readFile(binding.sessionFile), before);
+      assert.equal((await readdir(path.dirname(binding.sessionFile))).filter((name) => name.endsWith(".jsonl")).length, 1);
+    } finally {
+      release();
+      await engine.close();
+      await database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+test("accepts a session file with a leading UTF-8 byte order mark like Pi does", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-session-bom-"));
+  try {
+    const file = path.join(root, ".session-bom.jsonl");
+    await fs.promises.writeFile(file, `﻿${JSON.stringify({ type: "session", version: 3, id: "bom", timestamp: new Date().toISOString(), cwd: root })}\n`);
+    await assertSessionFileComplete(file);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses a session file rewritten with a different header even when it grows", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-session-rewrite-"));
+  try {
+    const file = path.join(root, ".session-rewrite.jsonl");
+    const header = (id: string) => JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: root });
+    const record = (id: string) => JSON.stringify({ type: "message", id, role: "user", content: "x", timestamp: new Date().toISOString() });
+    await fs.promises.writeFile(file, `${header("first")}\n${record("m1")}\n`);
+    await assertSessionFileComplete(file);
+    // Same inode, larger file, valid JSONL, but no longer the validated session: the append-only cache must not trust it.
+    await fs.promises.writeFile(file, `${header("second")}\n${record("m1")}\n${record("m2")}\n`);
+    await assert.rejects(assertSessionFileComplete(file), { message: "agent_session_file_incomplete" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses an appended session whose validated prefix was rewritten in place", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-session-prefix-"));
+  try {
+    const file = path.join(root, ".session-prefix.jsonl");
+    const header = JSON.stringify({ type: "session", version: 3, id: "prefix", timestamp: new Date().toISOString(), cwd: root });
+    const record = JSON.stringify({ type: "custom", id: "second", value: 1 });
+    await fs.promises.writeFile(file, `${header}\n${record}\n`);
+    await assertSessionFileComplete(file);
+    // Same inode and header, one byte changed inside the validated prefix, then a valid append.
+    const corrupted = record.replace(":", " ");
+    await fs.promises.writeFile(file, `${header}\n${corrupted}\n${JSON.stringify({ type: "custom", id: "third" })}\n`);
+    await assert.rejects(assertSessionFileComplete(file), { message: "agent_session_file_incomplete" });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

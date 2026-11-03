@@ -6,7 +6,7 @@ export async function hostMcpPid(pidFile: string): Promise<number> {
     if (!/^\d+$/.test(pid)) continue;
     try {
       const command = (await readFile(`/proc/${pid}/cmdline`)).toString().split("\0");
-      if (command[0] !== process.execPath || !command.some(part => part.endsWith("mcp-stdio-server.mjs"))) continue;
+      if (command[0] !== process.execPath || !command.some((part) => part.endsWith("mcp-stdio-server.mjs"))) continue;
       if ((await readFile(`/proc/${pid}/environ`)).includes(expected)) return Number(pid);
     } catch {}
   }

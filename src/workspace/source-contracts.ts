@@ -44,11 +44,18 @@ export interface SourceCommit {
   subject: string;
 }
 
-export interface SourceHistoryCursor { revision: string; offset: number }
-export interface SourceHistoryPage { commits: SourceCommit[]; truncated: boolean; nextCursor: SourceHistoryCursor | null }
+export interface SourceHistoryCursor {
+  revision: string;
+  offset: number;
+}
+export interface SourceHistoryPage {
+  commits: SourceCommit[];
+  truncated: boolean;
+  nextCursor: SourceHistoryCursor | null;
+}
 
 export interface SourceCommitFile {
-  status: typeof SOURCE_COMMIT_FILE_STATUSES[number];
+  status: (typeof SOURCE_COMMIT_FILE_STATUSES)[number];
   path: string;
   previousPath: string | null;
 }
@@ -76,7 +83,7 @@ export interface SourceRevisionFile {
 
 export interface SourceWorkspaceFile {
   path: string;
-  version: typeof SOURCE_WORKSPACE_FILE_VERSIONS[number];
+  version: (typeof SOURCE_WORKSPACE_FILE_VERSIONS)[number];
   content: string;
 }
 

@@ -13,15 +13,19 @@ async function assertIssueStructure(database: DatabaseConnection): Promise<void>
   const tables = new Set(tableRows.rows.map((row) => row.name));
   if (!tables.has("issues")) return;
   if (!tables.has("issue_workspaces")) throw new Error("issue_workspaces_table_missing");
-  const [issueWithoutWorkspace] = (await database.client.execute({
-    sql: "SELECT issues.key FROM issues LEFT JOIN issue_workspaces ON issue_workspaces.issue_id = issues.id WHERE issue_workspaces.issue_id IS NULL LIMIT 1",
-    args: [],
-  })).rows;
+  const [issueWithoutWorkspace] = (
+    await database.client.execute({
+      sql: "SELECT issues.key FROM issues LEFT JOIN issue_workspaces ON issue_workspaces.issue_id = issues.id WHERE issue_workspaces.issue_id IS NULL LIMIT 1",
+      args: [],
+    })
+  ).rows;
   if (issueWithoutWorkspace) throw new Error(`issue_workspace_missing:${issueWithoutWorkspace.key}`);
-  const [invalidResolution] = (await database.client.execute({
-    sql: "SELECT key FROM issues WHERE (status = 'resolved') <> (resolved_at IS NOT NULL) LIMIT 1",
-    args: [],
-  })).rows;
+  const [invalidResolution] = (
+    await database.client.execute({
+      sql: "SELECT key FROM issues WHERE (status = 'resolved') <> (resolved_at IS NOT NULL) LIMIT 1",
+      args: [],
+    })
+  ).rows;
   if (invalidResolution) throw new Error(`issue_resolution_state_invalid:${invalidResolution.key}`);
 }
 

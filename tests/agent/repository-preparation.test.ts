@@ -12,7 +12,22 @@ import { and, eq } from "drizzle-orm";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, globalAgentConfiguration, issueAttachments, issueRepositories, issues, issueWorkspaces, mcpServices, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects, userCredentials } from "../../src/db/schema.ts";
+import {
+  agentSessions,
+  environments,
+  globalAgentConfiguration,
+  issueAttachments,
+  issueRepositories,
+  issues,
+  issueWorkspaces,
+  mcpServices,
+  serviceDeploymentRepositories,
+  serviceDeployments,
+  serviceRepositories,
+  services,
+  subjects,
+  userCredentials,
+} from "../../src/db/schema.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
 import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
@@ -48,21 +63,31 @@ test("atomically switches development repository sets across preparation and fin
     await git(["clone", "--bare", source, thirdRemote]);
     const remotes = [...initialRemotes, thirdRemote];
     const targetRemotes: [string, string] = [path.join(root, "target-a", "shared.git"), path.join(root, "target-b", "shared.git")];
-    await Promise.all(targetRemotes.map(async (remote) => {
-      await mkdir(path.dirname(remote), { recursive: true });
-      await git(["clone", "--bare", source, remote]);
-    }));
+    await Promise.all(
+      targetRemotes.map(async (remote) => {
+        await mkdir(path.dirname(remote), { recursive: true });
+        await git(["clone", "--bare", source, remote]);
+      }),
+    );
     const [dev] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
-    await database.db.insert(userCredentials).values({ subject: "tester", modelCredentials: { provider: "test-provider", model: "test-model", thinkingLevel: "medium", codemode: "on", apiKey: "fixture-key" } });
+    await database.db
+      .insert(userCredentials)
+      .values({ subject: "tester", modelCredentials: { provider: "test-provider", model: "test-model", thinkingLevel: "medium", codemode: "on", apiKey: "fixture-key" } });
     const [service] = await database.db.insert(services).values({ key: "removal", name: "Removal" }).returning();
     await registerTestRepositories(database.db, remotes);
-    const repositories = await database.db.insert(serviceRepositories).values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url }))).returning();
+    const repositories = await database.db
+      .insert(serviceRepositories)
+      .values(remotes.map((url, index) => ({ serviceId: service!.id, alias: `repository-${index}`, url })))
+      .returning();
     const [production] = await database.db.select().from(environments).where(eq(environments.kind, "prod"));
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: dev!.id, config: {} });
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: production!.id, config: {} }).returning();
     await database.db.insert(serviceDeploymentRepositories).values(repositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
-    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-103", title: "Remove repositories", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({ key: "ISSUE-20260810-103", title: "Remove repositories", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
 
     const engine = new AgentEngine(database.db, stateRoot);
@@ -71,10 +96,15 @@ test("atomically switches development repository sets across preparation and fin
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
-      async start() { return { session: {}, streaming: false, async prompt() {}, async stop() {} }; },
+      async start() {
+        return { session: {}, streaming: false, async prompt() {}, async stop() {} };
+      },
       async close() {},
     };
-    const [unmanagedIssue] = await database.db.insert(issues).values({ key: "ISSUE-20260810-104", title: "Preserve unmanaged workspace", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" }).returning();
+    const [unmanagedIssue] = await database.db
+      .insert(issues)
+      .values({ key: "ISSUE-20260810-104", title: "Preserve unmanaged workspace", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: unmanagedIssue!.id });
     const unmanagedEvidence = path.join(issueRoot(stateRoot, unmanagedIssue!.key), "operator-evidence.txt");
     await mkdir(path.dirname(unmanagedEvidence), { recursive: true });
@@ -99,7 +129,10 @@ test("atomically switches development repository sets across preparation and fin
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[1]!.id));
     await database.db.delete(serviceRepositories).where(eq(serviceRepositories.id, repositories[2]!.id));
     await registerTestRepositories(database.db, targetRemotes);
-    const targetRepositories = await database.db.insert(serviceRepositories).values(targetRemotes.map((url, index) => ({ serviceId: service!.id, alias: `target-${index}`, url }))).returning();
+    const targetRepositories = await database.db
+      .insert(serviceRepositories)
+      .values(targetRemotes.map((url, index) => ({ serviceId: service!.id, alias: `target-${index}`, url })))
+      .returning();
     await database.db.insert(serviceDeploymentRepositories).values(targetRepositories.map((repository) => ({ deploymentId: deployment!.id, repositoryId: repository.id, baseBranch: "develop" })));
     const targetNames = repositoryWorkspaceNames(targetRemotes);
     const targetPaths = targetRemotes.map((remote) => path.join(issueRoot(stateRoot, issue!.key), targetNames.get(remote)!));
@@ -110,17 +143,17 @@ test("atomically switches development repository sets across preparation and fin
     assert.deepEqual(retained.map((repository) => repository.url).sort(), [...remotes].sort());
 
     await rm(path.join(dirtyRemovedPath, "untracked.txt"));
-    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "missing" }).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployment!.id),
-      eq(serviceDeploymentRepositories.repositoryId, targetRepositories[1]!.id),
-    ));
+    await database.db
+      .update(serviceDeploymentRepositories)
+      .set({ baseBranch: "missing" })
+      .where(and(eq(serviceDeploymentRepositories.deploymentId, deployment!.id), eq(serviceDeploymentRepositories.repositoryId, targetRepositories[1]!.id)));
     await assert.rejects(internal.run(issue!.id));
     await Promise.all([...prepared.map((repository) => access(repository.localPath!)), ...targetPaths.map((targetPath) => assert.rejects(access(targetPath)))]);
     assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map((repository) => repository.url).sort(), [...remotes].sort());
-    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "develop" }).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployment!.id),
-      eq(serviceDeploymentRepositories.repositoryId, targetRepositories[1]!.id),
-    ));
+    await database.db
+      .update(serviceDeploymentRepositories)
+      .set({ baseBranch: "develop" })
+      .where(and(eq(serviceDeploymentRepositories.deploymentId, deployment!.id), eq(serviceDeploymentRepositories.repositoryId, targetRepositories[1]!.id)));
     const engineDatabase = (engine as unknown as { database: { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> } }).database;
     const runTransaction = engineDatabase.transaction.bind(engineDatabase);
     let failRepositoryTransaction = true;
@@ -139,7 +172,10 @@ test("atomically switches development repository sets across preparation and fin
     await internal.run(issue!.id);
     await Promise.all([assert.rejects(access(firstRemovedPath)), assert.rejects(access(dirtyRemovedPath)), ...targetPaths.map((targetPath) => access(targetPath))]);
     const switched = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.deepEqual(switched.map((repository) => repository.url), [remotes[0], ...targetRemotes]);
+    assert.deepEqual(
+      switched.map((repository) => repository.url),
+      [remotes[0], ...targetRemotes],
+    );
     const retainedTarget = switched.find((repository) => repository.url === targetRemotes[0])!;
     const retainedTargetName = retainedTarget.workspaceName!;
     assert.equal(retainedTargetName, targetNames.get(targetRemotes[0]));
@@ -150,7 +186,10 @@ test("atomically switches development repository sets across preparation and fin
     await assert.rejects(access(targetPaths[1]!));
     assert.equal((await readdir(issueRoot(stateRoot, issue!.key))).includes(retainedTargetName), true);
     const reduced = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.deepEqual(reduced.map((repository) => repository.url), [remotes[0], targetRemotes[0]]);
+    assert.deepEqual(
+      reduced.map((repository) => repository.url),
+      [remotes[0], targetRemotes[0]],
+    );
     assert.equal(reduced.find((repository) => repository.url === targetRemotes[0])!.localPath, retainedTarget.localPath);
     assert.equal(reduced.find((repository) => repository.url === targetRemotes[0])!.workspaceName, retainedTarget.workspaceName);
     await engine.close();
@@ -173,20 +212,31 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const prod = environmentRows.find((environment) => environment.kind === "prod")!;
     const dev = environmentRows.find((environment) => environment.kind === "dev")!;
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
-    await database.db.insert(userCredentials).values({ subject: "tester", modelCredentials: { provider: "test-provider", model: "test-model", thinkingLevel: "medium", codemode: "on", apiKey: "fixture-key" } });
+    await database.db
+      .insert(userCredentials)
+      .values({ subject: "tester", modelCredentials: { provider: "test-provider", model: "test-model", thinkingLevel: "medium", codemode: "on", apiKey: "fixture-key" } });
     await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
     await database.db.insert(mcpServices).values({ name: "Disabled tools", url: "https://disabled.example.test/mcp", transport: "streamable_http", enabled: false });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     await registerTestRepositories(database.db, remotes);
-    const repositories = await database.db.insert(serviceRepositories).values([
-      { serviceId: service!.id, alias: "orders", url: remotes[0] },
-      { serviceId: service!.id, alias: "orders-secondary", url: remotes[1] },
-    ]).returning();
-    const deployments = await database.db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: prod.id, config: { mcpServices: ["obsolete-binding"] } },
-      { serviceId: service!.id, environmentId: dev.id, config: {} },
-    ]).returning();
-    const [ownedMcp] = await database.db.insert(mcpServices).values({ name: "Orders tools", url: "https://orders-tools.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id }).returning();
+    const repositories = await database.db
+      .insert(serviceRepositories)
+      .values([
+        { serviceId: service!.id, alias: "orders", url: remotes[0] },
+        { serviceId: service!.id, alias: "orders-secondary", url: remotes[1] },
+      ])
+      .returning();
+    const deployments = await database.db
+      .insert(serviceDeployments)
+      .values([
+        { serviceId: service!.id, environmentId: prod.id, config: { mcpServices: ["obsolete-binding"] } },
+        { serviceId: service!.id, environmentId: dev.id, config: {} },
+      ])
+      .returning();
+    const [ownedMcp] = await database.db
+      .insert(mcpServices)
+      .values({ name: "Orders tools", url: "https://orders-tools.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id })
+      .returning();
     await database.db.insert(mcpServices).values({ name: "dingtalk", url: "https://imports.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id });
     await database.db.insert(serviceDeploymentRepositories).values([
       { deploymentId: deployments[0]!.id, repositoryId: repositories[0]!.id, baseBranch: "prod" },
@@ -194,10 +244,13 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       { deploymentId: deployments[1]!.id, repositoryId: repositories[0]!.id, baseBranch: "develop" },
       { deploymentId: deployments[1]!.id, repositoryId: repositories[1]!.id, baseBranch: "prod" },
     ]);
-    const [prodIssue, devIssue] = await database.db.insert(issues).values([
-      { key: "ISSUE-20260810-101", title: "Inspect prod", type: "smart_analysis", serviceId: service!.id, environmentId: prod.id, reporterSubject: "tester" },
-      { key: "ISSUE-20260810-102", title: "Fix dev", type: "defect_fix", serviceId: service!.id, environmentId: dev.id, reporterSubject: "tester" },
-    ]).returning();
+    const [prodIssue, devIssue] = await database.db
+      .insert(issues)
+      .values([
+        { key: "ISSUE-20260810-101", title: "Inspect prod", type: "smart_analysis", serviceId: service!.id, environmentId: prod.id, reporterSubject: "tester" },
+        { key: "ISSUE-20260810-102", title: "Fix dev", type: "defect_fix", serviceId: service!.id, environmentId: dev.id, reporterSubject: "tester" },
+      ])
+      .returning();
     await database.db.insert(issueWorkspaces).values([{ issueId: prodIssue!.id }, { issueId: devIssue!.id }]);
 
     const engine = new AgentEngine(database.db, stateRoot);
@@ -208,7 +261,14 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     internal.piRuntime = {
       async start(options) {
         starts.push(options);
-        return { session: {}, streaming: false, async prompt() {}, async stop() { sessionStops += 1; } };
+        return {
+          session: {},
+          streaming: false,
+          async prompt() {},
+          async stop() {
+            sessionStops += 1;
+          },
+        };
       },
       async close() {},
     };
@@ -223,9 +283,14 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       await writeFile(objectKey, original.content);
       await chmod(objectKey, 0o400);
       await database.db.insert(issueAttachments).values({
-        issueId: prodIssue!.id, fileName: original.workingFileName, workingFileName: original.workingFileName,
-        mediaType: "text/csv", objectKey, size: Buffer.byteLength(original.content),
-        sha256: createHash("sha256").update(original.content).digest("hex"), uploadedBy: "tester",
+        issueId: prodIssue!.id,
+        fileName: original.workingFileName,
+        workingFileName: original.workingFileName,
+        mediaType: "text/csv",
+        objectKey,
+        size: Buffer.byteLength(original.content),
+        sha256: createHash("sha256").update(original.content).digest("hex"),
+        uploadedBy: "tester",
       });
     }
     await writeFile(path.join(prodRoot, "edited-source.csv"), "already edited evidence");
@@ -243,10 +308,13 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const prodRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, prodIssue!.id));
     const prodRepositoryByUrl = new Map(prodRepositories.map((repository) => [repository.url, repository]));
     const prodRepository = prodRepositoryByUrl.get(remotes[0])!;
-    assert.deepEqual(prodRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)), [
-      { url: remotes[0], baseBranch: "prod" },
-      { url: remotes[1], baseBranch: "develop" },
-    ]);
+    assert.deepEqual(
+      prodRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)),
+      [
+        { url: remotes[0], baseBranch: "prod" },
+        { url: remotes[1], baseBranch: "develop" },
+      ],
+    );
     const [prodWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, prodIssue!.id));
     const [prodSession] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, prodIssue!.id));
     assert.equal(prodRepository!.baseBranch, "prod");
@@ -259,7 +327,10 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(sessionStops, 1);
     assert.equal(starts[0]!.workspaceRoot, issueRoot(stateRoot, prodIssue!.key));
     await writeFile(path.join(starts[0]!.workspaceRoot, "notes.txt"), "retain analysis");
-    assert.equal(path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."), false);
+    assert.equal(
+      path.relative(sharedCheckoutsRoot(stateRoot), await git(["-C", path.join(issueRoot(stateRoot, prodIssue!.key), prodRuntimeName), "rev-parse", "--show-toplevel"])).startsWith(".."),
+      false,
+    );
     await access(issueRoot(stateRoot, prodIssue!.key));
 
     const firstProdCommit = prodRepository.commitBefore;
@@ -282,10 +353,13 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     await internal.run(devIssue!.id);
     const devRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));
     const devRepository = devRepositories.find((repository) => repository.url === remotes[0])!;
-    assert.deepEqual(devRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)), [
-      { url: remotes[0], baseBranch: "prod" },
-      { url: remotes[1], baseBranch: "develop" },
-    ]);
+    assert.deepEqual(
+      devRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)),
+      [
+        { url: remotes[0], baseBranch: "prod" },
+        { url: remotes[1], baseBranch: "develop" },
+      ],
+    );
     const [devWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, devIssue!.id));
     assert.equal(devRepository!.baseBranch, "prod");
     assert.equal(devRepository!.workingBranch, `hotfix-${devIssue!.key.toLowerCase()}`);
@@ -294,23 +368,29 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(devWorkspace!.runtimeReady, true);
     assert.equal(starts[2]!.context.canModifyCode, true);
 
-    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "develop" }).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployments[0]!.id),
-      eq(serviceDeploymentRepositories.repositoryId, repositories[0]!.id),
-    ));
-    await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "prod" }).where(and(
-      eq(serviceDeploymentRepositories.deploymentId, deployments[0]!.id),
-      eq(serviceDeploymentRepositories.repositoryId, repositories[1]!.id),
-    ));
+    await database.db
+      .update(serviceDeploymentRepositories)
+      .set({ baseBranch: "develop" })
+      .where(and(eq(serviceDeploymentRepositories.deploymentId, deployments[0]!.id), eq(serviceDeploymentRepositories.repositoryId, repositories[0]!.id)));
+    await database.db
+      .update(serviceDeploymentRepositories)
+      .set({ baseBranch: "prod" })
+      .where(and(eq(serviceDeploymentRepositories.deploymentId, deployments[0]!.id), eq(serviceDeploymentRepositories.repositoryId, repositories[1]!.id)));
     await internal.run(devIssue!.id);
     const repeatedDevRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, devIssue!.id));
-    assert.deepEqual(repeatedDevRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)), [
-      { url: remotes[0], baseBranch: "prod" },
-      { url: remotes[1], baseBranch: "develop" },
-    ]);
+    assert.deepEqual(
+      repeatedDevRepositories.map(({ url, baseBranch }) => ({ url, baseBranch })).sort((left, right) => left.url.localeCompare(right.url)),
+      [
+        { url: remotes[0], baseBranch: "prod" },
+        { url: remotes[1], baseBranch: "develop" },
+      ],
+    );
 
     for (const start of starts) {
-      assert.deepEqual(start.mcpConfigurations?.map(row => row.id), [ownedMcp!.id]);
+      assert.deepEqual(
+        start.mcpConfigurations?.map((row) => row.id),
+        [ownedMcp!.id],
+      );
     }
     const startsBeforeCorruption = starts.length;
     const corrupted = path.join(prodRoot, originals[0]!.name);

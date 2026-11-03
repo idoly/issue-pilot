@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentEventBus } from "../../src/agent/events.ts";
+import type { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
 import { AGENT_THINKING_LEVELS, type AgentRunState, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
 import type { McpConnector } from "../../src/mcp/client.ts";
@@ -49,7 +49,10 @@ export class TestAgentController {
     return !this.isRunning(issueId) ? "idle" : this.queued.has(issueId) ? "queued" : "running";
   }
 
-  async runExclusive<T>(issueIds: string[], operation: (reservation: { enqueue(issueId: string, message?: string, recordMessage?: boolean): void; closeSession(issueId: string): Promise<void> }) => Promise<T>): Promise<T> {
+  async runExclusive<T>(
+    issueIds: string[],
+    operation: (reservation: { enqueue(issueId: string, message?: string, recordMessage?: boolean): void; closeSession(issueId: string): Promise<void> }) => Promise<T>,
+  ): Promise<T> {
     const reserved = [...new Set(issueIds)];
     if (reserved.some((issueId) => this.running.has(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
     for (const issueId of reserved) this.reservations.add(issueId);
@@ -90,7 +93,15 @@ export async function createApiFixture(options: { events?: AgentEventBus; dingta
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
   const engine = new TestAgentController();
-  const app = await buildApi({ databaseFile, stateRoot: root, engine, ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}), ...(options.events ? { events: options.events } : {}), modelCatalog: options.modelCatalog ?? modelCatalog, logger: false });
+  const app = await buildApi({
+    databaseFile,
+    stateRoot: root,
+    engine,
+    ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}),
+    ...(options.events ? { events: options.events } : {}),
+    modelCatalog: options.modelCatalog ?? modelCatalog,
+    logger: false,
+  });
   let stopped = false;
   const stop = async () => {
     if (stopped) return;
@@ -132,7 +143,12 @@ export function servicePayload(name: string, environments: EnvironmentKind[] = [
 export async function createService(app: FastifyInstance, name: string, environments: EnvironmentKind[] = ["test"], repositoryUrls?: string[]) {
   const definition = servicePayload(name, environments, repositoryUrls);
   for (const repository of definition.repositories) {
-    const registered = await app.inject({ method: "POST", url: "/api/repositories", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: { name: repository.alias, url: repository.url } });
+    const registered = await app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+      payload: { name: repository.alias, url: repository.url },
+    });
     assert.ok([201, 409].includes(registered.statusCode), registered.body);
   }
   const response = await app.inject({ method: "POST", url: "/api/services", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject }, payload: definition });

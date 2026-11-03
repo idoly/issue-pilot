@@ -6,6 +6,7 @@ import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.t
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
 import { ScopeTransitionRefusal } from "../workspace/scope-transition.ts";
+import { errorDiagnostic } from "../diagnostics.ts";
 import { ApiError, choice, record, text } from "./input.ts";
 import { authorizeWorkMode, requireIssue, type ApiRouteContext } from "./route-context.ts";
 
@@ -24,16 +25,29 @@ function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["wor
 export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   const { app, database, workspaces, scopeTransitions, runScopeExclusive } = context;
 
-  const fileAccess = (issue: { id: string; key: string }) => runScopeExclusive(async () => {
-    const readRoots = await context.sourceBrowser.readRoots(issue);
-    const related = await database.db.select({ id: issues.id, key: issues.key }).from(issueRelations).innerJoin(issues, eq(issues.id, issueRelations.relatedIssueId)).where(eq(issueRelations.issueId, issue.id));
-    for (const row of related) {
-      const prefix = `.related-${row.key.toLowerCase()}`;
-      readRoots[prefix] = issueRoot(context.stateRoot, row.key);
-      for (const [name, root] of Object.entries(await context.sourceBrowser.readRoots(row))) readRoots[`${prefix}/${name}`] = root;
-    }
-    return { readRoots };
-  });
+  const fileAccess = (issue: { id: string; key: string }) =>
+    runScopeExclusive(async () => {
+      const readRoots = await context.sourceBrowser.readRoots(issue);
+      const related = await database.db
+        .select({ id: issues.id, key: issues.key })
+        .from(issueRelations)
+        .innerJoin(issues, eq(issues.id, issueRelations.relatedIssueId))
+        .where(eq(issueRelations.issueId, issue.id));
+      for (const row of related) {
+        const prefix = `.related-${row.key.toLowerCase()}`;
+        readRoots[prefix] = issueRoot(context.stateRoot, row.key);
+        let relatedRoots: Record<string, string>;
+        try {
+          relatedRoots = await context.sourceBrowser.readRoots(row);
+        } catch (error) {
+          // A related Issue's checkout drift must not block this Issue's own files; its checkouts stay unavailable.
+          app.log.warn({ issueKey: issue.key, relatedIssueKey: row.key, err: errorDiagnostic(error) }, "related_issue_read_roots_unavailable");
+          continue;
+        }
+        for (const [name, root] of Object.entries(relatedRoots)) readRoots[`${prefix}/${name}`] = root;
+      }
+      return { readRoots };
+    });
   const relativeWorkPath = (value: unknown, optional = false): string => {
     if (value === undefined && optional) return "";
     if (typeof value !== "string" || value.length > 4096 || (!optional && !value.length)) throw new ApiError(400, "invalid_issue_file_path");
@@ -50,12 +64,14 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     }
     throw error;
   };
-  app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", async (request, reply) => {
+  // The query carries a work-file path; keep names out of request logs like the download route.
+  app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", { logLevel: "silent" }, async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path, true);
     reply.header("Cache-Control", "private, no-store");
-    try { return await listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue)); }
-    catch (error) {
+    try {
+      return await listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue));
+    } catch (error) {
       if (!relative && error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
       return workFileError(error);
     }
@@ -71,7 +87,9 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
       reply.header("Content-Length", file.size);
       reply.header("Content-Disposition", contentDisposition(file.fileName));
       return reply.send(file.handle.createReadStream({ autoClose: true }));
-    } catch (error) { return workFileError(error); }
+    } catch (error) {
+      return workFileError(error);
+    }
   });
 
   app.get<{ Querystring: { refresh?: string } }>("/api/workspaces/stats", async (request, reply) => {
@@ -88,7 +106,10 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     };
   };
   const transitionError = (error: unknown): never => {
-    if (error instanceof ScopeTransitionRefusal || error instanceof WorkspaceConversionRefusal || error instanceof WorkspaceScopeMigrationRefusal) throw new ApiError(409, error.reason);
+    if (error instanceof ScopeTransitionRefusal || error instanceof WorkspaceConversionRefusal || error instanceof WorkspaceScopeMigrationRefusal) {
+      if (!/^[a-z][a-z0-9_]*$/.test(error.reason)) throw error;
+      throw new ApiError(409, error.reason);
+    }
     if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
     throw error;
   };
@@ -103,8 +124,14 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const target = transitionTarget(request.body);
     await authorizeWorkMode(database, request, target.workMode);
-    try { return await runScopeExclusive(async () => { await authorizeWorkMode(database, request, target.workMode); return scopeTransitions.plan(issue.id, target); }); }
-    catch (error) { transitionError(error); }
+    try {
+      return await runScopeExclusive(async () => {
+        await authorizeWorkMode(database, request, target.workMode);
+        return scopeTransitions.plan(issue.id, target);
+      });
+    } catch (error) {
+      transitionError(error);
+    }
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/scope-transition/apply", async (request) => {
@@ -116,9 +143,14 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     if (!/^sha256:[0-9a-f]{64}$/.test(expectedPlanHash) || !Number.isFinite(new Date(expectedIssueUpdatedAt).getTime())) throw new ApiError(400, "invalid_scope_transition_expectation");
     const actorSubject = await authorizeWorkMode(database, request, target.workMode);
     try {
-      const changed = await runScopeExclusive(async () => { await authorizeWorkMode(database, request, target.workMode); return scopeTransitions.apply(issue.id, target, { expectedIssueUpdatedAt, expectedPlanHash }, actorSubject); });
+      const changed = await runScopeExclusive(async () => {
+        await authorizeWorkMode(database, request, target.workMode);
+        return scopeTransitions.apply(issue.id, target, { expectedIssueUpdatedAt, expectedPlanHash }, actorSubject);
+      });
       return { issueKey: changed.key };
-    } catch (error) { transitionError(error); }
+    } catch (error) {
+      transitionError(error);
+    }
   });
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key/workspace", async (request) => {
@@ -126,7 +158,10 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     try {
       return await workspaces.releaseIssue(issue.id);
     } catch (error) {
-      if (error instanceof WorkspaceReleaseRefusal) throw new ApiError(409, error.reason);
+      if (error instanceof WorkspaceReleaseRefusal) {
+        if (!/^[a-z][a-z0-9_]*$/.test(error.reason)) throw error;
+        throw new ApiError(409, error.reason);
+      }
       throw error;
     }
   });

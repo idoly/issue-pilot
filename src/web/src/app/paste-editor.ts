@@ -89,10 +89,11 @@ export class PasteEditorModel {
     }
 
     const idMap = new Map([...this.contents.keys()].sort((left, right) => left - right).map((id, index) => [id, index + 1]));
-    const renumber = (text: string) => text.replace(markerRegex(), (marker, idText: string, suffix: string | undefined) => {
-      const nextId = idMap.get(Number(idText));
-      return nextId === undefined ? marker : `[paste #${nextId}${suffix ?? ""}]`;
-    });
+    const renumber = (text: string) =>
+      text.replace(markerRegex(), (marker, idText: string, suffix: string | undefined) => {
+        const nextId = idMap.get(Number(idText));
+        return nextId === undefined ? marker : `[paste #${nextId}${suffix ?? ""}]`;
+      });
     const nextValue = renumber(value);
     const nextStart = renumber(value.slice(0, selectionStart)).length;
     const nextEnd = renumber(value.slice(0, selectionEnd)).length;

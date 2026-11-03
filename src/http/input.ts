@@ -45,8 +45,17 @@ export function choice<const Values extends readonly string[]>(value: unknown, n
 
 // Shared and personal model groups accept only provider/model/thinking combinations offered by the model catalog.
 export function agentModelSelection(input: Record<string, unknown>, models: AgentModelDefinition[]): AgentModelSelection {
-  const selection = { provider: text(input.provider, "agent_provider", 200), model: text(input.model, "agent_model", 500), thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS), codemode: choice(input.codemode, "agent_codemode", AGENT_CODEMODE_MODES) };
-  try { validateAgentModelSelection(selection, models); }
-  catch (error) { if (error instanceof Error && ["agent_model_not_available", "agent_thinking_level_not_supported"].includes(error.message)) throw new ApiError(400, error.message); throw error; }
+  const selection = {
+    provider: text(input.provider, "agent_provider", 200),
+    model: text(input.model, "agent_model", 500),
+    thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS),
+    codemode: choice(input.codemode, "agent_codemode", AGENT_CODEMODE_MODES),
+  };
+  try {
+    validateAgentModelSelection(selection, models);
+  } catch (error) {
+    if (error instanceof Error && ["agent_model_not_available", "agent_thinking_level_not_supported"].includes(error.message)) throw new ApiError(400, error.message);
+    throw error;
+  }
   return selection;
 }

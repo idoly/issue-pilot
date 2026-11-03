@@ -6,12 +6,25 @@ import { capabilityInputSchemas, capabilityToolInputSchema } from "../../src/cap
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
-const context: AgentSessionContext = { issueKey: "ISSUE-20260808-001", serviceKey: "orders", environmentKey: "prod", model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" }, codemode: "off", capabilities: ["dms", "sls"], canModifyCode: false };
+const context: AgentSessionContext = {
+  issueKey: "ISSUE-20260808-001",
+  serviceKey: "orders",
+  environmentKey: "prod",
+  model: { provider: "test-provider", modelId: "test-model", thinkingLevel: "medium" },
+  codemode: "off",
+  capabilities: ["dms", "sls"],
+  canModifyCode: false,
+};
 const config: DeploymentConfig = {
-  dms: { url: "https://dms.example.test/sse", authorization: "Bearer private-token", databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }] },
+  dms: {
+    url: "https://dms.example.test/sse",
+    authorization: "Bearer private-token",
+    databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" }],
+  },
   sls: { accessKeyId: "private-key", accessKeySecret: "private-secret", region: "cn-test", project: "orders", logstores: ["application", "gateway"] },
 };
-const call = (tool: ReturnType<typeof createCapabilityTools>[number], input: unknown) => tool.execute("call", input && typeof input === "object" ? { environment: "prod", ...input } as never : input as never, undefined, undefined, {} as never);
+const call = (tool: ReturnType<typeof createCapabilityTools>[number], input: unknown) =>
+  tool.execute("call", input && typeof input === "object" ? ({ environment: "prod", ...input } as never) : (input as never), undefined, undefined, {} as never);
 test("mutating one DMS tool schema does not change base rules or a later tool instance", () => {
   const first = capabilityToolInputSchema("dms", config.dms!, { exportEnabled: true });
   const properties = Reflect.get(first, "properties") as Record<string, object>;
@@ -47,13 +60,18 @@ test("SLS query limits remain isolated across single-target and named-target too
       Reflect.set(query, "maxLength", 1);
       const second = compile(capabilityToolInputSchema("sls", configured));
       assert.equal(second.check({ logstore: "application", query: "order_id:123", ...(configured.targets ? { target: "primary" } : {}) }), true);
-    } finally { Reflect.set(query, "maxLength", maximum); }
+    } finally {
+      Reflect.set(query, "maxLength", maximum);
+    }
   }
 });
 
 test("exposes only selected DMS/SLS targets without credentials", () => {
   const tools = createCapabilityTools(context, config);
-  assert.deepEqual(tools.map(tool => tool.name), ["service_query"]);
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["service_query"],
+  );
   const serialized = JSON.stringify(tools[0]!.parameters);
   assert.doesNotMatch(serialized, /private-token|private-key|private-secret|databaseId/);
   const schemas = (tools[0]!.parameters as unknown as { anyOf: Array<{ properties: Record<string, unknown>; required: string[] }> }).anyOf;
@@ -62,7 +80,10 @@ test("exposes only selected DMS/SLS targets without credentials", () => {
   assert.deepEqual((schemas[1]!.properties.logstore as { enum: string[] }).enum, ["application", "gateway"]);
 });
 test("multi-target tool parameters keep an object root so strict OpenAI-compatible providers accept them", () => {
-  for (const [scopeContext, scopeConfig, union] of [[context, config, true], [{ ...context, capabilities: ["dms"] as AgentSessionContext["capabilities"] }, config, false]] as const) {
+  for (const [scopeContext, scopeConfig, union] of [
+    [context, config, true],
+    [{ ...context, capabilities: ["dms"] as AgentSessionContext["capabilities"] }, config, false],
+  ] as const) {
     const [tool] = createCapabilityTools(scopeContext, scopeConfig);
     const parameters = tool!.parameters as unknown as { type?: string; anyOf?: unknown[] };
     // DeepSeek rejects a bare anyOf root as `schema must be a JSON Schema of type: "object", got type: null`.
@@ -81,15 +102,20 @@ test("rejects retired adapters and undeclared targets before invoking external s
     { service: "other", capability: "dms", schema: "orders", script: "SELECT 1" },
     { service: "orders", capability: "dms", schema: "unknown", script: "SELECT 1" },
     { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", databaseId: "different" },
-    ...["nacos", "db", "redis", "mq", "es", "mcp"].map(capability => ({ service: "orders", capability })),
-  ]) await assert.rejects(call(tool!, input), /invalid_service_query_input/);
+    ...["nacos", "db", "redis", "mq", "es", "mcp"].map((capability) => ({ service: "orders", capability })),
+  ])
+    await assert.rejects(call(tool!, input), /invalid_service_query_input/);
   const [exports] = createCapabilityTools({ ...context }, config);
   await assert.rejects(call(exports!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", export: { fileName: "batch.json" } }), /invalid_service_query_input/);
   assert.deepEqual(createCapabilityTools({ ...context, capabilities: [] }, {}), []);
 });
 test("Pi schema coercion accepts valid DMS input without changing the transcript or bypassing read-only checks", async () => {
-  const originalFetch = globalThis.fetch; let requests = 0;
-  globalThis.fetch = async () => { requests++; return new Response("fixture rate limit", { status: 429, headers: { "retry-after": "120" } }); };
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response("fixture rate limit", { status: 429, headers: { "retry-after": "120" } });
+  };
   try {
     const [tool] = createCapabilityTools({ ...context, capabilities: ["dms"] }, config);
     const raw = { environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", logic: "false" };
@@ -104,14 +130,21 @@ test("Pi schema coercion accepts valid DMS input without changing the transcript
     const write = validateToolArguments(tool!, { type: "toolCall", id: "write", name: "service_query", arguments: { ...raw, script: "DELETE FROM orders" } });
     await assert.rejects(call(tool!, write), /database_query_must_be_read_only/);
     assert.equal(requests, 1);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("SDK-coerced arguments still cannot widen service scope through a mutable tool schema", async () => {
   const [tool] = createCapabilityTools({ ...context, capabilities: ["dms"] }, config);
   // Pi hooks may mutate the public definition after the owner compiled its checks.
   Reflect.set(Reflect.get(Reflect.get(tool!.parameters, "properties"), "service"), "const", "unauthorized");
-  const normalized = validateToolArguments(tool!, { type: "toolCall", id: "scope", name: "service_query", arguments: { environment: "prod", service: "unauthorized", capability: "dms", schema: "orders", script: "SELECT 1", logic: "true" } });
+  const normalized = validateToolArguments(tool!, {
+    type: "toolCall",
+    id: "scope",
+    name: "service_query",
+    arguments: { environment: "prod", service: "unauthorized", capability: "dms", schema: "orders", script: "SELECT 1", logic: "true" },
+  });
   assert.equal(normalized.logic, true);
   assert.equal(normalized.service, "unauthorized");
   await assert.rejects(call(tool!, normalized), /invalid_service_query_input|service_capability_not_available/);
@@ -120,17 +153,26 @@ test("SDK-coerced arguments still cannot widen service scope through a mutable t
 test("execute validation keeps an independent schema snapshot after a Pi hook weakens public constraints", async () => {
   const [tool] = createCapabilityTools({ ...context, capabilities: ["dms"] }, config);
   Reflect.set(Reflect.get(Reflect.get(tool!.parameters, "properties"), "script"), "minLength", 0);
-  const normalized = validateToolArguments(tool!, { type: "toolCall", id: "weakened", name: "service_query", arguments: { environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "" } });
+  const normalized = validateToolArguments(tool!, {
+    type: "toolCall",
+    id: "weakened",
+    name: "service_query",
+    arguments: { environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "" },
+  });
   assert.equal(normalized.script, "");
   await assert.rejects(call(tool!, normalized), /invalid_service_query_input/);
 });
 
 test("returns safe DMS diagnostics to the agent without SDK details or credentials", async () => {
-  const originalFetch = globalThis.fetch; let requests = 0;
-  globalThis.fetch = async () => { requests++; return new Response("private upstream detail", { status: 429, headers: { "retry-after": "120" } }); };
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response("private upstream detail", { status: 429, headers: { "retry-after": "120" } });
+  };
   try {
     const [tool] = createCapabilityTools(context, config);
-    await assert.rejects(call(tool!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), error => {
+    await assert.rejects(call(tool!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), (error) => {
       assert(error instanceof Error);
       const result = JSON.parse(error.message);
       assert.equal(result.error, "dms_mcp_http_429");
@@ -138,8 +180,39 @@ test("returns safe DMS diagnostics to the agent without SDK details or credentia
       assert.equal(result.diagnostics.retryAfterSeconds, 120);
       assert.equal(result.diagnostics.sqlDispatchAttempted, false);
       assert.doesNotMatch(error.message, /private|example|Bearer|SELECT/);
-      assert.equal(error.cause, undefined); return true;
+      assert.equal(error.cause, undefined);
+      return true;
     });
     assert.equal(requests, 1);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a missing credential for one capability does not block another capability on the same service", async () => {
+  const tools = createCapabilityTools(
+    context,
+    {},
+    { serviceScopes: [{ environmentKey: "prod", serviceKey: "orders", serviceName: "Orders", config, credentialErrors: { sls: "personal_sls_credentials_incomplete" } }] },
+  );
+  await assert.rejects(call(tools[0]!, { service: "orders", capability: "sls", logstore: "application", query: "*", from: 0, to: 1 }), /personal_sls_credentials_incomplete/);
+  // DMS is not rejected by the SLS credential error; it proceeds to SQL validation.
+  await assert.rejects(call(tools[0]!, { service: "orders", capability: "dms", schema: "orders", script: "DELETE FROM orders" }), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.doesNotMatch(error.message, /sls_credentials/);
+    return true;
+  });
+});
+
+test("reports a missing credential when the selected capability runs, not while preparing the session", async () => {
+  const tools = createCapabilityTools(
+    context,
+    {},
+    { serviceScopes: [{ environmentKey: "prod", serviceKey: "orders", serviceName: "Orders", config, credentialErrors: { dms: "dms_credentials_not_configured" } }] },
+  );
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["service_query"],
+  );
+  await assert.rejects(call(tools[0]!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), /dms_credentials_not_configured/);
 });

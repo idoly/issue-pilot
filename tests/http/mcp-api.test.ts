@@ -7,7 +7,13 @@ import { openDatabase } from "../../src/db/client.ts";
 import { serviceDeployments, services } from "../../src/db/schema.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
-const input = { name: "Docs", url: "https://mcp.example.test/mcp", transport: "streamable_http", enabled: false, credentialUpdate: { mode: "replace", values: { authorization: "Bearer secret-token" } } };
+const input = {
+  name: "Docs",
+  url: "https://mcp.example.test/mcp",
+  transport: "streamable_http",
+  enabled: false,
+  credentialUpdate: { mode: "replace", values: { authorization: "Bearer secret-token" } },
+};
 
 test("manages MCP configs without returning credentials and reserves all running sessions", async () => {
   const f = await createApiFixture();
@@ -23,7 +29,8 @@ test("manages MCP configs without returning credentials and reserves all running
     const duplicate = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: input });
     assert.equal(duplicate.statusCode, 409, duplicate.body);
     assert.equal(duplicate.body.includes("secret-token"), false);
-    await createService(f.app, "Running", ["test"]); await createIssue(f.app, "running", "test");
+    await createService(f.app, "Running", ["test"]);
+    await createIssue(f.app, "running", "test");
     const enable = { ...input, enabled: true, credentialUpdate: { mode: "preserve" } };
     const blocked = await f.app.inject({ method: "PATCH", url: `/api/mcp-services/${row.id}`, headers, payload: enable });
     assert.equal(blocked.statusCode, 409, blocked.body);
@@ -40,30 +47,49 @@ test("manages MCP configs without returning credentials and reserves all running
     assert.equal(cleared.statusCode, 200, cleared.body);
     assert.equal(JSON.parse(cleared.body).credentialConfigured, false);
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/mcp-services/${row.id}`, headers })).statusCode, 204);
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });
 
 test("unowned MCP entries and historical bindings do not leak into service descriptions or block deletion", async () => {
-  const f = await createApiFixture(), database = openDatabase(f.databaseFile);
+  const f = await createApiFixture(),
+    database = openDatabase(f.databaseFile);
   try {
     await createService(f.app, "Global", ["test"]);
     const added = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: { ...input, enabled: true } });
     assert.equal(added.statusCode, 201, added.body);
     const id = added.json().id;
     const [service] = await database.db.select().from(services).where(eq(services.key, "global"));
-    await database.db.update(serviceDeployments).set({ config: { mcpServices: [id, "obsolete-binding"] } }).where(eq(serviceDeployments.serviceId, service!.id));
+    await database.db
+      .update(serviceDeployments)
+      .set({ config: { mcpServices: [id, "obsolete-binding"] } })
+      .where(eq(serviceDeployments.serviceId, service!.id));
     const config = (await f.app.inject({ method: "GET", url: "/api/config" })).json();
     const projected = config.services.find((row: { key: string }) => row.key === "global");
     assert.equal("mcpServices" in projected.deployments[0], false);
     assert.doesNotMatch(projected.context, /MCP|mcp\.example\.test/);
-    const bind = await f.app.inject({ method: "PATCH", url: "/api/services/global", headers, payload: { name: projected.name, description: projected.description, repositories: projected.repositories, deployments: projected.deployments.map((row: object) => ({ ...row, mcpServices: [id] })) } });
+    const bind = await f.app.inject({
+      method: "PATCH",
+      url: "/api/services/global",
+      headers,
+      payload: {
+        name: projected.name,
+        description: projected.description,
+        repositories: projected.repositories,
+        deployments: projected.deployments.map((row: object) => ({ ...row, mcpServices: [id] })),
+      },
+    });
     assert.equal(bind.statusCode, 400, bind.body);
     assert.equal(bind.json().error, "mcp_services_are_global");
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/mcp-services/${id}`, headers })).statusCode, 204);
     const after = await f.app.inject({ method: "GET", url: "/api/config" });
     assert.equal(after.statusCode, 200, after.body);
     assert.doesNotMatch(after.body, /obsolete-binding/);
-  } finally { database.close(); await f.cleanup(); }
+  } finally {
+    database.close();
+    await f.cleanup();
+  }
 });
 
 test("keeps query credentials private and preserves them when toggling a projected MCP URL", async () => {
@@ -74,11 +100,17 @@ test("keeps query credentials private and preserves them when toggling a project
     const row = added.json();
     assert.equal(row.url, "https://mcp.example.test/mcp");
     assert.doesNotMatch(added.body, /private-query-key/);
-    const toggled = await f.app.inject({ method: "PATCH", url: `/api/mcp-services/${row.id}`, payload: { name: row.name, url: row.url, transport: row.transport, enabled: true, credentialUpdate: { mode: "preserve" } } });
+    const toggled = await f.app.inject({
+      method: "PATCH",
+      url: `/api/mcp-services/${row.id}`,
+      payload: { name: row.name, url: row.url, transport: row.transport, enabled: true, credentialUpdate: { mode: "preserve" } },
+    });
     assert.equal(toggled.statusCode, 200, toggled.body);
     const selected = await f.app.inject({ method: "GET", url: `/api/mcp-services/${row.id}/configuration` });
     assert.equal(selected.json().mcpServers.Docs.url, "https://mcp.example.test/mcp?key=private-query-key");
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });
 
 test("rejects unsafe MCP URLs and unauthorized changes", async () => {
@@ -91,5 +123,48 @@ test("rejects unsafe MCP URLs and unauthorized changes", async () => {
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });
     const response = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers: { "x-issue-pilot-subject": "product" }, payload: input });
     assert.equal(response.statusCode, 403);
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a developer without management access cannot read, change, delete or test global MCP connections", async () => {
+  const f = await createApiFixture();
+  try {
+    const admin = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
+    const developer = { "x-issue-pilot-subject": "plain-developer@example.test" };
+    assert.equal(
+      (
+        await f.app.inject({
+          method: "POST",
+          url: "/api/users",
+          headers: admin,
+          payload: { subject: "plain-developer@example.test", name: "Plain", email: "plain-developer@example.test", role: "developer" },
+        })
+      ).statusCode,
+      201,
+    );
+    const created = await f.app.inject({
+      method: "POST",
+      url: "/api/mcp-services/import",
+      headers: admin,
+      payload: { mcpServers: { dingtalk: { url: "https://gateway.example.test/mcp?key=shared-key", headers: { Authorization: "Bearer shared-gateway-token" } } } },
+    });
+    assert.equal(created.statusCode, 201, created.body);
+    const id = created.json()[0].id as string;
+    for (const request of [
+      { method: "GET" as const, url: `/api/mcp-services/${id}/configuration` },
+      { method: "PATCH" as const, url: `/api/mcp-services/${id}`, payload: { mcpServers: { dingtalk: { command: "node", args: ["-e", "0"] } } } },
+      { method: "DELETE" as const, url: `/api/mcp-services/${id}` },
+      { method: "POST" as const, url: `/api/mcp-services/${id}/test` },
+    ]) {
+      const response = await f.app.inject({ ...request, headers: developer });
+      assert.equal(response.statusCode, 403, `${request.method} ${request.url}: ${response.body}`);
+      assert.doesNotMatch(response.body, /shared-gateway-token|shared-key/);
+    }
+    const stored = (await f.app.inject({ method: "GET", url: `/api/mcp-services/${id}/configuration`, headers: admin })).json();
+    assert.equal(stored.mcpServers.dingtalk.headers.Authorization, "Bearer shared-gateway-token");
+  } finally {
+    await f.cleanup();
+  }
 });

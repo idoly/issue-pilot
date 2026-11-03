@@ -7,12 +7,18 @@ const [root, config, ...command] = process.argv.slice(2);
 try {
   if (!root || !config || path.dirname(config) !== root || !/^\.runtime-proxy-[0-9a-f-]+\.conf$/.test(path.basename(config)) || !command.length) throw new Error("invalid_issue_network_command");
   const proxy = new URL(process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "");
-  const user = decodeURIComponent(proxy.username), password = decodeURIComponent(proxy.password);
-  if (!["127.0.0.1", "localhost"].includes(proxy.hostname) || !/^\d+$/.test(proxy.port) || !/^[A-Za-z0-9_.=-]+$/.test(user) || !/^[A-Za-z0-9_.=-]+$/.test(password)) throw new Error("invalid_issue_network_proxy");
+  const user = decodeURIComponent(proxy.username),
+    password = decodeURIComponent(proxy.password);
+  if (!["127.0.0.1", "localhost"].includes(proxy.hostname) || !/^\d+$/.test(proxy.port) || !/^[A-Za-z0-9_.=-]+$/.test(user) || !/^[A-Za-z0-9_.=-]+$/.test(password))
+    throw new Error("invalid_issue_network_proxy");
   const content = `strict_chain\nproxy_dns\nlocalnet 127.0.0.1/255.255.255.255\nlocalnet ::1/128\n[ProxyList]\nhttp 127.0.0.1 ${proxy.port} ${user} ${password}\n`;
-  const existing = await lstat(config).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
-  if (existing) { if (!existing.isFile() || (existing.mode & 0o7777) !== 0o600 || await readFile(config, "utf8") !== content) throw new Error("issue_network_config_changed"); }
-  else await writeFile(config, content, { flag: "wx", mode: 0o600 });
+  const existing = await lstat(config).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (existing) {
+    if (!existing.isFile() || (existing.mode & 0o7777) !== 0o600 || (await readFile(config, "utf8")) !== content) throw new Error("issue_network_config_changed");
+  } else await writeFile(config, content, { flag: "wx", mode: 0o600 });
   // SRT supplies proxy SSH/config entries after spawn. Compose personal identity instead of losing either side.
   const personalSsh = process.env.ISSUE_PILOT_PERSONAL_GIT_SSH;
   if (personalSsh !== undefined) {
@@ -27,7 +33,7 @@ try {
     let count = Number(process.env.GIT_CONFIG_COUNT ?? "0");
     if (!Array.isArray(entries) || entries.length > 128 || !Number.isInteger(count) || count < 0 || count > 1024) throw new Error("invalid_issue_git_environment");
     for (const entry of entries) {
-      if (!Array.isArray(entry) || entry.length !== 2 || entry.some(value => typeof value !== "string" || value.includes("\0"))) throw new Error("invalid_issue_git_environment");
+      if (!Array.isArray(entry) || entry.length !== 2 || entry.some((value) => typeof value !== "string" || value.includes("\0"))) throw new Error("invalid_issue_git_environment");
       process.env[`GIT_CONFIG_KEY_${count}`] = entry[0];
       process.env[`GIT_CONFIG_VALUE_${count++}`] = entry[1];
     }
@@ -42,11 +48,18 @@ try {
   let executable: string | undefined;
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
     const selected = path.join(directory, "proxychains4");
-    try { await access(selected, constants.X_OK); executable = selected; break; } catch { /* Continue the normal PATH lookup. */ }
+    try {
+      await access(selected, constants.X_OK);
+      executable = selected;
+      break;
+    } catch {
+      /* Continue the normal PATH lookup. */
+    }
   }
   if (!executable || !process.execve) throw new Error("issue_network_runtime_unavailable");
   process.execve(executable, [executable, "-q", "-f", config, ...command], process.env);
 } catch (error) {
   const code = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "issue_network_runtime_failed";
-  process.stderr.write(code + "\n"); process.exitCode = 1;
+  process.stderr.write(code + "\n");
+  process.exitCode = 1;
 }

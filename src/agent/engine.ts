@@ -1,6 +1,6 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open } from "node:fs/promises";
+import { chmod, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq, inArray, ne } from "drizzle-orm";
@@ -20,27 +20,16 @@ import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { appendQueuedAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage, type AgentMessageScope } from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
-import { createPrivateSessionManager, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
+import { createPrivateSessionManager, assertSessionFileComplete, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { prepareIssueWorkDirectory } from "../workspace/work-files.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
-import {
-  agentSessions,
-  applicationSettings,
-  issueAttachments,
-  mcpServices,
-  environments,
-  issueWorkspaces,
-  issues,
-  services,
-  subjects,
-} from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, errorMessage, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
+import { agentSessions, applicationSettings, issueAttachments, mcpServices, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
+import { ENVIRONMENT_KINDS, errorMessage, type AgentRunState, type CapabilityName, type DeploymentConfig, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "./model-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
-
 
 export interface AgentReservation {
   enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
@@ -56,8 +45,6 @@ export interface AgentController {
   close?(): Promise<void>;
 }
 
-export { repositoryPreparationMode } from "../workspace/project.ts";
-
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
   private readonly steerQueue = new KeyedSerialQueue();
@@ -72,9 +59,10 @@ export class AgentEngine implements AgentController {
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly onError: (error: unknown) => void;
   private readonly sessions = new Map<string, ManagedPiSession>();
+  // Sessions whose service scope changed during a round; they are retired when that round ends.
+  private readonly scopeChangedSessions = new WeakSet<ManagedPiSession>();
   private readonly personalGit = new Map<string, PersonalGitEnvironment>();
   private readonly personalSessions = new Set<string>();
-  private readonly sharedReadOnlySessions = new Set<string>();
   private readonly piRuntime: PiSessionRuntime;
   private closePromise: Promise<void> | undefined;
   private closing = false;
@@ -121,7 +109,9 @@ export class AgentEngine implements AgentController {
     if (reserved.some((issueId) => this.isRunning(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
     for (const issueId of reserved) this.reservations.add(issueId);
     let active = true;
-    const assertReserved = (issueId: string) => { if (!active || !reservedSet.has(issueId)) throw new Error("issue_not_reserved"); };
+    const assertReserved = (issueId: string) => {
+      if (!active || !reservedSet.has(issueId)) throw new Error("issue_not_reserved");
+    };
     try {
       return await operation({
         enqueue: (issueId, message, recordMessage) => {
@@ -145,38 +135,55 @@ export class AgentEngine implements AgentController {
     this.assertNotReserved(issueId);
     this.beginActivity(issueId);
     try {
-      const [issue] = await this.database.select({ key: issues.key, status: issues.status, serviceId: issues.serviceId, environmentId: issues.environmentId }).from(issues).where(eq(issues.id, issueId)).limit(1);
+      const [issue] = await this.database
+        .select({ key: issues.key, status: issues.status, serviceId: issues.serviceId, environmentId: issues.environmentId })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .limit(1);
       if (!issue) throw new Error("issue_not_found");
       if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
       const userMessage = message;
       const messageIssue = { id: issueId, key: issue.key, serviceId: issue.serviceId, environmentId: issue.environmentId };
       const managed = this.sessions.get(issueId);
-      // A readonly round can be idle in the SDK while preparing its first prompt.
-      if (!managed || (this.sharedReadOnlySessions.has(issueId) && !managed.streaming && this.runCounts.get(issueId) === 1)) {
-        if (managed) await this.stopSession(issueId, managed);
+      if (!managed) {
         this.assertNotReserved(issueId);
-        await this.scheduleUserMessage(messageIssue, userMessage, images,
-          entryId => this.run(issueId, userMessage, false, gitIdentity, images, entryId));
+        await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, false, gitIdentity, images, entryId));
         return;
       }
-      const scheduleMessage = () => this.scheduleUserMessage(messageIssue, userMessage, images,
-        entryId => this.sessions.get(issueId) === managed
-          ? this.promptExisting(issueId, managed, userMessage, images, entryId)
-          : this.run(issueId, userMessage, false, gitIdentity, images, entryId));
+      const scheduleMessage = () =>
+        this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) =>
+          this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, false, gitIdentity, images, entryId),
+        );
       if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
       if (managed.streaming) {
         await this.steerQueue.run(issueId, async () => {
-          if (this.sessions.get(issueId) !== managed || !managed.streaming) {
+          // Earlier messages still queued for a later round keep their order; never steer past them.
+          if (this.sessions.get(issueId) !== managed || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
             return;
           }
-          await managed.session.steer(userMessage.startsWith("/") ? userMessage : promptWithRuntimeTime(userMessage), images);
+          const steered = userMessage.startsWith("/") ? userMessage : promptWithRuntimeTime(userMessage);
+          const queuedBefore = managed.session.getSteeringMessages().length;
+          await managed.session.steer(steered, images);
           // Pi may have accepted work before the old session was disposed; do not replay it.
           if (this.sessions.get(issueId) !== managed) throw new Error("agent_message_outcome_unknown");
-          try { await this.recordUserMessage(issueId, managed.session.sessionManager, userMessage, images); }
-          catch (error) {
-            try { await this.stopSession(issueId, managed); }
-            catch (stopError) { throw new AggregateError([error, stopError], "agent_message_record_failed"); }
+          // The round can finish while Pi is still admitting the steer, leaving it undelivered in Pi's queue.
+          // Take it back and queue it for the next round instead of reporting it as delivered. Pi may rewrite the
+          // text (skills, templates, input handlers), so match by count; clearQueue() empties the whole queue,
+          // so only do this when this steer is the only entry waiting there.
+          if (!managed.streaming && queuedBefore === 0 && managed.session.getSteeringMessages().length === 1) {
+            managed.session.clearQueue();
+            await scheduleMessage();
+            return;
+          }
+          try {
+            await this.recordUserMessage(issueId, managed.session.sessionManager, userMessage, images);
+          } catch (error) {
+            try {
+              await this.stopSession(issueId, managed);
+            } catch (stopError) {
+              throw new AggregateError([error, stopError], "agent_message_record_failed");
+            }
             throw error;
           }
         });
@@ -198,11 +205,17 @@ export class AgentEngine implements AgentController {
     await this.waitForIdle();
     const failures: unknown[] = [];
     for (const issueId of new Set([...this.sessions.keys(), ...this.personalGit.keys()])) {
-      try { await this.stopSession(issueId); }
-      catch (error) { failures.push(error); }
+      try {
+        await this.stopSession(issueId);
+      } catch (error) {
+        failures.push(error);
+      }
     }
-    try { await this.piRuntime.close(); }
-    catch (error) { failures.push(error); }
+    try {
+      await this.piRuntime.close();
+    } catch (error) {
+      failures.push(error);
+    }
     if (failures.length) throw new AggregateError(failures, "agent_close_failed");
   }
 
@@ -235,7 +248,9 @@ export class AgentEngine implements AgentController {
 
   private async waitForIdle(): Promise<void> {
     if (!this.runCounts.size && !this.reservations.size) return;
-    await new Promise<void>((resolve) => { this.idleWaiters.add(resolve); });
+    await new Promise<void>((resolve) => {
+      this.idleWaiters.add(resolve);
+    });
   }
 
   private notifyIdle(): void {
@@ -246,10 +261,11 @@ export class AgentEngine implements AgentController {
 
   private async acquireSlot(): Promise<() => void> {
     if (this.activeSlots < this.maxConcurrentIssues) this.activeSlots++;
-    else await new Promise<void>(resolve => this.slotWaiters.push(resolve));
+    else await new Promise<void>((resolve) => this.slotWaiters.push(resolve));
     return () => {
       const next = this.slotWaiters.shift();
-      if (next) next(); else this.activeSlots--;
+      if (next) next();
+      else this.activeSlots--;
     };
   }
 
@@ -260,20 +276,32 @@ export class AgentEngine implements AgentController {
       const previous = this.getRunState(issueId);
       this.executingIssues.add(issueId);
       this.publishRunState(issueId, previous);
-      try { await operation(); }
-      catch (error) {
+      try {
+        await operation();
+      } catch (error) {
         const cleanupFailures: unknown[] = [];
-        try { await this.stopSession(issueId); } catch (cleanupError) { cleanupFailures.push(cleanupError); }
+        try {
+          await this.stopSession(issueId);
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError);
+        }
         try {
           const failed = await this.database.transaction(async (transaction) => {
-            const [failedIssue] = await transaction.update(issues).set({ status: "open", updatedAt: new Date() })
-              .where(and(eq(issues.id, issueId), ne(issues.status, "resolved"))).returning({ id: issues.id });
+            const [failedIssue] = await transaction
+              .update(issues)
+              .set({ status: "open", updatedAt: new Date() })
+              .where(and(eq(issues.id, issueId), ne(issues.status, "resolved")))
+              .returning({ id: issues.id });
             if (!failedIssue) return false;
-            const [failedWorkspace] = await transaction.update(issueWorkspaces).set({
-              status: "failed",
-              lastError: errorMessage(error),
-              updatedAt: new Date(),
-            }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });
+            const [failedWorkspace] = await transaction
+              .update(issueWorkspaces)
+              .set({
+                status: "failed",
+                lastError: errorMessage(error),
+                updatedAt: new Date(),
+              })
+              .where(eq(issueWorkspaces.issueId, issueId))
+              .returning({ issueId: issueWorkspaces.issueId });
             if (!failedWorkspace) throw new Error("issue_workspace_missing");
             return true;
           });
@@ -309,18 +337,24 @@ export class AgentEngine implements AgentController {
         images = selected.images;
       }
     }
-    const gitIdentity = requestedGitIdentity ?? await this.gitIdentity(issue.reporterSubject);
-    const [preparingWorkspace] = await this.database.update(issueWorkspaces).set({ status: "preparing", runtimeReady: false, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id)).returning({ issueId: issueWorkspaces.issueId });
+    const gitIdentity = requestedGitIdentity ?? (await this.gitIdentity(issue.reporterSubject));
+    const [preparingWorkspace] = await this.database
+      .update(issueWorkspaces)
+      .set({ status: "preparing", runtimeReady: false, lastError: null, updatedAt: new Date() })
+      .where(eq(issueWorkspaces.issueId, issue.id))
+      .returning({ issueId: issueWorkspaces.issueId });
     if (!preparingWorkspace) throw new Error("issue_workspace_missing");
 
-    const [service] = await this.database.select({
-      id: services.id,
-      key: services.key,
-      name: services.name,
-      description: services.description,
-      environmentKey: environments.key,
-      environmentKind: environments.kind,
-    }).from(services)
+    const [service] = await this.database
+      .select({
+        id: services.id,
+        key: services.key,
+        name: services.name,
+        description: services.description,
+        environmentKey: environments.key,
+        environmentKind: environments.kind,
+      })
+      .from(services)
       .innerJoin(environments, eq(environments.id, issue.environmentId))
       .where(eq(services.id, issue.serviceId))
       .limit(1);
@@ -339,7 +373,10 @@ export class AgentEngine implements AgentController {
     let personalGit: PersonalGitEnvironment | undefined;
     if (owner.user.role === "developer") {
       const deployment = await loadIssueDeployments(this.database, issue);
-      personalGit = await createPersonalGitEnvironment(owner.credentials, deployment.repositories.map(({ repository }) => repository.url));
+      personalGit = await createPersonalGitEnvironment(
+        owner.credentials,
+        deployment.repositories.map(({ repository }) => repository.url),
+      );
       this.personalGit.set(issue.id, personalGit);
       this.personalSessions.add(issue.id);
     }
@@ -356,26 +393,53 @@ export class AgentEngine implements AgentController {
       await handle.close();
     }
     const environmentServices = await listEnvironmentServices(this.database, issue.environmentId);
-    const queryServices = environmentServices.filter(row => row.environment.kind !== "dev");
-    const [shared] = await this.database.select({ sls: applicationSettings.sharedSlsCredentials, dms: applicationSettings.sharedDmsCredentials }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
-    const serviceScopes = queryServices.map(row => ({ environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name, config: applyIssueCredentials(projectCapabilityConfiguration(row.deployment.config), owner.credentials, shared) }));
-    const deploymentConfig = serviceScopes.find(scope => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
+    const queryServices = environmentServices.filter((row) => row.environment.kind !== "dev");
+    const [shared] = await this.database
+      .select({ sls: applicationSettings.sharedSlsCredentials, dms: applicationSettings.sharedDmsCredentials })
+      .from(applicationSettings)
+      .where(eq(applicationSettings.id, 1))
+      .limit(1);
+    const serviceScopes = queryServices.map((row) => {
+      const config = projectCapabilityConfiguration(row.deployment.config);
+      const scope = { environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name };
+      // Resolve each capability separately so a missing DMS group does not block SLS, and vice versa.
+      // Failed targets stay discoverable; the selected query reports its own credential error at execution time.
+      const resolved = { ...(config as DeploymentConfig) };
+      const credentialErrors: Partial<Record<CapabilityName, string>> = {};
+      for (const capability of ["dms", "sls"] as const) {
+        if (!config[capability]) continue;
+        try {
+          Object.assign(resolved, applyIssueCredentials({ [capability]: config[capability] }, owner.credentials, shared));
+        } catch (error) {
+          credentialErrors[capability] = errorMessage(error);
+        }
+      }
+      return { ...scope, config: resolved, credentialErrors };
+    });
+    const deploymentConfig = serviceScopes.find((scope) => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
     const mcpRows = await this.database.select().from(mcpServices);
     const includedServiceIds = new Set(await issueServiceIds(this.database, issue));
-    const mcpConfigurations = serviceMcpConnections(mcpRows, environmentServices.filter(row => includedServiceIds.has(row.service.id)).map(row => row.deployment.id), await dingtalkMcpNames(this.database));
+    const mcpConfigurations = serviceMcpConnections(
+      mcpRows,
+      environmentServices.filter((row) => includedServiceIds.has(row.service.id)).map((row) => row.deployment.id),
+      await dingtalkMcpNames(this.database),
+    );
     const context = createAgentSessionContext({
       issueKey: issue.key,
       issueType: issue.type,
       enabledCapabilities: await loadEnabledCapabilities(this.database),
       deploymentConfig,
-      additionalDeploymentConfigs: serviceScopes.map(scope => scope.config),
+      additionalDeploymentConfigs: serviceScopes.map((scope) => scope.config),
       agentConfiguration,
       serviceKey: service.key,
       environmentKey: service.environmentKey,
       environmentKind,
       repositoryAccess: project.repositories.map((repository) => repository.access),
     });
-    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env);
+    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env, () => {
+      const current = this.sessions.get(issue.id);
+      if (current) this.scopeChangedSessions.add(current);
+    });
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
       const manager = await this.sessionManagerLocked(issue, workDirectory);
       const hadMessages = manager.buildSessionContext().messages.length > 0;
@@ -388,7 +452,7 @@ export class AgentEngine implements AgentController {
         workspaceTool,
         mcpConfigurations,
         manager,
-        readRoots: project.relatedIssueKeys.map(key => issueRoot(this.stateRoot, key)),
+        readRoots: project.relatedIssueKeys.map((key) => issueRoot(this.stateRoot, key)),
         gitAccess: environmentKind === "dev" ? "write" : "read",
         gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,
         modelApiKey,
@@ -398,13 +462,15 @@ export class AgentEngine implements AgentController {
         onEvent: (event) => this.publishPiEvent(issue.id, event),
       });
       this.sessions.set(issue.id, managed);
-      if (sharedRepositories) this.sharedReadOnlySessions.add(issue.id);
       const sessionFile = manager.getSessionFile();
       if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
-      await this.database.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workDirectory }).onConflictDoUpdate({
-        target: agentSessions.issueId,
-        set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
-      });
+      await this.database
+        .insert(agentSessions)
+        .values({ issueId: issue.id, sessionFile, workspacePath: workDirectory })
+        .onConflictDoUpdate({
+          target: agentSessions.issueId,
+          set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
+        });
       return { managed, hadMessages };
     });
     await this.markRunning(issue.id, project.runtimeReady);
@@ -412,14 +478,30 @@ export class AgentEngine implements AgentController {
     if (messageEntryId) await this.startQueuedMessage(issue, managed, messageEntryId);
     if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed.session.sessionManager, currentMessage, images);
 
-    const repositoryContexts = project.repositories.map((repository) => ({ branch: repository.workingBranch ?? repository.baseBranch, path: repository.workspacePath, readOnly: repository.access === "read" }));
+    const repositoryContexts = project.repositories.map((repository) => ({
+      branch: repository.workingBranch ?? repository.baseBranch,
+      path: repository.workspacePath,
+      readOnly: repository.access === "read",
+    }));
     const prompt = hadMessages
       ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys, project.runtimeRoot)
-      : initialPrompt({ issueKey: issue.key, title: issue.title, description: issue.description, issueType: issue.type, repositories: repositoryContexts, service, attachmentPath, relatedIssueKeys: project.relatedIssueKeys, relatedRoot: project.runtimeRoot, ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}) });
+      : initialPrompt({
+          issueKey: issue.key,
+          title: issue.title,
+          description: issue.description,
+          issueType: issue.type,
+          repositories: repositoryContexts,
+          service,
+          attachmentPath,
+          relatedIssueKeys: project.relatedIssueKeys,
+          relatedRoot: project.runtimeRoot,
+          ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}),
+        });
     await managed.prompt(prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined);
-    if (sharedRepositories) await this.stopSession(issue.id);
+    // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
+    if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
+    if (sharedRepositories || this.scopeChangedSessions.has(managed)) await this.stopSession(issue.id, managed);
     await this.finalizeRun(issue.id);
-
   }
 
   private async gitIdentity(subject: string): Promise<GitCommitIdentity> {
@@ -432,13 +514,19 @@ export class AgentEngine implements AgentController {
   }
 
   private reportError(error: unknown): void {
-    try { this.onError(error); } catch {
+    try {
+      this.onError(error);
+    } catch {
       // Logging failures cannot create an unhandled background rejection.
     }
   }
 
   private publishEvent(event: RunEvent): void {
-    try { this.publish?.(event); } catch (error) { this.reportError(error); }
+    try {
+      this.publish?.(event);
+    } catch (error) {
+      this.reportError(error);
+    }
   }
 
   private publishPiEvent(issueId: string, event: JsonAgentSessionEvent): void {
@@ -452,39 +540,50 @@ export class AgentEngine implements AgentController {
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
     const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    const existingFile = binding && await pathExists(binding.sessionFile);
+    const existingFile = binding && (await pathExists(binding.sessionFile));
     if (binding && !existingFile) throw new Error("agent_session_file_missing");
     if (existingFile) {
-      if (!(await lstat(binding.sessionFile)).isFile()) throw new Error("agent_session_file_incomplete");
-      const file = await open(binding.sessionFile, "r");
-      try {
-        const metadata = await file.stat();
-        const tail = Buffer.alloc(1);
-        if (metadata.size === 0) throw new Error("agent_session_file_incomplete");
-        await file.read(tail, 0, 1, metadata.size - 1);
-        if (tail[0] !== 0x0a) throw new Error("agent_session_file_incomplete");
-      } finally { await file.close(); }
-      return SessionManager.open(binding.sessionFile, sessionDirectory, workDirectory);
+      await assertSessionFileComplete(binding.sessionFile);
+      const manager = SessionManager.open(binding.sessionFile, sessionDirectory, workDirectory);
+      // Never let Pi rebind the Issue to a replacement session file.
+      if (manager.getSessionFile() !== path.resolve(binding.sessionFile)) throw new Error("agent_session_file_incomplete");
+      return manager;
     }
     const manager = await createPrivateSessionManager(workDirectory, sessionDirectory);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
-    await this.database.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workDirectory }).onConflictDoUpdate({
-      target: agentSessions.issueId,
-      set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
-    });
+    try {
+      await this.database
+        .insert(agentSessions)
+        .values({ issueId: issue.id, sessionFile, workspacePath: workDirectory })
+        .onConflictDoUpdate({
+          target: agentSessions.issueId,
+          set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
+        });
+    } catch (error) {
+      try {
+        await unlink(sessionFile);
+      } catch (cleanup) {
+        throw new AggregateError([error, cleanup], "agent_session_binding_cleanup_failed");
+      }
+      throw error;
+    }
     return manager;
   }
 
   private async scheduleUserMessage(issue: AgentMessageScope & { id: string; key: string }, message: string, images: ImageContent[], operation: (entryId: string) => Promise<void>): Promise<void> {
     await this.sessionQueue.run(issue.id, async () => {
       const current = this.sessions.get(issue.id)?.session.sessionManager;
-      const manager = current ?? await this.sessionManagerLocked(issue, await prepareIssueWorkDirectory(this.stateRoot, issue.key));
+      const manager = current ?? (await this.sessionManagerLocked(issue, await prepareIssueWorkDirectory(this.stateRoot, issue.key)));
       let entryId: string;
-      try { entryId = await this.recordUserMessage(issue.id, manager, message, images, issue); }
-      catch (error) {
-        try { await this.stopSessionLocked(issue.id); }
-        catch (cleanupError) { throw new AggregateError([error, cleanupError], "agent_message_record_failed"); }
+      try {
+        entryId = await this.recordUserMessage(issue.id, manager, message, images, issue);
+      } catch (error) {
+        try {
+          await this.stopSessionLocked(issue.id);
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], "agent_message_record_failed");
+        }
         throw error;
       }
       this.schedule(issue.id, () => operation(entryId));
@@ -492,8 +591,7 @@ export class AgentEngine implements AgentController {
   }
 
   private async recordUserMessage(issueId: string, manager: SessionManager, message: string, images: ImageContent[] = [], queuedScope?: AgentMessageScope): Promise<string> {
-    const entryId = queuedScope ? appendQueuedAgentMessage(manager, queuedScope, message, images)
-      : manager.appendCustomEntry("issue-pilot-user", { message, ...(images.length ? { images } : {}) });
+    const entryId = queuedScope ? appendQueuedAgentMessage(manager, queuedScope, message, images) : manager.appendCustomEntry("issue-pilot-user", { message, ...(images.length ? { images } : {}) });
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message, ...(images.length ? { images } : {}) } });
     return entryId;
   }
@@ -526,29 +624,47 @@ export class AgentEngine implements AgentController {
     if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
     if (messageEntryId && scope) await this.startQueuedMessage({ id: issueId, ...scope }, managed, messageEntryId);
     await managed.prompt(promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined);
+    // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
+    if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
+    if (this.scopeChangedSessions.has(managed)) await this.stopSession(issueId, managed);
     await this.finalizeRun(issueId);
   }
 
   private async markRunning(issueId: string, runtimeReady?: boolean): Promise<void> {
     await this.database.transaction(async (transaction) => {
-      const [runningIssue] = await transaction.update(issues).set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() })
-        .where(and(eq(issues.id, issueId), inArray(issues.status, ["open", "pending"]))).returning({ id: issues.id });
+      const [runningIssue] = await transaction
+        .update(issues)
+        .set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() })
+        .where(and(eq(issues.id, issueId), inArray(issues.status, ["open", "pending"])))
+        .returning({ id: issues.id });
       if (!runningIssue) throw new Error("issue_not_runnable");
-      const [runningWorkspace] = await transaction.update(issueWorkspaces).set({
-        status: "running",
-        ...(runtimeReady !== undefined ? { runtimeReady } : {}),
-        lastError: null,
-        updatedAt: new Date(),
-      }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });
+      const [runningWorkspace] = await transaction
+        .update(issueWorkspaces)
+        .set({
+          status: "running",
+          ...(runtimeReady !== undefined ? { runtimeReady } : {}),
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(issueWorkspaces.issueId, issueId))
+        .returning({ issueId: issueWorkspaces.issueId });
       if (!runningWorkspace) throw new Error("issue_workspace_missing");
     });
   }
 
   private async finalizeRun(issueId: string): Promise<void> {
     await this.database.transaction(async (transaction) => {
-      const [readyWorkspace] = await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId)).returning({ issueId: issueWorkspaces.issueId });
+      const [readyWorkspace] = await transaction
+        .update(issueWorkspaces)
+        .set({ status: "ready", lastError: null, updatedAt: new Date() })
+        .where(eq(issueWorkspaces.issueId, issueId))
+        .returning({ issueId: issueWorkspaces.issueId });
       if (!readyWorkspace) throw new Error("issue_workspace_missing");
-      const [completedIssue] = await transaction.update(issues).set({ status: "pending", updatedAt: new Date() }).where(and(eq(issues.id, issueId), eq(issues.status, "in_progress"))).returning({ id: issues.id });
+      const [completedIssue] = await transaction
+        .update(issues)
+        .set({ status: "pending", updatedAt: new Date() })
+        .where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")))
+        .returning({ id: issues.id });
       if (!completedIssue) throw new Error("issue_not_running");
     });
     this.publishStatus(issueId, "complete");
@@ -561,14 +677,21 @@ export class AgentEngine implements AgentController {
   private async stopSessionLocked(issueId: string, expected?: ManagedPiSession): Promise<void> {
     const managed = this.sessions.get(issueId);
     if (expected && managed !== expected) return;
-    this.sharedReadOnlySessions.delete(issueId);
     this.personalSessions.delete(issueId);
     const personalGit = this.personalGit.get(issueId);
     this.personalGit.delete(issueId);
     this.sessions.delete(issueId);
     const failures: unknown[] = [];
-    try { await managed?.stop(); } catch (error) { failures.push(error); }
-    try { await personalGit?.close(); } catch (error) { failures.push(error); }
+    try {
+      await managed?.stop();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await personalGit?.close();
+    } catch (error) {
+      failures.push(error);
+    }
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "agent_session_close_failed");
   }
@@ -576,5 +699,4 @@ export class AgentEngine implements AgentController {
   private publishStatus(issueId: string, status: "complete" | "error"): void {
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_status", status } });
   }
-
 }

@@ -89,7 +89,7 @@ SLS 的 `*` 表示允许该 Project 下的日志库，调用仍须指定具体 l
 
 ### 服务 MCP 与钉钉导入连接
 
-支持 Streamable HTTP、SSE、stdio。Agent 只加载入口／已包含服务在允许来源环境中、属于 Deployment 的连接。全局无 deployment_id 的连接和钉钉导入连接不成为服务 Agent 工具。
+支持 Streamable HTTP、SSE、stdio。Agent 只加载入口／已包含服务在允许来源环境中、属于 Deployment 的连接。全局无 deployment_id 的连接和钉钉导入连接不成为服务 Agent 工具。全局连接保存共享凭证并可能启动本机进程，其创建、导入、读取私有配置、修改、删除和连接测试都仅限管理员。
 
 Pi 管理发现、注册、资源、复用和关闭；应用保留字面私有配置、同源／禁止重定向、预算、取消和发送前校验。`readOnlyHint` 是说明，不是授权。列表与模型说明隐藏 URL 查询部分；标准导入结构见 [mcp.json](../examples/mcp.json)。
 
@@ -125,6 +125,6 @@ SSE 使用 idle／queued／running，并保留包含排队的 running 布尔语�
 | attachment_read | 校验并读取原件，二进制返回下载路径 |
 | work_files／work_file_read | 读取授权工作目录，管理文件只列名称 |
 
-附件结构为 fileName、可选 mediaType 和标准 Base64 contentBase64，不带 data 前缀。应用不设置附件业务总大小／数量上限，部署必须控制传输与内存。响应和分页预算见根配置。
+附件结构为 fileName、可选 mediaType 和标准 Base64 contentBase64，不带 data 前缀。HTTP 上传不设置附件业务总大小／数量上限，部署必须控制传输与内存。响应和分页预算见根配置。入站 MCP 的 Base64 附件在内存中解码，单个不超过 `mcpServer.attachmentBytes`（默认 20 MiB）、数量不超过 `mcpServer.attachments`（默认 20），超限在解码前拒绝；HTTP 上传仍流式落盘，不受此限。文本附件或工作文件在 `mcpServer.readBytes` 以内时按 offset／limit 分页读取，每页受 `mcpServer.responseBytes` 约束；超过 `readBytes` 时返回 `inline: false`、`size`、`reason: "read_budget_exceeded"` 与下载路径，不整份读取；二进制同样只返回元数据与下载路径。
 
 只读资源为 `issue-pilot://catalog/services`、`issue-pilot://catalog/users` 和 `issue-pilot://issues/{key}`。工具 schema、默认值与错误边界以 [server.ts](../src/mcp/server.ts) 为准，创建或发送响应不明时先查询，不盲目重试。

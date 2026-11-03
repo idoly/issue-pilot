@@ -4,31 +4,44 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Person } from "../data/client";
 const state = vi.hoisted(() => ({ user: undefined as unknown, load: vi.fn() }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), loadRepositories: state.load }));
+vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), loadRepositories: state.load }));
 import { RepositoryManagement } from "./RepositoryManagement";
 const repository = { id: "repository", name: "Example", url: "git@example.test:example.git", services: [], createdAt: "2026-10-18T00:00:00.000Z", updatedAt: "2026-10-18T00:00:00.000Z" };
-beforeEach(() => { state.load.mockResolvedValue([repository]); });
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
-const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" };
-for (const outcome of ["success", "failure"] as const) it(`ignores a previous identity's repository load ${outcome}`, async () => {
-  const [user, setUser] = createSignal<Person>(alice, { ownedWrite: true }); state.user = user;
-  let finish!: () => void;
-  state.load.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = outcome === "success" ? () => resolve([{ ...repository, name: "Stale repository" }]) : () => reject(new Error("old_identity_load_failed")); }));
-  render(() => <RepositoryManagement />);
-  await waitFor(() => expect(state.load).toHaveBeenCalledOnce());
-  setUser({ ...alice, subject: "bob", name: "Bob" });
-  await screen.findByText("Example"); finish();
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(screen.queryByText("Stale repository")).toBeNull();
-  expect(screen.queryByText("old_identity_load_failed")).toBeNull();
+beforeEach(() => {
+  state.load.mockResolvedValue([repository]);
 });
+afterEach(() => {
+  cleanup();
+  vi.resetAllMocks();
+});
+const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" };
+for (const outcome of ["success", "failure"] as const)
+  it(`ignores a previous identity's repository load ${outcome}`, async () => {
+    const [user, setUser] = createSignal<Person>(alice, { ownedWrite: true });
+    state.user = user;
+    let finish!: () => void;
+    state.load.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = outcome === "success" ? () => resolve([{ ...repository, name: "Stale repository" }]) : () => reject(new Error("old_identity_load_failed"));
+        }),
+    );
+    render(() => <RepositoryManagement />);
+    await waitFor(() => expect(state.load).toHaveBeenCalledOnce());
+    setUser({ ...alice, subject: "bob", name: "Bob" });
+    await screen.findByText("Example");
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText("Stale repository")).toBeNull();
+    expect(screen.queryByText("old_identity_load_failed")).toBeNull();
+  });
 it("shows repository usage and developer controls while retaining the full address", async () => {
   state.user = () => alice;
   render(() => <RepositoryManagement />);
   const panel = screen.getByRole("region", { name: "仓库管理" });
   const address = await within(panel).findByText(repository.url);
   expect(address.getAttribute("title")).toBe(repository.url);
-  expect([...panel.querySelectorAll("th")].map(node => node.textContent)).toEqual(["名称", "地址", "使用服务", ""]);
+  expect([...panel.querySelectorAll("th")].map((node) => node.textContent)).toEqual(["名称", "地址", "使用服务", ""]);
   expect(within(panel).getByRole("button", { name: "登记仓库" })).toBeTruthy();
   expect(within(panel).getByRole("button", { name: "编辑" })).toBeTruthy();
 });

@@ -8,42 +8,70 @@ import { copyText } from "../ui/clipboard";
 vi.mock("../ui/clipboard", () => ({ copyText: vi.fn() }));
 
 const api = vi.hoisted(() => ({
-  loadSourceRepositories: vi.fn(), loadSourceTree: vi.fn(), loadSourceFile: vi.fn(), saveSourceFile: vi.fn(), searchSource: vi.fn(),
-  loadSourceDiff: vi.fn(), loadSourceDiffFile: vi.fn(), stageSourcePaths: vi.fn(), unstageSourcePaths: vi.fn(), discardSourcePaths: vi.fn(), commitSourceChanges: vi.fn(),
-  loadSourceHistory: vi.fn(), loadSourceCommit: vi.fn(), loadSourceCommitFile: vi.fn(), loadSourceBlame: vi.fn(),
-  createSourceFile: vi.fn(), createSourceDirectory: vi.fn(), deleteSourcePath: vi.fn(), renameSourcePath: vi.fn(),
+  loadSourceRepositories: vi.fn(),
+  loadSourceTree: vi.fn(),
+  loadSourceFile: vi.fn(),
+  saveSourceFile: vi.fn(),
+  searchSource: vi.fn(),
+  loadSourceDiff: vi.fn(),
+  loadSourceDiffFile: vi.fn(),
+  stageSourcePaths: vi.fn(),
+  unstageSourcePaths: vi.fn(),
+  discardSourcePaths: vi.fn(),
+  commitSourceChanges: vi.fn(),
+  loadSourceHistory: vi.fn(),
+  loadSourceCommit: vi.fn(),
+  loadSourceCommitFile: vi.fn(),
+  loadSourceBlame: vi.fn(),
+  createSourceFile: vi.fn(),
+  createSourceDirectory: vi.fn(),
+  deleteSourcePath: vi.fn(),
+  renameSourcePath: vi.fn(),
 }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), ...api }));
+vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), ...api }));
 const revision = "c".repeat(40);
 const changedFile = { path: "a.txt", previousPath: null, status: "modified" };
 const file = (path: string, content = `${path} content`) => ({ path, content, size: content.length, sha256: "a".repeat(64) });
-const mount = (development = false) => render(() => <CodeBrowser issueKey="ISSUE-20261017-001" development={development} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />);
+const mount = (development = false) =>
+  render(() => <CodeBrowser issueKey="ISSUE-20261017-001" development={development} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />);
 const clickReady = async (name: string | RegExp) => {
   await waitFor(() => expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name }));
 };
-const open = async (name = "a.txt") => { fireEvent.click(await screen.findByRole("button", { name: new RegExp(name.replaceAll(".", "\\.")) })); return await screen.findByLabelText(`代码内容 ${name}`) as HTMLTextAreaElement; };
+const open = async (name = "a.txt") => {
+  fireEvent.click(await screen.findByRole("button", { name: new RegExp(name.replaceAll(".", "\\.")) }));
+  return (await screen.findByLabelText(`代码内容 ${name}`)) as HTMLTextAreaElement;
+};
 
 describe("native code browser", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     api.loadSourceRepositories.mockResolvedValue([{ name: "app", url: "https://example.test/app.git", branch: "main", access: "write" }]);
-    api.loadSourceTree.mockResolvedValue({ path: "", entries: ["a.txt", "b.txt"].map(name => ({ name, path: name, type: "file", size: 12 })), truncated: false });
+    api.loadSourceTree.mockResolvedValue({ path: "", entries: ["a.txt", "b.txt"].map((name) => ({ name, path: name, type: "file", size: 12 })), truncated: false });
     api.loadSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path));
     api.saveSourceFile.mockImplementation(async (_key: string, _repo: string, path: string, content: string) => ({ ...file(path, content), sha256: "b".repeat(64) }));
     api.searchSource.mockResolvedValue({ matches: [{ path: "b.txt", line: 1, column: 1, preview: "needle" }], truncated: false });
     api.loadSourceDiff.mockResolvedValue({ files: [], truncated: false });
     api.loadSourceDiffFile.mockResolvedValue({ file: changedFile, before: { content: "before" }, after: { content: "after" } });
-    api.loadSourceHistory.mockResolvedValue({ commits: [{ hash: revision, shortHash: "cccccccc", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" }], truncated: false });
+    api.loadSourceHistory.mockResolvedValue({
+      commits: [{ hash: revision, shortHash: "cccccccc", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" }],
+      truncated: false,
+    });
     api.loadSourceCommit.mockResolvedValue({ files: [changedFile], truncated: false });
     api.loadSourceCommitFile.mockResolvedValue({ file: changedFile, before: { content: "old revision" }, after: { content: "new revision" } });
     api.loadSourceBlame.mockResolvedValue({ path: "a.txt", line: 1, commit: revision, shortCommit: "cccccccc", author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" });
     api.createSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path, ""));
   });
-  afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
   it("opens text, saves with the read hash, and keeps a conflicting draft", async () => {
-    mount(); const editor = await open();
+    mount();
+    const editor = await open();
     await fireEvent.input(editor, { target: { value: "edited" } });
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     await waitFor(() => expect(api.saveSourceFile).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "a.txt", "edited", "a".repeat(64)));
@@ -55,20 +83,51 @@ describe("native code browser", () => {
     expect(editor.value).toBe("keep my draft");
   });
 
+  it("does not autosave a draft the user discarded when the next file fails to load", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    api.loadSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => {
+      if (path === "b.txt") throw new Error("source_file_binary");
+      return file(path);
+    });
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByRole("button", { name: "a.txt" }));
+    await vi.advanceTimersByTimeAsync(0);
+    const editor = screen.getByLabelText("代码内容 a.txt") as HTMLTextAreaElement;
+    // Typing then immediately leaving: the user confirms discarding before the autosave debounce fires.
+    await fireEvent.input(editor, { target: { value: "discard me" } });
+    fireEvent.click(screen.getByRole("button", { name: "b.txt" }));
+    await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs * 2);
+    expect(window.confirm).toHaveBeenCalled();
+    expect(api.saveSourceFile).not.toHaveBeenCalled();
+  });
+
   it("autosaves without losing typing or the next hash when Issue content refreshes during a save", async () => {
     vi.useFakeTimers();
     let finish!: (value: ReturnType<typeof file>) => void;
-    api.saveSourceFile.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    api.saveSourceFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     const [contentVersion, setContentVersion] = createSignal("first", { ownedWrite: true });
-    render(() => <CodeBrowser issueKey="ISSUE-20261017-001" contentVersion={contentVersion()} development={false} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />);
+    render(() => (
+      <CodeBrowser issueKey="ISSUE-20261017-001" contentVersion={contentVersion()} development={false} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />
+    ));
     await vi.advanceTimersByTimeAsync(0);
-    fireEvent.click(screen.getByRole("button", { name: "a.txt" })); await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByRole("button", { name: "a.txt" }));
+    await vi.advanceTimersByTimeAsync(0);
     const editor = screen.getByLabelText("代码内容 a.txt") as HTMLTextAreaElement;
     await fireEvent.input(editor, { target: { value: "first draft" } });
     await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs);
-    expect(api.saveSourceFile).toHaveBeenCalledTimes(1); expect(editor.readOnly).toBe(false);
-    await fireEvent.input(editor, { target: { value: "newer draft" } }); setContentVersion("Agent updated");
-    finish({ ...file("a.txt", "first draft"), sha256: "b".repeat(64) }); await vi.advanceTimersByTimeAsync(0);
+    expect(api.saveSourceFile).toHaveBeenCalledTimes(1);
+    expect(editor.readOnly).toBe(false);
+    await fireEvent.input(editor, { target: { value: "newer draft" } });
+    setContentVersion("Agent updated");
+    finish({ ...file("a.txt", "first draft"), sha256: "b".repeat(64) });
+    await vi.advanceTimersByTimeAsync(0);
     expect(editor.value).toBe("newer draft");
     await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs);
     expect(api.saveSourceFile).toHaveBeenLastCalledWith("ISSUE-20261017-001", "app", "a.txt", "newer draft", "b".repeat(64));
@@ -76,39 +135,64 @@ describe("native code browser", () => {
   });
 
   it("stops automatic retries after a conflict and keeps subsequent typing", async () => {
-    vi.useFakeTimers(); api.saveSourceFile.mockRejectedValue(new Error("source_file_changed"));
-    mount(); await vi.advanceTimersByTimeAsync(0);
-    fireEvent.click(screen.getByRole("button", { name: "a.txt" })); await vi.advanceTimersByTimeAsync(0);
+    vi.useFakeTimers();
+    api.saveSourceFile.mockRejectedValue(new Error("source_file_changed"));
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByRole("button", { name: "a.txt" }));
+    await vi.advanceTimersByTimeAsync(0);
     const editor = screen.getByLabelText("代码内容 a.txt") as HTMLTextAreaElement;
-    await fireEvent.input(editor, { target: { value: "keep draft" } }); await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs);
-    await fireEvent.input(editor, { target: { value: "keep newer draft" } }); await vi.advanceTimersByTimeAsync(5_000);
-    expect(api.saveSourceFile).toHaveBeenCalledTimes(1); expect(editor.value).toBe("keep newer draft");
+    await fireEvent.input(editor, { target: { value: "keep draft" } });
+    await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs);
+    await fireEvent.input(editor, { target: { value: "keep newer draft" } });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.saveSourceFile).toHaveBeenCalledTimes(1);
+    expect(editor.value).toBe("keep newer draft");
     expect(screen.getByLabelText("文件保存状态").textContent).toContain("草稿已保留");
   });
 
   it("refreshes external changes and keeps Changes visible when Graph history fails", async () => {
-    vi.useFakeTimers(); vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    vi.useFakeTimers();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     let modified = false;
     api.loadSourceHistory.mockRejectedValue(new Error("source_history_failed"));
-    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({ files: modified && !staged ? [changedFile] : [], truncated: false }));
-    mount(true); await vi.advanceTimersByTimeAsync(0);
-    modified = true; await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceRefreshMs);
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({
+      files: modified && !staged ? [changedFile] : [],
+      truncated: false,
+    }));
+    mount(true);
+    await vi.advanceTimersByTimeAsync(0);
+    modified = true;
+    await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceRefreshMs);
     expect(screen.getByRole("button", { name: "查看差异 a.txt" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "历史" })); await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByRole("button", { name: "历史" }));
+    await vi.advanceTimersByTimeAsync(0);
     expect(screen.getByText("CHANGES")).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看差异 a.txt" })).toBeTruthy();
   });
 
   it("preserves existing CRLF line endings when saving", async () => {
     api.loadSourceFile.mockResolvedValueOnce(file("a.txt", "first\r\nsecond\r\n"));
-    mount(); const editor = await open();
+    mount();
+    const editor = await open();
     await fireEvent.input(editor, { target: { value: "first\nchanged\n" } });
     await clickReady("保存文件");
     await waitFor(() => expect(api.saveSourceFile).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "a.txt", "first\r\nchanged\r\n", "a".repeat(64)));
   });
 
+  for (const content of ["first\nsecond\r\nthird\n", "first\rsecond\n"])
+    it(`opens a file with mixed line endings read-only instead of rewriting them (${JSON.stringify(content)})`, async () => {
+      api.loadSourceFile.mockResolvedValueOnce(file("a.txt", content));
+      mount();
+      const editor = await open();
+      expect(editor.readOnly).toBe(true);
+      expect(screen.getByText("混合换行 · 只读")).toBeTruthy();
+      expect(api.saveSourceFile).not.toHaveBeenCalled();
+    });
+
   it("keeps unsaved text when switching files is declined", async () => {
-    mount(); const editor = await open();
+    mount();
+    const editor = await open();
     vi.spyOn(window, "confirm").mockReturnValue(false);
     await fireEvent.input(editor, { target: { value: "unsaved" } });
     fireEvent.click(screen.getByRole("button", { name: /b\.txt/ }));
@@ -118,7 +202,8 @@ describe("native code browser", () => {
 
   it("keeps read-only repositories uneditable and does not send mutations", async () => {
     api.loadSourceRepositories.mockResolvedValue([{ name: "app", url: "https://example.test/app.git", branch: "main", access: "read" }]);
-    mount(); const editor = await open();
+    mount();
+    const editor = await open();
     expect(editor.readOnly).toBe(true);
     fireEvent.click(screen.getByLabelText("文件操作"));
     expect((screen.getByRole("button", { name: "新建文件" }) as HTMLButtonElement).disabled).toBe(true);
@@ -127,7 +212,8 @@ describe("native code browser", () => {
   });
 
   it("searches through the Source API and opens the selected result", async () => {
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
@@ -138,7 +224,8 @@ describe("native code browser", () => {
 
   it("keeps a broad AI search bounded and reveals more results without rerunning it", async () => {
     api.searchSource.mockResolvedValue({ matches: Array.from({ length: 10_000 }, (_, index) => ({ path: "many.txt", line: index + 1, column: 1, preview: "AI detail main" })), truncated: false });
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "AI" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
@@ -152,27 +239,38 @@ describe("native code browser", () => {
 
   it("cancels an obsolete search and ignores its late results", async () => {
     let finish!: (value: unknown) => void;
-    api.searchSource.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    api.searchSource.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     const input = await screen.findByLabelText("代码搜索文字");
-    await fireEvent.input(input, { target: { value: "AI" } }); fireEvent.submit(input.closest("form")!);
+    await fireEvent.input(input, { target: { value: "AI" } });
+    fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(api.searchSource).toHaveBeenCalledTimes(1));
     const signal = api.searchSource.mock.calls[0]![4] as AbortSignal;
-    await fireEvent.input(input, { target: { value: "needle" } }); fireEvent.submit(input.closest("form")!);
+    await fireEvent.input(input, { target: { value: "needle" } });
+    fireEvent.submit(input.closest("form")!);
     expect(await screen.findByRole("button", { name: "打开搜索结果 app/b.txt:1" })).toBeTruthy();
     expect(signal.aborted).toBe(true);
-    finish({ matches: [{ path: "stale.txt", line: 1, column: 1, preview: "AI" }], truncated: false }); await Promise.resolve(); await Promise.resolve();
+    finish({ matches: [{ path: "stale.txt", line: 1, column: 1, preview: "AI" }], truncated: false });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(screen.queryByRole("button", { name: /打开搜索结果.*stale/ })).toBeNull();
   });
 
   it("opens search results as a read-only editor document", async () => {
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
     fireEvent.click(await screen.findByRole("button", { name: "Open in editor" }));
-    const editor = await screen.findByLabelText("代码内容 搜索结果 needle") as HTMLTextAreaElement;
+    const editor = (await screen.findByLabelText("代码内容 搜索结果 needle")) as HTMLTextAreaElement;
     expect(editor.readOnly).toBe(true);
     expect(editor.value).toBe("app/b.txt\n  1: needle");
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
@@ -181,7 +279,8 @@ describe("native code browser", () => {
 
   it("saves a selected search replacement through the current file hash", async () => {
     api.loadSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path, "needle tail"));
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
@@ -192,8 +291,37 @@ describe("native code browser", () => {
     expect(screen.getByLabelText("代码内容 b.txt")).toHaveProperty("value", " tail");
   });
 
+  it("replaces a search match on the first line of a file that starts with a UTF-8 BOM", async () => {
+    // Search reports columns without the BOM; the editor content keeps it.
+    api.loadSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path, "\uFEFFneedle tail"));
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
+    fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
+    fireEvent.click(await screen.findByRole("button", { name: "打开搜索结果 app/b.txt:1" }));
+    await screen.findByLabelText("代码内容 b.txt");
+    await clickReady("替换为空 app/b.txt:1");
+    await waitFor(() => expect(api.saveSourceFile).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "b.txt", "\uFEFF tail", "a".repeat(64)));
+  });
+
+  it("replaces a search match on the second line of a UTF-8 BOM file without shifting the offset", async () => {
+    api.loadSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path, "\uFEFFaaa\nneedle tail"));
+    api.searchSource.mockResolvedValueOnce({ matches: [{ path: "b.txt", line: 2, column: 1, preview: "needle tail" }], truncated: false });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
+    fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
+    fireEvent.click(await screen.findByRole("button", { name: "打开搜索结果 app/b.txt:2" }));
+    await screen.findByLabelText("代码内容 b.txt");
+    await clickReady("替换为空 app/b.txt:2");
+    await waitFor(() => expect(api.saveSourceFile).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "b.txt", "\uFEFFaaa\n tail", "a".repeat(64)));
+  });
+
   it("rejects a stale search replacement while preserving the current file", async () => {
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
@@ -207,9 +335,16 @@ describe("native code browser", () => {
 
   it("shows changes and delegates staging, unstaging and committing", async () => {
     let staged = false;
-    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, index = false) => ({ files: index === staged ? [changedFile] : [], truncated: false }));
-    api.stageSourcePaths.mockImplementation(async () => { staged = true; });
-    api.unstageSourcePaths.mockImplementation(async () => { staged = false; });
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, index = false) => ({
+      files: index === staged ? [changedFile] : [],
+      truncated: false,
+    }));
+    api.stageSourcePaths.mockImplementation(async () => {
+      staged = true;
+    });
+    api.unstageSourcePaths.mockImplementation(async () => {
+      staged = false;
+    });
     mount(true);
     await waitFor(() => expect(api.loadSourceDiff).toHaveBeenCalledTimes(2));
     await clickReady("暂存");
@@ -239,7 +374,8 @@ describe("native code browser", () => {
     const unchanged = Array.from({ length: 20 }, (_, index) => `unchanged line ${index + 1}`).join("\n");
     api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({ files: staged ? [] : [changedFile], truncated: false }));
     api.loadSourceDiffFile.mockResolvedValue({ file: changedFile, before: { content: unchanged + "\nold ending\n" }, after: { content: unchanged + "\nnew ending\n" } });
-    mount(true); await clickReady("查看差异 a.txt");
+    mount(true);
+    await clickReady("查看差异 a.txt");
     await waitFor(() => expect(monacoTestState.models.at(-1)?.getValue()).toBe(unchanged + "\nnew ending\n"));
     expect(monacoTestState.models.at(-2)?.getValue()).toBe(unchanged + "\nold ending\n");
   });
@@ -256,7 +392,9 @@ describe("native code browser", () => {
     const renamed = { status: "renamed", path: "new.txt", previousPath: "old.txt" };
     api.loadSourceDiff.mockResolvedValue({ files: [renamed], truncated: false });
     api.loadSourceDiffFile.mockImplementation(async (_key: string, _repository: string, _path: string, _signal: AbortSignal, staged: boolean) => ({
-      file: renamed, before: { content: staged ? "committed" : "indexed" }, after: { content: staged ? "indexed" : "working" },
+      file: renamed,
+      before: { content: staged ? "committed" : "indexed" },
+      after: { content: staged ? "indexed" : "working" },
     }));
     mount(true);
     await waitFor(() => expect(screen.getAllByRole("button", { name: "查看差异 new.txt" })).toHaveLength(2));
@@ -277,9 +415,18 @@ describe("native code browser", () => {
 
   it("loads older history from its cursor while keeping expanded commits", async () => {
     const cursor = { revision, offset: 1 };
-    api.loadSourceHistory.mockResolvedValueOnce({ commits: [{ hash: revision, shortHash: "cccccccc", parents: ["d".repeat(40)], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" }], truncated: true, nextCursor: cursor });
-    api.loadSourceHistory.mockResolvedValue({ commits: [{ hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Earlier change" }], truncated: false, nextCursor: null });
-    mount(true); await clickReady(/Saved change/);
+    api.loadSourceHistory.mockResolvedValueOnce({
+      commits: [{ hash: revision, shortHash: "cccccccc", parents: ["d".repeat(40)], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" }],
+      truncated: true,
+      nextCursor: cursor,
+    });
+    api.loadSourceHistory.mockResolvedValue({
+      commits: [{ hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Earlier change" }],
+      truncated: false,
+      nextCursor: null,
+    });
+    mount(true);
+    await clickReady(/Saved change/);
     await screen.findByRole("button", { name: "提交文件 a.txt" });
     await clickReady("加载更早提交");
     expect(await screen.findByRole("button", { name: /Earlier change/ })).toBeTruthy();
@@ -290,21 +437,38 @@ describe("native code browser", () => {
 
   it("ignores older history arriving after the selected repository changes", async () => {
     let finish!: (value: unknown) => void;
-    api.loadSourceRepositories.mockResolvedValue(["app", "other"].map(name => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
-    api.loadSourceHistory.mockResolvedValueOnce({ commits: [{ hash: revision, shortHash: "cccccccc", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "App change" }], truncated: true, nextCursor: { revision, offset: 1 } });
-    api.loadSourceHistory.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    api.loadSourceHistory.mockResolvedValue({ commits: [{ hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Other repository" }], truncated: false, nextCursor: null });
-    mount(true); await clickReady("加载更早提交");
+    api.loadSourceRepositories.mockResolvedValue(["app", "other"].map((name) => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
+    api.loadSourceHistory.mockResolvedValueOnce({
+      commits: [{ hash: revision, shortHash: "cccccccc", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "App change" }],
+      truncated: true,
+      nextCursor: { revision, offset: 1 },
+    });
+    api.loadSourceHistory.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    api.loadSourceHistory.mockResolvedValue({
+      commits: [{ hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Other repository" }],
+      truncated: false,
+      nextCursor: null,
+    });
+    mount(true);
+    await clickReady("加载更早提交");
     await waitFor(() => expect(api.loadSourceHistory).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "仓库 other" }));
     expect(await screen.findByRole("button", { name: /Other repository/ })).toBeTruthy();
-    finish({ commits: [{ hash: "e".repeat(40), subject: "Stale history" }], truncated: false, nextCursor: null }); await Promise.resolve(); await Promise.resolve();
+    finish({ commits: [{ hash: "e".repeat(40), subject: "Stale history" }], truncated: false, nextCursor: null });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(screen.queryByRole("button", { name: /Stale history/ })).toBeNull();
     expect((api.loadSourceHistory.mock.calls[1]![3] as AbortSignal).aborted).toBe(true);
   });
 
   it("expands the Graph file list and opens the clicked file in the central area", async () => {
-    mount(true); await clickReady(/Saved change/);
+    mount(true);
+    await clickReady(/Saved change/);
     expect(api.loadSourceCommitFile).not.toHaveBeenCalled();
     await clickReady("提交文件 a.txt");
     expect(await screen.findByText("old revision")).toBeTruthy();
@@ -314,9 +478,17 @@ describe("native code browser", () => {
   });
 
   it("lists all Graph files under their commit and loads only the selected comparison", async () => {
-    api.loadSourceCommit.mockResolvedValue({ files: [changedFile, { path: "new.txt", previousPath: "old.txt", status: "renamed" }, { path: "gone.txt", previousPath: null, status: "deleted" }], truncated: false });
-    api.loadSourceCommitFile.mockImplementation(async (_key: string, _repo: string, _revision: string, path: string) => ({ file: { ...changedFile, path }, before: { content: `before ${path}` }, after: { content: `after ${path}` } }));
-    mount(true); await clickReady(/Saved change/);
+    api.loadSourceCommit.mockResolvedValue({
+      files: [changedFile, { path: "new.txt", previousPath: "old.txt", status: "renamed" }, { path: "gone.txt", previousPath: null, status: "deleted" }],
+      truncated: false,
+    });
+    api.loadSourceCommitFile.mockImplementation(async (_key: string, _repo: string, _revision: string, path: string) => ({
+      file: { ...changedFile, path },
+      before: { content: `before ${path}` },
+      after: { content: `after ${path}` },
+    }));
+    mount(true);
+    await clickReady(/Saved change/);
     const files = await screen.findByRole("group", { name: "Saved change 涉及的文件" });
     for (const path of ["a.txt", "new.txt", "gone.txt"]) expect(within(files).getByRole("button", { name: `提交文件 ${path}` })).toBeTruthy();
     expect(within(files).getByRole("button", { name: "提交文件 new.txt" }).getAttribute("title")).toContain("old.txt → new.txt");
@@ -331,12 +503,20 @@ describe("native code browser", () => {
   });
 
   it("keeps files nested under each of several expanded Graph commits", async () => {
-    api.loadSourceHistory.mockResolvedValue({ commits: [
-      { hash: revision, shortHash: "cccccccc", parents: ["d".repeat(40)], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Newest" },
-      { hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Older" },
-    ], truncated: false });
-    api.loadSourceCommit.mockImplementation(async (_key: string, _repository: string, hash: string) => ({ files: [{ ...changedFile, path: hash === revision ? "new.txt" : "old.txt" }], truncated: false }));
-    mount(true); await clickReady(/Newest/); await clickReady(/Older/);
+    api.loadSourceHistory.mockResolvedValue({
+      commits: [
+        { hash: revision, shortHash: "cccccccc", parents: ["d".repeat(40)], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Newest" },
+        { hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Older" },
+      ],
+      truncated: false,
+    });
+    api.loadSourceCommit.mockImplementation(async (_key: string, _repository: string, hash: string) => ({
+      files: [{ ...changedFile, path: hash === revision ? "new.txt" : "old.txt" }],
+      truncated: false,
+    }));
+    mount(true);
+    await clickReady(/Newest/);
+    await clickReady(/Older/);
     expect(await screen.findByRole("button", { name: "提交文件 old.txt" })).toBeTruthy();
     const groups = document.querySelectorAll(".source-history-commit");
     expect(groups).toHaveLength(2);
@@ -346,14 +526,16 @@ describe("native code browser", () => {
 
   it("shows an empty Graph commit without replacing the central editor", async () => {
     api.loadSourceCommit.mockResolvedValue({ files: [], truncated: false });
-    mount(true); await clickReady(/Saved change/);
+    mount(true);
+    await clickReady(/Saved change/);
     expect(await screen.findByRole("group", { name: "Saved change 涉及的文件" })).toHaveProperty("textContent", "");
     expect(screen.queryByRole("region", { name: "代码差异" })).toBeNull();
     expect(api.loadSourceCommitFile).not.toHaveBeenCalled();
   });
 
   it("reads line information, history and a commit comparison", async () => {
-    mount(); await open();
+    mount();
+    await open();
     await waitFor(() => expect(screen.getByLabelText("当前行归属").textContent).toContain("Fixture"));
     fireEvent.click(screen.getByRole("button", { name: "变更" }));
     await clickReady("历史");
@@ -367,21 +549,31 @@ describe("native code browser", () => {
   it("updates the permanent status bar from the clicked line and ignores stale blame", async () => {
     let finish!: (value: unknown) => void;
     api.loadSourceFile.mockResolvedValue(file("a.txt", "first\nsecond\nthird\n"));
-    api.loadSourceBlame.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    api.loadSourceBlame.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     api.loadSourceBlame.mockResolvedValue({ path: "a.txt", line: 2, commit: revision, shortCommit: "cccccccc", author: "Second author", date: "2026-10-17T00:00:00Z", subject: "Second line" });
-    mount(); const editor = await open();
+    mount();
+    const editor = await open();
     await waitFor(() => expect(api.loadSourceBlame).toHaveBeenCalledTimes(1));
-    editor.setSelectionRange(6, 6); fireEvent.click(editor);
+    editor.setSelectionRange(6, 6);
+    fireEvent.click(editor);
     await waitFor(() => expect(screen.getByLabelText("当前行归属").textContent).toContain("Second author"));
     expect(api.loadSourceBlame).toHaveBeenLastCalledWith("ISSUE-20261017-001", "app", "a.txt", 2, expect.any(AbortSignal));
     expect(api.loadSourceBlame.mock.calls[0]![4].aborted).toBe(true);
-    finish({ path: "a.txt", line: 1, author: "Stale author" }); await Promise.resolve(); await Promise.resolve();
+    finish({ path: "a.txt", line: 1, author: "Stale author" });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(screen.getByLabelText("当前行归属").textContent).toContain("Second author");
     expect(screen.getByText("Ln 2, Col 1")).toBeTruthy();
   });
 
   it("keeps Graph hover details selectable and copies the complete commit hash", async () => {
-    mount(true); const row = await screen.findByRole("button", { name: /Saved change/ });
+    mount(true);
+    const row = await screen.findByRole("button", { name: /Saved change/ });
     fireEvent.mouseEnter(row);
     const hover = await screen.findByRole("tooltip", { name: "提交信息" });
     expect(hover.textContent).toContain(revision);
@@ -391,55 +583,90 @@ describe("native code browser", () => {
     expect(await within(hover).findByText("已复制")).toBeTruthy();
   });
 
-  for (const outcome of ["success", "failure"] as const) it(`ignores clipboard ${outcome} from a different commit hover`, async () => {
-    const secondHash = "d".repeat(40);
-    api.loadSourceHistory.mockResolvedValue({ commits: [
-      { hash: revision, shortHash: "cccccccc", parents: [secondHash], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "First commit" },
-      { hash: secondHash, shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Second commit" },
-    ], truncated: false });
-    let finish!: () => void;
-    vi.mocked(copyText).mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = outcome === "success" ? resolve : () => reject(new Error("clipboard_failed")); }));
-    mount(true);
-    try {
-      fireEvent.mouseEnter(await screen.findByRole("button", { name: /First commit, Fixture/ }));
-      fireEvent.click(within(await screen.findByRole("tooltip", { name: "提交信息" })).getByRole("button", { name: "复制提交号" }));
-      await waitFor(() => expect(finish).toBeTypeOf("function"));
-      fireEvent.mouseEnter(screen.getByRole("button", { name: /Second commit, Fixture/ }));
-      const current = await waitFor(() => { const tooltip = screen.getByRole("tooltip", { name: "提交信息" }); expect(tooltip.textContent).toContain(secondHash); return tooltip; });
-      finish(); await new Promise(resolve => setTimeout(resolve, 0));
-      expect(current.textContent).not.toContain("已复制"); expect(current.textContent).not.toContain("复制失败");
-    } finally { finish?.(); }
-  });
+  for (const outcome of ["success", "failure"] as const)
+    it(`ignores clipboard ${outcome} from a different commit hover`, async () => {
+      const secondHash = "d".repeat(40);
+      api.loadSourceHistory.mockResolvedValue({
+        commits: [
+          { hash: revision, shortHash: "cccccccc", parents: [secondHash], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "First commit" },
+          { hash: secondHash, shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Second commit" },
+        ],
+        truncated: false,
+      });
+      let finish!: () => void;
+      vi.mocked(copyText).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finish = outcome === "success" ? resolve : () => reject(new Error("clipboard_failed"));
+          }),
+      );
+      mount(true);
+      try {
+        fireEvent.mouseEnter(await screen.findByRole("button", { name: /First commit, Fixture/ }));
+        fireEvent.click(within(await screen.findByRole("tooltip", { name: "提交信息" })).getByRole("button", { name: "复制提交号" }));
+        await waitFor(() => expect(finish).toBeTypeOf("function"));
+        fireEvent.mouseEnter(screen.getByRole("button", { name: /Second commit, Fixture/ }));
+        const current = await waitFor(() => {
+          const tooltip = screen.getByRole("tooltip", { name: "提交信息" });
+          expect(tooltip.textContent).toContain(secondHash);
+          return tooltip;
+        });
+        finish();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(current.textContent).not.toContain("已复制");
+        expect(current.textContent).not.toContain("复制失败");
+      } finally {
+        finish?.();
+      }
+    });
 
   it("searches every repository and reveals the selected Unicode match", async () => {
-    api.loadSourceRepositories.mockResolvedValue(["app", "other"].map(name => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
-    api.searchSource.mockImplementation(async (_key: string, repository: string) => ({ matches: repository === "other" ? [{ path: "result.txt", line: 2, column: 4, preview: "订单 needle" }] : [], truncated: false }));
+    api.loadSourceRepositories.mockResolvedValue(["app", "other"].map((name) => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
+    api.searchSource.mockImplementation(async (_key: string, repository: string) => ({
+      matches: repository === "other" ? [{ path: "result.txt", line: 2, column: 4, preview: "订单 needle" }] : [],
+      truncated: false,
+    }));
     api.loadSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path, "first\n订单 needle\nlast"));
-    mount(); await screen.findByRole("button", { name: "仓库 other" });
+    mount();
+    await screen.findByRole("button", { name: "仓库 other" });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await fireEvent.input(await screen.findByLabelText("代码搜索文字"), { target: { value: "needle" } });
     fireEvent.submit(screen.getByLabelText("代码搜索文字").closest("form")!);
     fireEvent.click(await screen.findByRole("button", { name: "打开搜索结果 other/result.txt:2" }));
-    const editor = await screen.findByLabelText("代码内容 result.txt") as HTMLTextAreaElement;
+    const editor = (await screen.findByLabelText("代码内容 result.txt")) as HTMLTextAreaElement;
     await waitFor(() => expect(editor.value.slice(editor.selectionStart, editor.selectionEnd)).toBe("needle"));
-    expect(api.searchSource.mock.calls.map(call => call[1])).toEqual(["app", "other"]);
+    expect(api.searchSource.mock.calls.map((call) => call[1])).toEqual(["app", "other"]);
     expect(api.loadSourceFile).toHaveBeenLastCalledWith("ISSUE-20261017-001", "other", "result.txt", expect.any(AbortSignal));
     expect(screen.getByText("Ln 2, Col 10")).toBeTruthy();
   });
 
   it("opens independent roots and single-child chains, preserving expansion after a save", async () => {
-    api.loadSourceRepositories.mockResolvedValue(["app", "other"].map(name => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
-    api.loadSourceTree.mockImplementation(async (_key: string, repository: string, path: string) => ({ path, truncated: false, entries: repository === "other" ? [{ path: "readme.md", name: "readme.md", type: "file" }] : path === "" ? [{ path: "src", name: "src", type: "directory" }] : path === "src" ? [{ path: "src/main", name: "main", type: "directory" }] : path === "src/main" ? [{ path: "src/main/code", name: "code", type: "directory" }] : [{ path: "src/main/code/value.ts", name: "value.ts", type: "file" }] }));
+    api.loadSourceRepositories.mockResolvedValue(["app", "other"].map((name) => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
+    api.loadSourceTree.mockImplementation(async (_key: string, repository: string, path: string) => ({
+      path,
+      truncated: false,
+      entries:
+        repository === "other"
+          ? [{ path: "readme.md", name: "readme.md", type: "file" }]
+          : path === ""
+            ? [{ path: "src", name: "src", type: "directory" }]
+            : path === "src"
+              ? [{ path: "src/main", name: "main", type: "directory" }]
+              : path === "src/main"
+                ? [{ path: "src/main/code", name: "code", type: "directory" }]
+                : [{ path: "src/main/code/value.ts", name: "value.ts", type: "file" }],
+    }));
     mount();
     expect((await screen.findByRole("button", { name: "仓库 app" })).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "仓库 other" }).getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(await screen.findByRole("button", { name: "src" }));
     fireEvent.click(await screen.findByRole("button", { name: "value.ts" }));
-    const editor = await screen.findByLabelText("代码内容 src/main/code/value.ts") as HTMLTextAreaElement;
+    const editor = (await screen.findByLabelText("代码内容 src/main/code/value.ts")) as HTMLTextAreaElement;
     await fireEvent.input(editor, { target: { value: "edited" } });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     fireEvent.click(screen.getByRole("button", { name: "仓库 other" }));
-    expect(editor.value).toBe("edited"); expect(confirm).not.toHaveBeenCalled();
+    expect(editor.value).toBe("edited");
+    expect(confirm).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "仓库 app" }).getAttribute("aria-expanded")).toBe("true");
     const reads = api.loadSourceTree.mock.calls.length;
     await clickReady("保存文件");
@@ -451,17 +678,26 @@ describe("native code browser", () => {
 
   it("ignores a file response superseded by a later selection", async () => {
     let finish!: (value: ReturnType<typeof file>) => void;
-    api.loadSourceFile.mockImplementation((_key: string, _repo: string, path: string) => path === "a.txt" ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(file(path)));
-    mount(); fireEvent.click(await screen.findByRole("button", { name: /a\.txt/ }));
+    api.loadSourceFile.mockImplementation((_key: string, _repo: string, path: string) =>
+      path === "a.txt"
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : Promise.resolve(file(path)),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: /a\.txt/ }));
     await waitFor(() => expect(api.loadSourceFile).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: /b\.txt/ }));
     expect(await screen.findByLabelText("代码内容 b.txt")).toHaveProperty("value", "b.txt content");
-    finish(file("a.txt")); await Promise.resolve();
+    finish(file("a.txt"));
+    await Promise.resolve();
     expect(screen.getByLabelText("代码内容 b.txt")).toHaveProperty("value", "b.txt content");
   });
 
   it("opens a file using the displayed keyboard shortcut", async () => {
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.keyDown(window, { key: "p", ctrlKey: true });
     const input = await screen.findByLabelText("转到文件路径");
     await fireEvent.input(input, { target: { value: "b.txt" } });
@@ -470,7 +706,8 @@ describe("native code browser", () => {
   });
 
   it("creates, renames and deletes paths through the existing API", async () => {
-    mount(); await screen.findByRole("button", { name: /a\.txt/ });
+    mount();
+    await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByLabelText("文件操作"));
     fireEvent.click(screen.getByRole("button", { name: "新建文件" }));
     await fireEvent.input(await screen.findByLabelText("文件操作路径"), { target: { value: "new.txt" } });
@@ -489,5 +726,45 @@ describe("native code browser", () => {
     const dialog = await screen.findByRole("dialog", { name: "删除路径" });
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
     await waitFor(() => expect(api.deleteSourcePath).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "a.txt", false));
+  });
+  it("does not reset the browser or break a running autosave when the Issue object is replaced with identical content", async () => {
+    vi.useFakeTimers();
+    // The parent derives repositoryVersion from the Issue object; a refresh replaces the object with equal content.
+    const [issueRepositories, setIssueRepositories] = createSignal([{ name: "app", url: "https://example.test/app.git", branch: "main", access: "write" }]);
+    let finishSave!: (value: ReturnType<typeof file>) => void;
+    api.saveSourceFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    render(() => (
+      <CodeBrowser
+        issueKey="ISSUE-20261017-001"
+        repositoryVersion={JSON.stringify(issueRepositories())}
+        development={false}
+        agentOpen
+        detailsOpen
+        onClose={() => {}}
+        onToggleAgent={() => {}}
+        onToggleDetails={() => {}}
+      />
+    ));
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByRole("button", { name: "a.txt" }));
+    await vi.advanceTimersByTimeAsync(0);
+    const editor = screen.getByLabelText("代码内容 a.txt") as HTMLTextAreaElement;
+    await fireEvent.input(editor, { target: { value: "edited" } });
+    await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs);
+    expect(api.saveSourceFile).toHaveBeenCalledTimes(1);
+    const loads = api.loadSourceRepositories.mock.calls.length;
+    // The parent replaces the Issue object (workspace tool events) but the derived repository version is unchanged.
+    setIssueRepositories([...issueRepositories()]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.loadSourceRepositories).toHaveBeenCalledTimes(loads);
+    finishSave({ ...file("a.txt", "edited"), sha256: "b".repeat(64) });
+    await vi.advanceTimersByTimeAsync(issuePilotConfig.web.sourceAutoSaveDebounceMs);
+    expect(screen.getByLabelText("文件保存状态").textContent).not.toContain("保存失败");
+    expect(screen.queryByText(/文件已被其他操作修改/)).toBeNull();
   });
 });

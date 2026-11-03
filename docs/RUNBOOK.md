@@ -106,6 +106,7 @@ GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C <path> \
 | 缺少／失败的模型、SSH、DMS、SLS 凭证 | 核对 owner 和所选组，不回退其他 Key／用户 |
 | 配置 409／Agent 活动 | 保留草稿，按版本和预约状态重试 |
 | 分支／路径／Git 控制文件异常 | 保留 refs、索引、dirty 与未知文件，不 reset、远端回退或改绑定 |
+| 开发工单根缺失（`workspace_missing`） | 回收与重开均被拒绝；从备份恢复工单根，或核对共享 store 中的分支后由 Operator 显式重建 worktree，不把共享 ref 当作完整历史 |
 | JSONL 缺失／不完整 | 保留文件和绑定，在副本中检查，不生成替代会话 |
 | 消息结果不明 | 查看会话／文件／交付元信息，不盲目重发 |
 | 查询拒绝、限流、不完整 | 核对目标、权限、时间与预算，遵守[查询规则](AGENT.md#原生证据查询) |

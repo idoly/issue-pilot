@@ -4,7 +4,9 @@ import { AgentStreamController } from "./agent-stream";
 
 class ClosingErrorEventSource extends EventTarget {
   closeCalls = 0;
-  constructor(readonly url: string) { super(); }
+  constructor(readonly url: string) {
+    super();
+  }
   close(): void {
     this.closeCalls += 1;
     this.dispatchEvent(new Event("error"));
@@ -12,33 +14,65 @@ class ClosingErrorEventSource extends EventTarget {
 }
 
 describe("AgentStreamController", () => {
-  it("validates run states at the SSE boundary without accepting malformed snapshots or live events", () => {
-    const sources: ClosingErrorEventSource[] = [], onSnapshot = vi.fn(), onEvent = vi.fn(), onError = vi.fn();
-    const controller = new AgentStreamController(id => `/api/issues/${id}/agent-stream`, 1000, 45000,
-      { onConnection() {}, onError, onSnapshot, onEvent },
-      url => { const source = new ClosingErrorEventSource(url); sources.push(source); return source as unknown as EventSource; });
+  it("reconnects after a malformed snapshot and validates live events on the fresh stream", async () => {
+    vi.useFakeTimers();
     try {
-      controller.connect("ISSUE-20261030-001");
-      const source = sources[0]!;
-      for (const runState of [null, "unknown", 1]) source.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState }) }));
-      expect(onSnapshot).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledTimes(3);
-      expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
-      source.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState: "queued" }) }));
-      expect(onSnapshot).toHaveBeenCalledTimes(1);
-      source.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "bad", event: { type: "issue_run_state", state: "unknown" } }) }));
-      expect(onEvent).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledTimes(4);
-      source.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));
-      expect(onEvent).toHaveBeenCalledTimes(1);
-    } finally { controller.dispose(); }
+      const sources: ClosingErrorEventSource[] = [],
+        onSnapshot = vi.fn(),
+        onEvent = vi.fn(),
+        onError = vi.fn();
+      const controller = new AgentStreamController(
+        (id) => `/api/issues/${id}/agent-stream`,
+        1000,
+        45000,
+        { onConnection() {}, onError, onSnapshot, onEvent },
+        (url) => {
+          const source = new ClosingErrorEventSource(url);
+          sources.push(source);
+          return source as unknown as EventSource;
+        },
+      );
+      try {
+        controller.connect("ISSUE-20261030-001");
+        const first = sources[0]!;
+        for (const runState of [null, "unknown", 1]) first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState }) }));
+        expect(onSnapshot).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
+        expect(first.closeCalls).toBe(1);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(sources).toHaveLength(2);
+        const second = sources[1]!;
+        second.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState: "queued" }) }));
+        expect(onSnapshot).toHaveBeenCalledTimes(1);
+        second.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "bad", event: { type: "issue_run_state", state: "unknown" } }) }));
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenCalledTimes(2);
+        expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
+        second.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));
+        expect(onEvent).toHaveBeenCalledTimes(1);
+      } finally {
+        controller.dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reconnects on a session reset and discards events from the previous stream", async () => {
-    const sources: ClosingErrorEventSource[] = [], onEvent = vi.fn();
-    const controller = new AgentStreamController(id => `/api/issues/${id}/agent-stream`, 1000, 45000,
+    const sources: ClosingErrorEventSource[] = [],
+      onEvent = vi.fn();
+    const controller = new AgentStreamController(
+      (id) => `/api/issues/${id}/agent-stream`,
+      1000,
+      45000,
       { onConnection() {}, onError() {}, onSnapshot() {}, onEvent },
-      url => { const source = new ClosingErrorEventSource(url); sources.push(source); return source as unknown as EventSource; });
+      (url) => {
+        const source = new ClosingErrorEventSource(url);
+        sources.push(source);
+        return source as unknown as EventSource;
+      },
+    );
     try {
       controller.connect("ISSUE-20261030-001");
       sources[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "reset", event: { type: "session_reset" } }) }));
@@ -47,7 +81,9 @@ describe("AgentStreamController", () => {
       expect(sources[0]!.closeCalls).toBe(1);
       sources[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "old", event: { type: "issue_user", message: "old context" } }) }));
       expect(onEvent).not.toHaveBeenCalled();
-    } finally { controller.dispose(); }
+    } finally {
+      controller.dispose();
+    }
   });
 
   it("invalidates the previous stream before closing it", async () => {
@@ -61,7 +97,9 @@ describe("AgentStreamController", () => {
         45_000,
         {
           onConnection() {},
-          onError(error) { errors.push(error); },
+          onError(error) {
+            errors.push(error);
+          },
           onSnapshot() {},
           onEvent() {},
         },
@@ -99,8 +137,12 @@ describe("AgentStreamController", () => {
         1_000,
         45_000,
         {
-          onConnection(connected) { connections.push(connected); },
-          onError(error) { errors.push(error); },
+          onConnection(connected) {
+            connections.push(connected);
+          },
+          onError(error) {
+            errors.push(error);
+          },
           onSnapshot() {},
           onEvent() {},
         },

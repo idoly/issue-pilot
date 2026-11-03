@@ -1,10 +1,11 @@
 import path from "node:path";
 import { DrizzleQueryError } from "drizzle-orm";
-import { errorDiagnostic } from "./error-diagnostic.ts";
+import { errorDiagnostic } from "../diagnostics.ts";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { applicationConfig } from "../config.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import { AgentEventBus } from "../agent/events.ts";
@@ -61,11 +62,19 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
   const shutdown = () => {
     if (closing) return;
     closing = true;
-    void app.close().catch((error) => {
-      try { app.log.error(errorDiagnostic(error)); } catch {
-        // A logger failure cannot turn graceful shutdown into an unhandled rejection.
-      }
-    });
+    // Stalled downloads or uploads would otherwise keep a graceful close pending indefinitely.
+    const force = setTimeout(() => app.server.closeAllConnections(), issuePilotConfig.http.shutdownGraceMs);
+    force.unref();
+    void app
+      .close()
+      .finally(() => clearTimeout(force))
+      .catch((error) => {
+        try {
+          app.log.error(errorDiagnostic(error));
+        } catch {
+          // A logger failure cannot turn graceful shutdown into an unhandled rejection.
+        }
+      });
   };
   target.once("SIGINT", shutdown);
   target.once("SIGTERM", shutdown);
@@ -78,7 +87,8 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? applicationConfig.stateRoot);
   const databaseFile = options.databaseFile ?? applicationConfig.databaseFile;
-  const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: true });
+  // Idle keep-alive sockets close at once; in-flight requests finish, and preClose ends long-lived SSE streams.
+  const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: "idle" });
   let connection: DatabaseConnection | undefined;
   let engine: AgentController | undefined;
   let modelRuntime: ReturnType<typeof createPiModelRuntime> | undefined;
@@ -109,12 +119,22 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only issue runtime could not be prepared");
     app.log.info({ issueKeys: readOnlyRuntimes.prepared, durationMs: Math.round(performance.now() - readOnlyStartedAt) }, "Prepared read-only issue runtimes");
 
-    const sharedModelRuntime = () => modelRuntime ??= createPiModelRuntime();
+    const sharedModelRuntime = () => (modelRuntime ??= createPiModelRuntime());
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
     await ensureGlobalAgentConfiguration(database.db, modelCatalog);
-    await app.register(multipart, { limits: { fileSize: Infinity, files: Infinity, fields: Infinity, parts: Infinity, fieldSize: Infinity } });
+    // File size/count stays deployment-controlled; ordinary form fields already have application maxima.
+    await app.register(multipart, { limits: { fileSize: Infinity, files: Infinity, fields: 64, parts: Infinity, fieldSize: 400_000 } });
     const events = options.events ?? new AgentEventBus((error) => app.log.error(errorDiagnostic(error)));
-    engine = options.engine ?? new AgentEngine(database.db, stateRoot, (event) => events.publish(event), (error) => app.log.error(errorDiagnostic(error)), sharedModelRuntime(), settings?.maxConcurrentIssues ?? undefined);
+    engine =
+      options.engine ??
+      new AgentEngine(
+        database.db,
+        stateRoot,
+        (event) => events.publish(event),
+        (error) => app.log.error(errorDiagnostic(error)),
+        sharedModelRuntime(),
+        settings?.maxConcurrentIssues ?? undefined,
+      );
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
@@ -125,7 +145,17 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(errorDiagnostic(error)));
 
     app.setErrorHandler((error, _request, reply) => {
-      if (error && typeof error === "object" && "code" in error && error.code === "FST_ERR_CTP_INVALID_JSON_BODY") return reply.code(400).send({ error: "invalid_json" });
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      // Malformed multipart input is a client error even though busboy only reports a message.
+      if (
+        ["FST_PROTO_VIOLATION", "FST_INVALID_JSON_FIELD_ERROR", "FST_MP_PREMATURE_CLOSE"].includes(code) ||
+        (error instanceof Error && /^(?:Multipart: |Unexpected end of multipart data|Malformed part header|Unexpected end of form)/.test(error.message))
+      )
+        return reply.code(400).send({ error: "invalid_multipart" });
+      if (code === "FST_ERR_CTP_INVALID_JSON_BODY" || code === "FST_ERR_CTP_EMPTY_JSON_BODY") return reply.code(400).send({ error: "invalid_json" });
+      if (["FST_ERR_CTP_BODY_TOO_LARGE", "FST_REQ_FILE_TOO_LARGE", "FST_FIELDS_LIMIT", "FST_PARTS_LIMIT", "FST_FILES_LIMIT"].includes(code))
+        return reply.code(413).send({ error: "payload_too_large" });
+      if (code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") return reply.code(415).send({ error: "unsupported_media_type" });
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
       const errorMessages: string[] = [];
       const seenCauses = new Set<unknown>();
@@ -139,7 +169,20 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
         if (errorChain.includes(conflict)) return reply.code(409).send({ error: conflict });
       }
-      for (const operationalError of ["attachment_finalize_failed", "attachment_rollback_failed", "issue_state_rollback_failed", "issue_update_rollback_failed", "source_rename_rollback_failed", "source_rename_finalize_failed", "source_save_cleanup_failed", "source_path_cleanup_failed", "workspace_runtime_restore_failed", "issue_workspace_missing", "agent_session_file_incomplete", "agent_session_file_missing"]) {
+      for (const operationalError of [
+        "attachment_finalize_failed",
+        "attachment_rollback_failed",
+        "issue_state_rollback_failed",
+        "issue_update_rollback_failed",
+        "source_rename_rollback_failed",
+        "source_rename_finalize_failed",
+        "source_save_cleanup_failed",
+        "source_path_cleanup_failed",
+        "workspace_runtime_restore_failed",
+        "issue_workspace_missing",
+        "agent_session_file_incomplete",
+        "agent_session_file_missing",
+      ]) {
         if (errorChain.includes(operationalError)) {
           app.log.error(errorDiagnostic(error));
           return reply.code(500).send({ error: operationalError });
@@ -170,11 +213,34 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     if (options.webRoot) await registerWebRoutes(app, options.webRoot);
     app.addHook("onClose", async () => {
       const failures: unknown[] = [];
-      try { await stopWorkspaceMaintenance?.(); } catch (error) { failures.push(error); }
-      try { await engine?.close?.(); } catch (error) { failures.push(error); }
-      try { await modelRuntime?.close(); } catch (error) { failures.push(error); }
-      try { await stateLease?.close(); } catch (error) { failures.push(error); }
-      try { await database.close(); } catch (error) { failures.push(error); }
+      try {
+        await stopWorkspaceMaintenance?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await engine?.close?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      // Scope-only writes (repositories, users, configuration) must finish before the database closes.
+      await scopeQueue.idle();
+      try {
+        await modelRuntime?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      // Keep the state lease until the database is closed so a new instance cannot start against live state.
+      try {
+        await database.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await stateLease?.close();
+      } catch (error) {
+        failures.push(error);
+      }
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) throw new AggregateError(failures, "api_close_failed");
     });
@@ -183,11 +249,13 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     if (stopWorkspaceMaintenance) await stopWorkspaceMaintenance().catch(() => undefined);
     if (engine?.close) await engine.close().catch(() => undefined);
     await modelRuntime?.close().catch(() => undefined);
-    await stateLease?.close().catch(() => undefined);
     await app.close().catch(() => undefined);
-    try { await connection?.close(); } catch {
+    try {
+      await connection?.close();
+    } catch {
       // Preserve the startup error that triggered cleanup.
     }
+    await stateLease?.close().catch(() => undefined);
     throw error;
   }
 }

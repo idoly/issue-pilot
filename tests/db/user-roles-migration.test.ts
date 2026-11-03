@@ -10,7 +10,13 @@ test("migrates existing users to developers and defaults new users to product wi
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-role-migration-"));
   const migrationRoot = path.join(root, "migrations");
   const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8"));
-  const previous = { ...journal, entries: journal.entries.slice(0, journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0045_user_roles_credentials")) };
+  const previous = {
+    ...journal,
+    entries: journal.entries.slice(
+      0,
+      journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0045_user_roles_credentials"),
+    ),
+  };
   await mkdir(path.join(migrationRoot, "meta"), { recursive: true });
   await writeFile(path.join(migrationRoot, "meta/_journal.json"), JSON.stringify(previous));
   for (const { tag } of previous.entries) await copyFile(`drizzle/${tag}.sql`, path.join(migrationRoot, `${tag}.sql`));
@@ -26,5 +32,8 @@ test("migrates existing users to developers and defaults new users to product wi
     assert.equal((await connection.client.execute("select count(*) count from user_credentials")).rows[0]!.count, 0);
     assert.equal((await connection.client.execute("pragma integrity_check")).rows[0]!.integrity_check, "ok");
     assert.equal((await connection.client.execute("pragma foreign_key_check")).rows.length, 0);
-  } finally { connection.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    connection.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

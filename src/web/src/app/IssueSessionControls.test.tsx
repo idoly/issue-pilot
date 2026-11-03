@@ -1,15 +1,27 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
 import type { IssueDetail } from "../data/client";
 const state = vi.hoisted(() => ({ list: vi.fn(), read: vi.fn(), user: () => ({ subject: "dev", role: "developer" }) }));
-vi.mock("../data/client", async original => ({ ...await original<typeof import("../data/client")>(), listIssueSessions: state.list, readIssueSession: state.read }));
+vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), listIssueSessions: state.list, readIssueSession: state.read }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueSessionControls } from "./IssueSessionControls";
 const issue = { id: "ISSUE-20261030-001", status: "open", workspace: { status: "ready" }, attachments: [] } as unknown as IssueDetail;
-const sessions = [{ sessionId: "current", createdAt: "2026-10-30T00:00:00Z", current: true }, { sessionId: "old", createdAt: "2026-10-29T00:00:00Z", current: false }];
-beforeEach(() => { vi.resetAllMocks(); state.user = () => ({ subject: "dev", role: "developer" }); state.list.mockResolvedValue(sessions); state.read.mockResolvedValue({ events: [], nextOffset: null }); });
+const sessions = [
+  { sessionId: "current", createdAt: "2026-10-30T00:00:00Z", current: true },
+  { sessionId: "old", createdAt: "2026-10-29T00:00:00Z", current: false },
+];
+beforeEach(() => {
+  vi.resetAllMocks();
+  state.user = () => ({ subject: "dev", role: "developer" });
+  state.list.mockResolvedValue(sessions);
+  state.read.mockResolvedValue({ events: [], nextOffset: null });
+});
 afterEach(() => cleanup());
-const open = () => { render(() => <IssueSessionControls issue={issue} disabled={false} />); fireEvent.click(screen.getByRole("button", { name: "查看历史" })); };
+const open = () => {
+  render(() => <IssueSessionControls issue={issue} disabled={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
+};
 
 it("opens history separately without reset controls", async () => {
   open();
@@ -24,7 +36,8 @@ it("automatically reads the first archived session and renders its conversation"
   expect(screen.getByRole("region", { name: "历史对话" })).toBeTruthy();
 });
 it("shows an empty state without a dark transcript when only the current session exists", async () => {
-  state.list.mockResolvedValue([sessions[0]]); open();
+  state.list.mockResolvedValue([sessions[0]]);
+  open();
   expect(await screen.findByText("暂无历史会话")).toBeTruthy();
   expect(screen.queryByRole("combobox")).toBeNull();
   expect(screen.queryByRole("region", { name: "历史对话" })).toBeNull();
@@ -32,7 +45,13 @@ it("shows an empty state without a dark transcript when only the current session
 });
 it("shows loading and empty conversation states without an empty transcript", async () => {
   let finish!: (page: { events: []; nextOffset: null }) => void;
-  state.read.mockImplementation(() => new Promise(resolve => { finish = resolve; })); open();
+  state.read.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  open();
   await waitFor(() => expect(state.read).toHaveBeenCalledOnce());
   expect(screen.getByRole("status").textContent).toBe("正在加载历史会话…");
   expect(screen.queryByRole("region", { name: "历史对话" })).toBeNull();
@@ -40,7 +59,8 @@ it("shows loading and empty conversation states without an empty transcript", as
   expect(await screen.findByText("该会话暂无可显示的对话")).toBeTruthy();
 });
 it("keeps read errors inside the dialog and permits retry", async () => {
-  state.read.mockRejectedValueOnce(new Error("读取失败")); open();
+  state.read.mockRejectedValueOnce(new Error("读取失败"));
+  open();
   const dialog = await screen.findByRole("dialog", { name: "历史会话" });
   expect((await within(dialog).findByRole("alert")).textContent).toBe("读取失败");
   fireEvent.click(within(dialog).getByRole("button", { name: "查看对话" }));
@@ -49,7 +69,13 @@ it("keeps read errors inside the dialog and permits retry", async () => {
 });
 it("aborts a pending history read on close and ignores its late result", async () => {
   let finish!: (page: { events: []; nextOffset: number }) => void;
-  state.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })); open();
+  state.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  open();
   await waitFor(() => expect(state.read).toHaveBeenCalledOnce());
   const signal = state.read.mock.calls[0]![3] as AbortSignal;
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
@@ -59,4 +85,16 @@ it("aborts a pending history read on close and ignores its late result", async (
   fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
   expect(await screen.findByText("该会话暂无可显示的对话")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
+});
+
+it("keeps the history panel open when the Issue object is replaced with identical content", async () => {
+  const [current, setCurrent] = createSignal(issue);
+  render(() => <IssueSessionControls issue={current()} disabled={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
+  const dialog = await screen.findByRole("dialog", { name: "历史会话" });
+  const reads = state.read.mock.calls.length;
+  setCurrent({ ...issue });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.getByRole("dialog", { name: "历史会话" })).toBe(dialog);
+  expect(state.read).toHaveBeenCalledTimes(reads);
 });

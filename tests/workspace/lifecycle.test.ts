@@ -8,16 +8,37 @@ import { execFile } from "node:child_process";
 import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueAttachments, issueComments, issueRepositories, issueScopeTransitions, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import {
+  agentSessions,
+  environments,
+  issueAttachments,
+  issueComments,
+  issueRepositories,
+  issueScopeTransitions,
+  issues,
+  issueWorkspaces,
+  serviceDeploymentRepositories,
+  serviceDeployments,
+  serviceRepositories,
+  services,
+  subjects,
+} from "../../src/db/schema.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { WorkspaceConversionRefusal, WorkspaceLifecycleManager, WorkspaceReleaseRefusal, WorkspaceRestoreRefusal, WorkspaceScopeMigrationRefusal, type WorkspaceInspection } from "../../src/workspace/lifecycle.ts";
+import {
+  WorkspaceConversionRefusal,
+  WorkspaceLifecycleManager,
+  WorkspaceReleaseRefusal,
+  WorkspaceRestoreRefusal,
+  WorkspaceScopeMigrationRefusal,
+  type WorkspaceInspection,
+} from "../../src/workspace/lifecycle.ts";
 import { IssueProjectManager, prepareDevelopmentIssueRuntimes } from "../../src/workspace/project.ts";
 import { IssueScopeTransitionManager, ScopeTransitionRefusal } from "../../src/workspace/scope-transition.ts";
 import { classifyRepositoryState, gitRoot, issueRoot } from "../../src/workspace/state.ts";
@@ -55,70 +76,127 @@ const engine = {
   closeError: undefined as Error | undefined,
   enqueue() {},
   async send() {},
-  isRunning(issueId: string) { return this.running.has(issueId); },
+  isRunning(issueId: string) {
+    return this.running.has(issueId);
+  },
   async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
     return operation({ enqueue() {}, closeSession: (issueId) => this.closeSession(issueId) });
   },
-  async closeSession(issueId: string) { this.closed.push(issueId); if (this.closeError) throw this.closeError; },
+  async closeSession(issueId: string) {
+    this.closed.push(issueId);
+    if (this.closeError) throw this.closeError;
+  },
 };
 
-for (const failureStage of ["session", "runtime"] as const) test(`automatic release isolates a ${failureStage} failure, preserves unresolved failures and retries`, async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-maintenance-retry-"));
-  const database = await openApplicationDatabase(path.join(root, "issues.db"));
-  try {
-    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
-    await database.db.insert(subjects).values({ subject: "maintenance-owner", role: "developer" });
-    const [service] = await database.db.insert(services).values({ key: "maintenance-retry", name: "Maintenance retry" }).returning();
-    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
-    const remote = await createRemote(root, "retry");
-    const worktrees = new WorktreeManager(root);
-    const created: Array<typeof issues.$inferSelect> = [], paths: string[] = [];
-    for (const index of [0, 1, 2]) {
-      const [issue] = await database.db.insert(issues).values({ key: `ISSUE-20261024-${940 + index}`, title: "Maintenance retry", status: index === 2 ? "open" : "resolved", resolvedAt: index === 2 ? null : new Date(0), type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "maintenance-owner", updatedAt: new Date(index) }).returning();
-      await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
-      const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
-      await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
-      created.push(issue!); paths.push(prepared.workspacePath);
-    }
-    const failure = new Error("fixture_maintenance_failed");
-    let fail = true;
-    const scopedEngine = { ...engine, running: new Set<string>(), closed: [] as string[], async closeSession(id: string) { this.closed.push(id); if (fail && failureStage === "session" && id === created[0]!.id) throw failure; } };
-    const projects = new IssueProjectManager(database.db, root);
-    const manager = new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 }, async issue => {
-      if (fail && failureStage === "runtime" && issue.id === created[0]!.id) throw failure;
-      return projects.hydrateDevelopmentRuntime(issue);
-    });
-    const first = await manager.maintain();
-    assert.deepEqual(first.released.map(row => row.issueKey), [created[1]!.key]);
-    assert.equal(first.failures.length, 1);
-    assert.equal(first.failures[0]!.issueKey, created[0]!.key);
-    assert.ok(first.failures[0]!.error === failure || first.failures[0]!.error instanceof Error && first.failures[0]!.error.cause === failure);
-    const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).stats();
-    assert.equal(first.totalBytes, independentlyMeasured.totalBytes);
-    assert.equal((await manager.stats()).totalBytes, independentlyMeasured.totalBytes);
-    await access(paths[2]!);
-    assert.equal(scopedEngine.closed.includes(created[2]!.id), false);
-    if (failureStage === "session") await access(paths[0]!);
-    else {
-      assert.equal((await manager.inspectIssue(created[0]!.id)).blockedReason, "workspace_runtime_restore_failed");
-      const [state] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, created[0]!.id));
-      assert.equal(state!.runtimeReady, false);
-    }
-    fail = false;
-    if (failureStage === "runtime") {
-      // A stopped but still active checkout must not be deleted by view recovery.
-      await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, created[2]!.id));
-      await database.db.update(issueWorkspaces).set({ status: "stopped", runtimeReady: false }).where(eq(issueWorkspaces.issueId, created[2]!.id));
-    }
-    const retryManager = failureStage === "runtime"
-      ? new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 })
-      : manager;
-    const retried = await retryManager.maintain();
-    assert.deepEqual(retried.failures, []);
-    assert.equal((await retryManager.inspectIssue(created[0]!.id)).blockedReason, "workspace_released");
-    await access(paths[2]!);
-  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+// The stub is shared by every test in this file; reset its mutable state so failures cannot leak.
+beforeEach(() => {
+  engine.running.clear();
+  engine.closed.length = 0;
+  engine.closeError = undefined;
 });
+
+for (const failureStage of ["session", "runtime"] as const)
+  test(`automatic release isolates a ${failureStage} failure, preserves unresolved failures and retries`, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-maintenance-retry-"));
+    const database = await openApplicationDatabase(path.join(root, "issues.db"));
+    try {
+      const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+      await database.db.insert(subjects).values({ subject: "maintenance-owner", role: "developer" });
+      const [service] = await database.db.insert(services).values({ key: "maintenance-retry", name: "Maintenance retry" }).returning();
+      await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+      const remote = await createRemote(root, "retry");
+      const worktrees = new WorktreeManager(root);
+      const created: Array<typeof issues.$inferSelect> = [],
+        paths: string[] = [];
+      for (const index of [0, 1, 2]) {
+        const [issue] = await database.db
+          .insert(issues)
+          .values({
+            key: `ISSUE-20261024-${940 + index}`,
+            title: "Maintenance retry",
+            status: index === 2 ? "open" : "resolved",
+            resolvedAt: index === 2 ? null : new Date(0),
+            type: "defect_fix",
+            serviceId: service!.id,
+            environmentId: environment!.id,
+            reporterSubject: "maintenance-owner",
+            updatedAt: new Date(index),
+          })
+          .returning();
+        await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
+        const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+        await database.db.insert(issueRepositories).values({
+          issueId: issue!.id,
+          url: remote,
+          baseBranch: "main",
+          workingBranch: prepared.workingBranch,
+          localPath: prepared.workspacePath,
+          workspaceName: "repo",
+          commitBefore: prepared.baseCommit,
+        });
+        created.push(issue!);
+        paths.push(prepared.workspacePath);
+      }
+      const failure = new Error("fixture_maintenance_failed");
+      let fail = true;
+      const scopedEngine = {
+        ...engine,
+        running: new Set<string>(),
+        closed: [] as string[],
+        async closeSession(id: string) {
+          this.closed.push(id);
+          if (fail && failureStage === "session" && id === created[0]!.id) throw failure;
+        },
+      };
+      const projects = new IssueProjectManager(database.db, root);
+      const manager = new WorkspaceLifecycleManager(
+        database.db,
+        root,
+        scopedEngine as never,
+        { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 },
+        async (issue) => {
+          if (fail && failureStage === "runtime" && issue.id === created[0]!.id) throw failure;
+          return projects.hydrateDevelopmentRuntime(issue);
+        },
+      );
+      const first = await manager.maintain();
+      assert.deepEqual(
+        first.released.map((row) => row.issueKey),
+        [created[1]!.key],
+      );
+      assert.equal(first.failures.length, 1);
+      assert.equal(first.failures[0]!.issueKey, created[0]!.key);
+      assert.ok(first.failures[0]!.error === failure || (first.failures[0]!.error instanceof Error && first.failures[0]!.error.cause === failure));
+      const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).stats();
+      assert.equal(first.totalBytes, independentlyMeasured.totalBytes);
+      assert.equal((await manager.stats()).totalBytes, independentlyMeasured.totalBytes);
+      await access(paths[2]!);
+      assert.equal(scopedEngine.closed.includes(created[2]!.id), false);
+      if (failureStage === "session") await access(paths[0]!);
+      else {
+        assert.equal((await manager.inspectIssue(created[0]!.id)).blockedReason, "workspace_runtime_restore_failed");
+        const [state] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, created[0]!.id));
+        assert.equal(state!.runtimeReady, false);
+      }
+      fail = false;
+      if (failureStage === "runtime") {
+        // A stopped but still active checkout must not be deleted by view recovery.
+        await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, created[2]!.id));
+        await database.db.update(issueWorkspaces).set({ status: "stopped", runtimeReady: false }).where(eq(issueWorkspaces.issueId, created[2]!.id));
+      }
+      const retryManager =
+        failureStage === "runtime"
+          ? new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 })
+          : manager;
+      const retried = await retryManager.maintain();
+      assert.deepEqual(retried.failures, []);
+      assert.equal((await retryManager.inspectIssue(created[0]!.id)).blockedReason, "workspace_released");
+      await access(paths[2]!);
+    } finally {
+      database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
 test("API startup continues after one automatic release fails and preserves its checkout", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-startup-release-failure-"));
@@ -131,19 +209,53 @@ test("API startup continues after one automatic release fails and preserves its 
     await database.db.insert(subjects).values({ subject: "startup-owner", role: "developer" });
     const [service] = await database.db.insert(services).values({ key: "startup-release", name: "Startup release" }).returning();
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
-    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261024-961", title: "Startup release", status: "resolved", resolvedAt: new Date(0), type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "startup-owner" }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20261024-961",
+        title: "Startup release",
+        status: "resolved",
+        resolvedAt: new Date(0),
+        type: "defect_fix",
+        serviceId: service!.id,
+        environmentId: environment!.id,
+        reporterSubject: "startup-owner",
+      })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
     const remote = await createRemote(root, "startup");
     const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
-    await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
-    await database.close(); closedDatabase = true;
+    await database.db.insert(issueRepositories).values({
+      issueId: issue!.id,
+      url: remote,
+      baseBranch: "main",
+      workingBranch: prepared.workingBranch,
+      localPath: prepared.workspacePath,
+      workspaceName: "repo",
+      commitBefore: prepared.baseCommit,
+    });
+    await database.close();
+    closedDatabase = true;
     const controller = new TestAgentController();
-    controller.closeSessionHook = async () => { throw new Error("fixture_session_close_failed"); };
-    app = await buildApi({ stateRoot: root, databaseFile, engine: controller, modelCatalog, logger: false, workspacePolicy: { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 } });
+    controller.closeSessionHook = async () => {
+      throw new Error("fixture_session_close_failed");
+    };
+    app = await buildApi({
+      stateRoot: root,
+      databaseFile,
+      engine: controller,
+      modelCatalog,
+      logger: false,
+      workspacePolicy: { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 },
+    });
     assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
     assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "startup\n");
     assert.deepEqual(controller.closedSessions, [issue!.id]);
-  } finally { await app?.close(); if (!closedDatabase) await database.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await app?.close();
+    if (!closedDatabase) await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("quota maintenance keeps retained Issue bytes and continues to the next worktree", async () => {
@@ -159,10 +271,30 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
     const worktrees = new WorktreeManager(root);
     const created: Array<typeof issues.$inferSelect> = [];
     for (const index of [0, 1]) {
-      const [issue] = await database.db.insert(issues).values({ key: `ISSUE-20261023-${910 + index}`, title: "Quota accounting", status: "resolved", resolvedAt: new Date(0), type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "quota-owner" }).returning();
+      const [issue] = await database.db
+        .insert(issues)
+        .values({
+          key: `ISSUE-20261023-${910 + index}`,
+          title: "Quota accounting",
+          status: "resolved",
+          resolvedAt: new Date(0),
+          type: "defect_fix",
+          serviceId: service!.id,
+          environmentId: environment!.id,
+          reporterSubject: "quota-owner",
+        })
+        .returning();
       await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true, updatedAt: new Date(index) });
       const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
-      await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
+      await database.db.insert(issueRepositories).values({
+        issueId: issue!.id,
+        url: remote,
+        baseBranch: "main",
+        workingBranch: prepared.workingBranch,
+        localPath: prepared.workspacePath,
+        workspaceName: "repo",
+        commitBefore: prepared.baseCommit,
+      });
       if (index === 0) await writeFile(path.join(issueRoot(root, issue!.key), "retained.bin"), Buffer.alloc(4 * 1024 ** 2, 7));
       else {
         await writeFile(path.join(prepared.workspacePath, "committed.bin"), Buffer.alloc(3 * 1024 ** 2, 7));
@@ -177,15 +309,25 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
     const sharedUsage = await execFileAsync("du", ["-sk", "--", gitRoot(root)]);
     assert.equal(initial.sharedGitBytes, Number(sharedUsage.stdout.trim().split(/\s+/, 1)[0]) * 1024);
     assert.ok(initial.sharedGitBytes >= 2 * 1024 ** 2);
-    assert.equal(initial.totalBytes, initial.workspaces.reduce((total, item) => total + item.bytes, 0));
-    const manager = new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, { ...policy, highWaterBytes: initial.totalBytes - 1, targetBytes: initial.workspaces.find(item => item.issueId === created[1]!.id)!.bytes });
+    assert.equal(
+      initial.totalBytes,
+      initial.workspaces.reduce((total, item) => total + item.bytes, 0),
+    );
+    const manager = new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, {
+      ...policy,
+      highWaterBytes: initial.totalBytes - 1,
+      targetBytes: initial.workspaces.find((item) => item.issueId === created[1]!.id)!.bytes,
+    });
     const result = await manager.maintain();
-    assert.deepEqual(result.released.map(item => item.issueKey), created.map(item => item.key));
+    assert.deepEqual(
+      result.released.map((item) => item.issueKey),
+      created.map((item) => item.key),
+    );
     const fresh = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).stats();
     assert.equal(result.totalBytes, fresh.totalBytes);
     assert.equal((await manager.stats()).totalBytes, fresh.totalBytes);
     assert.equal((await manager.stats()).sharedGitBytes, fresh.sharedGitBytes);
-    assert.ok(fresh.workspaces.find(item => item.issueId === created[0]!.id)!.bytes >= 4 * 1024 ** 2);
+    assert.ok(fresh.workspaces.find((item) => item.issueId === created[0]!.id)!.bytes >= 4 * 1024 ** 2);
     assert.equal((await readFile(path.join(issueRoot(root, created[0]!.key), "retained.bin"))).length, 4 * 1024 ** 2);
     const repeated = await manager.maintain();
     assert.deepEqual(repeated.released, []);
@@ -198,10 +340,7 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
 });
 
 test("rejects invalid Workspace task concurrency", () => {
-  assert.throws(
-    () => new WorkspaceLifecycleManager({} as never, ".", engine as never, { ...issuePilotConfig.workspace, taskConcurrency: 0 }),
-    /workspace_task_concurrency_invalid/,
-  );
+  assert.throws(() => new WorkspaceLifecycleManager({} as never, ".", engine as never, { ...issuePilotConfig.workspace, taskConcurrency: 0 }), /workspace_task_concurrency_invalid/);
 });
 
 test("stops maintenance only after the active exclusive operation drains", async () => {
@@ -215,8 +354,12 @@ test("stops maintenance only after the active exclusive operation drains", async
   const internal = manager as unknown as { exclusive<T>(operation: () => Promise<T>): Promise<T> };
   let operationStarted!: () => void;
   let releaseOperation!: () => void;
-  const started = new Promise<void>((resolve) => { operationStarted = resolve; });
-  const gate = new Promise<void>((resolve) => { releaseOperation = resolve; });
+  const started = new Promise<void>((resolve) => {
+    operationStarted = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    releaseOperation = resolve;
+  });
   const operation = internal.exclusive(async () => {
     operationStarted();
     await gate;
@@ -227,8 +370,13 @@ test("stops maintenance only after the active exclusive operation drains", async
   const stop = manager.start();
   const firstStop = stop();
   assert.equal(stop(), firstStop);
-  const stopping = firstStop.then(() => { stopped = true; });
-  await assert.rejects(internal.exclusive(async () => undefined), /workspace_lifecycle_closing/);
+  const stopping = firstStop.then(() => {
+    stopped = true;
+  });
+  await assert.rejects(
+    internal.exclusive(async () => undefined),
+    /workspace_lifecycle_closing/,
+  );
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(stopped, false);
   releaseOperation();
@@ -250,7 +398,9 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   };
   internal.issueRow = async (issueId) => ({ issue: { id: issueId, key: issueId }, workspace: null });
   let releaseFirst!: () => void;
-  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
   const inspected: string[] = [];
   internal.inspectLocked = async ({ issue }) => {
     inspected.push(issue.id);
@@ -264,7 +414,11 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   await otherIssue;
   assert.deepEqual(inspected, ["issue-a", "issue-b"]);
   let stopped = false;
-  const stopping = manager.start()().then(() => { stopped = true; });
+  const stopping = manager
+    .start()()
+    .then(() => {
+      stopped = true;
+    });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(stopped, false);
   releaseFirst();
@@ -273,7 +427,7 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   assert.equal(stopped, true);
 });
 
-test("shares one statistics scan, caches completed results and refreshes on request or expiry", async context => {
+test("shares one statistics scan, caches completed results and refreshes on request or expiry", async (context) => {
   const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,
     highWaterBytes: 0,
@@ -288,8 +442,12 @@ test("shares one statistics scan, caches completed results and refreshes on requ
   internal.issueRows = async () => [{ issue: { id: "issue-a", key: "ISSUE-20260814-001" }, workspace: null }];
   let releaseFirst!: () => void;
   let markStarted!: () => void;
-  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
   let inspections = 0;
   const knownMeasurements: Array<number | undefined> = [];
   internal.inspectLocked = async ({ issue }, _repositories, knownBytes) => {
@@ -342,8 +500,12 @@ test("bounds concurrent Workspace inspections while preserving Issue order", asy
   let started = 0;
   let releaseInspections!: () => void;
   let markConcurrencyReached!: () => void;
-  const inspectionGate = new Promise<void>((resolve) => { releaseInspections = resolve; });
-  const concurrencyReached = new Promise<void>((resolve) => { markConcurrencyReached = resolve; });
+  const inspectionGate = new Promise<void>((resolve) => {
+    releaseInspections = resolve;
+  });
+  const concurrencyReached = new Promise<void>((resolve) => {
+    markConcurrencyReached = resolve;
+  });
   internal.inspectLocked = async ({ issue }) => {
     active += 1;
     started += 1;
@@ -361,7 +523,10 @@ test("bounds concurrent Workspace inspections while preserving Issue order", asy
   releaseInspections();
   const result = await statistics;
   assert.equal(maximumActive, 2);
-  assert.deepEqual(result.workspaces.map(({ issueId }) => issueId), issueRows.map(({ issue }) => issue.id));
+  assert.deepEqual(
+    result.workspaces.map(({ issueId }) => issueId),
+    issueRows.map(({ issue }) => issue.id),
+  );
 });
 
 test("isolates maintenance reporter failures", async () => {
@@ -377,18 +542,33 @@ test("isolates maintenance reporter failures", async () => {
     reports += 1;
     throw new Error("logger_failed");
   });
-  while (!reports) await new Promise((resolve) => setTimeout(resolve, 1));
+  for (let attempt = 0; !reports && attempt < 2_000; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.ok(reports, "maintenance did not report");
   await stop();
   assert.ok(reports >= 1);
 });
 
 test("maintenance reports each failed Issue even when the reporter itself fails", async () => {
   const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 1, taskConcurrency: 1 });
-  const first = new Error("first failure"), second = new Error("second failure");
-  manager.maintain = async () => ({ totalBytes: 0, released: [], blocked: [], failures: [{ issueKey: "ISSUE-20261024-951", error: first }, { issueKey: "ISSUE-20261024-952", error: second }] });
+  const first = new Error("first failure"),
+    second = new Error("second failure");
+  manager.maintain = async () => ({
+    totalBytes: 0,
+    released: [],
+    blocked: [],
+    failures: [
+      { issueKey: "ISSUE-20261024-951", error: first },
+      { issueKey: "ISSUE-20261024-952", error: second },
+    ],
+  });
   const reported: Error[] = [];
-  const stop = manager.start(error => { assert(error instanceof Error); reported.push(error); throw new Error("reporter failed"); });
-  while (reported.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+  const stop = manager.start((error) => {
+    assert(error instanceof Error);
+    reported.push(error);
+    throw new Error("reporter failed");
+  });
+  for (let attempt = 0; reported.length < 2 && attempt < 2_000; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.equal(reported.length, 2, "maintenance did not report both failures");
   await stop();
   assert.match(reported[0]!.message, /ISSUE-20261024-951/);
   assert.equal(reported[0]!.cause, first);
@@ -405,18 +585,21 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", email: "tester@example.test" });
     const [service] = await database.db.insert(services).values({ key: "workspace-test", name: "Workspace Test" }).returning();
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment.id, config: {} });
-    const [issue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260810-001",
-      title: "Workspace lifecycle",
-      description: "",
-      status: "resolved",
-      priority: "p2",
-      type: "defect_fix",
-      serviceId: service!.id,
-      environmentId: environment.id,
-      reporterSubject: "tester",
-      resolvedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
-    }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260810-001",
+        title: "Workspace lifecycle",
+        description: "",
+        status: "resolved",
+        priority: "p2",
+        type: "defect_fix",
+        serviceId: service!.id,
+        environmentId: environment.id,
+        reporterSubject: "tester",
+        resolvedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+      })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
 
     const remotes = await Promise.all([createRemote(root, "alpha"), createRemote(root, "beta")]);
@@ -479,13 +662,19 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await rm(path.dirname(unknownMetadata), { recursive: true });
     assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
 
-    const lifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
-      retentionMs: Number.POSITIVE_INFINITY,
-      highWaterBytes: 0,
-      targetBytes: 0,
-      maintenanceIntervalMs: 0,
-      taskConcurrency: 1,
-    }, prepareRuntime);
+    const lifecycle = new WorkspaceLifecycleManager(
+      database.db,
+      root,
+      engine as never,
+      {
+        retentionMs: Number.POSITIVE_INFINITY,
+        highWaterBytes: 0,
+        targetBytes: 0,
+        maintenanceIntervalMs: 0,
+        taskConcurrency: 1,
+      },
+      prepareRuntime,
+    );
     await writeFile(path.join(prepared[1]!.workspacePath, "untracked.txt"), "do not delete\n", "utf8");
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
     assert.equal(dirtyInspection.releasable, false);
@@ -493,16 +682,22 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
     await Promise.all(prepared.map((worktree) => access(worktree.workspacePath)));
     const dirtyRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(dirtyRows.every((repository) => repository.localPath !== null), true);
+    assert.equal(
+      dirtyRows.every((repository) => repository.localPath !== null),
+      true,
+    );
 
     await unlink(path.join(prepared[1]!.workspacePath, "untracked.txt"));
     await writeFile(path.join(prepared[1]!.cachePath, "info/exclude"), "ignored-evidence.txt\n");
     const ignoredEvidence = path.join(prepared[1]!.workspacePath, "ignored-evidence.txt");
     await writeFile(ignoredEvidence, "uncommitted evidence");
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_has_changes");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), error => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
     assert.equal(await readFile(ignoredEvidence, "utf8"), "uncommitted evidence");
-    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every(repository => repository.localPath !== null), true);
+    assert.equal(
+      (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath !== null),
+      true,
+    );
     await unlink(ignoredEvidence);
     const statsBeforeRelease = await lifecycle.stats();
     assert.equal(statsBeforeRelease.totalBytes > 0, true);
@@ -516,19 +711,28 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const originalManifest = await readFile(manifestPath);
     await writeFile(manifestPath, JSON.stringify({ version: 1, entries: [{ name: "missing-reference", kind: "file", value: "a".repeat(64) }] }));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "issue_runtime_entry_missing");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), error => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_runtime_entry_missing");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_runtime_entry_missing");
     await writeFile(manifestPath, originalManifest);
     assert.equal(released.releasedBytes > 0, true);
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    await Promise.all(prepared.map(async worktree => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
+    await Promise.all(prepared.map(async (worktree) => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal(await readFile(sessionFile, "utf8"), "{}\n");
     assert.deepEqual(engine.closed, [issue!.id]);
 
     const releasedRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(releasedRows.every((repository) => repository.localPath === null), true);
-    assert.deepEqual(releasedRows.map((repository) => repository.workspaceName), ["alpha", "beta"]);
-    assert.equal(releasedRows.every((repository) => repository.workingBranch?.startsWith("hotfix-") && repository.commitBefore), true);
+    assert.equal(
+      releasedRows.every((repository) => repository.localPath === null),
+      true,
+    );
+    assert.deepEqual(
+      releasedRows.map((repository) => repository.workspaceName),
+      ["alpha", "beta"],
+    );
+    assert.equal(
+      releasedRows.every((repository) => repository.workingBranch?.startsWith("hotfix-") && repository.commitBefore),
+      true,
+    );
     const [releasedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(releasedWorkspace!.status, "stopped");
     assert.equal(releasedWorkspace!.runtimeReady, true);
@@ -565,14 +769,23 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "simulated_restore_transaction_failure");
     lifecycleDatabase.transaction = runTransaction;
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null), true);
+    assert.equal(
+      (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath === null),
+      true,
+    );
 
     const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
     assert.equal(reopenedIssue.status, "open");
     assert.equal(reopenedIssue.resolvedAt, null);
     const restoredRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(restoredRows.every((repository) => repository.localPath?.startsWith(issueRoot(root, issue!.key))), true);
-    assert.deepEqual(restoredRows.map((repository) => repository.workspaceName), ["alpha", "beta"]);
+    assert.equal(
+      restoredRows.every((repository) => repository.localPath?.startsWith(issueRoot(root, issue!.key))),
+      true,
+    );
+    assert.deepEqual(
+      restoredRows.map((repository) => repository.workspaceName),
+      ["alpha", "beta"],
+    );
     for (const repository of restoredRows) {
       assert.equal(await git(["-C", repository.localPath!, "branch", "--show-current"]), repository.workingBranch);
     }
@@ -587,13 +800,19 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_not_resolved");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
 
-    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    await database.db
+      .update(issues)
+      .set({ status: "resolved", resolvedAt: new Date(0) })
+      .where(eq(issues.id, issue!.id));
     const unmanagedRootEntry = path.join(issueRoot(root, issue!.key), "unmanaged-root.sql");
     await writeFile(unmanagedRootEntry, "select 1;\n", "utf8");
     await lifecycle.reopenIssue(issue!.id);
     assert.equal(await readFile(unmanagedRootEntry, "utf8"), "select 1;\n");
     await unlink(unmanagedRootEntry);
-    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    await database.db
+      .update(issues)
+      .set({ status: "resolved", resolvedAt: new Date(0) })
+      .where(eq(issues.id, issue!.id));
 
     await database.db.update(issueRepositories).set({ workspaceName: "mismatched-name" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_path_does_not_match_repository");
@@ -630,15 +849,20 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await lifecycle.releaseIssue(issue!.id);
     lifecycleWorktrees.remove = removeWorktree;
     assert.equal(await readFile(concurrentRootEntry, "utf8"), "preserve root entry\n");
-    await Promise.all(restoredRows.map(async repository => assert.equal((await lstat(repository.localPath!)).isSymbolicLink(), true)));
+    await Promise.all(restoredRows.map(async (repository) => assert.equal((await lstat(repository.localPath!)).isSymbolicLink(), true)));
     await lifecycle.reopenIssue(issue!.id);
-    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    await database.db
+      .update(issues)
+      .set({ status: "resolved", resolvedAt: new Date(0) })
+      .where(eq(issues.id, issue!.id));
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
     await unlink(concurrentRootEntry);
 
     const lifecycleInternal = lifecycle as unknown as { markReleased(issueId: string): Promise<void> };
     const markReleased = lifecycleInternal.markReleased.bind(lifecycle);
-    lifecycleInternal.markReleased = async () => { throw new Error("simulated_release_transaction_failure"); };
+    lifecycleInternal.markReleased = async () => {
+      throw new Error("simulated_release_transaction_failure");
+    };
     await assert.rejects(lifecycle.releaseIssue(issue!.id), /simulated_release_transaction_failure/);
     lifecycleInternal.markReleased = markReleased;
     for (const repository of restoredRows) {
@@ -677,20 +901,21 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
     await database.db.insert(issueRepositories).values(restoredRows);
 
-    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
+    await database.db
+      .update(issues)
+      .set({ status: "resolved", resolvedAt: new Date(0) })
+      .where(eq(issues.id, issue!.id));
     for (const repository of restoredRows) await worktrees.remove(repository.url, repository.localPath!);
     await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
     await database.db.update(issueWorkspaces).set({ status: "running" }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_busy");
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
     await database.db.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, issue!.id));
-    assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, true);
-    const interruptedRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.equal(classifyRepositoryState(interruptedRows), "development_snapshot");
-    assert.equal((await lifecycle.reopenIssue(issue!.id)).status, "open");
-
-    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date(0) }).where(eq(issues.id, issue!.id));
-    assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, false);
+    // The root held the private Git store; neither release nor reopen may rebuild from an older shared ref.
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_missing");
+    assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
+    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.status, "ready");
+    await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_missing");
 
     const reconstruct = async () => {
       await prepareIssueRuntime(root, issue!.key, [], "write");
@@ -714,48 +939,76 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       return reconstructed;
     };
 
+    // Operator repair: rebuild the runtime and worktrees from the recorded branches, then release normally.
     await reconstruct();
-    await writeFile(checkpoint, '{"remaining":10}\n');
-    const retentionLifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
-      retentionMs: 0,
-      highWaterBytes: 0,
-      targetBytes: 0,
-      maintenanceIntervalMs: 0,
-      taskConcurrency: 1,
-    }, prepareRuntime);
-    const retention = await retentionLifecycle.maintain();
-    assert.deepEqual(retention.released.map(({ issueKey }) => issueKey), [issue!.key]);
+    assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, false);
 
     await reconstruct();
-    const quotaLifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
-      retentionMs: Number.POSITIVE_INFINITY,
-      highWaterBytes: 1,
-      targetBytes: 0,
-      maintenanceIntervalMs: 0,
-      taskConcurrency: 1,
-    }, prepareRuntime);
+    await writeFile(checkpoint, '{"remaining":10}\n');
+    const retentionLifecycle = new WorkspaceLifecycleManager(
+      database.db,
+      root,
+      engine as never,
+      {
+        retentionMs: 0,
+        highWaterBytes: 0,
+        targetBytes: 0,
+        maintenanceIntervalMs: 0,
+        taskConcurrency: 1,
+      },
+      prepareRuntime,
+    );
+    const retention = await retentionLifecycle.maintain();
+    assert.deepEqual(
+      retention.released.map(({ issueKey }) => issueKey),
+      [issue!.key],
+    );
+
+    await reconstruct();
+    const quotaLifecycle = new WorkspaceLifecycleManager(
+      database.db,
+      root,
+      engine as never,
+      {
+        retentionMs: Number.POSITIVE_INFINITY,
+        highWaterBytes: 1,
+        targetBytes: 0,
+        maintenanceIntervalMs: 0,
+        taskConcurrency: 1,
+      },
+      prepareRuntime,
+    );
     const quota = await quotaLifecycle.maintain();
-    assert.deepEqual(quota.released.map(({ issueKey }) => issueKey), [issue!.key]);
+    assert.deepEqual(
+      quota.released.map(({ issueKey }) => issueKey),
+      [issue!.key],
+    );
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    await Promise.all(prepared.map(async worktree => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
+    await Promise.all(prepared.map(async (worktree) => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
 
     const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment!.id, config: {} });
-    const [readOnlyIssue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260810-099",
-      title: "Read-only runtime",
-      status: "resolved",
-      type: "smart_analysis",
-      serviceId: service!.id,
-      environmentId: prodEnvironment!.id,
-      reporterSubject: "tester",
-      resolvedAt: new Date(0),
-    }).returning();
+    const [readOnlyIssue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260810-099",
+        title: "Read-only runtime",
+        status: "resolved",
+        type: "smart_analysis",
+        serviceId: service!.id,
+        environmentId: prodEnvironment!.id,
+        reporterSubject: "tester",
+        resolvedAt: new Date(0),
+      })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });
     await database.db.insert(issueRepositories).values({ issueId: readOnlyIssue!.id, url: remotes[0]!, baseBranch: "main", workingBranch: null, localPath: null, commitBefore: "a".repeat(40) });
     const readOnlyMaintenance = await retentionLifecycle.maintain();
     assert.equal((await retentionLifecycle.inspectIssue(readOnlyIssue!.id)).blockedReason, "workspace_not_development");
-    assert.equal(readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key), false);
+    assert.equal(
+      readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key),
+      false,
+    );
     await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_not_development");
     const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
     assert.equal(readOnlyWorkspace!.runtimeReady, true);
@@ -785,17 +1038,20 @@ test("converts a ready test analysis to a development defect while preserving Is
       { deploymentId: testDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
       { deploymentId: devDeployment!.id, repositoryId: serviceRepository!.id, baseBranch: "main" },
     ]);
-    const [issue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260814-101",
-      title: "Test analysis found a code defect",
-      description: "Preserve this analysis",
-      status: "open",
-      priority: "p1",
-      type: "smart_analysis",
-      serviceId: service!.id,
-      environmentId: testEnvironment.id,
-      reporterSubject: "conversion-tester",
-    }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260814-101",
+        title: "Test analysis found a code defect",
+        description: "Preserve this analysis",
+        status: "open",
+        priority: "p1",
+        type: "smart_analysis",
+        serviceId: service!.id,
+        environmentId: testEnvironment.id,
+        reporterSubject: "conversion-tester",
+      })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
 
     const worktrees = new WorktreeManager(root);
@@ -804,7 +1060,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     const sessionRoot = issueRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "analysis.jsonl");
     await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
-    await writeFile(sessionFile, "{\"type\":\"session\"}\n", { mode: 0o600 });
+    await writeFile(sessionFile, '{"type":"session"}\n', { mode: 0o600 });
     await database.db.insert(agentSessions).values({ issueId: issue!.id, sessionFile, workspacePath: runtimeRoot });
     const attachmentRoot = issueRoot(root, issue!.key);
     const attachmentFile = path.join(attachmentRoot, "evidence.txt");
@@ -825,9 +1081,22 @@ test("converts a ready test analysis to a development defect while preserving Is
     const conversionEngine = {
       closed: [] as string[],
       enqueued: [] as string[],
-      enqueue(issueId: string) { this.enqueued.push(issueId); }, async send() {}, isRunning() { return false; },
+      enqueue(issueId: string) {
+        this.enqueued.push(issueId);
+      },
+      async send() {},
+      isRunning() {
+        return false;
+      },
       async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(issueId: string): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
-        return operation({ enqueue: (issueId) => { this.enqueue(issueId); }, closeSession: async (issueId) => { this.closed.push(issueId); } });
+        return operation({
+          enqueue: (issueId) => {
+            this.enqueue(issueId);
+          },
+          closeSession: async (issueId) => {
+            this.closed.push(issueId);
+          },
+        });
       },
     };
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, conversionEngine as never, {
@@ -848,7 +1117,10 @@ test("converts a ready test analysis to a development defect while preserving Is
       }
       return transaction(operation);
     }) as typeof database.db.transaction;
-    await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "simulated_conversion_transaction_failure");
+    await assert.rejects(
+      lifecycle.convertIssueToDevelopment(issue!.id),
+      (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "simulated_conversion_transaction_failure",
+    );
     mutableDatabase.transaction = transaction;
 
     const [rolledBackIssue] = await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1);
@@ -858,7 +1130,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
     assert.equal((await stat(issueRoot(root, issue!.key))).isDirectory(), true);
     assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))).startsWith(path.join(root, "git", "checkouts")), true);
-    assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal(await readFile(sessionFile, "utf8"), '{"type":"session"}\n');
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.deepEqual(conversionEngine.enqueued, []);
 
@@ -877,7 +1149,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     const [session] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(session!.sessionFile, sessionFile);
     assert.equal(session!.workspacePath, issueRoot(root, issue!.key));
-    assert.equal(await readFile(sessionFile, "utf8"), "{\"type\":\"session\"}\n");
+    assert.equal(await readFile(sessionFile, "utf8"), '{"type":"session"}\n');
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.equal((await stat(attachmentFile)).mode & 0o777, 0o400);
     assert.equal((await database.db.select().from(issueComments).where(eq(issueComments.issueId, issue!.id))).length, 1);
@@ -896,43 +1168,60 @@ test("migrates ready development scopes while preserving retained changes and ro
   try {
     const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     await database.db.insert(subjects).values({ subject: "migration-tester", displayName: "Migration Tester" });
-    const [sourceService, targetService] = await database.db.insert(services).values([
-      { key: "scope-source", name: "Scope Source" },
-      { key: "scope-target", name: "Scope Target" },
-    ]).returning();
+    const [sourceService, targetService] = await database.db
+      .insert(services)
+      .values([
+        { key: "scope-source", name: "Scope Source" },
+        { key: "scope-target", name: "Scope Target" },
+      ])
+      .returning();
     const retainedRemote = await createRemote(root, "scope-retained");
     const removedRemote = await createRemote(root, "scope-removed");
     const addedRemote = await createRemote(root, "scope-added");
     await registerTestRepositories(database.db, [retainedRemote, removedRemote, addedRemote]);
-    const sourceRepositories = await database.db.insert(serviceRepositories).values([
-      { serviceId: sourceService!.id, alias: "retained-source", url: retainedRemote },
-      { serviceId: sourceService!.id, alias: "removed", url: removedRemote },
-    ]).returning();
-    const targetRepositories = await database.db.insert(serviceRepositories).values([
-      { serviceId: targetService!.id, alias: "retained-target", url: retainedRemote },
-      { serviceId: targetService!.id, alias: "added", url: addedRemote },
-    ]).returning();
+    const sourceRepositories = await database.db
+      .insert(serviceRepositories)
+      .values([
+        { serviceId: sourceService!.id, alias: "retained-source", url: retainedRemote },
+        { serviceId: sourceService!.id, alias: "removed", url: removedRemote },
+      ])
+      .returning();
+    const targetRepositories = await database.db
+      .insert(serviceRepositories)
+      .values([
+        { serviceId: targetService!.id, alias: "retained-target", url: retainedRemote },
+        { serviceId: targetService!.id, alias: "added", url: addedRemote },
+      ])
+      .returning();
     const [productionEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod"));
     await database.db.insert(serviceDeployments).values([
       { serviceId: sourceService!.id, environmentId: devEnvironment!.id, config: {} },
       { serviceId: targetService!.id, environmentId: devEnvironment!.id, config: {} },
     ]);
-    const [sourceDeployment, targetDeployment] = await database.db.insert(serviceDeployments).values([
-      { serviceId: sourceService!.id, environmentId: productionEnvironment!.id, config: {} },
-      { serviceId: targetService!.id, environmentId: productionEnvironment!.id, config: {} },
-    ]).returning();
-    await database.db.insert(serviceDeploymentRepositories).values([
-      ...sourceRepositories.map((repository) => ({ deploymentId: sourceDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),
-      ...targetRepositories.map((repository) => ({ deploymentId: targetDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),
-    ]);
-    const [issue] = await database.db.insert(issues).values({
-      key: "ISSUE-20260814-102",
-      title: "Migrate development scope",
-      type: "defect_fix",
-      serviceId: sourceService!.id,
-      environmentId: devEnvironment!.id,
-      reporterSubject: "migration-tester",
-    }).returning();
+    const [sourceDeployment, targetDeployment] = await database.db
+      .insert(serviceDeployments)
+      .values([
+        { serviceId: sourceService!.id, environmentId: productionEnvironment!.id, config: {} },
+        { serviceId: targetService!.id, environmentId: productionEnvironment!.id, config: {} },
+      ])
+      .returning();
+    await database.db
+      .insert(serviceDeploymentRepositories)
+      .values([
+        ...sourceRepositories.map((repository) => ({ deploymentId: sourceDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),
+        ...targetRepositories.map((repository) => ({ deploymentId: targetDeployment!.id, repositoryId: repository.id, baseBranch: "main" })),
+      ]);
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260814-102",
+        title: "Migrate development scope",
+        type: "defect_fix",
+        serviceId: sourceService!.id,
+        environmentId: devEnvironment!.id,
+        reporterSubject: "migration-tester",
+      })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
     const projects = new IssueProjectManager(database.db, root);
     await projects.prepare(issue!, "dev");
@@ -951,9 +1240,22 @@ test("migrates ready development scopes while preserving retained changes and ro
     const migrationEngine = {
       closed: [] as string[],
       enqueued: [] as string[],
-      enqueue(issueId: string) { this.enqueued.push(issueId); }, async send() {}, isRunning() { return false; },
+      enqueue(issueId: string) {
+        this.enqueued.push(issueId);
+      },
+      async send() {},
+      isRunning() {
+        return false;
+      },
       async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(issueId: string): void; closeSession(issueId: string): Promise<void> }) => Promise<T>) {
-        return operation({ enqueue: (issueId) => { this.enqueue(issueId); }, closeSession: async (issueId) => { this.closed.push(issueId); } });
+        return operation({
+          enqueue: (issueId) => {
+            this.enqueue(issueId);
+          },
+          closeSession: async (issueId) => {
+            this.closed.push(issueId);
+          },
+        });
       },
     };
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, migrationEngine as never, {
@@ -971,14 +1273,28 @@ test("migrates ready development scopes while preserving retained changes and ro
     const plan = await transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" });
     assert.equal(plan.action, "migrate_development");
     assert.equal(plan.branch, `hotfix-${issue!.key.toLowerCase()}`);
-    assert.deepEqual(plan.repositories.retained.map(({ url }) => url), [retainedRemote]);
-    assert.deepEqual(plan.repositories.added.map(({ url }) => url), [addedRemote]);
-    assert.deepEqual(plan.repositories.removed.map(({ url }) => url), [removedRemote]);
+    assert.deepEqual(
+      plan.repositories.retained.map(({ url }) => url),
+      [retainedRemote],
+    );
+    assert.deepEqual(
+      plan.repositories.added.map(({ url }) => url),
+      [addedRemote],
+    );
+    assert.deepEqual(
+      plan.repositories.removed.map(({ url }) => url),
+      [removedRemote],
+    );
 
     const dirtyRemovedFile = path.join(removedPath, "do-not-remove.txt");
     await writeFile(dirtyRemovedFile, "operator evidence\n", "utf8");
     await assert.rejects(
-      transitions.apply(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" }, { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash }, "migration-tester"),
+      transitions.apply(
+        issue!.id,
+        { serviceKey: targetService!.key, workMode: "development_fix" },
+        { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash },
+        "migration-tester",
+      ),
       (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.reason === "scope_transition_removed_repository_changed",
     );
     assert.equal(await readFile(dirtyRemovedFile, "utf8"), "operator evidence\n");
@@ -998,12 +1314,20 @@ test("migrates ready development scopes while preserving retained changes and ro
       return transaction(operation);
     }) as typeof database.db.transaction;
     await assert.rejects(
-      transitions.apply(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" }, { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash }, "migration-tester"),
+      transitions.apply(
+        issue!.id,
+        { serviceKey: targetService!.key, workMode: "development_fix" },
+        { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash },
+        "migration-tester",
+      ),
       (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.reason === "simulated_scope_migration_transaction_failure",
     );
     mutableDatabase.transaction = transaction;
     const rolledBackRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
-    assert.deepEqual(rolledBackRepositories.toSorted((left, right) => left.url.localeCompare(right.url)), originalRepositories.toSorted((left, right) => left.url.localeCompare(right.url)));
+    assert.deepEqual(
+      rolledBackRepositories.toSorted((left, right) => left.url.localeCompare(right.url)),
+      originalRepositories.toSorted((left, right) => left.url.localeCompare(right.url)),
+    );
     await Promise.all(rolledBackRepositories.map(({ localPath }) => access(localPath!)));
     assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1))[0]!.serviceId, sourceService!.id);
     assert.match(await git(["-C", retainedPath, "status", "--porcelain"]), /README\.md/);
@@ -1011,10 +1335,15 @@ test("migrates ready development scopes while preserving retained changes and ro
     assert.equal((await database.db.select().from(issueScopeTransitions).where(eq(issueScopeTransitions.issueId, issue!.id))).length, 0);
 
     const retryPlan = await transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" });
-    const migrated = await transitions.apply(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" }, {
-      expectedIssueUpdatedAt: retryPlan.expectedIssueUpdatedAt,
-      expectedPlanHash: retryPlan.planHash,
-    }, "migration-tester");
+    const migrated = await transitions.apply(
+      issue!.id,
+      { serviceKey: targetService!.key, workMode: "development_fix" },
+      {
+        expectedIssueUpdatedAt: retryPlan.expectedIssueUpdatedAt,
+        expectedPlanHash: retryPlan.planHash,
+      },
+      "migration-tester",
+    );
     assert.equal(migrated.serviceId, targetService!.id);
     const migratedRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.deepEqual(migratedRepositories.map(({ url }) => url).sort(), [addedRemote, retainedRemote].sort());
@@ -1051,33 +1380,313 @@ test("cached storage eligibility cannot release a subsequently changed checkout"
     const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
     const [service] = await database.db.insert(services).values({ key: "stats-safety", name: "Stats safety" }).returning();
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
-    const [issue] = await database.db.insert(issues).values({ key: "ISSUE-20261025-991", title: "Stats safety", type: "defect_fix", status: "resolved", resolvedAt: new Date(0), reporterSubject: issuePilotConfig.bootstrapUser.subject, serviceId: service!.id, environmentId: environment!.id }).returning();
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20261025-991",
+        title: "Stats safety",
+        type: "defect_fix",
+        status: "resolved",
+        resolvedAt: new Date(0),
+        reporterSubject: issuePilotConfig.bootstrapUser.subject,
+        serviceId: service!.id,
+        environmentId: environment!.id,
+      })
+      .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     const remote = await createRemote(root, "cache-safety");
     const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
-    await database.db.insert(issueRepositories).values({ issueId: issue!.id, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch, localPath: prepared.workspacePath, workspaceName: "repo", commitBefore: prepared.baseCommit });
-    const manager = new WorkspaceLifecycleManager(database.db, root, { ...engine, running: new Set(), closed: [] } as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
-    const initial = await manager.stats(); assert.equal(initial.workspaces[0]!.releasable, true);
+    await database.db.insert(issueRepositories).values({
+      issueId: issue!.id,
+      url: remote,
+      baseBranch: "main",
+      workingBranch: prepared.workingBranch,
+      localPath: prepared.workspacePath,
+      workspaceName: "repo",
+      commitBefore: prepared.baseCommit,
+    });
+    const manager = new WorkspaceLifecycleManager(database.db, root, { ...engine, running: new Set(), closed: [] } as never, {
+      retentionMs: Infinity,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
+    const initial = await manager.stats();
+    assert.equal(initial.workspaces[0]!.releasable, true);
     await writeFile(path.join(prepared.workspacePath, "README.md"), "new working changes\n");
     assert.equal((await manager.stats()).sampledAt, initial.sampledAt);
     assert.equal((await manager.stats()).workspaces[0]!.releasable, true);
     await assert.rejects(manager.releaseIssue(issue!.id), /workspace_has_changes/);
     assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "new working changes\n");
     assert.equal((await manager.stats()).workspaces[0]!.blockedReason, "workspace_has_changes");
-    const forced = await manager.stats(true); assert.equal(forced.workspaces[0]!.releasable, false);
-  } finally { await database.close(); await rm(root, { recursive: true, force: true }); }
+    const forced = await manager.stats(true);
+    assert.equal(forced.workspaces[0]!.releasable, false);
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a refresh requested during an in-flight scan measures again instead of sharing the older scan", async () => {
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
+    retentionMs: Number.POSITIVE_INFINITY,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+    taskConcurrency: 1,
+  });
+  const internal = manager as unknown as {
+    issueRows(): Promise<Array<{ issue: { id: string; key: string }; workspace: null }>>;
+    inspectLocked(row: { issue: { id: string; key: string } }, repositories?: unknown, knownBytes?: number): Promise<WorkspaceInspection>;
+  };
+  internal.issueRows = async () => [{ issue: { id: "issue-a", key: "ISSUE-20260814-001" }, workspace: null }];
+  let releaseFirst!: () => void;
+  let markStarted!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let inspections = 0;
+  internal.inspectLocked = async ({ issue }) => {
+    inspections += 1;
+    if (inspections === 1) {
+      markStarted();
+      await firstGate;
+    }
+    return {
+      issueId: issue.id,
+      issueKey: issue.key,
+      issueStatus: "open",
+      workspaceStatus: "not_created",
+      resolvedAt: null,
+      bytes: inspections,
+      releasable: false,
+      blockedReason: "issue_not_resolved",
+    };
+  };
+  const first = manager.stats();
+  await started;
+  const refreshed = manager.stats(true);
+  releaseFirst();
+  const [firstResult, refreshedResult] = await Promise.all([first, refreshed]);
+  assert.equal(inspections, 2);
+  assert.equal(firstResult.totalBytes, 1);
+  assert.equal(refreshedResult.totalBytes, 2);
 });
 
 test("a release queued behind an in-flight scan invalidates the scan result when it completes", async () => {
-  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
+    retentionMs: Infinity,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+    taskConcurrency: 1,
+  });
   const row = { issue: { id: "queued-release", key: "ISSUE-20261025-993" }, workspace: null };
-  const internals = manager as unknown as { issueRows(): Promise<typeof row[]>; issueRow(): Promise<typeof row>; inspectLocked(): Promise<WorkspaceInspection>; releaseLocked(): Promise<{ issueKey: string; releasedBytes: number; remainingBytes: number; alreadyReleased: boolean }> };
-  internals.issueRows = async () => [row]; internals.issueRow = async () => row;
-  let start!: () => void, finish!: () => void, scans = 0, released = false;
-  const started = new Promise<void>(resolve => { start = resolve; }), gate = new Promise<void>(resolve => { finish = resolve; });
-  internals.inspectLocked = async () => { scans++; if (scans === 1) { start(); await gate; } return { issueId: row.issue.id, issueKey: row.issue.key, issueStatus: "resolved", workspaceStatus: released ? "stopped" : "ready", resolvedAt: new Date(0).toISOString(), bytes: 0, releasable: !released, blockedReason: released ? "workspace_released" : null }; };
-  internals.releaseLocked = async () => { released = true; return { issueKey: row.issue.key, releasedBytes: 0, remainingBytes: 0, alreadyReleased: false }; };
-  const statistics = manager.stats(); await started;
-  const release = manager.releaseIssue(row.issue.id); finish(); await statistics; await release;
-  const current = await manager.stats(); assert.equal(scans, 2); assert.equal(current.workspaces[0]!.blockedReason, "workspace_released");
+  const internals = manager as unknown as {
+    issueRows(): Promise<(typeof row)[]>;
+    issueRow(): Promise<typeof row>;
+    inspectLocked(): Promise<WorkspaceInspection>;
+    releaseLocked(): Promise<{ issueKey: string; releasedBytes: number; remainingBytes: number; alreadyReleased: boolean }>;
+  };
+  internals.issueRows = async () => [row];
+  internals.issueRow = async () => row;
+  let start!: () => void,
+    finish!: () => void,
+    scans = 0,
+    released = false;
+  const started = new Promise<void>((resolve) => {
+      start = resolve;
+    }),
+    gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  internals.inspectLocked = async () => {
+    scans++;
+    if (scans === 1) {
+      start();
+      await gate;
+    }
+    return {
+      issueId: row.issue.id,
+      issueKey: row.issue.key,
+      issueStatus: "resolved",
+      workspaceStatus: released ? "stopped" : "ready",
+      resolvedAt: new Date(0).toISOString(),
+      bytes: 0,
+      releasable: !released,
+      blockedReason: released ? "workspace_released" : null,
+    };
+  };
+  internals.releaseLocked = async () => {
+    released = true;
+    return { issueKey: row.issue.key, releasedBytes: 0, remainingBytes: 0, alreadyReleased: false };
+  };
+  const statistics = manager.stats();
+  await started;
+  const release = manager.releaseIssue(row.issue.id);
+  finish();
+  await statistics;
+  await release;
+  const current = await manager.stats();
+  assert.equal(scans, 2);
+  assert.equal(current.workspaces[0]!.blockedReason, "workspace_released");
+});
+
+test("a failed release whose workspace cannot be measured does not stop maintenance of other candidates", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-maintenance-measurement-"));
+  const originalPath = process.env.PATH;
+  try {
+    const rows = ["ISSUE-20261103-001", "ISSUE-20261103-002"].map((key) => ({
+      issue: { id: key.toLowerCase(), key, status: "resolved", resolvedAt: new Date(0), updatedAt: new Date(0) },
+      workspace: null,
+      environmentKind: "dev",
+    }));
+    for (const row of rows) {
+      await mkdir(issueRoot(root, row.issue.key), { recursive: true });
+      await writeFile(path.join(issueRoot(root, row.issue.key), "evidence.txt"), "x".repeat(8192));
+    }
+    const manager = new WorkspaceLifecycleManager({} as never, root, engine as never, { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
+    const internals = manager as unknown as {
+      issueRows(): Promise<typeof rows>;
+      issueRow(issueId: string): Promise<(typeof rows)[number]>;
+      releaseLocked(row: (typeof rows)[number]): Promise<{ issueKey: string; releasedBytes: number; remainingBytes: number; alreadyReleased: boolean }>;
+    };
+    internals.issueRows = async () => rows;
+    internals.issueRow = async (issueId) => rows.find((row) => row.issue.id === issueId)!;
+    // While the first candidate fails, `du` resolves to a stub that exits without output so its follow-up measurement fails too.
+    const bin = path.join(root, "bin");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "du"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+    internals.releaseLocked = async (row) => {
+      if (row === rows[0]) {
+        process.env.PATH = `${bin}:${originalPath}`;
+        throw new Error("simulated_release_failure");
+      }
+      process.env.PATH = originalPath;
+      return { issueKey: row.issue.key, releasedBytes: 8192, remainingBytes: 0, alreadyReleased: false };
+    };
+    const result = await manager.maintain();
+    assert.deepEqual(
+      result.released.map((release) => release.issueKey),
+      [rows[1]!.issue.key],
+    );
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.failures[0]!.issueKey, rows[0]!.issue.key);
+    assert.match(String((result.failures[0]!.error as Error).message), /workspace_maintenance_measurement_failed/);
+  } finally {
+    process.env.PATH = originalPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("releasing a development Issue whose root is missing is refused and leaves its records for inspection", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-missing-root-release-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+    const [service] = await database.db.insert(services).values({ key: "missing-root", name: "Missing root" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20261103-992",
+        title: "Missing root",
+        type: "defect_fix",
+        status: "resolved",
+        resolvedAt: new Date(0),
+        reporterSubject: issuePilotConfig.bootstrapUser.subject,
+        serviceId: service!.id,
+        environmentId: environment!.id,
+      })
+      .returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+    const remote = await createRemote(root, "missing-root");
+    const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    await database.db.insert(issueRepositories).values({
+      issueId: issue!.id,
+      url: remote,
+      baseBranch: "main",
+      workingBranch: prepared.workingBranch,
+      localPath: prepared.workspacePath,
+      workspaceName: "repo",
+      commitBefore: prepared.baseCommit,
+    });
+    // The root holds the private Git store; losing it loses any unpublished commits.
+    await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
+    const before = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    const manager = new WorkspaceLifecycleManager(database.db, root, { ...engine, running: new Set(), closed: [] } as never, {
+      retentionMs: Infinity,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
+    await assert.rejects(manager.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_missing");
+    assert.deepEqual(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id)), before);
+    const [workspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
+    assert.equal(workspace!.status, "ready");
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a released Issue whose root is missing is never rebuilt from the shared branch", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-released-root-missing-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+    const [service] = await database.db.insert(services).values({ key: "released-root", name: "Released root" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const [issue] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20261103-993",
+        title: "Released root",
+        type: "defect_fix",
+        status: "resolved",
+        resolvedAt: new Date(0),
+        reporterSubject: issuePilotConfig.bootstrapUser.subject,
+        serviceId: service!.id,
+        environmentId: environment!.id,
+      })
+      .returning();
+    await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+    const remote = await createRemote(root, "released-root");
+    const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    await database.db.insert(issueRepositories).values({
+      issueId: issue!.id,
+      url: remote,
+      baseBranch: "main",
+      workingBranch: prepared.workingBranch,
+      localPath: prepared.workspacePath,
+      workspaceName: "repo",
+      commitBefore: prepared.baseCommit,
+    });
+    const manager = new WorkspaceLifecycleManager(database.db, root, { ...engine, running: new Set(), closed: [] } as never, {
+      retentionMs: Infinity,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
+    await manager.releaseIssue(issue!.id);
+    assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_snapshot");
+    // The root held the private store and durable content; losing it must not be papered over.
+    await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
+    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [], blocked: [{ issueKey: issue!.key, reason: "workspace_missing" }] });
+    await assert.rejects(access(issueRoot(root, issue!.key)), { code: "ENOENT" });
+    await assert.rejects(manager.reopenIssue(issue!.id), (error) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_missing");
+    // A repeated release returns the same stable refusal rather than a generic restore failure.
+    await assert.rejects(manager.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_missing");
+    assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_snapshot");
+    assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)))[0]!.status, "resolved");
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

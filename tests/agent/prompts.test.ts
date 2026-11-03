@@ -7,7 +7,15 @@ const now = new Date("2026-08-06T01:52:43.000Z");
 
 test("bundles Karpathy guidelines for every Issue Agent without changing access policy", () => {
   for (const mode of ["investigation", "development", "data"] as const) {
-    const prompt = agentSystemPrompt({ issueKey: "ISSUE-20261016-001", serviceKey: "service", environmentKey: mode === "development" ? "dev" : "prod", model: { provider: "test", modelId: "test", thinkingLevel: "medium" }, codemode: "off", capabilities: [], canModifyCode: mode === "development" });
+    const prompt = agentSystemPrompt({
+      issueKey: "ISSUE-20261016-001",
+      serviceKey: "service",
+      environmentKey: mode === "development" ? "dev" : "prod",
+      model: { provider: "test", modelId: "test", thinkingLevel: "medium" },
+      codemode: "off",
+      capabilities: [],
+      canModifyCode: mode === "development",
+    });
     for (const principle of ["Think Before Coding", "Simplicity First", "Surgical Changes", "Goal-Driven Execution"]) assert.ok(prompt.includes(principle));
     assert.equal(prompt.match(/# Karpathy Guidelines/g)?.length, 1);
     assert.match(prompt, /tool availability and tool validation as hard authorization boundaries/);
@@ -15,10 +23,21 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.match(prompt, /not an operating-system isolation boundary/);
     assert.doesNotMatch(prompt, /sandbox operation|output\.spreadsheet|sandbox export_output/);
     assert.match(prompt, /global MCP servers expose separate mcp__ tools through Pi in every Issue environment/);
+    assert.doesNotMatch(prompt, /service_query/);
     assert.doesNotMatch(prompt, /Call them through the Issue's entry service/);
     assert.doesNotMatch(prompt, /Production\/test MCP access is read-only/);
     if (mode !== "development") assert.match(prompt, /All repository workspaces are read-only/);
   }
+  const withCapabilities = agentSystemPrompt({
+    issueKey: "ISSUE-20261016-001",
+    serviceKey: "service",
+    environmentKey: "prod",
+    model: { provider: "test", modelId: "test", thinkingLevel: "medium" },
+    codemode: "off",
+    capabilities: ["dms"],
+    canModifyCode: false,
+  });
+  assert.match(withCapabilities, /Use service_query/);
 });
 
 test("injects the current UTC and Asia/Shanghai time into every Agent prompt", () => {
@@ -31,15 +50,18 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(continuation, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(continuation, /shared read-only snapshots of the latest configured deployment branches/);
   assert.doesNotMatch(continuation, /unless the user explicitly asks you to commit or push them/);
-  const initial = initialPrompt({
-    issueKey: "ISSUE-20260810-001",
-    title: "Latest log",
-    description: "Read the latest SLS record",
-    issueType: "smart_analysis",
-    repositories: readOnlyRepositories,
-    service: { key: "service", name: "Service" },
-    attachmentPath: "/issues/issue-20260810-001/attachments",
-  }, now);
+  const initial = initialPrompt(
+    {
+      issueKey: "ISSUE-20260810-001",
+      title: "Latest log",
+      description: "Read the latest SLS record",
+      issueType: "smart_analysis",
+      repositories: readOnlyRepositories,
+      service: { key: "service", name: "Service" },
+      attachmentPath: "/issues/issue-20260810-001/attachments",
+    },
+    now,
+  );
   assert.match(initial, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(initial, /Investigate, verify the available evidence/);
 

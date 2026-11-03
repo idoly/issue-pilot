@@ -10,13 +10,25 @@ export async function downloadDingtalkAttachments(files: DingtalkAttachment[], s
     for (const file of files) {
       signal.throwIfAborted();
       const url = new URL(file.url);
-      if (url.protocol !== "https:" || url.username || url.password || url.port || !issuePilotConfig.limits.capability.dingtalk.attachmentHosts.includes(url.hostname)) throw new DingtalkError("dingtalk_attachment_host_not_allowed");
+      if (url.protocol !== "https:" || url.username || url.password || url.port || !issuePilotConfig.limits.capability.dingtalk.attachmentHosts.includes(url.hostname))
+        throw new DingtalkError("dingtalk_attachment_host_not_allowed");
       const response = await request(url, { signal, redirect: "error" });
-      if (!response.ok || !response.body) { await response.body?.cancel(); throw new DingtalkError("dingtalk_attachment_download_failed"); }
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        throw new DingtalkError("dingtalk_attachment_download_failed");
+      }
       async function* chunks() {
         const reader = response.body!.getReader();
+        let received = 0;
         try {
-          while (true) { const { done, value } = await reader.read(); if (done) return; yield value; }
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            // Stop at the declared size instead of staging an unbounded replacement object.
+            received += value.byteLength;
+            if (received > file.size) throw new DingtalkError("dingtalk_attachment_size_changed", 409);
+            yield value;
+          }
         } finally {
           try {
             await reader.cancel();

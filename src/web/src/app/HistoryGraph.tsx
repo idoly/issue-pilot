@@ -12,7 +12,12 @@ import type { SourceCommit } from "../data/client";
 
 type Lane = { id: string; color: string };
 interface GraphRow {
-  input: Lane[]; output: Lane[]; column: number; color: string; width: number; fileWidth: number;
+  input: Lane[];
+  output: Lane[];
+  column: number;
+  color: string;
+  width: number;
+  fileWidth: number;
   paths: { d: string; color: string }[];
   merge: boolean;
 }
@@ -22,20 +27,27 @@ const branchColors = ["#ffb000", "#dc267f", "#994f00", "#40b0a6", "#b66dff"];
 /** Keep lanes between rows, including through each commit's expanded file list. */
 export function historyGraph(commits: SourceCommit[]): Map<string, GraphRow> {
   const rows = new Map<string, GraphRow>();
-  let previous: Lane[] = [], colorIndex = -1;
+  let previous: Lane[] = [],
+    colorIndex = -1;
   for (const [index, commit] of commits.entries()) {
-    const input = previous, output: Lane[] = [];
+    const input = previous,
+      output: Lane[] = [];
     let firstParentAdded = false;
-    if (commit.parents.length) for (const lane of input) {
-      if (lane.id === commit.hash) {
-        if (!firstParentAdded) { output.push({ id: commit.parents[0]!, color: index === 0 ? referenceColor : lane.color }); firstParentAdded = true; }
-      } else output.push(lane);
-    }
+    if (commit.parents.length)
+      for (const lane of input) {
+        if (lane.id === commit.hash) {
+          if (!firstParentAdded) {
+            output.push({ id: commit.parents[0]!, color: index === 0 ? referenceColor : lane.color });
+            firstParentAdded = true;
+          }
+        } else output.push(lane);
+      }
     for (let parent = firstParentAdded ? 1 : 0; parent < commit.parents.length; parent++) {
       const color = index === 0 && parent === 0 ? referenceColor : branchColors[++colorIndex % branchColors.length]!;
       output.push({ id: commit.parents[parent]!, color });
     }
-    const inputIndex = input.findIndex(lane => lane.id === commit.hash), column = inputIndex < 0 ? input.length : inputIndex;
+    const inputIndex = input.findIndex((lane) => lane.id === commit.hash),
+      column = inputIndex < 0 ? input.length : inputIndex;
     const color = output[column]?.color ?? input[column]?.color ?? referenceColor;
     const paths: GraphRow["paths"] = [];
     let nextColumn = 0;
@@ -65,9 +77,21 @@ export function historyGraph(commits: SourceCommit[]): Map<string, GraphRow> {
 }
 
 export function HistoryGraph(props: { value: GraphRow; expanded?: boolean; files?: boolean }) {
-  const width = () => props.files ? props.value.fileWidth : props.value.width;
-  return <svg class={props.files ? "source-history-file-graph" : "source-history-graph"} width={width()} height="22" style={{ width: `${width()}px`, "flex-basis": `${width()}px` }} aria-hidden="true">
-    <For each={props.files ? props.value.output.map((lane, index) => ({ d: `M ${11 * (index + 1)} 0 V 22`, color: lane.color })) : props.value.paths}>{(path, index) => <path d={path.d} fill="none" stroke={path.color} stroke-width={props.files ? index() === props.value.column ? 3 : 1 : props.expanded && index() === props.value.paths.length - 1 ? 3 : 1} stroke-linecap="round" />}</For>
-    <For each={props.files ? [] : props.value.merge ? [6, 3] : [5]}>{radius => <circle cx={11 * (props.value.column + 1)} cy="11" r={radius} fill={props.value.color} stroke-width="2" />}</For>
-  </svg>;
+  const width = () => (props.files ? props.value.fileWidth : props.value.width);
+  return (
+    <svg class={props.files ? "source-history-file-graph" : "source-history-graph"} width={width()} height="22" style={{ width: `${width()}px`, "flex-basis": `${width()}px` }} aria-hidden="true">
+      <For each={props.files ? props.value.output.map((lane, index) => ({ d: `M ${11 * (index + 1)} 0 V 22`, color: lane.color })) : props.value.paths}>
+        {(path, index) => (
+          <path
+            d={path.d}
+            fill="none"
+            stroke={path.color}
+            stroke-width={props.files ? (index() === props.value.column ? 3 : 1) : props.expanded && index() === props.value.paths.length - 1 ? 3 : 1}
+            stroke-linecap="round"
+          />
+        )}
+      </For>
+      <For each={props.files ? [] : props.value.merge ? [6, 3] : [5]}>{(radius) => <circle cx={11 * (props.value.column + 1)} cy="11" r={radius} fill={props.value.color} stroke-width="2" />}</For>
+    </svg>
+  );
 }

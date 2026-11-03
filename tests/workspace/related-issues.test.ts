@@ -10,7 +10,18 @@ import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueRelations, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import {
+  agentSessions,
+  environments,
+  issueRelations,
+  issues,
+  issueWorkspaces,
+  serviceDeploymentRepositories,
+  serviceDeployments,
+  serviceRepositories,
+  services,
+  subjects,
+} from "../../src/db/schema.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 
@@ -39,16 +50,38 @@ test("related Issues expose their complete current working directory and convers
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     await registerTestRepositories(database.db, [remote]);
     const [repository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: remote }).returning();
-    const deployments = await database.db.insert(serviceDeployments).values([
-      { serviceId: service!.id, environmentId: prod!.id, config: {} },
-      { serviceId: service!.id, environmentId: dev!.id, config: {} },
-    ]).returning();
+    const deployments = await database.db
+      .insert(serviceDeployments)
+      .values([
+        { serviceId: service!.id, environmentId: prod!.id, config: {} },
+        { serviceId: service!.id, environmentId: dev!.id, config: {} },
+      ])
+      .returning();
     await database.db.insert(serviceDeploymentRepositories).values(deployments.map((deployment) => ({ deploymentId: deployment.id, repositoryId: repository!.id, baseBranch: "main" })));
-    const [development, relatedProduction, production] = await database.db.insert(issues).values([
-      { key: "ISSUE-20260918-101", title: "Development fix", description: "Fix the regression", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" },
-      { key: "ISSUE-20260918-102", title: "Earlier production evidence", description: "No development branch or conversation", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
-      { key: "ISSUE-20260918-103", title: "Production regression", description: "Investigate with related evidence", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" },
-    ]).returning();
+    const [development, relatedProduction, production] = await database.db
+      .insert(issues)
+      .values([
+        { key: "ISSUE-20260918-101", title: "Development fix", description: "Fix the regression", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" },
+        {
+          key: "ISSUE-20260918-102",
+          title: "Earlier production evidence",
+          description: "No development branch or conversation",
+          type: "smart_analysis",
+          serviceId: service!.id,
+          environmentId: prod!.id,
+          reporterSubject: "tester",
+        },
+        {
+          key: "ISSUE-20260918-103",
+          title: "Production regression",
+          description: "Investigate with related evidence",
+          type: "smart_analysis",
+          serviceId: service!.id,
+          environmentId: prod!.id,
+          reporterSubject: "tester",
+        },
+      ])
+      .returning();
     await database.db.insert(issueWorkspaces).values([{ issueId: development!.id }, { issueId: relatedProduction!.id }, { issueId: production!.id }]);
 
     await mkdir(issueRoot(root, relatedProduction!.key), { recursive: true });
@@ -63,7 +96,7 @@ test("related Issues expose their complete current working directory and convers
     const sessionRoot = issueRoot(root, development!.key);
     const sessionFile = path.join(sessionRoot, ".session-related.jsonl");
     await mkdir(sessionRoot, { recursive: true });
-    await writeFile(sessionFile, "{\"type\":\"custom\",\"customType\":\"issue-pilot-user\",\"data\":{\"message\":\"check the contract\"}}\n", { mode: 0o600 });
+    await writeFile(sessionFile, '{"type":"custom","customType":"issue-pilot-user","data":{"message":"check the contract"}}\n', { mode: 0o600 });
     await database.db.insert(agentSessions).values({ issueId: development!.id, sessionFile, workspacePath: preparedDevelopment.workspaceRoot });
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, development!.id));
     await database.db.insert(issueRelations).values([

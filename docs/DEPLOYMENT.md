@@ -78,6 +78,13 @@ podman push registry.example.com/issue-pilot:<version>
 | /etc/issue-pilot | /home/node，只读 Operator 配置 |
 | emptyDir | /tmp，临时执行资源 |
 
+hostPath 不受 `fsGroup` 影响，state 目录必须由容器用户（UID/GID 1000）拥有，否则启动时创建／收紧 0700 目录失败：
+
+```bash
+install -d -m 0700 -o 1000 -g 1000 /var/lib/issue-pilot
+install -d -m 0755 -o 1000 -g 1000 /etc/issue-pilot
+```
+
 准备 owner／mode、容量、节点标签 `issue-pilot/state=true`、网关与镜像后执行：
 
 ```bash
@@ -90,7 +97,7 @@ kubectl -n issue-pilot get deployment,pod,service
 
 ## 网络与验收
 
-网关限制可信 subject、源码／下载／私有配置／MCP 的访问，日志不能记录密钥或完整敏感响应。SSE 代理关闭缓冲并设置合理长连接超时；应用附件没有业务总大小／数量上限，边缘层应约束请求和容量。
+网关限制可信 subject、源码／下载／私有配置／MCP 的访问，日志不能记录密钥或完整敏感响应。应用为 HTML 响应设置 CSP（不含外部脚本、表单或内联框架来源）、`X-Frame-Options: DENY` 与 `Referrer-Policy: no-referrer`；`/assets` 中仅内容哈希文件可长期缓存。优雅停机等待进行中的请求，超过 `http.shutdownGraceMs`（默认 30 秒）后强制关闭连接，`terminationGracePeriodSeconds` 应大于该值。SSE 代理关闭缓冲并设置合理长连接超时；应用附件没有业务总大小／数量上限，边缘层应约束请求和容量。
 
 本地工具及 stdio MCP 按全局 runtime 追加精确出口域名／端口，SSH 与 HTTPS 分别配置；不能用允许列表代替外部业务授权。
 

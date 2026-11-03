@@ -10,7 +10,18 @@ import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { agentSessions, environments, issueRepositories, issues, issueWorkspaces, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
+import {
+  agentSessions,
+  environments,
+  issueRepositories,
+  issues,
+  issueWorkspaces,
+  serviceDeploymentRepositories,
+  serviceDeployments,
+  serviceRepositories,
+  services,
+  subjects,
+} from "../../src/db/schema.ts";
 import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
 import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
@@ -37,12 +48,16 @@ async function withGitFetchCount<T>(root: string, operation: () => Promise<T>): 
   const gitExecutable = (await execFileAsync("sh", ["-c", "command -v git"], { encoding: "utf8" })).stdout.trim();
   await mkdir(binRoot);
   await writeFile(fetchLog, "", "utf8");
-  await writeFile(path.join(binRoot, "git"), `#!/bin/sh
+  await writeFile(
+    path.join(binRoot, "git"),
+    `#!/bin/sh
 for argument do
   if [ "$argument" = fetch ]; then printf 'fetch\\n' >> "$ISSUE_PILOT_FETCH_LOG"; break; fi
 done
 exec ${JSON.stringify(gitExecutable)} "$@"
-`, { mode: 0o700 });
+`,
+    { mode: 0o700 },
+  );
 
   const previousPath = process.env.PATH;
   const previousFetchLog = process.env.ISSUE_PILOT_FETCH_LOG;
@@ -78,19 +93,24 @@ test("hydrates current read-only issue runtimes from deployment branches", async
       environmentId: prod!.id,
       reporterSubject: "tester",
     };
-    const [issue, secondIssue] = await database.db.insert(issues).values([
-      { ...issueValues, key: "ISSUE-20260810-201", title: "Inspect production" },
-      { ...issueValues, key: "ISSUE-20260810-202", title: "Inspect the same production deployment" },
-    ]).returning();
+    const [issue, secondIssue] = await database.db
+      .insert(issues)
+      .values([
+        { ...issueValues, key: "ISSUE-20260810-201", title: "Inspect production" },
+        { ...issueValues, key: "ISSUE-20260810-202", title: "Inspect the same production deployment" },
+      ])
+      .returning();
     await database.db.insert(issueWorkspaces).values([
       { issueId: issue!.id, status: "ready", runtimeReady: false },
       { issueId: secondIssue!.id, status: "ready", runtimeReady: false },
     ]);
-    await database.db.insert(agentSessions).values([issue!, secondIssue!].map((entry) => ({
-      issueId: entry.id,
-      sessionFile: path.join(issueRoot(root, entry.key), "session.jsonl"),
-      workspacePath: issueRoot(root, entry.key),
-    })));
+    await database.db.insert(agentSessions).values(
+      [issue!, secondIssue!].map((entry) => ({
+        issueId: entry.id,
+        sessionFile: path.join(issueRoot(root, entry.key), "session.jsonl"),
+        workspacePath: issueRoot(root, entry.key),
+      })),
+    );
 
     const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
     const runTransaction = runtimeDatabase.transaction.bind(runtimeDatabase);
@@ -107,8 +127,11 @@ test("hydrates current read-only issue runtimes from deployment branches", async
       }
     }) as typeof runtimeDatabase.transaction;
     const { result, fetches } = await (async () => {
-      try { return await withGitFetchCount(root, () => prepareReadOnlyIssueRuntimes(database.db, root)); }
-      finally { runtimeDatabase.transaction = runTransaction; }
+      try {
+        return await withGitFetchCount(root, () => prepareReadOnlyIssueRuntimes(database.db, root));
+      } finally {
+        runtimeDatabase.transaction = runTransaction;
+      }
     })();
     assert.deepEqual([...result.prepared].sort(), [issue!.key, secondIssue!.key]);
     assert.deepEqual(result.blocked, []);
@@ -141,7 +164,10 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: extraRepository!.id, baseBranch: "missing" });
     const failedSwitch = await prepareReadOnlyIssueRuntimes(database.db, root);
     assert.equal(failedSwitch.blocked[0]?.issueKey, issue!.key);
-    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
+    assert.deepEqual(
+      (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url),
+      [remote],
+    );
     await database.db.update(serviceDeploymentRepositories).set({ baseBranch: "main" }).where(eq(serviceDeploymentRepositories.repositoryId, extraRepository!.id));
     let failRepositoryTransaction = true;
     runtimeDatabase.transaction = (async (operation) => {
@@ -153,11 +179,17 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     }) as typeof runtimeDatabase.transaction;
     const failedTransaction = await prepareReadOnlyIssueRuntimes(database.db, root);
     assert.deepEqual(failedTransaction, { prepared: [], blocked: [{ issueKey: issue!.key, reason: "simulated_readonly_repository_transaction_failure" }] });
-    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote]);
+    assert.deepEqual(
+      (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url),
+      [remote],
+    );
     assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.runtimeReady, false);
     runtimeDatabase.transaction = runTransaction;
     assert.deepEqual(await prepareReadOnlyIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
-    assert.deepEqual((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url), [remote, extraRemote]);
+    assert.deepEqual(
+      (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url),
+      [remote, extraRemote],
+    );
 
     await database.db.update(issueRepositories).set({ workingBranch: "unexpected-branch" }).where(eq(issueRepositories.issueId, issue!.id));
     const invalid = await prepareReadOnlyIssueRuntimes(database.db, root);

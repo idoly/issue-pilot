@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import type { Model } from "@earendil-works/pi-ai";
-import { AgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import { AgentSession, type ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
 import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
@@ -27,27 +27,43 @@ test("creates a private Pi session file before the first Agent prompt", async ()
     assert.ok(sessionFile);
     assert.equal((await stat(sessionFile)).mode & 0o777, 0o600);
 
-    const [header] = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const [header] = (await readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     assert.equal(header.type, "session");
     assert.equal(header.id, manager.getSessionId());
 
     manager.appendCustomEntry("issue-pilot-user", { message: "hello" });
     const reopened = SessionManager.open(sessionFile, sessionDirectory, workspace);
-    assert.deepEqual(reopened.getEntries().map((entry) => entry.type), ["custom"]);
+    assert.deepEqual(
+      reopened.getEntries().map((entry) => entry.type),
+      ["custom"],
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
 function localMcp(root: string) {
-  return [{ id: "local", name: "Local", url: "", authorization: "", transport: "stdio" as const, enabled: true, stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_PID_FILE: join(root, "pid") } } }];
+  return [
+    {
+      id: "local",
+      name: "Local",
+      url: "",
+      authorization: "",
+      transport: "stdio" as const,
+      enabled: true,
+      stdio: { command: process.execPath, args: [fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url))], env: { MCP_FIXTURE_PID_FILE: join(root, "pid") } },
+    },
+  ];
 }
 
 async function waitForMcp(managed: Awaited<ReturnType<PiSessionRuntime["start"]>>) {
   for (let attempt = 0; attempt < 200; attempt++) {
-    const tools = managed.session.getAllTools().filter(tool => tool.name.startsWith("mcp__"));
+    const tools = managed.session.getAllTools().filter((tool) => tool.name.startsWith("mcp__"));
     if (tools.length) return tools;
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("mcp_tools_not_ready");
 }
@@ -79,24 +95,54 @@ const model: Model<"openai-responses"> = {
 
 test("a keyed runtime honors the explicit Agent directory instead of the Operator default", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-explicit-agent-"));
-  const agentDirectory = join(root, "agent"), otherDirectory = join(root, "other-agent");
+  const agentDirectory = join(root, "agent"),
+    otherDirectory = join(root, "other-agent");
   const previous = process.env.PI_CODING_AGENT_DIR;
-  const runtime = new PiSessionRuntime({ load: async () => { throw new Error("unexpected_injected_runtime"); }, close: async () => {} });
+  const runtime = new PiSessionRuntime({
+    load: async () => {
+      throw new Error("unexpected_injected_runtime");
+    },
+    close: async () => {},
+  });
   let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
-    await mkdir(agentDirectory); await mkdir(otherDirectory);
+    await mkdir(agentDirectory);
+    await mkdir(otherDirectory);
     await writeFile(join(otherDirectory, "models.json"), JSON.stringify({ providers: {} }));
-    await writeFile(join(agentDirectory, "models.json"), JSON.stringify({ providers: { [model.provider]: { api: model.api, baseUrl: model.baseUrl, models: [{ id: model.id, name: model.name, reasoning: model.reasoning, input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens }] } } }));
+    await writeFile(
+      join(agentDirectory, "models.json"),
+      JSON.stringify({
+        providers: {
+          [model.provider]: {
+            api: model.api,
+            baseUrl: model.baseUrl,
+            models: [{ id: model.id, name: model.name, reasoning: model.reasoning, input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens }],
+          },
+        },
+      }),
+    );
     // Even the default is a temporary directory: a regression must never read the real Operator files.
     process.env.PI_CODING_AGENT_DIR = otherDirectory;
-    managed = await runtime.start({ manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, agentDirectory, modelApiKey: "fixture-selected-key", systemPrompt: "Explicit resources.", onEvent: () => {} });
+    managed = await runtime.start({
+      manager: await createPrivateSessionManager(root, root),
+      context: context({ writable: false }),
+      deploymentConfig: {},
+      workspaceRoot: root,
+      agentDirectory,
+      modelApiKey: "fixture-selected-key",
+      systemPrompt: "Explicit resources.",
+      onEvent: () => {},
+    });
     assert.equal(managed.session.model?.provider, model.provider);
     assert.equal(managed.session.model?.id, model.id);
     await managed.stop();
   } finally {
-    try { await managed?.stop(); await runtime.close(); }
-    finally {
-      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    try {
+      await managed?.stop();
+      await runtime.close();
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
       await rm(root, { recursive: true, force: true });
     }
   }
@@ -108,18 +154,29 @@ function modelRuntime(available = true, refreshes?: unknown[]): ModelRuntime {
       refreshes?.push(options);
       return { aborted: false, errors: new Map() };
     },
-    getModel() { return model; },
-    getAvailableSnapshot() { return available ? [model] : []; },
+    getModel() {
+      return model;
+    },
+    getAvailableSnapshot() {
+      return available ? [model] : [];
+    },
   } as unknown as ModelRuntime;
 }
 
 function sharedModelRuntime(runtime: ModelRuntime): PiModelRuntime {
-  return { async load() { return runtime; }, async close() {} };
+  return {
+    async load() {
+      return runtime;
+    },
+    async close() {},
+  };
 }
 
 test("times out only while waiting for model output", async () => {
   let timeouts = 0;
-  const watchdog = new AgentResponseWatchdog(20, () => { timeouts += 1; });
+  const watchdog = new AgentResponseWatchdog(20, () => {
+    timeouts += 1;
+  });
   watchdog.start();
   watchdog.observe({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: {} });
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -176,8 +233,11 @@ test("starts an SDK session with only context-selected tools and explicit resour
     assert.equal(managed.session.thinkingLevel, "medium");
     assert.match(managed.session.systemPrompt, /Issue Pilot test context/);
   } finally {
-    try { await managed?.stop(); }
-    finally { await rm(root, { recursive: true, force: true }); }
+    try {
+      await managed?.stop();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -201,60 +261,70 @@ test("an export writer does not register a separate publication tool", async () 
     });
     assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
   } finally {
-    try { await managed?.stop(); }
-    finally { await rm(root, { recursive: true, force: true }); }
+    try {
+      await managed?.stop();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
-for (const cleanupFails of [false, true]) test(`disposes an SDK session and stdio process when stop fails (cleanup=${cleanupFails})`, async () => {
-  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
-  const manager = await createPrivateSessionManager(root, root);
-  const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-    manager,
-    context: context({ writable: false }),
-    deploymentConfig: {},
-    workspaceRoot: root,
-    agentDirectory: root,
-    mcpConfigurations: localMcp(root),
-    systemPrompt: "",
-    onEvent: () => undefined,
-  });
-  await waitForMcp(managed);
-  await readFile(join(root, "pid"), "utf8");
-  const child = await hostMcpPid(join(root, "pid"));
-  let disposed = false;
-  const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
-  const dispose = session.dispose.bind(session);
-  const abortError = new Error("abort_failed");
-  const shutdownError = new Error("shutdown_failed");
-  const disposeError = new Error("dispose_failed");
-  Object.defineProperty(session, "isIdle", { configurable: true, get: () => false });
-  session.abort = async () => { throw abortError; };
-  if (cleanupFails) {
-    const emit = session.extensionRunner.emit.bind(session.extensionRunner);
-    session.extensionRunner.emit = async event => {
-      const result = await emit(event);
-      if (event.type === "session_shutdown") throw shutdownError;
-      return result;
-    };
-  }
-  session.dispose = () => { disposed = true; dispose(); if (cleanupFails) throw disposeError; };
-  try {
-    await assert.rejects(managed.stop(), error => {
-      if (cleanupFails) {
-        assert.ok(error instanceof AggregateError);
-        assert.equal(error.message, "pi_session_stop_failed");
-        assert.deepEqual(error.errors, [abortError, shutdownError, disposeError]);
-      } else assert.equal(error, abortError);
-      return true;
+for (const cleanupFails of [false, true])
+  test(`disposes an SDK session and stdio process when stop fails (cleanup=${cleanupFails})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
+    const manager = await createPrivateSessionManager(root, root);
+    const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+      manager,
+      context: context({ writable: false }),
+      deploymentConfig: {},
+      workspaceRoot: root,
+      agentDirectory: root,
+      mcpConfigurations: localMcp(root),
+      systemPrompt: "",
+      onEvent: () => undefined,
     });
-    assert.equal(disposed, true);
-    assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
-    await managed.stop();
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    await waitForMcp(managed);
+    await readFile(join(root, "pid"), "utf8");
+    const child = await hostMcpPid(join(root, "pid"));
+    let disposed = false;
+    const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
+    const dispose = session.dispose.bind(session);
+    const abortError = new Error("abort_failed");
+    const shutdownError = new Error("shutdown_failed");
+    const disposeError = new Error("dispose_failed");
+    Object.defineProperty(session, "isIdle", { configurable: true, get: () => false });
+    session.abort = async () => {
+      throw abortError;
+    };
+    if (cleanupFails) {
+      const emit = session.extensionRunner.emit.bind(session.extensionRunner);
+      session.extensionRunner.emit = async (event) => {
+        const result = await emit(event);
+        if (event.type === "session_shutdown") throw shutdownError;
+        return result;
+      };
+    }
+    session.dispose = () => {
+      disposed = true;
+      dispose();
+      if (cleanupFails) throw disposeError;
+    };
+    try {
+      await assert.rejects(managed.stop(), (error) => {
+        if (cleanupFails) {
+          assert.ok(error instanceof AggregateError);
+          assert.equal(error.message, "pi_session_stop_failed");
+          assert.deepEqual(error.errors, [abortError, shutdownError, disposeError]);
+        } else assert.equal(error, abortError);
+        return true;
+      });
+      assert.equal(disposed, true);
+      assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+      await managed.stop();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
 test("preserves startup and disposal failures while releasing the SDK session", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-start-cleanup-"));
@@ -263,21 +333,31 @@ test("preserves startup and disposal failures while releasing the SDK session", 
   let disposed = false;
   t.mock.method(AgentSession.prototype, "bindExtensions", async function (this: AgentSession) {
     const dispose = this.dispose.bind(this);
-    this.dispose = () => { dispose(); disposed = true; throw disposalError; };
+    this.dispose = () => {
+      dispose();
+      disposed = true;
+      throw disposalError;
+    };
     throw startupError;
   });
   try {
-    await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-      manager: await createPrivateSessionManager(root, root),
-      context: context({ writable: false }),
-      deploymentConfig: {}, workspaceRoot: root, agentDirectory: root,
-      systemPrompt: "", onEvent: () => undefined,
-    }), error => {
-      assert.ok(error instanceof AggregateError);
-      assert.equal(error.message, "pi_session_start_cleanup_failed");
-      assert.deepEqual(error.errors, [startupError, disposalError]);
-      return true;
-    });
+    await assert.rejects(
+      new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+        manager: await createPrivateSessionManager(root, root),
+        context: context({ writable: false }),
+        deploymentConfig: {},
+        workspaceRoot: root,
+        agentDirectory: root,
+        systemPrompt: "",
+        onEvent: () => undefined,
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.message, "pi_session_start_cleanup_failed");
+        assert.deepEqual(error.errors, [startupError, disposalError]);
+        return true;
+      },
+    );
     assert.equal(disposed, true);
   } finally {
     t.mock.restoreAll();
@@ -285,47 +365,70 @@ test("preserves startup and disposal failures while releasing the SDK session", 
   }
 });
 
-for (const environment of ["prod", "test", "dev"] as const) test(`exposes non-read-only MCP tools in ${environment} sessions`, async () => {
-  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-tools-"));
-  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
-  try {
-    managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-      manager: await createPrivateSessionManager(root, root),
-      context: { ...context({ writable: environment === "dev" }), environmentKey: environment },
-      deploymentConfig: {}, workspaceRoot: root, agentDirectory: root,
-      mcpConfigurations: localMcp(root),
-      systemPrompt: "", onEvent: () => undefined,
-    });
-    const tools = await waitForMcp(managed);
-    assert.ok(tools.some(tool => tool.name === "mcp__local__write"));
-    assert.ok(managed.session.getActiveToolNames().includes("mcp__local__write"));
-    assert.equal(managed.session.getActiveToolNames().includes("service_query"), false);
-  } finally { await managed?.stop(); await rm(root, { recursive: true, force: true }); }
-});
+for (const environment of ["prod", "test", "dev"] as const)
+  test(`exposes non-read-only MCP tools in ${environment} sessions`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-tools-"));
+    let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
+    try {
+      managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+        manager: await createPrivateSessionManager(root, root),
+        context: { ...context({ writable: environment === "dev" }), environmentKey: environment },
+        deploymentConfig: {},
+        workspaceRoot: root,
+        agentDirectory: root,
+        mcpConfigurations: localMcp(root),
+        systemPrompt: "",
+        onEvent: () => undefined,
+      });
+      const tools = await waitForMcp(managed);
+      assert.ok(tools.some((tool) => tool.name === "mcp__local__write"));
+      assert.ok(managed.session.getActiveToolNames().includes("mcp__local__write"));
+      assert.equal(managed.session.getActiveToolNames().includes("service_query"), false);
+    } finally {
+      await managed?.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
 test("does not start stdio processes when Agent identity validation fails", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-mcp-start-"));
   try {
-    await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-      manager: await createPrivateSessionManager(root, root), context: context({ writable: false }), deploymentConfig: {}, workspaceRoot: root, agentDirectory: root, mcpConfigurations: localMcp(root), gitIdentity: { name: "", email: "test@example.test" }, systemPrompt: "", onEvent: () => undefined,
-    }), /invalid_git_commit_identity/);
+    await assert.rejects(
+      new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+        manager: await createPrivateSessionManager(root, root),
+        context: context({ writable: false }),
+        deploymentConfig: {},
+        workspaceRoot: root,
+        agentDirectory: root,
+        mcpConfigurations: localMcp(root),
+        gitIdentity: { name: "", email: "test@example.test" },
+        systemPrompt: "",
+        onEvent: () => undefined,
+      }),
+      /invalid_git_commit_identity/,
+    );
     await assert.rejects(readFile(join(root, "pid")), { code: "ENOENT" });
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("rejects configured models that are not currently available", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
   const manager = await createPrivateSessionManager(root, root);
   try {
-    await assert.rejects(new PiSessionRuntime(sharedModelRuntime(modelRuntime(false))).start({
-      manager,
-      context: context({ writable: false }),
-      deploymentConfig: {},
-      workspaceRoot: root,
-      agentDirectory: root,
-      systemPrompt: "",
-      onEvent: () => undefined,
-    }), /configured_model_unavailable/);
+    await assert.rejects(
+      new PiSessionRuntime(sharedModelRuntime(modelRuntime(false))).start({
+        manager,
+        context: context({ writable: false }),
+        deploymentConfig: {},
+        workspaceRoot: root,
+        agentDirectory: root,
+        systemPrompt: "",
+        onEvent: () => undefined,
+      }),
+      /configured_model_unavailable/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

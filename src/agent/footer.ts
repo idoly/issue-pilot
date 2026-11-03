@@ -13,13 +13,15 @@ function addUsage(stats: AgentFooterStats, usage: Usage): void {
 }
 
 function hasValidUsage(message: { role: string; stopReason?: string; usage?: Usage }): message is { role: string; usage: Usage } {
-  return message.role === "assistant"
-    && message.stopReason !== "aborted"
-    && message.stopReason !== "error"
-    && Boolean(message.usage && calculateContextTokens(message.usage) > 0);
+  return message.role === "assistant" && message.stopReason !== "aborted" && message.stopReason !== "error" && Boolean(message.usage && calculateContextTokens(message.usage) > 0);
 }
 
-export function sessionFooterStats(manager: SessionManager | undefined, contextWindow: number, autoCompact: boolean, sessionContext?: ReturnType<SessionManager["buildSessionContext"]>): AgentFooterStats {
+export function sessionFooterStats(
+  manager: SessionManager | undefined,
+  contextWindow: number,
+  autoCompact: boolean,
+  sessionContext?: ReturnType<SessionManager["buildSessionContext"]>,
+): AgentFooterStats {
   const stats: AgentFooterStats = {
     input: 0,
     output: 0,

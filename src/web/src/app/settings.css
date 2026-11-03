@@ -1,87 +1,417 @@
-.settings-members { margin-top: 24px; }
-.personal-credential-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 16px; }
-.personal-credential-summary > div { display: flex; min-width: 0; align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid #e1e8e2; border-radius: 8px; background: #fafcfb; }
-.personal-credential-summary strong { font: 600 14px/20px var(--app-font); }
-.personal-credential-summary .ui-button { margin-top: auto; }
-.settings-list-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 24px; border-bottom: 1px solid #e5eae6; }
-.settings-list-toolbar > .ui-input-affix-wrapper { width: min(320px, 100%); }
-.settings-list-toolbar label, .settings-checkbox { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: #65706c; font: 12px/16px var(--app-font); }
-.settings-list-toolbar input[type="checkbox"], .settings-checkbox input { width: 16px; height: 16px; margin: 0; flex: 0 0 16px; accent-color: #176b5b; }
-.settings-table-scroll { overflow-x: auto; scrollbar-gutter: stable; }
-.settings-view, .ui-modal-body { scrollbar-gutter: stable; scrollbar-width: auto; }
-.settings-view::-webkit-scrollbar, .ui-modal-body::-webkit-scrollbar { width: 10px; }
-.service-repositories { overflow-x: auto; scrollbar-width: auto; }
-.settings-table { width: 100%; border-collapse: collapse; text-align: left; }
-.settings-table th { font-weight: 500; color: #65706c; background: #f8faf8; }
-.settings-table th, .settings-table td { padding: 16px 24px; border-bottom: 1px solid #e8ede9; font-size: 14px; line-height: 20px; }
-.settings-table th { font-size: 12px; line-height: 16px; }
-.settings-table tbody tr:last-child td { border-bottom: 0; }
-.settings-table tbody tr { transition: background-color var(--motion-ui); }
-.settings-table tbody tr:hover { background: #f8faf8; }
-.settings-table td small { display: block; color: #65706c; font-size: 12px; line-height: 16px; margin-top: 4px; overflow-wrap: anywhere; }
-.settings-table td code { color: #526d5c; font: 12px/16px var(--mono-font); overflow-wrap: anywhere; }
-.settings-table td strong { font-size: 14px; font-weight: 500; }
-.settings-inactive { background: #f7f9f8; }
-.settings-inactive td strong { color: #65706c; }
-.settings-row-actions { display: flex; justify-content: flex-end; gap: 4px; white-space: nowrap; }
-.settings-service-link { border: 0; border-radius: 4px; padding: 4px 8px; background: transparent; color: #176b5b; cursor: pointer; font: 500 14px/20px var(--app-font); transition: background-color var(--motion-ui), color var(--motion-ui); }
-.settings-service-link:hover { background: #eaf4f0; }
-.settings-form { display: grid; gap: 16px; }
-.settings-form label, .settings-target-fields label { display: grid; min-width: 0; gap: 8px; font: 14px/20px var(--app-font); }
-.settings-form label > span, .settings-target-fields label > span { color: #526d5c; }
-.settings-form .settings-checkbox { display: flex; }
-.service-deployment-row > .settings-targets { grid-column: 1 / -1; min-width: 0; }
-.settings-targets { border-top: 1px solid #e3eae5; padding-top: 16px; margin-top: 16px; }
-.settings-targets-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #65706c; font: 12px/16px var(--app-font); }
-.settings-targets-head code { color: #526d5c; }
-.settings-target-row { padding: 12px; border: 1px solid #e1e8e2; border-radius: 8px; margin-top: 12px; background: #fff; }
-.edit-issue-reset-hint { grid-column: 1 / -1; margin: 4px 0 0; padding-top: 12px; border-top: 1px solid #e5eae6; color: #65706c; font: 12px/1.6 var(--app-font); }
-.issue-session-controls { margin-top: 12px; }
-.session-history-content { display: grid; min-width: 0; gap: 16px; }
-.session-history-description { margin: 0; color: #65706c; font: 14px/1.6 var(--app-font); }
-.session-history-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
-.session-history-toolbar > .ui-select { min-width: 0; flex: 1 1 240px; }
-.session-history-toolbar > .ui-button { flex: none; }
-.session-history-state { display: grid; min-height: 120px; place-items: center; padding: 24px; border: 1px solid #e1e8e2; border-radius: 8px; background: #f7f9f8; color: #65706c; text-align: center; }
-.agent-panel.session-history { display: block; max-height: 55dvh; overflow: auto; padding: 0 12px 16px; border: 1px solid #30363d; border-radius: 8px; background: #0d1117; }
-.settings-target-actions { display: flex; justify-content: flex-end; }
-.settings-target-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
-.settings-target-fields label > span { font: 12px/16px var(--app-font); }
-.settings-target-feedback { grid-column: 1 / -1; color: #65706c; font: 12px/16px var(--app-font); }
-.settings-target-fields > .form-error { grid-column: 1 / -1; }
-.inherited-branch { display: block; min-width: 0; min-height: 40px; padding: 12px; border: 1px solid #e1e8e2; border-radius: 8px; background: #f4f7f4; color: #526d5c; font: 12px/16px var(--mono-font); overflow-wrap: anywhere; }
-.service-repository-matrix > .repository-column-heading { flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; }
-.service-repository-branch { white-space: nowrap; }
+.settings-members {
+  margin-top: 24px;
+}
+.personal-credential-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.personal-credential-summary > div {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #e1e8e2;
+  border-radius: 8px;
+  background: #fafcfb;
+}
+.personal-credential-summary strong {
+  font: 600 14px / 20px var(--app-font);
+}
+.personal-credential-summary .ui-button {
+  margin-top: auto;
+}
+.settings-list-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e5eae6;
+}
+.settings-list-toolbar > .ui-input-affix-wrapper {
+  width: min(320px, 100%);
+}
+.settings-list-toolbar label,
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  color: #65706c;
+  font: 12px / 16px var(--app-font);
+}
+.settings-list-toolbar input[type="checkbox"],
+.settings-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 16px;
+  accent-color: #176b5b;
+}
+.settings-table-scroll {
+  overflow-x: auto;
+  scrollbar-gutter: stable;
+}
+.settings-view,
+.ui-modal-body {
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+}
+.settings-view::-webkit-scrollbar,
+.ui-modal-body::-webkit-scrollbar {
+  width: 10px;
+}
+.service-repositories {
+  overflow-x: auto;
+  scrollbar-width: auto;
+}
+.settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.settings-table th {
+  font-weight: 500;
+  color: #65706c;
+  background: #f8faf8;
+}
+.settings-table th,
+.settings-table td {
+  padding: 16px 24px;
+  border-bottom: 1px solid #e8ede9;
+  font-size: 14px;
+  line-height: 20px;
+}
+.settings-table th {
+  font-size: 12px;
+  line-height: 16px;
+}
+.settings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.settings-table tbody tr {
+  transition: background-color var(--motion-ui);
+}
+.settings-table tbody tr:hover {
+  background: #f8faf8;
+}
+.settings-table td small {
+  display: block;
+  color: #65706c;
+  font-size: 12px;
+  line-height: 16px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.settings-table td code {
+  color: #526d5c;
+  font: 12px / 16px var(--mono-font);
+  overflow-wrap: anywhere;
+}
+.settings-table td strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.settings-inactive {
+  background: #f7f9f8;
+}
+.settings-inactive td strong {
+  color: #65706c;
+}
+.settings-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+.settings-service-link {
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  color: #176b5b;
+  cursor: pointer;
+  font: 500 14px / 20px var(--app-font);
+  transition:
+    background-color var(--motion-ui),
+    color var(--motion-ui);
+}
+.settings-service-link:hover {
+  background: #eaf4f0;
+}
+.settings-form {
+  display: grid;
+  gap: 16px;
+}
+.settings-form label,
+.settings-target-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  font: 14px / 20px var(--app-font);
+}
+.settings-form label > span,
+.settings-target-fields label > span {
+  color: #526d5c;
+}
+.settings-form .settings-checkbox {
+  display: flex;
+}
+.service-deployment-row > .settings-targets {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.settings-targets {
+  border-top: 1px solid #e3eae5;
+  padding-top: 16px;
+  margin-top: 16px;
+}
+.settings-targets-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: #65706c;
+  font: 12px / 16px var(--app-font);
+}
+.settings-targets-head code {
+  color: #526d5c;
+}
+.settings-target-row {
+  padding: 12px;
+  border: 1px solid #e1e8e2;
+  border-radius: 8px;
+  margin-top: 12px;
+  background: #fff;
+}
+.edit-issue-reset-hint {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #e5eae6;
+  color: #65706c;
+  font: 12px / 1.6 var(--app-font);
+}
+.issue-session-controls {
+  margin-top: 12px;
+}
+.session-history-content {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+.session-history-description {
+  margin: 0;
+  color: #65706c;
+  font: 14px / 1.6 var(--app-font);
+}
+.session-history-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.session-history-toolbar > .ui-select {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.session-history-toolbar > .ui-button {
+  flex: none;
+}
+.session-history-state {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  padding: 24px;
+  border: 1px solid #e1e8e2;
+  border-radius: 8px;
+  background: #f7f9f8;
+  color: #65706c;
+  text-align: center;
+}
+.agent-panel.session-history {
+  display: block;
+  max-height: 55dvh;
+  overflow: auto;
+  padding: 0 12px 16px;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #0d1117;
+}
+.settings-target-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.settings-target-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+.settings-target-fields label > span {
+  font: 12px / 16px var(--app-font);
+}
+.settings-target-feedback {
+  grid-column: 1 / -1;
+  color: #65706c;
+  font: 12px / 16px var(--app-font);
+}
+.settings-target-fields > .form-error {
+  grid-column: 1 / -1;
+}
+.inherited-branch {
+  display: block;
+  min-width: 0;
+  min-height: 40px;
+  padding: 12px;
+  border: 1px solid #e1e8e2;
+  border-radius: 8px;
+  background: #f4f7f4;
+  color: #526d5c;
+  font: 12px / 16px var(--mono-font);
+  overflow-wrap: anywhere;
+}
+.service-repository-matrix > .repository-column-heading {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+}
+.service-repository-branch {
+  white-space: nowrap;
+}
 @media (max-width: 700px) {
-  .personal-credential-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .personal-credential-summary > div { padding: 12px; }
-  .settings-list-toolbar { flex-wrap: wrap; padding: 16px; }
-  .settings-list-toolbar > .ui-input-affix-wrapper { width: 100%; }
-  .settings-list-toolbar > label { min-height: 32px; margin-left: auto; }
-  .settings-table th, .settings-table td { padding: 12px 16px; }
-  .users-management-table, .users-management-table tbody { display: block; }
-  .users-management-table thead { display: none; }
-  .users-management-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 16px; border-bottom: 1px solid #e5eae6; }
-  .users-management-table td { border: 0; padding: 0; }
-  .users-management-table td:first-child { grid-row: 1; grid-column: 1; }
-  .users-management-table td:nth-child(2) { grid-row: 2; grid-column: 1; font-size: 12px; color: #65706c; }
-  .users-management-table td:nth-child(3) { grid-row: 2; grid-column: 2; text-align: right; color: #65706c; font-size: 12px; }
-  .users-management-table td:nth-child(4) { grid-row: 1; grid-column: 2; text-align: right; }
-  .users-management-table td:last-child { grid-row: 3; grid-column: 1 / -1; }
-  .repository-management .settings-table, .repository-management .settings-table tbody { display: block; }
-  .repository-management .settings-table thead { display: none; }
-  .repository-management .settings-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 16px; border-bottom: 1px solid #e5eae6; }
-  .repository-management .settings-table td { border: 0; padding: 0; min-width: 0; }
-  .repository-management .settings-table td:first-child { grid-row: 1; grid-column: 1; align-self: center; }
-  .repository-management .settings-table td:nth-child(2) { grid-row: 2; grid-column: 1 / -1; }
-  .repository-management .settings-table td:nth-child(3) { grid-row: 3; grid-column: 1 / -1; }
-  .repository-management .settings-table td:last-child { grid-row: 1; grid-column: 2; }
-  .settings-target-fields { grid-template-columns: minmax(0, 1fr); }
-  .service-tabs-inner { display: flex; justify-content: flex-start; gap: 8px; padding-block: 8px; }
-  .service-tab-list { width: auto; max-width: calc(100% - 148px); }
-  .service-tab-actions { position: absolute; right: 0; gap: 4px; }
-  .service-tab-actions .ui-button { padding-inline: 8px; }
+  .personal-credential-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .personal-credential-summary > div {
+    padding: 12px;
+  }
+  .settings-list-toolbar {
+    flex-wrap: wrap;
+    padding: 16px;
+  }
+  .settings-list-toolbar > .ui-input-affix-wrapper {
+    width: 100%;
+  }
+  .settings-list-toolbar > label {
+    min-height: 32px;
+    margin-left: auto;
+  }
+  .settings-table th,
+  .settings-table td {
+    padding: 12px 16px;
+  }
+  .users-management-table,
+  .users-management-table tbody {
+    display: block;
+  }
+  .users-management-table thead {
+    display: none;
+  }
+  .users-management-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid #e5eae6;
+  }
+  .users-management-table td {
+    border: 0;
+    padding: 0;
+  }
+  .users-management-table td:first-child {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .users-management-table td:nth-child(2) {
+    grid-row: 2;
+    grid-column: 1;
+    font-size: 12px;
+    color: #65706c;
+  }
+  .users-management-table td:nth-child(3) {
+    grid-row: 2;
+    grid-column: 2;
+    text-align: right;
+    color: #65706c;
+    font-size: 12px;
+  }
+  .users-management-table td:nth-child(4) {
+    grid-row: 1;
+    grid-column: 2;
+    text-align: right;
+  }
+  .users-management-table td:last-child {
+    grid-row: 3;
+    grid-column: 1 / -1;
+  }
+  .repository-management .settings-table,
+  .repository-management .settings-table tbody {
+    display: block;
+  }
+  .repository-management .settings-table thead {
+    display: none;
+  }
+  .repository-management .settings-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 16px;
+    border-bottom: 1px solid #e5eae6;
+  }
+  .repository-management .settings-table td {
+    border: 0;
+    padding: 0;
+    min-width: 0;
+  }
+  .repository-management .settings-table td:first-child {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: center;
+  }
+  .repository-management .settings-table td:nth-child(2) {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+  .repository-management .settings-table td:nth-child(3) {
+    grid-row: 3;
+    grid-column: 1 / -1;
+  }
+  .repository-management .settings-table td:last-child {
+    grid-row: 1;
+    grid-column: 2;
+  }
+  .settings-target-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .service-tabs-inner {
+    display: flex;
+    justify-content: flex-start;
+    gap: 8px;
+    padding-block: 8px;
+  }
+  .service-tab-list {
+    width: auto;
+    max-width: calc(100% - 148px);
+  }
+  .service-tab-actions {
+    position: absolute;
+    right: 0;
+    gap: 4px;
+  }
+  .service-tab-actions .ui-button {
+    padding-inline: 8px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .settings-table tbody tr, .settings-service-link { transition: none; }
+  .settings-table tbody tr,
+  .settings-service-link {
+    transition: none;
+  }
 }

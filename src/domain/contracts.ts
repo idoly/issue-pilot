@@ -1,8 +1,7 @@
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 
 export const USER_ROLES = ["product", "test", "developer"] as const;
-export type UserRole = typeof USER_ROLES[number];
-export function canCreateDevelopmentIssues(role: UserRole): boolean { return role === "developer"; }
+export type UserRole = (typeof USER_ROLES)[number];
 export function canUseIssueWorkMode(role: UserRole, workMode: IssueWorkMode): boolean {
   return role === "developer" || issueScopeForWorkMode(workMode).repositoryAccess !== "write";
 }
@@ -25,25 +24,45 @@ export function normalizeIssueKey(value: string): string {
 }
 
 export const MCP_TRANSPORTS = ["streamable_http", "sse", "stdio"] as const;
-export type McpTransport = typeof MCP_TRANSPORTS[number];
-export interface McpStdioConfiguration { command: string; args: string[]; env: Record<string, string>; cwd?: string }
+export type McpTransport = (typeof MCP_TRANSPORTS)[number];
+export interface McpStdioConfiguration {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+}
 
 export const CAPABILITY_KEYS = ["dms", "sls"] as const;
-export type CapabilityName = typeof CAPABILITY_KEYS[number];
+export type CapabilityName = (typeof CAPABILITY_KEYS)[number];
 
 // Queued work remains active for reservations, but has not acquired an execution slot.
 export const AGENT_RUN_STATES = ["idle", "queued", "running"] as const;
-export type AgentRunState = typeof AGENT_RUN_STATES[number];
+export type AgentRunState = (typeof AGENT_RUN_STATES)[number];
 
 export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type AgentThinkingLevel = typeof AGENT_THINKING_LEVELS[number];
+export type AgentThinkingLevel = (typeof AGENT_THINKING_LEVELS)[number];
 
 export const AGENT_CODEMODE_MODES = ["off", "on", "only"] as const;
-export type AgentCodemodeMode = typeof AGENT_CODEMODE_MODES[number];
+export type AgentCodemodeMode = (typeof AGENT_CODEMODE_MODES)[number];
 
-export const AGENT_PI_SETTING_KEYS = ["compaction", "retry", "branchSummary", "steeringMode", "followUpMode", "thinkingBudgets", "transport", "httpIdleTimeoutMs", "websocketConnectTimeoutMs", "cacheWarming", "images", "shellPath", "shellCommandPrefix", "codemode"] as const;
+export const AGENT_PI_SETTING_KEYS = [
+  "compaction",
+  "retry",
+  "branchSummary",
+  "steeringMode",
+  "followUpMode",
+  "thinkingBudgets",
+  "transport",
+  "httpIdleTimeoutMs",
+  "websocketConnectTimeoutMs",
+  "cacheWarming",
+  "images",
+  "shellPath",
+  "shellCommandPrefix",
+  "codemode",
+] as const;
 type PiSettings = NonNullable<Parameters<typeof SettingsManager.inMemory>[0]>;
-export type AgentPiSettings = Omit<Pick<PiSettings, typeof AGENT_PI_SETTING_KEYS[number]>, "codemode"> & { codemode?: { inlineBudget?: number } };
+export type AgentPiSettings = Omit<Pick<PiSettings, (typeof AGENT_PI_SETTING_KEYS)[number]>, "codemode"> & { codemode?: { inlineBudget?: number } };
 export interface AgentRuntimeConfiguration {
   networkAllowedDomains?: string[];
   settings?: AgentPiSettings;
@@ -100,13 +119,33 @@ export const DBHUB_DATABASES = [
   { value: "sqlserver", label: "SQL Server", port: 1433 },
   { value: "oracle", label: "Oracle", port: 1521 },
 ] as const;
-export type DbHubDatabaseType = typeof DBHUB_DATABASES[number]["value"];
-export interface DbHubTarget { type: DbHubDatabaseType; host: string; port: number; username: string; password: string; database: string }
+export type DbHubDatabaseType = (typeof DBHUB_DATABASES)[number]["value"];
+export interface DbHubTarget {
+  type: DbHubDatabaseType;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database: string;
+}
 
-export interface DmsCredentials { url: string; authorization: string }
-export interface DmsScope { databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }> }
-export interface SlsCredentials { accessKeyId: string; accessKeySecret: string }
-export interface SlsScope { region: string; project: string; logstores: string[]; targets?: Array<{ name: string; region: string; project: string; logstores: string[] }> }
+export interface DmsCredentials {
+  url: string;
+  authorization: string;
+}
+export interface DmsScope {
+  databases: Array<{ instanceAlias: string; schemaName: string; instanceId: string; instanceHost: string; instancePort: string; databaseId: string }>;
+}
+export interface SlsCredentials {
+  accessKeyId: string;
+  accessKeySecret: string;
+}
+export interface SlsScope {
+  region: string;
+  project: string;
+  logstores: string[];
+  targets?: Array<{ name: string; region: string; project: string; logstores: string[] }>;
+}
 
 export interface CapabilityConfiguration {
   dbhub?: DbHubTarget[];
@@ -124,22 +163,25 @@ interface RetiredCapabilityConfiguration {
 }
 
 export type DeploymentConfig = CapabilityConfiguration;
-export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "dms" | "sls"> & { dms?: DmsScope & Partial<DmsCredentials>; sls?: SlsScope & Partial<SlsCredentials> } & RetiredCapabilityConfiguration & {
-  /** Private pre-upgrade development settings; never projected or executed. */
-  archivedDevelopment?: unknown;
-  /** Historical deployment bindings; MCP availability is now global. */
-  mcpServices?: string[];
-};
+export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "dms" | "sls"> & {
+  dms?: DmsScope & Partial<DmsCredentials>;
+  sls?: SlsScope & Partial<SlsCredentials>;
+} & RetiredCapabilityConfiguration & {
+    /** Private pre-upgrade development settings; never projected or executed. */
+    archivedDevelopment?: unknown;
+    /** Historical deployment bindings; MCP availability is now global. */
+    mcpServices?: string[];
+  };
 
 export function configuredCapabilities(config: Partial<Record<CapabilityName, unknown>>): CapabilityName[] {
   return CAPABILITY_KEYS.filter((key) => config[key] !== undefined);
 }
 
 export const ENVIRONMENT_KINDS = ["prod", "test", "dev"] as const;
-export type EnvironmentKind = typeof ENVIRONMENT_KINDS[number];
+export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
 
 export const ISSUE_TYPES = ["smart_analysis", "defect_fix", "feature_development"] as const;
-export type IssueType = typeof ISSUE_TYPES[number];
+export type IssueType = (typeof ISSUE_TYPES)[number];
 
 export const ISSUE_TYPES_BY_ENVIRONMENT: Record<EnvironmentKind, readonly IssueType[]> = {
   prod: ["smart_analysis"],
@@ -148,7 +190,7 @@ export const ISSUE_TYPES_BY_ENVIRONMENT: Record<EnvironmentKind, readonly IssueT
 };
 
 export const ISSUE_WORK_MODES = ["production_analysis", "test_analysis", "development_fix", "development_feature"] as const;
-export type IssueWorkMode = typeof ISSUE_WORK_MODES[number];
+export type IssueWorkMode = (typeof ISSUE_WORK_MODES)[number];
 
 const ISSUE_SCOPE_BY_WORK_MODE: Record<IssueWorkMode, { environmentKind: EnvironmentKind; issueType: IssueType; repositoryAccess: "read" | "write" }> = {
   production_analysis: { environmentKind: "prod", issueType: "smart_analysis", repositoryAccess: "read" },
@@ -169,10 +211,10 @@ export function issueWorkMode(environmentKind: EnvironmentKind, issueType: Issue
 }
 
 export const ISSUE_STATUSES = ["open", "in_progress", "pending", "resolved"] as const;
-export type IssueStatus = typeof ISSUE_STATUSES[number];
+export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
 export const WORKSPACE_STATUSES = ["not_created", "preparing", "running", "ready", "stopped", "failed"] as const;
-export type WorkspaceStatus = typeof WORKSPACE_STATUSES[number];
+export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
 
 const WORKSPACE_BUSY_STATUSES: readonly WorkspaceStatus[] = ["preparing", "running"];
 
@@ -181,4 +223,4 @@ export function isWorkspaceBusy(status: WorkspaceStatus): boolean {
 }
 
 export const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
-export type IssuePriority = typeof ISSUE_PRIORITIES[number];
+export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];

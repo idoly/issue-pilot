@@ -3,9 +3,55 @@ import type { DingtalkSourceResponse, DingtalkImportInput, DingtalkImportRespons
 export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 
 import { SOURCE_COMMIT_FILE_STATUSES, SOURCE_WORKSPACE_FILE_VERSIONS } from "../../../workspace/source-contracts";
-import type { SourceBlame, SourceChanges, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceHistoryPage, SourceRepository, SourceRevisionFile, SourceSearchMatch, SourceTree, SourceWorkspaceFile, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
-export type { SourceBlame, SourceCommit, SourceCommitFile, SourceCommitFileComparison, SourceFile, SourceHistoryCursor, SourceRepository, SourceSearchMatch, SourceTree, SourceTreeEntry, SourceWorkspaceFileComparison } from "../../../workspace/source-contracts";
-import { mergeAgentCostSource, AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, type AgentConfiguration, type AgentModelSelection, type AgentCostSource, type AgentFooterStats, type IssuePriority, type IssueStatus, type IssueType, type IssueWorkMode, type WorkspaceStatus } from "../../../domain/contracts";
+import type {
+  SourceBlame,
+  SourceChanges,
+  SourceCommitFile,
+  SourceCommitFileComparison,
+  SourceFile,
+  SourceHistoryCursor,
+  SourceHistoryPage,
+  SourceRepository,
+  SourceRevisionFile,
+  SourceSearchMatch,
+  SourceTree,
+  SourceWorkspaceFile,
+  SourceWorkspaceFileComparison,
+} from "../../../workspace/source-contracts";
+export type {
+  SourceBlame,
+  SourceCommit,
+  SourceCommitFile,
+  SourceCommitFileComparison,
+  SourceFile,
+  SourceHistoryCursor,
+  SourceRepository,
+  SourceSearchMatch,
+  SourceTree,
+  SourceTreeEntry,
+  SourceWorkspaceFileComparison,
+} from "../../../workspace/source-contracts";
+import {
+  mergeAgentCostSource,
+  AGENT_RUN_STATES,
+  AGENT_CODEMODE_MODES,
+  ISSUE_PRIORITIES,
+  ISSUE_STATUSES,
+  ISSUE_WORK_MODES,
+  errorMessage,
+  isWorkspaceBusy,
+  issueScopeForWorkMode,
+  issueWorkMode,
+  type AgentConfiguration,
+  type AgentModelSelection,
+  type AgentCostSource,
+  type AgentFooterStats,
+  type IssuePriority,
+  type IssueStatus,
+  type IssueType,
+  type IssueWorkMode,
+  type WorkspaceStatus,
+} from "../../../domain/contracts";
 import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
@@ -19,27 +65,70 @@ export type ServiceInput = ServiceConfigurationInput;
 
 export type { UserRole } from "../../../domain/contracts";
 import type { UserRole } from "../../../domain/contracts";
-export { USER_ROLES, canCreateDevelopmentIssues, canUseIssueWorkMode } from "../../../domain/contracts";
-export interface Person { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
-export interface DmsScopeResolution { instanceId: string; instanceHost: string; instancePort: string; databaseId: string }
-export interface ManagedUser extends Person { revision: number; active: boolean; createdAt: string; updatedAt: string }
-export interface ManagedUserInput { subject: string; name: string; email: string; role: UserRole; isAdmin?: boolean }
-export interface ManagedUserUpdate { name?: string; email?: string; active?: boolean; role?: UserRole; isAdmin?: boolean; expectedRevision?: number }
+export { USER_ROLES, canUseIssueWorkMode } from "../../../domain/contracts";
+export interface Person {
+  subject: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  isAdmin?: boolean;
+}
+export interface DmsScopeResolution {
+  instanceId: string;
+  instanceHost: string;
+  instancePort: string;
+  databaseId: string;
+}
+export interface ManagedUser extends Person {
+  revision: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ManagedUserInput {
+  subject: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  isAdmin?: boolean;
+}
+export interface ManagedUserUpdate {
+  name?: string;
+  email?: string;
+  active?: boolean;
+  role?: UserRole;
+  isAdmin?: boolean;
+  expectedRevision?: number;
+}
 export interface PersonalCredentialUpdate {
   expectedRevision?: number;
   model?: ({ mode: "replace"; apiKey?: string } & AgentModelSelection) | { mode: "clear" };
   git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
   production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
 }
-export interface SharedDmsCredentialStatus { configured: boolean; revision: number; url: string }
+export interface SharedDmsCredentialStatus {
+  configured: boolean;
+  revision: number;
+  url: string;
+}
 export type SharedDmsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; url: string; authorization: string } | { mode: "clear" });
 export const loadSharedDmsCredentials = () => request<SharedDmsCredentialStatus>("/api/config/shared-dms-credentials");
 export const updateSharedDmsCredentials = (input: SharedDmsCredentialUpdate) => jsonRequest<SharedDmsCredentialStatus>("/api/config/shared-dms-credentials", "PUT", input);
-export interface SharedSlsCredentialStatus { configured: boolean; revision: number }
+export interface SharedSlsCredentialStatus {
+  configured: boolean;
+  revision: number;
+}
 export type SharedSlsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" });
 export const loadSharedSlsCredentials = () => request<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials");
 export const updateSharedSlsCredentials = (input: SharedSlsCredentialUpdate) => jsonRequest<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials", "PUT", input);
-export interface PersonalCredentialStatus { revision: number; model: AgentModelSelection | null; gitSshConfigured: boolean; productionDmsConfigured?: boolean; productionDmsUrl?: string; productionSlsConfigured?: boolean }
+export interface PersonalCredentialStatus {
+  revision: number;
+  model: AgentModelSelection | null;
+  gitSshConfigured: boolean;
+  productionDmsConfigured?: boolean;
+  productionDmsUrl?: string;
+  productionSlsConfigured?: boolean;
+}
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
 export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
 export type AgentConfigurationUpdate = AgentConfiguration & { apiKey?: { mode: "replace"; value: string } | { mode: "clear" } };
@@ -157,7 +246,10 @@ export function setCurrentUserSubject(subject: string | null, remember = true): 
 }
 
 async function requestError(response: Response): Promise<Error> {
-  const code = await response.json().then((body: { error?: string }) => body.error).catch(() => undefined);
+  const code = await response
+    .json()
+    .then((body: { error?: string }) => body.error)
+    .catch(() => undefined);
   return new Error(code ?? `request_failed:${response.status}`);
 }
 
@@ -175,7 +267,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) throw await requestError(response);
   if (response.status === 204 || response.status === 205) return undefined as T;
   const body = await response.text();
-  return body ? JSON.parse(body) as T : undefined as T;
+  return body ? (JSON.parse(body) as T) : (undefined as T);
 }
 
 /** Preview reads are bounded independently of stale file-list metadata; ordinary downloads stay unrestricted. */
@@ -190,14 +282,19 @@ async function previewBlob(path: string, signal?: AbortSignal): Promise<Blob> {
   }
   const type = response.headers.get("content-type") ?? "";
   if (!response.body) return new Blob([], { type });
-  const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = [];
-  let size = 0, completed = false;
+  const reader = response.body.getReader(),
+    chunks: Uint8Array<ArrayBuffer>[] = [];
+  let size = 0,
+    completed = false;
   try {
     while (true) {
       signal?.throwIfAborted();
       const { done, value } = await reader.read();
       signal?.throwIfAborted();
-      if (done) { completed = true; break; }
+      if (done) {
+        completed = true;
+        break;
+      }
       size += value.byteLength;
       if (size > maximum) throw new Error("file_preview_too_large");
       chunks.push(new Uint8Array(value));
@@ -217,7 +314,8 @@ export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
 export const loadDingtalkSource = (signal?: AbortSignal) => request<DingtalkSourceResponse>("/api/dingtalk/source", { signal });
-export const importDingtalkRecords = (input: DingtalkImportInput, signal?: AbortSignal) => request<DingtalkImportResponse>("/api/dingtalk/import", { method: "POST", body: JSON.stringify(input), signal });
+export const importDingtalkRecords = (input: DingtalkImportInput, signal?: AbortSignal) =>
+  request<DingtalkImportResponse>("/api/dingtalk/import", { method: "POST", body: JSON.stringify(input), signal });
 
 export const listIssues = (signal?: AbortSignal) => request<IssueExecutionItem[]>("/api/issues", signal ? { signal } : undefined);
 export const listIssuePins = (signal?: AbortSignal) => request<string[]>("/api/issue-pins", signal ? { signal } : undefined);
@@ -234,7 +332,21 @@ export interface IssueWorkFile {
 }
 export const listIssueWorkFiles = async (key: string, path = "", signal?: AbortSignal): Promise<IssueWorkFile[]> => {
   const rows = await request<unknown>(issuePath(key, `/files${path ? `?path=${encodeURIComponent(path)}` : ""}`), signal ? { signal } : undefined);
-  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || typeof row.name !== "string" || typeof row.path !== "string" || !["file", "directory", "link", "special"].includes(row.kind) || typeof row.size !== "number" || typeof row.updatedAt !== "string" || "managed" in row && row.managed !== undefined && typeof row.managed !== "boolean")) throw new Error("invalid_issue_files_response");
+  if (
+    !Array.isArray(rows) ||
+    rows.some(
+      (row) =>
+        !row ||
+        typeof row !== "object" ||
+        typeof row.name !== "string" ||
+        typeof row.path !== "string" ||
+        !["file", "directory", "link", "special"].includes(row.kind) ||
+        typeof row.size !== "number" ||
+        typeof row.updatedAt !== "string" ||
+        ("managed" in row && row.managed !== undefined && typeof row.managed !== "boolean"),
+    )
+  )
+    throw new Error("invalid_issue_files_response");
   return rows as IssueWorkFile[];
 };
 export const issueWorkFileUrl = (key: string, path: string) => issuePath(key, `/files/download?path=${encodeURIComponent(path)}`);
@@ -253,7 +365,13 @@ function sourceResponseRecord(value: unknown, code: string): Record<string, unkn
 
 function sourceCommitFile(value: unknown, code: string): SourceCommitFile {
   const file = sourceResponseRecord(value, code);
-  if (!SOURCE_COMMIT_FILE_STATUSES.includes(file.status as SourceCommitFile["status"]) || typeof file.path !== "string" || !file.path || (file.previousPath !== null && typeof file.previousPath !== "string")) throw new Error(code);
+  if (
+    !SOURCE_COMMIT_FILE_STATUSES.includes(file.status as SourceCommitFile["status"]) ||
+    typeof file.path !== "string" ||
+    !file.path ||
+    (file.previousPath !== null && typeof file.previousPath !== "string")
+  )
+    throw new Error(code);
   return { status: file.status as SourceCommitFile["status"], path: file.path, previousPath: file.previousPath as string | null };
 }
 
@@ -267,7 +385,8 @@ function sourceRevisionFile(value: unknown, code: string): SourceRevisionFile | 
 function sourceWorkspaceFile(value: unknown, code: string): SourceWorkspaceFile | null {
   if (value === null) return null;
   const file = sourceResponseRecord(value, code);
-  if (typeof file.path !== "string" || !file.path || !SOURCE_WORKSPACE_FILE_VERSIONS.includes(file.version as SourceWorkspaceFile["version"]) || typeof file.content !== "string") throw new Error(code);
+  if (typeof file.path !== "string" || !file.path || !SOURCE_WORKSPACE_FILE_VERSIONS.includes(file.version as SourceWorkspaceFile["version"]) || typeof file.content !== "string")
+    throw new Error(code);
   return { path: file.path, version: file.version as SourceWorkspaceFile["version"], content: file.content };
 }
 
@@ -281,27 +400,42 @@ function sourceRequest(key: string, resource: string, repository: string, values
 export const loadSourceRepositories = (key: string, signal?: AbortSignal) => request<SourceRepository[]>(issuePath(key, "/source/repositories"), signal ? { signal } : undefined);
 export const loadSourceTree = (key: string, repository: string, path = "", signal?: AbortSignal) => sourceRequest(key, "tree", repository, { Path: path }, signal) as Promise<SourceTree>;
 export const loadSourceFile = (key: string, repository: string, path: string, signal?: AbortSignal) => sourceRequest(key, "file", repository, { Path: path }, signal) as Promise<SourceFile>;
-export const saveSourceFile = (key: string, repository: string, path: string, content: string, sha256: string) => sourceRequest(key, "file", repository, { Path: path, Sha256: sha256 }, undefined, {
-  method: "PUT",
-  body: content,
-  headers: { "Content-Type": "text/plain; charset=utf-8" },
-}) as Promise<SourceFile>;
-export const createSourceFile = (key: string, repository: string, path: string, content: string) => sourceRequest(key, "file", repository, { Path: path }, undefined, { method: "POST", body: content, headers: { "Content-Type": "text/plain; charset=utf-8" } }) as Promise<SourceFile>;
+export const saveSourceFile = (key: string, repository: string, path: string, content: string, sha256: string) =>
+  sourceRequest(key, "file", repository, { Path: path, Sha256: sha256 }, undefined, {
+    method: "PUT",
+    body: content,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  }) as Promise<SourceFile>;
+export const createSourceFile = (key: string, repository: string, path: string, content: string) =>
+  sourceRequest(key, "file", repository, { Path: path }, undefined, { method: "POST", body: content, headers: { "Content-Type": "text/plain; charset=utf-8" } }) as Promise<SourceFile>;
 export const createSourceDirectory = (key: string, repository: string, path: string) => sourceRequest(key, "directory", repository, { Path: path }, undefined, { method: "POST" });
-export const deleteSourcePath = (key: string, repository: string, path: string, recursive: boolean) => sourceRequest(key, "path", repository, { Path: path, Recursive: String(recursive) }, undefined, { method: "DELETE" });
-export const renameSourcePath = (key: string, repository: string, path: string, destination: string, overwrite: boolean) => sourceRequest(key, "rename", repository, { Path: path, Destination: destination, Overwrite: String(overwrite) }, undefined, { method: "POST" });
-const mutateSourceGit = (key: string, repository: string, action: "stage" | "unstage" | "discard", paths: string[]) => sourceRequest(key, action, repository, {}, undefined, { method: "POST", body: JSON.stringify({ paths }), headers: { "Content-Type": "application/json" } });
+export const deleteSourcePath = (key: string, repository: string, path: string, recursive: boolean) =>
+  sourceRequest(key, "path", repository, { Path: path, Recursive: String(recursive) }, undefined, { method: "DELETE" });
+export const renameSourcePath = (key: string, repository: string, path: string, destination: string, overwrite: boolean) =>
+  sourceRequest(key, "rename", repository, { Path: path, Destination: destination, Overwrite: String(overwrite) }, undefined, { method: "POST" });
+const mutateSourceGit = (key: string, repository: string, action: "stage" | "unstage" | "discard", paths: string[]) =>
+  sourceRequest(key, action, repository, {}, undefined, { method: "POST", body: JSON.stringify({ paths }), headers: { "Content-Type": "application/json" } });
 export const stageSourcePaths = (key: string, repository: string, paths: string[]) => mutateSourceGit(key, repository, "stage", paths);
 export const unstageSourcePaths = (key: string, repository: string, paths: string[]) => mutateSourceGit(key, repository, "unstage", paths);
 export const discardSourcePaths = (key: string, repository: string, paths: string[]) => mutateSourceGit(key, repository, "discard", paths);
-export const commitSourceChanges = (key: string, repository: string, message: string) => sourceRequest(key, "commit", repository, {}, undefined, { method: "POST", body: JSON.stringify({ message }), headers: { "Content-Type": "application/json" } });
-export const searchSource = (key: string, repository: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}, signal?: AbortSignal) => sourceRequest(key, "search", repository, {
-  Query: query,
-  "Case-Sensitive": String(options.caseSensitive ?? true),
-  "Word-Match": String(options.wordMatch ?? false),
-}, signal) as Promise<{ matches: SourceSearchMatch[]; truncated: boolean }>;
-export const loadSourceBlame = (key: string, repository: string, path: string, line: number, signal?: AbortSignal) => sourceRequest(key, "blame", repository, { Path: path, Line: String(line) }, signal) as Promise<SourceBlame>;
-export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal, cursor?: SourceHistoryCursor) => sourceRequest(key, "history", repository, { Path: path, ...(cursor ? { Revision: cursor.revision, Offset: String(cursor.offset) } : {}) }, signal) as Promise<SourceHistoryPage>;
+export const commitSourceChanges = (key: string, repository: string, message: string) =>
+  sourceRequest(key, "commit", repository, {}, undefined, { method: "POST", body: JSON.stringify({ message }), headers: { "Content-Type": "application/json" } });
+export const searchSource = (key: string, repository: string, query: string, options: { caseSensitive?: boolean; wordMatch?: boolean } = {}, signal?: AbortSignal) =>
+  sourceRequest(
+    key,
+    "search",
+    repository,
+    {
+      Query: query,
+      "Case-Sensitive": String(options.caseSensitive ?? true),
+      "Word-Match": String(options.wordMatch ?? false),
+    },
+    signal,
+  ) as Promise<{ matches: SourceSearchMatch[]; truncated: boolean }>;
+export const loadSourceBlame = (key: string, repository: string, path: string, line: number, signal?: AbortSignal) =>
+  sourceRequest(key, "blame", repository, { Path: path, Line: String(line) }, signal) as Promise<SourceBlame>;
+export const loadSourceHistory = (key: string, repository: string, path = "", signal?: AbortSignal, cursor?: SourceHistoryCursor) =>
+  sourceRequest(key, "history", repository, { Path: path, ...(cursor ? { Revision: cursor.revision, Offset: String(cursor.offset) } : {}) }, signal) as Promise<SourceHistoryPage>;
 export async function loadSourceCommit(key: string, repository: string, revision: string, path = "", signal?: AbortSignal): Promise<SourceChanges> {
   const code = "source_commit_response_invalid";
   const response = sourceResponseRecord(await sourceRequest(key, "commit", repository, { Revision: revision, Path: path }, signal), code);
@@ -339,23 +473,40 @@ function appendFiles(form: FormData, files: File[]): void {
 
 export const resolveDmsScope = (input: { instanceAlias: string; schemaName: string }) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input);
 
-
 export interface ApplicationEndpoint {
-  name: string; path: string; transport: string; readOnly: boolean;
-  tools: Array<{ name: string; description: string; annotations: { readOnlyHint: boolean }; inputSchema: { properties?: Record<string, { type?: string; description?: string; enum?: unknown[]; anyOf?: unknown[] }>; required?: string[] } }>;
+  name: string;
+  path: string;
+  transport: string;
+  readOnly: boolean;
+  tools: Array<{
+    name: string;
+    description: string;
+    annotations: { readOnlyHint: boolean };
+    inputSchema: { properties?: Record<string, { type?: string; description?: string; enum?: unknown[]; anyOf?: unknown[] }>; required?: string[] };
+  }>;
 }
 export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endpoints: ApplicationEndpoint[] }>("/api/endpoints", signal ? { signal } : undefined);
 
-
 export const registerRepository = (input: { name: string; url: string }) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
-export const updateRepository = (id: string, input: { name: string; url: string; expectedRevision?: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
+export const updateRepository = (id: string, input: { name: string; url: string; expectedRevision?: number }) =>
+  jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
 export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const loadServiceDbHubTargets = (key: string) => request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
+export const loadServiceDbHubTargets = (key: string) =>
+  request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
 
-export interface ManagedRepository { revision: number; id: string; name: string; url: string; createdAt: string; updatedAt: string; services: Array<{ key: string; name: string }> }
+export interface ManagedRepository {
+  revision: number;
+  id: string;
+  name: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  services: Array<{ key: string; name: string }>;
+}
 export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");
 
-export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) => request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);
+export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) =>
+  request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
 export const updateService = (key: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", body: JSON.stringify(input) });
 export const deleteService = (key: string) => request<void>(servicePath(key), { method: "DELETE" });
@@ -383,11 +534,20 @@ export function updateIssue(key: string, input: IssueMetadataInput, removedAttac
   return request(issuePath(key), { method: "PATCH", body: form });
 }
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueExecutionItem>(issuePath(key, "/status"), "PATCH", { status });
-export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }) => jsonRequest<IssueScopeTransitionPlan>(issuePath(key, "/scope-transition/plan"), "POST", target);
-export const applyIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, plan: Pick<IssueScopeTransitionPlan, "expectedIssueUpdatedAt" | "planHash">) => jsonRequest<{ issueKey: string }>(issuePath(key, "/scope-transition/apply"), "POST", { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
-export interface IssueSessionSummary { sessionId: string; createdAt: string; current: boolean }
+export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }) =>
+  jsonRequest<IssueScopeTransitionPlan>(issuePath(key, "/scope-transition/plan"), "POST", target);
+export const applyIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, plan: Pick<IssueScopeTransitionPlan, "expectedIssueUpdatedAt" | "planHash">) =>
+  jsonRequest<{ issueKey: string }>(issuePath(key, "/scope-transition/apply"), "POST", { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
+export interface IssueSessionSummary {
+  sessionId: string;
+  createdAt: string;
+  current: boolean;
+}
 export const listIssueSessions = (key: string, signal?: AbortSignal) => request<IssueSessionSummary[]>(issuePath(key, "/sessions"), { ...(signal ? { signal } : {}) });
-export const readIssueSession = (key: string, sessionId: string, offset = 0, signal?: AbortSignal) => request<{ events: import("../../../agent/events").RunEvent[]; nextOffset: number | null }>(issuePath(key, `/sessions/${encodeURIComponent(sessionId)}?offset=${offset}`), { ...(signal ? { signal } : {}) });
+export const readIssueSession = (key: string, sessionId: string, offset = 0, signal?: AbortSignal) =>
+  request<{ events: import("../../../agent/events").RunEvent[]; nextOffset: number | null }>(issuePath(key, `/sessions/${encodeURIComponent(sessionId)}?offset=${offset}`), {
+    ...(signal ? { signal } : {}),
+  });
 export const resetIssueSession = (key: string, expectedSessionId: string) => jsonRequest<{ sessionId: string }>(issuePath(key, "/reset-session"), "POST", { expectedSessionId });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export function sendAgentMessage(key: string, message: string, images: File[] = []): Promise<void> {

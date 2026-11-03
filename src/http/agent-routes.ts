@@ -38,7 +38,8 @@ async function readAgentMessage(request: FastifyRequest): Promise<{ message: str
     let fileBytes = 0;
     for await (const chunk of part.file) {
       const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      fileBytes += content.length; totalBytes += content.length;
+      fileBytes += content.length;
+      totalBytes += content.length;
       if (fileBytes > limits.fileBytes || totalBytes > limits.requestBytes) throw new ApiError(413, "agent_image_limit_exceeded");
       chunks.push(content);
     }
@@ -65,33 +66,44 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     reply.header("Cache-Control", "private, no-store");
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
-    const manager = await runScopeExclusive(() => readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId));
+    let manager: Awaited<ReturnType<typeof readIssueSessionHistory>>;
+    try {
+      manager = await runScopeExclusive(() => readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId));
+    } catch (error) {
+      if (error instanceof Error && error.message === "agent_session_not_found") throw new ApiError(404, "agent_session_not_found");
+      throw error;
+    }
     // A readonly transcript uses the same private-entry projection as the live conversation.
     const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new ApiError(400, "invalid_offset");
-    const transcript = sessionTranscript(manager, issue.id), page = transcript.slice(offset, offset + 50);
+    const transcript = sessionTranscript(manager, issue.id),
+      page = transcript.slice(offset, offset + 50);
     return { events: page, nextOffset: offset + page.length < transcript.length ? offset + page.length : null };
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/reset-session", async (request, reply) => {
     await requireDeveloper(database, request);
-    const input = record(request.body), expectedSessionId = text(input.expectedSessionId, "session_id", 255);
+    const input = record(request.body),
+      expectedSessionId = text(input.expectedSessionId, "session_id", 255);
     const issue = await requireIssue(database, request.params.key);
-    const result = await runScopeExclusive(() => runIssueExclusive(engine, [issue.id], async reservation => {
-      const actor = await requireDeveloper(database, request);
-      const current = await requireIssue(database, issue.key);
-      if (current.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
-      const history = await issueSessionHistory(database.db, stateRoot, current);
-      if (history[0]?.sessionId !== expectedSessionId) throw new ApiError(409, "agent_session_changed");
-      await reservation.closeSession(issue.id);
-      const reset = await resetIssueSession(database.db, stateRoot, current, actor, expectedSessionId);
-      events.publish({ id: crypto.randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
-      return reset;
-    }));
+    const result = await runScopeExclusive(() =>
+      runIssueExclusive(engine, [issue.id], async (reservation) => {
+        const actor = await requireDeveloper(database, request);
+        const current = await requireIssue(database, issue.key);
+        if (current.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
+        const history = await issueSessionHistory(database.db, stateRoot, current);
+        if (history[0]?.sessionId !== expectedSessionId) throw new ApiError(409, "agent_session_changed");
+        await reservation.closeSession(issue.id);
+        const reset = await resetIssueSession(database.db, stateRoot, current, actor, expectedSessionId);
+        events.publish({ id: crypto.randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
+        return reset;
+      }),
+    );
     return reply.send(result);
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
@@ -101,29 +113,51 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     return reply.code(202).send({ ok: true });
   });
 
+  // Long-lived SSE streams keep a graceful stop from completing; end them when the server closes.
+  // Long-lived SSE streams keep a graceful stop from completing; end them when the server closes.
+  const activeStreams = new Set<() => void>();
+  app.addHook("preClose", async () => {
+    for (const end of [...activeStreams]) end();
+  });
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
+    // Validate an explicitly selected identity. Browser EventSource sends no subject header, so the
+    // default active user applies; an inactive explicit subject is refused here like other routes.
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     const sharedConfiguration = await loadGlobalAgentConfiguration(database.db);
-    const [credentials] = await database.db.select({ model: userCredentials.modelCredentials }).from(userCredentials).where(eq(userCredentials.subject, issue.assigneeSubject ?? issue.reporterSubject)).limit(1);
+    const [credentials] = await database.db
+      .select({ model: userCredentials.modelCredentials })
+      .from(userCredentials)
+      .where(eq(userCredentials.subject, issue.assigneeSubject ?? issue.reporterSubject))
+      .limit(1);
     const configured = selectAgentConfiguration(sharedConfiguration, credentials?.model);
     const autoCompact = SettingsManager.inMemory(configured.runtime.settings).getCompactionEnabled();
     const models = await modelCatalog.list();
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    const sessionReady = Boolean(binding && await pathExists(binding.sessionFile));
-    if (reply.raw.destroyed) { reply.hijack(); return; }
+    const sessionReady = Boolean(binding && (await pathExists(binding.sessionFile)));
+    if (reply.raw.destroyed) {
+      reply.hijack();
+      return;
+    }
     const liveEvents = subscribeBufferedAgentEvents(events, issue.id, {
       maxPendingBytes: issuePilotConfig.http.sseQueuedBytes,
       onFailure(error) {
-        try { app.log.error(error); }
-        finally { cleanup(); reply.raw.destroy(); }
+        try {
+          app.log.error(error);
+        } finally {
+          cleanup();
+          reply.raw.destroy();
+        }
       },
     });
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let hijacked = false;
     let cleaned = false;
+    let stopStream: (() => void) | undefined;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      if (stopStream) activeStreams.delete(stopStream);
       reply.raw.off("close", cleanup);
       if (heartbeat) clearInterval(heartbeat);
       liveEvents.unsubscribe();
@@ -138,18 +172,26 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       const { provider, model, thinkingLevel } = sessionContext?.model
         ? { provider: sessionContext.model.provider, model: sessionContext.model.modelId, thinkingLevel: sessionContext.thinkingLevel }
         : configured;
-      const contextWindow = models.find(candidate => candidate.provider === provider && candidate.id === model)?.contextWindow ?? 0;
+      const contextWindow = models.find((candidate) => candidate.provider === provider && candidate.id === model)?.contextWindow ?? 0;
       const footer = sessionFooterStats(manager, contextWindow, autoCompact, sessionContext);
       const currentEvents = events.replayCurrent(issue.id);
       const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
-      if (cleaned) { reply.hijack(); return; }
+      if (cleaned) {
+        reply.hijack();
+        return;
+      }
       if (!currentIssue) throw new ApiError(404, "issue_not_found");
       reply.hijack();
       hijacked = true;
       reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+      stopStream = () => {
+        if (!reply.raw.destroyed) reply.raw.end();
+      };
+      activeStreams.add(stopStream);
       const writer = createOrderedSseWriter(reply.raw, (error) => {
-        try { app.log.error(error); }
-        finally {
+        try {
+          app.log.error(error);
+        } finally {
           cleanup();
           reply.raw.destroy();
         }
@@ -175,8 +217,9 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
           sentTransient.add(event.id);
         }
         let serialized: string;
-        try { serialized = JSON.stringify(event); }
-        catch (error) {
+        try {
+          serialized = JSON.stringify(event);
+        } catch (error) {
           cleanup();
           reply.raw.destroy();
           throw error;
@@ -196,9 +239,12 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
         await writer.drain();
         if (cleaned) return;
       }
-      writer.write(`event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), runState: engine.getRunState(issue.id), issueStatus: currentIssue.status })}\n\n`);
+      writer.write(
+        `event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), runState: engine.getRunState(issue.id), issueStatus: currentIssue.status })}\n\n`,
+      );
       if (cleaned) return;
-      heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs); heartbeat.unref();
+      heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs);
+      heartbeat.unref();
       liveEvents.activate(send);
       // Replay can exceed the live window; prune only after its buffered overlap is deduplicated.
       replayComplete = true;
@@ -218,16 +264,19 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const { message, images } = await readAgentMessage(request);
     const person = await requireCurrentUser(database, request);
     try {
-      await engine.send(issue.id, message, {
-        name: person.displayName ?? person.subject,
-        email: person.email ?? `${person.subject}@localhost`,
-      }, images);
-    }
-    catch (error) {
+      await engine.send(
+        issue.id,
+        message,
+        {
+          name: person.displayName ?? person.subject,
+          email: person.email ?? `${person.subject}@localhost`,
+        },
+        images,
+      );
+    } catch (error) {
       if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown"].includes(error.message)) throw new ApiError(409, error.message);
       throw error;
     }
     return reply.code(202).send();
   });
-
 }

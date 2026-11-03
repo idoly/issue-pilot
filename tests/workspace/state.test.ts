@@ -14,10 +14,7 @@ async function createSharedCheckout(root: string, repositoryKey = "a".repeat(20)
   const source = path.join(root, `checkout-source-${repositoryKey}`);
   await mkdir(source, { recursive: true });
   await exec("git", ["init", "-b", "main", source]);
-  await Promise.all([
-    writeFile(path.join(source, "README.md"), "shared checkout\n", "utf8"),
-    writeFile(path.join(source, ".gitignore"), "ignored-evidence.txt\n", "utf8"),
-  ]);
+  await Promise.all([writeFile(path.join(source, "README.md"), "shared checkout\n", "utf8"), writeFile(path.join(source, ".gitignore"), "ignored-evidence.txt\n", "utf8")]);
   await exec("git", ["-C", source, "add", "."]);
   await exec("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
   const commit = (await exec("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
@@ -34,10 +31,13 @@ test("classifies repository persistence states without mixed-mode fallbacks", ()
   assert.equal(classifyRepositoryState([{ localPath: null, workingBranch: null }]), "read_only");
   assert.equal(classifyRepositoryState([{ localPath: "/workspace/repository", workingBranch: "hotfix-issue-20260810-001" }]), "development_workspace");
   assert.equal(classifyRepositoryState([{ localPath: null, workingBranch: "hotfix-issue-20260810-001" }]), "development_snapshot");
-  assert.equal(classifyRepositoryState([
-    { localPath: null, workingBranch: "hotfix-issue-20260810-001" },
-    { localPath: "/workspace/other", workingBranch: "hotfix-issue-20260810-001" },
-  ]), "invalid");
+  assert.equal(
+    classifyRepositoryState([
+      { localPath: null, workingBranch: "hotfix-issue-20260810-001" },
+      { localPath: "/workspace/other", workingBranch: "hotfix-issue-20260810-001" },
+    ]),
+    "invalid",
+  );
   assert.equal(classifyRepositoryState([{ localPath: null, workingBranch: "" }]), "invalid");
 });
 
@@ -98,10 +98,7 @@ test("preserves unmanaged issue state before pruning generated resources", async
     assert.equal((await stat(path.join(root, "workspaces", activeKey, "operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).isDirectory(), true);
 
-    await Promise.all([
-      rm(path.join(root, "workspaces", unmanagedKey), { recursive: true }),
-      rm(path.join(root, "issues", unmanagedKey), { recursive: true }),
-    ]);
+    await Promise.all([rm(path.join(root, "workspaces", unmanagedKey), { recursive: true }), rm(path.join(root, "issues", unmanagedKey), { recursive: true })]);
     await pruneState(root, ["ISSUE-20260807-001"]);
     assert.equal((await stat(path.join(root, "workspaces", activeKey, "repository"))).isDirectory(), true);
     assert.equal(await readFile(path.join(root, "workspaces", activeKey, ".session-test.jsonl"), "utf8"), "session evidence\n");
@@ -142,11 +139,7 @@ test("preserves changed shared checkouts and generated runtimes as evidence", as
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-shared-checkout-state-"));
   const issueRuntime = path.join(root, "workspaces", "issue-20260807-001");
   try {
-    await Promise.all([
-      mkdir(issueRuntime, { recursive: true }),
-      mkdir(repositoriesRoot(root), { recursive: true }),
-      mkdir(path.join(root, "workspaces"), { recursive: true }),
-    ]);
+    await Promise.all([mkdir(issueRuntime, { recursive: true }), mkdir(repositoriesRoot(root), { recursive: true }), mkdir(path.join(root, "workspaces"), { recursive: true })]);
     const checkout = await createSharedCheckout(root);
     const cleanCheckout = await createSharedCheckout(root, "b".repeat(20));
     const evidence = path.join(checkout, "ignored-evidence.txt");

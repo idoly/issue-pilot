@@ -19,23 +19,31 @@ export function OverviewView(props: { onSelectIssue: (issueKey: string, userSubj
     requestController?.abort();
     requestController = new AbortController();
     setRefreshing(true);
-    void listIssues(requestController.signal).then((value) => {
-      if (generation !== requestGeneration) return;
-      setIssues(value);
-      setLoadError("");
-    }).catch((error) => {
-      if (generation !== requestGeneration || requestController?.signal.aborted) return;
-      setLoadError(error instanceof Error ? error.message : "首页数据加载失败");
-    }).finally(() => {
-      if (generation === requestGeneration) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    });
+    void listIssues(requestController.signal)
+      .then((value) => {
+        if (generation !== requestGeneration) return;
+        setIssues(value);
+        setLoadError("");
+      })
+      .catch((error) => {
+        if (generation !== requestGeneration || requestController?.signal.aborted) return;
+        setLoadError(error instanceof Error ? error.message : "首页数据加载失败");
+      })
+      .finally(() => {
+        if (generation === requestGeneration) {
+          requestController = undefined;
+          setLoading(false);
+          setRefreshing(false);
+        }
+      });
   };
 
   refresh();
-  const refreshTimer = window.setInterval(refresh, refreshIntervalMs);
+  // Do not let the timer abort an in-flight sample; manual refresh still supersedes it.
+  const refreshIfIdle = () => {
+    if (!requestController) refresh();
+  };
+  const refreshTimer = window.setInterval(refreshIfIdle, refreshIntervalMs);
   onCleanup(() => {
     window.clearInterval(refreshTimer);
     requestGeneration += 1;

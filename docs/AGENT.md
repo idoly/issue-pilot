@@ -15,10 +15,12 @@ Engine 负责工单排队、活动预约和恢复；Pi 负责模型会话与工�
 | read／write／edit／bash／grep／find／ls | Pi 原生工具，经 SRT 中的短期 executor 执行，cwd 为工单根 |
 | workspace | 由 workspace owner 提供服务说明、代码 list／include／remove |
 | service_query | 原生 DMS／SLS 只读证据查询 |
-| 服务 MCP 工具和 resources | Pi 管理连接，应用筛选 Deployment 和入口／已包含服务范围 |
+| 服务 MCP 工具和 resources | Pi 管理连接，应用筛选 Deployment 和入口／已包含服务范围；include／remove 改变范围后，本轮结束即关闭会话，下一轮按新范围重建工具 |
 | Codemode | 编排已授权工具，不新增文件或网络权限 |
 
 输入在边界按当前 schema 解析。Pi 的初始工具规范化位于可变钩子之前，所以 execute 仍校验输入和授权；扩展改写公开 schema 不能扩大执行权限。应用 schema 使用 Pi Schema，外部协议保持官方 SDK 兼容。
+
+沙箱的受保护文件列表在命令或会话启动时生成快照，之后新建的受保护文件不在其中。因此附件、会话文件等只在工单没有沙箱进程存活时写入：编辑附件、重置会话等操作先取得工单预约并关闭会话。
 
 主要 owner：[pi-session.ts](../src/agent/pi-session.ts)、[native-tools.ts](../src/agent/native-tools.ts)、[service-query-tool.ts](../src/agent/service-query-tool.ts)、[pi-extension.ts](../src/mcp/pi-extension.ts)。
 
@@ -28,11 +30,11 @@ Engine 负责工单排队、活动预约和恢复；Pi 负责模型会话与工�
 
 ### DMS
 
-连接前检查只读 SQL，通过 SSE 执行。根默认预算为操作 120 秒、首次握手 12 秒；最多两次握手，429 仅按合法 Retry-After 有界重试一次，401／403 不重试。已经发送的 SQL 不自动重放。
+连接前检查只读 SQL，通过 SSE 执行。只读检查拒绝写语句、多语句、注释、锁定读取，以及 MySQL／PostgreSQL 中已知有副作用、读取服务器文件或执行 SQL 文本的函数；这是黑名单，不能替代数据库权限，DMS 账号本身必须只读。根默认预算为操作 120 秒、首次握手 12 秒；最多两次握手，429 仅按合法 Retry-After 有界重试一次，401／403 不重试。已经发送的 SQL 不自动重放。
 
 错误返回稳定 code 与脱敏阶段诊断：connect、discovery、execute、export、close，以及耗时、sqlDispatchAttempted 和可用的 retryAfterSeconds。发送尝试不证明服务端已执行，诊断不包含 URL、SQL 或认证；取消原因和关闭失败分别保留。
 
-DMS 导出只有内容写完且协议收尾成功才原子替换旧工作文件。失败不重查 SQL，不以空文件覆盖旧结果。模型工作指引要求串行批次、间隔、有界恢复探测与断点；这不是服务端限流器，不能据此声称外部调用必定安全。
+内联结果与其他能力共用 `limits.capability.resultBytes`，超出返回 `dms_mcp_result_too_large_use_export`，需改用 export。DMS 导出只有内容写完且协议收尾成功才原子替换旧工作文件。失败不重查 SQL，不以空文件覆盖旧结果。模型工作指引要求串行批次、间隔、有界恢复探测与断点；这不是服务端限流器，不能据此声称外部调用必定安全。
 
 ### SLS
 
@@ -82,13 +84,13 @@ JSONL 保存消息、工具结果与分支，恢复读取 active branch。只读
 
 恢复使用当前合法 owner／模型，不保存密钥，不重复追加可见输入。未知或损坏记录报错。模型瞬时失败按 Pi retry 预算处理；最终失败保留已记录费用、会话和文件，允许主动重试。
 
-未交给 Pi 的消息可在会话结束后转普通回合；已交付而会话被替换返回 `agent_message_outcome_unknown`，不重放、不写回旧会话。应用没有客户端提交幂等 ID、跨进程自动调度或外部副作用恰好一次保证。
+运行中的回合仅在没有更早排队消息时接收 steer，否则新消息排在其后，保持发送顺序；回合在 Pi 接纳 steer 前结束时，取回该输入并排入下一回合，不记为已交付。未交给 Pi 的消息可在会话结束后转普通回合；已交付而会话被替换返回 `agent_message_outcome_unknown`，不重放、不写回旧会话。应用没有客户端提交幂等 ID、跨进程自动调度或外部副作用恰好一次保证。
 
 ### 重置与关闭
 
 重置在 scope 和工单预约内进行，以读取的 session ID 检查并发，关闭空闲会话后创建私有 JSONL 并事务更新绑定；绑定失败只清理新文件。旧会话保留审计关系与只读历史，新会话不自动执行。
 
-缺失或末尾不完整 JSONL 报错并保留原文件，不截断、改绑或新建替代会话。shutdown 等待活动、排队和预约，依次尝试 abort／shutdown／dispose，聚合操作与清理错误。
+缺失或末尾不完整 JSONL 报错并保留原文件，不截断、改绑或新建替代会话。打开前校验每条记录都是完整 JSON 且首条为会话头；已校验的字节前缀会缓存，追加后的会话只解析新增部分。shutdown 等待活动、排队和预约，依次尝试 abort／shutdown／dispose，聚合操作与清理错误。
 
 ## 会话页面与统计
 

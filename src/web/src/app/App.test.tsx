@@ -7,11 +7,28 @@ vi.mock("../data/client", async (importOriginal) => {
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
   const issue = (id: string, title: string, status: string, retryable = false) => ({
-    id, title, description: `${title}描述`, priority: "p1", type: "defect_fix", status,
-    workspaceStatus: retryable ? "failed" : status === "in_progress" ? "running" : "ready", agentRunning: status === "in_progress", resolvedAt: status === "resolved" ? now : null,
-    assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣", assigneeSubject: (id === "ISSUE-20260810-038" ? "second-user" : "fixture-user") as string | null,
-    service, createdAt: now, updatedAt: now, repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }], attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }], relatedIssues: [], scopeTransitions: [] as Array<Record<string, unknown>>, comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>, ccRecipients: [],
-    reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" }, environmentKey: "test",
+    id,
+    title,
+    description: `${title}描述`,
+    priority: "p1",
+    type: "defect_fix",
+    status,
+    workspaceStatus: retryable ? "failed" : status === "in_progress" ? "running" : "ready",
+    agentRunning: status === "in_progress",
+    resolvedAt: status === "resolved" ? now : null,
+    assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣",
+    assigneeSubject: (id === "ISSUE-20260810-038" ? "second-user" : "fixture-user") as string | null,
+    service,
+    createdAt: now,
+    updatedAt: now,
+    repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }],
+    attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }],
+    relatedIssues: [],
+    scopeTransitions: [] as Array<Record<string, unknown>>,
+    comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>,
+    ccRecipients: [],
+    reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
+    environmentKey: "test",
     workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
   });
   const issues = [
@@ -30,23 +47,43 @@ vi.mock("../data/client", async (importOriginal) => {
   const configuration = {
     agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false },
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
-    environments: [{ key: "test", name: "测试" }, { key: "prod", name: "正式" }],
-    services: [{
-      revision: 0, key: "srm", name: "SRM", description: "供应商关系管理服务。", context: "供应商关系管理服务。\n\n### 测试环境\n\n代码基准分支：develop\n\nSLS（sls）：srm-test",
-      deployments: [{ environmentKey: "test", repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }], capabilities: ["sls"], sls: { region: "cn-test", project: "srm-test", logstores: ["srm"], credentialConfigured: true } }],
-      repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
-    }, {
-      revision: 0, key: "orders", name: "Orders", description: "订单服务。",
-      deployments: [
-        { environmentKey: "prod", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "main" }], capabilities: [] },
-        { environmentKey: "dev", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "develop" }], capabilities: [] },
-      ],
-      repositories: [{ id: "orders-repository", alias: "orders", url: "git@example.com:team/orders.git" }],
-    }],
+    environments: [
+      { key: "test", name: "测试" },
+      { key: "prod", name: "正式" },
+    ],
+    services: [
+      {
+        revision: 0,
+        key: "srm",
+        name: "SRM",
+        description: "供应商关系管理服务。",
+        context: "供应商关系管理服务。\n\n### 测试环境\n\n代码基准分支：develop\n\nSLS（sls）：srm-test",
+        deployments: [
+          {
+            environmentKey: "test",
+            repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }],
+            capabilities: ["sls"],
+            sls: { region: "cn-test", project: "srm-test", logstores: ["srm"], credentialConfigured: true },
+          },
+        ],
+        repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
+      },
+      {
+        revision: 0,
+        key: "orders",
+        name: "Orders",
+        description: "订单服务。",
+        deployments: [
+          { environmentKey: "prod", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "main" }], capabilities: [] },
+          { environmentKey: "dev", repositoryBranches: [{ repositoryId: "orders-repository", repositoryAlias: "orders", baseBranch: "develop" }], capabilities: [] },
+        ],
+        repositories: [{ id: "orders-repository", alias: "orders", url: "git@example.com:team/orders.git" }],
+      },
+    ],
   };
   return {
     ...actual,
-    loadManagedUsers: vi.fn(async () => structuredClone(managedUsers.map(user => ({ ...user, revision: 0 })))),
+    loadManagedUsers: vi.fn(async () => structuredClone(managedUsers.map((user) => ({ ...user, revision: 0 })))),
     loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
     loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
     loadSharedDmsCredentials: vi.fn(async () => ({ configured: true, revision: 0, url: "https://dms.example.test/sse" })),
@@ -56,29 +93,74 @@ vi.mock("../data/client", async (importOriginal) => {
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
     })),
-    loadApplicationEndpoints: vi.fn(async () => ({ endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: true, tools: [{ name: "issue_get", description: "Read Issue details", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { key: { type: "string", description: "Issue key" } }, required: ["key"] } }] }] })),
+    loadApplicationEndpoints: vi.fn(async () => ({
+      endpoints: [
+        {
+          name: "Issue Pilot MCP",
+          path: "/mcp",
+          transport: "Streamable HTTP",
+          readOnly: true,
+          tools: [
+            {
+              name: "issue_get",
+              description: "Read Issue details",
+              annotations: { readOnlyHint: true },
+              inputSchema: { type: "object", properties: { key: { type: "string", description: "Issue key" } }, required: ["key"] },
+            },
+          ],
+        },
+      ],
+    })),
     loadRepositories: vi.fn(async () => [
-      ...configuration.services.flatMap((service) => service.repositories.map((repository) => ({ id: repository.id, revision: 0, name: repository.alias, url: repository.url, createdAt: now, updatedAt: now, services: [{ key: service.key, name: service.name }] }))),
+      ...configuration.services.flatMap((service) =>
+        service.repositories.map((repository) => ({
+          id: repository.id,
+          revision: 0,
+          name: repository.alias,
+          url: repository.url,
+          createdAt: now,
+          updatedAt: now,
+          services: [{ key: service.key, name: service.name }],
+        })),
+      ),
       { id: "updated-repository", revision: 0, name: "Updated repository", url: "git@example.test:team/updated.git", createdAt: now, updatedAt: now, services: [] },
     ]),
-    loadServiceConfigurationDescription: vi.fn(async (key: string) => ({ context: configuration.services.find(service => service.key === key)?.context ?? configuration.services.find(service => service.key === key)?.description ?? "" })),
+    loadServiceConfigurationDescription: vi.fn(async (key: string) => ({
+      context: configuration.services.find((service) => service.key === key)?.context ?? configuration.services.find((service) => service.key === key)?.description ?? "",
+    })),
     loadConfig: vi.fn(async () => structuredClone(configuration)),
     listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
-    createIssue: vi.fn(async (input: { title: string; description: string; priority: string; workMode: string; serviceKey: string; assigneeSubject: string | null; ccSubjects: string[]; relatedIssueKeys?: string[] }) => {
-      const created = issue("ISSUE-20260810-043", input.title, "open");
-      created.description = input.description;
-      created.priority = input.priority;
-      created.type = "smart_analysis";
-      created.environmentKey = "prod";
-      created.service = configuration.services.find((candidate) => candidate.key === input.serviceKey) ?? created.service;
-      created.assigneeSubject = input.assigneeSubject;
-      issues.unshift(created);
-      return structuredClone(created);
-    }),
+    createIssue: vi.fn(
+      async (input: {
+        title: string;
+        description: string;
+        priority: string;
+        workMode: string;
+        serviceKey: string;
+        assigneeSubject: string | null;
+        ccSubjects: string[];
+        relatedIssueKeys?: string[];
+      }) => {
+        const created = issue("ISSUE-20260810-043", input.title, "open");
+        created.description = input.description;
+        created.priority = input.priority;
+        created.type = "smart_analysis";
+        created.environmentKey = "prod";
+        created.service = configuration.services.find((candidate) => candidate.key === input.serviceKey) ?? created.service;
+        created.assigneeSubject = input.assigneeSubject;
+        issues.unshift(created);
+        return structuredClone(created);
+      },
+    ),
     listIssuePins: vi.fn(async (_signal?: AbortSignal) => [] as string[]),
     setIssuePinned: vi.fn(async (_id: string, _pinned: boolean) => undefined),
     updateIssueRelatedIssues: vi.fn(async (_id: string, _relatedIssueKeys: string[]) => undefined),
-    resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({ instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1", instanceHost: `${input.schemaName}.db.example.test`, instancePort: "3306", databaseId: input.schemaName === "mdm" ? "456" : "123" })),
+    resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({
+      instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1",
+      instanceHost: `${input.schemaName}.db.example.test`,
+      instancePort: "3306",
+      databaseId: input.schemaName === "mdm" ? "456" : "123",
+    })),
     loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
       sampledAt: now,
       totalBytes: 4 * 1024 ** 3 + 2048,
@@ -88,7 +170,15 @@ vi.mock("../data/client", async (importOriginal) => {
         { issueKey: "ISSUE-20260810-041", issueStatus: "pending", workspaceStatus: "ready", resolvedAt: null, bytes: 4 * 1024 ** 3, releasable: true, blockedReason: null },
         { issueKey: "ISSUE-20260810-090", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "workspace_repository_missing" },
         { issueKey: "ISSUE-20260810-091", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "development_repository_state_invalid" },
-        { issueKey: "ISSUE-20260810-092", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "workspace_path_does_not_match_repository" },
+        {
+          issueKey: "ISSUE-20260810-092",
+          issueStatus: "resolved",
+          workspaceStatus: "failed",
+          resolvedAt: now,
+          bytes: 1024,
+          releasable: false,
+          blockedReason: "workspace_path_does_not_match_repository",
+        },
         { issueKey: "ISSUE-20260810-093", issueStatus: "resolved", workspaceStatus: "failed", resolvedAt: now, bytes: 1024, releasable: false, blockedReason: "repository_workspace_name_conflict" },
       ],
     })),
@@ -97,14 +187,31 @@ vi.mock("../data/client", async (importOriginal) => {
       { name: "srm", url: "git@example.com:team/srm.git", branch: "hotfix-issue", access: "write" as const },
       { name: "srm-server", url: "git@example.com:team/srm-server.git", branch: "hotfix-issue", access: "write" as const },
     ]),
-    loadSourceTree: vi.fn(async (_id: string, sourceRepository: string, sourcePath: string) => sourcePath
-      ? { path: sourcePath, entries: [{ name: "index.ts", path: "src/index.ts", type: "file" as const, size: 32 }], truncated: false }
-      : sourceRepository === "srm-server"
-        ? { path: "", entries: [{ name: "pom.xml", path: "pom.xml", type: "file" as const, size: 24 }], truncated: false }
-        : { path: "", entries: [{ name: "src", path: "src", type: "directory" as const, size: null }, { name: "README.md", path: "README.md", type: "file" as const, size: 24 }], truncated: false }),
-    loadSourceFile: vi.fn(async (_id: string, _repository: string, sourcePath: string) => ({ path: sourcePath, content: sourcePath === "README.md" ? "# SRM source\n" : "export const ready = true;\n", size: 24, sha256: "a".repeat(64) })),
+    loadSourceTree: vi.fn(async (_id: string, sourceRepository: string, sourcePath: string) =>
+      sourcePath
+        ? { path: sourcePath, entries: [{ name: "index.ts", path: "src/index.ts", type: "file" as const, size: 32 }], truncated: false }
+        : sourceRepository === "srm-server"
+          ? { path: "", entries: [{ name: "pom.xml", path: "pom.xml", type: "file" as const, size: 24 }], truncated: false }
+          : {
+              path: "",
+              entries: [
+                { name: "src", path: "src", type: "directory" as const, size: null },
+                { name: "README.md", path: "README.md", type: "file" as const, size: 24 },
+              ],
+              truncated: false,
+            },
+    ),
+    loadSourceFile: vi.fn(async (_id: string, _repository: string, sourcePath: string) => ({
+      path: sourcePath,
+      content: sourcePath === "README.md" ? "# SRM source\n" : "export const ready = true;\n",
+      size: 24,
+      sha256: "a".repeat(64),
+    })),
     searchSource: vi.fn(async () => ({ matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false })),
-    loadSourceHistory: vi.fn(async () => ({ commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Fixture User", date: now, subject: "Fix source browser" }], truncated: false })),
+    loadSourceHistory: vi.fn(async () => ({
+      commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Fixture User", date: now, subject: "Fix source browser" }],
+      truncated: false,
+    })),
     loadSourceCommit: vi.fn(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
     loadSourceCommitFile: vi.fn(async () => ({
       file: { status: "modified" as const, path: "README.md", previousPath: null },
@@ -117,7 +224,10 @@ vi.mock("../data/client", async (importOriginal) => {
       before: { path: "README.md", version: "index" as const, content: "# Indexed SRM source\n" },
       after: { path: "README.md", version: "working-tree" as const, content: "# SRM source\n" },
     })),
-    retryIssue: async (id: string) => { const selected = issues.find((item) => item.id === id); if (selected) selected.workspace.retryable = false; },
+    retryIssue: async (id: string) => {
+      const selected = issues.find((item) => item.id === id);
+      if (selected) selected.workspace.retryable = false;
+    },
     updateIssueStatus: vi.fn(async (id: string, status: "open" | "resolved") => {
       const selected = issues.find((item) => item.id === id)!;
       selected.status = status;
@@ -128,9 +238,9 @@ vi.mock("../data/client", async (importOriginal) => {
       return {
         planHash: `sha256:${"a".repeat(64)}`,
         expectedIssueUpdatedAt: selected.updatedAt,
-        action: target.workMode === "development_fix" ? "convert_to_development" as const : "rebind_read_only" as const,
-        current: { service: selected.service, workMode: selected.environmentKey === "prod" ? "production_analysis" as const : "test_analysis" as const, repositoryAccess: "read" as const },
-        target: { service: selected.service, workMode: target.workMode, repositoryAccess: target.workMode === "development_fix" ? "write" as const : "read" as const },
+        action: target.workMode === "development_fix" ? ("convert_to_development" as const) : ("rebind_read_only" as const),
+        current: { service: selected.service, workMode: selected.environmentKey === "prod" ? ("production_analysis" as const) : ("test_analysis" as const), repositoryAccess: "read" as const },
+        target: { service: selected.service, workMode: target.workMode, repositoryAccess: target.workMode === "development_fix" ? ("write" as const) : ("read" as const) },
         repositories: { retained: [{ name: "orders", url: selected.repositories[0]!.url, baseBranch: selected.repositories[0]!.baseBranch }], added: [], removed: [] },
         branch: target.workMode === "development_fix" ? `hotfix-${id.toLowerCase()}` : null,
         session: { closeCurrent: true, preserveConversation: true as const },
@@ -148,12 +258,14 @@ vi.mock("../data/client", async (importOriginal) => {
         selected.repositories[0]!.workingBranch = `hotfix-${id.toLowerCase()}`;
       }
       selected.scopeTransitions.push({
-        id: "transition-1", action: "convert_to_development",
+        id: "transition-1",
+        action: "convert_to_development",
         from: { service: fromService, workMode: fromWorkMode },
         to: { service: structuredClone(selected.service), workMode: target.workMode },
         repositories: { retained: [selected.repositories[0]!.url], added: [], removed: [] },
         planHash: `sha256:${"a".repeat(64)}`,
-        actor: { subject: "fixture-user", name: "严欣" }, createdAt: now,
+        actor: { subject: "fixture-user", name: "严欣" },
+        createdAt: now,
       });
       return { issueKey: id };
     }),
@@ -168,7 +280,14 @@ import { setCurrentUserSubject } from "../data/client";
 import { App } from "./App";
 
 describe("issue pilot workspace", () => {
-  afterEach(() => { cleanup(); setCurrentUserSubject(null); localStorage.clear(); document.body.replaceChildren(); vi.restoreAllMocks(); window.history.replaceState(null, "", window.location.pathname); });
+  afterEach(() => {
+    cleanup();
+    setCurrentUserSubject(null);
+    localStorage.clear();
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+    window.history.replaceState(null, "", window.location.pathname);
+  });
 
   test("opens a linked Issue even when it is outside the current user's queue", async () => {
     window.history.replaceState(null, "", "/home/idoly/issue-pilot/.issue-pilot/issues/issue-20260901-002/work/customer-state-sync-java8-tests.log?issue=ISSUE-20260810-038");
@@ -216,7 +335,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: "浏览工单代码" }));
     const browser = await screen.findByRole("region", { name: `${target.id} 代码浏览器` });
     fireEvent.click(await within(browser).findByRole("button", { name: /README\.md/ }));
-    const editor = await within(browser).findByLabelText("代码内容 README.md") as HTMLTextAreaElement;
+    const editor = (await within(browser).findByLabelText("代码内容 README.md")) as HTMLTextAreaElement;
     await fireEvent.input(editor, { target: { value: "preserve draft on browser back" } });
     await screen.findByText(/README.md · 未保存/);
     window.history.back();
@@ -258,7 +377,12 @@ describe("issue pilot workspace", () => {
     const client = await import("../data/client");
     const users = await client.loadUsers();
     let finish!: (value: typeof users) => void;
-    vi.mocked(client.loadUsers).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    vi.mocked(client.loadUsers).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     render(() => <App />);
     try {
       const attention = await screen.findByRole("region", { name: "团队工单动态" });
@@ -267,7 +391,9 @@ describe("issue pilot workspace", () => {
       expect(client.currentUserSubject()).toBe("second-user");
       finish(users);
       await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test"));
-    } finally { finish(users); }
+    } finally {
+      finish(users);
+    }
   });
 
   test("pins personal queue Issues above the existing queue order", async () => {
@@ -348,6 +474,30 @@ describe("issue pilot workspace", () => {
     }
   });
 
+  test("clears an assignee who cannot use the newly selected work mode", async () => {
+    const client = await import("../data/client");
+    const users = await client.loadUsers();
+    vi.mocked(client.loadUsers).mockResolvedValueOnce([...users, { subject: "viewer", name: "Viewer", email: "viewer@example.test", role: "product" }]);
+    render(() => <App initialView="issues" />);
+    const queue = await screen.findByLabelText("工单队列");
+    const create = within(queue).getByRole("button", { name: "新建工单" });
+    await waitFor(() => expect(create).toHaveProperty("disabled", false));
+    fireEvent.click(create);
+    const dialog = await screen.findByRole("dialog", { name: "新建工单" });
+    fireEvent.click(within(dialog).getByLabelText("工单处理人"));
+    fireEvent.click(await screen.findByRole("option", { name: "Viewer · viewer@example.test" }));
+    await waitFor(() => expect(within(dialog).getByLabelText("工单处理人").closest(".ui-select")?.textContent).toContain("Viewer"));
+    fireEvent.click(within(dialog).getByLabelText("工单处理方式"));
+    fireEvent.click(await screen.findByRole("option", { name: "开发缺陷修复" }));
+    // The option list hides the product user; the submitted payload must not carry it either.
+    // Reject the call so the shared fixture Issue list stays unchanged for later tests.
+    vi.mocked(client.createIssue).mockRejectedValueOnce(new Error("fixture_not_created"));
+    await fireEvent.input(within(dialog).getByLabelText("工单标题"), { target: { value: "Mode switch" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(client.createIssue).toHaveBeenCalled());
+    expect(JSON.stringify(vi.mocked(client.createIssue).mock.calls.at(-1))).not.toContain("viewer");
+  });
+
   test("shows related Issue candidates in every work mode and preserves selection across mode changes", async () => {
     const client = await import("../data/client");
     const catalog = await client.loadCatalog();
@@ -358,7 +508,7 @@ describe("issue pilot workspace", () => {
     developmentIssue.agentRunning = false;
     vi.mocked(client.loadCatalog).mockResolvedValueOnce({
       environments: [...catalog.environments, { key: "dev", name: "开发" }],
-      services: catalog.services.map((service) => service.key === "orders" ? { ...service, deployments: [...service.deployments, { environmentKey: "dev" }] } : service),
+      services: catalog.services.map((service) => (service.key === "orders" ? { ...service, deployments: [...service.deployments, { environmentKey: "dev" }] } : service)),
     });
     vi.mocked(client.listIssues).mockResolvedValueOnce(loadedIssues).mockResolvedValueOnce(loadedIssues);
     render(() => <App initialView="issues" />);
@@ -418,6 +568,29 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑关联工单" })).toBeNull());
   });
 
+  test("explains a related Issue save rejected because a selected Issue is running", async () => {
+    const client = await import("../data/client");
+    const loadedIssues = await client.listIssues();
+    const developmentIssue = loadedIssues.find((issue) => issue.id === "ISSUE-20260810-038")!;
+    developmentIssue.environmentKey = "dev";
+    developmentIssue.workspaceStatus = "ready";
+    developmentIssue.agentRunning = false;
+    vi.mocked(client.listIssues).mockResolvedValueOnce(loadedIssues).mockResolvedValueOnce(loadedIssues);
+    vi.mocked(client.updateIssueRelatedIssues).mockRejectedValueOnce(new Error("issue_already_running"));
+    render(() => <App initialView="issues" />);
+    const queue = await waitFor(() => screen.getByLabelText("工单队列"));
+    fireEvent.click(await waitFor(() => within(queue).getByText("ISSUE-20260810-041")));
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "编辑关联" })));
+    const dialog = await screen.findByRole("dialog", { name: "编辑关联工单" });
+    const selector = await waitFor(() => within(dialog).getByLabelText("编辑关联工单"));
+    fireEvent.click(selector);
+    fireEvent.click(within(await screen.findByRole("listbox")).getByText(/ISSUE-20260810-038/));
+    await waitFor(() => expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
+    fireEvent.click(within(dialog).getByText(/保存后当前 Agent session/));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("所选关联工单正在处理");
+  });
+
   test("collapses and expands a long Issue description", async () => {
     const client = await import("../data/client");
     const detail = (await client.getIssue("ISSUE-20260810-042"))!;
@@ -442,7 +615,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: "浏览工单代码" }));
     const browser = await screen.findByRole("region", { name: "ISSUE-20260810-042 代码浏览器" });
     fireEvent.click(await within(browser).findByRole("button", { name: /README\.md/ }));
-    const editor = await within(browser).findByLabelText("代码内容 README.md") as HTMLTextAreaElement;
+    const editor = (await within(browser).findByLabelText("代码内容 README.md")) as HTMLTextAreaElement;
     await fireEvent.input(editor, { target: { value: "keep unsaved code" } });
     await screen.findByText(/README.md · 未保存/);
     fireEvent.click(screen.getByRole("radio", { name: "配置" }));
@@ -502,7 +675,11 @@ describe("issue pilot workspace", () => {
     fireEvent.click(await within(sourceBrowser).findByRole("button", { name: /README.md/ }));
     expect(await within(sourceBrowser).findByLabelText("代码内容 README.md")).toHaveProperty("value", "# SRM source\n");
     const viewToolbar = within(sourceBrowser).getByRole("toolbar", { name: "代码视图" });
-    expect(within(viewToolbar).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["文件", "搜索", "变更"]);
+    expect(
+      within(viewToolbar)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["文件", "搜索", "变更"]);
     const searchToggle = within(viewToolbar).getByRole("button", { name: "搜索" });
     fireEvent.click(searchToggle);
     await waitFor(() => expect(searchToggle.getAttribute("aria-pressed")).toBe("true"));
@@ -684,7 +861,11 @@ describe("issue pilot workspace", () => {
       expect(screen.getByLabelText("部署 2 仓库 Updated repository 分支")).toBe(branchInput);
       expect(branchInput.value).toBe(value);
     }
-    expect(within(serviceDialog).getAllByRole("checkbox").map(item => item.parentElement?.textContent)).toEqual(["DBHub", "DMS", "SLS"]);
+    expect(
+      within(serviceDialog)
+        .getAllByRole("checkbox")
+        .map((item) => item.parentElement?.textContent),
+    ).toEqual(["DBHub", "DMS", "SLS"]);
     expect(within(serviceDialog).getByRole("checkbox", { name: "SLS" })).toHaveProperty("checked", true);
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
     expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "SLS"]);
@@ -790,40 +971,50 @@ describe("issue pilot workspace", () => {
     expect(await within(currentDialog).findByLabelText("dms database 2-1")).toHaveProperty("value", "");
   });
 
-  for (const outcome of ["success", "failure"] as const) test(`ignores an old identity's service-save ${outcome} after a new editor opens`, async () => {
-    const client = await import("../data/client");
-    let finish!: () => void;
-    vi.mocked(client.updateService).mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = outcome === "success" ? resolve : () => reject(new Error("old_service_save_failed")); }));
-    render(() => <App initialView="configuration" />);
-    try {
-      await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
-      const panel = document.querySelector(".service-panel") as HTMLElement;
-      fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
-      const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
-      const save = within(dialog).getByRole("button", { name: "保存" });
-      await waitFor(() => expect(save).toHaveProperty("disabled", false));
-      fireEvent.click(save);
-      await waitFor(() => expect(finish).toBeTypeOf("function"));
-      fireEvent.click(screen.getByLabelText("当前用户"));
-      fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
-      await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
-      fireEvent.click(within(panel).getByRole("button", { name: "编辑" }));
-      const current = await screen.findByRole("dialog", { name: "编辑服务" });
-      fireEvent.input(within(current).getByLabelText("服务名称"), { target: { value: "new identity draft" } });
-      finish();
-      await new Promise(resolve => setTimeout(resolve, 0));
-      expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(current);
-      expect(within(current).getByLabelText("服务名称")).toHaveProperty("value", "new identity draft");
-      expect(screen.queryByText("old_service_save_failed")).toBeNull();
-    } finally { finish?.(); }
-  });
+  for (const outcome of ["success", "failure"] as const)
+    test(`ignores an old identity's service-save ${outcome} after a new editor opens`, async () => {
+      const client = await import("../data/client");
+      let finish!: () => void;
+      vi.mocked(client.updateService).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finish = outcome === "success" ? resolve : () => reject(new Error("old_service_save_failed"));
+          }),
+      );
+      render(() => <App initialView="configuration" />);
+      try {
+        await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+        const panel = document.querySelector(".service-panel") as HTMLElement;
+        fireEvent.click(await within(panel).findByRole("button", { name: "编辑" }));
+        const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+        const save = within(dialog).getByRole("button", { name: "保存" });
+        await waitFor(() => expect(save).toHaveProperty("disabled", false));
+        fireEvent.click(save);
+        await waitFor(() => expect(finish).toBeTypeOf("function"));
+        fireEvent.click(screen.getByLabelText("当前用户"));
+        fireEvent.click(await screen.findByRole("option", { name: "刘宜展 · lyz@example.test" }));
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
+        fireEvent.click(within(panel).getByRole("button", { name: "编辑" }));
+        const current = await screen.findByRole("dialog", { name: "编辑服务" });
+        fireEvent.input(within(current).getByLabelText("服务名称"), { target: { value: "new identity draft" } });
+        finish();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(current);
+        expect(within(current).getByLabelText("服务名称")).toHaveProperty("value", "new identity draft");
+        expect(screen.queryByText("old_service_save_failed")).toBeNull();
+      } finally {
+        finish?.();
+      }
+    });
 
   test("shows developer configuration credentials and removes them when switching to a product user", async () => {
     const client = await import("../data/client");
     const users = await client.loadUsers();
     vi.mocked(client.loadUsers).mockResolvedValueOnce([...users, { subject: "viewer", name: "Viewer", email: "viewer@example.test", role: "product" }]);
     const loadDescription = vi.mocked(client.loadServiceConfigurationDescription).getMockImplementation()!;
-    vi.mocked(client.loadServiceConfigurationDescription).mockResolvedValue({ context: "### 测试环境\n\n#### MySQL\n\n| 配置项 | 值 |\n| --- | --- |\n| 密码 | <code>synthetic-private-password</code> |" });
+    vi.mocked(client.loadServiceConfigurationDescription).mockResolvedValue({
+      context: "### 测试环境\n\n#### MySQL\n\n| 配置项 | 值 |\n| --- | --- |\n| 密码 | <code>synthetic-private-password</code> |",
+    });
     render(() => <App initialView="configuration" />);
     await fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
     await screen.findByText("synthetic-private-password");
@@ -978,6 +1169,27 @@ describe("issue pilot workspace", () => {
     expect(client.resolveDmsScope).not.toHaveBeenCalled();
   });
 
+  test("validates every SLS target before saving instead of only the first", async () => {
+    const client = await import("../data/client");
+    const configuration = structuredClone(await client.loadConfig());
+    const deployment = configuration.services[0]!.deployments[0]!;
+    deployment.sls = { ...deployment.sls!, targets: [{ name: "primary", region: "cn-test", project: "srm-test", logstores: ["srm"] }] };
+    vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
+    vi.mocked(client.updateService).mockClear();
+    render(() => <App initialView="configuration" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "服务" }));
+    await screen.findByRole("tablist", { name: "服务列表" });
+    fireEvent.click(document.querySelector(".service-tab-actions button:last-child")!);
+    const dialog = await screen.findByRole("dialog", { name: "编辑服务" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
+    const group = await within(dialog).findByRole("group", { name: "SLS 配置" });
+    fireEvent.click(within(group).getByRole("button", { name: "添加 SLS 目标" }));
+    await waitFor(() => expect(within(group).getByRole("button", { name: "移除 SLS 2 2" })).toBeTruthy());
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("请填写全部 SLS 日志目标");
+    expect(client.updateService).not.toHaveBeenCalled();
+  });
+
   test("shows the upstream DMS rate limit while resolving a database", async () => {
     const client = await import("../data/client");
     const configuration = structuredClone(await client.loadConfig());
@@ -1036,7 +1248,8 @@ describe("issue pilot workspace", () => {
     const client = await import("../data/client");
     const now = new Date().toISOString();
     const urls = ["git@example.test:team/sub/z.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/a.git"];
-    const loadRepositories = vi.mocked(client.loadRepositories), original = loadRepositories.getMockImplementation()!;
+    const loadRepositories = vi.mocked(client.loadRepositories),
+      original = loadRepositories.getMockImplementation()!;
     loadRepositories.mockResolvedValue(urls.map((url, index) => ({ id: `repo-${index}`, revision: 0, name: `Repository ${3 - index}`, url, createdAt: now, updatedAt: now, services: [] })));
     try {
       render(() => <App initialView="configuration" />);
@@ -1044,8 +1257,15 @@ describe("issue pilot workspace", () => {
       const panel = await screen.findByRole("region", { name: "仓库管理" });
       await within(panel).findByText("git@example.test:team/sub/z.git");
       expect(panel.querySelector(".repository-catalog-group")).toBeNull();
-      expect([...panel.querySelectorAll(".settings-table tbody tr td:nth-child(2) code")].map(row => row.textContent)).toEqual(["git@example.test:team/a.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/sub/z.git"]);
-    } finally { loadRepositories.mockImplementation(original); }
+      expect([...panel.querySelectorAll(".settings-table tbody tr td:nth-child(2) code")].map((row) => row.textContent)).toEqual([
+        "git@example.test:team/a.git",
+        "git@example.test:team/z.git",
+        "git@example.test:team/sub/a.git",
+        "git@example.test:team/sub/z.git",
+      ]);
+    } finally {
+      loadRepositories.mockImplementation(original);
+    }
   });
 
   test("shows repository names, addresses, usage and developer maintenance controls", async () => {
@@ -1094,16 +1314,20 @@ describe("issue pilot workspace", () => {
     await within(credentials).findByText("API Key");
     const members = await screen.findByRole("region", { name: "人员管理" });
     await within(members).findByText("严欣");
-    expect(client.loadConfig).not.toHaveBeenCalled(); expect(client.loadRepositories).not.toHaveBeenCalled();
-    expect(client.loadApplicationEndpoints).not.toHaveBeenCalled(); expect(client.loadServiceConfigurationDescription).not.toHaveBeenCalled();
+    expect(client.loadConfig).not.toHaveBeenCalled();
+    expect(client.loadRepositories).not.toHaveBeenCalled();
+    expect(client.loadApplicationEndpoints).not.toHaveBeenCalled();
+    expect(client.loadServiceConfigurationDescription).not.toHaveBeenCalled();
     const search = within(members).getByLabelText("搜索人员");
     await fireEvent.input(search, { target: { value: "严欣" } });
     fireEvent.click(screen.getByRole("tab", { name: "仓库" }));
     await screen.findByRole("button", { name: "登记仓库" });
     await waitFor(() => expect(client.loadRepositories).toHaveBeenCalledTimes(1));
-    expect(client.loadConfig).not.toHaveBeenCalled(); expect(client.loadApplicationEndpoints).not.toHaveBeenCalled();
+    expect(client.loadConfig).not.toHaveBeenCalled();
+    expect(client.loadApplicationEndpoints).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "用户" }));
-    expect(screen.getByLabelText("搜索人员")).toBe(search); expect(search).toHaveProperty("value", "严欣");
+    expect(screen.getByLabelText("搜索人员")).toBe(search);
+    expect(search).toHaveProperty("value", "严欣");
     expect(client.loadManagedUsers).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("tab", { name: "端点" }));
     await screen.findByLabelText("MCP 客户端配置");
@@ -1117,7 +1341,11 @@ describe("issue pilot workspace", () => {
   test("shows four personal credentials followed by personnel management", async () => {
     render(() => <App initialView="configuration" />);
     const tabs = await screen.findByRole("tablist", { name: "配置分类" });
-    expect(within(tabs).getAllByRole("tab").map(tab => tab.textContent)).toEqual(["用户", "仓库", "服务", "端点"]);
+    expect(
+      within(tabs)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["用户", "仓库", "服务", "端点"]);
     const credentials = await screen.findByRole("region", { name: "我的凭证" });
     await within(credentials).findByText("API Key");
     expect(within(credentials).getByText("SSH Key")).toBeTruthy();
@@ -1149,10 +1377,13 @@ describe("issue pilot workspace", () => {
   test("renders Issue statistics while Workspace inspection is pending and aborts it on navigation", async () => {
     const { loadWorkspaceStats } = await import("../data/client");
     let workspaceSignal: AbortSignal | undefined;
-    vi.mocked(loadWorkspaceStats).mockImplementationOnce((signal) => new Promise((_resolve, reject) => {
-      workspaceSignal = signal;
-      signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
-    }));
+    vi.mocked(loadWorkspaceStats).mockImplementationOnce(
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          workspaceSignal = signal;
+          signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        }),
+    );
     const view = render(() => <App initialView="issues" />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
 
@@ -1172,7 +1403,9 @@ describe("issue pilot workspace", () => {
     const getIssue = vi.mocked(client.getIssue);
     getIssue.mockClear();
     let resolveCurrentUser!: (user: Awaited<ReturnType<typeof client.loadCurrentUser>>) => void;
-    const currentUser = new Promise<Awaited<ReturnType<typeof client.loadCurrentUser>>>((resolve) => { resolveCurrentUser = resolve; });
+    const currentUser = new Promise<Awaited<ReturnType<typeof client.loadCurrentUser>>>((resolve) => {
+      resolveCurrentUser = resolve;
+    });
     vi.mocked(client.loadCurrentUser).mockImplementationOnce(() => currentUser);
 
     render(() => <App initialView="issues" />);
@@ -1220,7 +1453,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.listIssues).mockResolvedValueOnce(rows);
     render(() => <App initialView="issues" />);
     await screen.findByRole("heading", { name: "结算页提交后订单状态未刷新" });
-    const row = screen.getAllByRole("listitem").find(row => row.textContent?.includes(rows[0]!.id))!;
+    const row = screen.getAllByRole("listitem").find((row) => row.textContent?.includes(rows[0]!.id))!;
     const time = row.querySelector(".queue-time")!;
     expect(time.textContent).not.toBe("2026/10/01");
     expect(time.getAttribute("title")).toBe("2026/10/01 09:02");
@@ -1242,7 +1475,11 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
     fireEvent.click(within(queue).getByLabelText("按状态筛选"));
     const statusOptions = await screen.findByRole("listbox");
-    expect(within(statusOptions).getAllByRole("option").map((option) => option.textContent)).toEqual(["未解决", "待确认", "已解决", "全部工单"]);
+    expect(
+      within(statusOptions)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["未解决", "待确认", "已解决", "全部工单"]);
     fireEvent.click(within(statusOptions).getByText("全部工单"));
 
     fireEvent.click(within(queue).getByLabelText("按环境筛选"));
@@ -1317,7 +1554,9 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy());
     const resolvedIssue = await getIssue("ISSUE-20260810-038");
     let resolveDetail!: (issue: typeof resolvedIssue) => void;
-    const detailRefresh = new Promise<typeof resolvedIssue>((resolve) => { resolveDetail = resolve; });
+    const detailRefresh = new Promise<typeof resolvedIssue>((resolve) => {
+      resolveDetail = resolve;
+    });
     getIssue.mockClear();
     listIssues.mockClear();
     updateIssueStatus.mockClear();
@@ -1343,8 +1582,12 @@ describe("issue pilot workspace", () => {
     const current = await getIssue("ISSUE-20260810-042");
     let resolveOld!: (issue: typeof current) => void;
     let resolveNew!: (issue: typeof current) => void;
-    const oldRefresh = new Promise<typeof current>((resolve) => { resolveOld = resolve; });
-    const newRefresh = new Promise<typeof current>((resolve) => { resolveNew = resolve; });
+    const oldRefresh = new Promise<typeof current>((resolve) => {
+      resolveOld = resolve;
+    });
+    const newRefresh = new Promise<typeof current>((resolve) => {
+      resolveNew = resolve;
+    });
     getIssue.mockImplementationOnce(async () => oldRefresh).mockImplementationOnce(async () => newRefresh);
     const source = EventSourceMock.instances.at(-1)!;
 
@@ -1366,5 +1609,43 @@ describe("issue pilot workspace", () => {
 
     expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
+  });
+  test("queue navigation becomes its own history entry so Back restores the previous Issue", async () => {
+    const client = await import("../data/client");
+    const first = (await client.getIssue("ISSUE-20260810-041"))!;
+    const second = (await client.getIssue("ISSUE-20260810-042"))!;
+    vi.mocked(client.getIssue).mockImplementation(async (key: string) => (key === first.id ? first : second));
+    render(() => <App initialView="issues" />);
+    const queue = await screen.findByLabelText("工单队列");
+    fireEvent.click(await waitFor(() => within(queue).getByText(first.id)));
+    await screen.findByRole("heading", { name: first.title });
+    fireEvent.click(within(queue).getByText(second.id));
+    await screen.findByRole("heading", { name: second.title });
+    window.history.back();
+    await screen.findByRole("heading", { name: first.title });
+    expect(new URLSearchParams(window.location.search).get("issue")).toBe(first.id);
+  });
+
+  test("re-selecting an Issue whose detail failed to load retries the request", async () => {
+    const client = await import("../data/client");
+    const issue = (await client.getIssue("ISSUE-20260810-041"))!;
+    const original = vi.mocked(client.getIssue).getMockImplementation()!;
+    let failed = false;
+    vi.mocked(client.getIssue).mockImplementation(async (key: string) => {
+      if (key === issue.id && !failed) {
+        failed = true;
+        throw new Error("fixture_load_failed");
+      }
+      return original(key);
+    });
+    render(() => <App initialView="issues" />);
+    const queue = await screen.findByLabelText("工单队列");
+    fireEvent.click(await waitFor(() => within(queue).getByText(issue.id)));
+    const retry = await screen.findByRole("button", { name: "重试" });
+    const calls = vi.mocked(client.getIssue).mock.calls.length;
+    // Both the inline retry and re-selecting the row must issue a new request.
+    fireEvent.click(retry);
+    await screen.findByRole("heading", { name: issue.title });
+    expect(vi.mocked(client.getIssue).mock.calls.length).toBe(calls + 1);
   });
 });

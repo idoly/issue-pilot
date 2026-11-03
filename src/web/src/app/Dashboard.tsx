@@ -30,10 +30,12 @@ export function Dashboard(props: {
 }) {
   const { catalog } = useApplicationResources();
   const activeIssues = createMemo(() => props.issues.filter((issue) => issue.status !== "resolved"));
-  const focusIssues = createMemo(() => activeIssues()
-    .map(issue => ({ issue, rank: attentionRank(issue), updatedAt: Date.parse(issue.updatedAt) }))
-    .sort((left, right) => left.rank - right.rank || right.updatedAt - left.updatedAt)
-    .map(row => row.issue));
+  const focusIssues = createMemo(() =>
+    activeIssues()
+      .map((issue) => ({ issue, rank: attentionRank(issue), updatedAt: Date.parse(issue.updatedAt) }))
+      .sort((left, right) => left.rank - right.rank || right.updatedAt - left.updatedAt)
+      .map((row) => row.issue),
+  );
   const running = createMemo(() => activeIssues().filter((issue) => issue.agentRunning || issue.workspaceStatus === "running" || issue.workspaceStatus === "preparing").length);
   const failed = createMemo(() => activeIssues().filter((issue) => issue.workspaceStatus === "failed").length);
   const unassigned = createMemo(() => activeIssues().filter((issue) => !issue.assigneeSubject).length);
@@ -42,29 +44,79 @@ export function Dashboard(props: {
   return (
     <section class="dashboard-workspace">
       <header class="dashboard-header">
-        <div><span>每 10 秒自动刷新</span><h1>运营总览</h1></div>
-        <Button aria-label="刷新运营总览" icon={<RefreshCw size={14} />} loading={props.refreshing} onClick={props.onRefresh}>刷新</Button>
+        <div>
+          <span>每 10 秒自动刷新</span>
+          <h1>运营总览</h1>
+        </div>
+        <Button aria-label="刷新运营总览" icon={<RefreshCw size={14} />} loading={props.refreshing} onClick={props.onRefresh}>
+          刷新
+        </Button>
       </header>
-      <Show when={!props.loading} fallback={<div class="dashboard-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>}>
-        <Show when={!props.loadError} fallback={<div class="dashboard-error" role="alert">{props.loadError}</div>}>
+      <Show
+        when={!props.loading}
+        fallback={
+          <div class="dashboard-loading">
+            <Skeleton active paragraph={{ rows: 10 }} />
+          </div>
+        }
+      >
+        <Show when={props.loadError}>
+          <div class="dashboard-error" role="alert">
+            {props.loadError}
+          </div>
+        </Show>
+        <Show when={!props.loadError || props.issues.length > 0}>
           <section class="dashboard-summary" aria-label="当前运营状态">
-            <div><span>活动工单</span><strong>{activeIssues().length}</strong><small>当前所有未解决工单</small></div>
-            <div><span>正在执行</span><strong>{running()}</strong><small>Agent / Workspace</small></div>
-            <div><span>执行失败</span><strong>{failed()}</strong><small>需要人工检查</small></div>
-            <div><span>未分配</span><strong>{unassigned()}</strong><small>当前活动工单</small></div>
+            <div>
+              <span>活动工单</span>
+              <strong>{activeIssues().length}</strong>
+            </div>
+            <div>
+              <span>正在执行</span>
+              <strong>{running()}</strong>
+              <small>Agent / Workspace</small>
+            </div>
+            <div>
+              <span>执行失败</span>
+              <strong>{failed()}</strong>
+              <small>需要人工检查</small>
+            </div>
+            <div>
+              <span>未分配</span>
+              <strong>{unassigned()}</strong>
+            </div>
           </section>
           <div class="dashboard-operations">
             <section class="dashboard-attention" aria-label="团队工单动态">
-              <div class="dashboard-section-heading"><div><span>跨人员视图</span><h2>团队工单动态</h2></div><small>异常和执行中优先，其余按最近更新排序</small></div>
+              <div class="dashboard-section-heading">
+                <h2 title="异常和执行中优先，其余按最近更新排序">团队工单动态</h2>
+              </div>
               <div class="dashboard-attention-list" role="list">
-                <For each={focusIssues()} fallback={<div class="dashboard-empty">当前没有未解决工单</div>}>
-                  {(issue) => { const state = executionState(issue); return (
-                    <button type="button" role="listitem" class="dashboard-attention-item" onClick={() => props.onSelectIssue(issue.id, issue.assigneeSubject ?? undefined)}>
-                      <span class={`execution-state ${state.key}`}><i />{state.label}</span>
-                      <div><strong>{issue.title}</strong><span><code>{issue.id}</code> · {issue.service.name} / {environmentName(issue.environmentKey)}</span></div>
-                      <span class="dashboard-assignee">{issue.assignee ?? "未分配"}</span><time>{relativeTime(issue.updatedAt)}</time><ChevronRight size={15} aria-hidden="true" />
-                    </button>
-                  ); }}
+                <For each={focusIssues()} keyed={(row) => row.id} fallback={<div class="dashboard-empty">当前没有未解决工单</div>}>
+                  {(issue) => {
+                    const state = () => executionState(issue());
+                    return (
+                      <div role="listitem">
+                        <button type="button" class="dashboard-attention-item" onClick={() => props.onSelectIssue(issue().id, issue().assigneeSubject ?? undefined)}>
+                          <span class={`execution-state ${state().key}`}>
+                            <i />
+                            {state().label}
+                          </span>
+                          <div>
+                            <strong title={issue().title}>{issue().title}</strong>
+                            <span>
+                              <code>{issue().id}</code> · {issue().service.name} / {environmentName(issue().environmentKey)}
+                            </span>
+                          </div>
+                          <span class="dashboard-assignee">{issue().assignee ?? "未分配"}</span>
+                          <time datetime={issue().updatedAt} title={new Date(issue().updatedAt).toLocaleString()}>
+                            {relativeTime(issue().updatedAt)}
+                          </time>
+                          <ChevronRight size={15} aria-hidden="true" />
+                        </button>
+                      </div>
+                    );
+                  }}
                 </For>
               </div>
             </section>

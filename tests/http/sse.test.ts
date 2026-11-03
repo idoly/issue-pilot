@@ -107,7 +107,7 @@ test("bounds queued UTF-8 bytes and releases waits after a slow client exceeds t
   const response = new FakeResponse();
   response.blockNextWrite = true;
   const failures: unknown[] = [];
-  const writer = createOrderedSseWriter(response, error => failures.push(error), 6);
+  const writer = createOrderedSseWriter(response, (error) => failures.push(error), 6);
   writer.write("first");
   const drained = writer.drain();
   writer.write("中文"); // Six bytes, exactly at the budget.
@@ -125,12 +125,14 @@ test("bounds queued UTF-8 bytes and releases waits after a slow client exceeds t
 test("paced replay can exceed the total queue budget without disconnecting", async () => {
   const response = new FakeResponse();
   const failures: unknown[] = [];
-  const writer = createOrderedSseWriter(response, error => failures.push(error), 4);
+  const writer = createOrderedSseWriter(response, (error) => failures.push(error), 4);
   for (let index = 0; index < 5; index++) {
     response.blockNextWrite = true;
     writer.write(`replay-${index}`); // A single directly written frame need not fit the waiting queue.
     let completed = false;
-    const pending = writer.drain().then(() => { completed = true; });
+    const pending = writer.drain().then(() => {
+      completed = true;
+    });
     await Promise.resolve();
     assert.equal(completed, false);
     response.emit("drain");
@@ -146,12 +148,14 @@ test("queue bytes are reclaimed on drain and a disconnected replay stops waiting
   const response = new FakeResponse();
   response.blockNextWrite = true;
   const failures: unknown[] = [];
-  const writer = createOrderedSseWriter(response, error => failures.push(error), 4);
-  writer.write("first"); writer.write("four");
+  const writer = createOrderedSseWriter(response, (error) => failures.push(error), 4);
+  writer.write("first");
+  writer.write("four");
   response.emit("drain");
   await writer.drain();
   response.blockNextWrite = true;
-  writer.write("second"); writer.write("four");
+  writer.write("second");
+  writer.write("four");
   const pending = writer.drain();
   response.emit("close");
   await pending;

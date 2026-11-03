@@ -14,15 +14,14 @@ export interface OrderedSseWriter {
   drain(): Promise<void>;
 }
 
-export function createOrderedSseWriter(
-  target: SseTarget,
-  onWriteFailure: (error: unknown) => void = () => undefined,
-  maxQueuedBytes = issuePilotConfig.http.sseQueuedBytes,
-): OrderedSseWriter {
+export function createOrderedSseWriter(target: SseTarget, onWriteFailure: (error: unknown) => void = () => undefined, maxQueuedBytes = issuePilotConfig.http.sseQueuedBytes): OrderedSseWriter {
   const queue: string[] = [];
   let queuedBytes = 0;
   const drainWaiters = new Set<() => void>();
-  const resolveDrain = () => { for (const resolve of drainWaiters) resolve(); drainWaiters.clear(); };
+  const resolveDrain = () => {
+    for (const resolve of drainWaiters) resolve();
+    drainWaiters.clear();
+  };
   let pumping = false;
   let closed = false;
   let removeDrainListener: (() => void) | undefined;
@@ -41,7 +40,9 @@ export function createOrderedSseWriter(
   const fail = (error: unknown) => {
     if (closed) return;
     close();
-    try { onWriteFailure(error); } catch {
+    try {
+      onWriteFailure(error);
+    } catch {
       // A transport cleanup failure cannot reject the ordered writer queue.
     }
   };
@@ -55,12 +56,19 @@ export function createOrderedSseWriter(
     let consumed = 0;
     try {
       while (!closed && !removeDrainListener && consumed < queue.length) {
-        if (target.destroyed || target.writableEnded) { close(); break; }
+        if (target.destroyed || target.writableEnded) {
+          close();
+          break;
+        }
         const next = queue[consumed++]!;
         queuedBytes -= Buffer.byteLength(next);
         let accepted: boolean;
-        try { accepted = target.write(next); }
-        catch (error) { fail(error); break; }
+        try {
+          accepted = target.write(next);
+        } catch (error) {
+          fail(error);
+          break;
+        }
         if (accepted) continue;
         const removeListener = () => target.off("drain", onDrain);
         const onDrain = () => {
@@ -85,8 +93,11 @@ export function createOrderedSseWriter(
     // The transport owns a directly written frame. Bound only frames waiting behind backpressure.
     if (queuedBytes > maxQueuedBytes) fail(new Error("sse_queue_budget_exceeded"));
   };
-  const drain = () => closed || !queue.length && !removeDrainListener
-    ? Promise.resolve()
-    : new Promise<void>(resolve => { drainWaiters.add(resolve); });
+  const drain = () =>
+    closed || (!queue.length && !removeDrainListener)
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          drainWaiters.add(resolve);
+        });
   return { write, drain };
 }

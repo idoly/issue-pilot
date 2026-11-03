@@ -9,22 +9,44 @@ import { removePendingAttachments } from "../../src/http/attachment-store.ts";
 const file = { id: "file", fileName: "evidence.txt", size: 4, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file?signature=fixture-private" };
 test("downloads attachment bytes to private staging and validates size", async () => {
   const pending = await downloadDingtalkAttachments([file], new AbortController().signal, async (_url, init) => {
-    assert.equal(init?.redirect, "error"); assert.equal(init?.headers, undefined);
+    assert.equal(init?.redirect, "error");
+    assert.equal(init?.headers, undefined);
     return new Response("data", { headers: { "content-type": "text/plain; charset=utf-8" } });
   });
-  try { assert.equal(pending[0]!.size, 4); assert.equal(pending[0]!.mediaType, "text/plain"); assert.equal((await stat(pending[0]!.temporaryPath)).mode & 0o777, 0o600); assert.equal(await readFile(pending[0]!.temporaryPath, "utf8"), "data"); }
-  finally { await removePendingAttachments(pending); }
+  try {
+    assert.equal(pending[0]!.size, 4);
+    assert.equal(pending[0]!.mediaType, "text/plain");
+    assert.equal((await stat(pending[0]!.temporaryPath)).mode & 0o777, 0o600);
+    assert.equal(await readFile(pending[0]!.temporaryPath, "utf8"), "data");
+  } finally {
+    await removePendingAttachments(pending);
+  }
 });
 test("rejects untrusted download targets before network access", async () => {
-  for (const url of ["http://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file", "https://127.0.0.1/file", "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com.evil.test/file", "https://user:pass@alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file"]) {
-    await assert.rejects(downloadDingtalkAttachments([{ ...file, url }], new AbortController().signal, async () => { assert.fail("must not fetch"); }), /dingtalk_attachment_host_not_allowed/);
+  for (const url of [
+    "http://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file",
+    "https://127.0.0.1/file",
+    "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com.evil.test/file",
+    "https://user:pass@alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file",
+  ]) {
+    await assert.rejects(
+      downloadDingtalkAttachments([{ ...file, url }], new AbortController().signal, async () => {
+        assert.fail("must not fetch");
+      }),
+      /dingtalk_attachment_host_not_allowed/,
+    );
   }
 });
 test("releases the response reader when the download stream fails", async () => {
   const stream = new ReadableStream<Uint8Array>({
-    start(controller) { controller.error(new Error("fixture-private-download-details")); },
+    start(controller) {
+      controller.error(new Error("fixture-private-download-details"));
+    },
   });
-  await assert.rejects(downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response(stream)), { message: "dingtalk_attachment_download_failed" });
+  await assert.rejects(
+    downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response(stream)),
+    { message: "dingtalk_attachment_download_failed" },
+  );
   assert.equal(stream.locked, false);
 });
 
@@ -35,10 +57,15 @@ test("rejects cancellation after a response arrives and removes completed stagin
   const previousTmpdir = process.env.TMPDIR;
   process.env.TMPDIR = stagingRoot;
   try {
-    await assert.rejects(downloadDingtalkAttachments([file], controller.signal, async () => {
-      queueMicrotask(() => { controller.abort(reason); });
-      return new Response("data");
-    }), error => error === reason);
+    await assert.rejects(
+      downloadDingtalkAttachments([file], controller.signal, async () => {
+        queueMicrotask(() => {
+          controller.abort(reason);
+        });
+        return new Response("data");
+      }),
+      (error) => error === reason,
+    );
     assert.deepEqual(await readdir(stagingRoot), []);
   } finally {
     if (previousTmpdir === undefined) delete process.env.TMPDIR;
@@ -48,7 +75,35 @@ test("rejects cancellation after a response arrives and removes completed stagin
 });
 
 test("rejects truncated attachments and preserves cancellation", async () => {
-  await assert.rejects(downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response("x")), /dingtalk_attachment_size_changed/);
-  const controller = new AbortController(), reason = new Error("cancelled by caller"); controller.abort(reason);
-  await assert.rejects(downloadDingtalkAttachments([file], controller.signal, async () => { assert.fail("must not fetch"); }), error => error === reason);
+  await assert.rejects(
+    downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response("x")),
+    /dingtalk_attachment_size_changed/,
+  );
+  const controller = new AbortController(),
+    reason = new Error("cancelled by caller");
+  controller.abort(reason);
+  await assert.rejects(
+    downloadDingtalkAttachments([file], controller.signal, async () => {
+      assert.fail("must not fetch");
+    }),
+    (error) => error === reason,
+  );
+});
+test("stops reading a download as soon as it exceeds the declared size and leaves no staging files", async () => {
+  const before = new Set((await readdir(tmpdir())).filter((name) => name.startsWith("issue-pilot-attachment-")));
+  let pulled = 0;
+  // An endless replacement object: without a cap, staging would grow until the import deadline.
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new Uint8Array(1024));
+    },
+  });
+  await assert.rejects(
+    downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response(stream)),
+    /dingtalk_attachment_size_changed/,
+  );
+  assert.ok(pulled < 5, `pulled ${pulled} chunks`);
+  const after = (await readdir(tmpdir())).filter((name) => name.startsWith("issue-pilot-attachment-") && !before.has(name));
+  assert.deepEqual(after, []);
 });

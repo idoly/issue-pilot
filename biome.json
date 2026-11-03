@@ -1,0 +1,64 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "main"
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/.issue-pilot",
+      "!**/node_modules",
+      "!**/src/web/dist",
+      "!**/.venv",
+      "!**/drizzle",
+      "!**/docs",
+      "!**/deploy",
+      "!**/patches",
+      "!**/examples",
+      "!**/.github",
+      "!**/*.yml",
+      "!**/*.yaml",
+      "!**/*.html",
+      "!**/package-lock.json",
+      "!**/*.md"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 200,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "correctness": {
+        "noUnsafeFinally": "error"
+      },
+      "suspicious": {
+        "useIterableCallbackReturn": "error"
+      },
+      "style": {
+        "useImportType": "error"
+      }
+    }
+  },
+  "assist": {
+    "enabled": false
+  }
+}

@@ -16,7 +16,13 @@ async function withOldSchema(run: (database: DatabaseConnection) => Promise<void
   const database = openDatabase(path.join(root, "issues.db"));
   try {
     const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8"));
-    const previous = { ...journal, entries: journal.entries.slice(0, journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0068_dbhub_targets")) };
+    const previous = {
+      ...journal,
+      entries: journal.entries.slice(
+        0,
+        journal.entries.findIndex((entry: { tag: string }) => entry.tag === "0068_dbhub_targets"),
+      ),
+    };
     await mkdir(path.join(folder, "meta"), { recursive: true });
     await writeFile(path.join(folder, "meta/_journal.json"), JSON.stringify(previous));
     for (const { tag } of previous.entries) await copyFile(`drizzle/${tag}.sql`, path.join(folder, `${tag}.sql`));
@@ -29,7 +35,10 @@ async function withOldSchema(run: (database: DatabaseConnection) => Promise<void
     ]);
     await database.db.insert(services).values({ id: "service", key: "service", name: "Service", revision: 3 });
     await run(database);
-  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 async function insertDeployment(database: DatabaseConnection, environment: string, config: unknown): Promise<void> {
@@ -47,19 +56,31 @@ async function state(database: DatabaseConnection) {
 }
 
 test("DBHub migration preserves target order, literal credentials, unrelated data and existing connections; repeated migration is inert", async () => {
-  await withOldSchema(async database => {
+  await withOldSchema(async (database) => {
     const targets = [target, { ...target, host: "2001:db8::1", database: "audit" }];
     const historical = { mysql: [{ ...target, password: "private archived evidence" }] };
     await insertDeployment(database, "prod", { mysql: targets, redis: { historical: true } });
     await insertDeployment(database, "test", { dbhub: [{ ...target, type: "postgres", port: 5432 }] });
     await insertDeployment(database, "dev", { archivedDevelopment: historical });
-    await database.db.insert(mcpServices).values({ id: "dbhub-existing", name: "Existing DBHub", url: "", transport: "stdio", deploymentId: "prod", enabled: true, stdio: { command: "/fixture/node", args: ["/fixture/dbhub.js"], env: { DBHUB_DSN: "fixture-connection" } } });
+    await database.db.insert(mcpServices).values({
+      id: "dbhub-existing",
+      name: "Existing DBHub",
+      url: "",
+      transport: "stdio",
+      deploymentId: "prod",
+      enabled: true,
+      stdio: { command: "/fixture/node", args: ["/fixture/dbhub.js"], env: { DBHUB_DSN: "fixture-connection" } },
+    });
     const before = await state(database);
     await migrate(database.db, migrationOptions);
     const after = await state(database);
-    const configs = Object.fromEntries(after.deployments.map(row => [String(row.id), JSON.parse(String(row.config))]));
-    assert.deepEqual(configs.prod, { dbhub: targets.map(value => ({ ...value, type: "mysql" })), redis: { historical: true } });
-    for (const id of ["test", "dev"]) assert.deepEqual(after.deployments.find(row => row.id === id), before.deployments.find(row => row.id === id));
+    const configs = Object.fromEntries(after.deployments.map((row) => [String(row.id), JSON.parse(String(row.config))]));
+    assert.deepEqual(configs.prod, { dbhub: targets.map((value) => ({ ...value, type: "mysql" })), redis: { historical: true } });
+    for (const id of ["test", "dev"])
+      assert.deepEqual(
+        after.deployments.find((row) => row.id === id),
+        before.deployments.find((row) => row.id === id),
+      );
     assert.equal(after.services[0]!.revision, 4);
     assert.deepEqual(after.connections, before.connections);
     await migrate(database.db, migrationOptions);
@@ -70,7 +91,7 @@ test("DBHub migration preserves target order, literal credentials, unrelated dat
 });
 
 test("empty historical MySQL arrays are removed without creating an active development configuration", async () => {
-  await withOldSchema(async database => {
+  await withOldSchema(async (database) => {
     await insertDeployment(database, "dev", { mysql: [], archivedDevelopment: { branch: "historical" } });
     await migrate(database.db, migrationOptions);
     const [row] = (await state(database)).deployments;
@@ -91,29 +112,34 @@ const invalidConfigurations = [
   { mysql: [{ ...target, unexpected: "preserve unknown fields" }] },
   { mysql: [target, target] },
 ];
-for (const [index, config] of invalidConfigurations.entries()) test(`DBHub migration rejects invalid/conflicting historical configuration ${index} atomically and permits retry after explicit correction`, async () => {
-  await withOldSchema(async database => {
-    await insertDeployment(database, "prod", { mysql: [target] });
-    await insertDeployment(database, "test", config);
-    const before = await state(database);
-    await assert.rejects(migrate(database.db, migrationOptions), error => {
-      assert.doesNotMatch(String(error), /literal p@ss/);
-      return true;
+for (const [index, config] of invalidConfigurations.entries())
+  test(`DBHub migration rejects invalid/conflicting historical configuration ${index} atomically and permits retry after explicit correction`, async () => {
+    await withOldSchema(async (database) => {
+      await insertDeployment(database, "prod", { mysql: [target] });
+      await insertDeployment(database, "test", config);
+      const before = await state(database);
+      await assert.rejects(migrate(database.db, migrationOptions), (error) => {
+        assert.doesNotMatch(String(error), /literal p@ss/);
+        return true;
+      });
+      assert.deepEqual(await state(database), before);
+      assert.deepEqual((await database.client.execute("SELECT name FROM sqlite_master WHERE name = '__dbhub_migration_guard'")).rows, []);
+      await database.client.execute({ sql: "UPDATE service_deployments SET config = ? WHERE id = 'test'", args: [JSON.stringify({ mysql: [target] })] });
+      await migrate(database.db, migrationOptions);
+      assert.equal((await state(database)).services[0]!.revision, 4);
     });
-    assert.deepEqual(await state(database), before);
-    assert.deepEqual((await database.client.execute("SELECT name FROM sqlite_master WHERE name = '__dbhub_migration_guard'")).rows, []);
-    await database.client.execute({ sql: "UPDATE service_deployments SET config = ? WHERE id = 'test'", args: [JSON.stringify({ mysql: [target] })] });
-    await migrate(database.db, migrationOptions);
-    assert.equal((await state(database)).services[0]!.revision, 4);
   });
-});
 
-for (const cause of ["development-target", "historical-command"] as const) test(`DBHub migration preserves unsafe ${cause} for owner inspection`, async () => {
-  await withOldSchema(async database => {
-    await insertDeployment(database, cause === "development-target" ? "dev" : "prod", { mysql: [target] });
-    if (cause === "historical-command") await database.db.insert(mcpServices).values({ id: "mysql-historical", name: "Historical", url: "", transport: "stdio", deploymentId: "prod", enabled: true, stdio: { command: "/unknown/command", args: [], env: {} } });
-    const before = await state(database);
-    await assert.rejects(migrate(database.db, migrationOptions));
-    assert.deepEqual(await state(database), before);
+for (const cause of ["development-target", "historical-command"] as const)
+  test(`DBHub migration preserves unsafe ${cause} for owner inspection`, async () => {
+    await withOldSchema(async (database) => {
+      await insertDeployment(database, cause === "development-target" ? "dev" : "prod", { mysql: [target] });
+      if (cause === "historical-command")
+        await database.db
+          .insert(mcpServices)
+          .values({ id: "mysql-historical", name: "Historical", url: "", transport: "stdio", deploymentId: "prod", enabled: true, stdio: { command: "/unknown/command", args: [], env: {} } });
+      const before = await state(database);
+      await assert.rejects(migrate(database.db, migrationOptions));
+      assert.deepEqual(await state(database), before);
+    });
   });
-});

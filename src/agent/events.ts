@@ -4,7 +4,8 @@ import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type Session
 
 type ToolCompletionEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_end" }>;
 // Replay carries the SDK's persisted nested-call record alongside the tool result.
-type AgentWireEvent = Exclude<JsonAgentSessionEvent, ToolCompletionEvent>
+type AgentWireEvent =
+  | Exclude<JsonAgentSessionEvent, ToolCompletionEvent>
   | (ToolCompletionEvent & { result: ToolCompletionEvent["result"] & { nestedCalls?: NestedToolCalls } })
   | { type: "session_reset" }
   | { type: "issue_run_state"; state: AgentRunState }
@@ -58,7 +59,9 @@ export class AgentEventBus {
       listener(event);
       return true;
     } catch (error) {
-      try { this.onListenerError(error); } catch {
+      try {
+        this.onListenerError(error);
+      } catch {
         // Event observers cannot affect Agent execution or other observers.
       }
       return false;
@@ -109,7 +112,10 @@ export class AgentEventBus {
       return;
     }
     if (event.type === "message_end") {
-      this.replay.set(envelope.issueId, current.filter(({ event }) => event.type !== "message_start" && event.type !== "message_update"));
+      this.replay.set(
+        envelope.issueId,
+        current.filter(({ event }) => event.type !== "message_start" && event.type !== "message_update"),
+      );
       return;
     }
     if (event.type === "tool_execution_start") {
@@ -124,7 +130,10 @@ export class AgentEventBus {
     }
     if (event.type === "tool_execution_end") {
       const toolCallId = event.toolCallId;
-      this.replay.set(envelope.issueId, current.filter(({ event }) => !("toolCallId" in event) || event.toolCallId !== toolCallId));
+      this.replay.set(
+        envelope.issueId,
+        current.filter(({ event }) => !("toolCallId" in event) || event.toolCallId !== toolCallId),
+      );
       return;
     }
     if (event.type === "queue_update") {
@@ -139,7 +148,12 @@ export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string
   let pendingBytes = 0;
   let closed = false;
   let sink: RunEventListener | undefined;
-  const unsubscribe = () => { closed = true; pending = []; pendingBytes = 0; stop(); };
+  const unsubscribe = () => {
+    closed = true;
+    pending = [];
+    pendingBytes = 0;
+    stop();
+  };
   const buffer = (event: RunEvent) => {
     if (closed) return;
     if (budget) {
@@ -154,7 +168,12 @@ export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string
     }
     pending.push(event);
   };
-  const stop = bus.subscribe(issueId, event => { if (!closed) { if (sink) sink(event); else buffer(event); } });
+  const stop = bus.subscribe(issueId, (event) => {
+    if (!closed) {
+      if (sink) sink(event);
+      else buffer(event);
+    }
+  });
   return {
     activate(nextSink: RunEventListener): void {
       if (sink) throw new Error("agent_event_subscription_already_active");
@@ -188,7 +207,17 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
       if (entry.customType === "issue-pilot-user") {
         const customData = entry.data as { message?: unknown; images?: unknown } | undefined;
         if (typeof customData?.message === "string") {
-          const images = Array.isArray(customData.images) ? customData.images.filter((image): image is ImageContent => Boolean(image && typeof image === "object" && (image as { type?: unknown }).type === "image" && typeof (image as { data?: unknown }).data === "string" && typeof (image as { mimeType?: unknown }).mimeType === "string")) : [];
+          const images = Array.isArray(customData.images)
+            ? customData.images.filter((image): image is ImageContent =>
+                Boolean(
+                  image &&
+                    typeof image === "object" &&
+                    (image as { type?: unknown }).type === "image" &&
+                    typeof (image as { data?: unknown }).data === "string" &&
+                    typeof (image as { mimeType?: unknown }).mimeType === "string",
+                ),
+              )
+            : [];
           events.push({ id: entry.id, issueId, createdAt, event: { type: "issue_user", message: customData.message, ...(images.length ? { images } : {}) } });
         }
       }

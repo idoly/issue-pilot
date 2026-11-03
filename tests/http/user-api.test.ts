@@ -15,11 +15,16 @@ const bootstrapHeaders = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUs
 test("manages active users in SQLite without rewriting historical identities", async () => {
   const fixture = await createApiFixture();
   try {
-    const created = await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: {
-      subject: "operator@example.test",
-      name: "Operator",
-      email: "operator@example.test",
-    } });
+    const created = await fixture.app.inject({
+      method: "POST",
+      url: "/api/users",
+      headers: bootstrapHeaders,
+      payload: {
+        subject: "operator@example.test",
+        name: "Operator",
+        email: "operator@example.test",
+      },
+    });
     assert.equal(created.statusCode, 201, created.body);
     assert.deepEqual(await json(created), {
       revision: 0,
@@ -35,7 +40,10 @@ test("manages active users in SQLite without rewriting historical identities", a
     const activeResponse = await fixture.app.inject({ method: "GET", url: "/api/users" });
     const active = JSON.parse(activeResponse.body) as Array<{ subject: string }>;
     assert.equal(activeResponse.headers["cache-control"], "private, no-store");
-    assert.deepEqual(active.map((user) => user.subject), ["operator@example.test", issuePilotConfig.bootstrapUser.subject]);
+    assert.deepEqual(
+      active.map((user) => user.subject),
+      ["operator@example.test", issuePilotConfig.bootstrapUser.subject],
+    );
     const selected = await fixture.app.inject({ method: "GET", url: "/api/me", headers: { "x-issue-pilot-subject": "operator@example.test" } });
     assert.equal(selected.statusCode, 200);
     assert.equal(selected.headers["cache-control"], "private, no-store");
@@ -45,11 +53,16 @@ test("manages active users in SQLite without rewriting historical identities", a
     const issueKey = String((await json(issue)).id);
 
     fixture.engine.running.clear();
-    const disabled = await fixture.app.inject({ method: "PATCH", url: "/api/users/operator%40example.test", headers: bootstrapHeaders, payload: {
-      name: "Operations",
-      email: "operations@example.test",
-      active: false,
-    } });
+    const disabled = await fixture.app.inject({
+      method: "PATCH",
+      url: "/api/users/operator%40example.test",
+      headers: bootstrapHeaders,
+      payload: {
+        name: "Operations",
+        email: "operations@example.test",
+        active: false,
+      },
+    });
     assert.equal(disabled.statusCode, 200, disabled.body);
     assert.deepEqual(await json(disabled), {
       revision: 1,
@@ -66,7 +79,12 @@ test("manages active users in SQLite without rewriting historical identities", a
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issueKey}`, headers: bootstrapHeaders });
     assert.equal(detail.statusCode, 200);
     assert.equal((await json(detail)).assignee, "Operations");
-    const inactiveAssignment = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: bootstrapHeaders, payload: { ...issuePayload("alpha"), assigneeSubject: "operator@example.test" } });
+    const inactiveAssignment = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: bootstrapHeaders,
+      payload: { ...issuePayload("alpha"), assigneeSubject: "operator@example.test" },
+    });
     assert.equal(inactiveAssignment.statusCode, 400);
     assert.equal((await json(inactiveAssignment)).error, "invalid_subject");
 
@@ -74,16 +92,24 @@ test("manages active users in SQLite without rewriting historical identities", a
     assert.equal(managed.statusCode, 200);
     assert.equal(managed.headers["cache-control"], "private, no-store");
     const managedUsers = JSON.parse(managed.body) as Array<{ subject: string; active: boolean }>;
-    assert.deepEqual(managedUsers.map(({ subject, active }) => ({ subject, active })), [
-      { subject: issuePilotConfig.bootstrapUser.subject, active: true },
-      { subject: "operator@example.test", active: false },
-    ]);
+    assert.deepEqual(
+      managedUsers.map(({ subject, active }) => ({ subject, active })),
+      [
+        { subject: issuePilotConfig.bootstrapUser.subject, active: true },
+        { subject: "operator@example.test", active: false },
+      ],
+    );
 
-    const lastActive = await fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`, headers: bootstrapHeaders, payload: {
-      name: issuePilotConfig.bootstrapUser.name,
-      email: issuePilotConfig.bootstrapUser.email,
-      active: false,
-    } });
+    const lastActive = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`,
+      headers: bootstrapHeaders,
+      payload: {
+        name: issuePilotConfig.bootstrapUser.name,
+        email: issuePilotConfig.bootstrapUser.email,
+        active: false,
+      },
+    });
     assert.equal(lastActive.statusCode, 409);
     assert.equal((await json(lastActive)).error, "last_active_user");
   } finally {
@@ -94,25 +120,45 @@ test("manages active users in SQLite without rewriting historical identities", a
 test("patches only provided user fields without restoring stale profile values", async () => {
   const fixture = await createApiFixture();
   try {
-    const created = await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "partial-user", name: "Original", email: "original@example.test", role: "test" } });
+    const created = await fixture.app.inject({
+      method: "POST",
+      url: "/api/users",
+      headers: bootstrapHeaders,
+      payload: { subject: "partial-user", name: "Original", email: "original@example.test", role: "test" },
+    });
     assert.equal(created.statusCode, 201, created.body);
-    const patch = (payload: Record<string, unknown>, subject = "partial-user") => fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(subject)}`, headers: bootstrapHeaders, payload });
+    const patch = (payload: Record<string, unknown>, subject = "partial-user") =>
+      fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(subject)}`, headers: bootstrapHeaders, payload });
     assert.equal((await patch({ name: "Current", email: "current@example.test", role: "developer", active: true })).statusCode, 200);
     const disabled = await patch({ active: false });
     assert.equal(disabled.statusCode, 200, disabled.body);
     const values = await json(disabled);
-    assert.equal(values.name, "Current"); assert.equal(values.email, "current@example.test"); assert.equal(values.role, "developer"); assert.equal(values.active, false);
+    assert.equal(values.name, "Current");
+    assert.equal(values.email, "current@example.test");
+    assert.equal(values.role, "developer");
+    assert.equal(values.active, false);
     const renamed = await patch({ name: "Renamed" });
     assert.equal(renamed.statusCode, 200, renamed.body);
     const renamedValues = await json(renamed);
-    assert.equal(renamedValues.name, "Renamed"); assert.equal(renamedValues.email, "current@example.test"); assert.equal(renamedValues.role, "developer"); assert.equal(renamedValues.active, false);
-    for (const [payload, error] of [[{ active: false }, "last_active_user"], [{ role: "product" }, "last_active_developer"], [{ isAdmin: false }, "last_active_admin"]] as const) {
+    assert.equal(renamedValues.name, "Renamed");
+    assert.equal(renamedValues.email, "current@example.test");
+    assert.equal(renamedValues.role, "developer");
+    assert.equal(renamedValues.active, false);
+    for (const [payload, error] of [
+      [{ active: false }, "last_active_user"],
+      [{ role: "product" }, "last_active_developer"],
+      [{ isAdmin: false }, "last_active_admin"],
+    ] as const) {
       const protectedUser = await patch(payload, issuePilotConfig.bootstrapUser.subject);
-      assert.equal(protectedUser.statusCode, 409, protectedUser.body); assert.equal((await json(protectedUser)).error, error);
+      assert.equal(protectedUser.statusCode, 409, protectedUser.body);
+      assert.equal((await json(protectedUser)).error, error);
     }
     const empty = await patch({});
-    assert.equal(empty.statusCode, 400, empty.body); assert.equal((await json(empty)).error, "invalid_user_update");
-  } finally { await fixture.cleanup(); }
+    assert.equal(empty.statusCode, 400, empty.body);
+    assert.equal((await json(empty)).error, "invalid_user_update");
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("validates provided user fields before closing their Issue sessions", async () => {
@@ -120,13 +166,21 @@ test("validates provided user fields before closing their Issue sessions", async
   try {
     await createService(fixture.app, "Patch validation");
     const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: bootstrapHeaders, payload: issuePayload("patch-validation") });
-    assert.equal(created.statusCode, 201, created.body); fixture.engine.running.clear();
+    assert.equal(created.statusCode, 201, created.body);
+    fixture.engine.running.clear();
     for (const invalid of [{ role: "unsupported" }, { isAdmin: "true" }]) {
-      const response = await fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`, headers: bootstrapHeaders, payload: { name: issuePilotConfig.bootstrapUser.name, email: issuePilotConfig.bootstrapUser.email, active: true, ...invalid } });
+      const response = await fixture.app.inject({
+        method: "PATCH",
+        url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`,
+        headers: bootstrapHeaders,
+        payload: { name: issuePilotConfig.bootstrapUser.name, email: issuePilotConfig.bootstrapUser.email, active: true, ...invalid },
+      });
       assert.equal(response.statusCode, 400, response.body);
       assert.deepEqual(fixture.engine.closedSessions, []);
     }
-  } finally { await fixture.cleanup(); }
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("rejects a user change when the actor loses the developer role while queued", { timeout: 10_000 }, async () => {
@@ -135,9 +189,23 @@ test("rejects a user change when the actor loses the developer role while queued
   const app = Fastify();
   let release!: () => void;
   let entered!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const waiting = new Promise<void>((resolve) => { entered = resolve; });
-  registerUserRoutes({ app, database, engine: fixture.engine, modelCatalog, runScopeExclusive: async operation => { entered(); await gate; return operation(); } });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  registerUserRoutes({
+    app,
+    database,
+    engine: fixture.engine,
+    modelCatalog,
+    runScopeExclusive: async (operation) => {
+      entered();
+      await gate;
+      return operation();
+    },
+  });
   app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });
@@ -145,7 +213,9 @@ test("rejects a user change when the actor loses the developer role while queued
     const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: bootstrapHeaders, payload: { ...issuePayload("queued-auth"), assigneeSubject: "other-developer" } });
     assert.equal(created.statusCode, 201, created.body);
     fixture.engine.running.clear();
-    const response = app.inject({ method: "PATCH", url: "/api/users/other-developer", headers: bootstrapHeaders, payload: { name: "Changed", email: "other@example.test", active: true } }).then(result => result);
+    const response = app
+      .inject({ method: "PATCH", url: "/api/users/other-developer", headers: bootstrapHeaders, payload: { name: "Changed", email: "other@example.test", active: true } })
+      .then((result) => result);
     await waiting;
     // Simulate the earlier scope operation committing a role change before this request acquires it.
     await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, issuePilotConfig.bootstrapUser.subject));

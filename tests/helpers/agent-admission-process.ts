@@ -11,7 +11,5 @@ const engine = new AgentEngine(database.db, root);
 (engine as unknown as { run(): Promise<void> }).run = async () => {
   await new Promise<void>(() => {});
 };
-await engine.send(issueId, "Keep this accepted input after a crash", undefined, [
-  { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
-]);
+await engine.send(issueId, "Keep this accepted input after a crash", undefined, [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
 process.send({ type: "accepted" });

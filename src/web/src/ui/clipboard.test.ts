@@ -3,10 +3,14 @@ import { copyText } from "./clipboard";
 
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalCopy = Object.getOwnPropertyDescriptor(document, "execCommand");
-beforeEach(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }); });
+beforeEach(() => {
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+});
 afterEach(() => {
-  if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard); else Reflect.deleteProperty(navigator, "clipboard");
-  if (originalCopy) Object.defineProperty(document, "execCommand", originalCopy); else Reflect.deleteProperty(document, "execCommand");
+  if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+  else Reflect.deleteProperty(navigator, "clipboard");
+  if (originalCopy) Object.defineProperty(document, "execCommand", originalCopy);
+  else Reflect.deleteProperty(document, "execCommand");
   document.body.replaceChildren();
 });
 
@@ -18,8 +22,13 @@ describe("browser clipboard", () => {
     expect(writeText).toHaveBeenCalledWith("提交信息");
   });
   it("copies on HTTP and restores focus without leaving temporary elements", async () => {
-    const button = document.createElement("button"); document.body.append(button); button.focus();
-    const copy = vi.fn(() => { expect((document.activeElement as HTMLTextAreaElement).value).toBe("提交信息"); return true; });
+    const button = document.createElement("button");
+    document.body.append(button);
+    button.focus();
+    const copy = vi.fn(() => {
+      expect((document.activeElement as HTMLTextAreaElement).value).toBe("提交信息");
+      return true;
+    });
     Object.defineProperty(document, "execCommand", { configurable: true, value: copy });
     await copyText("提交信息");
     expect(copy).toHaveBeenCalledWith("copy");

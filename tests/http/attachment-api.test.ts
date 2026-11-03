@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, readFile, readdir, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises, { chmod, readFile, readdir, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { Readable } from "node:stream";
 import path from "node:path";
 import { test } from "node:test";
 import { parse as parseDisposition } from "content-disposition";
@@ -10,42 +13,58 @@ import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createService, issuePayload, json } from "./fixture.ts";
 
 function issueMultipart(boundary: string, issue: Record<string, unknown>, fileName: string, content: string): Buffer {
-  return Buffer.from([
-    `--${boundary}`,
-    'Content-Disposition: form-data; name="issue"',
-    "",
-    JSON.stringify(issue),
-    `--${boundary}`,
-    `Content-Disposition: form-data; name="files"; filename="${fileName}"`,
-    "Content-Type: text/plain",
-    "",
-    content,
-    `--${boundary}--`,
-    "",
-  ].join("\r\n"));
+  return Buffer.from(
+    [
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="issue"',
+      "",
+      JSON.stringify(issue),
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="files"; filename="${fileName}"`,
+      "Content-Type: text/plain",
+      "",
+      content,
+      `--${boundary}--`,
+      "",
+    ].join("\r\n"),
+  );
 }
 
-for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt", "预算 '()*%.txt"]) test(`preserves attachment names, filesystem limits and valid disposition (${Buffer.byteLength(fileName)} UTF-8 bytes)`, async () => {
-  const fixture = await createApiFixture();
-  try {
-    await createService(fixture.app, "Long names");
-    const boundary = "long-attachment-name", content = "long filename evidence";
-    const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: issueMultipart(boundary, issuePayload("long-names"), fileName, content) });
-    assert.equal(created.statusCode, 201, created.body);
-    const issue = await json(created);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(response => response.json<{ attachments: Array<{ id: string; fileName: string }> }>());
-    assert.equal(detail.attachments[0]!.fileName, fileName);
-    const root = issueRoot(fixture.root, String(issue.id)), files = await readdir(root);
-    assert.equal(files.length, 1); assert.ok(Buffer.byteLength(files[0]!) <= 255); assert.equal(path.extname(files[0]!), ".txt"); assert.ok(!files[0]!.includes("\ufffd"));
-    const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${detail.attachments[0]!.id}` });
-    assert.equal(download.statusCode, 200, download.body); assert.equal(download.body, content);
-    const header = String(download.headers["content-disposition"]);
-    assert.equal(parseDisposition(header).type, "inline");
-    assert.equal(parseDisposition(header).parameters.filename, fileName);
-    const encoded = /filename\*=UTF-8''([^;]+)/.exec(header);
-    if (encoded) assert.match(encoded[1]!, /^(?:[A-Za-z0-9!#$&+.^_`|~-]|%[0-9a-f]{2})*$/i);
-  } finally { await fixture.cleanup(); }
-});
+for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt", "预算 '()*%.txt"])
+  test(`preserves attachment names, filesystem limits and valid disposition (${Buffer.byteLength(fileName)} UTF-8 bytes)`, async () => {
+    const fixture = await createApiFixture();
+    try {
+      await createService(fixture.app, "Long names");
+      const boundary = "long-attachment-name",
+        content = "long filename evidence";
+      const created = await fixture.app.inject({
+        method: "POST",
+        url: "/api/issues",
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+        payload: issueMultipart(boundary, issuePayload("long-names"), fileName, content),
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const issue = await json(created);
+      const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => response.json<{ attachments: Array<{ id: string; fileName: string }> }>());
+      assert.equal(detail.attachments[0]!.fileName, fileName);
+      const root = issueRoot(fixture.root, String(issue.id)),
+        files = await readdir(root);
+      assert.equal(files.length, 1);
+      assert.ok(Buffer.byteLength(files[0]!) <= 255);
+      assert.equal(path.extname(files[0]!), ".txt");
+      assert.ok(!files[0]!.includes("\ufffd"));
+      const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${detail.attachments[0]!.id}` });
+      assert.equal(download.statusCode, 200, download.body);
+      assert.equal(download.body, content);
+      const header = String(download.headers["content-disposition"]);
+      assert.equal(parseDisposition(header).type, "inline");
+      assert.equal(parseDisposition(header).parameters.filename, fileName);
+      const encoded = /filename\*=UTF-8''([^;]+)/.exec(header);
+      if (encoded) assert.match(encoded[1]!, /^(?:[A-Za-z0-9!#$&+.^_`|~-]|%[0-9a-f]{2})*$/i);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
 test("creates initial attachments atomically and rolls back the claimed Issue root", async () => {
   const fixture = await createApiFixture();
@@ -67,15 +86,25 @@ test("creates initial attachments atomically and rolls back the claimed Issue ro
     const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: body });
     assert.equal(created.statusCode, 201, created.body);
     const issue = await json(created);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string; fileName: string; sha256: string }> };
-    assert.deepEqual(detail.attachments.map(({ fileName }) => fileName), ["initial.txt"]);
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as {
+      attachments: Array<{ id: string; fileName: string; sha256: string }>;
+    };
+    assert.deepEqual(
+      detail.attachments.map(({ fileName }) => fileName),
+      ["initial.txt"],
+    );
     assert.equal(detail.attachments[0]!.sha256, createHash("sha256").update("initial evidence").digest("hex"));
     assert.equal("workingFileName" in detail.attachments[0]!, false);
     const saved = openDatabase(fixture.databaseFile);
     try {
       const result = await saved.client.execute("SELECT working_file_name FROM issue_attachments");
-      assert.deepEqual(result.rows.map(row => row.working_file_name), [null]);
-    } finally { await saved.close(); }
+      assert.deepEqual(
+        result.rows.map((row) => row.working_file_name),
+        [null],
+      );
+    } finally {
+      await saved.close();
+    }
     const files = await readdir(issueRoot(fixture.root, String(issue.id)));
     assert.equal(files.length, 1);
   } finally {
@@ -88,20 +117,33 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
   try {
     await createService(fixture.app, "Alpha");
     const createBoundary = "create-attachment";
-    const create = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${createBoundary}` }, payload: issueMultipart(createBoundary, issuePayload("alpha"), "initial.txt", "initial evidence") });
+    const create = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${createBoundary}` },
+      payload: issueMultipart(createBoundary, issuePayload("alpha"), "initial.txt", "initial evidence"),
+    });
     const issue = await json(create);
     const issueId = fixture.engine.enqueued.at(-1)!;
     fixture.engine.running.delete(issueId);
-    const created = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string }> };
+    const created = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { attachments: Array<{ id: string }> };
     const edit = { title: "Updated", description: "Atomic edit", priority: "p2", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] };
     const boundary = "replace-attachment";
-    const updated = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: issueMultipart(boundary, edit, "replacement.txt", "replacement evidence") });
+    const updated = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: issueMultipart(boundary, edit, "replacement.txt", "replacement evidence"),
+    });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.match(fixture.engine.messages.at(-1) ?? "", /replacement\.txt/);
     assert.doesNotMatch(fixture.engine.messages.at(-1) ?? "", /initial\.txt/);
     fixture.engine.running.delete(issueId);
 
-    const current = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { title: string; attachments: Array<{ id: string; fileName: string }> };
+    const current = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as {
+      title: string;
+      attachments: Array<{ id: string; fileName: string }>;
+    };
     const failingDatabase = openDatabase(fixture.databaseFile);
     await failingDatabase.client.execute("CREATE TRIGGER fail_atomic_attachment_insert BEFORE INSERT ON issue_attachments BEGIN SELECT RAISE(ABORT, 'simulated_atomic_edit_failure'); END");
     const failedBoundary = "failed-replacement";
@@ -114,9 +156,15 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
     assert.equal(failed.statusCode, 500);
     await failingDatabase.client.execute("DROP TRIGGER fail_atomic_attachment_insert");
     await failingDatabase.close();
-    const after = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { title: string; attachments: Array<{ fileName: string }> };
+    const after = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as {
+      title: string;
+      attachments: Array<{ fileName: string }>;
+    };
     assert.equal(after.title, "Updated");
-    assert.deepEqual(after.attachments.map(({ fileName }) => fileName), ["replacement.txt"]);
+    assert.deepEqual(
+      after.attachments.map(({ fileName }) => fileName),
+      ["replacement.txt"],
+    );
     const attachmentRoot = issueRoot(fixture.root, String(issue.id));
     const files = await readdir(attachmentRoot);
     assert.equal(files.length, 1);
@@ -131,9 +179,14 @@ test("serves only verified attachment files and exposes no independent write rou
   try {
     await createService(fixture.app, "Alpha");
     const boundary = "download-attachment";
-    const created = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: issueMultipart(boundary, issuePayload("alpha"), "evidence.txt", "evidence") });
+    const created = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: issueMultipart(boundary, issuePayload("alpha"), "evidence.txt", "evidence"),
+    });
     const issue = await json(created);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body)) as { attachments: Array<{ id: string }> };
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { attachments: Array<{ id: string }> };
     const attachmentId = detail.attachments[0]!.id;
     const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${attachmentId}` });
     assert.equal(download.statusCode, 200);
@@ -170,14 +223,196 @@ test("streams Issue attachments larger than the former application limit", async
       url: `/api/issues/${issue.id}`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload: Buffer.concat([
-        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="issue"\r\n\r\n${JSON.stringify(edit)}\r\n--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="oversized.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="issue"\r\n\r\n${JSON.stringify(edit)}\r\n--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="oversized.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+        ),
         Buffer.alloc(20 * 1024 * 1024 + 1),
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ]),
     });
     assert.equal(response.statusCode, 200, response.body);
-    const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((current) => JSON.parse(current.body)) as { attachments: Array<{ fileName: string; size: number }> };
-    assert.deepEqual(detail.attachments.map(({ fileName, size }) => ({ fileName, size })), [{ fileName: "oversized.bin", size: 20 * 1024 * 1024 + 1 }]);
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((current) => JSON.parse(current.body))) as {
+      attachments: Array<{ fileName: string; size: number }>;
+    };
+    assert.deepEqual(
+      detail.attachments.map(({ fileName, size }) => ({ fileName, size })),
+      [{ fileName: "oversized.bin", size: 20 * 1024 * 1024 + 1 }],
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a committed edit stays successful and enqueues the update when quarantine cleanup fails", async (context) => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha");
+    const createBoundary = "create-attachment";
+    const create = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${createBoundary}` },
+      payload: issueMultipart(createBoundary, issuePayload("alpha"), "initial.txt", "initial evidence"),
+    });
+    const issue = await json(create);
+    fixture.engine.running.delete(fixture.engine.enqueued.at(-1)!);
+    const created = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { attachments: Array<{ id: string }> };
+    const remove = fsPromises.rm;
+    context.mock.method(fsPromises, "rm", async (target: string, options?: Parameters<typeof remove>[1]) => {
+      if (String(target).endsWith(".deleting")) throw Object.assign(new Error("simulated_remove_failure"), { code: "EIO" });
+      return remove(target, options);
+    });
+    syncBuiltinESMExports();
+    const messages = fixture.engine.messages.length;
+    const updated = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      payload: { title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] },
+    });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.equal(fixture.engine.messages.length, messages + 1);
+    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { title: string; attachments: unknown[] };
+    assert.equal(detail.title, "Updated");
+    assert.deepEqual(detail.attachments, []);
+    // The quarantined original is retained for operator cleanup rather than silently lost.
+    assert.equal((await readdir(issueRoot(fixture.root, String(issue.id)))).filter((name) => name.endsWith(".deleting")).length, 1);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await fixture.cleanup();
+  }
+});
+
+test("attachment copies run before the Issue write transaction so other writers are not blocked", async (context) => {
+  const fixture = await createApiFixture();
+  const other = openDatabase(fixture.databaseFile);
+  try {
+    await createService(fixture.app, "Alpha");
+    const copyStream = fs.createReadStream;
+    let concurrentWrite: Promise<unknown> | undefined;
+    context.mock.method(fs, "createReadStream", (...args: Parameters<typeof copyStream>) => {
+      // A writer on another connection must complete while the upload is being copied.
+      // The copy waits for it, so copying under the Issue write lock would stall until SQLITE_BUSY.
+      concurrentWrite ??= other.client.execute({ sql: "UPDATE subjects SET display_name = display_name WHERE subject = ?", args: ["nobody"] });
+      const write = concurrentWrite;
+      return Readable.from(
+        (async function* () {
+          await write;
+          yield* copyStream(...args);
+        })(),
+      ) as ReturnType<typeof copyStream>;
+    });
+    syncBuiltinESMExports();
+    const boundary = "concurrent-copy";
+    const create = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: issueMultipart(boundary, issuePayload("alpha"), "evidence.txt", "copied evidence"),
+    });
+    assert.equal(create.statusCode, 201, create.body);
+    assert.ok(concurrentWrite);
+    // Under the old ordering (copy inside the write transaction) this writer deadlocks until SQLITE_BUSY
+    // and the request fails; reaching 201 with the write completed proves the copy ran outside the transaction.
+    await concurrentWrite;
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await other.close();
+    await fixture.cleanup();
+  }
+});
+
+test("a committed Issue stays created when removing its upload staging directory fails", async (context) => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha");
+    const remove = fsPromises.rm;
+    context.mock.method(fsPromises, "rm", async (target: string, options?: Parameters<typeof remove>[1]) => {
+      if (path.basename(String(target)).startsWith("issue-pilot-attachment-")) throw Object.assign(new Error("simulated_staging_remove_failure"), { code: "EBUSY" });
+      return remove(target, options);
+    });
+    syncBuiltinESMExports();
+    const boundary = "staging-cleanup";
+    const create = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: issueMultipart(boundary, issuePayload("alpha"), "evidence.txt", "staged evidence"),
+    });
+    assert.equal(create.statusCode, 201, create.body);
+    const listed = (await fixture.app.inject({ method: "GET", url: "/api/issues" })).json() as unknown[];
+    assert.equal(listed.length, 1);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await fixture.cleanup();
+  }
+});
+
+test("an attachment edit closes the Issue session before any original is written into the sandbox-writable root", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha");
+    const create = await fixture.app.inject({ method: "POST", url: "/api/issues", payload: issuePayload("alpha") });
+    const issue = await json(create);
+    const issueId = fixture.engine.enqueued.at(-1)!;
+    fixture.engine.running.delete(issueId);
+    const root = issueRoot(fixture.root, String(issue.id));
+    let originalsAtClose: string[] | undefined;
+    // Sandbox deny lists are built when a session starts; files written while one is alive would stay writable to it.
+    fixture.engine.closeSessionHook = async () => {
+      originalsAtClose = (await readdir(root).catch(() => [])).filter((name) => name.startsWith(".attachment-"));
+    };
+    const boundary = "close-before-write";
+    const updated = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: issueMultipart(boundary, { title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [] }, "late.txt", "late evidence"),
+    });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.deepEqual(originalsAtClose, []);
+    assert.equal((await readdir(root)).filter((name) => name.startsWith(".attachment-")).length, 1);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("malformed multipart bodies and a file part without a filename are client errors", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Alpha");
+    const noBoundary = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": "multipart/form-data" }, payload: "x" });
+    assert.equal(noBoundary.statusCode, 400, noBoundary.body);
+    assert.equal(JSON.parse(noBoundary.body).error, "invalid_multipart");
+    const truncated = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: { "content-type": "multipart/form-data; boundary=abc" },
+      payload: '--abc\r\nContent-Disposition: form-data; name="issue"\r\n\r\n{}\r\n',
+    });
+    assert.equal(truncated.statusCode, 400, truncated.body);
+    assert.equal(JSON.parse(truncated.body).error, "invalid_multipart");
+    const boundary = "no-filename";
+    const withoutName = Buffer.from(
+      [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="issue"',
+        "",
+        JSON.stringify(issuePayload("alpha")),
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="files"',
+        "Content-Type: application/octet-stream",
+        "",
+        "bytes",
+        `--${boundary}--`,
+        "",
+      ].join("\r\n"),
+    );
+    const unnamed = await fixture.app.inject({ method: "POST", url: "/api/issues", headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: withoutName });
+    assert.equal(unnamed.statusCode, 400, unnamed.body);
+    assert.equal(JSON.parse(unnamed.body).error, "invalid_attachment_name");
   } finally {
     await fixture.cleanup();
   }

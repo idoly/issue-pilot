@@ -9,10 +9,12 @@ test("enables codemode by default and persists all global modes through the exis
   try {
     const initial = await f.app.inject({ method: "GET", url: "/api/config" });
     assert.equal(initial.json().agent.codemode, "on");
-    await createService(f.app, "Codemode"); await createIssue(f.app, "codemode");
+    await createService(f.app, "Codemode");
+    await createIssue(f.app, "codemode");
     const id = f.engine.enqueued[0]!;
     const blocked = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode: "only" } });
-    assert.equal(blocked.statusCode, 409); assert.equal(blocked.json().error, "global_configuration_has_running_issues");
+    assert.equal(blocked.statusCode, 409);
+    assert.equal(blocked.json().error, "global_configuration_has_running_issues");
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).json().agent.codemode, "on");
     f.engine.running.clear();
     for (const codemode of ["off", "on", "only"]) {
@@ -27,5 +29,7 @@ test("enables codemode by default and persists all global modes through the exis
       assert.equal(invalid.json().error, "invalid_agent_codemode");
     }
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).json().agent.codemode, "only");
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });

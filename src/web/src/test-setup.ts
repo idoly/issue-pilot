@@ -1,7 +1,11 @@
 import { beforeEach, vi } from "vitest";
+import { clearAgentDrafts } from "./app/agent-drafts";
 import { resetMonacoTestState } from "./test-monaco";
 vi.mock("./app/monaco", async () => (await import("./test-monaco")).monacoMock);
-beforeEach(resetMonacoTestState);
+beforeEach(() => {
+  resetMonacoTestState();
+  clearAgentDrafts();
+});
 
 class ResizeObserverMock implements ResizeObserver {
   observe(): void {}
@@ -35,8 +39,11 @@ Object.defineProperty(window, "matchMedia", {
   configurable: true,
   value(query: string): MediaQueryList {
     return Object.assign(new EventTarget(), {
-      media: query, matches: false, onchange: null,
-      addListener() {}, removeListener() {},
+      media: query,
+      matches: false,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
     }) as MediaQueryList;
   },
 });

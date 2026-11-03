@@ -24,7 +24,9 @@ export async function readMultipartAttachment(part: MultipartFile): Promise<Pend
     yield* part.file;
     if (part.file.truncated) throw new Error("attachment_stream_truncated");
   }
-  return stageAttachment(path.basename(part.filename), part.mimetype, chunks());
+  // A file part without a filename is client input, not a server fault.
+  const fileName = typeof part.filename === "string" ? part.filename : "";
+  return stageAttachment(path.basename(fileName), part.mimetype, chunks());
 }
 
 export async function stageAttachment(fileName: string, mediaType: string, chunks: AsyncIterable<Uint8Array>): Promise<PendingAttachment> {
@@ -46,8 +48,16 @@ export async function stageAttachment(fileName: string, mediaType: string, chunk
     return { fileName, mediaType, temporaryPath, size, sha256: sha256.digest("hex") };
   } catch (error) {
     const failures: unknown[] = [error];
-    try { await handle?.close(); } catch (failure) { if (!failures.includes(failure)) failures.push(failure); }
-    try { await rm(stagingRoot, { recursive: true, force: true }); } catch (failure) { failures.push(failure); }
+    try {
+      await handle?.close();
+    } catch (failure) {
+      if (!failures.includes(failure)) failures.push(failure);
+    }
+    try {
+      await rm(stagingRoot, { recursive: true, force: true });
+    } catch (failure) {
+      failures.push(failure);
+    }
     if (failures.length > 1) throw new AggregateError(failures, "attachment_staging_cleanup_failed");
     throw error;
   }
@@ -55,8 +65,8 @@ export async function stageAttachment(fileName: string, mediaType: string, chunk
 
 export async function removePendingAttachments(pendingAttachments: PendingAttachment[], primaryFailures: readonly unknown[] = []): Promise<void> {
   const stagingRoots = [...new Set(pendingAttachments.map(({ temporaryPath }) => path.dirname(temporaryPath)))];
-  const results = await Promise.allSettled(stagingRoots.map(stagingRoot => rm(stagingRoot, { recursive: true, force: true })));
-  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+  const results = await Promise.allSettled(stagingRoots.map((stagingRoot) => rm(stagingRoot, { recursive: true, force: true })));
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => result.reason);
   if (failures.length) throw new AggregateError([...primaryFailures, ...failures], "attachment_staging_cleanup_failed");
 }
 
@@ -72,13 +82,7 @@ export async function resolveSecureAttachmentFile(attachmentRoot: string, object
   return attachmentPath;
 }
 
-export async function openVerifiedAttachmentFile(
-  attachmentRoot: string,
-  objectKey: string,
-  size: number,
-  sha256: string,
-  signal?: AbortSignal,
-): Promise<FileHandle> {
+export async function openVerifiedAttachmentFile(attachmentRoot: string, objectKey: string, size: number, sha256: string, signal?: AbortSignal): Promise<FileHandle> {
   signal?.throwIfAborted();
   const file = await resolveSecureAttachmentFile(attachmentRoot, objectKey, size);
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -98,26 +102,26 @@ export async function openVerifiedAttachmentFile(
     if (position !== size || hash.digest("hex") !== sha256) throw new Error("attachment_integrity_check_failed");
     return handle;
   } catch (error) {
-    try { await handle.close(); }
-    catch (cleanup) { throw new AggregateError([error, cleanup], "attachment_read_cleanup_failed"); }
+    try {
+      await handle.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "attachment_read_cleanup_failed");
+    }
     throw error;
   }
 }
 
-export async function openVerifiedAttachmentStream(
-  attachmentRoot: string,
-  objectKey: string,
-  size: number,
-  sha256: string,
-  signal?: AbortSignal,
-): Promise<ReadStream> {
+export async function openVerifiedAttachmentStream(attachmentRoot: string, objectKey: string, size: number, sha256: string, signal?: AbortSignal): Promise<ReadStream> {
   const handle = await openVerifiedAttachmentFile(attachmentRoot, objectKey, size, sha256, signal);
   try {
     // Reuse the verified descriptor rather than reopening a replaceable path.
     return handle.createReadStream({ start: 0, autoClose: true, ...(signal ? { signal } : {}) });
   } catch (error) {
-    try { await handle.close(); }
-    catch (cleanup) { throw new AggregateError([error, cleanup], "attachment_read_cleanup_failed"); }
+    try {
+      await handle.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "attachment_read_cleanup_failed");
+    }
     throw error;
   }
 }
@@ -144,18 +148,26 @@ export interface QuarantinedAttachment {
 export async function restoreQuarantinedAttachments(quarantined: QuarantinedAttachment[]): Promise<void> {
   const failures: unknown[] = [];
   for (const { sourcePath, temporaryPath } of [...quarantined].reverse()) {
-    try { await rename(temporaryPath, sourcePath); }
-    catch (error) { failures.push(error); }
+    try {
+      await rename(temporaryPath, sourcePath);
+    } catch (error) {
+      failures.push(error);
+    }
   }
   if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
 export async function removeWrittenAttachments(objectKeys: string[]): Promise<void> {
   const failures: unknown[] = [];
-  await Promise.all(objectKeys.map(async (objectKey) => {
-    try { await rm(objectKey, { force: true }); }
-    catch (error) { failures.push(error); }
-  }));
+  await Promise.all(
+    objectKeys.map(async (objectKey) => {
+      try {
+        await rm(objectKey, { force: true });
+      } catch (error) {
+        failures.push(error);
+      }
+    }),
+  );
   if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
@@ -164,9 +176,15 @@ export async function finalizeQuarantinedAttachments(
   remove: (candidate: string) => Promise<void> = (candidate) => rm(candidate, { force: true }),
 ): Promise<void> {
   const failures: unknown[] = [];
-  await Promise.all(quarantined.map(async ({ temporaryPath }) => {
-    try { await remove(temporaryPath); } catch (error) { failures.push(error); }
-  }));
+  await Promise.all(
+    quarantined.map(async ({ temporaryPath }) => {
+      try {
+        await remove(temporaryPath);
+      } catch (error) {
+        failures.push(error);
+      }
+    }),
+  );
   if (failures.length) throw new Error("attachment_finalize_failed", { cause: new AggregateError(failures, "attachment_finalize_failed") });
 }
 
@@ -182,23 +200,22 @@ function attachmentObjectName(fileName: string): string {
   return `${prefix}${name}${extension}`;
 }
 
-export async function writePendingAttachments(
-  executor: AttachmentWriter,
-  stateRoot: string,
-  issue: { id: string; key: string },
-  uploadedBy: string,
-  pendingAttachments: PendingAttachment[],
-  writtenObjectKeys: string[],
-): Promise<Array<ReturnType<typeof serializeAttachment>>> {
+export interface CopiedAttachment {
+  pending: PendingAttachment;
+  objectKey: string;
+}
+
+/** Copy uploads into the Issue root before its database transaction so a large copy never holds the SQLite write lock. */
+export async function copyPendingAttachments(stateRoot: string, issueKey: string, pendingAttachments: PendingAttachment[], writtenObjectKeys: string[]): Promise<CopiedAttachment[]> {
   if (!pendingAttachments.length) return [];
-  const attachmentRoot = issueRoot(stateRoot, issue.key);
+  const attachmentRoot = issueRoot(stateRoot, issueKey);
   await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
   await Promise.all([chmod(path.dirname(attachmentRoot), 0o700), chmod(attachmentRoot, 0o700)]);
-  const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
+  const copied: CopiedAttachment[] = [];
   for (const pendingAttachment of pendingAttachments) {
     const objectKey = path.join(attachmentRoot, attachmentObjectName(pendingAttachment.fileName));
     const handle = await open(objectKey, "wx", 0o600);
-    // Register only paths exclusively created by this transaction, including partial copies.
+    // Register only paths exclusively created by this operation, including partial copies.
     writtenObjectKeys.push(objectKey);
     let failed = false;
     let failure: unknown;
@@ -212,13 +229,36 @@ export async function writePendingAttachments(
       failure = error;
       throw error;
     } finally {
-      try { await handle.close(); }
-      catch (error) {
+      try {
+        await handle.close();
+      } catch (error) {
+        // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
         if (failed) throw new AggregateError([failure, error], "attachment_copy_cleanup_failed");
+        // biome-ignore lint/correctness/noUnsafeFinally: reached only when the copy succeeded; the close failure is the sole error.
         throw error;
       }
     }
-    const [attachment] = await executor.insert(issueAttachments).values({ issueId: issue.id, fileName: pendingAttachment.fileName, mediaType: pendingAttachment.mediaType, size: pendingAttachment.size, objectKey, sha256: pendingAttachment.sha256, uploadedBy }).returning();
+    copied.push({ pending: pendingAttachment, objectKey });
+  }
+  return copied;
+}
+
+/** Register copied originals inside the Issue transaction; the caller removes writtenObjectKeys if it rolls back. */
+export async function insertCopiedAttachments(executor: AttachmentWriter, issueId: string, uploadedBy: string, copied: CopiedAttachment[]): Promise<Array<ReturnType<typeof serializeAttachment>>> {
+  const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
+  for (const { pending, objectKey } of copied) {
+    const [attachment] = await executor
+      .insert(issueAttachments)
+      .values({
+        issueId,
+        fileName: pending.fileName,
+        mediaType: pending.mediaType,
+        size: pending.size,
+        objectKey,
+        sha256: pending.sha256,
+        uploadedBy,
+      })
+      .returning();
     createdAttachments.push(serializeAttachment(attachment!));
   }
   return createdAttachments;
