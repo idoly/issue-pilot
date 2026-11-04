@@ -1893,10 +1893,6 @@ summary.agent-tool-head > svg {
   font-synthesis: none;
   scrollbar-width: none;
 }
-.agent-composer:focus-within {
-  box-shadow: 0 0 0 2px #176b5b;
-}
-
 .agent-composer textarea::placeholder {
   color: var(--agent-dim);
 }
