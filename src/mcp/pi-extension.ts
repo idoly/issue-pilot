@@ -7,6 +7,7 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { compile } from "@earendil-works/pi-schema";
 import { formats } from "@earendil-works/pi-schema/formats";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import type { AgentCodemodeMode } from "../domain/contracts.ts";
 import { generatedWorkFileSaver } from "../workspace/work-files.ts";
 import { createMcpTransport, type McpConfiguration, type McpTool } from "./client.ts";
@@ -30,7 +31,7 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
         config: {
           ...(configuration.transport === "stdio" ? configuration.stdio! : { url: configuration.url, headers: { Authorization: configuration.authorization } }),
           exposure,
-          timeout: limits.mcp.executionMs / 1000,
+          timeout: applicationParameters().mcpExecutionMs / 1000,
           description: configuration.name,
         },
       })),
@@ -104,7 +105,7 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
       transport.onclose = onClose;
       return {
         async start() {
-          const signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(limits.mcp.executionMs)]);
+          const signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(applicationParameters().mcpExecutionMs)]);
           let cancellation: ReturnType<typeof addAbortListener> | undefined;
           try {
             signal.throwIfAborted();

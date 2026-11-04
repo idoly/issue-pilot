@@ -484,6 +484,13 @@
       "when": 1793640000000,
       "tag": "0068_dbhub_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "6",
+      "when": 1793726400000,
+      "tag": "0069_application_parameters",
+      "breakpoints": true
     }
   ]
 }

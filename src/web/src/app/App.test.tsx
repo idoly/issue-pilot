@@ -1034,7 +1034,7 @@ describe("issue pilot workspace", () => {
     const copy = vi.spyOn(clipboard, "copyText").mockResolvedValue();
     render(() => <App initialView="configuration" />);
     const tabs = screen.getByRole("tablist", { name: "配置分类" });
-    expect(within(tabs).getAllByRole("tab").at(-1)?.textContent).toBe("端点");
+    expect(within(tabs).getAllByRole("tab").at(-1)?.textContent).toBe("参数");
     fireEvent.click(within(tabs).getByRole("tab", { name: "端点" }));
     const panel = await screen.findByRole("region", { name: "端点说明" });
     const connection = { type: "http", url: `${window.location.origin}/mcp`, headers: { "X-Issue-Pilot-Subject": "fixture-user" } };
@@ -1345,7 +1345,7 @@ describe("issue pilot workspace", () => {
       within(tabs)
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
-    ).toEqual(["用户", "仓库", "服务", "端点"]);
+    ).toEqual(["用户", "仓库", "服务", "端点", "参数"]);
     const credentials = await screen.findByRole("region", { name: "我的凭证" });
     await within(credentials).findByText("API Key");
     expect(within(credentials).getByText("SSH Key")).toBeTruthy();

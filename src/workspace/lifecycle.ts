@@ -6,6 +6,8 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import pMap from "p-map";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
+import type { ApplicationParameters } from "../configuration/contracts.ts";
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import { stableErrorReason } from "../diagnostics.ts";
 import type { Database } from "../db/client.ts";
@@ -25,6 +27,21 @@ export interface WorkspaceLifecyclePolicy {
   targetBytes: number;
   maintenanceIntervalMs: number;
   taskConcurrency: number;
+}
+
+export function workspaceLifecyclePolicy(parameters: ApplicationParameters = applicationParameters()): WorkspaceLifecyclePolicy {
+  return {
+    retentionMs: parameters.workspaceRetentionMs,
+    highWaterBytes: parameters.workspaceHighWaterBytes,
+    targetBytes: parameters.workspaceTargetBytes,
+    maintenanceIntervalMs: parameters.workspaceMaintenanceIntervalMs,
+    taskConcurrency: issuePilotConfig.workspace.taskConcurrency,
+  };
+}
+
+function assertWorkspaceLifecyclePolicy(policy: WorkspaceLifecyclePolicy): void {
+  if (policy.highWaterBytes > 0 && policy.targetBytes >= policy.highWaterBytes) throw new Error("workspace_target_must_be_below_high_water");
+  if (!Number.isSafeInteger(policy.taskConcurrency) || policy.taskConcurrency < 1) throw new Error("workspace_task_concurrency_invalid");
 }
 
 export interface WorkspaceInspection {
@@ -101,13 +118,13 @@ export class WorkspaceLifecycleManager {
   private readonly worktrees: WorktreeManager;
   private readonly projects: IssueProjectManager;
   private readonly prepareDevelopmentRuntime: (issue: Pick<Issue, "id" | "key" | "type">) => Promise<unknown>;
-  readonly policy: WorkspaceLifecyclePolicy;
+  private currentPolicy: WorkspaceLifecyclePolicy;
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
   private statsPromise: Promise<WorkspaceStatistics> | undefined;
   private statisticsCache: { createdAt: number; value: WorkspaceStatistics } | undefined;
   private workspaceBytesCache: { expiresAt: number; values: Map<string, number>; sharedGitBytes?: number } | undefined;
-  private readonly workspaceBytesCacheMs: number;
+  private maintenanceTimer: { handle: ReturnType<typeof setInterval> | undefined; report: (error: unknown) => void } | undefined;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
 
@@ -115,17 +132,14 @@ export class WorkspaceLifecycleManager {
     database: Database,
     stateRoot: string,
     engine: AgentController,
-    policy: WorkspaceLifecyclePolicy = issuePilotConfig.workspace,
+    policy: WorkspaceLifecyclePolicy = workspaceLifecyclePolicy(),
     prepareRuntime?: (issue: Pick<Issue, "id" | "key" | "type">) => Promise<unknown>,
   ) {
-    if (policy.highWaterBytes > 0 && policy.targetBytes >= policy.highWaterBytes) throw new Error("workspace_target_must_be_below_high_water");
-    if (!Number.isSafeInteger(policy.taskConcurrency) || policy.taskConcurrency < 1) throw new Error("workspace_task_concurrency_invalid");
+    assertWorkspaceLifecyclePolicy(policy);
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.engine = engine;
-    this.policy = policy;
-    // Statistics reuse the last sample for one maintenance cycle; the page shows sampledAt and can force a refresh.
-    this.workspaceBytesCacheMs = policy.maintenanceIntervalMs > 0 ? policy.maintenanceIntervalMs : 5_000;
+    this.currentPolicy = policy;
     this.worktrees = new WorktreeManager(this.stateRoot);
     this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
     this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => this.projects.hydrateDevelopmentRuntime(issue));
@@ -139,24 +153,50 @@ export class WorkspaceLifecycleManager {
         /* Reporting must not interrupt maintenance. */
       }
     };
-    let timer: ReturnType<typeof setInterval> | undefined;
-    if (this.policy.maintenanceIntervalMs > 0) {
-      timer = setInterval(() => {
-        void this.maintain()
-          .then((result) => {
-            for (const failure of result.failures) report(new Error(`workspace_auto_release_failed:${failure.issueKey}`, { cause: failure.error }));
-          })
-          .catch(report);
-      }, this.policy.maintenanceIntervalMs);
-      timer.unref();
-    }
+    this.maintenanceTimer = { handle: undefined, report };
+    this.scheduleMaintenance();
     return () => {
-      if (timer) clearInterval(timer);
-      timer = undefined;
+      if (this.maintenanceTimer?.handle) clearInterval(this.maintenanceTimer.handle);
+      this.maintenanceTimer = undefined;
       this.stopping = true;
       this.stopPromise ??= Promise.all([this.queue.idle(), this.issueQueue.idle()]).then(() => undefined);
       return this.stopPromise;
     };
+  }
+
+  get policy(): WorkspaceLifecyclePolicy {
+    return this.currentPolicy;
+  }
+
+  /** A changed policy applies from the next maintenance cycle and statistics sample; a running cycle keeps its values. */
+  updatePolicy(policy: WorkspaceLifecyclePolicy): void {
+    assertWorkspaceLifecyclePolicy(policy);
+    const rescheduled = policy.maintenanceIntervalMs !== this.currentPolicy.maintenanceIntervalMs;
+    this.currentPolicy = policy;
+    this.statsPromise = undefined;
+    this.invalidateMeasurements();
+    if (rescheduled) this.scheduleMaintenance();
+  }
+
+  private scheduleMaintenance(): void {
+    const timer = this.maintenanceTimer;
+    if (!timer) return;
+    if (timer.handle) clearInterval(timer.handle);
+    timer.handle = undefined;
+    if (this.currentPolicy.maintenanceIntervalMs <= 0) return;
+    timer.handle = setInterval(() => {
+      void this.maintain()
+        .then((result) => {
+          for (const failure of result.failures) timer.report(new Error(`workspace_auto_release_failed:${failure.issueKey}`, { cause: failure.error }));
+        })
+        .catch(timer.report);
+    }, this.currentPolicy.maintenanceIntervalMs);
+    timer.handle.unref();
+  }
+
+  // Statistics reuse the last sample for one maintenance cycle; the page shows sampledAt and can force a refresh.
+  private get workspaceBytesCacheMs(): number {
+    return this.currentPolicy.maintenanceIntervalMs > 0 ? this.currentPolicy.maintenanceIntervalMs : 5_000;
   }
 
   async inspectIssue(issueId: string): Promise<WorkspaceInspection> {
@@ -173,6 +213,7 @@ export class WorkspaceLifecycleManager {
     if (this.statsPromise && !refresh) return this.statsPromise;
     if (!refresh && this.statisticsCache && Date.now() - this.statisticsCache.createdAt <= this.workspaceBytesCacheMs) return this.statisticsCache.value;
     const request = this.exclusive(async () => {
+      const policy = this.policy;
       const issueRows = await this.issueRows();
       const repositories = await this.database.select().from(issueRepositories);
       const repositoriesByIssue = new Map<string, IssueRepository[]>();
@@ -186,7 +227,7 @@ export class WorkspaceLifecycleManager {
       const inspections = await pMap(
         issueRows,
         (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id))),
-        { concurrency: this.policy.taskConcurrency, stopOnError: false },
+        { concurrency: policy.taskConcurrency, stopOnError: false },
       );
       const sharedGitBytes = cached?.sharedGitBytes ?? (await directoryBytes(gitRoot(this.stateRoot)));
       this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: new Map(inspections.map((workspace) => [workspace.issueId, workspace.bytes])), sharedGitBytes };
@@ -195,14 +236,15 @@ export class WorkspaceLifecycleManager {
         totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
         sharedGitBytes,
         policy: {
-          retentionHours: Number.isFinite(this.policy.retentionMs) ? this.policy.retentionMs / 3_600_000 : null,
-          highWaterBytes: this.policy.highWaterBytes,
-          targetBytes: this.policy.targetBytes,
-          maintenanceIntervalMinutes: this.policy.maintenanceIntervalMs / 60_000,
+          retentionHours: Number.isFinite(policy.retentionMs) ? policy.retentionMs / 3_600_000 : null,
+          highWaterBytes: policy.highWaterBytes,
+          targetBytes: policy.targetBytes,
+          maintenanceIntervalMinutes: policy.maintenanceIntervalMs / 60_000,
         },
         workspaces: inspections,
       };
-      this.statisticsCache = { createdAt: Date.now(), value };
+      // A policy saved during the scan must not be hidden behind this sample.
+      if (policy === this.policy) this.statisticsCache = { createdAt: Date.now(), value };
       return value;
     });
     this.statsPromise = request;
@@ -276,9 +318,10 @@ export class WorkspaceLifecycleManager {
     return this.exclusive(async () => {
       // Automatic release changes workspace state, so a cached sample must not outlive this maintenance pass.
       this.invalidateMeasurements();
+      const policy = this.policy;
       const issueRows = await this.issueRows();
       const measuredWorkspaces = await pMap(issueRows, async ({ issue }) => ({ issueId: issue.id, bytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) }), {
-        concurrency: this.policy.taskConcurrency,
+        concurrency: policy.taskConcurrency,
         stopOnError: false,
       });
       const workspaceBytes = new Map(measuredWorkspaces.map(({ issueId, bytes }) => [issueId, bytes]));
@@ -332,8 +375,8 @@ export class WorkspaceLifecycleManager {
       // Finish an already-recorded release even after disk pressure has gone away.
       // The reserved recheck permits only snapshot-view recovery, never new code removal.
       for (const candidate of candidates) if (candidate.workspace?.status === "stopped" && !candidate.workspace.runtimeReady) await releaseCandidate(candidate, true);
-      if (Number.isFinite(this.policy.retentionMs)) {
-        const retentionCutoff = Date.now() - this.policy.retentionMs;
+      if (Number.isFinite(policy.retentionMs)) {
+        const retentionCutoff = Date.now() - policy.retentionMs;
         const retentionCandidates = [...candidates].sort(
           (left, right) => (left.issue.resolvedAt?.getTime() ?? left.issue.updatedAt.getTime()) - (right.issue.resolvedAt?.getTime() ?? right.issue.updatedAt.getTime()),
         );
@@ -341,12 +384,12 @@ export class WorkspaceLifecycleManager {
           if (!attemptedIssues.has(candidate.issue.id) && candidate.issue.resolvedAt && candidate.issue.resolvedAt.getTime() <= retentionCutoff) await releaseCandidate(candidate);
         }
       }
-      if (this.policy.highWaterBytes > 0 && totalBytes > this.policy.highWaterBytes) {
+      if (policy.highWaterBytes > 0 && totalBytes > policy.highWaterBytes) {
         const quotaCandidates = [...candidates].sort(
           (left, right) => (left.workspace?.updatedAt.getTime() ?? left.issue.updatedAt.getTime()) - (right.workspace?.updatedAt.getTime() ?? right.issue.updatedAt.getTime()),
         );
         for (const candidate of quotaCandidates) {
-          if (totalBytes <= this.policy.targetBytes) break;
+          if (totalBytes <= policy.targetBytes) break;
           if (!attemptedIssues.has(candidate.issue.id)) await releaseCandidate(candidate);
         }
       }

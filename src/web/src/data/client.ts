@@ -52,12 +52,34 @@ import {
   type IssueWorkMode,
   type WorkspaceStatus,
 } from "../../../domain/contracts";
-import type { AgentModelOption, Configuration, ConfigurationCatalog, ServiceConfiguration, ServiceConfigurationInput } from "../../../configuration/contracts";
+import type {
+  AgentModelOption,
+  ApplicationParameterKey,
+  ApplicationParameters,
+  ApplicationParameterState,
+  ApplicationParameterUpdate,
+  Configuration,
+  ConfigurationCatalog,
+  ServiceConfiguration,
+  ServiceConfigurationInput,
+} from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
 export { mergeAgentCostSource, AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
 export type { AgentConfiguration, AgentModelSelection, AgentRunState, CapabilityName } from "../../../domain/contracts";
-export type { AgentCostSource, AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
+export type {
+  AgentCostSource,
+  AgentFooterStats,
+  AgentModelOption,
+  ApplicationParameters,
+  ApplicationParameterKey,
+  ApplicationParameterState,
+  ApplicationParameterUpdate,
+  IssuePriority,
+  IssueStatus,
+  IssueType,
+  IssueWorkMode,
+};
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
 export type Service = ServiceConfiguration;
@@ -313,6 +335,8 @@ export const loadUsers = () => request<Person[]>("/api/users");
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
+export const loadApplicationParameters = () => request<ApplicationParameterState>("/api/config/parameters");
+export const updateApplicationParameters = (input: ApplicationParameterUpdate) => jsonRequest<ApplicationParameterState>("/api/config/parameters", "PUT", input);
 export const loadDingtalkSource = (signal?: AbortSignal) => request<DingtalkSourceResponse>("/api/dingtalk/source", { signal });
 export const importDingtalkRecords = (input: DingtalkImportInput, signal?: AbortSignal) =>
   request<DingtalkImportResponse>("/api/dingtalk/import", { method: "POST", body: JSON.stringify(input), signal });

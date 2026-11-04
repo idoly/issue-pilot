@@ -71,3 +71,38 @@ export interface ServiceConfigurationInput {
     }
   >;
 }
+
+/** Operational parameters that apply without restart. Durations are milliseconds and sizes are bytes. */
+export interface ApplicationParameters {
+  maxConcurrentIssues: number;
+  modelResponseIdleMs: number;
+  workspaceRetentionMs: number;
+  workspaceHighWaterBytes: number;
+  workspaceTargetBytes: number;
+  workspaceMaintenanceIntervalMs: number;
+  capabilityConnectionMs: number;
+  mcpExecutionMs: number;
+  dmsExecutionMs: number;
+  slsExecutionMs: number;
+  dingtalkAttachmentHosts: readonly string[];
+  networkAllowedDomains: readonly string[];
+}
+export type ApplicationParameterKey = keyof ApplicationParameters;
+export type NumericApplicationParameterKey = { [Key in ApplicationParameterKey]: ApplicationParameters[Key] extends number ? Key : never }[ApplicationParameterKey];
+export type ApplicationParameterOverrides = Partial<ApplicationParameters>;
+export interface ApplicationParameterBounds {
+  numbers: Record<NumericApplicationParameterKey, { minimum: number; maximum: number }>;
+  listEntries: number;
+}
+export interface ApplicationParameterState {
+  revision: number;
+  /** Saved admin values; omitted keys use the project configuration default. */
+  overrides: ApplicationParameterOverrides;
+  values: ApplicationParameters;
+  defaults: ApplicationParameters;
+  bounds: ApplicationParameterBounds;
+}
+export interface ApplicationParameterUpdate {
+  expectedRevision: number;
+  overrides: ApplicationParameterOverrides;
+}

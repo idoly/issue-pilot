@@ -3,7 +3,17 @@ import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
+import {
+  ApplicationParameterError,
+  installApplicationParameters,
+  loadApplicationParameterState,
+  parseApplicationParameterOverrides,
+  resolveApplicationParameters,
+  saveApplicationParameters,
+} from "../configuration/parameters.ts";
 import { AgentRuntimeConfigurationError, inspectAgentResources, parseAgentRuntime } from "../configuration/pi-runtime.ts";
+import { applyIssueSandboxNetwork } from "../agent/issue-sandbox.ts";
+import { workspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
 import { selectDmsCredentials } from "../configuration/user-credentials.ts";
 import { applicationSettings, userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
@@ -27,7 +37,7 @@ function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
 }
 
 export function registerConfigurationRoutes(context: ApiRouteContext): void {
-  const { app, database, engine, modelCatalog, runScopeExclusive } = context;
+  const { app, database, engine, modelCatalog, runScopeExclusive, workspaces } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
 
   // Any Issue in these environments may query this service, even if its entry
@@ -156,6 +166,35 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
         if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, "global_configuration_has_running_issues");
         throw error;
       }
+    }),
+  );
+  app.get("/api/config/parameters", async (_request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    return runScopeExclusive(() => loadApplicationParameterState(database.db));
+  });
+  // Parameters are budgets read when an operation starts, so saving neither reserves Issues nor closes sessions.
+  app.put("/api/config/parameters", async (request) =>
+    runScopeExclusive(async () => {
+      await requireAdmin(database, request);
+      const input = record(request.body);
+      if (input.expectedRevision === undefined || Object.keys(input).some((key) => key !== "expectedRevision" && key !== "overrides")) throw new ApiError(400, "invalid_application_parameters");
+      let overrides;
+      try {
+        overrides = parseApplicationParameterOverrides(input.overrides);
+      } catch (error) {
+        if (error instanceof ApplicationParameterError) throw new ApiError(400, error.message);
+        throw error;
+      }
+      const current = await loadApplicationParameterState(database.db);
+      checkRevision(input.expectedRevision, current.revision);
+      await saveApplicationParameters(database.db, overrides, current.revision + 1);
+      const values = resolveApplicationParameters(overrides);
+      installApplicationParameters(values);
+      engine.setMaxConcurrentIssues?.(values.maxConcurrentIssues);
+      workspaces.updatePolicy({ ...workspaceLifecyclePolicy(values), taskConcurrency: workspaces.policy.taskConcurrency });
+      // A failed sync is retried when the sandbox is next acquired; the saved values stay authoritative.
+      await applyIssueSandboxNetwork();
+      return loadApplicationParameterState(database.db);
     }),
   );
   app.get("/api/config/agent/resources", { logLevel: "silent" }, async (request, reply) => {

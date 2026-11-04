@@ -7,14 +7,15 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { applicationConfig } from "../config.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { installApplicationParameters, loadApplicationParameterState } from "../configuration/parameters.ts";
 import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import type { DatabaseConnection } from "../db/client.ts";
-import { applicationSettings, issues } from "../db/schema.ts";
+import { issues } from "../db/schema.ts";
 import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../agent/model-runtime.ts";
 import { SerialQueue } from "../serial.ts";
-import { WorkspaceLifecycleManager, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
+import { WorkspaceLifecycleManager, workspaceLifecyclePolicy, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { prepareDevelopmentIssueRuntimes, prepareReadOnlyIssueRuntimes } from "../workspace/project.ts";
 import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import { ApplicationStateLease } from "../workspace/state-lease.ts";
@@ -102,7 +103,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const databaseStartedAt = performance.now();
     const database = await openApplicationDatabase(databaseFile);
     connection = database;
-    const [settings] = await database.db.select().from(applicationSettings).limit(1);
+    // Install saved parameters before any owner starts so startup work already uses them.
+    const parameters = (await loadApplicationParameterState(database.db)).values;
+    installApplicationParameters(parameters);
     app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
     const pruneStartedAt = performance.now();
     const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
@@ -133,11 +136,11 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         (event) => events.publish(event),
         (error) => app.log.error(errorDiagnostic(error)),
         sharedModelRuntime(),
-        settings?.maxConcurrentIssues ?? undefined,
+        parameters.maxConcurrentIssues,
       );
     const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
-    const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy);
+    const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy ?? workspaceLifecyclePolicy(parameters));
     const maintenanceStartedAt = performance.now();
     const maintenance = await workspaces.maintain();
     for (const failure of maintenance.failures) app.log.error({ issueKey: failure.issueKey, err: errorDiagnostic(failure.error) }, "Workspace automatic release failed");

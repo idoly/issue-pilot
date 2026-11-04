@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { applicationParameterBounds } from "../../src/configuration/parameters.ts";
 import { AgentEngine, type AgentReservation } from "../../src/agent/engine.ts";
 import { repositoryPreparationMode } from "../../src/workspace/project.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
@@ -68,6 +69,43 @@ test("bounds concurrent Issue rounds while retaining reservations and draining q
   } finally {
     releaseFirst();
     releaseSecond();
+    await engine.close();
+  }
+});
+
+test("applies concurrency changes to queued rounds without interrupting running rounds", async () => {
+  const engine = new AgentEngine({} as never, unusedStateRoot, undefined, undefined, undefined, 1);
+  const releases = new Map<string, () => void>();
+  const started: string[] = [];
+  (engine as unknown as { run(id: string): Promise<void> }).run = (id) =>
+    new Promise<void>((resolve) => {
+      started.push(id);
+      releases.set(id, resolve);
+    });
+  try {
+    for (const id of ["a", "b", "c", "d"]) engine.enqueue(id);
+    await waitFor(() => started.length === 1);
+    engine.setMaxConcurrentIssues(3);
+    await waitFor(() => started.length === 3);
+    assert.deepEqual(started, ["a", "b", "c"]);
+    assert.equal(engine.getRunState("d"), "queued");
+
+    engine.setMaxConcurrentIssues(1);
+    assert.deepEqual(
+      ["a", "b", "c"].map((id) => engine.getRunState(id)),
+      ["running", "running", "running"],
+    );
+    releases.get("a")!();
+    releases.get("b")!();
+    await waitFor(() => engine.getRunState("b") === "idle");
+    assert.equal(engine.getRunState("d"), "queued");
+    releases.get("c")!();
+    await waitFor(() => started.length === 4);
+    assert.equal(engine.getRunState("d"), "running");
+
+    for (const invalid of [0, 1.5, applicationParameterBounds.numbers.maxConcurrentIssues.maximum + 1]) assert.throws(() => engine.setMaxConcurrentIssues(invalid), /invalid_agent_concurrency/);
+  } finally {
+    for (const release of releases.values()) release();
     await engine.close();
   }
 });

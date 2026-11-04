@@ -59,6 +59,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0066_shared_agent_api_key",
       "0067_personal_model_credentials",
       "0068_dbhub_targets",
+      "0069_application_parameters",
     ],
   );
   const previousJournal = {

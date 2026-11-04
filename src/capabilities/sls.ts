@@ -1,4 +1,5 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import { readSlsCli, SLS_QUERY_ERRORS } from "./sls-cli.ts";
 import type { CommandExecutor } from "../process.ts";
 import { SLS_LOGSTORE, type CapabilityConfig, type CapabilityInputs } from "./registry.ts";
@@ -36,7 +37,7 @@ export type SlsQuery = ReturnType<typeof prepareSlsQuery>;
 export async function readSlsLogs(input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">, signal?: AbortSignal, executor?: CommandExecutor) {
   const query = prepareSlsQuery(input, configured);
   const selected = selectTarget(input, configured);
-  const active = AbortSignal.any([AbortSignal.timeout(limits.executionMs), ...(signal ? [signal] : [])]);
+  const active = AbortSignal.any([AbortSignal.timeout(applicationParameters().slsExecutionMs), ...(signal ? [signal] : [])]);
   try {
     return await readSlsCli(selected, query, active, executor);
   } catch (error) {

@@ -1,4 +1,3 @@
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +12,7 @@ import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuratio
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, selectAgentConfiguration } from "../configuration/agent.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
+import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
 import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
 import { createWorkspaceTool } from "./workspace-tool.ts";
@@ -43,6 +43,7 @@ export interface AgentController {
   isRunning(issueId: string): boolean;
   getRunState(issueId: string): AgentRunState;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
+  setMaxConcurrentIssues?(maxConcurrentIssues: number): void;
   close?(): Promise<void>;
 }
 
@@ -69,7 +70,7 @@ export class AgentEngine implements AgentController {
   private closing = false;
   private activeSlots = 0;
   private readonly slotWaiters: Array<() => void> = [];
-  private readonly maxConcurrentIssues: number;
+  private maxConcurrentIssues: number;
 
   constructor(
     database: Database,
@@ -77,9 +78,9 @@ export class AgentEngine implements AgentController {
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
     modelRuntime?: PiModelRuntime,
-    maxConcurrentIssues: number = issuePilotConfig.runtime.agent.maxConcurrentIssues,
+    maxConcurrentIssues: number = applicationParameters().maxConcurrentIssues,
   ) {
-    if (!Number.isInteger(maxConcurrentIssues) || maxConcurrentIssues < 1) throw new Error("invalid_agent_concurrency");
+    assertAgentConcurrency(maxConcurrentIssues);
     this.maxConcurrentIssues = maxConcurrentIssues;
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
@@ -93,6 +94,13 @@ export class AgentEngine implements AgentController {
     this.assertOpen();
     this.assertNotReserved(issueId);
     this.schedule(issueId, () => this.run(issueId, latestMessage, displayMessage));
+  }
+
+  /** Raising the limit admits queued rounds now; lowering it never interrupts running rounds, it only withholds freed slots. */
+  setMaxConcurrentIssues(maxConcurrentIssues: number): void {
+    assertAgentConcurrency(maxConcurrentIssues);
+    this.maxConcurrentIssues = maxConcurrentIssues;
+    this.grantSlots();
   }
 
   isRunning(issueId: string): boolean {
@@ -261,13 +269,20 @@ export class AgentEngine implements AgentController {
   }
 
   private async acquireSlot(): Promise<() => void> {
+    // A resolved waiter already owns the slot counted by grantSlots.
     if (this.activeSlots < this.maxConcurrentIssues) this.activeSlots++;
     else await new Promise<void>((resolve) => this.slotWaiters.push(resolve));
     return () => {
-      const next = this.slotWaiters.shift();
-      if (next) next();
-      else this.activeSlots--;
+      this.activeSlots--;
+      this.grantSlots();
     };
+  }
+
+  private grantSlots(): void {
+    while (this.activeSlots < this.maxConcurrentIssues && this.slotWaiters.length) {
+      this.activeSlots++;
+      this.slotWaiters.shift()!();
+    }
   }
 
   private schedule(issueId: string, operation: () => Promise<void>): void {
@@ -697,4 +712,9 @@ export class AgentEngine implements AgentController {
   private publishStatus(issueId: string, status: "complete" | "error"): void {
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_status", status } });
   }
+}
+
+function assertAgentConcurrency(value: number): void {
+  const { minimum, maximum } = applicationParameterBounds.numbers.maxConcurrentIssues;
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error("invalid_agent_concurrency");
 }

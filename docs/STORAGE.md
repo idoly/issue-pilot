@@ -18,7 +18,7 @@ SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来
 
 ## 数据表关系
 
-当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。
+当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。admin 保存的运行参数位于 `application_settings.parameters`（由 [parameters.ts](../src/configuration/parameters.ts) 校验），`max_concurrent_issues` 已由 0069 迁移复制进该列，仅保留为恢复证据。
 
 | 关系 | 要点 |
 | --- | --- |

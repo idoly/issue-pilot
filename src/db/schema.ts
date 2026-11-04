@@ -1,4 +1,4 @@
-import type { DingtalkUserSettings } from "../configuration/contracts.ts";
+import type { ApplicationParameterOverrides, DingtalkUserSettings } from "../configuration/contracts.ts";
 import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
 import { randomUUID } from "node:crypto";
 
@@ -81,7 +81,11 @@ export const applicationSettings = sqliteTable(
   "application_settings",
   {
     id: integer("id").primaryKey(),
+    // Retired: 0069 copied it into parameters; never read by runtime.
     maxConcurrentIssues: integer("max_concurrent_issues"),
+    // Admin overrides of issuePilotConfig.parameters, validated by src/configuration/parameters.ts.
+    parameters: json<ApplicationParameterOverrides>("parameters").notNull().default({}),
+    parametersRevision: integer("parameters_revision").notNull().default(0),
     dingtalkFields: json<Partial<DingtalkColumns>>("dingtalk_fields").notNull().default({}),
     sharedDmsCredentials: json<DmsCredentials>("shared_dms_credentials"),
     sharedDmsRevision: integer("shared_dms_revision").notNull().default(0),

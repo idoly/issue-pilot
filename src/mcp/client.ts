@@ -5,6 +5,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import type { McpStdioConfiguration, McpTransport } from "../domain/contracts.ts";
 
 export interface McpConfiguration {
@@ -74,7 +75,7 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
   try {
     startupSignal.throwIfAborted();
     await Promise.race([
-      client.connect(transport, { signal: startupSignal, timeout: limits.executionMs }),
+      client.connect(transport, { signal: startupSignal, timeout: applicationParameters().mcpExecutionMs }),
       new Promise<never>((_, reject) => {
         cancellation = addAbortListener(startupSignal, () => reject(startupSignal.reason));
       }),
@@ -95,7 +96,7 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const result = await client.listTools(cursor ? { cursor } : undefined, { signal: startupSignal, timeout: limits.executionMs });
+        const result = await client.listTools(cursor ? { cursor } : undefined, { signal: startupSignal, timeout: applicationParameters().mcpExecutionMs });
         tools.push(...(result.tools as McpTool[]));
         if (tools.length > limits.tools) throw new McpFailure("mcp_too_many_tools");
         cursor = result.nextCursor;
@@ -105,7 +106,7 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
       if (new Set(tools.map((tool) => tool.name)).size !== tools.length) throw new McpFailure("mcp_duplicate_tool_names");
       return tools;
     },
-    call: (name, input) => client.callTool({ name, arguments: input }, undefined, { signal: startupSignal, timeout: limits.executionMs }),
+    call: (name, input) => client.callTool({ name, arguments: input }, undefined, { signal: startupSignal, timeout: applicationParameters().mcpExecutionMs }),
     async close() {
       await client.close();
       await closeTransport();
@@ -114,7 +115,7 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
 };
 
 export async function inspectMcp(configuration: McpConfiguration, connect: McpConnector = connectMcp) {
-  const signal = AbortSignal.timeout(limits.executionMs);
+  const signal = AbortSignal.timeout(applicationParameters().mcpExecutionMs);
   try {
     const session = await connect(configuration, signal);
     let tools: Array<{ name: string; readOnly: boolean }>;

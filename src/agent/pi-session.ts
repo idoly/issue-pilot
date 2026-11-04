@@ -15,7 +15,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import type { AgentRuntimeConfiguration, DeploymentConfig } from "../domain/contracts.ts";
 import type { McpConfiguration } from "../mcp/client.ts";
 import { createIssueCodemodeExtension } from "./codemode-extension.ts";
@@ -214,12 +214,13 @@ type JsonMessageUpdateEvent = Extract<JsonAgentSessionEvent, { type: "message_up
 export class AgentResponseWatchdog {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly activeTools = new Set<string>();
-  private readonly idleMs: number;
+  private readonly idleMs: () => number;
   private readonly onTimeout: () => void;
 
-  constructor(idleMs: number, onTimeout: () => void) {
-    if (!Number.isSafeInteger(idleMs) || idleMs <= 0) throw new Error("invalid_model_response_idle_timeout");
-    this.idleMs = idleMs;
+  /** A function is read on every arm so a changed application parameter reaches existing sessions. */
+  constructor(idleMs: number | (() => number), onTimeout: () => void) {
+    if (typeof idleMs === "number" && (!Number.isSafeInteger(idleMs) || idleMs <= 0)) throw new Error("invalid_model_response_idle_timeout");
+    this.idleMs = typeof idleMs === "number" ? () => idleMs : idleMs;
     this.onTimeout = onTimeout;
   }
 
@@ -252,7 +253,7 @@ export class AgentResponseWatchdog {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.onTimeout();
-    }, this.idleMs);
+    }, this.idleMs());
     this.timer.unref?.();
   }
 
@@ -522,7 +523,7 @@ export class PiSessionRuntime {
       assertExtensionToolNames(resourceLoader.getExtensions().extensions);
       let rejectIdle: ((error: Error) => void) | undefined;
       let modelResponseFailed = false;
-      const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? issuePilotConfig.runtime.agent.modelResponseIdleMs, () => {
+      const watchdog = new AgentResponseWatchdog(options.modelResponseIdleMs ?? (() => applicationParameters().modelResponseIdleMs), () => {
         const error = new Error("model_response_idle_timeout");
         rejectIdle?.(error);
         void session.abort().catch(() => undefined);

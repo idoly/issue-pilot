@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
 import type { CapabilityConfig } from "./registry.ts";
@@ -108,9 +109,9 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
           "--retry-count",
           "0",
           "--read-timeout",
-          String(Math.ceil(limits.sls.executionMs / 1000)),
+          String(Math.ceil(applicationParameters().slsExecutionMs / 1000)),
           "--connect-timeout",
-          String(Math.ceil(limits.connectionMs / 1000)),
+          String(Math.ceil(applicationParameters().capabilityConnectionMs / 1000)),
           "--body",
           JSON.stringify({ from: query.from, to: query.to, query: query.query, line: limits.sls.pageResults, offset: records.length, reverse: true }),
         ],

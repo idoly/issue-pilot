@@ -21,6 +21,7 @@ Before an authorized operational change, follow the Runbook, including its bound
 | Roles, work modes, states and business predicates | src/domain/contracts.ts |
 | Current database and immutable upgrades | src/db/schema.ts, src/db/bootstrap.ts, drizzle/ |
 | Configuration, projection and credentials | src/configuration |
+| Hot-updatable operational parameters | src/configuration/parameters.ts |
 | HTTP identity and authorization | src/http/route-context.ts |
 | HTTP coordination | src/http/*-routes.ts |
 | Service prepare/apply | src/http/service-configuration.ts |

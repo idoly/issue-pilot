@@ -1,4 +1,5 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
+import { ApplicationParametersView } from "./ApplicationParameters";
 import { ConfigurationView } from "./ConfigurationView";
 import { useApplicationResources } from "./ApplicationResources";
 import { EndpointConfiguration } from "./EndpointConfiguration";
@@ -6,12 +7,13 @@ import { RepositoryManagement } from "./RepositoryManagement";
 import { PersonalCredentials } from "./PersonalCredentials";
 import { UserManagement } from "./UserManagement";
 
-type SettingsPanel = "users" | "services" | "repositories" | "endpoints";
+type SettingsPanel = "users" | "services" | "repositories" | "endpoints" | "parameters";
 const settingsPanels: Array<{ key: SettingsPanel; label: string }> = [
   { key: "users", label: "用户" },
   { key: "repositories", label: "仓库" },
   { key: "services", label: "服务" },
   { key: "endpoints", label: "端点" },
+  { key: "parameters", label: "参数" },
 ];
 export function SettingsView() {
   const { configurationLoaded, refreshConfiguration } = useApplicationResources();
@@ -64,6 +66,11 @@ export function SettingsView() {
               selectPanel("services");
             }}
           />
+        </div>
+      </Show>
+      <Show when={visitedPanels().includes("parameters")}>
+        <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "parameters"}>
+          <ApplicationParametersView />
         </div>
       </Show>
       <Show when={visitedPanels().includes("services")}>

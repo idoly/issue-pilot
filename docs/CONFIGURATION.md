@@ -7,7 +7,8 @@
 | 来源 | 管理内容 | 不承担的职责 |
 | --- | --- | --- |
 | SQLite | 用户、凭证、仓库、服务部署、MCP、Agent 设置和偏好 | 不从历史 YAML 补齐值 |
-| [根配置](../issue-pilot.config.ts) | state 路径、启动默认值、预算、网络基础列表和维护策略 | 不是每个服务的配置文件 |
+| [根配置](../issue-pilot.config.ts) | state 路径、启动默认值、代码上限和运行参数默认值 | 不是每个服务的配置文件 |
+| SQLite 运行参数 | admin 在“配置 → 参数”保存的运维参数覆盖值 | 不覆盖进程级设置和代码上限 |
 | Operator Pi 目录 | 模型定义、settings、指令、skills、prompts 和 extensions | auth.json／models.json 中的密钥不能成为模型请求身份 |
 
 业务配置通过页面／API 保存，不维护用户或服务 YAML 投影。state root 相对于应用源码位置解析，没有业务 state 路径环境变量覆盖。安装、测试和迁移的不同入口见[部署](DEPLOYMENT.md)、[开发](DEVELOPMENT.md)、[离线迁移](operations/legacy-layout-migration.md)。
@@ -61,7 +62,7 @@ admin 打开 API Key／DMS／SLS 弹窗时默认勾选共享凭证；取消后�
 
 ### 共享 DMS／SLS 凭据
 
-共享组和独立 revision 位于 `application_settings`。admin 修改时预约工单并关闭旧会话；接口只返回状态及约定的非敏感编辑值。更换 DMS URL 需同时提供 Authorization。
+共享组和独立 revision 位于 `application_settings`。admin 修改时预约工单并关闭旧会话；接口只返回状态及约定的非敏感编辑值。更换 DMS URL 需同时提供 Authorization。根配置不提供 DMS 地址默认值，未配置时由 admin 填写。
 
 服务只维护目标，保存目标不要求凭证已经存在；实际查询时检查。部署 DMS／SLS 输入拒绝 `credentialUpdate`，包括旧 `preserve`。MCP 自身的凭证更新契约与此不同，不能混用。
 
@@ -111,7 +112,23 @@ Pi ResourceLoader 使用 `getAgentDir()` 解析的运行用户全局目录，默
 
 Pi settings 为基线，SQLite `runtime.settings` 显式覆盖，省略的覆盖恢复基线。可配置项由 [contracts.ts](../src/domain/contracts.ts) 和 [pi-runtime.ts](../src/configuration/pi-runtime.ts) 限定，不接受任意 Pi 内部设置。资源检查只发现资源，不执行扩展；实际会话才加载。
 
-`runtime.networkAllowedDomains` 追加精确域名／端口，省略回到根默认列表，不覆盖宿主控制地址拒绝或业务范围。`application_settings.maxConcurrentIssues` 控制并发轮次；排队算活动但不占执行名额。
+`runtime.networkAllowedDomains` 在个人组内追加精确域名／端口，省略回到运行参数的基础白名单，不覆盖宿主控制地址拒绝或业务范围。
+
+## 运行参数
+
+以下参数由 admin 在“配置 → 参数”修改，保存后立即生效，不需要重启应用，也不预约工单或关闭会话。未保存过的项使用根配置 `issue-pilot.config.ts` 的 `parameters` 默认值；已保存的值存于 `application_settings.parameters`，带 `parameters_revision` 做并发冲突检测。
+
+| 参数 | 生效时机 |
+| --- | --- |
+| `maxConcurrentIssues` | 立即。调高放行排队轮次；调低不中断运行中的轮次，只在释放名额时收紧。排队算活动但不占执行名额 |
+| `modelResponseIdleMs` | 下一次重新计时，包含已打开会话 |
+| `workspaceRetentionMs`、`workspaceHighWaterBytes`、`workspaceTargetBytes` | 下一次维护或统计采样 |
+| `workspaceMaintenanceIntervalMs` | 保存后重新计时；0 表示不自动维护 |
+| `capabilityConnectionMs`、`mcpExecutionMs`、`dmsExecutionMs`、`slsExecutionMs` | 下一次调用 |
+| `dingtalkAttachmentHosts` | 下一次导入 |
+| `networkAllowedDomains` | 下一次获取沙箱；在用的沙箱由 `SandboxManager.updateConfig` 同步 |
+
+`GET /api/config/parameters` 返回 `revision`、保存的 `overrides`、生效的 `values`、根配置 `defaults` 和 `bounds`。`PUT /api/config/parameters` 接受 `{ expectedRevision, overrides }`：`overrides` 是完整快照，省略的项回到默认值；数值必须为范围内的整数，`workspaceTargetBytes` 必须小于非零的 `workspaceHighWaterBytes`，非零维护周期不小于一分钟，列表去重且逐项校验。非法值返回 `400 invalid_application_parameter:<key>`，版本不符返回 `409 configuration_changed`。并发参数之外的入站额度、协议字段长度、缩进以及端口、state 路径、时区等进程级设置仍在根配置中，修改需要重启。
 
 SSE 使用 idle／queued／running，并保留包含排队的 running 布尔语义。`http.sseRecentEventIds` 限制临时 ID 去重窗口；`http.sseQueuedBytes` 分别限制待发送帧和回放期间的实时缓冲，不限制整份历史总大小或已直接交给 socket 的单帧。
 

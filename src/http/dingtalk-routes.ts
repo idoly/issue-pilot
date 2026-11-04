@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import { loadDingtalkUserSettings } from "../configuration/user-preferences.ts";
 import { dingtalkIssueImports, issues, mcpServices, subjects } from "../db/schema.ts";
 import { ISSUE_PRIORITIES, ISSUE_WORK_MODES } from "../domain/contracts.ts";
@@ -20,7 +20,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       reply.header("Cache-Control", "private, no-store");
       reply.header("Pragma", "no-cache");
       const controller = new AbortController(),
-        signal = AbortSignal.any([controller.signal, AbortSignal.timeout(issuePilotConfig.limits.capability.mcp.executionMs)]);
+        signal = AbortSignal.any([controller.signal, AbortSignal.timeout(applicationParameters().mcpExecutionMs)]);
       const abort = () => controller.abort();
       const close = () => {
         if (!reply.raw.writableEnded) abort();

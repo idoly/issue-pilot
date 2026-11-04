@@ -34,17 +34,17 @@ test("retains seed environment timestamps when startup does not change their val
 test("keeps application paths and workspace defaults in the project configuration", () => {
   assert.equal(applicationConfig.databaseFile, join(applicationConfig.stateRoot, "issues.db"));
   assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");
-  assert.equal(applicationConfig.workspace.highWaterBytes, 20 * 1024 ** 3);
-  assert.equal(applicationConfig.workspace.targetBytes, 16 * 1024 ** 3);
+  assert.equal(applicationConfig.parameters.workspaceHighWaterBytes, 20 * 1024 ** 3);
+  assert.equal(applicationConfig.parameters.workspaceTargetBytes, 16 * 1024 ** 3);
   assert.equal(applicationConfig.http.host, "0.0.0.0");
   assert.equal(applicationConfig.webRoot, join(applicationConfig.stateRoot, "..", "src", "web", "dist"));
   assert.equal(applicationConfig.limits.sourceBrowser.fileBytes, 64 * 1024 * 1024);
   assert.equal(applicationConfig.limits.relatedIssues, 20);
   assert.deepEqual(applicationConfig.limits.agentImage, { fileBytes: 20 * 1024 * 1024, requestBytes: 40 * 1024 * 1024, files: 20 });
-  assert.equal(applicationConfig.limits.capability.connectionMs, 10_000);
+  assert.equal(applicationConfig.parameters.capabilityConnectionMs, 10_000);
   assert.equal("database" in applicationConfig.limits.capability, false);
-  assert.equal(applicationConfig.defaults.dms.sseUrl, "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse");
-  assert.deepEqual(applicationConfig.limits.capability.dms, { executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 });
+  assert.equal("dms" in applicationConfig.defaults, false);
+  assert.deepEqual(applicationConfig.limits.capability.dms, { databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
   assert.equal(applicationConfig.web.host, "0.0.0.0");

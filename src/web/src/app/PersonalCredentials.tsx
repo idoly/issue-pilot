@@ -1,5 +1,4 @@
 import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid-js";
-import { issuePilotConfig } from "../../../../issue-pilot.config";
 import { Button, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
 import {
   loadPersonalCredentials,
@@ -62,7 +61,7 @@ export function PersonalCredentials() {
   };
   // A new personal group starts from the shared model so only the key has to be filled in.
   const modelInitial = () => (shared() ? sharedModel() : (status()?.model ?? sharedModel()));
-  const dmsUrl = (sharedTarget = shared()) => (sharedTarget ? sharedDms()?.url || issuePilotConfig.defaults.dms.sseUrl : (status()?.productionDmsUrl ?? ""));
+  const dmsUrl = (sharedTarget = shared()) => (sharedTarget ? (sharedDms()?.url ?? "") : (status()?.productionDmsUrl ?? ""));
   // Signal writes are not readable until the next flush, so callers pass the new group and target explicitly.
   const resetDrafts = (group: Group | null, sharedTarget: boolean) => {
     setSecret("");

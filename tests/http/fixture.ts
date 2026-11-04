@@ -32,6 +32,7 @@ export class TestAgentController {
   readonly running = new Set<string>();
   readonly queued = new Set<string>();
   readonly reservations = new Set<string>();
+  readonly concurrencyUpdates: number[] = [];
   closeSessionHook: undefined | ((issueId: string) => Promise<void>);
 
   enqueue(issueId: string, message?: string, recordMessage = true): void {
@@ -39,6 +40,10 @@ export class TestAgentController {
     this.enqueued.push(issueId);
     this.messages.push(message);
     this.recordedMessages.push(recordMessage);
+  }
+
+  setMaxConcurrentIssues(maxConcurrentIssues: number): void {
+    this.concurrencyUpdates.push(maxConcurrentIssues);
   }
 
   isRunning(issueId: string): boolean {

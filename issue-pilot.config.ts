@@ -40,23 +40,28 @@ export const issuePilotConfig = Object.freeze({
     markdownCacheCharacters: 4 * 1024 * 1024,
   }),
   workspace: Object.freeze({
-    retentionMs: 7 * 24 * 60 * 60 * 1000,
-    highWaterBytes: 20 * gibibyte,
-    targetBytes: 16 * gibibyte,
-    maintenanceIntervalMs: 15 * 60 * 1000,
     taskConcurrency: 4,
+  }),
+  // Defaults for parameters admins change under 配置 → 参数; saved values live in SQLite and apply without restart.
+  parameters: Object.freeze({
+    maxConcurrentIssues: 10,
+    modelResponseIdleMs: 5 * 60 * 1000,
+    workspaceRetentionMs: 7 * 24 * 60 * 60 * 1000,
+    workspaceHighWaterBytes: 20 * gibibyte,
+    workspaceTargetBytes: 16 * gibibyte,
+    workspaceMaintenanceIntervalMs: 15 * 60 * 1000,
+    capabilityConnectionMs: 10_000,
+    mcpExecutionMs: 120_000,
+    dmsExecutionMs: 120_000,
+    slsExecutionMs: 30_000,
+    dingtalkAttachmentHosts: Object.freeze(["alidocs2.oss-cn-zhangjiakou.aliyuncs.com"]),
+    networkAllowedDomains: Object.freeze(["registry.npmjs.org", "registry.npmmirror.com", "repo.maven.apache.org", "repo1.maven.org", "github.com", "*.githubusercontent.com"]),
   }),
   defaults: Object.freeze({
     environments: Object.freeze({ prod: "正式", test: "测试", dev: "开发" }),
     deployment: Object.freeze({ baseBranch: "main" }),
-    dms: Object.freeze({ sseUrl: "https://dms-mcpr-qcuenv-ralojeaice.cn-hangzhou.fcapp.run/sse" }),
   }),
   runtime: Object.freeze({
-    agent: Object.freeze({
-      modelResponseIdleMs: 5 * 60 * 1000,
-      maxConcurrentIssues: 10,
-      networkAllowedDomains: Object.freeze(["registry.npmjs.org", "registry.npmmirror.com", "repo.maven.apache.org", "repo1.maven.org", "github.com", "*.githubusercontent.com"]),
-    }),
     sourceBrowser: Object.freeze({ gitExecutable: "git", searchExecutable: "rg" }),
   }),
   limits: Object.freeze({
@@ -101,10 +106,9 @@ export const issuePilotConfig = Object.freeze({
     }),
     capability: Object.freeze({
       resultBytes: 1024 * 1024,
-      connectionMs: 10_000,
-      dingtalk: Object.freeze({ attachmentHosts: ["alidocs2.oss-cn-zhangjiakou.aliyuncs.com"] as readonly string[], tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512 }),
-      mcp: Object.freeze({ executionMs: 120_000, tools: 200 }),
-      dms: Object.freeze({ executionMs: 120_000, databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
+      dingtalk: Object.freeze({ tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512 }),
+      mcp: Object.freeze({ tools: 200 }),
+      dms: Object.freeze({ databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 }),
       sls: Object.freeze({
         pageResults: 100,
         queryChars: 4096,
@@ -112,7 +116,6 @@ export const issuePilotConfig = Object.freeze({
         traceWindowSeconds: 24 * 60 * 60,
         defaultWindowSeconds: 15 * 60,
         futureToleranceSeconds: 5 * 60,
-        executionMs: 30_000,
       }),
     }),
   }),

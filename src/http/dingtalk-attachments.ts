@@ -1,4 +1,4 @@
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import { removePendingAttachments, stageAttachment, type PendingAttachment } from "./attachment-store.ts";
 import type { DingtalkAttachment } from "../mcp/dingtalk.ts";
 import { DingtalkError } from "../mcp/dingtalk.ts";
@@ -10,7 +10,7 @@ export async function downloadDingtalkAttachments(files: DingtalkAttachment[], s
     for (const file of files) {
       signal.throwIfAborted();
       const url = new URL(file.url);
-      if (url.protocol !== "https:" || url.username || url.password || url.port || !issuePilotConfig.limits.capability.dingtalk.attachmentHosts.includes(url.hostname))
+      if (url.protocol !== "https:" || url.username || url.password || url.port || !applicationParameters().dingtalkAttachmentHosts.includes(url.hostname))
         throw new DingtalkError("dingtalk_attachment_host_not_allowed");
       const response = await request(url, { signal, redirect: "error" });
       if (!response.ok || !response.body) {

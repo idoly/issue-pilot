@@ -8,6 +8,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SerialQueue } from "../serial.ts";
 import { isManagedIssueFile } from "../workspace/work-files.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 
 export interface IssueFilesystemPolicy {
   writeRoot: string;
@@ -33,6 +34,21 @@ async function executable(name: string): Promise<string> {
   throw new Error("issue_sandbox_unavailable");
 }
 let users = 0;
+// The proxy reads the configured allow list on each connection, so replacing it reaches running sessions too.
+function syncNetworkAllowedDomains(): void {
+  const configured = SandboxManager.getConfig();
+  const allowedDomains = [...applicationParameters().networkAllowedDomains];
+  if (!configured || JSON.stringify(configured.network.allowedDomains) === JSON.stringify(allowedDomains)) return;
+  SandboxManager.updateConfig({ ...configured, network: { ...configured.network, allowedDomains } });
+}
+
+/** Applies a saved base network list to the shared sandbox; a stopped sandbox reads it when it next starts. */
+export function applyIssueSandboxNetwork(): Promise<void> {
+  return lifecycle.run(async () => {
+    if (users) syncNetworkAllowedDomains();
+  });
+}
+
 async function acquireIssueSandbox(): Promise<() => Promise<void>> {
   await lifecycle.run(async () => {
     if (!users) {
@@ -43,7 +59,7 @@ async function acquireIssueSandbox(): Promise<() => Promise<void>> {
         await SandboxManager.initialize({
           filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
           network: {
-            allowedDomains: [...issuePilotConfig.runtime.agent.networkAllowedDomains],
+            allowedDomains: [...applicationParameters().networkAllowedDomains],
             deniedDomains: [
               "localhost",
               `*:${issuePilotConfig.http.port}`,
@@ -67,7 +83,7 @@ async function acquireIssueSandbox(): Promise<() => Promise<void>> {
         }
         throw error;
       }
-    }
+    } else syncNetworkAllowedDomains();
     users++;
   });
   let released = false;

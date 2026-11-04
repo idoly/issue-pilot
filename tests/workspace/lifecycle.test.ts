@@ -34,6 +34,7 @@ import { WorktreeManager } from "../../src/workspace/git.ts";
 import {
   WorkspaceConversionRefusal,
   WorkspaceLifecycleManager,
+  workspaceLifecyclePolicy,
   WorkspaceReleaseRefusal,
   WorkspaceRestoreRefusal,
   WorkspaceScopeMigrationRefusal,
@@ -61,7 +62,7 @@ async function createRemote(root: string, name: string): Promise<string> {
 }
 
 test("uses the central Workspace lifecycle configuration", () => {
-  assert.deepEqual(issuePilotConfig.workspace, {
+  assert.deepEqual(workspaceLifecyclePolicy(), {
     retentionMs: 7 * 24 * 60 * 60 * 1000,
     highWaterBytes: 20 * 1024 ** 3,
     targetBytes: 16 * 1024 ** 3,
@@ -340,7 +341,32 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
 });
 
 test("rejects invalid Workspace task concurrency", () => {
-  assert.throws(() => new WorkspaceLifecycleManager({} as never, ".", engine as never, { ...issuePilotConfig.workspace, taskConcurrency: 0 }), /workspace_task_concurrency_invalid/);
+  assert.throws(() => new WorkspaceLifecycleManager({} as never, ".", engine as never, { ...workspaceLifecyclePolicy(), taskConcurrency: 0 }), /workspace_task_concurrency_invalid/);
+});
+
+test("applies an updated policy to the maintenance timer without restarting the manager", async () => {
+  const disabled = { retentionMs: Number.POSITIVE_INFINITY, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 };
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, disabled);
+  let cycles = 0;
+  (manager as unknown as { maintain(): Promise<unknown> }).maintain = async () => {
+    cycles++;
+    return { totalBytes: 0, released: [], blocked: [], failures: [] };
+  };
+  const stop = manager.start();
+  try {
+    assert.throws(() => manager.updatePolicy({ ...disabled, highWaterBytes: 10, targetBytes: 10 }), /workspace_target_must_be_below_high_water/);
+    assert.deepEqual(manager.policy, disabled);
+    manager.updatePolicy({ ...disabled, maintenanceIntervalMs: 5 });
+    const deadline = Date.now() + 2_000;
+    while (cycles < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.ok(cycles >= 2);
+    manager.updatePolicy(disabled);
+    const stoppedAt = cycles;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(cycles, stoppedAt);
+  } finally {
+    await stop();
+  }
 });
 
 test("stops maintenance only after the active exclusive operation drains", async () => {

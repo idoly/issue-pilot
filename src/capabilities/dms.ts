@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { applicationParameters } from "../configuration/parameters.ts";
 import { capabilityTextResult } from "./contracts.ts";
 import type { CapabilityConfig, CapabilityInputs } from "./registry.ts";
 import { workFileName, type IssueWorkFileStore } from "../workspace/work-files.ts";
@@ -29,7 +30,7 @@ type DmsConnectionConfiguration = Pick<CapabilityConfig<"dms">, "url" | "authori
 export type ConnectDmsMcp = (configured: DmsConnectionConfiguration, signal: AbortSignal) => Promise<DmsMcpSession>;
 
 function operationSignal(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(limits.executionMs);
+  const timeout = AbortSignal.timeout(applicationParameters().dmsExecutionMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
@@ -182,7 +183,11 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const result = await connectedClient.listTools(cursor ? { cursor } : undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
+        const result = await connectedClient.listTools(cursor ? { cursor } : undefined, {
+          signal: requestSignal,
+          timeout: applicationParameters().dmsExecutionMs,
+          maxTotalTimeout: applicationParameters().dmsExecutionMs,
+        });
         tools.push(...(result.tools as DmsMcpTool[]));
         // A remote server may page forever; keep discovery within the same tool budget as other MCP clients.
         if (tools.length > issuePilotConfig.limits.capability.mcp.tools) throw new Error("dms_mcp_too_many_tools");
@@ -193,7 +198,11 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       return tools;
     },
     async callTool(name, args, requestSignal) {
-      return connectedClient.callTool({ name, arguments: args }, undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
+      return connectedClient.callTool({ name, arguments: args }, undefined, {
+        signal: requestSignal,
+        timeout: applicationParameters().dmsExecutionMs,
+        maxTotalTimeout: applicationParameters().dmsExecutionMs,
+      });
     },
     close: () => connectedClient.close(),
   };
