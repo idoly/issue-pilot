@@ -7,6 +7,7 @@ import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readInBatches } from "../db/client.ts";
+import { errorCode } from "../diagnostics.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import {
   agentSessions,
@@ -24,7 +25,7 @@ import {
   services,
   subjects,
 } from "../db/schema.ts";
-import { ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
+import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
@@ -43,7 +44,7 @@ import {
 } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { ensureCurrentSubject, authorizeWorkMode, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, authorizeWorkMode, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
@@ -251,25 +252,11 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     return reply.code(204).send();
   });
 
-  // Filesystem failures are diagnosed by errno; their message embeds absolute paths that must not be logged.
-  const errnoCode = (error: unknown): string => {
-    const pending = [error],
-      seen = new Set<unknown>();
-    while (pending.length) {
-      const current = pending.pop();
-      if (!current || seen.has(current)) continue;
-      seen.add(current);
-      if (typeof current === "object" && "code" in current && typeof current.code === "string") return current.code;
-      if (current instanceof AggregateError) pending.push(...current.errors);
-      if (typeof current === "object" && "cause" in current) pending.push(current.cause);
-    }
-    return "unknown";
-  };
   // Staging files are temporary. After a committed operation, a failed cleanup is logged so the client
   // does not retry (and duplicate) work that already succeeded; on failure it joins the primary error.
   const removeStagedAttachments = async (request: FastifyRequest, pending: PendingAttachment[], failures: unknown[]): Promise<void> => {
     if (failures.length) return removePendingAttachments(pending, failures);
-    await removePendingAttachments(pending).catch((error: unknown) => request.log.error({ code: errnoCode(error) }, "attachment_staging_cleanup_failed"));
+    await removePendingAttachments(pending).catch((error: unknown) => request.log.error({ code: errorCode(error) }, "attachment_staging_cleanup_failed"));
   };
   const createIssue = async (
     input: Record<string, unknown>,
@@ -298,7 +285,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           }
         }
         const issueValues = await parseCreateIssueInput(input);
-        if (issueValues.environment.kind === "dev") await requireDevelopmentOwner(issueValues.assigneeSubject ?? reporterSubject);
+        if (issueValues.environment.kind === "dev") await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject }));
         const relatedIssues = await parseRelatedIssues(input);
         const issueId = randomUUID();
         return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
@@ -383,7 +370,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           const removedAttachmentIdSet = new Set(removedAttachmentIds);
           const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
           if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
-          if (issueEnvironment.kind === "dev") await requireDevelopmentOwner(issueValues.assigneeSubject ?? currentIssue.reporterSubject);
+          if (issueEnvironment.kind === "dev") await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
           const attachmentRoot = issueRoot(stateRoot, issue.key);
           const removableFiles = await Promise.all(
             removedAttachments.map(async (attachment) => ({
@@ -425,7 +412,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
             throw error;
           }
           // The update is committed; a leftover quarantined original is operator cleanup, not a failed edit.
-          await finalizeQuarantinedAttachments(quarantined).catch((error: unknown) => request.log.error({ issueKey: issue.key, code: errnoCode(error) }, "attachment_finalize_failed"));
+          await finalizeQuarantinedAttachments(quarantined).catch((error: unknown) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"));
           if (currentIssue.status !== "resolved") {
             reservation.enqueue(
               issue.id,
@@ -451,6 +438,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   });
 
   app.put<{ Params: { key: string } }>("/api/issues/:key/related-issues", async (request, reply) => {
+    await ensureCurrentSubject(database, request);
     const requestedKeys = parseRelatedIssueKeys(record(request.body));
     await runScopeExclusive(async () => {
       const issue = await requireIssue(database, request.params.key);
@@ -460,6 +448,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       ]);
       const reservationIds = [issue.id, ...existingRelations.map(({ relatedIssueId }) => relatedIssueId), ...requestedRows.map(({ id }) => id)];
       await runIssueExclusive(engine, reservationIds, async (reservation) => {
+        await ensureCurrentSubject(database, request);
         const currentIssue = await requireIssue(database, issue.key);
         const [[workspace], currentRelations] = await Promise.all([
           database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, currentIssue.id)).limit(1),
@@ -491,21 +480,19 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key/status", async (request) => {
+    await ensureCurrentSubject(database, request);
     const issue = await requireIssue(database, request.params.key);
     const targetStatus = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     if (targetStatus === "open") {
       try {
-        return serializeIssueSummary(await workspaces.reopenIssue(issue.id));
+        return serializeIssueSummary(await workspaces.reopenIssue(issue.id, () => ensureCurrentSubject(database, request)));
       } catch (error) {
-        if (error instanceof WorkspaceRestoreRefusal) {
-          // Only stable refusal codes may reach clients; unexpected failures stay internal and are logged.
-          if (!/^[a-z][a-z0-9_]*$/.test(error.reason)) throw error;
-          throw new ApiError(409, error.reason);
-        }
+        if (error instanceof WorkspaceRestoreRefusal) throwRefusal(error);
         throw error;
       }
     }
     return runIssueExclusive(engine, [issue.id], async (reservation) => {
+      await ensureCurrentSubject(database, request);
       const currentIssue = await requireIssue(database, issue.key);
       if (currentIssue.status !== "pending") throw new ApiError(409, "invalid_issue_status_transition");
       await reservation.closeSession(issue.id);
@@ -519,7 +506,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     });
   });
 
-  app.get<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
+  app.get<{ Params: { key: string } }>("/api/issues/:key", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
     const issue = await requireIssue(database, request.params.key);
     const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relationRows, scopeHistory] = await Promise.all([
       serializeIssueSummary(issue),

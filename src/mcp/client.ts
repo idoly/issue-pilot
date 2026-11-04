@@ -63,9 +63,12 @@ export function createMcpTransport(configuration: McpConfiguration, signal: Abor
 /** The settings-page connection test uses the protocol client without starting an Agent. */
 export const connectMcp: McpConnector = async (configuration, startupSignal) => {
   const transport = createMcpTransport(configuration, startupSignal);
-  const closeTransport = transport.close.bind(transport);
+  const originalClose = transport.close.bind(transport);
   let closing: Promise<void> | undefined;
-  transport.close = () => (closing ??= closeTransport());
+  const closeTransport = () => (closing ??= Promise.resolve().then(originalClose));
+  // Client.connect fires close without awaiting it on initialization failure. The SDK path must
+  // settle, while this owner awaits the same original promise and reports any cleanup failure.
+  transport.close = () => closeTransport().catch(() => undefined);
   const client = new Client({ name: "issue-pilot", version: "0.1.0" });
   let cancellation: ReturnType<typeof addAbortListener> | undefined;
   try {
@@ -76,9 +79,13 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
         cancellation = addAbortListener(startupSignal, () => reject(startupSignal.reason));
       }),
     ]);
-  } catch {
-    await transport.close().catch(() => {});
-    throw new McpFailure(startupSignal.aborted ? "mcp_timeout_or_aborted" : "mcp_connection_failed");
+  } catch (error) {
+    try {
+      await closeTransport();
+    } catch (cleanupError) {
+      throw new McpFailure("mcp_connection_cleanup_failed", { cause: new AggregateError([error, cleanupError]) });
+    }
+    throw new McpFailure(startupSignal.aborted ? "mcp_timeout_or_aborted" : "mcp_connection_failed", { cause: error });
   } finally {
     cancellation?.[Symbol.dispose]();
   }
@@ -99,21 +106,37 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
       return tools;
     },
     call: (name, input) => client.callTool({ name, arguments: input }, undefined, { signal: startupSignal, timeout: limits.executionMs }),
-    close: () => client.close(),
+    async close() {
+      await client.close();
+      await closeTransport();
+    },
   };
 };
 
 export async function inspectMcp(configuration: McpConfiguration, connect: McpConnector = connectMcp) {
   const signal = AbortSignal.timeout(limits.executionMs);
-  let session: McpSession | undefined;
   try {
-    session = await connect(configuration, signal);
-    return (await session.list()).map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true }));
+    const session = await connect(configuration, signal);
+    let tools: Array<{ name: string; readOnly: boolean }>;
+    try {
+      tools = (await session.list()).map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true }));
+    } catch (error) {
+      try {
+        await session.close();
+      } catch (cleanupError) {
+        throw new McpFailure("mcp_operation_cleanup_failed", { cause: new AggregateError([error, cleanupError]) });
+      }
+      throw error;
+    }
+    try {
+      await session.close();
+    } catch (error) {
+      throw new McpFailure("mcp_close_failed", { cause: error });
+    }
+    return tools;
   } catch (error) {
-    if (signal.aborted) throw new McpFailure("mcp_timeout");
     if (error instanceof McpFailure) throw error;
-    throw new McpFailure("mcp_operation_failed");
-  } finally {
-    await session?.close().catch(() => {});
+    if (signal.aborted) throw new McpFailure("mcp_timeout", { cause: error });
+    throw new McpFailure("mcp_operation_failed", { cause: error });
   }
 }

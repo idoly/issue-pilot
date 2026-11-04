@@ -4,7 +4,7 @@ import { createMemo, For, Show } from "solid-js";
 import type { IssueExecutionItem } from "../data/client";
 import { ChevronRight, RefreshCw } from "../ui/icons";
 import { useApplicationResources } from "./ApplicationResources";
-import { relativeTime } from "./model";
+import { environmentName, relativeTime } from "./model";
 
 type ExecutionState = "running" | "preparing" | "failed" | "pending";
 
@@ -39,7 +39,6 @@ export function Dashboard(props: {
   const running = createMemo(() => activeIssues().filter((issue) => issue.agentRunning || issue.workspaceStatus === "running" || issue.workspaceStatus === "preparing").length);
   const failed = createMemo(() => activeIssues().filter((issue) => issue.workspaceStatus === "failed").length);
   const unassigned = createMemo(() => activeIssues().filter((issue) => !issue.assigneeSubject).length);
-  const environmentName = (key: string) => catalog().environments.find((environment) => environment.key === key)?.name ?? key;
 
   return (
     <section class="dashboard-workspace">
@@ -102,7 +101,7 @@ export function Dashboard(props: {
                           <div>
                             <strong title={issue().title}>{issue().title}</strong>
                             <span>
-                              <code>{issue().id}</code> · {issue().service.name} / {environmentName(issue().environmentKey)}
+                              <code>{issue().id}</code> · {issue().service.name} / {environmentName(catalog().environments, issue().environmentKey)}
                             </span>
                           </div>
                           <span class="dashboard-assignee">{issue().assignee ?? "未分配"}</span>

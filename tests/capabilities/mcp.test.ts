@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { connectMcp, createMcpFetch, inspectMcp, type McpConfiguration, type McpTool } from "../../src/mcp/client.ts";
 
 const configuration: McpConfiguration = { id: "service-1", name: "Documents", url: "https://mcp.example.test/mcp", transport: "streamable_http", authorization: "Bearer private-token", enabled: true };
@@ -9,6 +10,70 @@ const definitions: McpTool[] = [
   { name: "write", inputSchema: schema, annotations: { destructiveHint: true } },
   { name: "unknown", inputSchema: schema },
 ];
+
+for (const outcome of ["success", "failure", "cancelled"] as const)
+  test(`MCP inspection reports close failures after ${outcome} without exposing private details`, async (context) => {
+    const controller = new AbortController();
+    const operation = new Error("private query detail"),
+      cleanup = new Error("private connection token");
+    context.mock.method(AbortSignal, "timeout", () => controller.signal);
+    let closes = 0;
+    await assert.rejects(
+      inspectMcp(configuration, async () => ({
+        async list() {
+          if (outcome === "cancelled") controller.abort(operation);
+          if (outcome !== "success") throw operation;
+          return definitions;
+        },
+        async close() {
+          closes++;
+          throw cleanup;
+        },
+      })),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, outcome === "success" ? "mcp_close_failed" : "mcp_operation_cleanup_failed");
+        assert.doesNotMatch(error.message, /private/);
+        if (outcome === "success") assert.equal(error.cause, cleanup);
+        else {
+          assert.ok(error.cause instanceof AggregateError);
+          assert.deepEqual(error.cause.errors, [operation, cleanup]);
+        }
+        return true;
+      },
+    );
+    assert.equal(closes, 1);
+    context.mock.restoreAll();
+    const retry = await inspectMcp(configuration, async () => ({
+      async list() {
+        return definitions;
+      },
+      async close() {},
+    }));
+    assert.equal(retry.length, definitions.length);
+  });
+
+test("MCP startup preserves failed connection and cleanup diagnostics", async (context) => {
+  const operation = new Error("private startup token"),
+    cleanup = new Error("private transport detail");
+  context.mock.method(globalThis, "fetch", async () => {
+    throw operation;
+  });
+  let closes = 0;
+  context.mock.method(StreamableHTTPClientTransport.prototype, "close", async () => {
+    closes++;
+    throw cleanup;
+  });
+  await assert.rejects(connectMcp(configuration, new AbortController().signal), (error) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "mcp_connection_cleanup_failed");
+    assert.ok(error.cause instanceof AggregateError);
+    assert.ok(error.cause.errors.includes(cleanup));
+    assert.doesNotMatch(error.message, /private/);
+    return true;
+  });
+  assert.equal(closes, 1);
+});
 
 for (const transport of ["streamable_http", "sse"] as const) {
   test(`connects ${transport} with protected headers and tests tools without invoking them`, async () => {

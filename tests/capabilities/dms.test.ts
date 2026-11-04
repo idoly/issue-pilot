@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import { test } from "node:test";
 
@@ -192,39 +193,62 @@ for (const output of [false, true])
     });
 
 for (const output of [false, true])
-  test(`retains DMS caller cancellation when ${output ? "export" : "query"} and close fail`, async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-cancel-close-"));
-    const store = new IssueWorkFileStore(root, "ISSUE-20261020-992");
-    const controller = new AbortController(),
-      reason = new Error("caller_cancelled");
-    let closes = 0;
-    const fixture = fixtureSession({
-      async listTools() {
-        return [executeScriptTool];
-      },
-      async callTool() {
-        controller.abort(reason);
-        throw reason;
-      },
-      async close() {
-        closes++;
-        throw new Error("private fixture cleanup detail");
-      },
-    });
-    try {
-      await store.generate("result.json", async (append) => {
-        await append("old-delivery");
+  for (const cancellation of ["caller", "deadline"] as const)
+    test(`retains DMS ${cancellation} cancellation when ${output ? "export" : "query"} and close fail`, async (context) => {
+      const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-cancel-close-"));
+      const store = new IssueWorkFileStore(root, "ISSUE-20261020-992");
+      const controller = new AbortController(),
+        reason = cancellation === "caller" ? new Error("caller_cancelled") : new DOMException("query expired", "TimeoutError"),
+        cleanup = new Error("private fixture cleanup detail");
+      if (cancellation === "deadline") context.mock.method(AbortSignal, "timeout", () => controller.signal);
+      let closes = 0;
+      const fixture = fixtureSession({
+        async listTools() {
+          return [executeScriptTool];
+        },
+        async callTool() {
+          controller.abort(reason);
+          throw reason;
+        },
+        async close() {
+          closes++;
+          throw cleanup;
+        },
       });
-      await assert.rejects(
-        queryDms({ schema: "orders", script: "SELECT 1", ...(output ? { export: { fileName: "result.json" } } : {}) }, configured, controller.signal, fixture.connect, store),
-        (error) => error === reason,
-      );
-      assert.equal(closes, 1);
-      assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "old-delivery");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+      try {
+        await store.generate("result.json", async (append) => {
+          await append("old-delivery");
+        });
+        await assert.rejects(
+          queryDms(
+            { schema: "orders", script: "SELECT 1", ...(output ? { export: { fileName: "result.json" } } : {}) },
+            configured,
+            cancellation === "caller" ? controller.signal : undefined,
+            fixture.connect,
+            store,
+          ),
+          (error) => {
+            let original = error;
+            if (cancellation === "deadline") {
+              assert.ok(error instanceof DmsOperationError);
+              assert.equal(error.message, "dms_mcp_timeout");
+              assert.equal(error.diagnostics.phase, "execute");
+              assert.equal(error.diagnostics.sqlDispatchAttempted, true);
+              assert.ok(error.cause instanceof Error);
+              assert.equal(error.cause.message, "dms_mcp_timeout");
+              original = error.cause.cause;
+            }
+            assert.ok(original instanceof AggregateError);
+            assert.deepEqual(original.errors, [reason, cleanup]);
+            return true;
+          },
+        );
+        assert.equal(closes, 1);
+        assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "old-delivery");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
 
 for (const phase of ["single", "double", "cancel"] as const)
   test(`retains DMS scope resolution ${phase} failure during cleanup`, async () => {
@@ -243,7 +267,7 @@ for (const phase of ["single", "double", "cancel"] as const)
       },
     });
     await assert.rejects(resolveDmsScope(configured, "ORDERS-PROD", "orders", controller.signal, fixture.connect), (error) => {
-      if (phase === "double") {
+      if (phase !== "single") {
         assert(error instanceof AggregateError);
         assert.equal(error.message, primary.message);
         assert.deepEqual(error.errors, [primary, cleanup]);
@@ -327,6 +351,41 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
       requests.every(({ url }) => new URL(url).origin === "https://dms.example.test"),
       true,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("rejects DMS tool discovery that exceeds the shared tool budget", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const send = (message: unknown) => stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
+  const tools = Array.from({ length: issuePilotConfig.limits.capability.mcp.tools + 1 }, (_, index) => ({ name: `tool_${index}`, inputSchema: { type: "object" } }));
+  globalThis.fetch = async (input, init) => {
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (method === "GET") {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+          controller.enqueue(encoder.encode("event: endpoint\ndata: /messages?session=budget\n\n"));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    const request = JSON.parse(String(init?.body)) as { id?: number; method: string };
+    if (request.method === "initialize") {
+      send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } });
+    } else if (request.method === "tools/list") {
+      send({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    }
+    return new Response(null, { status: 202 });
+  };
+  try {
+    const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), 1_000);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await assert.rejects(session.listTools(AbortSignal.timeout(5_000)), { message: "dms_mcp_too_many_tools" });
+    await session.close();
   } finally {
     globalThis.fetch = originalFetch;
   }

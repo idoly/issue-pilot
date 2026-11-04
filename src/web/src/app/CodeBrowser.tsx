@@ -5,6 +5,7 @@ import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Penci
 import { Codicon } from "../ui/Codicon";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { sourceLanguageName } from "./source-language";
+import { sourceIndentation } from "./source-editor-settings";
 import { EditorFileIcon } from "./EditorIcons";
 import { Portal } from "@solidjs/web";
 import { copyText } from "../ui/clipboard";
@@ -323,7 +324,7 @@ export default function CodeBrowser(props: {
     fileRequest = 0,
     comparisonRequest = 0,
     loadedIssue = "";
-  let savingRequest: { owner: number; sequence: number } | undefined;
+  let savingRequest: { owner: number } | undefined;
   let changesController: AbortController | undefined;
   const [changesError, setChangesError] = createSignal("", { ownedWrite: true });
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -629,30 +630,33 @@ export default function CodeBrowser(props: {
   }
   const save = async () => {
     const current = file();
-    if (!current || !dirty() || !editable() || mutating() || fileLoading() || (savingRequest?.owner === scope && savingRequest.sequence === fileRequest)) return;
-    const task = { owner: scope, sequence: fileRequest },
+    if (!current || !dirty() || !editable() || mutating() || saving() || fileLoading()) return;
+    const owner = scope,
       content = draft(),
-      name = repository();
+      name = repository(),
+      task = { owner };
     savingRequest = task;
     setSaving(true);
     setSaveBlocked(false);
     setError("");
     try {
       const saved = await saveSourceFile(props.issueKey, name, current.path, current.content.includes("\r\n") ? content.replace(/\n/g, "\r\n") : content, current.sha256);
-      if (task.owner !== scope || task.sequence !== fileRequest) return;
+      // A comparison bumps fileRequest but leaves this file open, so the saved content still owns the buffer.
+      if (owner !== scope || file() !== current) return;
       setFile(saved);
       setVersion((value) => value + 1);
     } catch (cause) {
-      if (task.owner === scope && task.sequence === fileRequest) {
+      if (owner === scope && file() === current) {
         setSaveBlocked(true);
         report(cause);
       }
     } finally {
       if (savingRequest === task) {
         savingRequest = undefined;
-        if (task.owner === scope && task.sequence === fileRequest) {
+        // The save settled: release the editor even when another view superseded its result.
+        if (owner === scope) {
           setSaving(false);
-          void refreshChanges();
+          if (file() === current) void refreshChanges();
         }
       }
     }
@@ -782,6 +786,11 @@ export default function CodeBrowser(props: {
     },
   );
   const compare = async (path: string, staged: boolean, revision?: string) => {
+    // A pending file load must not repopulate the editor after this comparison owns the panel.
+    fileRequest += 1;
+    fileController?.abort();
+    fileController = undefined;
+    setFileLoading(false);
     panelController?.abort();
     const request = new AbortController();
     panelController = request;
@@ -938,6 +947,11 @@ export default function CodeBrowser(props: {
         if (current.kind === "delete") await deleteSourcePath(key, name, current.path, current.directory);
       },
       async (created) => {
+        // The tree changed; a file load started before this mutation must not win the race.
+        fileRequest += 1;
+        fileController?.abort();
+        fileController = undefined;
+        setFileLoading(false);
         setAction(null);
         if (created) {
           if (name !== repository()) selectRepository(name);
@@ -1656,7 +1670,9 @@ export default function CodeBrowser(props: {
                 Ln {cursor().line}, Col {cursor().column}
               </span>
             </Show>
-            <span>Spaces: 2</span>
+            <span>
+              {sourceIndentation.insertSpaces ? "Spaces" : "Tabs"}: {sourceIndentation.tabSize}
+            </span>
             <span>UTF-8</span>
             <span>{lineEndings(file()?.content ?? "") === "mixed" ? "混合换行 · 只读" : lineEndings(file()?.content ?? "")}</span>
             <span>{sourceLanguageName(activePath())}</span>

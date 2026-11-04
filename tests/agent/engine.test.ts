@@ -819,6 +819,41 @@ test("reopens a session for a queued message after the preceding round failed", 
   }
 });
 
+test("reports background execution failures even when cleanup and failure persistence succeed", async () => {
+  const reported: unknown[] = [],
+    updates: Array<{ status?: string; lastError?: string }> = [];
+  const transaction = {
+    update: () => ({
+      set: (values: (typeof updates)[number]) => {
+        updates.push(values);
+        return { where: () => ({ returning: async () => [{ id: "issue-1" }] }) };
+      },
+    }),
+  };
+  const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
+  const failure = new Error("provider failed at /private/fixture-path");
+  const engine = new AgentEngine(database as never, unusedStateRoot, undefined, (error) => {
+    reported.push(error);
+    throw new Error("logger_failed");
+  });
+  const internal = engine as unknown as { schedule(issueId: string, operation: () => Promise<void>): void };
+  let nextRound = false;
+  try {
+    internal.schedule("issue-1", async () => {
+      throw failure;
+    });
+    internal.schedule("issue-1", async () => {
+      nextRound = true;
+    });
+    await waitFor(() => !engine.isRunning("issue-1"));
+    assert.deepEqual(reported, [failure]);
+    assert.equal(updates.find((update) => update.status === "failed")?.lastError, "agent_run_failed");
+    assert.equal(nextRound, true);
+  } finally {
+    await engine.close();
+  }
+});
+
 test("reports background cleanup failures without leaking logger errors", async () => {
   const reported: unknown[] = [];
   const database = {

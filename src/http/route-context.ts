@@ -10,6 +10,7 @@ import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 import type { WorkspaceLifecycleManager } from "../workspace/lifecycle.ts";
 import type { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import type { SourceBrowser } from "../workspace/source-browser.ts";
+import { isStableErrorCode } from "../diagnostics.ts";
 import { ApiError } from "./input.ts";
 
 export interface ApiRouteContext {
@@ -100,4 +101,10 @@ export async function runIssueExclusive<T>(engine: AgentController, issueIds: st
     if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
     throw error;
   }
+}
+
+/** Operator-correctable refusals carry stable snake_case reasons; any other failure stays internal. */
+export function throwRefusal(error: Error & { reason: string }): never {
+  if (!isStableErrorCode(error.reason)) throw error;
+  throw new ApiError(409, error.reason);
 }

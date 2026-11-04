@@ -34,7 +34,7 @@ import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
 import { attachmentPreviewKind } from "./file-preview";
-import { fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workModeLabel, workModeOptions } from "./model";
+import { environmentName, fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workModeLabel, workModeOptions } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
 
@@ -51,6 +51,9 @@ const workspaceErrorMessages: Record<string, string> = {
   personal_sls_credentials_incomplete: "个人 SLS 凭据不完整，请重新设置完整凭据后重试。",
   model_api_key_not_configured: "尚未配置模型 API Key，请在用户配置中设置个人或共享 API Key 后重试。",
   model_response_failed: "模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。",
+  agent_run_failed: "处理未完成：发生了未识别的错误。已有对话和文件已保留，请核对结果后重试处理。",
+  workspace_runtime_restore_failed: "代码工作区视图恢复失败，请重新打开工单或联系管理员检查运行环境。",
+  database_operation_failed: "数据库操作失败，请稍后重试；如持续出现请联系管理员。",
 };
 
 // Saving relations reserves this Issue and every selected related Issue, and needs their workspaces ready.
@@ -615,7 +618,7 @@ export function IssueWorkspace(props: {
             <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>
               {(relatedIssue) => {
                 const assignee = relatedIssue.assignee || relatedIssue.assigneeSubject || "未分配";
-                const environment = () => catalog().environments.find((item) => item.key === relatedIssue.environmentKey)?.name ?? relatedIssue.environmentKey;
+                const environment = () => environmentName(catalog().environments, relatedIssue.environmentKey);
                 return (
                   <a
                     class="related-issue-row"

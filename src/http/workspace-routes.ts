@@ -8,7 +8,7 @@ import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigr
 import { ScopeTransitionRefusal } from "../workspace/scope-transition.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
 import { ApiError, choice, record, text } from "./input.ts";
-import { authorizeWorkMode, requireIssue, type ApiRouteContext } from "./route-context.ts";
+import { authorizeWorkMode, requireCurrentUser, requireIssue, throwRefusal, type ApiRouteContext } from "./route-context.ts";
 
 function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["workspaces"]["inspectIssue"]>>) {
   return {
@@ -106,10 +106,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     };
   };
   const transitionError = (error: unknown): never => {
-    if (error instanceof ScopeTransitionRefusal || error instanceof WorkspaceConversionRefusal || error instanceof WorkspaceScopeMigrationRefusal) {
-      if (!/^[a-z][a-z0-9_]*$/.test(error.reason)) throw error;
-      throw new ApiError(409, error.reason);
-    }
+    if (error instanceof ScopeTransitionRefusal || error instanceof WorkspaceConversionRefusal || error instanceof WorkspaceScopeMigrationRefusal) throwRefusal(error);
     if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
     throw error;
   };
@@ -145,7 +142,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     try {
       const changed = await runScopeExclusive(async () => {
         await authorizeWorkMode(database, request, target.workMode);
-        return scopeTransitions.apply(issue.id, target, { expectedIssueUpdatedAt, expectedPlanHash }, actorSubject);
+        return scopeTransitions.apply(issue.id, target, { expectedIssueUpdatedAt, expectedPlanHash }, actorSubject, () => authorizeWorkMode(database, request, target.workMode));
       });
       return { issueKey: changed.key };
     } catch (error) {
@@ -154,14 +151,12 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   });
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key/workspace", async (request) => {
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     try {
-      return await workspaces.releaseIssue(issue.id);
+      return await workspaces.releaseIssue(issue.id, () => requireCurrentUser(database, request));
     } catch (error) {
-      if (error instanceof WorkspaceReleaseRefusal) {
-        if (!/^[a-z][a-z0-9_]*$/.test(error.reason)) throw error;
-        throw new ApiError(409, error.reason);
-      }
+      if (error instanceof WorkspaceReleaseRefusal) throwRefusal(error);
       throw error;
     }
   });

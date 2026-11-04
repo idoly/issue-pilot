@@ -8,6 +8,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
+import { stableErrorReason } from "../diagnostics.ts";
 import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, selectAgentConfiguration } from "../configuration/agent.ts";
@@ -26,7 +27,7 @@ import { prepareIssueWorkDirectory } from "../workspace/work-files.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, applicationSettings, issueAttachments, mcpServices, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, errorMessage, type AgentRunState, type CapabilityName, type DeploymentConfig, type EnvironmentKind } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, errorMessage, personGitIdentity, type AgentRunState, type CapabilityName, type DeploymentConfig, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "./model-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
@@ -297,7 +298,7 @@ export class AgentEngine implements AgentController {
               .update(issueWorkspaces)
               .set({
                 status: "failed",
-                lastError: errorMessage(error),
+                lastError: stableErrorReason(error, "agent_run_failed"),
                 updatedAt: new Date(),
               })
               .where(eq(issueWorkspaces.issueId, issueId))
@@ -309,7 +310,7 @@ export class AgentEngine implements AgentController {
         } catch (reportingError) {
           cleanupFailures.push(reportingError);
         }
-        if (cleanupFailures.length) this.reportError(new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed"));
+        this.reportError(cleanupFailures.length ? new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed") : error);
       } finally {
         // Keep execution and failure cleanup in the same per-Issue serialized round.
         this.executingIssues.delete(issueId);
@@ -406,7 +407,7 @@ export class AgentEngine implements AgentController {
       // Failed targets stay discoverable; the selected query reports its own credential error at execution time.
       const resolved = { ...(config as DeploymentConfig) };
       const credentialErrors: Partial<Record<CapabilityName, string>> = {};
-      for (const capability of ["dms", "sls"] as const) {
+      for (const capability of CAPABILITY_KEYS) {
         if (!config[capability]) continue;
         try {
           Object.assign(resolved, applyIssueCredentials({ [capability]: config[capability] }, owner.credentials, shared));
@@ -454,7 +455,7 @@ export class AgentEngine implements AgentController {
         manager,
         readRoots: project.relatedIssueKeys.map((key) => issueRoot(this.stateRoot, key)),
         gitAccess: environmentKind === "dev" ? "write" : "read",
-        gitIdentity: owner.user.role === "developer" ? { name: owner.user.displayName ?? owner.user.subject, email: owner.user.email ?? `${owner.user.subject}@localhost` } : gitIdentity,
+        gitIdentity: owner.user.role === "developer" ? personGitIdentity(owner.user) : gitIdentity,
         modelApiKey,
         ...(personalGit ? { gitEnvironment: personalGit.env, gitReadRoots: personalGit.readRoots } : {}),
         workFiles: new IssueWorkFileStore(this.stateRoot, issue.key),
@@ -507,10 +508,7 @@ export class AgentEngine implements AgentController {
   private async gitIdentity(subject: string): Promise<GitCommitIdentity> {
     const [person] = await this.database.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
     if (!person) throw new Error("issue_reporter_not_found");
-    return {
-      name: person.displayName ?? person.subject,
-      email: person.email ?? `${person.subject}@localhost`,
-    };
+    return personGitIdentity(person);
   }
 
   private reportError(error: unknown): void {

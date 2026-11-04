@@ -536,7 +536,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     }
     const issueId = props.issue.id;
     const submitGeneration = issueGeneration;
-    const submitRevision = draftStore.revision();
     const submittedEditor = record.pasteEditor;
     record.text = "";
     record.images = [];
@@ -550,7 +549,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setSending(true);
     setError("");
     scrollLatest();
-    const submitCurrent = () => submitGeneration === issueGeneration && submitRevision === draftStore.revision() && draftRecord === record;
+    const submitCurrent = () => submitGeneration === issueGeneration && draftRecord === record && draftStore.isCurrent(issueId, record);
     try {
       if (pendingImages.length)
         await sendAgentMessage(
@@ -562,6 +561,10 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       discardImages(pendingImages);
       if (submitCurrent()) setProcessing(true);
     } catch (cause) {
+      if (!draftStore.isCurrent(issueId, record)) {
+        discardImages(pendingImages);
+        return;
+      }
       let failureMessage = cause instanceof Error ? cause.message : "agent_message_failed";
       if (failureMessage === "agent_message_too_long") failureMessage = `消息超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
       else if (failureMessage === "invalid_agent_message") failureMessage = "消息内容无效，请输入文字后重新发送。";
@@ -602,7 +605,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         });
       }
       // A remounted panel for this Issue reloads the record's outcome.
-      else draftStore.touch();
+      else if (draftStore.isCurrent(issueId, record)) draftStore.touch();
     }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {

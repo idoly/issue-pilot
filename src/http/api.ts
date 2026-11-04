@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DrizzleQueryError } from "drizzle-orm";
-import { errorDiagnostic } from "../diagnostics.ts";
+import { errorChain, errorDiagnostic } from "../diagnostics.ts";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 
@@ -157,21 +157,19 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         return reply.code(413).send({ error: "payload_too_large" });
       if (code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") return reply.code(415).send({ error: "unsupported_media_type" });
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
-      const errorMessages: string[] = [];
-      const seenCauses = new Set<unknown>();
-      let cause: unknown = error;
-      while (cause && !seenCauses.has(cause)) {
-        seenCauses.add(cause);
-        if (!(cause instanceof DrizzleQueryError)) errorMessages.push(cause instanceof Error ? cause.message : String(cause));
-        cause = typeof cause === "object" && "cause" in cause ? (cause as { cause?: unknown }).cause : undefined;
-      }
-      const errorChain = errorMessages.join("\n");
-      for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
-        if (errorChain.includes(conflict)) return reply.code(409).send({ error: conflict });
-      }
+      // Known failure codes keep their status; the joined chain stays internal and never reaches the client.
+      const errorMessages = errorChain(error)
+        .filter((cause) => !(cause instanceof DrizzleQueryError))
+        .map((cause) => (cause instanceof Error ? cause.message : String(cause)))
+        .join("\n");
+      // A rollback or cleanup failure dominates the constraint error wrapped in its AggregateError: the state was not
+      // cleanly settled, so reporting a retryable conflict (or keeping the failure out of the log) would mislead.
       for (const operationalError of [
         "attachment_finalize_failed",
         "attachment_rollback_failed",
+        "attachment_staging_cleanup_failed",
+        "attachment_copy_cleanup_failed",
+        "attachment_read_cleanup_failed",
         "issue_state_rollback_failed",
         "issue_update_rollback_failed",
         "source_rename_rollback_failed",
@@ -180,16 +178,22 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "source_path_cleanup_failed",
         "workspace_runtime_restore_failed",
         "issue_workspace_missing",
+        "issue_workspace_not_found",
+        "issue_service_not_found",
+        "issue_environment_not_found",
         "agent_session_file_incomplete",
         "agent_session_file_missing",
       ]) {
-        if (errorChain.includes(operationalError)) {
+        if (errorMessages.includes(operationalError)) {
           app.log.error(errorDiagnostic(error));
           return reply.code(500).send({ error: operationalError });
         }
       }
-      if (/UNIQUE constraint failed/i.test(errorChain)) return reply.code(409).send({ error: "conflict" });
-      if (/FOREIGN KEY constraint failed/i.test(errorChain)) return reply.code(409).send({ error: "resource_in_use" });
+      for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
+        if (errorMessages.includes(conflict)) return reply.code(409).send({ error: conflict });
+      }
+      if (/UNIQUE constraint failed/i.test(errorMessages)) return reply.code(409).send({ error: "conflict" });
+      if (/FOREIGN KEY constraint failed/i.test(errorMessages)) return reply.code(409).send({ error: "resource_in_use" });
       app.log.error(errorDiagnostic(error));
       return reply.code(500).send({ error: "internal_error" });
     });

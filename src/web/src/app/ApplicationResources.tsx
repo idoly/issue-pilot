@@ -65,7 +65,10 @@ export function ApplicationResourcesProvider(props: ParentProps) {
     event.returnValue = "";
   };
   window.addEventListener("beforeunload", beforeUnload);
-  onCleanup(() => window.removeEventListener("beforeunload", beforeUnload));
+  onCleanup(() => {
+    window.removeEventListener("beforeunload", beforeUnload);
+    agentDrafts.clearAll();
+  });
   let lastSubject: string | null | undefined;
   createEffect(
     () => currentUser()?.subject ?? null,

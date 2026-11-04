@@ -2,6 +2,7 @@ import { Button, Segmented, Select, Skeleton } from "../ui";
 import { createEffect, createSignal, lazy, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
+import { parseIssueKey } from "../../../domain/contracts";
 import { DingtalkImportButton } from "./DingtalkImportDialog";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
@@ -122,8 +123,7 @@ function ResourceBackedOverview(props: { onSelectIssue: (issueKey: string) => vo
 }
 
 function linkedIssueFromUrl(): string {
-  const key = new URLSearchParams(window.location.search).get("issue") ?? "";
-  return /^ISSUE-\d{8}-\d{3,}$/i.test(key) ? key.toUpperCase() : "";
+  return parseIssueKey(new URLSearchParams(window.location.search).get("issue") ?? "") ?? "";
 }
 
 export function App(props: { initialView?: AppView } = {}) {

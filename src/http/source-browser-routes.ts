@@ -1,5 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { personGitIdentity } from "../domain/contracts.ts";
 import { ApiError } from "./input.ts";
 import { requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
@@ -106,8 +107,15 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
   register("repositories", (issue) => sourceBrowser.repositories(issue));
   register("tree", (issue, request) => sourceBrowser.tree(issue, repository(request), relativePath(request)));
   register("file", (issue, request) => sourceBrowser.file(issue, repository(request), relativePath(request, true)));
-  const mutate = <T>(request: FastifyRequest<{ Params: { key: string } }>, operation: (issue: Issue) => Promise<T>) =>
-    requireIssue(database, request.params.key).then((issue) => runIssueExclusive(engine, [issue.id], () => sourceOperation(() => operation(issue))));
+  const mutate = async <T>(request: SourceRequest, operation: (issue: Issue, person: Awaited<ReturnType<typeof requireCurrentUser>>) => Promise<T>) => {
+    await requireCurrentUser(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    return runIssueExclusive(engine, [issue.id], async () => {
+      const person = await requireCurrentUser(database, request);
+      const current = await requireIssue(database, issue.key);
+      return sourceOperation(() => operation(current, person));
+    });
+  };
   app.put<{ Params: { key: string }; Body: string }>(
     "/api/issues/:key/source/file",
     {
@@ -117,10 +125,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
     async (request, reply) => {
       reply.header("Cache-Control", "private, no-store");
       if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
-      const issue = await requireIssue(database, request.params.key);
-      return runIssueExclusive(engine, [issue.id], () =>
-        sourceOperation(() => sourceBrowser.writeFile(issue, repository(request), relativePath(request, true), request.body, headerValue(request.headers["x-issue-pilot-sha256"], true))),
-      );
+      return mutate(request, (issue) => sourceBrowser.writeFile(issue, repository(request), relativePath(request, true), request.body, headerValue(request.headers["x-issue-pilot-sha256"], true)));
     },
   );
   app.post<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", { logLevel: "silent", bodyLimit: sourceFileBodyLimit }, (request) => {
@@ -155,15 +160,9 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
     ["discard", (issue: Issue, request: GitRequest) => sourceBrowser.discard(issue, repository(request), gitPaths(request))],
   ] as const)
     app.post<{ Params: { key: string }; Body: { paths?: unknown } }>(`/api/issues/:key/source/${action}`, { logLevel: "silent" }, (request) => mutate(request, (issue) => operation(issue, request)));
-  app.post<{ Params: { key: string }; Body: { message?: unknown } }>("/api/issues/:key/source/commit", { logLevel: "silent" }, async (request) => {
-    const person = await requireCurrentUser(database, request);
-    return mutate(request, (issue) =>
-      sourceBrowser.createCommit(issue, repository(request), typeof request.body?.message === "string" ? request.body.message : "", {
-        name: person.displayName ?? person.subject,
-        email: person.email ?? `${person.subject}@localhost`,
-      }),
-    );
-  });
+  app.post<{ Params: { key: string }; Body: { message?: unknown } }>("/api/issues/:key/source/commit", { logLevel: "silent" }, (request) =>
+    mutate(request, (issue, person) => sourceBrowser.createCommit(issue, repository(request), typeof request.body?.message === "string" ? request.body.message : "", personGitIdentity(person))),
+  );
   register("search", (issue, request, signal) =>
     sourceBrowser.search(issue, repository(request), headerValue(request.headers["x-issue-pilot-query"], true), {
       signal,

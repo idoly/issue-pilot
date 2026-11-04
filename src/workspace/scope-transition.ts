@@ -208,14 +208,14 @@ export class IssueScopeTransitionManager {
     }));
   }
 
-  async apply(issueId: string, target: ScopeTransitionTarget, expectation: ScopeTransitionExpectation, actorSubject: string): Promise<typeof issues.$inferSelect> {
+  async apply(issueId: string, target: ScopeTransitionTarget, expectation: ScopeTransitionExpectation, actorSubject: string, authorize?: () => Promise<unknown>): Promise<typeof issues.$inferSelect> {
     const initialPlan = await this.plan(issueId, target);
     this.assertExpected(initialPlan, expectation);
     if (initialPlan.action === "none") return this.issue(issueId);
     const recordTransition = this.transitionAudit(issueId, actorSubject, initialPlan);
     if (initialPlan.action === "convert_to_development") {
       try {
-        return await this.workspaces.convertIssueToDevelopment(issueId, expectation.expectedIssueUpdatedAt, recordTransition);
+        return await this.workspaces.convertIssueToDevelopment(issueId, expectation.expectedIssueUpdatedAt, recordTransition, authorize);
       } catch (error) {
         if (error instanceof Error && error.message === "scope_transition_plan_stale") throw new ScopeTransitionRefusal(error.message);
         throw error;
@@ -228,9 +228,18 @@ export class IssueScopeTransitionManager {
         this.database.select().from(environments).where(eq(environments.kind, targetScope.environmentKind)).limit(1),
       ]);
       if (!targetService || !targetEnvironment) throw new ScopeTransitionRefusal("scope_transition_plan_stale");
-      return this.workspaces.migrateDevelopmentIssueScope(issueId, { serviceId: targetService.id, environmentId: targetEnvironment.id }, expectation.expectedIssueUpdatedAt, recordTransition);
+      return this.workspaces.migrateDevelopmentIssueScope(
+        issueId,
+        { serviceId: targetService.id, environmentId: targetEnvironment.id },
+        expectation.expectedIssueUpdatedAt,
+        recordTransition,
+        authorize,
+      );
     }
-    return this.engine.runExclusive([issueId], async (reservation) => this.applyReadOnlyRebind(issueId, target, expectation, actorSubject, reservation));
+    return this.engine.runExclusive([issueId], async (reservation) => {
+      await authorize?.();
+      return this.applyReadOnlyRebind(issueId, target, expectation, actorSubject, reservation);
+    });
   }
 
   private async applyReadOnlyRebind(

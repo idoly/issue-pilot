@@ -1428,6 +1428,46 @@ test("cached storage eligibility cannot release a subsequently changed checkout"
   }
 });
 
+test("statistics reuse one sample across a maintenance cycle unless refreshed", async (context) => {
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
+    retentionMs: Number.POSITIVE_INFINITY,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 15 * 60_000,
+    taskConcurrency: 1,
+  });
+  const internal = manager as unknown as {
+    issueRows(): Promise<Array<{ issue: { id: string; key: string }; workspace: null }>>;
+    inspectLocked(row: { issue: { id: string; key: string } }, repositories?: unknown, knownBytes?: number): Promise<WorkspaceInspection>;
+  };
+  internal.issueRows = async () => [{ issue: { id: "issue-a", key: "ISSUE-20260814-001" }, workspace: null }];
+  let inspections = 0;
+  internal.inspectLocked = async ({ issue }) => {
+    inspections += 1;
+    return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
+  };
+  const first = await manager.stats();
+  assert.equal(inspections, 1);
+  context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  // A page revisit within the maintenance cycle serves the sampled snapshot instead of rescanning the fleet.
+  context.mock.timers.tick(5 * 60_000);
+  const cached = await manager.stats();
+  assert.equal(inspections, 1);
+  assert.equal(cached.sampledAt, first.sampledAt);
+  // Automatic maintenance changes workspace state, so its cache must not outlive that pass.
+  await manager.maintain();
+  const maintained = await manager.stats();
+  assert.equal(inspections, 2);
+  assert.notEqual(maintained.sampledAt, first.sampledAt);
+  // The explicit refresh still measures.
+  await manager.stats(true);
+  assert.equal(inspections, 3);
+  // Expiry after one maintenance cycle measures again.
+  context.mock.timers.tick(15 * 60_000 + 1);
+  await manager.stats();
+  assert.equal(inspections, 4);
+});
+
 test("a refresh requested during an in-flight scan measures again instead of sharing the older scan", async () => {
   const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,

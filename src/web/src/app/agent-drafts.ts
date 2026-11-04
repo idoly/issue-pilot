@@ -43,6 +43,10 @@ export class AgentDraftStore {
     return record;
   }
 
+  isCurrent(issueId: string, record: AgentDraftRecord): boolean {
+    return this.records.get(issueId) === record;
+  }
+
   /** Unsent text, images or an in-flight send would be lost on reload. */
   hasPending(): boolean {
     for (const record of this.records.values()) if (record.sending || record.text.trim().length > 0 || record.images.length) return true;

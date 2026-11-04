@@ -7,7 +7,8 @@ import { eq } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
 import { lstat } from "node:fs/promises";
-import { ISSUE_PRIORITIES, ISSUE_WORK_MODES } from "../domain/contracts.ts";
+import { ISSUE_KEY_PATTERN, ISSUE_PRIORITIES, ISSUE_WORK_MODES, parseIssueKey } from "../domain/contracts.ts";
+import { isStableErrorCode } from "../diagnostics.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
 import { sessionTranscript } from "../agent/events.ts";
@@ -15,7 +16,7 @@ import { issueRoot } from "../workspace/state.ts";
 import { ensureCurrentSubject, requireIssue, type ApiRouteContext } from "../http/route-context.ts";
 
 const limits = issuePilotConfig.limits.mcpServer;
-const key = str({ pattern: "^ISSUE-[0-9]{8}-[0-9]{3,}$", description: "工单编号" });
+const key = str({ pattern: ISSUE_KEY_PATTERN, description: "工单编号" });
 const paging = { offset: opt(int({ minimum: 0 })), limit: opt(int({ minimum: 1, maximum: limits.pageItems })) };
 const linePaging = { offset: opt(int({ minimum: 0 })), limit: opt(int({ minimum: 1, maximum: limits.textLines })) };
 const attachment = obj({
@@ -150,7 +151,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       let code = "mcp_api_failed";
       try {
         const error = JSON.parse(response.body).error;
-        if (typeof error === "string" && /^[a-z_]+$/.test(error)) code = error;
+        if (typeof error === "string" && isStableErrorCode(error)) code = error;
       } catch {}
       throw new Error(code);
     }
@@ -241,7 +242,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       if (!validators.get(definition.name)!.check(input)) throw new Error("mcp_invalid_input_or_operation_failed");
       return bounded(await call(definition.name, input));
     } catch (error) {
-      const message = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "mcp_invalid_input_or_operation_failed";
+      const message = error instanceof Error && isStableErrorCode(error.message) ? error.message : "mcp_invalid_input_or_operation_failed";
       return { isError: true, content: [{ type: "text" as const, text: message }] };
     }
   });
@@ -251,9 +252,10 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
   }));
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const catalog = /^issue-pilot:\/\/catalog\/(services|users)$/.exec(request.params.uri);
-    const match = /^issue-pilot:\/\/issues\/(ISSUE-\d{8}-\d{3,})$/.exec(request.params.uri);
-    if (!catalog && !match) throw new Error("mcp_resource_not_found");
-    const result = bounded(await call(catalog ? `${catalog[1]}_list` : "issue_get", match ? { key: match[1] } : {}));
+    const resource = /^issue-pilot:\/\/issues\/(.+)$/.exec(request.params.uri);
+    const issueKey = resource ? parseIssueKey(resource[1]!) : undefined;
+    if (!catalog && !issueKey) throw new Error("mcp_resource_not_found");
+    const result = bounded(await call(catalog ? `${catalog[1]}_list` : "issue_get", issueKey ? { key: issueKey } : {}));
     return { contents: [{ uri: request.params.uri, mimeType: "application/json", text: result.content[0]!.text }] };
   });
   return server;

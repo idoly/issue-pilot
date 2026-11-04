@@ -40,11 +40,11 @@ export async function readSlsLogs(input: CapabilityInputs["sls"], configured: Ca
   try {
     return await readSlsCli(selected, query, active, executor);
   } catch (error) {
+    // A temporary AccessKey profile may remain on disk; preserve cleanup failures even after cancellation.
+    if (error instanceof Error && error.message === "sls_credential_cleanup_failed") throw error;
     if (signal?.aborted) signal.throwIfAborted();
     if (active.aborted) throw new Error("sls_query_timeout");
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new Error("sls_cli_not_available");
-    // A temporary AccessKey profile may remain on disk; keep that stable code and its causes for the operator.
-    if (error instanceof Error && error.message === "sls_credential_cleanup_failed") throw error;
     if (error instanceof Error && (SLS_QUERY_ERRORS.includes(error.message) || error.message === "capability_result_too_large" || error.message === "command_output_too_large")) throw error;
     throw new Error("sls_query_failed");
   }

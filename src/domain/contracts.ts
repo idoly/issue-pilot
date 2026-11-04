@@ -6,7 +6,8 @@ export function canUseIssueWorkMode(role: UserRole, workMode: IssueWorkMode): bo
   return role === "developer" || issueScopeForWorkMode(workMode).repositoryAccess !== "write";
 }
 
-const ISSUE_KEY = /^ISSUE-[0-9]{8}-[0-9]{3,}$/i;
+export const ISSUE_KEY_PATTERN = "^ISSUE-[0-9]{8}-[0-9]{3,}$";
+const ISSUE_KEY = new RegExp(ISSUE_KEY_PATTERN, "i");
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -172,6 +173,16 @@ export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "dms" | "sls"
     /** Historical deployment bindings; MCP availability is now global. */
     mcpServices?: string[];
   };
+
+/** Credential owner is the assignee, else the reporter; callers still enforce that the owner is active. */
+export function credentialOwnerSubject(issue: { assigneeSubject: string | null; reporterSubject: string }): string {
+  return issue.assigneeSubject ?? issue.reporterSubject;
+}
+
+/** Commits stay attributable when a person has no display name or email address on record. */
+export function personGitIdentity(person: { subject: string; displayName: string | null; email: string | null }): { name: string; email: string } {
+  return { name: person.displayName ?? person.subject, email: person.email ?? `${person.subject}@localhost` };
+}
 
 export function configuredCapabilities(config: Partial<Record<CapabilityName, unknown>>): CapabilityName[] {
   return CAPABILITY_KEYS.filter((key) => config[key] !== undefined);

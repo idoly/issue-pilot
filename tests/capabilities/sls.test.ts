@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { access, chmod, readFile, rm, stat } from "node:fs/promises";
+import fs, { access, chmod, readFile, rm, stat } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import type { CommandExecutor } from "../../src/process.ts";
@@ -202,6 +203,47 @@ test("SLS preserves cancellation and removes its temporary credentials", async (
   );
   assert.equal(called, false);
 });
+
+for (const cancellation of ["caller", "deadline"] as const)
+  test(`SLS retains credential cleanup failures after ${cancellation} cancellation`, async (context) => {
+    const controller = new AbortController();
+    const reason = cancellation === "caller" ? new Error("caller_cancelled") : new DOMException("query expired", "TimeoutError");
+    const cleanup = Object.assign(new Error("fixture cleanup failure"), { code: "EACCES" });
+    const remove = fs.rm;
+    let directory = "";
+    context.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+      if (args[0] === directory) throw cleanup;
+      return remove(...args);
+    });
+    if (cancellation === "deadline") context.mock.method(AbortSignal, "timeout", () => controller.signal);
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        readSlsLogs(base, configured, cancellation === "caller" ? controller.signal : undefined, {
+          async execute(_command, args, options) {
+            directory = path.dirname(args[args.indexOf("--config-path") + 1]!);
+            controller.abort(reason);
+            options!.signal!.throwIfAborted();
+            throw new Error("unreachable");
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof AggregateError);
+          assert.equal(error.message, "sls_credential_cleanup_failed");
+          assert.deepEqual(error.errors, [reason, cleanup]);
+          return true;
+        },
+      );
+      assert.equal(await readFile(path.join(directory, "config.json"), "utf8").then((content) => content.includes(configured.accessKeySecret)), true);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      if (directory) await rm(directory, { recursive: true, force: true });
+    }
+    const retry = fixture([page([])]);
+    await readSlsLogs(base, configured, undefined, retry.executor);
+    await assert.rejects(access(retry.calls[0]!.configPath), { code: "ENOENT" });
+  });
 
 test("SLS does not expose raw CLI errors and classifies missing CLI without a fallback identity", async () => {
   const f = fixture([new Error("fixture-secret private log content")]);

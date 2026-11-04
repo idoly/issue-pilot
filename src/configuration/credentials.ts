@@ -1,13 +1,6 @@
-import { CapabilityConfigurationError, parseDmsScopeConfiguration, parseSlsScopeConfiguration } from "../capabilities/registry.ts";
+import { fail, inputRecord, parseDmsScopeConfiguration, parseSlsScopeConfiguration } from "../capabilities/registry.ts";
 import { CAPABILITY_KEYS, type CapabilityName, type StoredDeploymentConfig } from "../domain/contracts.ts";
 import { CAPABILITY_CREDENTIAL_FIELDS, type ProjectedCapabilityConfiguration } from "./contracts.ts";
-function fail(code: string): never {
-  throw new CapabilityConfigurationError(code);
-}
-function inputRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid_request");
-  return value as Record<string, unknown>;
-}
 export function projectCapabilityConfiguration(configuration: StoredDeploymentConfig): ProjectedCapabilityConfiguration {
   const projected: Record<string, unknown> = {};
   for (const key of CAPABILITY_KEYS) {
@@ -23,7 +16,12 @@ function resolveCapabilityConfiguration(key: CapabilityName, value: unknown): No
   const fields = CAPABILITY_CREDENTIAL_FIELDS[key] as readonly string[];
   if (fields.some((field) => field in input)) fail("credential_fields_not_allowed");
   if (Object.hasOwn(input, "credentialUpdate")) fail(`service_${key}_credentials_not_allowed`);
-  return key === "dms" ? parseDmsScopeConfiguration(input) : parseSlsScopeConfiguration(input);
+  switch (key) {
+    case "dms":
+      return parseDmsScopeConfiguration(input);
+    case "sls":
+      return parseSlsScopeConfiguration(input);
+  }
 }
 export function resolveConfiguredCapabilitySections(input: Record<string, unknown>, capabilities: CapabilityName[]): Pick<StoredDeploymentConfig, CapabilityName> {
   const selected = new Set(capabilities);

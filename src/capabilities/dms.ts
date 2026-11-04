@@ -38,28 +38,24 @@ function cancellationError(signal: AbortSignal): Error {
   return new Error("dms_mcp_aborted");
 }
 
-async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, signal: AbortSignal, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
+async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
   let closing: Promise<void> | undefined;
   const close = () => (closing ??= Promise.resolve().then(() => session.close()));
-  let failure: { error: unknown } | undefined;
+  let result: T;
   try {
-    return await operation(close);
+    result = await operation(close);
   } catch (error) {
-    failure = { error };
-    throw error;
-  } finally {
     try {
       await close();
     } catch (cleanupError) {
-      signal.throwIfAborted();
       // An export may have already awaited this same close failure before replacing the working file.
-      // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
-      if (!failure || failure.error === cleanupError) throw cleanupError;
-      const primary = failure.error;
-      // biome-ignore lint/correctness/noUnsafeFinally: aggregates the in-flight primary error with the close failure.
-      throw new AggregateError([primary, cleanupError], primary instanceof Error ? primary.message : "dms_mcp_operation_cleanup_failed");
+      if (error === cleanupError) throw error;
+      throw new AggregateError([error, cleanupError], error instanceof Error ? error.message : "dms_mcp_operation_cleanup_failed");
     }
+    throw error;
   }
+  await close();
+  return result;
 }
 
 function retryAfterMs(value: string | null): number | undefined {
@@ -188,6 +184,8 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       do {
         const result = await connectedClient.listTools(cursor ? { cursor } : undefined, { signal: requestSignal, timeout: limits.executionMs, maxTotalTimeout: limits.executionMs });
         tools.push(...(result.tools as DmsMcpTool[]));
+        // A remote server may page forever; keep discovery within the same tool budget as other MCP clients.
+        if (tools.length > issuePilotConfig.limits.capability.mcp.tools) throw new Error("dms_mcp_too_many_tools");
         cursor = result.nextCursor;
         if (cursor && (cursor.length > 1024 || cursors.has(cursor))) throw new Error("dms_mcp_invalid_cursor");
         if (cursor) cursors.add(cursor);
@@ -271,7 +269,7 @@ export async function resolveDmsScope(
 ): Promise<DmsScopeResolution> {
   const boundedSignal = operationSignal(signal);
   const session = await connect(configured, boundedSignal);
-  return withDmsSession(session, boundedSignal, async () => {
+  return withDmsSession(session, async () => {
     const tools = await session.listTools(boundedSignal);
     const instanceTool = uniqueTool(tools, "listInstances", isReadOnlyTool);
     const databaseTool = uniqueTool(tools, "getDatabase", isReadOnlyTool);
@@ -360,7 +358,7 @@ export async function queryDms(input: CapabilityInputs["dms"], configured: Capab
       }
       return connect(configured, boundedSignal);
     });
-    return await withDmsSession({ close: () => phase("close", () => session.close()) }, boundedSignal, async (close) => {
+    return await withDmsSession({ close: () => phase("close", () => session.close()) }, async (close) => {
       const tool = uniqueTool(await phase("discovery", () => session.listTools(boundedSignal)), "executeScript", isReadOnlyScriptTool);
       if (!tool) {
         failedPhase = "discovery";
@@ -406,7 +404,7 @@ export async function queryDms(input: CapabilityInputs["dms"], configured: Capab
         sqlDispatchAttempted,
         ...(httpError?.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: httpError.retryAfterSeconds }),
       },
-      boundedSignal.aborted ? cancellationError(boundedSignal) : error,
+      boundedSignal.aborted ? new Error("dms_mcp_timeout", { cause: error }) : error,
     );
   }
 }

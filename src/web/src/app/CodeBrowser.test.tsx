@@ -134,6 +134,29 @@ describe("native code browser", () => {
     expect(screen.getByLabelText("文件保存状态").textContent).toBe("已保存");
   });
 
+  it("releases the editor when a comparison supersedes an in-flight save", async () => {
+    let finish!: (value: ReturnType<typeof file>) => void;
+    api.saveSourceFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    mount();
+    const editor = await open();
+    await fireEvent.input(editor, { target: { value: "edited" } });
+    fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(screen.getByLabelText("文件保存状态").textContent).toBe("保存中…"));
+    // A read-only comparison owns the panel while the save is still in flight; the save must settle anyway.
+    fireEvent.click(screen.getByRole("button", { name: "变更" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Saved change/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /提交文件 a\.txt/ }));
+    await waitFor(() => expect(api.loadSourceCommitFile).toHaveBeenCalledTimes(1));
+    finish({ ...file("a.txt", "edited"), sha256: "b".repeat(64) });
+    fireEvent.click(await screen.findByRole("button", { name: "关闭差异" }));
+    await waitFor(() => expect(screen.getByLabelText("文件保存状态").textContent).toBe("已保存"));
+  });
+
   it("stops automatic retries after a conflict and keeps subsequent typing", async () => {
     vi.useFakeTimers();
     api.saveSourceFile.mockRejectedValue(new Error("source_file_changed"));

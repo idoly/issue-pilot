@@ -1,14 +1,46 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, pruneState, repositoriesRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, pathExists, pruneState, repositoriesRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const exec = promisify(execFile);
+
+test("path probes distinguish missing paths from invalid directory structure", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-path-probe-"));
+  try {
+    assert.equal(await pathExists(root), true);
+    assert.equal(await pathExists(path.join(root, "missing")), false);
+    const file = path.join(root, "file");
+    await writeFile(file, "evidence");
+    await assert.rejects(pathExists(path.join(file, "child")), { code: "ENOTDIR" });
+    assert.equal(await readFile(file, "utf8"), "evidence");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("path probes propagate permission and I/O failures instead of reporting missing state", async (context) => {
+  try {
+    for (const code of ["EACCES", "EIO"]) {
+      const failure = Object.assign(new Error("fixture filesystem failure"), { code });
+      context.mock.method(fs, "access", async () => {
+        throw failure;
+      });
+      syncBuiltinESMExports();
+      await assert.rejects(pathExists("/unused-fixture-path"), (error) => error === failure);
+      context.mock.restoreAll();
+    }
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
 
 async function createSharedCheckout(root: string, repositoryKey = "a".repeat(20)): Promise<string> {
   const source = path.join(root, `checkout-source-${repositoryKey}`);

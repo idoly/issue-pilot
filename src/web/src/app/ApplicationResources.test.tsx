@@ -103,6 +103,30 @@ describe("application configuration resources", () => {
     expect(currentUserSubject()).toBe("user");
   });
 
+  it("releases draft image URLs when application resources are disposed", async () => {
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    let resources!: ReturnType<typeof useApplicationResources>;
+    function Probe() {
+      resources = useApplicationResources();
+      return null;
+    }
+    const view = render(() => (
+      <ApplicationResourcesProvider>
+        <Probe />
+      </ApplicationResourcesProvider>
+    ));
+    try {
+      await waitFor(() => expect(resources.currentUser()?.subject).toBe("user"));
+      resources.agentDrafts.get("issue").images.push({ file: new File(["image"], "fixture.png"), url: "blob:disposed-draft" });
+      view.unmount();
+      expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:disposed-draft");
+      expect(resources.agentDrafts.hasPending()).toBe(false);
+    } finally {
+      view.unmount();
+      revoke.mockRestore();
+    }
+  });
+
   it("clears the previous user while resolving an inactive selection's replacement", async () => {
     const client = await import("../data/client");
     const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" };

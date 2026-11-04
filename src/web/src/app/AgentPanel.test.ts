@@ -8,7 +8,7 @@ import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel, ConversationItem } from "./AgentPanel";
-import { clearAgentDrafts } from "./agent-drafts";
+import { AgentDraftStore, clearAgentDrafts } from "./agent-drafts";
 import {
   activityForEvent,
   applyAgentEvent,
@@ -1220,6 +1220,62 @@ describe("Agent conversation state", () => {
     expect(secondEditor.disabled).toBe(false);
     expect(second.getByText("会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。")).toBeTruthy();
   });
+
+  for (const code of ["agent_session_file_missing", "resolved_issue_cannot_run_agent"])
+    it(`discards the old identity's failed send after ${code} without restoring images or disabling the new editor`, async ({ onTestFinished }) => {
+      const issue = {
+        id: "ISSUE-20260810-003",
+        title: "Identity send fixture",
+        description: "",
+        priority: "p1",
+        type: "defect_fix",
+        status: "open",
+        assignee: null,
+        assigneeSubject: null,
+        service: { key: "service", name: "Service" },
+        updatedAt: new Date().toISOString(),
+        repositories: [],
+        attachments: [],
+        comments: [],
+        environmentKey: "dev",
+        workspace: { status: "ready", sourceAvailable: false },
+      } satisfies IssueDetail;
+      const drafts = new AgentDraftStore();
+      let respond!: (response: Response) => void;
+      const fetchRequest = vi.spyOn(globalThis, "fetch").mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            respond = resolve;
+          }),
+      );
+      const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:old-identity");
+      const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+      const view = render(() => AgentPanel({ issue, drafts, onRefresh: async () => issue }));
+      onTestFinished(() => {
+        view.unmount();
+        fetchRequest.mockRestore();
+        createUrl.mockRestore();
+        revokeUrl.mockRestore();
+      });
+      const editor = view.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+      const image = new File(["fixture image"], "old.png", { type: "image/png" });
+      fireEvent.paste(editor, { clipboardData: { files: [image], getData: () => "" } });
+      await view.findByAltText("old.png");
+      const old = drafts.get(issue.id);
+      fireEvent.input(editor, { target: { value: "old identity's question" } });
+      fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(fetchRequest).toHaveBeenCalledOnce());
+      drafts.clearAll();
+      await waitFor(() => expect(editor.disabled).toBe(false));
+      fireEvent.input(editor, { target: { value: "new identity's draft" } });
+      respond(new Response(JSON.stringify({ error: code }), { status: 409 }));
+      await waitFor(() => expect(old.sending).toBe(false));
+      expect(revokeUrl).toHaveBeenCalledWith("blob:old-identity");
+      expect(old.images).toEqual([]);
+      expect(editor.disabled).toBe(false);
+      expect(editor.value).toBe("new identity's draft");
+      expect(drafts.get(issue.id).error).toBe("");
+    });
 
   it("reconnects with one close and atomically replaces the replayed transcript", async () => {
     vi.useFakeTimers();

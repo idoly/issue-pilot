@@ -7,6 +7,7 @@ import pMap from "p-map";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
+import { stableErrorReason } from "../diagnostics.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
 import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
@@ -104,7 +105,7 @@ export class WorkspaceLifecycleManager {
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
   private statsPromise: Promise<WorkspaceStatistics> | undefined;
-  private statisticsCache: { bytesCache: object; value: WorkspaceStatistics } | undefined;
+  private statisticsCache: { createdAt: number; value: WorkspaceStatistics } | undefined;
   private workspaceBytesCache: { expiresAt: number; values: Map<string, number>; sharedGitBytes?: number } | undefined;
   private readonly workspaceBytesCacheMs: number;
   private stopping = false;
@@ -123,7 +124,8 @@ export class WorkspaceLifecycleManager {
     this.stateRoot = path.resolve(stateRoot);
     this.engine = engine;
     this.policy = policy;
-    this.workspaceBytesCacheMs = Math.min(60_000, policy.maintenanceIntervalMs > 0 ? policy.maintenanceIntervalMs : 5_000);
+    // Statistics reuse the last sample for one maintenance cycle; the page shows sampledAt and can force a refresh.
+    this.workspaceBytesCacheMs = policy.maintenanceIntervalMs > 0 ? policy.maintenanceIntervalMs : 5_000;
     this.worktrees = new WorktreeManager(this.stateRoot);
     this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
     this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => this.projects.hydrateDevelopmentRuntime(issue));
@@ -169,8 +171,7 @@ export class WorkspaceLifecycleManager {
     if (this.stopping) throw new Error("workspace_lifecycle_closing");
     // A refresh must not reuse a scan that may have started from cached measurements.
     if (this.statsPromise && !refresh) return this.statsPromise;
-    const bytesCache = this.workspaceBytesCache;
-    if (!refresh && bytesCache && bytesCache.expiresAt > Date.now() && this.statisticsCache?.bytesCache === bytesCache) return this.statisticsCache.value;
+    if (!refresh && this.statisticsCache && Date.now() - this.statisticsCache.createdAt <= this.workspaceBytesCacheMs) return this.statisticsCache.value;
     const request = this.exclusive(async () => {
       const issueRows = await this.issueRows();
       const repositories = await this.database.select().from(issueRepositories);
@@ -201,7 +202,7 @@ export class WorkspaceLifecycleManager {
         },
         workspaces: inspections,
       };
-      this.statisticsCache = { bytesCache: this.workspaceBytesCache, value };
+      this.statisticsCache = { createdAt: Date.now(), value };
       return value;
     });
     this.statsPromise = request;
@@ -212,7 +213,7 @@ export class WorkspaceLifecycleManager {
     }
   }
 
-  async releaseIssue(issueId: string): Promise<WorkspaceReleaseResult> {
+  async releaseIssue(issueId: string, authorize?: () => Promise<unknown>): Promise<WorkspaceReleaseResult> {
     return this.withIssueReservation(
       issueId,
       async (reservation) => {
@@ -223,10 +224,11 @@ export class WorkspaceLifecycleManager {
         if (error instanceof Error && error.message === "issue_already_running") throw new WorkspaceReleaseRefusal(error.message);
         throw error;
       },
+      authorize,
     );
   }
 
-  async reopenIssue(issueId: string): Promise<Issue> {
+  async reopenIssue(issueId: string, authorize?: () => Promise<unknown>): Promise<Issue> {
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation),
@@ -234,10 +236,11 @@ export class WorkspaceLifecycleManager {
         if (error instanceof WorkspaceRestoreRefusal) throw error;
         throw new WorkspaceRestoreRefusal(errorMessage(error));
       },
+      authorize,
     );
   }
 
-  async convertIssueToDevelopment(issueId: string, expectedIssueUpdatedAt?: string, recordTransition?: TransitionAudit): Promise<Issue> {
+  async convertIssueToDevelopment(issueId: string, expectedIssueUpdatedAt?: string, recordTransition?: TransitionAudit, authorize?: () => Promise<unknown>): Promise<Issue> {
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation, expectedIssueUpdatedAt, recordTransition),
@@ -245,10 +248,17 @@ export class WorkspaceLifecycleManager {
         if (error instanceof WorkspaceConversionRefusal) throw error;
         throw new WorkspaceConversionRefusal(errorMessage(error));
       },
+      authorize,
     );
   }
 
-  async migrateDevelopmentIssueScope(issueId: string, target: { serviceId: string; environmentId: string }, expectedIssueUpdatedAt: string, recordTransition?: TransitionAudit): Promise<Issue> {
+  async migrateDevelopmentIssueScope(
+    issueId: string,
+    target: { serviceId: string; environmentId: string },
+    expectedIssueUpdatedAt: string,
+    recordTransition?: TransitionAudit,
+    authorize?: () => Promise<unknown>,
+  ): Promise<Issue> {
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.migrateDevelopmentScopeLocked(await this.issueRow(issueId), target, expectedIssueUpdatedAt, reservation, recordTransition),
@@ -258,12 +268,14 @@ export class WorkspaceLifecycleManager {
         if (message === "workspace_has_changes") throw new WorkspaceScopeMigrationRefusal("scope_transition_removed_repository_changed");
         throw new WorkspaceScopeMigrationRefusal(message);
       },
+      authorize,
     );
   }
 
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }>; failures: Array<{ issueKey: string; error: unknown }> }> {
     return this.exclusive(async () => {
-      this.workspaceBytesCache = undefined;
+      // Automatic release changes workspace state, so a cached sample must not outlive this maintenance pass.
+      this.invalidateMeasurements();
       const issueRows = await this.issueRows();
       const measuredWorkspaces = await pMap(issueRows, async ({ issue }) => ({ issueId: issue.id, bytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) }), {
         concurrency: this.policy.taskConcurrency,
@@ -624,7 +636,7 @@ export class WorkspaceLifecycleManager {
     try {
       await this.prepareDevelopmentRuntime(issue);
     } catch (error) {
-      const reason = errorMessage(error);
+      const reason = stableErrorReason(error, "workspace_runtime_restore_failed");
       try {
         await this.database.update(issueWorkspaces).set({ runtimeReady: false, lastError: reason, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
       } catch (stateError) {
@@ -674,8 +686,7 @@ export class WorkspaceLifecycleManager {
             blockedReason = "workspace_released";
           }
         } catch (error) {
-          const reason = errorMessage(error);
-          blockedReason = /^[a-z][a-z0-9_]*$/.test(reason) ? reason : "workspace_runtime_inspection_failed";
+          blockedReason = stableErrorReason(error, "workspace_runtime_inspection_failed");
         }
       } else if (state !== "development_workspace") blockedReason = "development_repository_state_invalid";
       else
@@ -687,8 +698,7 @@ export class WorkspaceLifecycleManager {
           );
           for (const repository of repositories) await this.worktrees.assertClean(repository.url, repository.localPath!, repository.workingBranch!);
         } catch (error) {
-          const reason = errorMessage(error);
-          blockedReason = /^[a-z][a-z0-9_]*$/.test(reason) ? reason : "workspace_inspection_failed";
+          blockedReason = stableErrorReason(error, "workspace_inspection_failed");
         }
     }
     return {
@@ -728,19 +738,27 @@ export class WorkspaceLifecycleManager {
     return rows;
   }
 
-  private withIssueReservation<T>(issueId: string, operation: (reservation: AgentReservation) => Promise<T>, rethrow: (error: unknown) => never): Promise<T> {
-    this.workspaceBytesCache = undefined;
+  private withIssueReservation<T>(issueId: string, operation: (reservation: AgentReservation) => Promise<T>, rethrow: (error: unknown) => never, authorize?: () => Promise<unknown>): Promise<T> {
+    // Release, reopen and conversion change workspace state; the next statistics request must rescan.
+    this.invalidateMeasurements();
     return this.exclusive(() =>
       this.issueQueue.run(issueId, async () => {
+        // Keep HTTP policy at the caller, but recheck it after both lifecycle and inspection waits.
+        await authorize?.();
         try {
           return await this.engine.runExclusive([issueId], operation);
         } catch (error) {
           return rethrow(error);
         } finally {
-          this.workspaceBytesCache = undefined;
+          this.invalidateMeasurements();
         }
       }),
     );
+  }
+
+  private invalidateMeasurements(): void {
+    this.workspaceBytesCache = undefined;
+    this.statisticsCache = undefined;
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {

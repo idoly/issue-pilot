@@ -8,10 +8,10 @@ const SLS_PROJECT = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 export const SLS_LOGSTORE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$/;
 export type CapabilityConfig<Key extends CapabilityName> = NonNullable<CapabilityConfiguration[Key]>;
 export class CapabilityConfigurationError extends Error {}
-function fail(code: string): never {
+export function fail(code: string): never {
   throw new CapabilityConfigurationError(code);
 }
-function inputRecord(value: unknown): Record<string, unknown> {
+export function inputRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid_request");
   return value as Record<string, unknown>;
 }

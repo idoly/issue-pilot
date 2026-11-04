@@ -48,6 +48,11 @@ const creationTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.loc
   minute: "2-digit",
   hour12: false,
 });
+/** Environments are addressed by key; the display name falls back to that key. */
+export function environmentName(environments: ReadonlyArray<{ key: string; name: string }>, key: string): string {
+  return environments.find((environment) => environment.key === key)?.name ?? key;
+}
+
 export function issueCreationDate(value: string | undefined, full = false): string {
   if (!value) return "未记录";
   const date = new Date(value);

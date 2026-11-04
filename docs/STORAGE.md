@@ -14,6 +14,8 @@
 
 SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来源，普通文件保存原件和成果。Agent 对话不另存 SQL 消息表；人工评论独立保存在 issue_comments。GET 脱敏不等于存储加密，数据库和恢复点均属敏感数据。
 
+共享路径探测只把 `ENOENT` 视为不存在；权限、I/O 和目录结构错误向调用方传播，不能据此选择其他 Git store、重新创建会话或报告状态缺失。
+
 ## 数据表关系
 
 当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。
@@ -108,7 +110,7 @@ Source API 使用读取时 SHA-256 检测冲突，`source_file_changed` 不可�
 
 `totalBytes` 统计工单根分配空间，含缓存和私有 Git，`sharedGitBytes` 单独计量。结果不是主机全盘占用或原子磁盘快照。
 
-并发读取共享扫描，完成快照最多缓存 60 秒；`GET /api/workspaces/stats?refresh=true` 请求重新采样并返回 sampledAt。生命周期变更使缓存失效，真实释放重新检查。候选占用不等于可释放量，释放量以实际减少为准。
+并发读取共享同一次扫描，完成的快照在下一个维护周期内复用（默认 15 分钟；维护间隔为 0 时 5 秒）。释放、重开、转换和自动维护使缓存失效；Agent 处理与源码编辑等其它变更在下一次采样后反映，页面显示 `sampledAt`，`GET /api/workspaces/stats?refresh=true` 强制重新采样。真实释放重新检查；候选占用不等于可释放量，释放量以实际减少为准。
 
 ## 升级与恢复
 

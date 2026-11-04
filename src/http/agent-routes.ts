@@ -10,6 +10,7 @@ import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from 
 import { sessionFooterStats } from "../agent/footer.ts";
 import { agentSessions, issues, userCredentials } from "../db/schema.ts";
 import { pathExists } from "../workspace/state.ts";
+import { credentialOwnerSubject, personGitIdentity } from "../domain/contracts.ts";
 import { ApiError, record, text } from "./input.ts";
 import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
@@ -114,7 +115,6 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
   });
 
   // Long-lived SSE streams keep a graceful stop from completing; end them when the server closes.
-  // Long-lived SSE streams keep a graceful stop from completing; end them when the server closes.
   const activeStreams = new Set<() => void>();
   app.addHook("preClose", async () => {
     for (const end of [...activeStreams]) end();
@@ -128,7 +128,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const [credentials] = await database.db
       .select({ model: userCredentials.modelCredentials })
       .from(userCredentials)
-      .where(eq(userCredentials.subject, issue.assigneeSubject ?? issue.reporterSubject))
+      .where(eq(userCredentials.subject, credentialOwnerSubject(issue)))
       .limit(1);
     const configured = selectAgentConfiguration(sharedConfiguration, credentials?.model);
     const autoCompact = SettingsManager.inMemory(configured.runtime.settings).getCompactionEnabled();
@@ -264,15 +264,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const { message, images } = await readAgentMessage(request);
     const person = await requireCurrentUser(database, request);
     try {
-      await engine.send(
-        issue.id,
-        message,
-        {
-          name: person.displayName ?? person.subject,
-          email: person.email ?? `${person.subject}@localhost`,
-        },
-        images,
-      );
+      await engine.send(issue.id, message, personGitIdentity(person), images);
     } catch (error) {
       if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown"].includes(error.message)) throw new ApiError(409, error.message);
       throw error;

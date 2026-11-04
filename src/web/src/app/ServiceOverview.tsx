@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 import type { ManagedRepository, Service } from "../data/client";
 import { GitBranch } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
+import { environmentName } from "./model";
 
 export function ServiceOverview(props: { service: Service; configurationDescription?: string | undefined; repositories: ManagedRepository[]; environments: Array<{ key: string; name: string }> }) {
   const description = () => props.configurationDescription ?? props.service.context ?? props.service.description;
@@ -18,7 +19,7 @@ export function ServiceOverview(props: { service: Service; configurationDescript
       <section class="service-repositories" aria-label="仓库与环境分支">
         <div class="service-repository-matrix" style={{ "grid-template-columns": columns(), "min-width": `${150 + environments().length * 140}px` }}>
           <span class="repository-column-heading">仓库</span>
-          <For each={environments()}>{(key) => <span class="repository-column-heading">{props.environments.find((row) => row.key === key)?.name ?? key}</span>}</For>
+          <For each={environments()}>{(key) => <span class="repository-column-heading">{environmentName(props.environments, key)}</span>}</For>
           <For each={props.service.repositories}>
             {(repository) => (
               <>

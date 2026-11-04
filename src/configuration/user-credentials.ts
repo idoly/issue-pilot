@@ -1,12 +1,12 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import type { DeploymentConfig, StoredDeploymentConfig, DmsCredentials, SlsCredentials } from "../domain/contracts.ts";
+import { credentialOwnerSubject, type DeploymentConfig, type StoredDeploymentConfig, type DmsCredentials, type SlsCredentials } from "../domain/contracts.ts";
 import { issues, subjects, userCredentials } from "../db/schema.ts";
 
 export async function loadIssueCredentialOwner(database: Database, issueId: string) {
   const [issue] = await database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
   if (!issue) throw new Error("issue_not_found");
-  const subject = issue.assigneeSubject ?? issue.reporterSubject;
+  const subject = credentialOwnerSubject(issue);
   const [user] = await database.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
   if (!user?.active) throw new Error("issue_credential_owner_inactive");
   const [credentials] = await database.select().from(userCredentials).where(eq(userCredentials.subject, subject)).limit(1);

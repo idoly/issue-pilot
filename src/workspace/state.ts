@@ -32,7 +32,10 @@ export function classifyRepositoryState(repositories: RepositoryStateRecord[]): 
 export function pathExists(candidate: string): Promise<boolean> {
   return access(candidate).then(
     () => true,
-    () => false,
+    (error) => {
+      if (isMissing(error)) return false;
+      throw error;
+    },
   );
 }
 

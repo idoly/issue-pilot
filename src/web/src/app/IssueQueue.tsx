@@ -5,7 +5,7 @@ import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
 import { canUseIssueWorkMode, createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
-import { priorityColor, priorityOptions, issueCreationDate, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
+import { environmentName, priorityColor, priorityOptions, issueCreationDate, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 
 type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
@@ -22,7 +22,6 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
   const [status, setStatus] = createSignal<QueueStatusFilter>("all", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
-  const environmentLabel = (key: string) => catalog().environments.find((environment) => environment.key === key)?.name ?? key;
   const filtered = createMemo(() => {
     const subject = props.userSubject;
     if (!subject) return [];
@@ -350,10 +349,10 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
                       <span class="queue-status">
                         <Badge status={statusBadge[issue().status]} text={statusLabel[issue().status]} />
                       </span>
-                      <span class="queue-scope" title={`${issue().service.name} / ${environmentLabel(issue().environmentKey)}`}>
+                      <span class="queue-scope" title={`${issue().service.name} / ${environmentName(catalog().environments, issue().environmentKey)}`}>
                         <strong>{issue().service.name}</strong>
                         <span aria-hidden="true">/</span>
-                        <span>{environmentLabel(issue().environmentKey)}</span>
+                        <span>{environmentName(catalog().environments, issue().environmentKey)}</span>
                       </span>
                     </span>
                     <button

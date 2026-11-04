@@ -19,6 +19,7 @@ import {
   type Service,
 } from "../data/client";
 import { normalizeDmsScope, serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
+import { environmentName } from "./model";
 import { DbHubTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
@@ -951,7 +952,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
                       productionBranches={() => serviceDeployments.find((row) => row.environmentKey === "prod")?.repositoryBranches ?? []}
                       repositories={serviceRepositories}
                       repositoryName={repositoryName}
-                      environmentName={configuration().environments.find((environment) => environment.key === deployment.environmentKey)?.name ?? deployment.environmentKey}
+                      environmentName={environmentName(configuration().environments, deployment.environmentKey)}
                       onChange={(next) =>
                         setServiceDeployments((current) => {
                           Object.assign(current[index()]!, next);

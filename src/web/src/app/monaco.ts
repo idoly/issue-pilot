@@ -24,6 +24,7 @@ import "monaco-editor/languages/definitions/shell/register.js";
 import "monaco-editor/languages/definitions/yaml/register.js";
 import "monaco-editor/languages/definitions/markdown/register.js";
 import { jsonDefaults } from "monaco-editor/languages/features/json/register.js";
+import { sourceIndentation } from "./source-editor-settings";
 import { sourceLanguage } from "./source-language";
 
 declare global {
@@ -67,8 +68,7 @@ export const sourceEditorOptions = {
   unicodeHighlight: { ambiguousCharacters: false },
   stickyScroll: { enabled: false },
   occurrencesHighlight: "off",
-  tabSize: 4,
-  insertSpaces: true,
+  ...sourceIndentation,
 } satisfies monaco.editor.IStandaloneEditorConstructionOptions;
 monaco.editor.defineTheme("issue-pilot", {
   base: "vs-dark",
