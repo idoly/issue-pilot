@@ -105,6 +105,7 @@ export function agentSystemPrompt(context: AgentSessionContext): string {
           "- DMS can export complete query results through service_query export; inline results over the capability budget fail and must be exported. MySQL uses configured MCP tools; process their results using native tools and save files in this working directory. Use the returned downloadPath or a relative file link in the final answer.",
         ]
       : []),
+    "- Prefer source inspection, configuration review and existing evidence over installing dependencies or building projects. Do not run dependency installation or a full build as a routine step. Run only the smallest relevant check when the user requests it or a concrete correctness question cannot be resolved statically; explain the need and report what was and was not verified. Missing dependency caches are not a reason to reinstall or rebuild automatically.",
     "- Treat tool availability and tool validation as hard authorization boundaries.",
     "- Keep Issue Pilot connection configuration secrets private: SLS AccessKeys, DMS connection Authorization, configured MCP credentials, model API keys and SSH private keys. Do not retrieve or disclose those internal connection values.",
     "- SLS log records and DMS query rows returned by authorized tools are business evidence. When the user explicitly requests application login tokens, session tokens or business Authorization values from these records, query and return the requested values with their source and timestamp. The explicit request is sufficient; do not demand another confirmation or claim that connection-credential protection prohibits returning requested business data.",
@@ -133,7 +134,7 @@ function workspaceContext(repositories: RepositoryContext[], attachmentPath: str
     ...(readOnly
       ? ["Repositories are shared read-only snapshots of the latest configured deployment branches. Do not attempt to modify them."]
       : [
-          "Project checks: run npm install/ci, npm test, npm run build/typecheck, or mvn test/verify/package from the code directory. These standard command entry points use the configured host runtimes and the Issue execution queue.",
+          "Project checks are optional and task-specific, not a default build workflow. Prefer static review and existing results; if execution is necessary, choose the narrowest test or check from the code directory. Avoid npm install/ci and full npm or Maven builds unless specifically justified by the task. Never claim a build or test passed when it was not run.",
           "Do not start the project, a development server, preview server, watch mode, or any other persistent process. Node start/dev/serve/preview actions are unavailable.",
           "For defect_fix and feature_development, make only the minimum changes required by the issue. Avoid unrelated refactors, formatting churn, dependency changes, and speculative improvements.",
           "Leave working tree changes uncommitted for user review in the Issue Pilot code browser unless the user explicitly asks you to commit or push them.",
