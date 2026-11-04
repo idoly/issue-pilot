@@ -50,6 +50,8 @@ rsync -a --exclude=/control/project-tools.sock -- \
   "$issue_state_root/" "$issue_backup_root/state/"
 ```
 
+可再生的依赖缓存、构建产物和共享只读快照不进入恢复点：排除 `node_modules`、`target`、`.maven-cache`、`.npm-cache`、`.venv`／`venv`、`__pycache__`、`.gradle` 和 `state/git/checkouts`；DB 文件组、workspaces（代码、私有 Git、附件、会话）、`git/repositories`、控制目录及匹配的源码／配置／监督单元仍须完整保留。排除共享 checkout 时同时生成 manifest、在仓库中 pin 重建所需 commit，并保留重建脚本，恢复时离线重建，不能只删不记。
+
 大状态可先预复制到标记未完成的目录，停写后完成增量与删除同步，核对 WAL／SHM 和持久文件才标记完整。link-dest 仅在备份之间共享，不链接可写 live inode；有共享 inode 时不能原地覆盖或统一 chmod，元数据变化也需先隔离对应文件。
 
 在独立副本验证完整性、FK、业务约束及 migration hash，再演练迁移。迁移 schema 与文件回滚不是一回事。小型日志或 DB 单文件副本不等于完整恢复点。
