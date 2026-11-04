@@ -14,7 +14,11 @@ test("projects and resolves only DMS and SLS scopes, without deployment credenti
   const projected = projectCapabilityConfiguration(configuration);
   assert.deepEqual(projected.dms, { databases: configuration.dms!.databases });
   assert.doesNotMatch(JSON.stringify(projected), /sls-secret|dms-token|dms.example|sls-key|accessKeyId|accessKeySecret|credentialConfigured/);
-  assert.deepEqual(resolveConfiguredCapabilitySections(projected, ["dms", "sls"]), projected);
+  // Saving service input re-normalizes DMS targets: resolution stays server-owned.
+  assert.deepEqual(resolveConfiguredCapabilitySections(projected, ["dms", "sls"]), {
+    dms: { databases: [{ instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" }] },
+    sls: { region: "cn-test", project: "orders-test", logstores: ["application"] },
+  });
 });
 test("deployment inputs reject connection credentials and credential mutations", () => {
   const projected = projectCapabilityConfiguration(configuration);

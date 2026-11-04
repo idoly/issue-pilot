@@ -9,6 +9,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readInBatches } from "../db/client.ts";
 import { errorCode } from "../diagnostics.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
+import { issueSessionHistory, resetIssueSession } from "../agent/session-reset.ts";
 import {
   agentSessions,
   dingtalkIssueImports,
@@ -25,7 +26,7 @@ import {
   services,
   subjects,
 } from "../db/schema.ts";
-import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
+import { credentialOwnerSubject, errorMessage, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
@@ -44,7 +45,7 @@ import {
 } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { ensureCurrentSubject, authorizeWorkMode, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, authorizeWorkMode, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
@@ -86,7 +87,7 @@ export type DingtalkImportClaim = Pick<typeof dingtalkIssueImports.$inferInsert,
 export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"];
 
 export function registerIssueRoutes(context: ApiRouteContext) {
-  const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive } = context;
+  const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive, events } = context;
   const findEnvironmentByKind = async (kind: EnvironmentKind) => (await database.db.select().from(environments).where(eq(environments.kind, kind)).limit(1))[0];
   const findServiceDeployment = async (key: string, environmentId: string) =>
     (
@@ -202,8 +203,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     });
   };
   const serializeIssueSummary = async (issue: IssueSummaryRow) => (await serializeIssueSummaries([issue]))[0]!;
-  app.get("/api/issues", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/issues", async (_request, _reply) => {
     // The list is polled; summaries never read the (large) description column.
     return serializeIssueSummaries(
       await database.db
@@ -227,9 +227,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     );
   });
 
-  app.get("/api/issue-pins", async (request, reply) => {
+  app.get("/api/issue-pins", async (request, _reply) => {
     const subject = await ensureCurrentSubject(database, request);
-    reply.header("Cache-Control", "private, no-store");
     const pinned = await database.db
       .select({ key: issues.key })
       .from(issuePins)
@@ -352,6 +351,10 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
     const { input, attachments: pendingAttachments } = await readIssueInput(request);
+    if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new ApiError(400, "invalid_reset_session");
+    // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
+    const resetSession = input.resetSession === true;
+    if (resetSession) await requireDeveloper(database, request);
     const failures: unknown[] = [];
     try {
       const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
@@ -413,7 +416,20 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           }
           // The update is committed; a leftover quarantined original is operator cleanup, not a failed edit.
           await finalizeQuarantinedAttachments(quarantined).catch((error: unknown) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"));
-          if (currentIssue.status !== "resolved") {
+          if (resetSession) {
+            if (currentIssue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
+            const currentSession = (await issueSessionHistory(database.db, stateRoot, currentIssue))[0];
+            if (!currentSession) throw new ApiError(409, "agent_session_not_found");
+            try {
+              await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession.sessionId);
+            } catch (error) {
+              const code = errorMessage(error);
+              if (["agent_session_changed", "agent_session_not_found", "agent_session_file_incomplete", "agent_session_file_missing"].includes(code)) throw new ApiError(409, code);
+              // The metadata update above is committed; say so instead of implying nothing was saved.
+              throw new Error("issue_saved_session_reset_failed", { cause: error });
+            }
+            events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
+          } else if (currentIssue.status !== "resolved") {
             reservation.enqueue(
               issue.id,
               issueMetadataUpdatePrompt({
@@ -423,7 +439,6 @@ export function registerIssueRoutes(context: ApiRouteContext) {
                 attachments: attachmentDtos,
                 attachmentPath: attachmentRoot,
               }),
-              false,
             );
           }
           return serializeIssueSummary(await requireIssue(database, issue.key));
@@ -506,8 +521,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     });
   });
 
-  app.get<{ Params: { key: string } }>("/api/issues/:key", async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get<{ Params: { key: string } }>("/api/issues/:key", async (request, _reply) => {
     const issue = await requireIssue(database, request.params.key);
     const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relationRows, scopeHistory] = await Promise.all([
       serializeIssueSummary(issue),

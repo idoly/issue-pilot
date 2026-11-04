@@ -4,12 +4,13 @@ import { parseDmsConnectionConfiguration, parseDmsScopeConfiguration, parseSlsCo
 
 test("validates DMS connection credentials independently from query targets", () => {
   const database = { instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" };
+  const unresolved = { instanceAlias: "ORDERS-PROD", schemaName: "orders", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" };
   const connection = { url: "https://dms.example.test/sse", authorization: "Bearer token" };
   assert.deepEqual(parseDmsConnectionConfiguration(connection), connection);
-  assert.deepEqual(parseDmsScopeConfiguration({ databases: [database] }), { databases: [database] });
+  // Resolution belongs to the server: browser-supplied resolved metadata is ignored, not stored.
+  assert.deepEqual(parseDmsScopeConfiguration({ databases: [database] }), { databases: [unresolved] });
   assert.throws(() => parseDmsScopeConfiguration({ databases: [] }), /invalid_dms_databases/);
-  assert.throws(() => parseDmsScopeConfiguration({ databases: [database, { ...database, databaseId: "456" }] }), /duplicate_dms_database_schema/);
-  assert.throws(() => parseDmsScopeConfiguration({ databases: [database, { ...database, schemaName: "archive" }] }), /duplicate_dms_database_id/);
+  assert.throws(() => parseDmsScopeConfiguration({ databases: [database, { ...database }] }), /duplicate_dms_database_schema/);
   for (const url of ["", "http://dms.example.test/sse", "https://user@dms.example.test/sse", "https://dms.example.test/sse?token=secret"])
     assert.throws(() => parseDmsConnectionConfiguration({ ...connection, url }), /invalid_dms_url/);
   for (const authorization of ["", "token", "Bearer token with spaces"]) assert.throws(() => parseDmsConnectionConfiguration({ ...connection, authorization }), /invalid_dms_authorization/);

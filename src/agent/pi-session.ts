@@ -35,6 +35,7 @@ export interface GitCommitIdentity {
 export interface StartPiSessionOptions {
   manager: SessionManager;
   context: AgentSessionContext;
+  stateRoot?: string;
   agentDirectory?: string;
   runtime?: AgentRuntimeConfiguration;
   deploymentConfig: DeploymentConfig;
@@ -296,6 +297,7 @@ function sessionTools(options: StartPiSessionOptions, identityEnvironment: () =>
     ...issueNativeTools(
       {
         writeRoot: workspaceRoot,
+        ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
         gitAccess: options.gitAccess ?? (context.canModifyCode ? "write" : "read"),
         readRoots: [...(options.readRoots ?? []), ...(options.gitReadRoots ?? []), options.agentDirectory ?? getAgentDir()],
         networkDomains: options.runtime?.networkAllowedDomains ?? [],
@@ -457,7 +459,13 @@ export class PiSessionRuntime {
       assertIssueLaunchEnvironment(configuration.stdio.env ?? {});
       const cwd = path.resolve(workspaceRoot, configuration.stdio.cwd ?? ".");
       const prepared = await prepareIssueCommand(
-        { writeRoot: workspaceRoot, gitAccess: "read", readRoots: options.readRoots ?? [], networkDomains: options.runtime?.networkAllowedDomains ?? [] },
+        {
+          writeRoot: workspaceRoot,
+          ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
+          gitAccess: "read",
+          readRoots: options.readRoots ?? [],
+          networkDomains: options.runtime?.networkAllowedDomains ?? [],
+        },
         [configuration.stdio.command, ...configuration.stdio.args],
         cwd,
       );

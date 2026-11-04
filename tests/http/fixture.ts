@@ -25,7 +25,6 @@ export const modelCatalog = {
 export class TestAgentController {
   readonly enqueued: string[] = [];
   readonly messages: Array<string | undefined> = [];
-  readonly recordedMessages: boolean[] = [];
   readonly gitIdentities: Array<GitCommitIdentity | undefined> = [];
   readonly images: ImageContent[][] = [];
   readonly closedSessions: string[] = [];
@@ -35,11 +34,10 @@ export class TestAgentController {
   readonly concurrencyUpdates: number[] = [];
   closeSessionHook: undefined | ((issueId: string) => Promise<void>);
 
-  enqueue(issueId: string, message?: string, recordMessage = true): void {
+  enqueue(issueId: string, message?: string): void {
     this.running.add(issueId);
     this.enqueued.push(issueId);
     this.messages.push(message);
-    this.recordedMessages.push(recordMessage);
   }
 
   setMaxConcurrentIssues(maxConcurrentIssues: number): void {
@@ -54,16 +52,13 @@ export class TestAgentController {
     return !this.isRunning(issueId) ? "idle" : this.queued.has(issueId) ? "queued" : "running";
   }
 
-  async runExclusive<T>(
-    issueIds: string[],
-    operation: (reservation: { enqueue(issueId: string, message?: string, recordMessage?: boolean): void; closeSession(issueId: string): Promise<void> }) => Promise<T>,
-  ): Promise<T> {
+  async runExclusive<T>(issueIds: string[], operation: (reservation: { enqueue(issueId: string, message?: string): void; closeSession(issueId: string): Promise<void> }) => Promise<T>): Promise<T> {
     const reserved = [...new Set(issueIds)];
     if (reserved.some((issueId) => this.running.has(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
     for (const issueId of reserved) this.reservations.add(issueId);
     try {
       return await operation({
-        enqueue: (issueId, message, recordMessage = true) => this.enqueue(issueId, message, recordMessage),
+        enqueue: (issueId, message) => this.enqueue(issueId, message),
         closeSession: (issueId) => this.closeSession(issueId),
       });
     } finally {

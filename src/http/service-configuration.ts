@@ -58,9 +58,9 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
   if (new Set(repositories.map((repository) => repository.alias)).size !== repositories.length) throw new ApiError(400, "duplicate_repository_alias");
   if (new Set(repositories.map((repository) => repository.url)).size !== repositories.length) throw new ApiError(400, "duplicate_repository");
   const aliases = new Set(repositories.map((repository) => repository.alias));
-  const deployments = Array.isArray(input.deployments)
-    ? input.deployments.map(record).map((deployment) => parseServiceDeployment(deployment, aliases, existing.get(String(deployment.environmentKey))))
-    : [];
+  // An omitted deployment list used to be read as "remove every deployment"; require the intent explicitly.
+  if (!Array.isArray(input.deployments)) throw new ApiError(400, "invalid_deployments");
+  const deployments = input.deployments.map(record).map((deployment) => parseServiceDeployment(deployment, aliases, existing.get(String(deployment.environmentKey))));
   if (new Set(deployments.map((deployment) => deployment.environmentKey)).size !== deployments.length) throw new ApiError(400, "duplicate_deployment_environment");
   if (deployments.some((deployment) => deployment.environmentKey === "dev") && !deployments.some((deployment) => deployment.environmentKey === "prod"))
     throw new ApiError(400, "development_production_deployment_required");

@@ -320,22 +320,36 @@ export class WorkspaceLifecycleManager {
       this.invalidateMeasurements();
       const policy = this.policy;
       const issueRows = await this.issueRows();
-      const measuredWorkspaces = await pMap(issueRows, async ({ issue }) => ({ issueId: issue.id, bytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) }), {
-        concurrency: policy.taskConcurrency,
-        stopOnError: false,
-      });
-      const workspaceBytes = new Map(measuredWorkspaces.map(({ issueId, bytes }) => [issueId, bytes]));
-      let totalBytes = measuredWorkspaces.reduce((total, { bytes }) => total + bytes, 0);
+      const failures: Array<{ issueKey: string; error: unknown }> = [];
+      // Measure per Issue: one unmeasurable tree must not abort startup or every later maintenance cycle.
+      const measuredWorkspaces = await pMap(
+        issueRows,
+        async ({ issue }) => {
+          try {
+            return { issueId: issue.id, bytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) };
+          } catch (error) {
+            failures.push({ issueKey: issue.key, error });
+            return undefined;
+          }
+        },
+        { concurrency: policy.taskConcurrency },
+      );
+      const measured = measuredWorkspaces.filter((workspace): workspace is { issueId: string; bytes: number } => workspace !== undefined);
+      const measurementIncomplete = measured.length !== issueRows.length;
+      const workspaceBytes = new Map(measured.map(({ issueId, bytes }) => [issueId, bytes]));
+      let totalBytes = measured.reduce((total, { bytes }) => total + bytes, 0);
       const updateBytes = (issueId: string, remainingBytes: number) => {
         totalBytes = Math.max(0, totalBytes - (workspaceBytes.get(issueId) ?? 0) + remainingBytes);
         workspaceBytes.set(issueId, remainingBytes);
       };
 
       const released: WorkspaceReleaseResult[] = [];
-      const failures: Array<{ issueKey: string; error: unknown }> = [];
       const blocked: Array<{ issueKey: string; reason: string }> = [];
       const attemptedIssues = new Set<string>();
-      const candidates = issueRows.filter(({ issue, environmentKind }) => environmentKind === "dev" && issue.status === "resolved" && (workspaceBytes.get(issue.id) ?? 0) > 0);
+      // An unmeasured workspace has no known bytes, so it is left for the next cycle instead of being released blind.
+      const candidates = issueRows.filter(
+        ({ issue, environmentKind }) => workspaceBytes.has(issue.id) && environmentKind === "dev" && issue.status === "resolved" && workspaceBytes.get(issue.id)! > 0,
+      );
       const releaseCandidate = async (candidate: IssueRow, runtimeRecoveryOnly = false) => {
         attemptedIssues.add(candidate.issue.id);
         try {
@@ -393,7 +407,8 @@ export class WorkspaceLifecycleManager {
           if (!attemptedIssues.has(candidate.issue.id)) await releaseCandidate(candidate);
         }
       }
-      this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: workspaceBytes };
+      // A partial total must not seed the statistics cache; the next stats call rescans instead.
+      if (!measurementIncomplete) this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: workspaceBytes };
       return { totalBytes, released, blocked, failures };
     });
   }

@@ -5,7 +5,6 @@ import type { Database } from "../db/client.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { publicMcpUrl } from "../configuration/mcp.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
-import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, mcpServices, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
@@ -35,6 +34,8 @@ export async function createWorkspaceTool(
   onScopeChanged?: () => void,
 ) {
   const available = await listEnvironmentServices(database, issue.environmentId);
+  // Development environments carry no investigation capability configuration of their own.
+  const investigationCapabilities = (row: (typeof available)[number]) => configuredCapabilities(row.environment.kind === "dev" ? {} : row.deployment.config);
   const keys = available.filter((row) => row.environment.id === issue.environmentId).map((row) => row.service.key);
   const schema = objectToolParameters(
     structuredClone(
@@ -60,19 +61,21 @@ export async function createWorkspaceTool(
       if (input.operation === "list") {
         const included = await issueServiceIds(database, issue);
         const names = new Map((await database.select().from(repositoryCatalog)).map((row) => [row.url, row.name]));
-        const services = [];
-        for (const row of available) {
-          const deployment = await loadDeploymentRepositories(database, { serviceId: row.service.id, environmentId: row.environment.id });
-          services.push({
-            key: row.service.key,
-            name: row.service.name,
-            environment: row.environment.key,
-            entry: row.service.id === issue.serviceId && row.environment.id === issue.environmentId,
-            included: row.environment.id === issue.environmentId && included.includes(row.service.id),
-            configuredCapabilities: configuredCapabilities(row.environment.kind === "dev" ? {} : row.deployment.config),
-            repositories: deployment.repositories.map(({ repository, baseBranch }) => ({ name: names.get(repository.url), baseBranch })),
-          });
-        }
+        // Load deployments concurrently; they are independent reads and a serial loop made the tool O(services) round trips.
+        const services = await Promise.all(
+          available.map(async (row) => {
+            const deployment = await loadDeploymentRepositories(database, { serviceId: row.service.id, environmentId: row.environment.id });
+            return {
+              key: row.service.key,
+              name: row.service.name,
+              environment: row.environment.key,
+              entry: row.service.id === issue.serviceId && row.environment.id === issue.environmentId,
+              included: row.environment.id === issue.environmentId && included.includes(row.service.id),
+              configuredCapabilities: investigationCapabilities(row),
+              repositories: deployment.repositories.map(({ repository, baseBranch }) => ({ name: names.get(repository.url), baseBranch })),
+            };
+          }),
+        );
         return structuredJsonResult(capabilityTextResult(JSON.stringify({ environment: environmentKind, services }), { operation: "list" }));
       }
       if (input.operation === "describe") {
@@ -94,7 +97,7 @@ export async function createWorkspaceTool(
               environment: target.environment.key,
               repositories,
               description: [target.service.description, context].filter(Boolean).join("\n\n"),
-              capabilities: configuredCapabilities(target.environment.kind === "dev" ? {} : projectCapabilityConfiguration(target.deployment.config)),
+              capabilities: investigationCapabilities(target),
               mcp: mcp.filter((row) => row.enabled).map((row) => ({ ...row, url: publicMcpUrl(row.url) })),
             }),
             { operation: "describe" },
@@ -105,7 +108,7 @@ export async function createWorkspaceTool(
         signal?.throwIfAborted();
         const [current] = await database.select().from(issues).where(eq(issues.id, issue.id)).limit(1);
         if (!current || current.status === "resolved" || current.environmentId !== issue.environmentId || current.serviceId !== issue.serviceId) throw new Error("issue_scope_changed");
-        const target = available.find((row) => row.service.key === input.service && row.environment.id === issue.environmentId)!;
+        const target = available.find((row) => row.service.key === input.service && row.environment.id === issue.environmentId);
         if (!target) throw new Error("service_not_available_in_environment");
         if (input.operation === "remove" && target.service.id === issue.serviceId) throw new Error("entry_service_cannot_be_removed");
         const included = await issueServiceIds(database, issue);

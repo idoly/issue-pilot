@@ -17,8 +17,6 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
   const handle =
     <T>(operation: (request: FastifyRequest, signal: AbortSignal) => Promise<T>) =>
     async (request: FastifyRequest, reply: FastifyReply) => {
-      reply.header("Cache-Control", "private, no-store");
-      reply.header("Pragma", "no-cache");
       const controller = new AbortController(),
         signal = AbortSignal.any([controller.signal, AbortSignal.timeout(applicationParameters().mcpExecutionMs)]);
       const abort = () => controller.abort();

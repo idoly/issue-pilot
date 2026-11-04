@@ -38,7 +38,6 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
       const safeInline = attachment.mediaType.startsWith("text/") || ["application/json", "application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType);
       reply.header("Content-Disposition", contentDisposition(attachment.fileName, { type: safeInline ? "inline" : "attachment" }));
       reply.header("Content-Length", attachment.size);
-      reply.header("Cache-Control", "private, no-store");
       reply.header("X-Content-Type-Options", "nosniff");
       const inlineMediaType = attachment.mediaType.startsWith("image/") || attachment.mediaType === "application/pdf" ? attachment.mediaType : "text/plain; charset=utf-8";
       reply.type(safeInline ? inlineMediaType : "application/octet-stream");

@@ -357,6 +357,10 @@ test("updates and deletes Service configuration directly", async () => {
     assert.equal(updated.statusCode, 200, updated.body);
     const config = (await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body))) as { services: Array<{ key: string; name: string }> };
     assert.equal(config.services.find(({ key }) => key === "alpha")!.name, "Alpha updated");
+    const { deployments: _deployments, ...withoutDeployments } = servicePayload("Alpha updated");
+    const omitted = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: withoutDeployments });
+    assert.equal(omitted.statusCode, 400, omitted.body);
+    assert.equal(omitted.json().error, "invalid_deployments");
     const deleted = await fixture.app.inject({ method: "DELETE", url: "/api/services/beta" });
     assert.equal(deleted.statusCode, 204, deleted.body);
   } finally {

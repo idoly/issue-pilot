@@ -76,9 +76,11 @@ admin 打开 API Key／DMS／SLS 弹窗时默认勾选共享凭证；取消后�
 | DMS | alias／schema 解析得到的明确数据库绑定 | owner 个人或应用共享组 |
 | SLS | region、project、logstores／targets | owner 个人或应用共享组 |
 
-SLS 的 `*` 表示允许该 Project 下的日志库，调用仍须指定具体 logstore。DMS alias／schema 由服务端用当前操作用户的选定凭证解析，浏览器不能伪造解析结果。
+SLS 的 `*` 表示允许该 Project 下的日志库，调用仍须指定具体 logstore。DMS alias／schema 由服务端用当前操作用户的选定凭证解析，浏览器不能伪造解析结果；保存服务时忽略客户端提供的 instanceId／instanceHost／instancePort／databaseId，查询时按 owner 凭证解析。
 
 工具是否可用依据真实目标，不硬编码某个环境禁用。调查查询保持本环境；开发查询显式选 prod/test，代码 include／remove 保持开发环境。
+
+服务的 `deployments` 必须是数组（可为空）；省略或非数组返回 `invalid_deployments`，不再被当作清空全部部署。
 
 状态携带 revision，保存时提供 `expectedRevision` 可检测并发冲突，`configuration_changed` 不应丢弃草稿。部分 API 接受省略版本，需要保护时必须显式携带。仓库 URL 级联变更推进关联服务版本，显示名变更不等于 URL 变更。
 
@@ -112,7 +114,7 @@ Pi ResourceLoader 使用 `getAgentDir()` 解析的运行用户全局目录，默
 
 Pi settings 为基线，SQLite `runtime.settings` 显式覆盖，省略的覆盖恢复基线。可配置项由 [contracts.ts](../src/domain/contracts.ts) 和 [pi-runtime.ts](../src/configuration/pi-runtime.ts) 限定，不接受任意 Pi 内部设置。资源检查只发现资源，不执行扩展；实际会话才加载。
 
-`runtime.networkAllowedDomains` 在个人组内追加精确域名／端口，省略回到运行参数的基础白名单，不覆盖宿主控制地址拒绝或业务范围。
+`runtime.networkAllowedDomains` 在个人组内追加精确域名／端口，省略回到运行参数的基础白名单，不覆盖宿主控制地址拒绝或业务范围。它与运行参数使用同一套校验：单项语法、去重、最多 100 项。
 
 ## 运行参数
 

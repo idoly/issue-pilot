@@ -41,15 +41,12 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
       throw new ApiError(500, "mcp_configuration_save_failed");
     }
   };
-  app.get("/api/mcp-services", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/mcp-services", async (_request, _reply) => {
     return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).map(project));
   });
   // Global connections (including the DingTalk import gateway) carry shared credentials and launch host
   // processes, so reading their configuration, changing, deleting or testing them is admin-only like creation.
-  app.get<{ Params: { id: string } }>("/api/mcp-services/:id/configuration", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    reply.header("Pragma", "no-cache");
+  app.get<{ Params: { id: string } }>("/api/mcp-services/:id/configuration", { logLevel: "silent" }, async (request, _reply) => {
     return runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const row = await requireService(request.params.id);
@@ -110,13 +107,12 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     });
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/mcp-services/:id/test", { logLevel: "silent" }, async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/mcp-services/:id/test", { logLevel: "silent" }, async (request, _reply) => {
     await requireAdmin(database, request);
     const configuration: McpConfiguration = await runScopeExclusive(async () => {
       await requireAdmin(database, request);
       return requireService(request.params.id);
     });
-    reply.header("Cache-Control", "private, no-store");
     try {
       return { tools: await inspectMcp(configuration) };
     } catch (error) {

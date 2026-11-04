@@ -5,7 +5,7 @@ import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, test } from "node:test";
@@ -255,6 +255,80 @@ test("API startup continues after one automatic release fails and preserves its 
   } finally {
     await app?.close();
     if (!closedDatabase) await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("records an unmeasurable workspace instead of aborting the maintenance cycle", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-measure-failure-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  const measurementEngine = { ...engine, running: new Set<string>(), closed: [] as string[] };
+  const originalPath = process.env.PATH;
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
+    await database.db.insert(subjects).values({ subject: "measure-owner", role: "developer" });
+    const [service] = await database.db.insert(services).values({ key: "measure", name: "Measure" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const remote = await createRemote(root, "measure");
+    const created: Array<typeof issues.$inferSelect> = [];
+    for (const suffix of [977, 978]) {
+      const [issue] = await database.db
+        .insert(issues)
+        .values({
+          key: `ISSUE-20261026-${suffix}`,
+          title: "Measurement failure",
+          status: "resolved",
+          resolvedAt: new Date(0),
+          type: "defect_fix",
+          serviceId: service!.id,
+          environmentId: environment!.id,
+          reporterSubject: "measure-owner",
+        })
+        .returning();
+      await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+      const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+      await database.db.insert(issueRepositories).values({
+        issueId: issue!.id,
+        url: remote,
+        baseBranch: "main",
+        workingBranch: prepared.workingBranch,
+        localPath: prepared.workspacePath,
+        workspaceName: "repo",
+        commitBefore: prepared.baseCommit,
+      });
+      created.push(issue!);
+    }
+    // `du` fails for the first Issue only; a single unreadable tree must not abort the whole cycle.
+    const bin = path.join(root, "bin");
+    await mkdir(bin, { recursive: true });
+    const du = path.join(bin, "du");
+    await writeFile(du, `#!/bin/sh\ncase "$3" in\n  *issue-20261026-977) echo "du unavailable" >&2; exit 2;;\nesac\nexec /usr/bin/du "$@"\n`);
+    await chmod(du, 0o755);
+    process.env.PATH = `${bin}:${originalPath ?? ""}`;
+
+    const manager = new WorkspaceLifecycleManager(database.db, root, measurementEngine as never, {
+      retentionMs: 0,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
+    const result = await manager.maintain();
+    assert.deepEqual(
+      result.failures.map((failure) => failure.issueKey),
+      [created[0]!.key],
+    );
+    assert.deepEqual(
+      result.released.map((release) => release.issueKey),
+      [created[1]!.key],
+    );
+    // Once `du` works again the next cycle is complete again.
+    process.env.PATH = originalPath;
+    const refreshed = await manager.maintain();
+    assert.deepEqual(refreshed.failures, []);
+  } finally {
+    process.env.PATH = originalPath;
+    await database.close();
     await rm(root, { recursive: true, force: true });
   }
 });

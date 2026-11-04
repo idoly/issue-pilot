@@ -43,11 +43,17 @@ const hostname = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9
 export class ApplicationParameterError extends Error {}
 const invalid = (key: string) => new ApplicationParameterError(`invalid_application_parameter:${key}`);
 
+/** Domain lists share one rule set wherever they are configured: admin parameters and per-agent runtime additions. */
+export function parseAllowedDomains(value: unknown): readonly string[] {
+  return parseList("networkAllowedDomains", value);
+}
+
 function parseList(key: (typeof listKeys)[number], value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length > applicationParameterBounds.listEntries || value.some((entry) => typeof entry !== "string")) throw invalid(key);
   const entries = value as string[];
   if (new Set(entries).size !== entries.length) throw invalid(key);
-  if (key === "dingtalkAttachmentHosts" ? entries.some((entry) => !hostname.test(entry)) : !NetworkConfigSchema.safeParse({ allowedDomains: entries, deniedDomains: [] }).success) throw invalid(key);
+  const valid = key === "networkAllowedDomains" ? NetworkConfigSchema.safeParse({ allowedDomains: entries, deniedDomains: [] }).success : entries.every((entry) => hostname.test(entry));
+  if (!valid) throw invalid(key);
   return Object.freeze([...entries]);
 }
 

@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { DefaultPackageManager, DefaultResourceLoader, getAgentDir, getPackageDir, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { NetworkConfigSchema } from "@anthropic-ai/sandbox-runtime";
-import { arr, compile, num, obj, opt, str, type Schema } from "@earendil-works/pi-schema";
-import { AGENT_PI_SETTING_KEYS, type AgentRuntimeConfiguration } from "../domain/contracts.ts";
+import { compile, num, obj, opt, unknown, type Schema } from "@earendil-works/pi-schema";
+import { AGENT_PI_SETTING_KEYS, type AgentPiSettings, type AgentRuntimeConfiguration } from "../domain/contracts.ts";
+import { parseAllowedDomains } from "./parameters.ts";
 type SettingsSchema = Record<string, unknown> & { properties?: Record<string, SettingsSchema>; patternProperties?: Record<string, SettingsSchema>; anyOf?: SettingsSchema[] };
 const nativeSchema = JSON.parse(readFileSync(path.join(getPackageDir(), "schemas/settings.schema.json"), "utf8")) as { properties: Record<string, SettingsSchema> };
 // Keep the SDK's field contracts, reject unknown/deprecated settings, and bound numeric budgets.
@@ -25,13 +25,21 @@ function exactSchema(schema: SettingsSchema): Schema {
 const settingProperties = Object.fromEntries(AGENT_PI_SETTING_KEYS.map((key) => [key, opt(exactSchema(nativeSchema.properties[key]!))]));
 settingProperties.codemode = opt(obj({ inlineBudget: opt(num({ minimum: 0 })) }));
 const agentPiSettingsSchema = obj(settingProperties);
-const validateRuntime = compile(obj({ settings: opt(agentPiSettingsSchema), networkAllowedDomains: opt(arr(str())) }));
+// Domain entries are validated by parseAllowedDomains so this list shares the admin parameter rules.
+const validateRuntime = compile(obj({ settings: opt(agentPiSettingsSchema), networkAllowedDomains: opt(unknown()) }));
 export class AgentRuntimeConfigurationError extends Error {}
 export function parseAgentRuntime(value: unknown): AgentRuntimeConfiguration {
   if (!validateRuntime.check(value)) throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
-  const runtime = structuredClone(value) as AgentRuntimeConfiguration;
-  if (runtime.networkAllowedDomains && !NetworkConfigSchema.safeParse({ allowedDomains: runtime.networkAllowedDomains, deniedDomains: [] }).success)
-    throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
+  const input = value as { settings?: AgentPiSettings; networkAllowedDomains?: unknown };
+  const runtime: AgentRuntimeConfiguration = {};
+  if (input.settings !== undefined) runtime.settings = structuredClone(input.settings);
+  if (input.networkAllowedDomains !== undefined) {
+    try {
+      runtime.networkAllowedDomains = [...parseAllowedDomains(input.networkAllowedDomains)];
+    } catch {
+      throw new AgentRuntimeConfigurationError("invalid_agent_runtime_configuration");
+    }
+  }
   return runtime;
 }
 export async function inspectAgentResources(directory = getAgentDir()) {

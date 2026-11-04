@@ -60,6 +60,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0067_personal_model_credentials",
       "0068_dbhub_targets",
       "0069_application_parameters",
+      "0070_issue_type_guard",
     ],
   );
   const previousJournal = {
@@ -86,7 +87,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)",
       "insert into service_repositories (id, service_id, url, created_at, updated_at) values ('orders-api', 'service', 'git@example.test:team/orders-api.git', 1, 1), ('orders-web', 'service', 'https://example.test/team/orders-web.git', 1, 1)",
       'insert into service_deployments (id, service_id, environment_id, base_branch, config, created_at, updated_at) values (\'test-deployment\', \'service\', \'environment\', \'develop\', \'{"agent":{"provider":"enterprise-ai","model":"engineering-model","thinkingLevel":"high"}}\', 1, 1)',
-      `insert into issues (id, key, title, service_id, environment_id, reporter_subject, version, created_at, updated_at) values ('issue', 'ISSUE-20260809-001', 'Preserved', 'service', 'environment', 'reporter', 7, ${now}, ${now})`,
+      `insert into issues (id, key, title, type, service_id, environment_id, reporter_subject, version, created_at, updated_at) values ('issue', 'ISSUE-20260809-001', 'Preserved', 'smart_analysis', 'service', 'environment', 'reporter', 7, ${now}, ${now})`,
       "insert into issue_repositories (id, issue_id, url, base_branch, working_branch, local_path, commit_before, created_at, updated_at) values ('issue-repository', 'issue', 'git@example.test:team/orders-api.git', 'develop', 'hotfix-issue-20260809-001', '/state/workspaces/issue-20260809-001/orders-api', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1)",
       "insert into issue_cc_recipients (issue_id, subject, created_at) values ('issue', 'recipient', 2)",
       "insert into issue_history (id, issue_id, actor_subject, action, changes, created_at) values ('history', 'issue', 'reporter', 'created', '{}', 3)",
@@ -322,7 +323,7 @@ test("refuses to install resolution triggers over inconsistent Issue state", asy
     await client.execute("insert into services (id, key, name, description, created_at, updated_at) values ('service', 'orders', 'Orders', '', 1, 1)");
     await client.execute("insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', '{}', 1, 1)");
     await client.execute(
-      "insert into issues (id, key, title, status, service_id, environment_id, reporter_subject, created_at, updated_at) values ('issue', 'ISSUE-20260809-002', 'Invalid resolution', 'resolved', 'service', 'environment', 'reporter', 1, 1)",
+      "insert into issues (id, key, title, type, status, service_id, environment_id, reporter_subject, created_at, updated_at) values ('issue', 'ISSUE-20260809-002', 'Invalid resolution', 'smart_analysis', 'resolved', 'service', 'environment', 'reporter', 1, 1)",
     );
 
     await assert.rejects(migrate(db, { migrationsFolder: migrationSource }), /issue_resolution_state_invalid/);
@@ -366,18 +367,18 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
       .returning();
     await assert.rejects(
       client.execute({
-        sql: "insert into issues (id, key, title, reporter_subject, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
+        sql: "insert into issues (id, key, title, type, reporter_subject, environment_id, created_at, updated_at) values (?, ?, ?, 'smart_analysis', ?, ?, ?, ?)",
         args: ["invalid-scope", "ISSUE-20260805-001", "Invalid scope", "demo-owner", environment!.id, Date.now(), Date.now()],
       }),
       /issue_scope_required/,
     );
     await client.execute({
-      sql: "insert into issues (id, key, title, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      sql: "insert into issues (id, key, title, type, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, 'smart_analysis', ?, ?, ?, ?, ?)",
       args: ["valid-scope", "ISSUE-20260805-002", "Valid scope", "demo-owner", service!.id, environment!.id, Date.now(), Date.now()],
     });
     await assert.rejects(
       client.execute({
-        sql: "insert into issues (id, key, title, status, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, 'resolved', ?, ?, ?, ?, ?)",
+        sql: "insert into issues (id, key, title, type, status, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, 'smart_analysis', 'resolved', ?, ?, ?, ?, ?)",
         args: ["invalid-resolution", "ISSUE-20260805-004", "Invalid resolution", "demo-owner", service!.id, environment!.id, Date.now(), Date.now()],
       }),
       /issue_resolution_state_invalid/,
@@ -389,7 +390,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await assert.rejects(client.execute({ sql: "update issues set service_id = null where id = ?", args: ["valid-scope"] }), /issue_scope_required/);
     await assert.rejects(
       client.execute({
-        sql: "insert into issues (id, key, title, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+        sql: "insert into issues (id, key, title, type, reporter_subject, service_id, environment_id, created_at, updated_at) values (?, ?, ?, 'smart_analysis', ?, ?, ?, ?, ?)",
         args: ["missing-deployment", "ISSUE-20260805-003", "Missing deployment", "demo-owner", service!.id, prod!.id, Date.now(), Date.now()],
       }),
       /issue_deployment_required/,

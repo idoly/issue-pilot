@@ -1,7 +1,8 @@
 import {
   CAPABILITY_KEYS,
   configuredCapabilities,
-  ISSUE_TYPES_BY_ENVIRONMENT,
+  issueScopeForWorkMode,
+  issueWorkMode,
   normalizeIssueKey,
   type CapabilityName,
   type AgentConfiguration,
@@ -39,7 +40,9 @@ export function createAgentSessionContext(input: {
   repositoryAccess: Array<"read" | "write">;
 }): AgentSessionContext {
   const agent = input.agentConfiguration;
-  const writableIssue = input.environmentKind === "dev" && ISSUE_TYPES_BY_ENVIRONMENT.dev.includes(input.issueType);
+  // One mapping owns which environment/type combinations may write; historical rows outside it stay read-only.
+  const workMode = issueWorkMode(input.environmentKind, input.issueType);
+  const writableIssue = workMode !== undefined && issueScopeForWorkMode(workMode).repositoryAccess === "write";
   return {
     issueKey: normalizeIssueKey(input.issueKey),
     serviceKey: input.serviceKey,

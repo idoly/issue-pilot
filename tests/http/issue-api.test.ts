@@ -240,6 +240,16 @@ test("serializes retries, status transitions, messages, and comments with one Is
     assert.deepEqual(retries.map(({ statusCode }) => statusCode).sort(), [202, 409]);
     fixture.engine.running.delete(issueId);
 
+    const pendingRetry = openDatabase(fixture.databaseFile);
+    await pendingRetry.db.update(issues).set({ status: "pending" }).where(eq(issues.id, issueId));
+    await pendingRetry.close();
+    // The detail view offers "继续处理" for an unresolved pending Issue; the route must accept it.
+    assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/retry` })).statusCode, 202);
+    fixture.engine.running.delete(issueId);
+    const reopened = openDatabase(fixture.databaseFile);
+    await reopened.db.update(issues).set({ status: "open" }).where(eq(issues.id, issueId));
+    await reopened.close();
+
     assert.equal((await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}/status`, payload: { status: "resolved" } })).statusCode, 409);
     const pending = openDatabase(fixture.databaseFile);
     await pending.db.update(issues).set({ status: "pending" }).where(eq(issues.id, issueId));
@@ -380,7 +390,6 @@ test("edits only Issue metadata and rejects scope fields", async () => {
     assert.equal(((await json(metadataUpdate)).service as { key: string }).key, "alpha");
     assert.equal(fixture.engine.closedSessions.at(-1), issueId);
     assert.equal(fixture.engine.enqueued.at(-1), issueId);
-    assert.equal(fixture.engine.recordedMessages.at(-1), false);
     assert.match(fixture.engine.messages.at(-1) ?? "", /"environmentKey": "test"/);
     assert.match(fixture.engine.messages.at(-1) ?? "", /"key": "alpha"/);
 
@@ -571,9 +580,6 @@ test("plans and applies read-only scope transitions with stale-plan protection",
     assert.deepEqual(detail.scopeTransitions[0]!.from, { service: { key: "alpha", name: "Alpha" }, workMode: "test_analysis" });
     assert.deepEqual(detail.scopeTransitions[0]!.to, { service: { key: "beta", name: "Beta" }, workMode: "production_analysis" });
     assert.deepEqual(detail.scopeTransitions[0]!.repositories, { retained: [], added: ["https://example.test/beta.git"], removed: ["https://example.test/alpha.git"] });
-    const historyResponse = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/scope-transitions` });
-    assert.equal(historyResponse.statusCode, 200);
-    assert.equal((JSON.parse(historyResponse.body) as unknown[]).length, 1);
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/development` })).statusCode, 404);
 
     fixture.engine.running.clear();

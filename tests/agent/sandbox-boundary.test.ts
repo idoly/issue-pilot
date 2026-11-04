@@ -220,3 +220,12 @@ test("standard npm and mvn commands run without a command broker or generated wr
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("rejects a workspace outside the declared state root instead of dropping the state deny", async () => {
+  const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-state-root-"));
+  try {
+    await assert.rejects(prepareIssueCommand({ writeRoot: path.join(state, "elsewhere"), stateRoot: state }, [process.execPath, "-e", ""]), /issue_sandbox_root_outside_state/);
+  } finally {
+    await rm(state, { recursive: true, force: true });
+  }
+});

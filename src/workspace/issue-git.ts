@@ -90,9 +90,12 @@ export async function validateIssueWorktreeBinding(store: string, workspace: str
 
 export const publishedIssueBranchFile = "issue-pilot-published.json";
 
-/** Import objects, then compare-and-swap only the branch this store was created for. */
-export async function publishIssueBranch(sharedStore: string, privateStore: string, branch: string): Promise<void> {
-  await validateIssueGitStore(privateStore);
+/**
+ * Import objects, then compare-and-swap only the branch this store was created for.
+ * Callers that already validated this store in the same operation pass `storeValidated`.
+ */
+export async function publishIssueBranch(sharedStore: string, privateStore: string, branch: string, storeValidated = false): Promise<void> {
+  if (!storeValidated) await validateIssueGitStore(privateStore);
   const markerFile = path.join(privateStore, publishedIssueBranchFile);
   const marker: unknown = JSON.parse(await readFile(markerFile, "utf8"));
   if (!marker || typeof marker !== "object" || !("branch" in marker) || marker.branch !== branch || !("commit" in marker) || typeof marker.commit !== "string" || !/^[a-f0-9]{40}$/.test(marker.commit))

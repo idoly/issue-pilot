@@ -73,8 +73,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     const url = `/api/config/shared-${kind}-credentials`;
     const fields = CAPABILITY_CREDENTIAL_FIELDS[kind] as readonly string[];
     const revisionColumn = kind === "dms" ? applicationSettings.sharedDmsRevision : applicationSettings.sharedSlsRevision;
-    app.get(url, { logLevel: "silent" }, async (request, reply) => {
-      reply.header("Cache-Control", "private, no-store");
+    app.get(url, { logLevel: "silent" }, async (request, _reply) => {
       return runScopeExclusive(async () => {
         await requireAdmin(database, request);
         const [row] = await database.db
@@ -88,8 +87,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
           : { configured: Boolean(row?.sls?.accessKeyId && row.sls.accessKeySecret), revision };
       });
     });
-    app.put(url, { logLevel: "silent" }, async (request, reply) => {
-      reply.header("Cache-Control", "private, no-store");
+    app.put(url, { logLevel: "silent" }, async (request, _reply) => {
       await requireAdmin(database, request);
       const input = record(request.body);
       if (Object.keys(input).some((key) => !["mode", "expectedRevision", ...fields].includes(key)) || (input.mode === "clear" && fields.some((field) => input[field] !== undefined)))
@@ -133,14 +131,13 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     });
   }
 
-  app.get("/api/me/credentials", async (request, reply) => {
+  app.get("/api/me/credentials", async (request, _reply) => {
     const user = await requireCurrentUser(database, request);
-    reply.header("Cache-Control", "private, no-store");
     const [credentials] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, user.subject)).limit(1);
     return personalStatus(user.role, credentials);
   });
 
-  app.put("/api/me/credentials", { logLevel: "silent" }, async (request, reply) => {
+  app.put("/api/me/credentials", { logLevel: "silent" }, async (request, _reply) => {
     const subject = await ensureCurrentSubject(database, request);
     const input = record(request.body);
     // Personal model groups are open to every role; SSH identities serve development Issues only.
@@ -231,26 +228,22 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       app.log.error(errorDiagnostic(error));
       throw new ApiError(500, "user_credentials_save_failed");
     });
-    reply.header("Cache-Control", "private, no-store");
     return result;
   });
 
-  app.get("/api/users", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/users", async (_request, _reply) => {
     const users = await database.db.select().from(subjects).where(eq(subjects.active, true)).orderBy(asc(subjects.displayName), asc(subjects.subject));
     return users.map(serializePerson);
   });
 
-  app.get("/api/me", async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/me", async (request, _reply) => {
     const person = await requireCurrentUser(database, request);
     return serializePerson(person);
   });
 
-  app.get("/api/users/manage", async (request, reply) => {
+  app.get("/api/users/manage", async (request, _reply) => {
     // Management data (inactive users, revisions, admin flags) follows the documented developer gate.
     await requireDeveloper(database, request);
-    reply.header("Cache-Control", "private, no-store");
     const users = await database.db.select().from(subjects).orderBy(desc(subjects.active), asc(subjects.displayName), asc(subjects.subject));
     return users.map(serializeManagedUser);
   });

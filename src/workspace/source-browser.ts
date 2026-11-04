@@ -38,6 +38,8 @@ type SourceContext = {
   repository: RepositoryRow;
   root: string;
   source: SourceRepository;
+  /** Validated isolated store of a development workspace; writes reuse it instead of rescanning. */
+  store?: string;
 };
 
 type SourceRevisionContext = {
@@ -749,8 +751,11 @@ export class SourceBrowser {
       ["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"],
       this.mutationOptions(),
     );
+    // A killed or failed probe is not a binding mismatch; keep the two conditions distinguishable.
+    if (result.killed) throw new Error("source_git_timeout");
     const [gitDirectory, commonDirectory, workingDirectory, branch] = result.stdout.trim().split("\n");
-    const expectedStore = await developmentRepositoryStorePath(this.stateRoot, issue.key, context.repository.url);
+    // context() already validated the isolated store for a development workspace; only read-state contexts lack it.
+    const expectedStore = context.store ?? (await developmentRepositoryStorePath(this.stateRoot, issue.key, context.repository.url));
     if (
       result.code !== 0 ||
       commonDirectory !== expectedStore ||
@@ -851,9 +856,11 @@ export class SourceBrowser {
     } catch (error) {
       missingPathError(error);
     }
+    let validatedStore: string | undefined;
     if (state === "development_workspace") {
       if (!repository.localPath || path.resolve(repository.localPath) !== root) throw new Error("source_runtime_invalid");
       const store = await developmentRepositoryStorePath(this.stateRoot, issue.key, repository.url);
+      validatedStore = store;
       // One owner validates the worktree binding; translate its stable diagnostic for the browser.
       try {
         await validateIssueWorktreeBinding(store, root, repository.workingBranch!);
@@ -876,6 +883,7 @@ export class SourceBrowser {
     return {
       repository,
       root,
+      ...(validatedStore ? { store: validatedStore } : {}),
       source: { name: repositoryName, url: repository.url, branch: repository.workingBranch ?? repository.baseBranch, access: state === "development_workspace" ? "write" : "read" },
     };
   }

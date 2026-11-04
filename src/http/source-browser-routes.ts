@@ -74,7 +74,6 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
   const { app, database, engine, sourceBrowser } = context;
   const register = (resource: string, operation: (issue: Issue, request: SourceRequest, signal: AbortSignal) => Promise<unknown>) => {
     app.get<{ Params: { key: string } }>(`/api/issues/:key/source/${resource}`, { logLevel: "silent" }, async (request, reply) => {
-      reply.header("Cache-Control", "private, no-store");
       const controller = new AbortController();
       const closed = () => {
         if (!reply.raw.writableEnded) controller.abort();
@@ -122,8 +121,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
       logLevel: "silent",
       bodyLimit: sourceFileBodyLimit,
     },
-    async (request, reply) => {
-      reply.header("Cache-Control", "private, no-store");
+    async (request, _reply) => {
       if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
       return mutate(request, (issue) => sourceBrowser.writeFile(issue, repository(request), relativePath(request, true), request.body, headerValue(request.headers["x-issue-pilot-sha256"], true)));
     },

@@ -194,12 +194,6 @@ export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
 export const ISSUE_TYPES = ["smart_analysis", "defect_fix", "feature_development"] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
-export const ISSUE_TYPES_BY_ENVIRONMENT: Record<EnvironmentKind, readonly IssueType[]> = {
-  prod: ["smart_analysis"],
-  test: ["smart_analysis"],
-  dev: ["defect_fix", "feature_development"],
-};
-
 export const ISSUE_WORK_MODES = ["production_analysis", "test_analysis", "development_fix", "development_feature"] as const;
 export type IssueWorkMode = (typeof ISSUE_WORK_MODES)[number];
 

@@ -45,6 +45,11 @@ test("DMS scope resolution selects the caller's personal credentials and never f
     await db.db.update(userCredentials).set({ productionDmsUrl: "" }).where(eq(userCredentials.subject, issuePilotConfig.bootstrapUser.subject));
     await resolve();
     assert.deepEqual(requests[1], { url: "https://shared.example.test/sse", authorization: "Bearer shared-secret" });
+    // A group without a URL is incomplete, so the credential status must not claim it is configured.
+    await db.db.update(userCredentials).set({ productionDmsAuthorization: "Bearer orphaned" }).where(eq(userCredentials.subject, issuePilotConfig.bootstrapUser.subject));
+    const status = await f.app.inject({ method: "GET", url: "/api/me/credentials", headers });
+    assert.equal(status.statusCode, 200, status.body);
+    assert.equal(status.json().productionDmsConfigured, undefined);
   } finally {
     globalThis.fetch = original;
     await db.close();

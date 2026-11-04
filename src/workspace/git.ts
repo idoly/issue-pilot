@@ -382,7 +382,7 @@ export class WorktreeManager {
       await validateIssueGitStore(isolated, input.url);
       if (!(await this.hasBranch(isolated, input.workingBranch))) throw new Error("working_branch_not_found");
       await this.git(["-C", isolated, "rev-parse", `refs/heads/${input.workingBranch}`]);
-      await publishIssueBranch(cachePath, isolated, input.workingBranch);
+      await publishIssueBranch(cachePath, isolated, input.workingBranch, true);
     }
     if (!(await this.hasBranch(cachePath, input.workingBranch))) throw new Error("working_branch_not_found");
     const baseCommit = (await this.git(["-C", cachePath, "rev-parse", `refs/heads/${input.workingBranch}`])).trim();

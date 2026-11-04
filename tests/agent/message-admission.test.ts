@@ -103,9 +103,9 @@ test("uses one session branch for concurrent admissions and dispatches each mess
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const dispatched: Array<{ message: string | undefined; record: boolean | undefined }> = [];
-  (engine as unknown as { run(issueId: string, message?: string, record?: boolean): Promise<void> }).run = async (_issueId, message, record) => {
-    dispatched.push({ message, record });
+  const dispatched: Array<{ message: string | undefined }> = [];
+  (engine as unknown as { run(issueId: string, message?: string): Promise<void> }).run = async (_issueId, message) => {
+    dispatched.push({ message });
     await gate;
   };
   try {
@@ -125,10 +125,7 @@ test("uses one session branch for concurrent admissions and dispatches each mess
     assert.equal((await readdir(path.dirname(binding.sessionFile))).filter((name) => name.startsWith(".session-")).length, 1);
     release();
     await engine.close();
-    assert.deepEqual(dispatched, [
-      { message: "first", record: false },
-      { message: "second", record: false },
-    ]);
+    assert.deepEqual(dispatched, [{ message: "first" }, { message: "second" }]);
   } finally {
     release();
     await engine.close();
@@ -138,7 +135,7 @@ test("uses one session branch for concurrent admissions and dispatches each mess
 });
 
 test("keeps admissions and executed rounds on the same branch during session startup", async (t) => {
-  const { root, database, issue, deployment } = await fixture();
+  const { root, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);
   const internal = engine as unknown as { projectManager: IssueProjectManager; piRuntime: PiSessionRuntime };
   let started!: () => void;
@@ -154,7 +151,7 @@ test("keeps admissions and executed rounds on the same branch during session sta
     await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, "admit-owner"));
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {}, apiKey: "fixture-key" });
     const work = issueRoot(root, issue.key);
-    const project: PreparedIssueProject = { deployment, runtimeRoot: work, workspaceRoot: work, repositories: [], relatedIssueKeys: [], runtimeReady: true };
+    const project: PreparedIssueProject = { runtimeRoot: work, repositories: [], relatedIssueKeys: [], runtimeReady: true };
     t.mock.method(internal.projectManager, "prepare", async () => project);
     t.mock.method(internal.piRuntime, "start", async (options: StartPiSessionOptions) => {
       options.manager.appendCustomEntry("fixture-start", {});

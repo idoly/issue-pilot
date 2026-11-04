@@ -47,19 +47,18 @@ export function parseDmsScopeConfiguration(value: unknown): DmsScope {
   if (!Array.isArray(input.databases) || !input.databases.length || input.databases.length > limits.dms.databases) fail("invalid_dms_databases");
   const databases = input.databases.map((value) => {
     const database = inputRecord(value);
-    const instanceAlias = requiredText(database.instanceAlias, "dms_instance_alias", 255);
-    const schemaName = requiredText(database.schemaName, "dms_schema_name", 255);
-    const resolvedFields = ["instanceId", "instanceHost", "instancePort", "databaseId"] as const;
-    const resolved = resolvedFields.some((key) => database[key] !== undefined && database[key] !== "");
-    const instanceId = resolved ? requiredText(database.instanceId, "dms_instance_id", 100) : "";
-    const instanceHost = resolved ? requiredText(database.instanceHost, "dms_instance_host", 255) : "";
-    const instancePort = resolved ? requiredText(database.instancePort, "dms_instance_port", 10) : "";
-    const databaseId = resolved ? requiredText(database.databaseId, "dms_database_id", 100) : "";
-    if (resolved && (!/^\d{1,5}$/.test(instancePort) || Number(instancePort) < 1 || Number(instancePort) > 65_535)) fail("invalid_dms_database");
-    return { instanceAlias, schemaName, instanceId, instanceHost, instancePort, databaseId };
+    // Resolution is server-owned: the browser names the instance alias and schema, and DMS resolves the rest
+    // with the acting user's credentials at query time. Client-supplied resolved metadata is ignored.
+    return {
+      instanceAlias: requiredText(database.instanceAlias, "dms_instance_alias", 255),
+      schemaName: requiredText(database.schemaName, "dms_schema_name", 255),
+      instanceId: "",
+      instanceHost: "",
+      instancePort: "",
+      databaseId: "",
+    };
   });
   if (new Set(databases.map(({ schemaName }) => schemaName)).size !== databases.length) fail("duplicate_dms_database_schema");
-  if (new Set(databases.filter(({ databaseId }) => databaseId).map(({ databaseId }) => databaseId)).size !== databases.filter(({ databaseId }) => databaseId).length) fail("duplicate_dms_database_id");
   return { databases };
 }
 

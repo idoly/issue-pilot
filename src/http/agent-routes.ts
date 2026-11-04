@@ -5,12 +5,13 @@ import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
+import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues, userCredentials } from "../db/schema.ts";
+import { agentSessions, issues } from "../db/schema.ts";
 import { pathExists } from "../workspace/state.ts";
-import { credentialOwnerSubject, personGitIdentity } from "../domain/contracts.ts";
+import { personGitIdentity } from "../domain/contracts.ts";
 import { ApiError, record, text } from "./input.ts";
 import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
@@ -56,15 +57,13 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
   const recentEventLimit = issuePilotConfig.http.sseRecentEventIds;
   if (!Number.isSafeInteger(recentEventLimit) || recentEventLimit < 1) throw new Error("invalid_sse_event_id_budget");
 
-  app.get<{ Params: { key: string } }>("/api/issues/:key/sessions", async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get<{ Params: { key: string } }>("/api/issues/:key/sessions", async (request, _reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     return runScopeExclusive(async () => (await issueSessionHistory(database.db, stateRoot, issue)).map(({ file: _file, ...entry }) => entry));
   });
 
-  app.get<{ Params: { key: string; sessionId: string }; Querystring: { offset?: string } }>("/api/issues/:key/sessions/:sessionId", async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get<{ Params: { key: string; sessionId: string }; Querystring: { offset?: string } }>("/api/issues/:key/sessions/:sessionId", async (request, _reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     let manager: Awaited<ReturnType<typeof readIssueSessionHistory>>;
@@ -108,7 +107,8 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
-      if (currentIssue.status !== "open") throw new ApiError(409, "issue_not_retryable");
+      // The engine can start any unresolved Issue; the detail view offers the same retry for pending ones.
+      if (currentIssue.status === "resolved") throw new ApiError(409, "issue_not_retryable");
       reservation.enqueue(issue.id);
     });
     return reply.code(202).send({ ok: true });
@@ -125,12 +125,12 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     const sharedConfiguration = await loadGlobalAgentConfiguration(database.db);
-    const [credentials] = await database.db
-      .select({ model: userCredentials.modelCredentials })
-      .from(userCredentials)
-      .where(eq(userCredentials.subject, credentialOwnerSubject(issue)))
-      .limit(1);
-    const configured = selectAgentConfiguration(sharedConfiguration, credentials?.model);
+    // Same owner rule as execution; an inactive owner has no usable personal group, so this view falls back to the shared one.
+    const owner = await loadIssueCredentialOwner(database.db, issue.id).catch((error: unknown) => {
+      if (error instanceof Error && error.message === "issue_credential_owner_inactive") return undefined;
+      throw error;
+    });
+    const configured = selectAgentConfiguration(sharedConfiguration, owner?.credentials?.modelCredentials);
     const autoCompact = SettingsManager.inMemory(configured.runtime.settings).getCompactionEnabled();
     const models = await modelCatalog.list();
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);

@@ -262,9 +262,8 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
 }
 
 export function registerApplicationMcp(context: ApiRouteContext) {
-  context.app.get("/api/endpoints", async (request, reply) => {
+  context.app.get("/api/endpoints", async (request, _reply) => {
     await ensureCurrentSubject(context.database, request);
-    reply.header("Cache-Control", "private, no-store");
     return { endpoints: [{ name: "Issue Pilot MCP", path: "/mcp", transport: "Streamable HTTP", readOnly: false, tools: applicationTools() }] };
   });
   context.app.post("/mcp", { logLevel: "silent", bodyLimit: limits.requestBytes }, async (request, reply) => {

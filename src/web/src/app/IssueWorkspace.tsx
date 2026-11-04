@@ -14,8 +14,6 @@ import {
   issueScopeForWorkMode,
   issueWorkMode,
   listIssues,
-  listIssueSessions,
-  resetIssueSession,
   planIssueScopeTransition,
   retryIssue,
   updateIssue,
@@ -47,6 +45,7 @@ const workspaceErrorMessages: Record<string, string> = {
   issue_already_running: "工单正在处理，请等待结束后重置。",
   invalid_subject: "处理人或抄送人包含已停用的用户，请重新选择后保存。",
   resolved_issue_cannot_reset_session: "请先重开工单。",
+  issue_saved_session_reset_failed: "工单已保存，但会话重置失败，请重试重置。",
   sls_credentials_not_configured: "尚未配置 SLS 凭据，请在用户配置中设置个人或共享 SLS 凭据后重试。",
   personal_sls_credentials_incomplete: "个人 SLS 凭据不完整，请重新设置完整凭据后重试。",
   model_api_key_not_configured: "尚未配置模型 API Key，请在用户配置中设置个人或共享 API Key 后重试。",
@@ -236,46 +235,28 @@ export function IssueWorkspace(props: {
     const input = { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), assigneeSubject: editAssignee(), ccSubjects: [...editCc()] };
     const removals = [...removedAttachmentIds()];
     const additions = [...editAttachments()];
-    let saved = false,
-      resetDone = false;
     setEditSaving(true);
     setEditResetting(reset);
     setEditError("");
+    let saved = false;
     try {
-      const sessions = reset ? await listIssueSessions(issueId) : [];
-      if (issueGeneration !== generation) return;
-      const current = sessions.find((session) => session.current);
-      if (reset && !current) throw new Error("agent_session_not_found");
-      await updateIssue(issueId, input, removals, additions);
+      // Save and reset are one reservation on the server; sending them separately would queue a metadata round first.
+      await updateIssue(issueId, input, removals, additions, reset);
       saved = true;
       if (issueGeneration !== generation) return;
       setRemovedAttachmentIds([]);
       setEditAttachments([]);
-      if (reset) {
-        await resetIssueSession(issueId, current!.sessionId);
-        resetDone = true;
-      }
-      if (issueGeneration !== generation) return;
       await props.onUpdated();
       if (issueGeneration === generation) setEditOpen(false);
     } catch (error) {
       const code = errorMessage(error);
-      let message = workspaceErrorMessages[code] ?? code;
-      if (saved && reset && !resetDone && issueGeneration === generation) {
-        try {
-          await props.onUpdated();
-        } catch (refreshError) {
-          message += `；刷新工单失败：${errorMessage(refreshError)}`;
-        }
+      const message = workspaceErrorMessages[code] ?? code;
+      // A committed edit must not be resent with its files; the server already stored them.
+      if (saved || code === "issue_saved_session_reset_failed") {
+        setRemovedAttachmentIds([]);
+        setEditAttachments([]);
       }
-      if (issueGeneration === generation)
-        setEditError(
-          resetDone
-            ? `工单已保存，会话已重置，但刷新失败：${message}。请关闭编辑窗口后刷新页面。`
-            : saved && reset
-              ? `工单已保存，但重置未完成：${message}。可重试重置，已保存的附件不会重复上传。`
-              : message,
-        );
+      if (issueGeneration === generation) setEditError(saved ? `工单已保存${reset ? "并重置" : ""}，但刷新失败：${message}。请关闭编辑窗口后刷新页面。` : message);
     } finally {
       if (issueGeneration === generation) {
         setEditSaving(false);

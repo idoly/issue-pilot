@@ -8,7 +8,7 @@ import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
-import { createApiFixture, createService, createIssue } from "./fixture.ts";
+import { createApiFixture, createService, createIssue, issueMetadataPayload } from "./fixture.ts";
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 async function fixture() {
   const f = await createApiFixture();
@@ -72,6 +72,27 @@ test("reset preserves the old transcript and files, binds an empty session, and 
     const repeated = await f.app.inject({ method: "POST", url: endpoint + "/reset-session", headers, payload: { expectedSessionId: manager.getSessionId() } });
     assert.equal(repeated.statusCode, 200);
     assert.equal((await f.app.inject({ method: "GET", url: endpoint + "/sessions", headers })).json().length, 3);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("saving metadata with resetSession resets in the same reservation without starting a round", async () => {
+  const f = await fixture();
+  try {
+    const oldFile = f.manager.getSessionFile()!,
+      original = await readFile(oldFile);
+    const response = await f.app.inject({ method: "PATCH", url: `/api/issues/${f.issue.key}`, headers, payload: { ...issueMetadataPayload("Saved with reset"), resetSession: true } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().title, "Saved with reset");
+    // Creation is the only queued round; the reset must not leave a metadata round behind.
+    assert.equal(f.engine.enqueued.length, 1);
+    assert.deepEqual(await readFile(oldFile), original);
+    const [binding] = await f.db.db.select().from(agentSessions);
+    assert.ok(binding);
+    assert.notEqual(binding.sessionFile, oldFile);
+    assert.deepEqual(SessionManager.open(binding.sessionFile).buildSessionContext().messages, []);
+    assert.equal(f.engine.closedSessions.at(-1), f.issue.id);
+    assert.equal((await f.app.inject({ method: "PATCH", url: `/api/issues/${f.issue.key}`, headers, payload: { ...issueMetadataPayload("Invalid"), resetSession: "yes" } })).statusCode, 400);
   } finally {
     await f.cleanup();
   }

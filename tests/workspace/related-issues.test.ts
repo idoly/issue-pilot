@@ -97,7 +97,7 @@ test("related Issues expose their complete current working directory and convers
     const sessionFile = path.join(sessionRoot, ".session-related.jsonl");
     await mkdir(sessionRoot, { recursive: true });
     await writeFile(sessionFile, '{"type":"custom","customType":"issue-pilot-user","data":{"message":"check the contract"}}\n', { mode: 0o600 });
-    await database.db.insert(agentSessions).values({ issueId: development!.id, sessionFile, workspacePath: preparedDevelopment.workspaceRoot });
+    await database.db.insert(agentSessions).values({ issueId: development!.id, sessionFile, workspacePath: issueRoot(root, development!.key) });
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, development!.id));
     await database.db.insert(issueRelations).values([
       { issueId: production!.id, relatedIssueId: development!.id },
@@ -129,7 +129,7 @@ test("related Issues expose their complete current working directory and convers
     assert.deepEqual(developmentWithRelations.relatedIssueKeys, [relatedProduction!.key]);
     const devEvidence = path.join(developmentWithRelations.runtimeRoot, `.related-${relatedProduction!.key.toLowerCase()}.json`);
     assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
-    assert.equal((await readdir(developmentWithRelations.workspaceRoot)).includes("remote"), true);
+    assert.equal((await readdir(issueRoot(root, development!.key))).includes("remote"), true);
     await projects.hydrateDevelopmentRuntime(development!);
     assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
   } finally {

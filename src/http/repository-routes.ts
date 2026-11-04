@@ -24,8 +24,7 @@ function repositoryInput(body: unknown) {
 export function registerRepositoryRoutes(context: ApiRouteContext) {
   const { app, database, engine, runScopeExclusive } = context;
 
-  app.get("/api/repositories", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/repositories", async (_request, _reply) => {
     return runScopeExclusive(async () => {
       const rows = await database.db.select().from(repositories).orderBy(asc(repositories.url));
       const uses = await database.db

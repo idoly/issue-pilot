@@ -31,3 +31,15 @@ test("file field mappings resolve exact names or IDs and reject ambiguity", () =
   assert.throws(() => resolveDingtalkColumns(fields, { title: "missing" }), /dingtalk_fields_changed/);
   assert.throws(() => resolveDingtalkColumns([...fields, { id: "duplicate", name: "另一个标题", type: "text" }], { title: "另一个标题" }), /dingtalk_fields_changed/);
 });
+
+test("an explicitly cleared column is skipped instead of falling back to auto-detection", () => {
+  const fields = [
+    { id: "title", name: "序号", type: "text" },
+    { id: "description", name: "描述", type: "text" },
+    { id: "attachments", name: "附件", type: "attachment" },
+  ];
+  assert.deepEqual(resolveDingtalkColumns(fields, { title: "序号" }), { title: "title", description: "description", number: "title", attachments: "attachments" });
+  assert.equal(resolveDingtalkColumns(fields, { description: "", attachments: "" }).description, "");
+  assert.equal(resolveDingtalkColumns(fields, { description: "", attachments: "" }).attachments, "");
+  assert.equal(resolveDingtalkColumns(fields, { description: "", attachments: "" }).title, "title");
+});

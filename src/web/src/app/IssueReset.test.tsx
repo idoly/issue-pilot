@@ -1,12 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueDetail } from "../data/client";
-const state = vi.hoisted(() => ({ update: vi.fn(), sessions: vi.fn(), reset: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
+const state = vi.hoisted(() => ({ update: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   updateIssue: state.update,
-  listIssueSessions: state.sessions,
-  resetIssueSession: state.reset,
 }));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({ currentUser: () => state.user(), people: () => [], peopleError: () => "", catalog: () => ({ environments: [], services: [] }) }),
@@ -30,9 +28,7 @@ const issue: IssueDetail = {
   comments: [],
 };
 beforeEach(() => {
-  state.sessions.mockResolvedValue([{ sessionId: "current", current: true }]);
   state.update.mockResolvedValue(issue);
-  state.reset.mockResolvedValue({ sessionId: "new" });
 });
 afterEach(() => {
   cleanup();
@@ -55,9 +51,7 @@ it("saves edits and resets from the footer without confirmation", async () => {
   expect(within(dialog).getByText(/重置会保存当前修改并创建新会话/)).toBeTruthy();
   fireEvent.click(reset);
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
-  expect(state.update).toHaveBeenCalledWith(issue.id, expect.objectContaining({ title: "修改后的标题" }), [], []);
-  expect(state.reset).toHaveBeenCalledExactlyOnceWith(issue.id, "current");
-  expect(state.update.mock.invocationCallOrder[0]).toBeLessThan(state.reset.mock.invocationCallOrder[0]!);
+  expect(state.update).toHaveBeenCalledWith(issue.id, expect.objectContaining({ title: "修改后的标题" }), [], [], true);
   expect(confirm).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
 });
@@ -68,29 +62,27 @@ it("preserves drafts and does not reset when saving fails", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   expect((await within(dialog).findByRole("alert")).textContent).toBe("保存失败");
   expect(within(dialog).getByLabelText("编辑工单标题")).toHaveProperty("value", "保留草稿");
-  expect(state.reset).not.toHaveBeenCalled();
 });
 it("reports partial success and retries without uploading saved attachments twice", async () => {
-  state.reset.mockRejectedValueOnce(new Error("agent_session_changed"));
+  state.update.mockRejectedValueOnce(new Error("issue_saved_session_reset_failed"));
   const updated = vi.fn(async () => {}),
     dialog = await open(updated);
   const file = new File(["content"], "evidence.txt", { type: "text/plain" });
   await fireEvent.change(within(dialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
-  expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存，但重置未完成");
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存，但会话重置失败");
   expect(state.update.mock.calls[0]![3]).toEqual([file]);
+  // The server committed the edits, so the retry must not upload the same file again.
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
-  await waitFor(() => expect(updated).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(updated).toHaveBeenCalledOnce());
   expect(state.update.mock.calls[1]![3]).toEqual([]);
-  expect(state.reset).toHaveBeenCalledTimes(2);
 });
 it("saves normally without reading or resetting the session", async () => {
   const updated = vi.fn(async () => {}),
     dialog = await open(updated);
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
-  expect(state.sessions).not.toHaveBeenCalled();
-  expect(state.reset).not.toHaveBeenCalled();
+  expect(state.update.mock.calls[0]!.at(-1)).toBe(false);
 });
 for (const busy of [true, false])
   it(`disables reset for ${busy ? "active work" : "non-developers"}`, async () => {
@@ -105,8 +97,7 @@ it("reports a completed reset separately from a failed page refresh", async () =
     }),
     dialog = await open(updated);
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
-  expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存，会话已重置，但刷新失败");
-  expect(state.reset).toHaveBeenCalledOnce();
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存并重置，但刷新失败");
   expect(updated).toHaveBeenCalledOnce();
 });
 it("does not reset after the workspace unmounts while saving", async () => {
@@ -126,14 +117,11 @@ it("does not reset after the workspace unmounts while saving", async () => {
   view.unmount();
   finish();
   await Promise.resolve();
-  expect(state.reset).not.toHaveBeenCalled();
   expect(updated).not.toHaveBeenCalled();
 });
-it("does not save or reset if there is no current session", async () => {
-  state.sessions.mockResolvedValue([]);
+it("surfaces the server refusal when there is no current session", async () => {
+  state.update.mockRejectedValueOnce(new Error("agent_session_not_found"));
   const dialog = await open();
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   expect((await within(dialog).findByRole("alert")).textContent).toBe("暂无可重置的会话。");
-  expect(state.update).not.toHaveBeenCalled();
-  expect(state.reset).not.toHaveBeenCalled();
 });

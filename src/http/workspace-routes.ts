@@ -65,10 +65,9 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     throw error;
   };
   // The query carries a work-file path; keep names out of request logs like the download route.
-  app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", { logLevel: "silent" }, async (request, reply) => {
+  app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", { logLevel: "silent" }, async (request, _reply) => {
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path, true);
-    reply.header("Cache-Control", "private, no-store");
     try {
       return await listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue));
     } catch (error) {
@@ -81,7 +80,6 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const relative = relativeWorkPath(request.query.path);
     try {
       const file = await openIssueWorkFile(context.stateRoot, issue.key, relative, await fileAccess(issue));
-      reply.header("Cache-Control", "private, no-store");
       reply.header("Content-Type", "application/octet-stream");
       reply.header("X-Content-Type-Options", "nosniff");
       reply.header("Content-Length", file.size);
@@ -92,8 +90,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     }
   });
 
-  app.get<{ Querystring: { refresh?: string } }>("/api/workspaces/stats", async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get<{ Querystring: { refresh?: string } }>("/api/workspaces/stats", async (request, _reply) => {
     const stats = await workspaces.stats(request.query.refresh === "true");
     return { ...stats, workspaces: stats.workspaces.map(serializeInspection) };
   });
@@ -110,12 +107,6 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
     throw error;
   };
-
-  app.get<{ Params: { key: string } }>("/api/issues/:key/scope-transitions", async (request, reply) => {
-    const issue = await requireIssue(database, request.params.key);
-    reply.header("Cache-Control", "private, no-store");
-    return scopeTransitions.history(issue.id);
-  });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/scope-transition/plan", async (request) => {
     const issue = await requireIssue(database, request.params.key);

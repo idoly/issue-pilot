@@ -68,8 +68,8 @@ test("restores interrupted and ready workspaces when the application database re
     const created = await initial.db
       .insert(issues)
       .values([
-        { key: "ISSUE-20260809-001", title: "Interrupted", status: "in_progress", serviceId: service.id, environmentId: environment.id, reporterSubject: "owner" },
-        { key: "ISSUE-20260809-002", title: "Ready", status: "in_progress", serviceId: service.id, environmentId: environment.id, reporterSubject: "owner" },
+        { key: "ISSUE-20260809-001", title: "Interrupted", type: "defect_fix", status: "in_progress", serviceId: service.id, environmentId: environment.id, reporterSubject: "owner" },
+        { key: "ISSUE-20260809-002", title: "Ready", type: "defect_fix", status: "in_progress", serviceId: service.id, environmentId: environment.id, reporterSubject: "owner" },
       ])
       .returning();
     await initial.db.insert(issueWorkspaces).values([
@@ -114,7 +114,9 @@ test("rejects Issues without their required workspace row", async () => {
     await initial.db.insert(subjects).values({ subject: "owner", displayName: "Owner" });
     const [service] = await initial.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
     await initial.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
-    await initial.db.insert(issues).values({ key: "ISSUE-20260809-003", title: "Missing workspace", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "owner" });
+    await initial.db
+      .insert(issues)
+      .values({ key: "ISSUE-20260809-003", title: "Missing workspace", type: "smart_analysis", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "owner" });
   } finally {
     await initial.close();
   }

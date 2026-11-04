@@ -44,7 +44,8 @@ export function credentialStatus(credentials?: typeof userCredentials.$inferSele
   return {
     model: model ? { provider: model.provider, model: model.model, thinkingLevel: model.thinkingLevel, codemode: model.codemode } : null,
     gitSshConfigured: Boolean(credentials?.gitPrivateKey),
-    ...(credentials?.productionDmsAuthorization ? { productionDmsConfigured: true, productionDmsUrl: credentials.productionDmsUrl } : {}),
+    // Status must match selection: a URL without Authorization (or the reverse) is an incomplete group.
+    ...(credentials?.productionDmsUrl && credentials.productionDmsAuthorization ? { productionDmsConfigured: true, productionDmsUrl: credentials.productionDmsUrl } : {}),
     ...(credentials?.productionSlsAccessKeyId && credentials.productionSlsAccessKeySecret ? { productionSlsConfigured: true } : {}),
   };
 }

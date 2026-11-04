@@ -13,6 +13,7 @@ import { createApiFixture, createIssue, createService } from "./fixture.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const target = { instanceAlias: "ORDERS", schemaName: "orders", instanceId: "i1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" };
+const unresolvedTarget = { instanceAlias: "ORDERS", schemaName: "orders", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" };
 async function serviceInput(f: Awaited<ReturnType<typeof createApiFixture>>, key = "other") {
   const service = JSON.parse((await f.app.inject({ method: "GET", url: "/api/config" })).body).services.find((row: { key: string }) => row.key === key);
   return {
@@ -95,7 +96,7 @@ test("service configuration and generated descriptions share one source without 
     assert.equal(other.description, "按 order_no 关联网关日志。");
     assert.match(other.context, /orders_test/);
     assert.doesNotMatch(other.context, /Shared DMS|代码基准分支|访问配置/);
-    assert.deepEqual(other.deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dms, { databases: [target] });
+    assert.deepEqual(other.deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dms, { databases: [unresolvedTarget] });
     assert.equal((await f.app.inject({ method: "GET", url: "/api/resources" })).statusCode, 404);
     const dev = String((await db.client.execute("select id from environments where key='dev'")).rows[0]!.id);
     const prod = String((await db.client.execute("select id from environments where key='prod'")).rows[0]!.id);

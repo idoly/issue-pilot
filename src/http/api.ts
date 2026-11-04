@@ -186,6 +186,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "issue_environment_not_found",
         "agent_session_file_incomplete",
         "agent_session_file_missing",
+        "issue_saved_session_reset_failed",
       ]) {
         if (errorMessages.includes(operationalError)) {
           app.log.error(errorDiagnostic(error));
@@ -199,6 +200,16 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       if (/FOREIGN KEY constraint failed/i.test(errorMessages)) return reply.code(409).send({ error: "resource_in_use" });
       app.log.error(errorDiagnostic(error));
       return reply.code(500).send({ error: "internal_error" });
+    });
+
+    // Every API and MCP response may carry identity-scoped data; one hook guarantees it for new routes.
+    // SSE hijacks the socket and writes its own streaming cache headers.
+    app.addHook("onSend", async (request, reply, payload) => {
+      if (request.url === "/mcp" || request.url.startsWith("/api/")) {
+        reply.header("Cache-Control", "private, no-store");
+        reply.header("Pragma", "no-cache");
+      }
+      return payload;
     });
 
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);

@@ -9,10 +9,21 @@ import { assertSessionFileComplete, createPrivateSessionManager } from "./pi-ses
 
 const resetEntry = "issue-pilot-session-reset";
 
+/** A bound session file that disappeared is a stable condition, not an internal error. */
+async function ownSessionFile<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT" || code === "ENOTDIR") throw new Error("agent_session_file_missing", { cause: error });
+    throw error;
+  }
+}
+
 async function readSession(file: string, root: string) {
   if (path.dirname(file) !== root || !path.basename(file).startsWith(".session-")) throw new Error("agent_session_file_incomplete");
-  await assertSessionFileComplete(file);
-  return SessionManager.open(file, root, root);
+  await ownSessionFile(() => assertSessionFileComplete(file));
+  return ownSessionFile(async () => SessionManager.open(file, root, root));
 }
 
 /**
@@ -21,7 +32,7 @@ async function readSession(file: string, root: string) {
  */
 async function readSessionSummary(file: string, root: string) {
   if (path.dirname(file) !== root || !path.basename(file).startsWith(".session-")) throw new Error("agent_session_file_incomplete");
-  const descriptor = await open(file, "r");
+  const descriptor = await ownSessionFile(() => open(file, "r"));
   try {
     let header: { sessionId: string; createdAt: string } | undefined;
     let previousFile: string | undefined;

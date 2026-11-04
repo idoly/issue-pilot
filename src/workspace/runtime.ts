@@ -46,7 +46,7 @@ export async function prepareIssueRuntimeBatch<T extends { id: string; key: stri
         return { issueKey: issue.key, reason: errorMessage(errorDiagnostic(error)) };
       }
     },
-    { concurrency: options.concurrency ?? 1, stopOnError: false },
+    { concurrency: options.concurrency ?? 1 },
   );
   return {
     prepared: outcomes.filter((row) => row.reason === undefined).map((row) => row.issueKey),

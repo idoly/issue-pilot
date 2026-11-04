@@ -18,7 +18,7 @@ test("validates supported Pi fields against the installed SDK schema and rejects
   };
   assert.deepEqual(parseAgentRuntime(runtime), runtime);
   assert.deepEqual(parseAgentRuntime({ networkAllowedDomains: ["db.example.test:3306", "repo.example.test:443"] }), { networkAllowedDomains: ["db.example.test:3306", "repo.example.test:443"] });
-  for (const networkAllowedDomains of [["*"], ["http://example.test"], ["example.test:0"], [9]])
+  for (const networkAllowedDomains of [["*"], ["http://example.test"], ["example.test:0"], [9], ["dup.example.test", "dup.example.test"]])
     assert.throws(() => parseAgentRuntime({ networkAllowedDomains }), /invalid_agent_runtime_configuration/);
   for (const settings of [
     { defaultModel: "other" },

@@ -5,7 +5,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { readInBatches, type Database } from "../db/client.ts";
 import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces, services } from "../db/schema.ts";
 import { SerialQueue } from "../serial.ts";
-import type { StoredDeploymentConfig, EnvironmentKind, IssueType } from "../domain/contracts.ts";
+import type { EnvironmentKind, IssueType } from "../domain/contracts.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment } from "./git-credentials.ts";
 import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from "./issue-services.ts";
@@ -24,9 +24,7 @@ interface PreparedIssueRepository {
 }
 
 export interface PreparedIssueProject {
-  deployment: { id: string; config: StoredDeploymentConfig };
   runtimeRoot: string;
-  workspaceRoot: string;
   repositories: PreparedIssueRepository[];
   relatedIssueKeys: string[];
   runtimeReady: boolean;
@@ -45,12 +43,9 @@ export interface PreparedDevelopmentConversion {
   repositories: DeploymentRepository[];
   existingRepositories: IssueRepository[];
   names: Map<string, string>;
-  runtimeRoot: string;
 }
 
-export interface PreparedDevelopmentScopeMigration extends PreparedDevelopmentConversion {
-  removedRepositories: IssueRepository[];
-}
+export type PreparedDevelopmentScopeMigration = PreparedDevelopmentConversion;
 
 type IssueRepositoryWriter = Pick<Database, "insert" | "delete">;
 type IssueRepositoryReplacement = Pick<IssueRepository, "url" | "baseBranch" | "workingBranch" | "localPath" | "workspaceName" | "commitBefore">;
@@ -352,7 +347,7 @@ export class IssueProjectManager {
             workspaceRoot,
             prepared.map(({ workspacePath }) => workspacePath),
           );
-          const runtimeRoot = await prepareIssueRuntime(
+          await prepareIssueRuntime(
             this.stateRoot,
             issue.key,
             prepared.map((worktree, index) => ({
@@ -361,7 +356,7 @@ export class IssueProjectManager {
             })),
             "write",
           );
-          return finalize({ prepared, repositories, existingRepositories, names, runtimeRoot });
+          return finalize({ prepared, repositories, existingRepositories, names });
         },
       });
     } catch (error) {
@@ -425,7 +420,7 @@ export class IssueProjectManager {
         }),
         finalize: async (prepared) => {
           await assertManagedIssueWorkspaceLayout(workspaceRoot, [...prepared.map(({ workspacePath }) => workspacePath), ...removedRepositories.map(({ localPath }) => localPath!)]);
-          const runtimeRoot = await prepareIssueRuntime(
+          await prepareIssueRuntime(
             this.stateRoot,
             issue.key,
             prepared.map((worktree, index) => ({
@@ -434,7 +429,7 @@ export class IssueProjectManager {
             })),
             "write",
           );
-          const complete = () => finalize({ prepared, repositories, existingRepositories, removedRepositories, names, runtimeRoot });
+          const complete = () => finalize({ prepared, repositories, existingRepositories, names });
           if (!removedRepositories.length) return complete();
           let result: T | undefined;
           await this.worktrees.removeBatch({
@@ -483,7 +478,7 @@ export class IssueProjectManager {
 
   async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, gitEnvironment?: Record<string, string>): Promise<PreparedIssueProject> {
     if (gitEnvironment) return this.worktrees.withGitEnvironment(gitEnvironment, () => this.prepare(issue, environmentKind));
-    const [{ deployment, repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
+    const [{ repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
       loadIssueDeployments(this.database, issue),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
@@ -576,11 +571,8 @@ export class IssueProjectManager {
       shared ? "read" : "write",
       relatedIssues,
     );
-    const workspaceRoot = shared ? runtimeRoot : issueRoot(this.stateRoot, issue.key);
     return {
-      deployment: { id: deployment.id, config: deployment.config },
       runtimeRoot,
-      workspaceRoot,
       repositories: prepared.map((workspace, index) => {
         const name = names.get(repositoryRows[index]!.repository.url)!;
         return {

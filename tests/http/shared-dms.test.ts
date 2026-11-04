@@ -8,6 +8,7 @@ import { applyIssueCredentials } from "../../src/configuration/user-credentials.
 const headers: Record<string, string> = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const shared = { url: "https://shared.example.test/sse", authorization: "Bearer shared-dms-secret" };
 const scope = { databases: [{ instanceAlias: "ORDERS", schemaName: "orders", instanceId: "1", instanceHost: "db", instancePort: "3306", databaseId: "2" }] };
+const unresolvedScope = { databases: [{ instanceAlias: "ORDERS", schemaName: "orders", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" }] };
 
 test("shared DMS credentials are private, versioned, developer-only and reserve Issues", async () => {
   const f = await createApiFixture();
@@ -60,7 +61,7 @@ test("services save DMS targets without requiring or storing connection credenti
     const saved = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: definition });
     assert.equal(saved.statusCode, 200, saved.body);
     const rows = await db.db.select().from(serviceDeployments);
-    assert.ok(rows.every((row) => JSON.stringify(row.config.dms) === JSON.stringify(scope)));
+    assert.ok(rows.every((row) => JSON.stringify(row.config.dms) === JSON.stringify(unresolvedScope)));
     for (const extra of [{ authorization: shared.authorization }, { url: shared.url }, { credentialUpdate: { mode: "replace", values: shared } }]) {
       const result = await f.app.inject({
         method: "PATCH",

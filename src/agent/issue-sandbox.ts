@@ -12,6 +12,8 @@ import { applicationParameters } from "../configuration/parameters.ts";
 
 export interface IssueFilesystemPolicy {
   writeRoot: string;
+  /** Application state root; callers that know it make the read deny unconditional instead of inferred. */
+  stateRoot?: string;
   readRoots?: readonly string[];
   networkDomains?: readonly string[];
   gitAccess?: "write" | "read";
@@ -27,8 +29,10 @@ async function executable(name: string): Promise<string> {
     try {
       await access(file, constants.X_OK);
       return await realpath(file);
-    } catch {
-      /* Continue the trusted application's PATH lookup. */
+    } catch (error) {
+      // A missing entry is a normal PATH miss; any other failure means the configured binary is unusable.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw new Error("issue_sandbox_unavailable", { cause: error });
     }
   }
   throw new Error("issue_sandbox_unavailable");
@@ -101,6 +105,9 @@ const within = (root: string, value: string) => {
 /** One SRT boundary for local tools and stdio MCP. Policy is immutable for each invocation. */
 export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command: readonly string[], cwd = policy.writeRoot): Promise<PreparedIssueCommand> {
   const root = path.resolve(policy.writeRoot);
+  // A known state root makes the boundary explicit: a workspace outside it would otherwise lose the state deny.
+  const knownStateRoot = policy.stateRoot === undefined ? undefined : path.resolve(policy.stateRoot);
+  if (knownStateRoot && !within(path.join(knownStateRoot, "workspaces"), root)) throw new Error("issue_sandbox_root_outside_state");
   if ((await realpath(root)) !== root || !(await lstat(root)).isDirectory()) throw new Error("invalid_issue_sandbox_root");
   const gitRoot = path.join(root, ".issue-git");
   await mkdir(gitRoot, { recursive: true, mode: 0o700 });
@@ -171,7 +178,7 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
     }
     const agent = getAgentDir(),
       application = path.resolve(import.meta.dirname, "../..");
-    const state = path.basename(path.dirname(root)) === "workspaces" ? path.dirname(path.dirname(root)) : undefined;
+    const state = knownStateRoot ?? (path.basename(path.dirname(root)) === "workspaces" ? path.dirname(path.dirname(root)) : undefined);
     const denyRead = [
       os.tmpdir(),
       path.join(os.homedir(), ".ssh"),

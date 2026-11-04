@@ -8,8 +8,7 @@ import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./rou
 export function registerCapabilityRoutes(context: ApiRouteContext) {
   const { app, database, engine, runScopeExclusive } = context;
 
-  app.get("/api/capabilities", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/capabilities", async (_request, _reply) => {
     return runScopeExclusive(async () => (await loadCapabilitySwitches(database.db)).map((row) => ({ key: row.key, enabled: row.enabled })));
   });
   app.patch<{ Params: { key: string } }>("/api/capabilities/:key", async (request) => {

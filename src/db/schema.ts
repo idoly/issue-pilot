@@ -233,7 +233,8 @@ export const issues = sqliteTable(
     description: text("description").notNull().default(""),
     status: text("status", { enum: ISSUE_STATUSES }).notNull().default("open"),
     priority: text("priority", { enum: ISSUE_PRIORITIES }).notNull().default("p2"),
-    type: text("type", { enum: ISSUE_TYPES }).notNull().default("smart_analysis"),
+    // Every insert names the type explicitly; the database guard below rejects anything outside the enum.
+    type: text("type", { enum: ISSUE_TYPES }).notNull(),
     serviceId: text("service_id")
       .notNull()
       .references(() => services.id),

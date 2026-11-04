@@ -63,9 +63,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       prepared.existingDeployments.some((old) => old.config.dbhub?.length && !incoming.some((row) => prepared.environmentsByKey.get(row.environmentKey)?.id === old.environmentId))
     );
   };
-  app.get<{ Params: { key: string } }>("/api/services/:key/dbhub-targets", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    reply.header("Pragma", "no-cache");
+  app.get<{ Params: { key: string } }>("/api/services/:key/dbhub-targets", { logLevel: "silent" }, async (request, _reply) => {
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const service = await findServiceByKey(request.params.key);
@@ -78,9 +76,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       return { revision: service.revision, deployments: deployments.map((row) => ({ environmentKey: row.environmentKey, dbhub: row.config.dbhub ?? [] })) };
     });
   });
-  app.get<{ Params: { key: string } }>("/api/services/:key/configuration-description", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    reply.header("Pragma", "no-cache");
+  app.get<{ Params: { key: string } }>("/api/services/:key/configuration-description", { logLevel: "silent" }, async (request, _reply) => {
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       try {
@@ -94,8 +90,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       }
     });
   });
-  app.post("/api/dms/scope/resolve", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.post("/api/dms/scope/resolve", { logLevel: "silent" }, async (request, _reply) => {
     await requireDeveloper(database, request);
     const input = record(request.body);
     try {
@@ -120,13 +115,10 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       throw new ApiError(502, code);
     }
   });
-  app.get("/api/catalog", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/catalog", async (_request, _reply) => {
     return runScopeExclusive(() => loadConfigurationCatalog(database.db));
   });
-  app.get("/api/config", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
-    reply.header("Pragma", "no-cache");
+  app.get("/api/config", async (_request, _reply) => {
     return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog));
   });
   app.put("/api/config/agent", { logLevel: "silent" }, async (request) =>
@@ -168,8 +160,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       }
     }),
   );
-  app.get("/api/config/parameters", async (_request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/config/parameters", async (_request, _reply) => {
     return runScopeExclusive(() => loadApplicationParameterState(database.db));
   });
   // Parameters are budgets read when an operation starts, so saving neither reserves Issues nor closes sessions.
@@ -197,8 +188,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       return loadApplicationParameterState(database.db);
     }),
   );
-  app.get("/api/config/agent/resources", { logLevel: "silent" }, async (request, reply) => {
-    reply.header("Cache-Control", "private, no-store");
+  app.get("/api/config/agent/resources", { logLevel: "silent" }, async (request, _reply) => {
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       try {
@@ -284,14 +274,19 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       const extra = await database.db.select().from(issueServiceScopes).where(eq(issueServiceScopes.serviceId, service.id)).limit(1);
       if (primary.length || extra.length) throw new ApiError(409, "service_is_used_by_issues");
       const affected = await affectedIssues(service.id);
-      await runIssueExclusive(
-        engine,
-        affected.map((row) => row.id),
-        async (reservation) => {
-          for (const row of affected) await reservation.closeSession(row.id);
-          await database.db.delete(services).where(eq(services.id, service.id));
-        },
-      );
+      try {
+        await runIssueExclusive(
+          engine,
+          affected.map((row) => row.id),
+          async (reservation) => {
+            for (const row of affected) await reservation.closeSession(row.id);
+            await database.db.delete(services).where(eq(services.id, service.id));
+          },
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "service_has_running_issues");
+        throw error;
+      }
     });
     return reply.code(204).send();
   });

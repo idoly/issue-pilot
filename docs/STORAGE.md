@@ -18,7 +18,7 @@ SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来
 
 ## 数据表关系
 
-当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。admin 保存的运行参数位于 `application_settings.parameters`（由 [parameters.ts](../src/configuration/parameters.ts) 校验），`max_concurrent_issues` 已由 0069 迁移复制进该列，仅保留为恢复证据。
+当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。`issues.type` 由 0070 触发器限定为 `ISSUE_TYPES`，表默认值仍是历史 `request`，因此省略 type 的插入会以 `invalid_issue_type` 失败；Drizzle 不再提供该默认值。admin 保存的运行参数位于 `application_settings.parameters`（由 [parameters.ts](../src/configuration/parameters.ts) 校验），`max_concurrent_issues` 已由 0069 迁移复制进该列，仅保留为恢复证据。
 
 | 关系 | 要点 |
 | --- | --- |
@@ -109,6 +109,8 @@ Source API 使用读取时 SHA-256 检测冲突，`source_file_changed` 不可�
 ### 容量统计
 
 `totalBytes` 统计工单根分配空间，含缓存和私有 Git，`sharedGitBytes` 单独计量。结果不是主机全盘占用或原子磁盘快照。
+
+维护逐工单测量磁盘占用；单个工单测量失败记入该轮 failures，不阻塞启动、其他工单释放或下一轮周期，也不写入统计缓存。
 
 并发读取共享同一次扫描，完成的快照在下一个维护周期内复用（默认 15 分钟；维护间隔为 0 时 5 秒）。释放、重开、转换和自动维护使缓存失效；Agent 处理与源码编辑等其它变更在下一次采样后反映，页面显示 `sampledAt`，`GET /api/workspaces/stats?refresh=true` 强制重新采样。真实释放重新检查；候选占用不等于可释放量，释放量以实际减少为准。
 

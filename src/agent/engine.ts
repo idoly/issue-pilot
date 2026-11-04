@@ -33,12 +33,12 @@ import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
 export interface AgentReservation {
-  enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
+  enqueue(issueId: string, message?: string): void;
   closeSession(issueId: string): Promise<void>;
 }
 
 export interface AgentController {
-  enqueue(issueId: string, message?: string, recordMessage?: boolean): void;
+  enqueue(issueId: string, message?: string): void;
   send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[]): Promise<void>;
   isRunning(issueId: string): boolean;
   getRunState(issueId: string): AgentRunState;
@@ -90,10 +90,10 @@ export class AgentEngine implements AgentController {
     this.piRuntime = new PiSessionRuntime(modelRuntime);
   }
 
-  enqueue(issueId: string, latestMessage?: string, displayMessage = false): void {
+  enqueue(issueId: string, latestMessage?: string): void {
     this.assertOpen();
     this.assertNotReserved(issueId);
-    this.schedule(issueId, () => this.run(issueId, latestMessage, displayMessage));
+    this.schedule(issueId, () => this.run(issueId, latestMessage));
   }
 
   /** Raising the limit admits queued rounds now; lowering it never interrupts running rounds, it only withholds freed slots. */
@@ -123,9 +123,9 @@ export class AgentEngine implements AgentController {
     };
     try {
       return await operation({
-        enqueue: (issueId, message, recordMessage) => {
+        enqueue: (issueId, message) => {
           assertReserved(issueId);
-          this.schedule(issueId, () => this.run(issueId, message, recordMessage));
+          this.schedule(issueId, () => this.run(issueId, message));
         },
         closeSession: async (issueId) => {
           assertReserved(issueId);
@@ -155,13 +155,12 @@ export class AgentEngine implements AgentController {
       const messageIssue = { id: issueId, key: issue.key, serviceId: issue.serviceId, environmentId: issue.environmentId };
       const managed = this.sessions.get(issueId);
       if (!managed) {
-        this.assertNotReserved(issueId);
-        await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, false, gitIdentity, images, entryId));
+        await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, gitIdentity, images, entryId));
         return;
       }
       const scheduleMessage = () =>
         this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) =>
-          this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, false, gitIdentity, images, entryId),
+          this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
         );
       if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
       if (managed.streaming) {
@@ -248,7 +247,10 @@ export class AgentEngine implements AgentController {
   }
 
   private endActivity(issueId: string, previous = this.getRunState(issueId)): void {
-    const remaining = (this.runCounts.get(issueId) ?? 1) - 1;
+    // Every end follows its own begin on the same round; a missing count would mean broken accounting.
+    const active = this.runCounts.get(issueId);
+    if (!active) throw new Error("agent_activity_not_started");
+    const remaining = active - 1;
     if (remaining > 0) this.runCounts.set(issueId, remaining);
     else this.runCounts.delete(issueId);
     this.publishRunState(issueId, previous);
@@ -335,14 +337,18 @@ export class AgentEngine implements AgentController {
     });
   }
 
-  private async run(issueId: string, latestMessage?: string, displayMessage = false, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
+  private async run(issueId: string, latestMessage?: string, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
     const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
     let currentMessage = latestMessage?.trim() || undefined;
+    // A file-backed manager opened for selection is reused when the round starts, so a long transcript is parsed once.
+    let reusableManager: SessionManager | undefined;
     if (messageEntryId || latestMessage === undefined) {
       const selected = await this.sessionQueue.run(issueId, async () => {
+        const live = this.sessions.has(issue.id);
         const manager = await this.sessionManagerLocked(issue, await prepareIssueWorkDirectory(this.stateRoot, issue.key));
+        if (!live) reusableManager = manager;
         return selectAgentMessage(manager, issue, messageEntryId);
       });
       if (messageEntryId && !selected) return;
@@ -457,10 +463,11 @@ export class AgentEngine implements AgentController {
       if (current) this.scopeChangedSessions.add(current);
     });
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
-      const manager = await this.sessionManagerLocked(issue, workDirectory);
+      const manager = reusableManager ?? (await this.sessionManagerLocked(issue, workDirectory));
       const hadMessages = manager.buildSessionContext().messages.length > 0;
       const managed = await this.piRuntime.start({
         runtime: agentConfiguration.runtime,
+        stateRoot: this.stateRoot,
         workspaceRoot: workDirectory,
         context,
         deploymentConfig,
@@ -492,7 +499,6 @@ export class AgentEngine implements AgentController {
     await this.markRunning(issue.id, project.runtimeReady);
     if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
     if (messageEntryId) await this.startQueuedMessage(issue, managed, messageEntryId);
-    if (displayMessage && currentMessage) await this.recordUserMessage(issue.id, managed.session.sessionManager, currentMessage, images);
 
     const repositoryContexts = project.repositories.map((repository) => ({
       branch: repository.workingBranch ?? repository.baseBranch,
@@ -614,7 +620,7 @@ export class AgentEngine implements AgentController {
       if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
       startAgentMessage(managed.session.sessionManager, entryId, issue);
       const next = pendingAgentMessages(managed.session.sessionManager)[0];
-      if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, false, undefined, next.images, next.id));
+      if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, undefined, next.images, next.id));
     });
   }
 

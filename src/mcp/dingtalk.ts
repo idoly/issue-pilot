@@ -91,13 +91,15 @@ const suggested: Record<keyof DingtalkColumns, string[]> = {
 export function resolveDingtalkColumns(fields: DingtalkField[], requested: Partial<DingtalkColumns>): DingtalkColumns {
   return Object.fromEntries(
     DINGTALK_COLUMNS.map((key) => {
-      let id = requested[key];
-      if (id !== undefined && id !== "") {
+      // An explicit empty preference skips the column; only an absent preference falls back to suggestions.
+      const preference = requested[key];
+      if (preference === "") return [key, ""];
+      let id = preference;
+      if (id !== undefined) {
         const matches = fields.filter((field) => field.id === id || field.name === id);
         if (matches.length !== 1) throw new DingtalkError("dingtalk_fields_changed", 409);
         id = matches[0]!.id;
-      }
-      if (id === undefined) {
+      } else {
         for (const name of suggested[key]) {
           const matching = fields.filter((field) => field.name === name);
           if (matching.length === 1) {
