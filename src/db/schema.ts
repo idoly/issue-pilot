@@ -188,9 +188,10 @@ export const repositories = sqliteTable(
     id: id(),
     name: text("name").notNull(),
     url: text("url").notNull(),
+    group: text("repository_group").notNull().default("other"),
     ...timestamps,
   },
-  (table) => [uniqueIndex("repositories_url_unique").on(table.url)],
+  (table) => [uniqueIndex("repositories_url_unique").on(table.url), check("repository_group_valid", sql`length(${table.group}) BETWEEN 1 AND 64 AND trim(${table.group}) = ${table.group}`)],
 );
 
 export const serviceRepositories = sqliteTable(

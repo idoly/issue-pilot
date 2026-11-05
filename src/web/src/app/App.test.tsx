@@ -118,12 +118,13 @@ vi.mock("../data/client", async (importOriginal) => {
           revision: 0,
           name: repository.alias,
           url: repository.url,
+          group: "other",
           createdAt: now,
           updatedAt: now,
           services: [{ key: service.key, name: service.name }],
         })),
       ),
-      { id: "updated-repository", revision: 0, name: "Updated repository", url: "git@example.test:team/updated.git", createdAt: now, updatedAt: now, services: [] },
+      { id: "updated-repository", revision: 0, name: "Updated repository", url: "git@example.test:team/updated.git", group: "other", createdAt: now, updatedAt: now, services: [] },
     ]),
     loadServiceConfigurationDescription: vi.fn(async (key: string) => ({
       context: configuration.services.find((service) => service.key === key)?.context ?? configuration.services.find((service) => service.key === key)?.description ?? "",
@@ -1250,7 +1251,9 @@ describe("issue pilot workspace", () => {
     const urls = ["git@example.test:team/sub/z.git", "git@example.test:team/z.git", "git@example.test:team/sub/a.git", "git@example.test:team/a.git"];
     const loadRepositories = vi.mocked(client.loadRepositories),
       original = loadRepositories.getMockImplementation()!;
-    loadRepositories.mockResolvedValue(urls.map((url, index) => ({ id: `repo-${index}`, revision: 0, name: `Repository ${3 - index}`, url, createdAt: now, updatedAt: now, services: [] })));
+    loadRepositories.mockResolvedValue(
+      urls.map((url, index) => ({ id: `repo-${index}`, revision: 0, name: `Repository ${3 - index}`, url, group: "other", createdAt: now, updatedAt: now, services: [] })),
+    );
     try {
       render(() => <App initialView="configuration" />);
       fireEvent.click(await screen.findByRole("tab", { name: "仓库" }));

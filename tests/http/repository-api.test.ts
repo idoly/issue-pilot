@@ -27,10 +27,10 @@ test("manages a shared repository catalog and cascades config URLs without rewri
     connection.close();
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/repositories/${id}`, headers })).statusCode, 409);
     const next = "git@git.example.test:team/renamed.git";
-    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { name: "Shared", url: next } });
+    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { group: "other", name: "Shared", url: next } });
     assert.equal(blocked.statusCode, 409, blocked.body);
     f.engine.running.clear();
-    const update = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { name: "Shared", url: next } });
+    const update = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { group: "other", name: "Shared", url: next } });
     assert.equal(update.statusCode, 200, update.body);
     const config = JSON.parse((await f.app.inject({ method: "GET", url: "/api/config" })).body);
     assert.deepEqual(
@@ -46,8 +46,8 @@ test("manages a shared repository catalog and cascades config URLs without rewri
     const db = openDatabase(f.databaseFile);
     assert.equal((await db.client.execute("pragma foreign_key_check")).rows.length, 0);
     db.close();
-    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Duplicate", url: next } })).statusCode, 409);
-    const unused = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Unused", url: "https://git.example.test/unused.git" } });
+    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Duplicate", url: next } })).statusCode, 409);
+    const unused = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Unused", url: "https://git.example.test/unused.git" } });
     assert.equal(unused.statusCode, 201);
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/repositories/${JSON.parse(unused.body).id}`, headers })).statusCode, 204);
     const invalidService = await f.app.inject({ method: "POST", url: "/api/services", payload: servicePayload("Unregistered") });
@@ -58,7 +58,7 @@ test("manages a shared repository catalog and cascades config URLs without rewri
   }
 });
 
-test("repository display-name changes do not reserve or stop active Issue sessions", async () => {
+test("repository group changes do not reserve or stop active Issue sessions or change service configuration", async () => {
   const f = await createApiFixture();
   try {
     const url = "git@git.example.test:team/metadata.git";
@@ -67,12 +67,45 @@ test("repository display-name changes do not reserve or stop active Issue sessio
     const issueId = f.engine.enqueued.at(-1)!;
     const rows = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json();
     const revision = (await f.app.inject({ method: "GET", url: "/api/config" })).json().services[0].revision;
-    const response = await f.app.inject({ method: "PATCH", url: `/api/repositories/${rows[0].id}`, headers, payload: { name: "Readable repository name", url } });
+    const response = await f.app.inject({
+      method: "PATCH",
+      url: `/api/repositories/${rows[0].id}`,
+      headers,
+      payload: { group: " Platform Ops ", name: rows[0].name, url, expectedRevision: rows[0].revision },
+    });
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(f.engine.running.has(issueId), true);
     assert.deepEqual(f.engine.closedSessions, []);
-    assert.equal((await f.app.inject({ method: "GET", url: "/api/repositories" })).json()[0].name, "Readable repository name");
+    const saved = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json()[0];
+    assert.deepEqual({ ...saved, updatedAt: rows[0].updatedAt }, { ...rows[0], group: "platform ops", revision: rows[0].revision + 1 });
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).json().services[0].revision, revision);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("repository groups are explicit, can be shared by new repositories, and are independent of URLs", async () => {
+  const f = await createApiFixture();
+  try {
+    const url = "git@git.example.test:digital-biz-projects/mdm/repo.git";
+    for (const group of [undefined, " ", "a\nb", "x".repeat(65)]) {
+      const response = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Repo", url, group } });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.equal(response.json().error, "invalid_repository_group");
+    }
+    const create = (name: string, url: string, group: string) => f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name, url, group } });
+    const first = await create("Repo", url, " Custom Group ");
+    assert.equal(first.statusCode, 201, first.body);
+    assert.equal((await create("Another", "https://git.example.test/another.git", "custom group")).statusCode, 201);
+    const nextUrl = "git@git.example.test:digital-biz-projects/oms/repo.git";
+    const response = await f.app.inject({ method: "PATCH", url: `/api/repositories/${first.json().id}`, headers, payload: { name: "Repo", url: nextUrl, group: "custom group", expectedRevision: 0 } });
+    assert.equal(response.statusCode, 200, response.body);
+    const rows = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json() as Array<{ url: string; group: string }>;
+    assert.deepEqual(
+      rows.map((row) => row.group),
+      ["custom group", "custom group"],
+    );
+    assert.ok(rows.some((row) => row.url === nextUrl));
   } finally {
     await f.cleanup();
   }
@@ -89,7 +122,7 @@ test("repository address changes reserve only entry and included services that u
     const catalog = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json() as Array<{ id: string; url: string }>;
     const repository = catalog.find((row) => row.url === original)!;
     const next = "git@git.example.test:team/scoped-next.git";
-    const updated = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { name: "Scoped", url: next } });
+    const updated = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { group: "other", name: "Scoped", url: next } });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.equal(f.engine.running.has(unrelatedIssueId), true);
     assert.deepEqual(f.engine.closedSessions, []);
@@ -101,10 +134,10 @@ test("repository address changes reserve only entry and included services that u
       await database.close();
     }
     const final = "git@git.example.test:team/scoped-final.git";
-    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { name: "Scoped", url: final } });
+    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { group: "other", name: "Scoped", url: final } });
     assert.equal(blocked.statusCode, 409, blocked.body);
     f.engine.running.clear();
-    const applied = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { name: "Scoped", url: final } });
+    const applied = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { group: "other", name: "Scoped", url: final } });
     assert.equal(applied.statusCode, 200, applied.body);
     assert.deepEqual(f.engine.closedSessions, [unrelatedIssueId]);
   } finally {
@@ -116,11 +149,16 @@ test("rejects embedded credentials, unsupported URLs, and nondeveloper repositor
   const f = await createApiFixture();
   try {
     for (const url of ["https://user:secret@git.example.test/repo.git", "https://git.example.test/repo.git?token=secret", "/tmp/repo.git", "file:///tmp/repo", "http://git.example.test/repo.git"]) {
-      const response = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Invalid", url } });
+      const response = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Invalid", url } });
       assert.equal(response.statusCode, 400, response.body);
     }
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });
-    const response = await f.app.inject({ method: "POST", url: "/api/repositories", headers: { "x-issue-pilot-subject": "product" }, payload: { name: "No", url: "git@git.example.test:no.git" } });
+    const response = await f.app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      headers: { "x-issue-pilot-subject": "product" },
+      payload: { group: "other", name: "No", url: "git@git.example.test:no.git" },
+    });
     assert.equal(response.statusCode, 403);
   } finally {
     await f.cleanup();
@@ -135,10 +173,17 @@ test("catalog URL changes invalidate service drafts even when the original URL i
     const repository = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json()[0];
     const nextUrl = "git@example.test:team/new-location.git";
     assert.equal(
-      (await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { expectedRevision: repository.revision, name: repository.name, url: nextUrl } })).statusCode,
+      (
+        await f.app.inject({
+          method: "PATCH",
+          url: `/api/repositories/${repository.id}`,
+          headers,
+          payload: { group: "other", expectedRevision: repository.revision, name: repository.name, url: nextUrl },
+        })
+      ).statusCode,
       200,
     );
-    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Original upstream", url: repository.url } })).statusCode, 201);
+    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Original upstream", url: repository.url } })).statusCode, 201);
     const oldDraft: ServiceConfigurationInput = {
       name: prior.name,
       description: prior.description,

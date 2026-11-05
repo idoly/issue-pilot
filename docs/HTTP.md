@@ -37,6 +37,8 @@ HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不�
 
 配置、Source、范围转换和回收接口有各自权限／并发规则，不宜据此表猜测请求体。Source 保存使用读取时的 SHA-256 检查冲突；配置 revision 和工单元信息不是同一种并发机制。
 
+`GET /api/repositories` 无需分组参数，返回全部仓库及每个仓库保存的 `group`。页面筛选在本地完成。开发人员登记（`POST /api/repositories`）或编辑（`PATCH /api/repositories/:id`）时必须提供 `name`、`url` 和 `group`；编辑可传 `expectedRevision` 检查冲突。分组名称去掉首尾空白并转成小写，长度为 1 至 64，不能包含控制字符。仅修改分组不会更改服务绑定、分支或工单会话。
+
 ### 工单创建与编辑
 
 创建 body 的必填字段为 `title`、`priority`、`serviceKey`、`workMode`。以下是请求体示例，不是初始化服务的脚本；`demo-service` 必须替换为目录中实际服务 key：

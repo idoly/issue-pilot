@@ -4,24 +4,6 @@ import { deleteRepository, loadRepositories, registerRepository, updateRepositor
 import { useApplicationResources } from "./ApplicationResources";
 import { settingsError } from "./settings-error";
 
-const allRepositories = "all";
-const otherRepositories = "other";
-const repositoryGroups = new Map([
-  ["oms", "oms"],
-  ["srm", "srm"],
-  ["xhgj-mall", "mall"],
-  ["mdm", "mdm"],
-  ["crm", "crm"],
-  ["iqs", "iqs"],
-  ["mpm", "mpm"],
-]);
-const groupOptions = [{ value: allRepositories, label: "全部" }, ...Array.from(repositoryGroups.values(), (value) => ({ value, label: value })), { value: otherRepositories, label: "其他" }];
-const namespacePath = /^(?:(?:https|ssh):\/\/[^/]+\/|[\w.-]+@[\w.-]+:\/?)digital-biz-projects\/([^/]+)\/[^/]/i;
-function repositoryGroup(url: string) {
-  const namespace = namespacePath.exec(url)?.[1];
-  return (namespace && repositoryGroups.get(namespace.toLowerCase())) || otherRepositories;
-}
-
 const addressPrefix = (url: string) => url.slice(0, Math.max(url.lastIndexOf("/"), url.includes("://") ? -1 : url.indexOf(":")) + 1);
 const repositoryName = (url: string) =>
   url
@@ -32,11 +14,12 @@ const repositoryName = (url: string) =>
 export function RepositoryManagement(props: { onSelectService?: (key: string) => void } = {}) {
   const { currentUser, refreshConfiguration, refreshCatalog } = useApplicationResources();
   const [rows, setRows] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
-  const [group, setGroup] = createSignal(allRepositories, { ownedWrite: true });
+  const [group, setGroup] = createSignal("", { ownedWrite: true });
+  const groupOptions = createMemo(() => [...new Set(rows().map((row) => row.group))].sort((a, b) => a.localeCompare(b)).map((value) => ({ value, label: value === "other" ? "其他" : value })));
   const sortedRows = createMemo(() => [...rows()].sort((left, right) => addressPrefix(left.url).localeCompare(addressPrefix(right.url)) || left.url.localeCompare(right.url)));
   const visibleRows = createMemo(() => {
     const selected = group();
-    return selected === allRepositories ? sortedRows() : sortedRows().filter((row) => repositoryGroup(row.url) === selected);
+    return selected ? sortedRows().filter((row) => row.group === selected) : sortedRows();
   });
   let list: HTMLDivElement | undefined;
   createEffect(group, () => {
@@ -54,6 +37,9 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
   const [editing, setEditing] = createSignal<ManagedRepository | null>(null, { ownedWrite: true });
   const [name, setName] = createSignal("", { ownedWrite: true });
   const [url, setUrl] = createSignal("", { ownedWrite: true });
+  const [formGroup, setFormGroup] = createSignal<string | undefined>(undefined, { ownedWrite: true });
+  const [newGroup, setNewGroup] = createSignal("", { ownedWrite: true });
+  const formGroupOptions = () => [...groupOptions(), ...(groupOptions().some(({ value }) => value === "other") ? [] : [{ value: "other", label: "其他" }]), { value: "", label: "新建分组…" }];
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [remove, setRemove] = createSignal<ManagedRepository | null>(null, { ownedWrite: true });
   let generation = 0,
@@ -64,6 +50,8 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     setEditing(null);
     setName("");
     setUrl("");
+    setFormGroup(undefined);
+    setNewGroup("");
     setSaveError("");
     setConflict(false);
   };
@@ -74,7 +62,10 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     setLoadError("");
     try {
       const value = await loadRepositories();
-      if (owner === generation && request === loadGeneration) setRows(value);
+      if (owner === generation && request === loadGeneration) {
+        setRows(value);
+        if (group() && !value.some((row) => row.group === group())) setGroup("");
+      }
     } catch (cause) {
       if (owner === generation && request === loadGeneration) setLoadError(settingsError(cause));
     } finally {
@@ -91,7 +82,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
       setSaving(false);
       setActionError("");
       setRows([]);
-      setGroup(allRepositories);
+      setGroup("");
       if (identity.split(":")[0]) void load();
       else setLoading(false);
     },
@@ -104,6 +95,8 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     setEditing(repository ?? null);
     setName(repository?.name ?? "");
     setUrl(repository?.url ?? "");
+    setFormGroup(repository?.group);
+    setNewGroup("");
     setSaveError("");
     setOpen(true);
   };
@@ -121,9 +114,14 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
       setSaveError("请填写仓库地址");
       return;
     }
+    const selectedGroup = formGroup() === "" ? newGroup().trim() : formGroup();
+    if (!selectedGroup) {
+      setSaveError("请选择分组或填写新分组名称");
+      return;
+    }
     const owner = generation,
       target = editing();
-    const input = { name: name().trim() || repositoryName(url()), url: url().trim() };
+    const input = { name: name().trim() || repositoryName(url()), url: url().trim(), group: selectedGroup };
     setSaving(true);
     setSaveError("");
     try {
@@ -163,7 +161,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
       <header class="user-management-header">
         <strong>仓库</strong>
         <div class="repository-toolbar">
-          <Select aria-label="仓库分组" value={group()} options={groupOptions} onChange={setGroup} />
+          <Select aria-label="仓库分组" value={group()} options={[{ value: "", label: "全部" }, ...groupOptions()]} onChange={setGroup} />
           <Show when={canEdit()}>
             <Button size="small" type="primary" disabled={saving()} onClick={() => edit()}>
               登记仓库
@@ -214,7 +212,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
                   each={visibleRows()}
                   fallback={
                     <tr>
-                      <td colspan={4}>{group() === allRepositories ? "暂无仓库" : "此分组暂无仓库"}</td>
+                      <td colspan={4}>{group() ? "此分组暂无仓库" : "暂无仓库"}</td>
                     </tr>
                   }
                 >
@@ -294,6 +292,16 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
             <span>显示名称</span>
             <Input aria-label="仓库显示名称" value={name()} placeholder="默认使用仓库名" onInput={(event) => setName(event.currentTarget.value)} />
           </label>
+          <div class="settings-form-field">
+            <span>分组</span>
+            <Select aria-label="仓库分组" value={formGroup()} options={formGroupOptions()} placeholder="请选择分组" showSearch onChange={setFormGroup} />
+          </div>
+          <Show when={formGroup() === ""}>
+            <label>
+              <span>新分组名称</span>
+              <Input aria-label="新分组名称" value={newGroup()} onInput={(event) => setNewGroup(event.currentTarget.value)} />
+            </label>
+          </Show>
           <Show when={editing()?.services.length}>
             <p class="muted">
               使用服务：

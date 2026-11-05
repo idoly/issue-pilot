@@ -30,7 +30,12 @@ try {
   await createService(app, "browser", ["dev"]);
   const mdmRepositories = Array.from({ length: 24 }, (_, index) => `git@example.test:digital-biz-projects/mdm/servers/repository-${index}.git`);
   const mallRepository = "https://example.test/digital-biz-projects/xhgj-mall/fronts/mall.git";
-  await createService(app, "grouped", ["dev", "test"], [...mdmRepositories, mallRepository]);
+  const groupedService = servicePayload("grouped", ["dev", "test"], [...mdmRepositories, mallRepository]);
+  for (const { alias, url } of groupedService.repositories) {
+    const registered = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: alias, url, group: url === mallRepository ? "mall" : "mdm" } });
+    assert.equal(registered.statusCode, 201, registered.body);
+  }
+  assert.equal((await app.inject({ method: "POST", url: "/api/services", payload: groupedService })).statusCode, 201);
   const created = await createIssue(app, "browser", "dev", "Browser acceptance fixture");
   const database = openDatabase(databaseFile);
   let issue;
@@ -272,12 +277,16 @@ try {
   }
   await page.getByRole("button", { name: "关闭代码浏览器", exact: true }).click();
   for (let index = 0; index < 300; index += 1) {
-    const registered = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: `Repository ${index}`, url: `git@example.test:repo-${String(index).padStart(3, "0")}.git` } });
+    const registered = await app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      payload: { name: `Repository ${index}`, url: `git@example.test:repo-${String(index).padStart(3, "0")}.git`, group: "other" },
+    });
     assert.equal(registered.statusCode, 201, registered.body);
   }
   const longName = "example-mall-docking-chinarailway";
   const longUrl = `git@example.test:digital-biz-projects/example/docking-servers/${longName}.git`;
-  const longRepository = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: longName, url: longUrl } });
+  const longRepository = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: longName, url: longUrl, group: "other" } });
   assert.equal(longRepository.statusCode, 201, longRepository.body);
   await createService(app, "ai-platform", ["test"], [longUrl]);
   await page.getByRole("radio", { name: "配置", exact: true }).click();
@@ -384,6 +393,12 @@ try {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.getByRole("radio", { name: "配置", exact: true }).click();
   const settingsTabs = page.getByRole("tablist", { name: "配置分类" });
+  const repositoryListRequests = [];
+  const recordRepositoryList = (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === "/api/repositories") repositoryListRequests.push(url.pathname + url.search);
+  };
+  page.on("request", recordRepositoryList);
   await settingsTabs.getByRole("tab", { name: "仓库", exact: true }).click();
   const repositories = page.getByRole("region", { name: "仓库管理" });
   const list = repositories.getByRole("region", { name: "仓库列表" });
@@ -415,6 +430,7 @@ try {
     await page.getByRole("listbox", { name: "仓库分组" }).getByRole("option", { name, exact: true }).click();
   };
   await list.getByText(mallRepository, { exact: true }).waitFor();
+  assert.deepEqual(repositoryListRequests, ["/api/repositories"]);
   assert.equal(await group.innerText(), "全部");
   const addPosition = await add.boundingBox();
   await scrollToEnd(list);
@@ -428,6 +444,34 @@ try {
   assert.equal(await list.getByText(mdmRepositories[0], { exact: true }).count(), 0);
   assert.ok(await list.evaluate((node) => node.scrollHeight === node.clientHeight && node.offsetWidth === node.clientWidth));
   await selectGroup("全部");
+  assert.deepEqual(repositoryListRequests, ["/api/repositories"]);
+  await add.click();
+  const registration = page.getByRole("dialog", { name: "登记仓库" });
+  const customGroupRepo = "git@example.test:digital-biz-projects/mdm/custom-group-fixture.git";
+  await registration.getByRole("textbox", { name: "仓库地址" }).fill(customGroupRepo);
+  await registration.getByRole("combobox", { name: "仓库分组" }).click();
+  await page.getByRole("option", { name: "新建分组…" }).click();
+  await registration.getByRole("textbox", { name: "新分组名称" }).fill("Platform Ops");
+  await registration.getByRole("button", { name: "保存" }).click();
+  await registration.waitFor({ state: "hidden" });
+  await list.getByText(customGroupRepo, { exact: true }).waitFor();
+  await selectGroup("platform ops");
+  await list.getByText(customGroupRepo, { exact: true }).waitFor();
+  assert.equal(await list.getByText(mdmRepositories[0], { exact: true }).count(), 0);
+  await list.getByRole("button", { name: "编辑", exact: true }).click();
+  const repositoryEdit = page.getByRole("dialog", { name: "编辑仓库" });
+  const editGroup = repositoryEdit.getByRole("combobox", { name: "仓库分组" });
+  assert.equal(await editGroup.innerText(), "platform ops");
+  await editGroup.click();
+  await page.getByRole("option", { name: "mall", exact: true }).click();
+  await repositoryEdit.getByRole("button", { name: "保存" }).click();
+  await repositoryEdit.waitFor({ state: "hidden" });
+  await page.waitForFunction(() => document.querySelector('.repository-toolbar [aria-label="仓库分组"]')?.textContent === "全部");
+  await selectGroup("mall");
+  await list.getByText(customGroupRepo, { exact: true }).waitFor();
+  await selectGroup("全部");
+  assert.ok(repositoryListRequests.every((url) => url === "/api/repositories"));
+  page.off("request", recordRepositoryList);
 
   const settingsViewport = { width: 520, height: 540 };
   await page.setViewportSize(settingsViewport);
@@ -466,30 +510,36 @@ try {
   const tools = endpointsPanel.getByRole("region", { name: "工具列表" });
   const copyConfig = endpointsPanel.getByRole("button", { name: "复制配置" });
   await toolsToggle.waitFor();
-  await assertHiddenScrollbar(endpointsPanel);
-  await tools.waitFor({ state: "hidden" });
-  const copyPosition = await copyConfig.boundingBox();
-  await toolsToggle.press("Enter");
-  await tools.waitFor();
-  const togglePosition = await toolsToggle.boundingBox();
-  await scrollToEnd(tools);
-  assert.deepEqual(await copyConfig.boundingBox(), copyPosition);
-  assert.deepEqual(await toolsToggle.boundingBox(), togglePosition);
-  assert.ok(await endpointsPanel.evaluate((node) => node.scrollHeight === node.clientHeight));
-  await toolsToggle.press("Enter");
-  await tools.waitFor({ state: "hidden" });
-
-  await page.setViewportSize(settingsViewport);
-  await assertHiddenScrollbar(endpointsPanel);
-  const preview = endpointsPanel.getByLabel("MCP 客户端配置");
-  assert.ok(await preview.evaluate((node) => node.scrollWidth === node.clientWidth));
-  await toolsToggle.click();
-  await tools.scrollIntoViewIfNeeded();
-  const endpointsScrollTop = await endpointsPanel.evaluate((node) => node.scrollTop);
-  await scrollToEnd(tools);
-  assert.equal(await endpointsPanel.evaluate((node) => node.scrollTop), endpointsScrollTop);
-  await toolsToggle.click();
-  await tools.waitFor({ state: "hidden" });
+  const assertPanelFixed = async (panel) => {
+    assert.deepEqual(
+      await panel.evaluate((node) => {
+        node.scrollTop = 200;
+        return [node.scrollTop, node.closest(".app-content").scrollTop, window.scrollY];
+      }),
+      [0, 0, 0],
+    );
+  };
+  for (const viewport of [endpointsViewport, { width: 1280, height: 800 }, settingsViewport]) {
+    await page.setViewportSize(viewport);
+    await tools.waitFor({ state: "hidden" });
+    const preview = endpointsPanel.getByLabel("MCP 客户端配置");
+    assert.ok(await preview.evaluate((node) => node.scrollWidth === node.clientWidth));
+    const fixed = [copyConfig, toolsToggle];
+    const positions = await Promise.all(fixed.map((control) => control.boundingBox()));
+    await toolsToggle.press("Enter");
+    await tools.waitFor();
+    const toolsBounds = await tools.boundingBox();
+    const panelBounds = await endpointsPanel.boundingBox();
+    assert.ok(toolsBounds.height > 0 && toolsBounds.y + toolsBounds.height <= panelBounds.y + panelBounds.height + 1, JSON.stringify({ viewport, toolsBounds, panelBounds }));
+    await scrollToEnd(tools);
+    await tools.hover();
+    await page.mouse.wheel(0, 500);
+    await assertPanelFixed(endpointsPanel);
+    assert.deepEqual(await Promise.all(fixed.map((control) => control.boundingBox())), positions);
+    await toolsToggle.click();
+    await tools.waitFor({ state: "hidden" });
+    assert.deepEqual(await toolsToggle.boundingBox(), positions[1]);
+  }
 
   await settingsTabs.getByRole("tab", { name: "参数", exact: true }).click();
   const parametersPanel = page.getByRole("tabpanel", { name: "参数", exact: true });
@@ -511,23 +561,31 @@ try {
   const servicesPanel = page.getByRole("tabpanel", { name: "服务", exact: true });
   const serviceTabsList = page.getByRole("tablist", { name: "服务列表" });
   const descriptionTab = serviceTabsList.getByRole("tab", { name: "description-scroll", exact: true });
-  const serviceDetail = servicesPanel.getByRole("article", { name: "服务描述" });
-  const lastParagraph = serviceDetail.getByText(descriptionLines.at(-1), { exact: true });
+  const serviceDetail = servicesPanel.getByRole("region", { name: "服务描述", exact: true });
+  const branchTable = servicesPanel.getByRole("region", { name: "仓库与环境分支" });
+  const lastParagraph = serviceDetail.locator("p").last();
   for (const viewport of [{ width: 1280, height: 800 }, settingsViewport]) {
     await page.setViewportSize(viewport);
     await descriptionTab.click();
     await lastParagraph.waitFor();
-    await assertHiddenScrollbar(servicesPanel);
-    assert.ok(await servicesPanel.evaluate((node) => node.scrollHeight === node.clientHeight));
-    const serviceToolbar = page.locator(".service-toolbar");
-    const serviceToolbarPosition = await serviceToolbar.boundingBox();
+    await assertPanelFixed(servicesPanel);
+    const fixed = [page.locator(".service-toolbar"), servicesPanel.getByRole("heading", { name: "代码分支" }), branchTable];
+    const positions = await Promise.all(fixed.map((control) => control.boundingBox()));
+    await assertHiddenScrollbar(branchTable);
+    assert.ok(await branchTable.evaluate((node) => node.scrollHeight === node.clientHeight));
     await scrollToEnd(serviceDetail);
-    assert.deepEqual(await serviceToolbar.boundingBox(), serviceToolbarPosition);
+    assert.deepEqual(await Promise.all(fixed.map((control) => control.boundingBox())), positions);
     const detailBounds = await serviceDetail.boundingBox();
     const paragraphBounds = await lastParagraph.boundingBox();
-    assert.ok(paragraphBounds.y >= detailBounds.y && paragraphBounds.y + paragraphBounds.height <= detailBounds.y + detailBounds.height + 1);
+    assert.ok(
+      detailBounds.height >= 48 && paragraphBounds.y >= detailBounds.y && paragraphBounds.y + paragraphBounds.height <= detailBounds.y + detailBounds.height + 1,
+      JSON.stringify({ viewport, detailBounds, paragraphBounds }),
+    );
     await serviceTabsList.getByRole("tab", { name: "grouped", exact: true }).click();
     await page.waitForFunction((node) => node.scrollTop === 0, await serviceDetail.elementHandle());
+    await branchTable.press("End");
+    await page.waitForFunction((node) => node.scrollTop > 0 && node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await branchTable.elementHandle());
+    await assertPanelFixed(servicesPanel);
   }
   for (let index = 1; index <= 6; index += 1) await createIssue(app, "browser", "dev", `Home scroll fixture ${index}`);
   engine.running.clear();
@@ -654,9 +712,9 @@ try {
           "long draft and accessible send control at 1280px",
           "click sends through HTTP and returns focus to composer",
           "1280px editor layout",
-          "repository namespace filter and fixed toolbar",
+          "unfiltered repository GET, local group filtering and manual group assignment",
           "independent personnel list and expanded endpoint tool list scrolling on desktop and narrow screens",
-          "hidden outer endpoint and parameter scrollbars; parameter save action stays visible on narrow screens",
+          "fixed endpoint panel with scrollable tools; parameter save action stays visible on narrow screens",
           "fixed home layout for wheel, keyboard and programmatic scrolling, with reachable activity and statistics on desktop and mobile",
           "health and database integrity",
         ],

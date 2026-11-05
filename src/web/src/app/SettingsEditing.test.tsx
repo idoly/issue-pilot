@@ -73,7 +73,7 @@ beforeEach(() => {
   state.updateUser.mockResolvedValue(users[0]);
   state.credentials.mockResolvedValue(status);
   state.saveCredentials.mockResolvedValue({ ...status, revision: 4 });
-  state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", services: [], revision: 2 }]);
+  state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", group: "other", services: [], revision: 2 }]);
   state.register.mockResolvedValue({ id: "new" });
   state.updateRepository.mockResolvedValue({ ok: true });
   state.removeRepository.mockResolvedValue(undefined);
@@ -245,6 +245,17 @@ test("identity changes clear secret drafts and late credential success cannot mu
   expect(screen.getAllByText("未配置")).toHaveLength(2);
 });
 
+async function chooseRepositoryGroup(dialog: HTMLElement, name: string) {
+  const group = within(dialog).getByRole("combobox", { name: "仓库分组" });
+  fireEvent.click(group);
+  const search = await screen.findByRole("searchbox", { name: "搜索 仓库分组" });
+  await fireEvent.input(search, { target: { value: name } });
+  const option = await screen.findByRole("option", { name });
+  await waitFor(() => expect(search.getAttribute("aria-activedescendant")).toBe(option.id));
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() => expect(group.textContent).toBe(name));
+}
+
 test("repository saving infers a name, preserves stale drafts and refreshes shared configuration", async () => {
   state.register.mockRejectedValueOnce(new Error("conflict"));
   render(() => <RepositoryManagement />);
@@ -253,9 +264,14 @@ test("repository saving infers a name, preserves stale drafts and refreshes shar
   const dialog = await screen.findByRole("dialog");
   await fireEvent.input(within(dialog).getByLabelText("仓库地址"), { target: { value: "git@example.test:team/added.git" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await within(dialog).findByRole("alert");
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("请选择分组");
+  expect(state.register).not.toHaveBeenCalled();
+  await chooseRepositoryGroup(dialog, "新建分组…");
+  await fireEvent.input(await within(dialog).findByLabelText("新分组名称"), { target: { value: "platform" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("仓库地址已存在"));
   expect(within(dialog).getByLabelText("仓库地址")).toHaveProperty("value", "git@example.test:team/added.git");
-  expect(state.register).toHaveBeenCalledWith({ name: "added", url: "git@example.test:team/added.git" });
+  expect(state.register).toHaveBeenCalledWith({ name: "added", url: "git@example.test:team/added.git", group: "platform" });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await waitFor(() => expect(state.refreshCatalog).toHaveBeenCalled());
@@ -263,7 +279,7 @@ test("repository saving infers a name, preserves stale drafts and refreshes shar
 });
 
 test("repository usage navigates to its service and linked repositories cannot be deleted", async () => {
-  state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", revision: 2, services: [{ key: "orders", name: "Orders" }] }]);
+  state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", group: "other", revision: 2, services: [{ key: "orders", name: "Orders" }] }]);
   const select = vi.fn();
   render(() => <RepositoryManagement onSelectService={select} />);
   await screen.findByText("Repository");
@@ -297,6 +313,7 @@ for (const failedRead of ["configuration", "catalog"] as const)
     fireEvent.click(screen.getByRole("button", { name: "登记仓库" }));
     const dialog = await screen.findByRole("dialog");
     await fireEvent.input(within(dialog).getByLabelText("仓库地址"), { target: { value: "git@example.test:team/retry.git" } });
+    await chooseRepositoryGroup(dialog, "其他");
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const error = await screen.findByRole("alert");

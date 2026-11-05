@@ -56,7 +56,7 @@ export function SettingsView() {
         </div>
       </Show>
       <Show when={visitedPanels().includes("endpoints")}>
-        <div class="settings-panel settings-panel-quiet" id="settings-panel-endpoints" role="tabpanel" aria-labelledby="settings-tab-endpoints" tabindex={0} hidden={selectedPanel() !== "endpoints"}>
+        <div class="settings-panel settings-panel-fixed" id="settings-panel-endpoints" role="tabpanel" aria-labelledby="settings-tab-endpoints" hidden={selectedPanel() !== "endpoints"}>
           <EndpointConfiguration />
         </div>
       </Show>
@@ -83,7 +83,7 @@ export function SettingsView() {
         </div>
       </Show>
       <Show when={visitedPanels().includes("services")}>
-        <div class="settings-panel settings-panel-quiet" id="settings-panel-services" role="tabpanel" aria-labelledby="settings-tab-services" tabindex={0} hidden={selectedPanel() !== "services"}>
+        <div class="settings-panel settings-panel-fixed" id="settings-panel-services" role="tabpanel" aria-labelledby="settings-tab-services" hidden={selectedPanel() !== "services"}>
           <ConfigurationView selectedServiceKey={serviceKey()} onSelectService={(key) => setServiceKey(key)} />
         </div>
       </Show>

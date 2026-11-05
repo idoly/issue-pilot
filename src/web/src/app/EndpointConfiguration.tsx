@@ -68,7 +68,7 @@ export function EndpointConfiguration() {
   };
   return (
     <main class="endpoint-configuration">
-      <section class="user-management-card" aria-label="端点说明">
+      <section class="user-management-card endpoint-card" aria-label="端点说明">
         <Show when={error()}>
           <div class="workspace-error" role="alert">
             {error()}
@@ -100,55 +100,57 @@ export function EndpointConfiguration() {
           >
             {(endpoint) => (
               <article class="endpoint-description">
-                <div class="endpoint-config">
-                  <div class="endpoint-config-toolbar">
-                    <Select
-                      aria-label="接入客户端"
-                      value={format()}
-                      options={clientFormats}
-                      onChange={(value) => {
-                        setFormat(value);
-                        setCopied("");
-                        setCopyError("");
-                      }}
-                    />
-                    <Button
-                      type="primary"
-                      size="small"
-                      disabled={!currentUser()?.subject}
-                      onClick={() => {
-                        void copy(endpoint);
-                      }}
-                    >
-                      {copied() === copyKey(endpoint) ? "已复制配置" : "复制配置"}
-                    </Button>
+                <div class="endpoint-intro" role="region" aria-label="客户端接入配置" tabindex={0}>
+                  <div class="endpoint-config">
+                    <div class="endpoint-config-toolbar">
+                      <Select
+                        aria-label="接入客户端"
+                        value={format()}
+                        options={clientFormats}
+                        onChange={(value) => {
+                          setFormat(value);
+                          setCopied("");
+                          setCopyError("");
+                        }}
+                      />
+                      <Button
+                        type="primary"
+                        size="small"
+                        disabled={!currentUser()?.subject}
+                        onClick={() => {
+                          void copy(endpoint);
+                        }}
+                      >
+                        {copied() === copyKey(endpoint) ? "已复制配置" : "复制配置"}
+                      </Button>
+                    </div>
+                    <p class="endpoint-guidance">{client().guidance}</p>
+                    <Show when={currentUser()} fallback={<p class="endpoint-guidance">连接身份加载后即可复制配置。</p>}>
+                      {(user) => (
+                        <>
+                          <p class="endpoint-identity">
+                            连接身份：{user().name} <code>{user().subject}</code>
+                          </p>
+                          <pre aria-label="MCP 客户端配置">
+                            <code>{configuration(endpoint)}</code>
+                          </pre>
+                        </>
+                      )}
+                    </Show>
+                    <p class="endpoint-guidance">配置使用右上角选择的用户身份；为其他用户提供配置时请先切换用户。身份头用于选择用户，入口网关认证需在客户端另行配置。</p>
+                    <Show when={copyError()}>
+                      <p class="workspace-error" role="alert">
+                        {copyError()}
+                      </p>
+                    </Show>
+                    <span class="visually-hidden" role="status">
+                      {copied() ? "复制成功" : ""}
+                    </span>
                   </div>
-                  <p class="endpoint-guidance">{client().guidance}</p>
-                  <Show when={currentUser()} fallback={<p class="endpoint-guidance">连接身份加载后即可复制配置。</p>}>
-                    {(user) => (
-                      <>
-                        <p class="endpoint-identity">
-                          连接身份：{user().name} <code>{user().subject}</code>
-                        </p>
-                        <pre aria-label="MCP 客户端配置">
-                          <code>{configuration(endpoint)}</code>
-                        </pre>
-                      </>
-                    )}
+                  <Show when={!endpoint.readOnly}>
+                    <p class="endpoint-guidance">连接后先用 users_list 确认身份、services_list 查看服务，再创建工单或发送消息；用 issue_get 和 issue_conversation 查看处理进展及回复。</p>
                   </Show>
-                  <p class="endpoint-guidance">配置使用右上角选择的用户身份；为其他用户提供配置时请先切换用户。身份头用于选择用户，入口网关认证需在客户端另行配置。</p>
-                  <Show when={copyError()}>
-                    <p class="workspace-error" role="alert">
-                      {copyError()}
-                    </p>
-                  </Show>
-                  <span class="visually-hidden" role="status">
-                    {copied() ? "复制成功" : ""}
-                  </span>
                 </div>
-                <Show when={!endpoint.readOnly}>
-                  <p class="endpoint-guidance">连接后先用 users_list 确认身份、services_list 查看服务，再创建工单或发送消息；用 issue_get 和 issue_conversation 查看处理进展及回复。</p>
-                </Show>
                 <details class="endpoint-tools">
                   <summary>可用工具（{endpoint.tools.length}）</summary>
                   <div class="endpoint-tool-list ip-scrollbar" role="region" aria-label="工具列表" tabindex={0}>

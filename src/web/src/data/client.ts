@@ -511,9 +511,9 @@ export interface ApplicationEndpoint {
 }
 export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endpoints: ApplicationEndpoint[] }>("/api/endpoints", signal ? { signal } : undefined);
 
-export const registerRepository = (input: { name: string; url: string }) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
-export const updateRepository = (id: string, input: { name: string; url: string; expectedRevision?: number }) =>
-  jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
+type RepositoryInput = Pick<ManagedRepository, "name" | "url" | "group">;
+export const registerRepository = (input: RepositoryInput) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
+export const updateRepository = (id: string, input: RepositoryInput & { expectedRevision?: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
 export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const loadServiceDbHubTargets = (key: string) =>
   request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
@@ -523,6 +523,7 @@ export interface ManagedRepository {
   id: string;
   name: string;
   url: string;
+  group: string;
   createdAt: string;
   updatedAt: string;
   services: Array<{ key: string; name: string }>;

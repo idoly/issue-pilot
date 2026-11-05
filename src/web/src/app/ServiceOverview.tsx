@@ -5,11 +5,14 @@ import { Markdown } from "../ui/Markdown";
 import { environmentName } from "./model";
 
 export function ServiceOverview(props: { service: Service; configurationDescription?: string | undefined; repositories: ManagedRepository[]; environments: Array<{ key: string; name: string }> }) {
-  let detail!: HTMLElement;
+  let repositoryList!: HTMLElement;
+  let descriptionBody!: HTMLDivElement;
   createEffect(
     () => props.service.key,
     () => {
-      detail.scrollTop = 0;
+      repositoryList.scrollTop = 0;
+      repositoryList.scrollLeft = 0;
+      descriptionBody.scrollTop = 0;
     },
   );
   const description = () => props.configurationDescription ?? props.service.context ?? props.service.description;
@@ -19,11 +22,11 @@ export function ServiceOverview(props: { service: Service; configurationDescript
     props.service.deployments.find((deployment) => deployment.environmentKey === environment)?.repositoryBranches.find((row) => row.repositoryId === id)?.baseBranch;
   const columns = () => `minmax(150px, 1fr) repeat(${environments().length}, minmax(140px, .7fr))`;
   return (
-    <article ref={detail} class="service-detail ip-scrollbar" aria-label="服务描述" tabindex={0}>
+    <article class="service-detail">
       <header class="service-overview-header">
         <h2>代码分支</h2>
       </header>
-      <section class="service-repositories" aria-label="仓库与环境分支">
+      <section ref={repositoryList} class="service-repositories" aria-label="仓库与环境分支" tabindex={0}>
         <div class="service-repository-matrix" style={{ "grid-template-columns": columns(), "min-width": `${150 + environments().length * 140}px` }}>
           <span class="repository-column-heading">仓库</span>
           <For each={environments()}>{(key) => <span class="repository-column-heading">{environmentName(props.environments, key)}</span>}</For>
@@ -50,11 +53,11 @@ export function ServiceOverview(props: { service: Service; configurationDescript
         <div class="service-detail-heading">
           <h3>服务描述</h3>
         </div>
-        <Show when={description().trim()} fallback={<p class="service-description">暂无描述</p>}>
-          <div class="service-description">
+        <div ref={descriptionBody} class="service-description ip-scrollbar" role="region" aria-label="服务描述" tabindex={0}>
+          <Show when={description().trim()} fallback={<p>暂无描述</p>}>
             <Markdown source={description()} cache={props.configurationDescription === undefined} />
-          </div>
-        </Show>
+          </Show>
+        </div>
       </section>
     </article>
   );

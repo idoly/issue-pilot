@@ -2274,6 +2274,9 @@ summary.agent-tool-head > svg {
 .settings-panel-quiet {
   overflow: auto;
 }
+.settings-panel-fixed {
+  overflow: clip;
+}
 .settings-tabs {
   display: flex;
   width: min(1080px, 100%);
@@ -2328,11 +2331,32 @@ summary.agent-tool-head > svg {
   border-radius: 8px;
   background: #fff;
 }
+.endpoint-configuration {
+  height: 100%;
+  container-type: size;
+}
+.endpoint-card {
+  display: flex;
+  max-block-size: 100%;
+  flex-direction: column;
+  overflow: clip;
+}
 .endpoint-description {
-  padding: 24px;
+  --endpoint-block-padding: clamp(12px, 2dvh, 24px);
+  display: grid;
+  min-block-size: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: var(--endpoint-block-padding) clamp(12px, 3vw, 24px);
 }
 .endpoint-description + .endpoint-description {
   border-top: 1px solid #dfe4e1;
+}
+.endpoint-intro {
+  min-block-size: 0;
+  max-block-size: calc(100cqh - clamp(80px, 28cqh, 160px) - 2 * var(--endpoint-block-padding));
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .endpoint-config-toolbar > button {
   flex-shrink: 0;
@@ -2382,10 +2406,15 @@ summary.agent-tool-head > svg {
   margin-left: 6px;
   color: #718079;
 }
-.endpoint-tools {
-  margin-top: 24px;
+.endpoint-tools[open],
+.endpoint-tools[open]::details-content {
+  display: flex;
+  min-block-size: 0;
+  flex-direction: column;
 }
 .endpoint-tools > summary {
+  display: list-item;
+  flex: none;
   padding-bottom: 12px;
   color: #415b4d;
   font-size: 12px;
@@ -2415,19 +2444,14 @@ summary.agent-tool-head > svg {
   line-height: 1.7;
 }
 @media (max-width: 600px) {
-  .endpoint-description {
-    padding: 16px;
-  }
   .endpoint-config {
     padding: 14px;
   }
   .endpoint-config-toolbar {
-    align-items: stretch;
-    flex-direction: column;
     gap: 10px;
   }
   .endpoint-config-toolbar > .ui-select {
-    width: 100%;
+    flex: 1;
   }
   .endpoint-config pre {
     padding: 12px;
@@ -2911,10 +2935,10 @@ summary.agent-tool-head > svg {
 .service-detail {
   display: grid;
   width: min(1032px, calc(100% - 48px));
-  min-block-size: min(8rem, 30dvh);
-  align-content: start;
+  min-block-size: 0;
+  grid-template-rows: auto fit-content(50%) minmax(0, 1fr);
   margin: 18px auto 0;
-  overflow: auto;
+  overflow: clip;
   border: 1px solid #dce2df;
   border-radius: 8px;
   background: #fff;
@@ -2930,11 +2954,15 @@ summary.agent-tool-head > svg {
   border-top: 0;
 }
 .service-description-section {
+  display: flex;
+  min-block-size: 0;
+  flex-direction: column;
   padding-block: 14px;
   background: #fbfcfb;
 }
 .service-detail-heading {
   display: flex;
+  flex: none;
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
@@ -2962,9 +2990,10 @@ summary.agent-tool-head > svg {
   color: #2f3b35;
 }
 .service-repositories {
+  min-block-size: 0;
   padding: 12px 18px;
   border-top: 1px solid #e5eae7;
-  overflow-x: auto;
+  overflow: auto;
 }
 .service-repository-matrix {
   display: grid;
@@ -3012,10 +3041,16 @@ summary.agent-tool-head > svg {
   overflow-wrap: anywhere;
 }
 .service-description {
+  min-block-size: 0;
   margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   color: #68756f;
   font-size: 12px;
   line-height: 1.65;
+}
+.service-description > p {
+  margin: 0;
 }
 .markdown-body {
   --bgColor-attention-muted: #fff8c5;
@@ -3661,6 +3696,30 @@ summary.agent-tool-head > svg {
   .source-browser-header {
     gap: 2px;
     padding-inline: 4px;
+  }
+}
+
+@media (max-height: 650px) {
+  .service-toolbar,
+  .service-detail {
+    margin-top: 8px;
+  }
+  .service-detail {
+    grid-template-rows: auto fit-content(43%) minmax(0, 1fr);
+  }
+  .service-overview-header,
+  .service-description-section {
+    padding-block: 8px;
+  }
+  .service-overview-header h2 {
+    margin-bottom: 2px;
+  }
+  .service-repositories,
+  .service-repository-matrix > * {
+    padding-block: 5px;
+  }
+  .service-description-section .service-detail-heading {
+    margin-bottom: 6px;
   }
 }
 

@@ -7,6 +7,8 @@ function repositoryInput(body: unknown) {
   const input = record(body);
   const name = text(input.name, "repository_name", 200);
   const url = text(input.url, "repository_url", 2048);
+  const group = typeof input.group === "string" ? input.group.trim().toLowerCase() : "";
+  if (!group || group.length > 64 || /\p{Cc}/u.test(group)) throw new ApiError(400, "invalid_repository_group");
   if (/\s|\0/.test(url)) throw new ApiError(400, "invalid_repository_url");
   if (url.startsWith("https://") || url.startsWith("ssh://")) {
     let parsed: URL;
@@ -18,7 +20,7 @@ function repositoryInput(body: unknown) {
     if (!parsed.hostname || parsed.password || parsed.search || parsed.hash || parsed.pathname === "/" || (url.startsWith("https://") && parsed.username))
       throw new ApiError(400, "invalid_repository_url");
   } else if (!/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+:[^\s\0]+$/.test(url)) throw new ApiError(400, "invalid_repository_url");
-  return { name, url };
+  return { name, url, group };
 }
 
 export function registerRepositoryRoutes(context: ApiRouteContext) {
@@ -57,11 +59,11 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
       const [existing] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
       if (!existing) throw new ApiError(404, "repository_not_found");
       checkRevision(record(request.body).expectedRevision, existing.revision);
-      if (existing.name === input.name && existing.url === input.url) return { ok: true };
       if (existing.url === input.url) {
+        if (existing.name === input.name && existing.group === input.group) return { ok: true };
         await database.db
           .update(repositories)
-          .set({ name: input.name, revision: existing.revision + 1, updatedAt: new Date() })
+          .set({ name: input.name, group: input.group, revision: existing.revision + 1, updatedAt: new Date() })
           .where(eq(repositories.id, existing.id));
         return { ok: true };
       }

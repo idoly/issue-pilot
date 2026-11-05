@@ -70,7 +70,7 @@ beforeEach(() => {
   state.replaceConfiguration = (next) => {
     setValue(next);
   };
-  state.repositories.mockResolvedValue([{ id: "catalog", name: "App", url: "git@example.test:team/app.git", services: [] }]);
+  state.repositories.mockResolvedValue([{ id: "catalog", name: "App", url: "git@example.test:team/app.git", group: "other", services: [] }]);
   state.description.mockResolvedValue({ context: "" });
   state.mysql.mockResolvedValue({ revision: 1, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysql, type: "mysql" }] }] });
   state.refresh.mockImplementation(async () => {

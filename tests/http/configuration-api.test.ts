@@ -352,7 +352,7 @@ test("updates and deletes Service configuration directly", async () => {
   try {
     await createService(fixture.app, "Alpha");
     await createService(fixture.app, "Beta");
-    await fixture.app.inject({ method: "POST", url: "/api/repositories", payload: { name: "Alpha updated", url: servicePayload("Alpha updated").repositories[0]!.url } });
+    await fixture.app.inject({ method: "POST", url: "/api/repositories", payload: { group: "other", name: "Alpha updated", url: servicePayload("Alpha updated").repositories[0]!.url } });
     const updated = await fixture.app.inject({ method: "PATCH", url: "/api/services/alpha", payload: servicePayload("Alpha updated") });
     assert.equal(updated.statusCode, 200, updated.body);
     const config = (await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body))) as { services: Array<{ key: string; name: string }> };

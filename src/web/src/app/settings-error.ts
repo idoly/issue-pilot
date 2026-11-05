@@ -7,6 +7,7 @@ export function settingsError(error: unknown): string {
     conflict: "该邮箱或仓库地址已存在。",
     invalid_user_email: "请填写有效的邮箱地址。",
     invalid_repository_url: "请填写有效的 HTTPS 或 SSH 仓库地址。",
+    invalid_repository_group: "请填写 1 至 64 个字符的分组名称，不能包含控制字符。",
     repository_is_used_by_services: "仓库仍被服务使用，请先解除关联。",
     issue_already_running: "相关工单正在运行，请稍后重试。",
     service_has_running_issues: "相关环境有运行中的工单，请稍后重试。",

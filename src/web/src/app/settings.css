@@ -72,12 +72,16 @@
   scrollbar-gutter: auto;
 }
 .settings-panel-quiet,
+.endpoint-intro,
+.service-repositories,
 .service-tab-list,
 .parameters-grid,
 .parameters-textarea {
   scrollbar-width: none;
 }
 .settings-panel-quiet::-webkit-scrollbar,
+.endpoint-intro::-webkit-scrollbar,
+.service-repositories::-webkit-scrollbar,
 .service-tab-list::-webkit-scrollbar,
 .parameters-grid::-webkit-scrollbar,
 .parameters-textarea::-webkit-scrollbar {
@@ -89,10 +93,13 @@
 }
 .endpoint-tool-list {
   max-block-size: min(22rem, 34dvh);
+  overscroll-behavior: contain;
 }
 .settings-table-scroll:focus-visible,
+.endpoint-intro:focus-visible,
 .endpoint-tool-list:focus-visible,
-.service-detail:focus-visible,
+.service-repositories:focus-visible,
+.service-description:focus-visible,
 .parameters-grid:focus-visible {
   outline-offset: -2px;
 }
@@ -242,6 +249,7 @@
   gap: 16px;
 }
 .settings-form label,
+.settings-form-field,
 .settings-target-fields label {
   display: grid;
   min-width: 0;
@@ -249,6 +257,7 @@
   font: 14px / 20px var(--app-font);
 }
 .settings-form label > span,
+.settings-form-field > span,
 .settings-target-fields label > span {
   color: #526d5c;
 }

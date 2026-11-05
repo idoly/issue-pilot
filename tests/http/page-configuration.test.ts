@@ -64,7 +64,7 @@ test("development baselines derive only from production and reject independent o
   try {
     const input = servicePayload("Branches", ["prod", "test", "dev"]);
     const url = input.repositories[0]!.url;
-    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Branches", url } });
+    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Branches", url } });
     input.deployments.find((row) => row.environmentKey === "prod")!.repositoryBranches[0]!.baseBranch = "release/production";
     const created = await f.app.inject({ method: "POST", url: "/api/services", headers, payload: input });
     assert.equal(created.statusCode, 201, created.body);
@@ -105,7 +105,7 @@ test("DBHub MySQL targets save atomically with deployment-owned MCP connections 
   const f = await createApiFixture();
   try {
     const input = servicePayload("Mysql", ["prod", "dev"]);
-    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Mysql", url: input.repositories[0]!.url } });
+    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Mysql", url: input.repositories[0]!.url } });
     const password = " private mysql password ";
     const withDbHub = {
       ...input,
@@ -163,7 +163,7 @@ test("DBHub connection changes reserve all Issue environments", async () => {
     await createService(f.app, "Other", ["test"]);
     await createIssue(f.app, "other", "test");
     const input = servicePayload("Global Mysql", ["prod", "dev"]);
-    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Global Mysql", url: input.repositories[0]!.url } });
+    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Global Mysql", url: input.repositories[0]!.url } });
     const payload = {
       ...input,
       deployments: input.deployments.map((row) => ({
@@ -189,14 +189,16 @@ test("DBHub connection changes reserve all Issue environments", async () => {
 test("stale configuration revisions refuse repository and credential replacement", async () => {
   const f = await createApiFixture();
   try {
-    const saved = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "One", url: "git@example.test:team/repo.git" } });
+    const saved = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "One", url: "git@example.test:team/repo.git" } });
     const id = saved.json().id;
     assert.equal(
-      (await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { name: "Two", url: "git@example.test:team/repo.git", expectedRevision: 0 } })).statusCode,
+      (await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { group: "other", name: "Two", url: "git@example.test:team/repo.git", expectedRevision: 0 } }))
+        .statusCode,
       200,
     );
     assert.equal(
-      (await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { name: "Old", url: "git@example.test:team/repo.git", expectedRevision: 0 } })).statusCode,
+      (await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { group: "other", name: "Old", url: "git@example.test:team/repo.git", expectedRevision: 0 } }))
+        .statusCode,
       409,
     );
     const first = await f.app.inject({
@@ -257,7 +259,7 @@ test("service API retains structural validation after removing redundant UI chec
   const f = await createApiFixture();
   try {
     const input = servicePayload("Boundary", ["test"]);
-    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { name: "Boundary", url: input.repositories[0]!.url } })).statusCode, 201);
+    assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Boundary", url: input.repositories[0]!.url } })).statusCode, 201);
     const repository = input.repositories[0]!;
     const deployment = input.deployments[0]!;
     const cases = [

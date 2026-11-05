@@ -61,6 +61,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0068_dbhub_targets",
       "0069_application_parameters",
       "0070_issue_type_guard",
+      "0071_repository_groups",
     ],
   );
   const previousJournal = {

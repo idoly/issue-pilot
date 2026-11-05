@@ -147,7 +147,7 @@ export async function createService(app: FastifyInstance, name: string, environm
       method: "POST",
       url: "/api/repositories",
       headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
-      payload: { name: repository.alias, url: repository.url },
+      payload: { name: repository.alias, url: repository.url, group: "other" },
     });
     assert.ok([201, 409].includes(registered.statusCode), registered.body);
   }

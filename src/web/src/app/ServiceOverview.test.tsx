@@ -21,7 +21,7 @@ describe("service description", () => {
     const view = render(() => (
       <ServiceOverview
         service={service}
-        repositories={[{ id: "catalog", revision: 0, name: "订单服务仓库", url: "git@example.test:orders.git", createdAt: "", updatedAt: "", services: [] }]}
+        repositories={[{ id: "catalog", revision: 0, name: "订单服务仓库", url: "git@example.test:orders.git", group: "other", createdAt: "", updatedAt: "", services: [] }]}
         environments={[
           { key: "prod", name: "正式" },
           { key: "test", name: "测试" },
