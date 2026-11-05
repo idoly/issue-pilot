@@ -16,7 +16,7 @@
 
 ## 身份与权限
 
-`X-Issue-Pilot-Subject` 选择活跃用户，**不是认证**。可信网关必须认证并绑定该头；无显式头时请求固定默认用户，失活后拒绝，不换账号。
+`X-Issue-Pilot-Subject` 选择活跃用户，**不是认证**。可信网关必须认证并绑定该头。调用身份校验时，无显式头会按 `createdAt`、`subject` 升序选择第一名活跃用户，并在该请求内固定选择；等待后该用户失活则拒绝，不换账号。这不是固定的全局登录账号。部分目录／详情 GET 不调用身份校验，因此错误 subject 头也不能作为这些接口拒绝访问的保证；认证边界必须在网关，详见 [HTTP 身份边界](HTTP.md#身份与访问边界)。
 
 | 身份条件 | 主要用途 |
 | --- | --- |
@@ -47,7 +47,7 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 
 空白保留与显式 clear 不同。切换个人／共享目标清空 Key 草稿，保存期间不可切换；关闭或换身份后旧请求不能覆盖新弹窗。
 
-共享完整模型组在 global_agent_configuration，个人组在 user_credentials.model_credentials，候选来自 Pi models.json 的 provider／model。`PUT /api/config/agent` 的 apiKey 是 replace／clear，省略保留；个人 `PUT /api/me/credentials` 的 model 是完整 replace 组或 clear。更换 provider 必须提供对应 Key 或清除，不能保留跨 provider Key。
+共享完整模型组在 global_agent_configuration，个人组在 user_credentials.model_credentials，候选只来自运行用户 Pi `models.json.providers` 声明的 provider 下的模型；应用离线刷新目录，不自动联网补齐模型。空目录在首次创建全局模型配置时会阻止启动，见[首次运行](DEPLOYMENT.md#首次本地运行)。`PUT /api/config/agent` 的 apiKey 是 replace／clear，省略保留；个人 `PUT /api/me/credentials` 的 model 是完整 replace 组或 clear。更换 provider 必须提供对应 Key 或清除，不能保留跨 provider Key。
 
 共享 DMS／SLS 位于 application_settings，独立 revision；更换 DMS URL 需同时提供 Authorization，没有代码默认连接地址。模型和凭证变更按受影响工单预约、关闭旧会话，活动冲突拒绝修改。服务 DMS／SLS 不接受 credentialUpdate，连接密钥只在个人／共享入口维护。
 
@@ -127,3 +127,5 @@ Pi settings 为基线，SQLite runtime.settings 只覆盖契约允许项，省�
 Base64 附件不带 data 前缀，默认最多 20 个、单个 20 MiB；入站 MCP 在内存解码，不能与 HTTP 流式上传混同。HTTP 附件不设业务总量／数量上限，由部署控制传输容量。
 
 文本读取默认整文件预算 64 MiB，每页响应 1 MiB、最多 100 项／1,000 行；超 readBytes 返回 inline=false、read_budget_exceeded 和下载路径，二进制只返回元数据。具体 schema 与限额见 [server.ts](../src/mcp/server.ts) 和根配置。响应不明先查询，不盲目重发。
+
+列表与对话分页使用从 0 开始的 `offset`，默认 `limit=30`、最多 100；文本按行分页默认 200 行、最多 1,000 行。分页返回 `{ total, offset, items, nextOffset }`，`nextOffset=null` 表示到末尾，不是跨修改稳定的游标。`issues_search` 先按 HTTP 列表的创建时间／编号倒序取数据，再过滤编号／标题、服务、环境和状态；不是全文描述搜索。工具成功结果位于 `content[].text`，内容为 JSON 字符串；工具失败可能是 HTTP 200 内的 `isError: true` 和稳定错误码，不能只检查 HTTP 状态。HTTP、SSE 与 MCP 的区别见 [HTTP 接口约定](HTTP.md)。

@@ -168,6 +168,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       // A rollback or cleanup failure dominates the constraint error wrapped in its AggregateError: the state was not
       // cleanly settled, so reporting a retryable conflict (or keeping the failure out of the log) would mislead.
       for (const operationalError of [
+        // A committed edit takes precedence over the nested reason why its session reset failed.
+        "issue_saved_session_reset_failed",
         "attachment_finalize_failed",
         "attachment_rollback_failed",
         "attachment_staging_cleanup_failed",
@@ -186,7 +188,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "issue_environment_not_found",
         "agent_session_file_incomplete",
         "agent_session_file_missing",
-        "issue_saved_session_reset_failed",
       ]) {
         if (errorMessages.includes(operationalError)) {
           app.log.error(errorDiagnostic(error));

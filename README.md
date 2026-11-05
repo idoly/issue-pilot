@@ -56,7 +56,7 @@ Pi 管理模型会话、工具管线和外部 MCP 生命周期；应用维护身
 
 用户、凭证、仓库、服务部署与运行参数由页面／API 写入 SQLite。参数 Tab 提供部分运维参数热更新；监听端口、state 路径等仍是部署设置，不是所有常量都可热改。个人模型组整组替换共享组，所选身份失败不会自动换 Key 或用户。
 
-安装步骤见[部署指南](docs/DEPLOYMENT.md#首次本地运行)。生产访问必须通过可信认证网关，不能把账号选择器或 subject 请求头当作认证。
+首次运行按[部署指南](docs/DEPLOYMENT.md#首次本地运行)依次准备 Operator 模型目录、安装依赖、启动和配置第一张工单。仅安装 npm 包或全局执行 `pi update` 不会完成应用配置；项目通过本地 Pi SDK 工作，全局 CLI 与项目依赖独立，详见[开发指南](docs/DEVELOPMENT.md#pi-cli-与项目-sdk)。生产访问必须通过可信认证网关，不能把账号选择器或 subject 请求头当作认证。
 
 ## 数据目录
 
@@ -78,10 +78,11 @@ Pi 管理模型会话、工具管线和外部 MCP 生命周期；应用维护身
 | 阅读目标 | 文档 |
 | --- | --- |
 | 创建、处理、解决与重开 | [使用指南](docs/USAGE.md) |
-| 人员、凭证、服务、参数与协议 | [配置与协议](docs/CONFIGURATION.md) |
+| 人员、凭证、服务、参数与 MCP | [配置与协议](docs/CONFIGURATION.md) |
+| HTTP 调用、返回值与异步处理 | [HTTP 接口约定](docs/HTTP.md) |
 | 系统组成和职责边界 | [系统架构](docs/ARCHITECTURE.md) · [Agent 与能力](docs/AGENT.md) |
 | 数据、文件事务和 Git | [数据存储](docs/STORAGE.md) |
 | 安装与发布 | [部署指南](docs/DEPLOYMENT.md) · [运维手册](docs/RUNBOOK.md) |
 | 开发与验证 | [开发指南](docs/DEVELOPMENT.md) · [依赖补丁](patches/README.md) |
 
-[文档导航](docs/README.md)
+[文档导航与适用版本](docs/README.md#适用范围与读者)

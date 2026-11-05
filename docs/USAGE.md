@@ -17,7 +17,23 @@ product／test 可使用调查方式；开发方式要求 developer。凭证 own
 
 页面创建后自动启动处理。顶部“钉钉”导入单条记录，新工单默认指派当前用户并启动；重复来源打开原工单，不重复启动或改派。入站 MCP 的默认行为另见[协议说明](CONFIGURATION.md#入站工单-mcp)。
 
-## 阅读、补充与中止
+## 状态与完成条件
+
+工单业务状态、Agent 活动和代码准备状态是三件事，不能只看其中一个字段判断成功：
+
+| 字段 | 值与语义 |
+| --- | --- |
+| `status` | `open` 待处理／执行失败后待处理；`in_progress` Agent 处理；`pending` 一轮处理结束，等待人确认；`resolved` 人工确认解决 |
+| `agentRunning`／SSE `runState` | `agentRunning=true` 包含 `queued` 和 `running`；`idle` 只表示当前无排队／执行活动，不代表已解决 |
+| `workspace.status` | `not_created`、`preparing`、`running`、`ready`、`stopped`、`failed`；表示准备、运行或代码回收状态，不是工单结论 |
+
+通常流程为 `open → in_progress → pending → resolved`；补充消息／继续处理可使未解决工单再次进入处理。准备或执行失败通常回到 `open` 并记录 `workspace.status=failed`、`lastError`。`pending` 只是本轮完成，不是测试、修复或外部操作成功的证明，仍需阅读回复和证据。
+
+手工状态接口只接受 `resolved`（当前必须为 `pending`）或 `open`（当前必须为 `resolved`）。解决时设置 `resolvedAt`，重开时清空；重开恢复所需代码但**不自动启动 Agent**，需再发送消息或继续处理。并发活动或恢复检查失败会拒绝转换，不能直接改数据库绕过。
+
+规则依据：[业务契约](../src/domain/contracts.ts)、[状态路由](../src/http/issue-routes.ts)、[Engine](../src/agent/engine.ts)、[重开与回收](../src/workspace/lifecycle.ts)；流程回归见 [issue-api.test.ts](../tests/http/issue-api.test.ts)。
+
+## 阅读与补充
 
 [会话页面图](images/workspace.jpg) 展示了对话、工具、描述和文件的布局。
 
@@ -28,7 +44,7 @@ product／test 可使用调查方式；开发方式要求 developer。凭证 own
 - 可以补充文字或粘贴图片；运行中消息按引导／排队语义受理，空闲时继续处理。
 - 草稿、发送失败和图片属于应用资源中的具体工单，导航后可恢复；切换身份取消旧身份未发送工作，迟到响应不会覆盖新身份输入。
 
-202／accepted 表示输入持久保存，不表示模型成功完成。发送结果不明时先看对话、状态和文件，避免重复提交。没有客户端幂等 ID 或跨进程自动执行保证。
+消息发送的 202／accepted 表示输入持久保存，不表示模型成功完成。发送结果不明时先看对话、状态和文件，避免重复提交。没有客户端幂等 ID 或跨进程自动执行保证。关闭网页、切换工单或断开 SSE 都不等于中止服务端任务；当前 HTTP 路由没有面向用户的 Agent abort 接口，不要通过刷新或重启模拟安全撤销。
 
 ## 验证与费用
 

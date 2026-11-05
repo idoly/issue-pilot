@@ -26,7 +26,7 @@ import {
   services,
   subjects,
 } from "../db/schema.ts";
-import { credentialOwnerSubject, errorMessage, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
+import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
@@ -351,18 +351,24 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     const issue = await requireIssue(database, request.params.key);
     const { input, attachments: pendingAttachments } = await readIssueInput(request);
-    if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new ApiError(400, "invalid_reset_session");
-    // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
-    const resetSession = input.resetSession === true;
-    if (resetSession) await requireDeveloper(database, request);
     const failures: unknown[] = [];
     try {
+      if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new ApiError(400, "invalid_reset_session");
+      // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
+      const resetSession = input.resetSession === true;
+      if (resetSession) await requireDeveloper(database, request);
       const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
       if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new ApiError(400, "issue_scope_update_not_allowed");
       return await runScopeExclusive(() =>
         runIssueExclusive(engine, [issue.id], async (reservation) => {
           const editorSubject = await ensureCurrentSubject(database, request);
           const currentIssue = await requireIssue(database, issue.key);
+          if (resetSession) {
+            await requireDeveloper(database, request);
+            if (currentIssue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
+          }
+          const currentSession = resetSession ? (await issueSessionHistory(database.db, stateRoot, currentIssue))[0] : undefined;
+          if (resetSession && !currentSession) throw new ApiError(409, "agent_session_not_found");
           const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
             database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
             database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, currentIssue.serviceId)).limit(1),
@@ -417,15 +423,10 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           // The update is committed; a leftover quarantined original is operator cleanup, not a failed edit.
           await finalizeQuarantinedAttachments(quarantined).catch((error: unknown) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"));
           if (resetSession) {
-            if (currentIssue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
-            const currentSession = (await issueSessionHistory(database.db, stateRoot, currentIssue))[0];
-            if (!currentSession) throw new ApiError(409, "agent_session_not_found");
             try {
-              await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession.sessionId);
+              await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId);
             } catch (error) {
-              const code = errorMessage(error);
-              if (["agent_session_changed", "agent_session_not_found", "agent_session_file_incomplete", "agent_session_file_missing"].includes(code)) throw new ApiError(409, code);
-              // The metadata update above is committed; say so instead of implying nothing was saved.
+              // Every failure here follows a committed edit, including a session changed or lost after preflight.
               throw new Error("issue_saved_session_reset_failed", { cause: error });
             }
             events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });

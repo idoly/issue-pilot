@@ -14,6 +14,8 @@
                                          └─ storage → 原件／JSONL／工作文件
 ```
 
+图中的箭头表示请求／处理调用，不表示数据复制或同步事务。浏览器 SSE 接收的是 Agent 事件投影；入站 MCP 会复用 HTTP 路由，但服务 MCP 是 Agent 的外部能力，两者方向不同。
+
 SQLite、JSONL、普通文件与 Git 共同构成事实；任一介质都不是其他介质的完整备份。路由负责协调，不实现第二套 Git、协议、存储或授权逻辑。
 
 ## Owner 与入口
@@ -45,6 +47,17 @@ Pi 管理模型管线、发现、注册和连接；应用继续拥有配置、�
 5. 事件通过 SSE 投影；结束和失败清理仍属于该工单串行范围，不允许旧失败覆盖新轮次。
 
 `idle` 无活动，`queued` 等待执行名额，`running` 已取得名额并包含准备与收尾。预约使用的 agentRunning 包含排队，不可只检查 running 状态。
+
+### 核心调用链与完成边界
+
+| 任务 | 已确认调用链 | 请求返回时完成了什么 |
+| --- | --- | --- |
+| 创建工单 | [issue-routes.createIssue](../src/http/issue-routes.ts) → claimIssueRoot／附件准备 → SQLite 事务插入 Issue 与唯一 Workspace → reservation.enqueue → [Engine](../src/agent/engine.ts) | 201 表示保存和安排入队，不等待模型或代码准备完成 |
+| 补充消息 | [agent-routes](../src/http/agent-routes.ts) → Engine.send → 同工单 sessionQueue 保存输入／绑定 → steer 或安排排队 | 202 表示输入已持久接收；进程内执行队列不是持久任务调度器 |
+| 执行一轮 | Engine.schedule 获取名额 → 准备服务代码／owner 模型 → [pi-session](../src/agent/pi-session.ts) → Pi 工具管线 → 应用 execute 校验／本地 SRT 或外部服务 | 正常结束更新 workspace 与业务状态；失败收尾在同工单串行范围内完成 |
+| 展示对话 | Pi JSONL／[events](../src/agent/events.ts) → [SSE 路由](../src/http/agent-routes.ts) → [Web 投影](../src/web/src/app/agent-stream.ts) | 回放、snapshot_ready、live；连接成功不表示执行成功 |
+
+业务 `status`、Agent `runState`、Workspace 状态分别表达结论流程、活动和准备／回收，详见[状态与完成条件](USAGE.md#状态与完成条件)。接口失败与重试约定集中在 [HTTP 接口](HTTP.md)，不把 HTTP 受理画成端到端完成。
 
 ## 并发与失败清理
 

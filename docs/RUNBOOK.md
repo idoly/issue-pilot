@@ -93,6 +93,31 @@ GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C <path> \
 
 服务／容器／镜像按归属、引用、挂载与当前构建检查，不做宽泛 prune，不处理其他项目或系统服务。历史 dirty 工作树、未知目录和恢复证据保留。物理分配可因硬链接导致“删除目录体积”大于实际释放。
 
+## 从启动到首张工单的定位顺序
+
+先确定是在自己的演示安装还是已授权维护的业务实例。以下 GET 可用于已知实例的只读观察；完整详情和日志也可能含业务数据，不应原样对外粘贴。不要为排障直接运行迁移、清理目录或反复重启。
+
+1. **进程未监听／health 不通**：查看前台启动错误或已有 supervisor 日志，区分监听失败、数据库迁移、state 租约和代码准备。`application_already_running` 说明另一个 API 持有租约，先找实际进程／挂载；不要直接删除 `control/project-tools.sock`。冷启动可能在监听前访问仓库，不应一看到超时就连续重启。
+2. **`global_agent_model_unavailable`**：确认启动进程实际 HOME／Pi agentDir，核对该用户 `models.json.providers` 和模型定义；只在自己 shell 里执行全局 `pi --version` 或 `/login` 不能证明应用模型目录完整。空库首次需要至少一项候选；已有全局选择后模型不可用还可能到保存／执行阶段才暴露。
+3. **网页构建缺失／入口异常**：生产入口要求 `src/web/dist/index.html`，缺失会以 `web_build_file_missing:index.html` 拒绝启动，核对是否在独立安装完成 `npm run build`。health 正常而页面不可用时再检查是否用了不带 webRoot 的自定义 API 入口、静态资产发布或代理；若用 4173，核对 Vite 进程、实际端口和 3000 API，Vite 不代理 `/health`。不要在 live dist 现场重建来掩盖发布不完整。
+4. **身份或配置拒绝**：使用与客户端同一网关路径读取 `/api/me`；核对 header 绑定、活跃角色和 isAdmin。浏览器账号选择不是登录。GET 目录可读不证明写入身份有效，详见 [HTTP 边界](HTTP.md#身份与访问边界)。
+5. **创建后没有回复**：读取对应工单详情和会话。`agentRunning=true` 含等待名额；`workspace.status=failed` 时记录 `lastError`。先检查 owner 模型组、共享 Key、所选仓库／分支／SSH，再检查本地工具与 SRT。确认原因解决后再显式 retry／发送消息，避免重复工单；API 重启不会自动接续模型执行。
+6. **能回复但某能力失败**：区分没有部署目标、全局开关关闭、凭证组不完整、网络／工具缺失与外部授权拒绝；DMS／SLS／DBHub／其他 MCP 不是同一执行路径。只针对所选服务和来源环境检查，不能通过切换身份或扩大网络白名单猜测修复。
+
+本地演示的只读查询示例（Bash，替换两处示例值；已有业务实例要用实际受保护网关地址）：
+
+```bash
+BASE_URL='http://127.0.0.1:3000'
+SUBJECT='demo-developer@example.invalid'
+ISSUE_KEY='ISSUE-20260101-001'
+curl --fail-with-body -sS -H "X-Issue-Pilot-Subject: $SUBJECT" "$BASE_URL/api/me"
+curl --fail-with-body -sS -H "X-Issue-Pilot-Subject: $SUBJECT" "$BASE_URL/api/issues/$ISSUE_KEY"
+# 仅在确有此 user unit 的安装中查看，输出按敏感业务日志处理：
+journalctl --user -u issue-pilot-api.service -n 100 --no-pager
+```
+
+静态检查通过只能证明对应文件／配置可见；health、路由测试、真实模型／SSH／sandbox／外部查询分别验证并分别记录。启动、关闭和错误映射依据为 [api.ts](../src/http/api.ts)，租约依据为 [state-lease.ts](../src/workspace/state-lease.ts)，模型目录依据为 [model-runtime.ts](../src/agent/model-runtime.ts)。
+
 ## 常见故障
 
 | 类别 | 处理 |

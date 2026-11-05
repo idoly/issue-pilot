@@ -4,11 +4,30 @@
 
 ## 环境与入口
 
-后端直接用 Node strip-types 执行 TypeScript，开发／CI 使用 Node 24.18.0，容器 Node 26。Pi AI／Coding Agent／Schema 1.5.0，Solid runtime／web 2.0.0-rc.20 与对应 Vite 插件、Monaco 0.57.0、SRT 0.0.81 按锁文件配套。
+后端直接用 Node strip-types 执行 TypeScript，版本以 [CI](../.github/workflows/ci.yml) 为准；容器 Node 与系统工具以 [Containerfile](../Containerfile) 为准。前端使用 Solid、Vite 与 Monaco，后端为 Fastify、Drizzle／libSQL，Agent 使用本地 Pi SDK 和 SRT。Solid runtime／web／Vite 插件需按锁文件配套，不把预发布版本当稳定兼容承诺。
 
 准确版本见 [package.json](../package.json)、[package-lock.json](../package-lock.json)、[requirements.txt](../requirements.txt)。安装须执行 postinstall 校验[依赖补丁](../patches/README.md)，不默许被策略阻止的脚本。工具环境见[部署](DEPLOYMENT.md#首次本地运行)。
 
 修改前运行 git status，固定基线，读取 owner、契约、配置、schema 与聚焦测试；区分持久、有条件持久和生成状态。路由协调 owner，不重实现协议／Git／附件授权，不为风格重写合理设计。
+
+## Pi CLI 与项目 SDK
+
+项目直接依赖 `@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`@earendil-works/pi-schema`，由 `package-lock.json` 固定实际安装；运行入口通过 import 调用 SDK，不要求先全局安装 `pi`。`pi --version` 查看 PATH 中的 CLI，不能代表应用版本。
+
+在仓库根查看本地依赖：
+
+```bash
+npm ls --depth=0
+npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent @earendil-works/pi-schema
+```
+
+全局 `pi update` 不更新项目锁文件或本地 SDK，也不替应用写入 SQLite 模型凭证。SDK 升级属于依赖变更，需配套检查[补丁](../patches/README.md)、调用 API、聚焦回归与完整验证，不能用全局 CLI 升级替代。
+
+## 本地开发循环
+
+先完成[首次运行准备](DEPLOYMENT.md#首次本地运行)，在自己的独立安装目录启动 API；另一个终端在同一仓库根执行 `npm run dev:web`。浏览器打开 `http://127.0.0.1:4173` 使用前端 HMR；`/api`、`/mcp` 代理到 3000 API，`/health` 不在 Vite 代理范围，检查健康请直连 API。
+
+后端没有 `dev`／watch 脚本，也没有后端编译步骤；修改后端按需要优雅重启 API。`npm run build` 只生成 `src/web/dist`，不是启动服务。开发 Web 仍操作同一个 API 的真实 state，HMR 不提供数据隔离，不能将它指向生产 API 做试验。
 
 ## 代码约定
 
@@ -23,6 +42,18 @@
 真实 .issue-pilot 含凭证、附件、JSONL、分支和恢复证据，不作夹具。后端通过 buildApi({ stateRoot, databaseFile }) 或 manager 注入临时根；手工服务器使用独立项目与根配置，没有 state 环境变量覆盖。
 
 Pi 会话显式使用临时 agentDirectory，注入模型不能替代资源隔离。所有会话、连接、句柄和临时根在 finally／onTestFinished 关闭，断言失败也清理。不要在运行中的 checkout 安装依赖或覆盖 dist；动态 executor 会读取磁盘源码，health 200 不代表其可用。
+
+## 无需真实模型的核心流程验证
+
+在已安装依赖的仓库根执行以下现存测试，走工单创建、重复／冲突处理、消息受理和状态转换：
+
+```bash
+node --experimental-strip-types --test --test-concurrency=2 tests/http/issue-api.test.ts tests/http/application-mcp-create.test.ts
+```
+
+[HTTP fixture](../tests/http/fixture.ts) 通过 `buildApi({ stateRoot, databaseFile, engine, modelCatalog })` 创建临时数据库和根目录，注入替代 Agent／模型目录，使用 Fastify `inject` 调用真实路由，最后关闭并清理。它验证 HTTP／MCP 与存储契约，不监听真实部署端口，也不调用真实模型或远程 Git；不能据此声称模型、SSH、SRT 或网关集成通过。实际 Engine 的排队、输入持久化和失败恢复另见 `tests/agent/engine.test.ts`、`message-admission.test.ts`、`message-recovery.test.ts`。
+
+新增行为测试沿用临时根注入模式，避免把上述替代 controller 的成功误当成 Agent 执行成功。手工验证真实能力则按[首张工单路径](DEPLOYMENT.md#首次本地运行)在独立安装中进行。
 
 ## 验证
 
@@ -54,6 +85,8 @@ npx vitest run --config src/web/vite.config.ts --environment jsdom --maxWorkers=
 运行时、依赖、协议安全、容器变化还执行生产 npm audit、pip check 和可用部署健康验证。SSH E2E 缺 sshd fixture 明确 skip，不当作通过；远程模型／数据库／认证与完整容器需要对应环境。本机结果不代表远程 CI 成功。
 
 纯文档可以按文档范围验证，不必为了文档运行用户工单的依赖安装或完整构建。应用自身检查与工单 Agent 的“默认不构建”策略是不同职责。
+
+仓库 `npm run format`／`format:check` 使用 Biome，但 [biome.json](../biome.json) 明确排除 Markdown 和 docs；执行成功也不等于格式化了文档。目前没有专用 Markdown formatter 或链接检查脚本。文档变更保持现有标题、表格、代码围栏风格，逐项检查相对路径、锚点、导航及命令，并运行 `git diff --check`；不要为一次文档改动引入新框架或修改全仓库格式配置。
 
 ## Web 与浏览器
 
