@@ -71,6 +71,18 @@
   --ip-scrollbar-size: 8px;
   scrollbar-gutter: auto;
 }
+.settings-panel-quiet,
+.service-tab-list,
+.parameters-grid,
+.parameters-textarea {
+  scrollbar-width: none;
+}
+.settings-panel-quiet::-webkit-scrollbar,
+.service-tab-list::-webkit-scrollbar,
+.parameters-grid::-webkit-scrollbar,
+.parameters-textarea::-webkit-scrollbar {
+  display: none;
+}
 .settings-table-scroll,
 .endpoint-tool-list {
   overflow: auto;
@@ -79,7 +91,9 @@
   max-block-size: min(22rem, 34dvh);
 }
 .settings-table-scroll:focus-visible,
-.endpoint-tool-list:focus-visible {
+.endpoint-tool-list:focus-visible,
+.service-detail:focus-visible,
+.parameters-grid:focus-visible {
   outline-offset: -2px;
 }
 .repository-settings-panel {
@@ -492,29 +506,51 @@
     transition: none;
   }
 }
+.parameters-card {
+  display: flex;
+  min-block-size: min(10rem, 30dvh);
+  max-block-size: 100%;
+  flex-direction: column;
+}
+.parameters-card > :not(.parameters-grid) {
+  flex: none;
+}
+.parameters-header {
+  min-height: 52px;
+  padding: 12px clamp(12px, 2vw, 20px);
+}
+.parameters-header > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 4px;
+}
+.parameters-header .ui-button {
+  flex: none;
+}
 .parameters-grid {
   display: grid;
+  min-height: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 24px;
-  padding: 24px;
+  align-content: start;
+  gap: 12px 20px;
+  overflow: auto;
+  padding: 16px clamp(12px, 2vw, 20px) 20px;
 }
 .parameters-grid label {
   display: grid;
   min-width: 0;
   align-content: start;
-  gap: 8px;
+  gap: 4px;
   font: 14px / 20px var(--app-font);
 }
 .parameters-grid label > span {
   color: #526d5c;
 }
-.parameters-grid label > small {
+.parameters-grid label small {
   color: #718079;
   font-size: 12px;
   line-height: 16px;
-}
-.parameters-grid .parameters-wide {
-  grid-column: 1 / -1;
 }
 .parameters-textarea {
   width: 100%;
@@ -529,16 +565,6 @@
 .parameters-textarea:disabled {
   background: #f5f7f6;
   color: #718079;
-}
-.parameters-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 24px 24px;
-}
-.parameters-actions > span {
-  color: #718079;
-  font-size: 12px;
 }
 .parameters-hint {
   margin: 0;

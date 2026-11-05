@@ -51,7 +51,7 @@ export function OverviewView(props: { onSelectIssue: (issueKey: string, userSubj
   });
 
   return (
-    <main class="overview-view" aria-label="首页" tabindex={0}>
+    <main class="overview-view" aria-label="首页">
       <Dashboard issues={issues()} loading={loading()} loadError={loadError()} refreshing={refreshing()} onRefresh={refresh} onSelectIssue={props.onSelectIssue} />
       <Statistics issues={issues()} />
     </main>

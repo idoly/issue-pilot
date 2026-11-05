@@ -1,10 +1,17 @@
-import { For, Show } from "solid-js";
+import { createEffect, For, Show } from "solid-js";
 import type { ManagedRepository, Service } from "../data/client";
 import { GitBranch } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
 import { environmentName } from "./model";
 
 export function ServiceOverview(props: { service: Service; configurationDescription?: string | undefined; repositories: ManagedRepository[]; environments: Array<{ key: string; name: string }> }) {
+  let detail!: HTMLElement;
+  createEffect(
+    () => props.service.key,
+    () => {
+      detail.scrollTop = 0;
+    },
+  );
   const description = () => props.configurationDescription ?? props.service.context ?? props.service.description;
   const environments = () => ["dev", "test", "prod"].filter((key) => props.service.deployments.some((deployment) => deployment.environmentKey === key));
   const repositoryName = (url: string) => props.repositories.find((repository) => repository.url === url)?.name ?? url;
@@ -12,7 +19,7 @@ export function ServiceOverview(props: { service: Service; configurationDescript
     props.service.deployments.find((deployment) => deployment.environmentKey === environment)?.repositoryBranches.find((row) => row.repositoryId === id)?.baseBranch;
   const columns = () => `minmax(150px, 1fr) repeat(${environments().length}, minmax(140px, .7fr))`;
   return (
-    <article class="service-detail" aria-label="服务描述">
+    <article ref={detail} class="service-detail ip-scrollbar" aria-label="服务描述" tabindex={0}>
       <header class="service-overview-header">
         <h2>代码分支</h2>
       </header>

@@ -784,7 +784,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       <section class="service-panel" hidden={!configurationLoaded()}>
         <div class="service-toolbar">
           <div class="service-toolbar-inner">
-            <div class="service-tab-list ip-scrollbar" role="tablist" aria-label="服务列表">
+            <div class="service-tab-list" role="tablist" aria-label="服务列表">
               <For each={configuration().services}>
                 {(service) => (
                   <button

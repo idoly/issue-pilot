@@ -1985,8 +1985,6 @@ summary.agent-tool-head > svg {
   font-size: 13px;
 }
 
-.dashboard-workspace,
-.statistics-workspace,
 .overview-view,
 .settings-view,
 .configuration-workspace,
@@ -1996,41 +1994,29 @@ summary.agent-tool-head > svg {
   min-height: 0;
   background: #f4f6f5;
 }
-.dashboard-workspace,
-.statistics-workspace {
-  overflow-y: auto;
-  padding: 24px clamp(16px, 3vw, 32px) 48px;
-}
-.dashboard-header {
+.dashboard-header,
+.statistics-header {
   display: flex;
-  max-width: 1180px;
-  align-items: flex-end;
+  min-height: 40px;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin: 0 auto 24px;
+  gap: 12px;
+  margin-bottom: var(--overview-gap);
 }
-.dashboard-header > div {
-  display: grid;
-  gap: 4px;
-}
-.dashboard-header span {
-  color: #65706c;
-  font-size: 12px;
-  line-height: 16px;
-}
-.dashboard-header h1 {
+.dashboard-header h1,
+.statistics-header h2 {
   margin: 0;
   color: #28312d;
-  font-size: 24px;
+  font-size: clamp(18px, 2vw, 24px);
   line-height: 32px;
   font-weight: 600;
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 .dashboard-summary {
   display: grid;
-  width: min(1180px, 100%);
-  grid-template-columns: repeat(4, minmax(130px, 1fr));
-  margin: 0 auto 24px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: var(--overview-gap);
   border: 1px solid #d9dfdc;
   border-radius: 8px;
   overflow: hidden;
@@ -2040,7 +2026,7 @@ summary.agent-tool-head > svg {
   display: grid;
   min-width: 0;
   gap: 4px;
-  padding: 16px 24px;
+  padding: clamp(6px, 1.5dvh, 16px) clamp(6px, 2vw, 24px);
   border-right: 1px solid #e1e6e3;
 }
 .dashboard-summary > div:last-child {
@@ -2066,23 +2052,28 @@ summary.agent-tool-head > svg {
   color: #ad443d;
 }
 .dashboard-operations {
-  width: min(1180px, 100%);
-  margin-inline: auto;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
 }
 .dashboard-attention {
+  display: flex;
   min-width: 0;
-  overflow: hidden;
+  min-height: 0;
+  flex-direction: column;
+  overflow: clip;
   border: 1px solid #dce2df;
   border-radius: 8px;
   background: #fff;
 }
 .dashboard-section-heading {
   display: flex;
-  min-height: 56px;
+  min-height: 40px;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px;
+  padding: clamp(7px, 1.5dvh, 16px) 16px;
   border-bottom: 1px solid #e3e8e5;
 }
 .dashboard-section-heading h2 {
@@ -2096,6 +2087,7 @@ summary.agent-tool-head > svg {
   display: grid;
   max-height: 232px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 .dashboard-attention-item {
   display: grid;
@@ -2217,20 +2209,23 @@ summary.agent-tool-head > svg {
   overflow: clip;
 }
 .overview-view {
+  --overview-gap: clamp(8px, 2dvh, 24px);
+  display: grid;
   height: 100%;
-  overflow-y: auto;
-  padding: 24px clamp(16px, 3vw, 42px) 40px;
+  grid-template: fit-content(54%) minmax(0, 1fr) / minmax(0, 1280px);
+  justify-content: center;
+  gap: var(--overview-gap);
+  overflow: clip;
+  padding: var(--overview-gap) clamp(16px, 3vw, 42px);
   background: #f4f6f5;
 }
-.overview-view,
-.overview-view :is(.dashboard-attention-list, .compact-scroll, .distribution-grid) {
+.overview-view :is(.dashboard-attention-list, .insight-panel, .compact-scroll, .distribution-grid) {
   scrollbar-width: none;
 }
-.overview-view::-webkit-scrollbar,
-.overview-view :is(.dashboard-attention-list, .compact-scroll, .distribution-grid)::-webkit-scrollbar {
+.overview-view :is(.dashboard-attention-list, .insight-panel, .compact-scroll, .distribution-grid)::-webkit-scrollbar {
   display: none;
 }
-.overview-view:focus-visible,
+.insight-panel:focus-visible,
 .dashboard-attention-list:focus-visible,
 .distribution-grid:focus-visible,
 .assignee-table:focus-visible {
@@ -2238,21 +2233,28 @@ summary.agent-tool-head > svg {
 }
 .overview-view > .dashboard-workspace,
 .overview-view > .statistics-workspace {
-  width: min(1280px, 100%);
+  display: flex;
+  min-width: 0;
   min-height: 0;
-  margin-inline: auto;
-  overflow: visible;
-  padding: 0;
-  background: transparent;
+  flex-direction: column;
 }
-.overview-view .dashboard-summary,
-.overview-view .dashboard-operations {
-  width: 100%;
+.dashboard-workspace > :not(.dashboard-operations),
+.statistics-workspace > :not(.insight-panel) {
+  flex: none;
 }
 .overview-view > .statistics-workspace {
-  margin-top: 34px;
-  padding-top: 30px;
+  padding-top: var(--overview-gap);
   border-top: 1px solid #d8dfdb;
+}
+@media (min-width: 560px) and (max-height: 600px) {
+  .overview-view {
+    grid-template: minmax(0, 1fr) / repeat(2, minmax(0, 640px));
+    column-gap: clamp(16px, 3vw, 36px);
+  }
+  .overview-view > .statistics-workspace {
+    padding-block-start: 0;
+    border-block-start: 0;
+  }
 }
 .settings-view {
   display: grid;
@@ -2268,7 +2270,8 @@ summary.agent-tool-head > svg {
   margin-inline: auto;
   background: transparent;
 }
-.settings-panel.ip-scrollbar {
+.settings-panel.ip-scrollbar,
+.settings-panel-quiet {
   overflow: auto;
 }
 .settings-tabs {
@@ -2355,7 +2358,6 @@ summary.agent-tool-head > svg {
   min-width: 0;
 }
 .endpoint-config pre {
-  overflow-x: auto;
   margin: 14px 0;
   padding: 16px;
   border: 1px solid #e4ebe6;
@@ -2364,6 +2366,8 @@ summary.agent-tool-head > svg {
   color: #354b3d;
   font: 12px / 1.7 var(--mono-font);
   tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .endpoint-config pre code {
   font: inherit;
@@ -2503,42 +2507,18 @@ summary.agent-tool-head > svg {
   color: #a52d28;
   font-size: 12px;
 }
-.statistics-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-.statistics-header > div {
-  display: grid;
-  min-width: max-content;
-  flex: 0 0 auto;
-  gap: 2px;
-}
 .statistics-header .ui-select {
-  width: 180px;
-  min-width: 180px;
-  max-width: 180px;
-  flex: 0 0 180px;
+  min-width: 0;
+  flex: 0 1 180px;
 }
 .statistics-header span,
 .statistics-header small {
   color: #74807b;
   font-size: 11px;
 }
-.statistics-header h2 {
-  margin: 0;
-  color: #28312d;
-  font-size: 20px;
-  line-height: 28px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
 .metric-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-block: 1px solid #d9dfdc;
   background: #fff;
 }
@@ -2671,13 +2651,10 @@ summary.agent-tool-head > svg {
   color: #7a8580;
   text-align: right;
 }
-.insight-header {
-  margin-bottom: 12px;
-}
 .insight-tabs {
   display: flex;
   gap: 4px;
-  margin-bottom: 12px;
+  margin-bottom: var(--overview-gap);
   padding: 4px;
   border-radius: 8px;
   background: #e8eeeb;
@@ -2704,6 +2681,11 @@ summary.agent-tool-head > svg {
 }
 .insight-panel[hidden] {
   display: none;
+}
+.insight-panel {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .insight-panel > .metric-strip {
   border: 1px solid #dce2df;
@@ -2846,21 +2828,25 @@ summary.agent-tool-head > svg {
 }
 
 .configuration-workspace {
-  display: block;
-  overflow: visible;
+  display: flex;
+  height: 100%;
+  flex-direction: column;
   background: transparent;
 }
 .configuration-loading {
   padding: 24px;
 }
-.service-panel {
+.service-panel:not([hidden]) {
+  display: flex;
+  min-height: 0;
   min-width: 0;
-  background: transparent;
+  flex: 1;
+  flex-direction: column;
+}
+.service-panel > :not(.service-detail) {
+  flex: none;
 }
 .service-toolbar {
-  position: sticky;
-  z-index: 3;
-  top: 0;
   width: min(1032px, calc(100% - 48px));
   margin: 18px auto 0;
   padding: 4px 0;
@@ -2889,10 +2875,6 @@ summary.agent-tool-head > svg {
   border-radius: 9px;
   background: #edf2ef;
   box-shadow: inset 0 0 0 1px rgb(37 66 54 / 3%);
-  scrollbar-width: thin;
-}
-.service-tab-list::-webkit-scrollbar {
-  height: 8px;
 }
 .service-tab-list button {
   min-height: 32px;
@@ -2929,8 +2911,10 @@ summary.agent-tool-head > svg {
 .service-detail {
   display: grid;
   width: min(1032px, calc(100% - 48px));
-  margin: 18px auto 40px;
-  overflow: hidden;
+  min-block-size: min(8rem, 30dvh);
+  align-content: start;
+  margin: 18px auto 0;
+  overflow: auto;
   border: 1px solid #dce2df;
   border-radius: 8px;
   background: #fff;
@@ -3456,23 +3440,8 @@ summary.agent-tool-head > svg {
     display: block;
     overflow: hidden;
   }
-  .dashboard-workspace,
-  .statistics-workspace {
-    min-height: 100%;
-    padding: 18px 12px 30px;
-  }
-  .statistics-header {
-    align-items: flex-end;
-  }
-  .metric-strip,
-  .dashboard-summary {
+  .metric-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .dashboard-summary > div:nth-child(2n) {
-    border-right: 0;
-  }
-  .dashboard-summary > div:nth-child(-n + 2) {
-    border-bottom: 1px solid #e1e6e3;
   }
   .metric-strip > div {
     border-bottom: 1px solid #e1e6e3;
@@ -3493,16 +3462,13 @@ summary.agent-tool-head > svg {
     flex: 0 0 min(560px, calc(100vw - 56px));
     scroll-snap-align: start;
   }
-  .configuration-workspace {
-    overflow: visible;
-  }
   .service-toolbar {
     width: calc(100% - 24px);
     margin-top: 14px;
   }
   .service-detail {
     width: calc(100% - 24px);
-    margin: 14px auto 28px;
+    margin-top: 14px;
   }
   .service-deployment-row {
     grid-template-columns: 64px minmax(0, 1fr) 44px;
@@ -3567,17 +3533,6 @@ summary.agent-tool-head > svg {
     gap: 5px;
     padding-inline: 8px;
   }
-  .dashboard-header {
-    align-items: center;
-    flex-direction: row;
-  }
-  .statistics-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .dashboard-header .ui-button {
-    align-self: center;
-  }
   .settings-view,
   .overview-view {
     padding-inline: 16px;
@@ -3632,12 +3587,6 @@ summary.agent-tool-head > svg {
   }
   .user-management-header {
     padding: 14px 16px;
-  }
-  .statistics-header .ui-select {
-    width: 100%;
-    min-width: 0;
-    max-width: none;
-    flex-basis: auto;
   }
   .dashboard-section-heading {
     align-items: start;

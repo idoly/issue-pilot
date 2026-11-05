@@ -43,9 +43,7 @@ export function Dashboard(props: {
   return (
     <section class="dashboard-workspace">
       <header class="dashboard-header">
-        <div>
-          <h1>运营总览</h1>
-        </div>
+        <h1>运营总览</h1>
         <Button aria-label="刷新运营总览" icon={<RefreshCw size={14} />} loading={props.refreshing} onClick={props.onRefresh}>
           刷新
         </Button>

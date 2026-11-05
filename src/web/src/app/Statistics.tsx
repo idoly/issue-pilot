@@ -128,11 +128,9 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   };
 
   return (
-    <section class="statistics-workspace insight-workspace" aria-label="运营洞察">
-      <header class="statistics-header insight-header">
-        <div>
-          <h2>运营洞察</h2>
-        </div>
+    <section class="statistics-workspace" aria-label="运营洞察">
+      <header class="statistics-header">
+        <h2>运营洞察</h2>
         <Select
           aria-label="统计周期"
           value={period()}
@@ -160,7 +158,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           资源
         </button>
       </nav>
-      <div class="insight-panel" role="tabpanel" hidden={view() !== "output"}>
+      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "output"}>
         <section class="metric-strip" aria-label="周期产出指标">
           <div>
             <span>周期新增</span>
@@ -184,7 +182,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           </div>
         </section>
       </div>
-      <div class="insight-panel" role="tabpanel" hidden={view() !== "distribution"}>
+      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "distribution"}>
         <div class="distribution-grid" role="region" aria-label="工单分布" tabindex={0}>
           <section class="statistics-section">
             <div class="statistics-title">
@@ -227,7 +225,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           </section>
         </div>
       </div>
-      <div class="insight-panel" role="tabpanel" hidden={view() !== "team"}>
+      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "team"}>
         <section class="statistics-section compact-panel" aria-labelledby="assignee-summary-title">
           <div class="statistics-title">
             <h2 id="assignee-summary-title">个人处理情况</h2>
@@ -253,7 +251,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           </div>
         </section>
       </div>
-      <div class="insight-panel" role="tabpanel" hidden={view() !== "resources"}>
+      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "resources"}>
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
           <div class="statistics-title">
             <h2 id="workspace-capacity-title">工作区存储</h2>

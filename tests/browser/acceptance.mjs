@@ -15,7 +15,7 @@ import { issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.
 import { repositoryStorePath } from "../../src/workspace/git.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
-import { createService, createIssue, modelCatalog, TestAgentController } from "../http/fixture.ts";
+import { createService, createIssue, modelCatalog, servicePayload, TestAgentController } from "../http/fixture.ts";
 
 // Playwright is optional verification tooling; install it outside the application checkout.
 const { chromium } = await import(process.env.ISSUE_PILOT_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.ISSUE_PILOT_PLAYWRIGHT_MODULE).href : "playwright");
@@ -319,6 +319,14 @@ try {
   assert.ok(compactBounds.width < compactToolbar.width / 2);
   assert.ok(Math.abs(compactBounds.x + compactBounds.width / 2 - compactToolbar.x - compactToolbar.width / 2) < 1);
   assert.equal(await compactTabs.evaluate((element) => getComputedStyle(element).overflowY === "hidden" && element.scrollHeight <= element.clientHeight), true);
+  const descriptionLines = Array.from({ length: 32 }, (_, index) => `Service description fixture paragraph ${index + 1}.`);
+  const longDescription = await app.inject({
+    method: "POST",
+    url: "/api/services",
+    headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+    payload: { ...servicePayload("description-scroll", ["test"], [mallRepository]), description: descriptionLines.join("\n\n") },
+  });
+  assert.equal(longDescription.statusCode, 201, longDescription.body);
   for (let index = 0; index < 20; index += 1) await createService(app, `demo-namespace-${String(index).padStart(2, "0")}-servers`, ["test"]);
   await page.reload();
   await page.getByRole("radio", { name: "配置", exact: true }).click();
@@ -331,7 +339,13 @@ try {
     const tabBounds = await serviceTabs.boundingBox();
     const toolbarInnerBounds = await page.locator(".service-toolbar-inner").boundingBox();
     assert.ok(Math.abs(tabBounds.x + tabBounds.width / 2 - toolbarInnerBounds.x - toolbarInnerBounds.width / 2) < 1);
-    assert.equal(await serviceTabs.evaluate((element) => getComputedStyle(element).overflowY === "hidden" && element.scrollHeight <= element.clientHeight), true);
+    assert.equal(
+      await serviceTabs.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return style.overflowY === "hidden" && style.scrollbarWidth === "none" && element.scrollHeight <= element.clientHeight;
+      }),
+      true,
+    );
     const actionBounds = await serviceActions.boundingBox();
     assert.ok(tabBounds.x >= 0 && actionBounds.x + actionBounds.width <= width);
     if (width > 700) assert.ok(tabBounds.x + tabBounds.width + 8 <= actionBounds.x);
@@ -384,10 +398,14 @@ try {
     assert.match(style.scrollbarColor, / rgba\(0, 0, 0, 0\)$/);
     assert.equal(style.scrollbarGutter, "auto");
   };
-  const scrollToEnd = async (area) => {
+  const assertHiddenScrollbar = async (area) => {
+    assert.equal(await area.evaluate((node) => getComputedStyle(node).scrollbarWidth), "none");
+  };
+  const scrollToEnd = async (area, visibleScrollbar = true) => {
     const tabsTop = (await settingsTabs.boundingBox()).y;
     assert.ok(await area.evaluate((node) => getComputedStyle(node).overflowY === "auto" && node.scrollHeight > node.clientHeight));
-    await assertSubtleScrollbar(area);
+    if (visibleScrollbar) await assertSubtleScrollbar(area);
+    else await assertHiddenScrollbar(area);
     await area.press("End");
     await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await area.elementHandle());
     assert.equal((await settingsTabs.boundingBox()).y, tabsTop);
@@ -448,6 +466,7 @@ try {
   const tools = endpointsPanel.getByRole("region", { name: "工具列表" });
   const copyConfig = endpointsPanel.getByRole("button", { name: "复制配置" });
   await toolsToggle.waitFor();
+  await assertHiddenScrollbar(endpointsPanel);
   await tools.waitFor({ state: "hidden" });
   const copyPosition = await copyConfig.boundingBox();
   await toolsToggle.press("Enter");
@@ -461,6 +480,9 @@ try {
   await tools.waitFor({ state: "hidden" });
 
   await page.setViewportSize(settingsViewport);
+  await assertHiddenScrollbar(endpointsPanel);
+  const preview = endpointsPanel.getByLabel("MCP 客户端配置");
+  assert.ok(await preview.evaluate((node) => node.scrollWidth === node.clientWidth));
   await toolsToggle.click();
   await tools.scrollIntoViewIfNeeded();
   const endpointsScrollTop = await endpointsPanel.evaluate((node) => node.scrollTop);
@@ -470,65 +492,109 @@ try {
   await tools.waitFor({ state: "hidden" });
 
   await settingsTabs.getByRole("tab", { name: "参数", exact: true }).click();
-  await page.getByRole("button", { name: "保存参数" }).waitFor();
-  await scrollToEnd(page.getByRole("tabpanel", { name: "参数", exact: true }));
+  const parametersPanel = page.getByRole("tabpanel", { name: "参数", exact: true });
+  const parameters = parametersPanel.getByRole("region", { name: "参数表单" });
+  const saveParameters = parametersPanel.getByRole("button", { name: "保存参数" });
+  await saveParameters.waitFor();
+  const savePosition = await saveParameters.boundingBox();
+  await assertHiddenScrollbar(parametersPanel);
+  await scrollToEnd(parameters, false);
+  assert.deepEqual(await saveParameters.boundingBox(), savePosition);
+  const lastParameter = parameters.getByRole("textbox", { name: "Agent 网络基础白名单" });
+  const formBounds = await parameters.boundingBox();
+  const lastParameterBounds = await lastParameter.boundingBox();
+  assert.ok(lastParameterBounds.y >= formBounds.y && lastParameterBounds.y + lastParameterBounds.height <= formBounds.y + formBounds.height + 1);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  assert.ok(await parameters.evaluate((node) => node.scrollHeight === node.clientHeight));
+
   await settingsTabs.getByRole("tab", { name: "服务", exact: true }).click();
+  const servicesPanel = page.getByRole("tabpanel", { name: "服务", exact: true });
   const serviceTabsList = page.getByRole("tablist", { name: "服务列表" });
-  await serviceTabsList.getByRole("tab", { name: "grouped", exact: true }).click();
-  await scrollToEnd(page.getByRole("tabpanel", { name: "服务", exact: true }));
-  await assertSubtleScrollbar(serviceTabsList);
+  const descriptionTab = serviceTabsList.getByRole("tab", { name: "description-scroll", exact: true });
+  const serviceDetail = servicesPanel.getByRole("article", { name: "服务描述" });
+  const lastParagraph = serviceDetail.getByText(descriptionLines.at(-1), { exact: true });
+  for (const viewport of [{ width: 1280, height: 800 }, settingsViewport]) {
+    await page.setViewportSize(viewport);
+    await descriptionTab.click();
+    await lastParagraph.waitFor();
+    await assertHiddenScrollbar(servicesPanel);
+    assert.ok(await servicesPanel.evaluate((node) => node.scrollHeight === node.clientHeight));
+    const serviceToolbar = page.locator(".service-toolbar");
+    const serviceToolbarPosition = await serviceToolbar.boundingBox();
+    await scrollToEnd(serviceDetail);
+    assert.deepEqual(await serviceToolbar.boundingBox(), serviceToolbarPosition);
+    const detailBounds = await serviceDetail.boundingBox();
+    const paragraphBounds = await lastParagraph.boundingBox();
+    assert.ok(paragraphBounds.y >= detailBounds.y && paragraphBounds.y + paragraphBounds.height <= detailBounds.y + detailBounds.height + 1);
+    await serviceTabsList.getByRole("tab", { name: "grouped", exact: true }).click();
+    await page.waitForFunction((node) => node.scrollTop === 0, await serviceDetail.elementHandle());
+  }
   for (let index = 1; index <= 6; index += 1) await createIssue(app, "browser", "dev", `Home scroll fixture ${index}`);
   engine.running.clear();
   const homeViewports = [
+    { width: 1280, height: 800 },
     { width: 1220, height: 540 },
+    { width: 568, height: 320 },
     { width: 390, height: 570 },
   ];
   await page.getByRole("radio", { name: "首页", exact: true }).click();
-  const home = page.getByRole("main");
-  await home.getByText("Home scroll fixture 1", { exact: true }).waitFor();
-  const assertHiddenScrollbar = async (area) => {
-    assert.equal(await area.evaluate((node) => getComputedStyle(node).scrollbarWidth), "none");
+  const home = page.getByRole("main", { name: "首页", exact: true });
+  const activity = home.getByRole("list", { name: "待处理工单" });
+  const summary = home.getByRole("region", { name: "当前运营状态" });
+  const overviewTitle = home.getByRole("heading", { name: "运营总览", exact: true });
+  const insightTitle = home.getByRole("heading", { name: "运营洞察", exact: true });
+  const insightTabs = home.getByRole("tablist", { name: "统计分类" });
+  const output = insightTabs.getByRole("tab", { name: "产出" });
+  const assertHomeFixed = async () => {
+    assert.deepEqual(await home.evaluate((node) => [node.scrollTop, node.scrollLeft, node.parentElement.scrollTop, window.scrollY]), [0, 0, 0, 0]);
   };
-  const resetHomeScroll = () => home.evaluate((node) => node.scrollTo({ top: 0, behavior: "instant" }));
+  await home.getByText("Home scroll fixture 1", { exact: true }).waitFor();
   for (const viewport of homeViewports) {
     await page.setViewportSize(viewport);
     const box = await home.boundingBox();
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Home bounds ${box.x}+${box.width} exceed viewport ${viewport.width}`);
-    assert.ok(await home.evaluate((node) => node.scrollHeight > node.clientHeight && node.scrollWidth === node.clientWidth));
-    await assertHiddenScrollbar(home);
-    const header = page.getByRole("banner");
-    const headerPosition = await header.boundingBox();
-    await resetHomeScroll();
-    await home.press("End");
-    await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await home.elementHandle());
-    assert.deepEqual(await header.boundingBox(), headerPosition);
-    if (viewport.width === homeViewports[0].width) {
-      await resetHomeScroll();
-      const activity = home.getByRole("list", { name: "待处理工单" });
-      assert.ok(await activity.evaluate((node) => node.scrollHeight > node.clientHeight));
-      await assertHiddenScrollbar(activity);
-      await activity.press("End");
-      await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await activity.elementHandle());
-      assert.equal(await home.evaluate((node) => node.scrollTop), 0);
-    }
+    const summaryPosition = await summary.boundingBox();
+    const tabPosition = await insightTabs.boundingBox();
+    const overviewHeading = await overviewTitle.boundingBox();
+    const insightHeading = await insightTitle.boundingBox();
+    assert.equal(overviewHeading.x, summaryPosition.x);
+    assert.equal(insightHeading.x, tabPosition.x);
+    if (summaryPosition.x === tabPosition.x) assert.equal(summaryPosition.width, tabPosition.width);
+    else assert.equal(overviewHeading.y, insightHeading.y);
+    assert.ok(tabPosition.y + tabPosition.height < viewport.height, `Statistics tabs clipped at ${viewport.width}x${viewport.height}`);
+    await home.evaluate((node) => node.scrollTo(300, 300));
+    await page.mouse.move(summaryPosition.x + summaryPosition.width / 2, summaryPosition.y + summaryPosition.height / 2);
+    await page.mouse.wheel(0, 600);
+    await output.press("End");
+    await assertHomeFixed();
+
+    assert.ok(await activity.evaluate((node) => node.clientHeight > 0 && node.scrollHeight > node.clientHeight));
+    await assertHiddenScrollbar(activity);
+    await activity.press("End");
+    await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await activity.elementHandle());
+    await assertHomeFixed();
+    assert.deepEqual(await summary.boundingBox(), summaryPosition);
+    assert.deepEqual(await insightTabs.boundingBox(), tabPosition);
   }
-  await home.getByRole("tab", { name: "团队", exact: true }).click();
+  await insightTabs.getByRole("tab", { name: "团队", exact: true }).click();
   const assigneeTable = home.getByRole("region", { name: "处理人统计", exact: true });
   assert.ok(await assigneeTable.evaluate((node) => node.scrollWidth > node.clientWidth));
   await assertHiddenScrollbar(assigneeTable);
   await assigneeTable.press("ArrowRight");
   await page.waitForFunction((node) => node.scrollLeft > 0, await assigneeTable.elementHandle());
-  assert.equal(await home.evaluate((node) => node.scrollLeft), 0);
-  await home.getByRole("tab", { name: "分布", exact: true }).click();
+  await assertHomeFixed();
+  await insightTabs.getByRole("tab", { name: "分布", exact: true }).click();
   const distribution = home.getByRole("region", { name: "工单分布", exact: true });
   await assertHiddenScrollbar(distribution);
   await distribution.press("ArrowRight");
   await page.waitForFunction((node) => node.scrollLeft > 0, await distribution.elementHandle());
-  await resetHomeScroll();
-  const homeBounds = await home.boundingBox();
-  await page.mouse.move(homeBounds.x + 8, homeBounds.y + 48);
-  await page.mouse.wheel(0, 240);
-  await page.waitForFunction((node) => node.scrollTop > 0, await home.elementHandle());
+  await insightTabs.getByRole("tab", { name: "资源", exact: true }).click();
+  const resourcePanel = home.getByRole("tabpanel");
+  await resourcePanel.getByText("共享 Git 占用", { exact: true }).waitFor();
+  assert.ok(await resourcePanel.evaluate((node) => node.scrollHeight > node.clientHeight));
+  await resourcePanel.press("End");
+  await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await resourcePanel.elementHandle());
+  await assertHomeFixed();
   const unexpected = failures.filter((failure) => !/^Failed to load resource: the server responded with a status of 409/.test(failure));
   assert.deepEqual(unexpected, []);
   const inspection = openDatabase(databaseFile);
@@ -583,15 +649,15 @@ try {
           "composer focus uses a single border without a second outline",
           "service Tabs retain their original rounded rail and white selected pill",
           "service Tabs shrink to content, stay centered and never show a vertical scrollbar",
-          "service toolbar aligns with details and keeps actions separate on narrow screens",
+          "service toolbar stays fixed while long descriptions scroll inside the detail card",
           "history scroll and unread indicator with real SSE",
           "long draft and accessible send control at 1280px",
           "click sends through HTTP and returns focus to composer",
           "1280px editor layout",
           "repository namespace filter and fixed toolbar",
           "independent personnel list and expanded endpoint tool list scrolling on desktop and narrow screens",
-          "thin transparent scrollbars and keyboard scrolling in settings",
-          "hidden home scrollbars with wheel, keyboard, independent activity and narrow team table scrolling",
+          "hidden outer endpoint and parameter scrollbars; parameter save action stays visible on narrow screens",
+          "fixed home layout for wheel, keyboard and programmatic scrolling, with reachable activity and statistics on desktop and mobile",
           "health and database integrity",
         ],
         resources,
